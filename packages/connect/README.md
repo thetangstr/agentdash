@@ -1,86 +1,70 @@
 # agentdash-connect
 
-Connect the coding agent on your machine — Claude Code or Codex — to your
-AgentDash agent.
+Connect Claude Code (or Codex) on your machine to your AgentDash agent — and to
+your own AgentDash inbox, so you can ask what is waiting and approve or reject
+right in the chat.
+
+## Connect
+
+Open your agent's **My Agent** page, press **Create a connect code**, and copy
+the prompt it shows into Claude Code. That is the whole install. The prompt
+runs one command, which looks like this:
 
 ```sh
-npx agentdash-connect
+npx -y agentdash-connect@latest --url https://your-instance KVTX-8F02
 ```
 
-It asks for two things, a link and a key, and does the rest.
+When it finishes, **restart Claude Code** — new tools load only when a session
+starts — and ask:
 
-## What it actually does
+> What's waiting on me in AgentDash?
 
-1. Finds which harnesses are installed (`claude`, `codex`).
-2. **Checks the link and key work before touching anything.** A wrong key, a
-   typo'd host and an instance that is down are three different messages, and
-   you get them before any file is written.
-3. Writes each harness's own native MCP config.
-4. Prints every file it changed.
+The code works once and expires ten minutes after it is made. If it is refused,
+create another; nothing was written.
 
-```
-Connecting this machine to an AgentDash agent.
-Found: Claude Code, Codex
+Prefer a terminal? Run the command yourself — same result. Use the full name
+`agentdash-connect`: a bare `npx agentdash` is an unrelated package that prints
+a help screen and looks like success.
 
-Instance link (e.g. http://mkmini.local:3103): …
-Agent key (input hidden): …
+## What it sets up
 
-Checking http://mkmini.local:3103/api/mcp …
-Connected. 72 tools available, agent briefing received.
+Two connections, deliberately kept apart:
 
-Wrote:
-  claude  ~/.claude.json
-          stores the key in this file (mode 600)
-  codex   ~/.codex/config.toml
-          reads AGENTDASH_KEY_AGENTDASH at runtime; key stored in the keychain
-```
+- **Your agent** (`agentdash` in Claude Code): the agent's own identity, for its
+  work and its mandate. It can never decide an approval — an agent must not
+  decide what constrains it.
+- **You** (`agentdash-inbox` in Claude Code): your own inbox, acting with your
+  authority. `inbox_sync` shows what is waiting; `inbox_decide` approves or
+  rejects one item when you say so, and can decide only what you could decide
+  on the AgentDash page.
 
-## Why this instead of a prompt to paste
+It lists every file it writes when it finishes:
 
-A prompt is a suggestion — editable, truncatable, and silent when it fails.
-This is a config write with an exit code, and `--remove` puts everything back.
-
-Nothing runs in the background. No daemon, no menu-bar app, no directories to
-create, nothing to keep alive. It is a short script that edits two config files
-you can read, and it is entirely reversible. That is a change your IT department
-can review in a minute.
-
-## Where the key goes
-
-Being precise about this, because it differs by harness and it is the part worth
-understanding:
-
-| | where the key lives |
+| file | what |
 |---|---|
-| **Codex** | the OS keychain. `config.toml` holds only the *name* of an environment variable, never the secret. One line in your shell profile reads it back at login. |
-| **Claude Code** | `~/.claude.json`, in plaintext, at mode 600. This is how Claude Code stores HTTP MCP credentials; we cannot change it, so we say so rather than imply otherwise. |
+| `~/.claude.json` | both Claude Code entries; the agent key sits here at mode 600, which is how Claude Code stores HTTP MCP credentials |
+| `~/.agentdash/bridge-token` | your inbox credential, mode 600 |
+| `~/.agentdash/bridge-owner.json` | whose inbox this is, mode 600 |
+| `~/agentdash-inbox/` | optional: start Claude Code here and your inbox appears as the session opens |
+| `~/.codex/config.toml`, a shell-profile line, the OS keychain | Codex only; the key is in the keychain (or `~/.agentdash/agentdash.key` at mode 600 when none is available), never in the config |
 
-The key is read from the terminal with echo off — never from a command-line
-argument — so it stays out of your shell history and out of the process list.
-If no keychain is available (common over SSH or on a fresh login), it falls back
-to `~/.agentdash/<name>.key` at mode 600 and tells you it did.
+If this machine's inbox already belongs to someone else, it keeps theirs and
+tells you. To replace it, run the command in a terminal and answer yes.
+
+Nothing runs in the background — no daemon, nothing to keep alive.
 
 ## Commands
 
 ```sh
-npx agentdash-connect                  # interactive
-npx agentdash-connect --url <url>      # skip the URL question
-npx agentdash-connect --check          # is the connection still good?
-npx agentdash-connect --remove         # undo everything it wrote
-npx agentdash-connect --name <name>    # use a different MCP server name
+npx agentdash-connect --check          # is the connection still good? (non-zero if not)
+npx agentdash-connect --remove         # remove both Claude Code entries and the Codex setup
+npx agentdash-connect inbox            # print your inbox (what the optional folder's hook runs)
+npx agentdash-connect mcp              # serve your inbox tools over stdio (Claude Code launches this)
 ```
 
-`--check` exits non-zero when the connection is broken, so it works in a
-monitoring script. Piping the key on stdin works too, for scripted installs:
-
-```sh
-printf '%s\n' "$KEY" | npx agentdash-connect --url https://your-instance
-```
+`--remove` leaves your inbox credential in place; delete `~/.agentdash/` and
+`~/agentdash-inbox/` to remove that too.
 
 ## Requirements
 
-Node 18 or newer, and at least one of Claude Code or Codex already installed.
-This wires up what is already on the machine; it does not install a harness for
-you.
-
-Zero runtime dependencies.
+Node 18 or newer, and Claude Code or Codex already installed.

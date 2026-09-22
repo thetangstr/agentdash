@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildConnectCommand,
+  buildInstallPrompt,
   buildWatchPrompt,
   describeCodeLife,
   resolveInstanceOrigin,
@@ -90,16 +91,57 @@ describe("describeCodeLife", () => {
   });
 });
 
+describe("buildInstallPrompt", () => {
+  const ORIGIN = "http://10.50.10.129:3102";
+  const prompt = buildInstallPrompt(ORIGIN, "KVTX-8F02", "Casper");
+
+  it("carries the exact command with the code, so nothing else must be typed", () => {
+    expect(prompt).toContain(buildConnectCommand(ORIGIN, "KVTX-8F02"));
+    expect(prompt).toContain("exactly as written");
+  });
+
+  /** The CLI prints progress first; the outcome is the summary line. */
+  it("points Claude at the outcome line, which the CLI prints after its progress", () => {
+    expect(prompt).toContain('starts with "Connected."');
+  });
+
+  it("names the agent being connected", () => {
+    expect(prompt).toContain("my AgentDash agent, Casper");
+  });
+
+  /** A code works once: a rerun with a "fixed" command after a partial failure burns it. */
+  it("forbids improvising a different command on failure", () => {
+    expect(prompt).toContain("do not retry with a");
+    expect(prompt).toContain("works once");
+  });
+
+  /** New MCP servers are invisible in the session that installed them. */
+  it("says to restart, and what to ask afterwards", () => {
+    expect(prompt).toContain("restart Claude Code");
+    expect(prompt).toContain("What's waiting on me in");
+  });
+
+  it("never carries a key", () => {
+    expect(prompt).not.toMatch(/pcp_|Bearer|api key/i);
+  });
+});
+
 describe("buildWatchPrompt", () => {
   /**
-   * The inbox routes need a `bridge:inbox` endpoint credential. An agent key
-   * minted by a connect code is not one, so a prompt pointed at them fails for
-   * everybody who follows it.
+   * REVERSED. This used to assert the agent's tools, on the grounds that the
+   * inbox routes need a person's inbox credential a connect code did not reach
+   * the harness with. Since connect registers the person's own inbox tools,
+   * the agent tools are the wrong ones: the agent key is refused on every
+   * decision route by design, so "approve that" after a check answered 403.
    */
-  it("uses the tools a connect code actually grants, not the inbox routes", () => {
+  it("reads the person's own inbox, not the agent's tools", () => {
     const prompt = buildWatchPrompt("Casper");
-    expect(prompt).toContain("agentdash tools");
-    expect(prompt).not.toMatch(/bridge inbox|inbox_sync|inbox_decide/);
+    expect(prompt).toContain("inbox_sync");
+    expect(prompt).not.toContain("agentdash tools");
+  });
+
+  it("decides only the item the person names, when they say so", () => {
+    expect(buildWatchPrompt("Casper")).toContain("use inbox_decide for that item only");
   });
 
   it("demands silence when there is nothing, or people stop reading it", () => {
@@ -113,6 +155,6 @@ describe("buildWatchPrompt", () => {
   });
 
   it("names the agent, so the prompt reads as being about theirs", () => {
-    expect(buildWatchPrompt("HAL")).toContain("assigned to HAL");
+    expect(buildWatchPrompt("HAL")).toContain("anything of HAL's");
   });
 });

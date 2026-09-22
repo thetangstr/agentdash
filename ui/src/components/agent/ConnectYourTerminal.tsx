@@ -11,6 +11,7 @@ import { queryKeys } from "../../lib/queryKeys";
 import { copyToClipboard } from "../../lib/clipboard";
 import {
   buildConnectCommand,
+  buildInstallPrompt,
   buildWatchPrompt,
   describeCodeLife,
   resolveOriginChoices,
@@ -28,9 +29,9 @@ import { Button } from "../ui/button";
  * was hidden behind a disclosure aimed at technicians.
  *
  * What is left is the flow that is real: press a button, get an eight-character
- * code, run one line. The code is short-lived and single-use, so unlike an
- * agent key it is safe to put in a command someone reads off a screen — which
- * is the whole reason it exists.
+ * code, paste one prompt into Claude Code. The code is short-lived and
+ * single-use, so unlike an agent key it is safe inside a prompt or a command
+ * someone reads off a screen — which is the whole reason it exists.
  */
 
 export function ConnectYourTerminal({
@@ -144,6 +145,7 @@ export function ConnectYourTerminal({
   const secondsLeft = expiresAt ? Math.round((expiresAt - now) / 1000) : 0;
   const life = describeCodeLife(secondsLeft);
   const command = code ? buildConnectCommand(origin, code) : null;
+  const installPrompt = code ? buildInstallPrompt(origin, code, agentName) : null;
   // A control with one option is just noise.
   const showOriginPicker = originChoices.length > 1;
   const watchPrompt = buildWatchPrompt(agentName);
@@ -170,7 +172,7 @@ export function ConnectYourTerminal({
       >
         <div className="border-b px-4 py-2.5">
           <h2 id="connect-terminal-heading" className="text-sm font-semibold">
-            Work with {agentName} from your own terminal
+            Work with {agentName} from Claude Code
           </h2>
         </div>
 
@@ -178,9 +180,10 @@ export function ConnectYourTerminal({
           {!code ? (
             <>
               <p className="text-sm text-muted-foreground">
-                Create a code, then run one line on the machine you work on. {agentName} appears in
-                Claude Code or Codex with its work and its mandate. No key changes hands, and the
-                code stops working ten minutes from now.
+                Create a code, then paste one prompt into Claude Code on the machine you work on. It
+                connects {agentName} and your own inbox, so you can ask what is waiting and approve or
+                reject right in the chat. No key changes hands, and the code stops working ten minutes
+                from now.
               </p>
               {connectingAs ? (
                 <p className="mt-1.5 text-xs text-muted-foreground">
@@ -224,14 +227,41 @@ export function ConnectYourTerminal({
               </p>
 
               <div className="mt-4 flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold">Run this on the machine you work on</span>
-                <Button size="sm" onClick={() => copy("command", command!)}>
-                  {copyLabel("command", "Copy command")}
+                <span className="text-xs font-semibold">
+                  Paste this into Claude Code on the machine you work on
+                </span>
+                <Button size="sm" onClick={() => copy("install", installPrompt!)}>
+                  {copyLabel("install", "Copy prompt")}
                 </Button>
               </div>
-              <pre className="mt-1.5 overflow-x-auto rounded-md border bg-muted/40 p-2.5 text-xs">
-                <code>{command}</code>
+              <pre className="mt-1.5 overflow-x-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-2.5 text-xs leading-relaxed">
+                <code>{installPrompt}</code>
               </pre>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Claude runs one command, then asks you to restart it — new tools load only when a
+                session starts. After that, ask{" "}
+                <span className="font-medium text-foreground">
+                  &ldquo;What&rsquo;s waiting on me in AgentDash?&rdquo;
+                </span>
+              </p>
+
+              <details className="mt-3 rounded-md border border-dashed px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  Prefer a terminal? Run the command yourself
+                </summary>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted-foreground">
+                    Same result, and the only way to answer if it asks to replace someone
+                    else&rsquo;s inbox on this machine. Works for Codex too.
+                  </span>
+                  <Button size="sm" variant="outline" onClick={() => copy("command", command!)}>
+                    {copyLabel("command", "Copy command")}
+                  </Button>
+                </div>
+                <pre className="mt-1.5 overflow-x-auto rounded-md border bg-muted/40 p-2.5 text-xs">
+                  <code>{command}</code>
+                </pre>
+              </details>
 
               {showOriginPicker ? (
                 <fieldset className="mt-2 rounded-md border border-dashed px-3 py-2">
@@ -240,7 +270,8 @@ export function ConnectYourTerminal({
                   </legend>
                   <p className="text-xs text-muted-foreground">
                     You opened this page at a different address from the one this instance
-                    publishes, and they do not both work from everywhere.
+                    publishes, and they do not both work from everywhere. The prompt and the
+                    command both use the one you pick.
                   </p>
                   <div className="mt-1.5 flex flex-col gap-1.5">
                     {originChoices.map((choice) => (
@@ -274,11 +305,10 @@ export function ConnectYourTerminal({
                   </div>
                 </fieldset>
               ) : null}
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                It finds Claude Code and Codex if they are installed, writes their own config, and
-                creates an <code className="font-mono">~/agentdash-inbox</code> folder — open that
-                folder in Claude Code and anything waiting on you appears as the session starts.
-                Undo any time with <code className="font-mono">npx agentdash-connect --remove</code>.
+              <p className="mt-2 text-xs text-muted-foreground">
+                It sets up Claude Code and Codex if they are installed, and lists every file it
+                writes. Undo any time with{" "}
+                <code className="font-mono">npx agentdash-connect --remove</code>.
               </p>
 
               <Button
@@ -412,8 +442,8 @@ export function ConnectYourTerminal({
               Ask it when you want to know, or let your operating system run the check on a timer.
             </li>
             <li>
-              <span className="font-medium text-foreground">Decisions are still yours, here.</span>{" "}
-              The terminal is where you are told; approving and declining happen on this page.
+              <span className="font-medium text-foreground">Decisions are still yours.</span>{" "}
+              Nothing is approved unless you say so — in the chat, or on this page.
             </li>
           </ul>
         </div>

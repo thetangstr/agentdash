@@ -35,6 +35,7 @@ import {
   storeBridgeToken,
 } from "../src/inbox.mjs";
 import { runInboxMcp } from "../src/inbox-mcp.mjs";
+import { renderConnectSummary } from "../src/summary.mjs";
 
 // Read the real version rather than restating it. A CLI that misreports which
 // version it is turns "did the fix reach me?" into guesswork -- which is
@@ -229,7 +230,6 @@ async function main() {
   let pairedWith = null;
 
   if (positional && looksLikeConnectCode(positional)) {
-    out("");
     out(`Redeeming code ${formatConnectCode(positional)} …`);
     try {
       const paired = await redeemConnectCode(instanceUrl, positional, deviceName());
@@ -243,10 +243,6 @@ async function main() {
       bad("Nothing was written.");
       return 1;
     }
-    out(
-      `Paired as ${pairedWith.agentName}${pairedWith.companyName ? ` at ${pairedWith.companyName}` : ""}` +
-        `, for this machine (${pairedWith.deviceName}).`,
-    );
   } else {
     key = await ask("Agent key or connect code (input hidden): ", { silent: true });
     if (!key) {
@@ -261,10 +257,6 @@ async function main() {
         const paired = await redeemConnectCode(instanceUrl, key, deviceName());
         key = paired.apiKey;
         pairedWith = paired;
-        out(
-          `Paired as ${paired.agentName}${paired.companyName ? ` at ${paired.companyName}` : ""}` +
-            `, for this machine (${paired.deviceName}).`,
-        );
       } catch (error) {
         bad("");
         bad(error instanceof VerifyError ? error.message : String(error?.message ?? error));
@@ -291,9 +283,6 @@ async function main() {
     return 1;
   }
 
-  out(`Connected. ${verified.toolCount} tools available${verified.hasInstructions ? ", agent briefing received" : ""}.`);
-  out("");
-
   const { envVar, written, secretBackend } = applyConnection({
     serverName,
     instanceUrl,
@@ -302,12 +291,21 @@ async function main() {
     account,
   });
 
-  out("Wrote:");
-  for (const entry of written) out(`  ${entry.harness.padEnd(7)} ${entry.file}\n          ${entry.note}`);
-  out("");
-  if (harnesses.codex && secretBackend === "file") {
-    out(`Note: no OS keychain was available, so the key is in ~/.agentdash/${account}.key (mode 600).`);
+  const agentName = pairedWith?.agentName ?? `your agent (${verified.toolCount} tools)`;
+  const files = [];
+  for (const entry of written) {
+    if (entry.harness === "claude") files.push({ file: entry.file, what: `${agentName}'s agent key ("${serverName}")` });
+    else if (entry.file.endsWith("config.toml")) files.push({ file: entry.file, what: `Codex config, reads ${envVar}` });
+    else files.push({ file: entry.file, what: `one line exporting ${envVar} for Codex` });
   }
+  if (harnesses.codex) {
+    files.push(
+      secretBackend === "file"
+        ? { file: `~/.agentdash/${account}.key`, what: "Codex key (no OS keychain was available)" }
+        : { file: "OS keychain", what: "Codex key" },
+    );
+  }
+
   /*
    * The other half of the connection: the inbox. Redeeming a code now also
    * mints a bridge endpoint for whoever created the code — that credential is
@@ -316,6 +314,9 @@ async function main() {
    * credential must never read it). An older instance returns no bridgeToken,
    * and this block simply does not run — pairing still works as before.
    */
+  let inbox = "unsupported";
+  let keptOwner = null;
+  let inboxError = null;
   if (pairedWith?.bridgeToken) {
     try {
       /**
@@ -323,50 +324,65 @@ async function main() {
        * failure this guards actually happened: a shared machine, re-paired
        * under another signed-in account, switched whose approvals arrived
        * here with nothing on screen saying so. Replacing is allowed — one
-       * machine changing hands is normal — but only as an answered question.
+       * machine changing hands is normal — but only as an answered question,
+       * and with no terminal attached (Claude running this for someone) there
+       * is nobody to answer it, so the existing inbox is kept and the summary
+       * says how to replace it.
        */
       const conflict = ownerConflict(readBridgeOwner(), pairedWith.owner ?? null);
       if (conflict) {
-        bad("");
-        bad(`This machine's inbox currently belongs to ${conflict.existing}.`);
-        bad(`This pairing would hand it to ${conflict.incoming} instead.`);
-        const answer = await ask(`Replace it? [y/N]: `);
-        if (!/^y(es)?$/i.test(answer.trim())) {
-          out("Kept the existing inbox connection. The agent pairing above still stands.");
-          throw { skipped: true };
+        keptOwner = conflict.existing;
+        let replace = false;
+        if (process.stdin.isTTY) {
+          bad("");
+          bad(`This machine's inbox currently belongs to ${conflict.existing}.`);
+          bad(`This pairing would hand it to ${conflict.incoming} instead.`);
+          replace = /^y(es)?$/i.test((await ask(`Replace it? [y/N]: `)).trim());
         }
+        if (!replace) throw { skipped: true };
       }
       const tokenPath = storeBridgeToken(pairedWith.bridgeToken);
-      if (pairedWith.owner) storeBridgeOwner(pairedWith.owner, { server: instanceUrl });
-      const inboxDir = defaultInboxDir();
-      const { created } = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
-      out("");
-      const ownerLine = pairedWith.owner?.name
-        ? `${pairedWith.owner.name}${pairedWith.owner.email ? ` (${pairedWith.owner.email})` : ""}`
-        : null;
-      out(ownerLine ? `Inbox connected for ${ownerLine}:` : "Inbox connected too:");
-      out(`  token   ${tokenPath}
-          your inbox credential (mode 600) — questions for you arrive with it`);
-      for (const file of created) out(`  inbox   ${file}`);
+      files.push({ file: tokenPath, what: "your inbox credential" });
+      if (pairedWith.owner) {
+        files.push({ file: storeBridgeOwner(pairedWith.owner, { server: instanceUrl }), what: "whose inbox this is" });
+      }
       if (harnesses.claude) {
         const inboxMcp = applyInboxMcp({ serverName, instanceUrl });
-        out(`  claude  ${inboxMcp.file}
-          "${inboxMcp.name}" — your own inbox tools, so you can approve or reject from Claude`);
+        const claudeLine = files.find((entry) => entry.file === inboxMcp.file);
+        if (claudeLine) claudeLine.what += `, and your inbox tools ("${inboxMcp.name}")`;
+        else files.push({ file: inboxMcp.file, what: `your inbox tools ("${inboxMcp.name}")` });
       }
-      out("");
-      out(`Open ${inboxDir} in Claude Code and anything waiting on you appears as the session starts.`);
+      // Optional, not a step: the inbox tools above work in every session.
+      // Starting Claude Code in this folder also shows the inbox as it opens.
+      const inboxDir = defaultInboxDir();
+      scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
+      files.push({ file: `${inboxDir}/`, what: "optional: start Claude Code here to see your inbox as it opens" });
+      inbox = "connected";
     } catch (error) {
-      if (!error?.skipped) {
-        // The agent pairing above already succeeded; say what did not, precisely.
-        bad(`Inbox setup failed (${error?.message ?? error}). The agent connection above still works.`);
-        bad(`Retry later with a fresh connect code.`);
+      if (error?.skipped) {
+        inbox = "kept";
+      } else {
+        inbox = "failed";
+        inboxError = error?.message ?? String(error);
       }
     }
   }
 
-  out(`Start a new session and ask your agent to list its AgentDash tools.`);
-  out(`Undo any time with:  npx agentdash-connect --remove${args.name ? ` --name ${serverName}` : ""}`);
-  if (harnesses.codex) out(`Codex needs a new terminal so ${envVar} is set.`);
+  out("");
+  out(
+    renderConnectSummary({
+      agentName,
+      companyName: pairedWith?.companyName ?? null,
+      harnesses,
+      inbox,
+      owner: pairedWith?.owner ?? null,
+      keptOwner,
+      inboxError,
+      files,
+      codexEnvVar: harnesses.codex ? envVar : null,
+      undo: `npx agentdash-connect --remove${args.name ? ` --name ${serverName}` : ""}`,
+    }),
+  );
   return 0;
 }
 

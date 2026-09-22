@@ -573,7 +573,7 @@ describe("MyAgent", () => {
 
     const text = container.textContent ?? "";
     const needs = text.indexOf("Needs you");
-    const connect = text.indexOf("Work with Casper from your own terminal");
+    const connect = text.indexOf("Work with Casper from Claude Code");
     const doing = text.indexOf("What Casper is doing");
     const may = text.indexOf("What Casper may do");
 
@@ -691,7 +691,7 @@ describe("MyAgent", () => {
 
       const text = container.textContent ?? "";
       expect(text.indexOf("Process adapter missing command")).toBeLessThan(
-        text.indexOf("Work with Casper from your own terminal"),
+        text.indexOf("Work with Casper from Claude Code"),
       );
     });
   });

@@ -112,12 +112,47 @@ export function describeCodeLife(secondsLeft: number): CodeLife {
 }
 
 /**
- * The prompt that turns "I can ask my agent" into "my agent tells me".
+ * The one thing a person copies to connect: a prompt for Claude Code that
+ * carries the code. Pasting a prompt is how most people already use the tool,
+ * and it spares them finding a terminal, which is where the old one-liner lost
+ * them.
  *
- * Deliberately built on the MCP tools a connect code actually grants, not on
- * the steward-inbox routes: those need a `bridge:inbox` endpoint credential,
- * which an agent key is not, so a prompt pointed at them would fail for every
- * person who followed it.
+ * Every instruction here closes a gap someone actually fell into. The exact
+ * command, because a bare `npx agentdash` is an unrelated npm package and a
+ * bare `agentdash-connect` lets npx serve a stale cached copy. No retrying
+ * with a different command, because a code works once and a "helpful" rerun
+ * after a partial failure burns it. The restart, because MCP servers load only
+ * when a session starts, so the new tools are invisible in the session that
+ * installed them. Saying so beats the person concluding it did not work.
+ *
+ * The code is single-use and dead within ten minutes, so it is safe inside a
+ * prompt in a way an agent key never would be; no key appears here.
+ */
+export function buildInstallPrompt(origin: string, code: string, agentName: string): string {
+  return [
+    `Connect this machine to my AgentDash agent, ${agentName}.`,
+    ``,
+    `Run this command exactly as written. It asks me nothing:`,
+    ``,
+    `    ${buildConnectCommand(origin, code)}`,
+    ``,
+    `Then tell me in one or two lines whether it worked, using the line of its`,
+    `output that starts with "Connected." If it failed, show me its error and`,
+    `stop — do not retry with a different command; the code works once and`,
+    `expires ten minutes after it was made.`,
+    ``,
+    `If it worked, tell me to restart Claude Code, because new tools only load`,
+    `when a session starts. After that I can ask "What's waiting on me in`,
+    `AgentDash?" and approve or reject right in the chat.`,
+  ].join("\n");
+}
+
+/**
+ * A timer check that reads the person's own inbox. It used to point Claude at
+ * the agent's tools, and for approvals that is the one path guaranteed to fail:
+ * the agent key is refused on every decision route, by design, so the first
+ * "approve that" after a check answered 403. The inbox tools carry the
+ * person's own authority, and only act when the person says to.
  *
  * Two instructions in here are load-bearing. "Say nothing at all" — because a
  * check that reports its own emptiness every half hour trains people to ignore
@@ -126,15 +161,16 @@ export function describeCodeLife(secondsLeft: number): CodeLife {
  */
 export function buildWatchPrompt(agentName: string): string {
   return [
-    `Every 30 minutes, for as long as this session is open, check AgentDash.`,
+    `Every 30 minutes, for as long as this session is open, check my AgentDash inbox.`,
     ``,
-    `Use the agentdash tools to look for two things: approvals waiting on my`,
-    `decision, and issues assigned to ${agentName} that are blocked.`,
+    `Use inbox_sync from the agentdash-inbox tools to look for two things:`,
+    `approvals waiting on my decision, and anything of ${agentName}'s that is blocked.`,
     ``,
     `If there is nothing, say nothing at all — an empty check is normal and I`,
     `do not want to be told about it.`,
     ``,
     `If there is something, tell me who is asking, what for, and how long it`,
-    `has been waiting. Do not act on any of it. I decide.`,
+    `has been waiting. Do not act on any of it. I decide — and if I tell you to`,
+    `approve or reject one, use inbox_decide for that item only.`,
   ].join("\n");
 }
