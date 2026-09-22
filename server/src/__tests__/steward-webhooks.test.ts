@@ -23,7 +23,7 @@ import { stewardWebhookRoutes } from "../routes/steward-webhooks.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
-import {
+import { webhookBodyFor,
   renderStewardWebhookMessage,
   stewardWebhooksService,
 } from "../services/steward-webhooks.js";
@@ -42,6 +42,44 @@ import {
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+
+describe("webhookBodyFor", () => {
+  const digestText = [
+    "AgentDash inbox — Titus",
+    "",
+    "1 decision waiting:",
+    "- connector_send from Casper",
+    "Decide on your AgentDash page: https://example.test/MKT/approvals",
+  ].join("\n");
+
+  it("keeps plain {text} for ordinary webhook hosts", () => {
+    const body = JSON.parse(webhookBodyFor("https://hooks.slack.example/services/x", digestText));
+    expect(body).toEqual({ text: digestText });
+  });
+
+  it("wraps Power Automate hosts in an Adaptive Card with only an OpenUrl action", () => {
+    const body = JSON.parse(
+      webhookBodyFor("https://abc.4a.environment.api.powerplatform.com:443/flow/x", digestText),
+    );
+    expect(body.type).toBe("message");
+    const card = body.attachments[0];
+    expect(card.contentType).toBe("application/vnd.microsoft.card.adaptive");
+    const blocks = card.content.body.map((b: { text: string }) => b.text).join("\n");
+    expect(blocks).toContain("AgentDash inbox — Titus");
+    expect(blocks).toContain("connector_send from Casper");
+    // raw URL becomes a tappable markdown link
+    expect(blocks).toContain("[https://example.test/MKT/approvals](https://example.test/MKT/approvals)");
+    // a pointer, never a decision: OpenUrl is the only permitted action kind
+    expect(card.content.actions).toEqual([
+      { type: "Action.OpenUrl", title: "Decide on AgentDash", url: "https://example.test/MKT/approvals" },
+    ]);
+  });
+
+  it("recognizes older logic.azure.com flow hosts too", () => {
+    const body = JSON.parse(webhookBodyFor("https://prod-1.westus.logic.azure.com/workflows/x", "hi"));
+    expect(body.type).toBe("message");
+  });
+});
 
 describe("renderStewardWebhookMessage", () => {
   const digest = (over: Record<string, unknown> = {}) => ({
