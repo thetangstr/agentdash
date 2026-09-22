@@ -108,7 +108,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
                   <span className="relative">
                     <Icon className={cn("h-[18px] w-[18px]", isActive && "stroke-[2.3]")} />
                     {item.badge != null && item.badge > 0 && (
-                      <span className="absolute -right-2 -top-2 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
+                      <span className="absolute -right-2 -top-2 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-text-inverse">
                         {item.badge > 99 ? "99+" : item.badge}
                       </span>
                     )}
