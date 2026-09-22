@@ -181,7 +181,7 @@ jobs:
 
       - name: Test the shard split itself
         # A split that loses a suite looks exactly like a suite that passed.
-        run: node --test scripts/lib/shard.test.mjs
+        run: node --test scripts/lib/shard.test.mjs scripts/ci/check-dockerfile-build-order.test.mjs
 
       - name: Run Hermes onboarding regression lane
         run: pnpm run test:regression:hermes-onboarding
