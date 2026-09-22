@@ -491,8 +491,14 @@ export function companyService(db: Db) {
         await tx.delete(issues).where(eq(issues.companyId, id));
         await tx.delete(companyLogos).where(eq(companyLogos.companyId, id));
         await tx.delete(assets).where(eq(assets.companyId, id));
-        await tx.delete(goals).where(eq(goals.companyId, id));
+        // Projects must go before goals: projects.goal_id -> goals.id is a
+        // NO ACTION foreign key, so deleting goals first failed the whole
+        // delete with `projects_goal_id_goals_id_fk` for any company whose
+        // project referenced a goal (AGE-120, hit 16/16 during the AGE-114
+        // cleanup). project_goals rows are no concern here — both of their
+        // edges (to projects and to goals) cascade.
         await tx.delete(projects).where(eq(projects.companyId, id));
+        await tx.delete(goals).where(eq(goals.companyId, id));
         // AgentDash-MK: both reference agents with ON DELETE NO ACTION, so they
         // must go before the agents themselves or the delete fails with a
         // foreign-key violation.
