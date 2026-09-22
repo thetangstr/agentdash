@@ -12,6 +12,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
   getActiveRunIssueSummaryForAgent: vi.fn(),
   getRunLogAccess: vi.fn(),
   readLog: vi.fn(),
+  list: vi.fn(),
 }));
 
 const mockIssueService = vi.hoisted(() => ({
@@ -247,6 +248,42 @@ describe("agent live run routes", () => {
     expect(res.body).not.toHaveProperty("contextSnapshot");
     expect(res.body).not.toHaveProperty("logRef");
   }, 10_000);
+
+  it("honors offset on the company heartbeat run list", async () => {
+    mockHeartbeatService.list.mockResolvedValue([]);
+
+    const res = await requestApp(
+      await createApp(),
+      (baseUrl) => request(baseUrl).get("/api/companies/company-1/heartbeat-runs?offset=200&limit=100"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatService.list).toHaveBeenCalledWith("company-1", undefined, 100, 200);
+  });
+
+  it("defaults offset to zero on the company heartbeat run list", async () => {
+    mockHeartbeatService.list.mockResolvedValue([]);
+
+    const res = await requestApp(
+      await createApp(),
+      (baseUrl) => request(baseUrl).get("/api/companies/company-1/heartbeat-runs"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatService.list).toHaveBeenCalledWith("company-1", undefined, undefined, 0);
+  });
+
+  it("rejects invalid offset on the company heartbeat run list", async () => {
+    mockHeartbeatService.list.mockResolvedValue([]);
+
+    const res = await requestApp(
+      await createApp(),
+      (baseUrl) => request(baseUrl).get("/api/companies/company-1/heartbeat-runs?offset=nope"),
+    );
+
+    expect(res.status).toBe(400);
+    expect(mockHeartbeatService.list).not.toHaveBeenCalled();
+  });
 
   it("ignores a stale execution run from another issue and falls back to the assignee's matching run", async () => {
     mockHeartbeatService.getRunIssueSummary.mockResolvedValue({

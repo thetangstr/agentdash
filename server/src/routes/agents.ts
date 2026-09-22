@@ -3935,7 +3935,15 @@ export function agentRoutes(
     const agentId = req.query.agentId as string | undefined;
     const limitParam = req.query.limit as string | undefined;
     const limit = limitParam ? Math.max(1, Math.min(1000, parseInt(limitParam, 10) || 200)) : undefined;
-    const runs = await heartbeat.list(companyId, agentId, limit);
+    // Honor offset pagination: previously this parameter was accepted but
+    // ignored, so pages beyond the first silently repeated page one.
+    const offsetParam = req.query.offset as string | undefined;
+    const parsedOffset = offsetParam !== undefined && /^\d+$/.test(offsetParam) ? Number.parseInt(offsetParam, 10) : null;
+    if (offsetParam !== undefined && (parsedOffset === null || !Number.isInteger(parsedOffset) || parsedOffset < 0)) {
+      res.status(400).json({ error: "offset must be a non-negative integer" });
+      return;
+    }
+    const runs = await heartbeat.list(companyId, agentId, limit, parsedOffset ?? 0);
     res.json(runs);
   });
 

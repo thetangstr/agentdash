@@ -8215,7 +8215,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   return {
-    list: async (companyId: string, agentId?: string, limit?: number) => {
+    list: async (companyId: string, agentId?: string, limit?: number, offset = 0) => {
       const safeForLegacyEncoding = await hasUnsafeTextProjectionDatabase();
       const query = db
         .select(
@@ -8239,7 +8239,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         )
         .orderBy(desc(heartbeatRuns.createdAt));
 
-      const rows = limit ? await query.limit(limit) : await query;
+      const safeOffset = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+      const rows = limit
+        ? await query.limit(limit).offset(safeOffset)
+        : await query.offset(safeOffset);
       return rows.map((row) => {
         const {
           contextIssueId,

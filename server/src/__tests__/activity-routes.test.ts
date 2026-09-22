@@ -25,6 +25,10 @@ vi.mock("../services/activity.js", () => ({
     if (!Number.isFinite(limit)) return 100;
     return Math.max(1, Math.min(500, Math.floor(limit ?? 100)));
   },
+  normalizeIssueRunsLimit: (limit: number | undefined) => {
+    if (!Number.isFinite(limit)) return 100;
+    return Math.max(1, Math.min(500, Math.floor(limit ?? 100)));
+  },
 }));
 
 vi.mock("../services/index.js", () => ({
@@ -149,8 +153,116 @@ describe.sequential("activity routes", () => {
     expect(res.status).toBe(200);
     expect(mockIssueService.getByIdentifier).toHaveBeenCalledWith("PAP-475");
     expect(mockIssueService.getById).not.toHaveBeenCalled();
-    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1");
+    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1", {
+      limit: 100,
+      offset: 0,
+    });
     expect(res.body).toEqual([{ runId: "run-1", adapterType: "codex_local" }]);
+  });
+
+  it("bounds the default issue run list to 100 runs", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-uuid-1",
+      companyId: "company-1",
+    });
+    mockActivityService.runsForIssue.mockResolvedValue([]);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/issues/issue-uuid-1/runs"));
+
+    expect(res.status).toBe(200);
+    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1", {
+      limit: 100,
+      offset: 0,
+    });
+  });
+
+  it("passes bounded limit and offset filters to the issue run list", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-uuid-1",
+      companyId: "company-1",
+    });
+    mockActivityService.runsForIssue.mockResolvedValue([]);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/issues/issue-uuid-1/runs?limit=25&offset=50"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1", {
+      limit: 25,
+      offset: 50,
+    });
+  });
+
+  it("caps oversized issue run list limits", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-uuid-1",
+      companyId: "company-1",
+    });
+    mockActivityService.runsForIssue.mockResolvedValue([]);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/issues/issue-uuid-1/runs?limit=99999"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1", {
+      limit: 500,
+      offset: 0,
+    });
+  });
+
+  it("rejects non-numeric issue run list paging parameters", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-uuid-1",
+      companyId: "company-1",
+    });
+
+    const app = await createApp();
+    const badLimit = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/issues/issue-uuid-1/runs?limit=abc"),
+    );
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/issues/issue-uuid-1/runs?offset=-3"),
+    );
+    expect(badOffset.status).toBe(400);
+    expect(mockActivityService.runsForIssue).not.toHaveBeenCalled();
+  });
+
+  it("serves issue run payloads through the redacting service without re-exposing context snapshots", async () => {
+    // Redaction itself is proven by the DB-backed activity-service tests
+    // (summarizeHeartbeatRunContextSnapshot allow-list). Here we pin the
+    // route contract: the payload served to clients is exactly the
+    // service-returned, already-redacted record.
+    const summarizedSnapshot = { issueId: "issue-uuid-1", wakeReason: "retry_failed_run" };
+    mockIssueService.getByIdentifier.mockResolvedValue({
+      id: "issue-uuid-1",
+      companyId: "company-1",
+    });
+    mockActivityService.runsForIssue.mockResolvedValue([
+      {
+        runId: "run-1",
+        status: "failed",
+        adapterType: "hermes_paperclip",
+        contextSnapshot: summarizedSnapshot,
+      },
+    ]);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/issues/PAP-475/runs"));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].contextSnapshot).toEqual(summarizedSnapshot);
+    expect(res.body[0]).not.toHaveProperty("stdoutExcerpt");
+    expect(res.body[0]).not.toHaveProperty("stderrExcerpt");
+    expect(res.body[0]).not.toHaveProperty("error");
+    expect(res.body[0]).not.toHaveProperty("adapterConfig");
   });
 
   it("requires company access before creating activity events", async () => {

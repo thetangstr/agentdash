@@ -17,6 +17,7 @@ import {
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { classifyRunLiveness } from "./run-liveness.js";
+import { summarizeHeartbeatRunContextSnapshot } from "./heartbeat.js";
 
 export interface ActivityFilters {
   companyId: string;
@@ -26,12 +27,24 @@ export interface ActivityFilters {
   limit?: number;
 }
 
+export interface IssueRunsFilters {
+  limit?: number;
+  offset?: number;
+}
+
 const DEFAULT_ACTIVITY_LIMIT = 100;
 const MAX_ACTIVITY_LIMIT = 500;
+const DEFAULT_ISSUE_RUNS_LIMIT = 100;
+const MAX_ISSUE_RUNS_LIMIT = 500;
 
 export function normalizeActivityLimit(limit: number | undefined) {
   if (!Number.isFinite(limit)) return DEFAULT_ACTIVITY_LIMIT;
   return Math.max(1, Math.min(MAX_ACTIVITY_LIMIT, Math.floor(limit ?? DEFAULT_ACTIVITY_LIMIT)));
+}
+
+export function normalizeIssueRunsLimit(limit: number | undefined) {
+  if (!Number.isFinite(limit)) return DEFAULT_ISSUE_RUNS_LIMIT;
+  return Math.max(1, Math.min(MAX_ISSUE_RUNS_LIMIT, Math.floor(limit ?? DEFAULT_ISSUE_RUNS_LIMIT)));
 }
 
 export function activityService(db: Db) {
@@ -376,8 +389,10 @@ export function activityService(db: Db) {
         )
         .orderBy(desc(activityLog.createdAt)),
 
-    runsForIssue: async (companyId: string, issueId: string) => {
+    runsForIssue: async (companyId: string, issueId: string, filters: IssueRunsFilters = {}) => {
       scheduleRunLivenessBackfill(companyId, issueId);
+      const limit = normalizeIssueRunsLimit(filters.limit);
+      const offset = Math.max(0, Math.floor(filters.offset ?? 0));
       const runs = await db
         .select({
           runId: heartbeatRuns.id,
@@ -426,7 +441,9 @@ export function activityService(db: Db) {
             ),
           ),
         )
-        .orderBy(desc(heartbeatRuns.createdAt));
+        .orderBy(desc(heartbeatRuns.createdAt))
+        .limit(limit)
+        .offset(offset);
 
       if (runs.length === 0) return runs;
       const runIds = runs.map((run) => run.runId);
@@ -490,6 +507,7 @@ export function activityService(db: Db) {
               : null;
         return {
           ...run,
+          contextSnapshot: summarizeHeartbeatRunContextSnapshot(run.contextSnapshot),
           environment: leaseRow
             ? {
                 id: leaseRow.environment.id,
