@@ -47,6 +47,7 @@ import { hubspotConnectorRoutes } from "./routes/hubspot-connector.js";
 // AgentDash-MK: SharePoint read through the acting person's Entra identity.
 import { sharepointConnectorRoutes } from "./routes/sharepoint-connector.js";
 import { bridgeRoutes } from "./routes/bridge.js";
+import { stewardWebhookRoutes } from "./routes/steward-webhooks.js";
 import { teamsConnectorRoutes } from "./routes/teams-connector.js";
 import { projectRoutes } from "./routes/projects.js";
 import { issueRoutes } from "./routes/issues.js";
@@ -505,6 +506,7 @@ export async function createApp(
   api.use(hubspotConnectorRoutes(db));
   api.use(sharepointConnectorRoutes(db));
   api.use(bridgeRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(stewardWebhookRoutes(db));
   api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));

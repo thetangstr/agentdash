@@ -37,6 +37,7 @@ const mockAgentsApi = vi.hoisted(() => ({ createConnectCode: vi.fn(), createKey:
 const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
 const mockAuthApi = vi.hoisted(() => ({ getSession: vi.fn() }));
 const mockBridgeApi = vi.hoisted(() => ({ listMyEndpoints: vi.fn(), revoke: vi.fn() }));
+const mockStewardWebhooksApi = vi.hoisted(() => ({ list: vi.fn(), register: vi.fn(), revoke: vi.fn() }));
 const mockApprovalsApi = vi.hoisted(() => ({ approve: vi.fn(), reject: vi.fn() }));
 const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
 
@@ -60,6 +61,7 @@ vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
 vi.mock("../api/health", () => ({ healthApi: mockHealthApi }));
 vi.mock("../api/auth", () => ({ authApi: mockAuthApi }));
 vi.mock("../api/bridge", () => ({ bridgeApi: mockBridgeApi }));
+vi.mock("../api/steward-webhooks", () => ({ stewardWebhooksApi: mockStewardWebhooksApi }));
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: MyAgent } = await import("./MyAgent");
@@ -126,6 +128,7 @@ describe("MyAgent", () => {
       user: { id: "user-me", name: "Yang Tang", email: "yang@x", image: null },
     });
     mockBridgeApi.listMyEndpoints.mockResolvedValue({ endpoints: [] });
+    mockStewardWebhooksApi.list.mockResolvedValue({ webhooks: [] });
     mockAgentsApi.createConnectCode.mockResolvedValue({
       code: "KVTX-8F02",
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
@@ -909,6 +912,48 @@ describe("MyAgent", () => {
       expect(text).not.toContain("What you will see");
       expect(text).not.toContain("MCP Server Status");
       expect(container.querySelector('[role="tablist"]')).toBeNull();
+    });
+  });
+
+  describe("getting told in Teams", () => {
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+      });
+    });
+
+    /** The card must say the two things that keep it safe before the paste. */
+    it("offers the webhook with the audience warning and the no-deciding rule", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("Get told in Teams");
+      expect(text).toMatch(/Everyone in that channel will see/);
+      expect(text).toMatch(/deciding stays on this page/i);
+    });
+
+    it("lists a registered webhook with its host hint and a disconnect", async () => {
+      mockStewardWebhooksApi.list.mockResolvedValue({
+        webhooks: [
+          {
+            id: "wh-1",
+            label: "Casper channel",
+            urlHint: "prod.workflows.example…",
+            verifiedAt: "2026-09-22T00:00:00Z",
+            lastDeliveredAt: null,
+            lastError: null,
+            createdAt: "2026-09-22T00:00:00Z",
+          },
+        ],
+      });
+
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("Casper channel");
+      expect(text).toContain("prod.workflows.example…");
+      expect(text).toContain("nothing delivered yet");
     });
   });
 

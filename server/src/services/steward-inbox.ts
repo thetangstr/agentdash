@@ -520,7 +520,15 @@ export function stewardInboxService(db: Db) {
    * a list that only grows, which is precisely the unemptyable inbox this
    * project has already built once and had to narrow.
    */
-  async function buildDigest(endpoint: { id: string; companyId: string; userId: string }) {
+  /**
+   * `endpoint.id: null` builds the same digest WITHOUT decision handles. The
+   * webhook delivery path uses it: a handle is minted for one endpoint and
+   * spent through that endpoint's credential, and a webhook has neither — it
+   * posts into a channel whose audience is wider than the steward, so nothing
+   * even handle-shaped may be created on its behalf. Discovered the honest
+   * way: passing a webhook id here violated the callback-token FK.
+   */
+  async function buildDigest(endpoint: { id: string | null; companyId: string; userId: string }) {
     const mine = await agentsAnsweredForBy(endpoint.companyId, endpoint.userId);
     const nameById = new Map(mine.map((agent) => [agent.id, agent.name]));
     const agentIds = mine.map((agent) => agent.id);
@@ -565,8 +573,11 @@ export function stewardInboxService(db: Db) {
         waitingSince: approval.createdAt.toISOString(),
         // The digest is actionable, not just informative. An approval listed
         // here without handles would make the steward sync again to act on
-        // something already in front of them.
-        actions: await decisionActionsFor(endpoint, approval.id),
+        // something already in front of them. Handle-less callers (the webhook
+        // sweep) pass id: null and get the same digest with no actions minted.
+        actions: endpoint.id
+          ? await decisionActionsFor({ id: endpoint.id, companyId: endpoint.companyId, userId: endpoint.userId }, approval.id)
+          : undefined,
       })),
     );
 
