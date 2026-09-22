@@ -1,3 +1,4 @@
+import process from "node:process";
 /**
  * Reading and writing the two harnesses' native MCP config.
  *
@@ -58,6 +59,26 @@ export function upsertClaudeConfig(config, serverName, { url, key }) {
     url,
     headers: { Authorization: `Bearer ${key}` },
   };
+  return next;
+}
+
+/**
+ * How Claude Code should launch the person's inbox tools. Pinned @latest for
+ * the same reason the hook is: a bare name lets npx serve a cached copy from
+ * before the `mcp` subcommand existed. On Windows `npx` is a .cmd shim that
+ * Claude Code cannot spawn directly, so it goes through cmd.
+ */
+export function inboxMcpLaunch({ server, platform = process.platform } = {}) {
+  const args = ["-y", "agentdash-connect@latest", "mcp", ...(server ? ["--server", server] : [])];
+  return platform === "win32"
+    ? { command: "cmd", args: ["/c", "npx", ...args] }
+    : { command: "npx", args };
+}
+
+export function upsertClaudeStdioServer(config, serverName, { command, args }) {
+  const next = { ...(config ?? {}) };
+  next.mcpServers = { ...(next.mcpServers ?? {}) };
+  next.mcpServers[serverName] = { type: "stdio", command, args, env: {} };
   return next;
 }
 

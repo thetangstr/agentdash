@@ -44,14 +44,16 @@ function relativeImports(source) {
 describe("the published package", () => {
   const root = packAndExtract();
 
-  it("continues the owned package lineage at 0.2.1", () => {
+  it("continues the owned package lineage at 0.3.0", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
     expect(pkg.name).toBe("agentdash-connect");
     // 0.2.0: the inbox half. Redeem stores the bridge token, scaffolds the
     // inbox workspace, and answers `agentdash-connect inbox`. Pinned so a
     // publish is a deliberate act — which worked: the 0.2.0 tag was refused by
     // this very line until it was updated on purpose.
-    expect(pkg.version).toBe("0.2.1");
+    // 0.3.0: `agentdash-connect mcp` — the person's own inbox tools, so a
+    // steward can approve or reject from their harness as themselves.
+    expect(pkg.version).toBe("0.3.0");
   });
 
   it("ships the entry point named in bin", () => {
