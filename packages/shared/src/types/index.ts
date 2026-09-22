@@ -91,6 +91,7 @@ export type {
   AdapterEnvironmentTestStatus,
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
+  AgentResolvedRuntime,
 } from "./agent.js";
 export { AGENT_API_KEY_SOURCES } from "./agent.js";
 export type {

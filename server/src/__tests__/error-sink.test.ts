@@ -133,4 +133,41 @@ describeEmbeddedPostgres("error sink", () => {
     expect(a).toBe(b);
     expect(a).not.toBe(c);
   });
+
+  // --- AGE-83: the sink URL is scrubbed at the boundary -------------------
+
+  it("scrubs credential query values from context.url before persisting (AGE-83)", async () => {
+    recordServerError(new Error("oauth step failed"), {
+      method: "GET",
+      url: "/api/auth/callback?code=super-secret-code&state=st9&next=/dashboard",
+      status: 500,
+    });
+
+    const rows = await flushSink();
+    expect(rows).toHaveLength(1);
+    const ctx = rows[0].lastContext as { url: string };
+    expect(ctx.url).toBe("/api/auth/callback?code=[REDACTED]&state=[REDACTED]&next=/dashboard");
+    expect(JSON.stringify(rows[0].lastContext)).not.toContain("super-secret-code");
+  });
+
+  it("fingerprint is identical for the raw and scrubbed URL — grouping unaffected (AGE-83)", async () => {
+    // fingerprintError never sees the URL (name+message+stack only), so the
+    // boundary scrub cannot split one defect into two rows: the same error
+    // reported first with a raw URL, then a scrubbed one, is ONE row, count 2.
+    const errA = new Error("callback blew up");
+    const errB = new Error("callback blew up");
+    errB.stack = errA.stack;
+
+    recordServerError(errA, { method: "GET", url: "/cb?code=raw-secret-value", status: 500 });
+    await flushSink();
+    recordServerError(errB, { method: "GET", url: "/cb?code=[REDACTED]", status: 500 });
+    for (let i = 0; i < 20; i++) {
+      if ((await db.select().from(serverErrors))[0]?.count === 2) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    const rows = await db.select().from(serverErrors);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].count).toBe(2);
+  });
 });

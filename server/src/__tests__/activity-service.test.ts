@@ -548,4 +548,118 @@ describeEmbeddedPostgres("activity service", () => {
       lastUsefulActionAt: null,
     });
   });
+
+  it("returns a bounded page of issue runs honoring offset", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const createdAtByIndex = [0, 1, 2].map(
+      (index) => new Date(Date.UTC(2026, 3, 21, 10, 0, index)),
+    );
+    await db.insert(heartbeatRuns).values(
+      [0, 1, 2].map((index) => ({
+        id: randomUUID(),
+        companyId,
+        agentId,
+        invocationSource: "assignment",
+        status: "succeeded",
+        createdAt: createdAtByIndex[index],
+        contextSnapshot: { issueId },
+      })),
+    );
+
+    const service = activityService(db);
+    const allRuns = await service.runsForIssue(companyId, issueId);
+    expect(allRuns).toHaveLength(3);
+    // Newest first.
+    expect(allRuns.map((run) => run.createdAt.getTime())).toEqual(
+      [...allRuns.map((run) => run.createdAt.getTime())].sort((a, b) => b - a),
+    );
+
+    const page = await service.runsForIssue(companyId, issueId, { limit: 2 });
+    expect(page).toHaveLength(2);
+    expect(page.map((run) => run.runId)).toEqual(allRuns.slice(0, 2).map((run) => run.runId));
+
+    const secondPage = await service.runsForIssue(companyId, issueId, { limit: 2, offset: 2 });
+    expect(secondPage).toHaveLength(1);
+    expect(secondPage.map((run) => run.runId)).toEqual(allRuns.slice(2).map((run) => run.runId));
+  });
+
+  it("redacts context snapshots in issue run payloads", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "failed",
+      contextSnapshot: {
+        issueId,
+        wakeReason: "scheduled",
+        paperclipWake: {
+          comments: [{ body: "secret wake payload that must not be exposed" }],
+        },
+        providerApiKey: "sk-test-never-expose",
+        adapterEnv: { ANTHROPIC_API_KEY: "sk-ant-never-expose" },
+        executionStage: { summary: "large nested blob that must be dropped" },
+      },
+    });
+
+    const service = activityService(db);
+    const runs = await service.runsForIssue(companyId, issueId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.contextSnapshot).toEqual({
+      issueId,
+      wakeReason: "scheduled",
+    });
+
+    const serialized = JSON.stringify(runs);
+    expect(serialized).not.toContain("sk-test-never-expose");
+    expect(serialized).not.toContain("sk-ant-never-expose");
+    expect(serialized).not.toContain("secret wake payload that must not be exposed");
+    expect(serialized).not.toContain("large nested blob that must be dropped");
+  });
 });

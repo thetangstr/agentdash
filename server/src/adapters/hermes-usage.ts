@@ -223,8 +223,27 @@ export function applyHermesSessionUsage(
   usage: HermesSessionUsage | null,
 ): AdapterExecutionResult {
   if (!usage) return result;
+  // AGE-142 (S3): the recovery budget reads turns from resultJson.num_turns
+  // (task-recovery-budget.ts), but nothing in this repo ever wrote it, so the
+  // turns dimension sat silently at zero and could never exhaust. The ledger's
+  // per-model API call counts are that number, from the process that spent
+  // them. Cumulative-session caveat, recorded where the write happens: hermes
+  // totals are per session, so on a resumed session this reports the
+  // session-so-far figure rather than a per-run delta — an overcount that can
+  // only bias the budget toward stopping sooner, never toward overspending.
+  // A natively reported count the adapter already established is not clobbered.
+  const existingResultJson =
+    result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
+      ? result.resultJson
+      : {};
+  const existingTurns = readNumber(
+    existingResultJson.num_turns ?? existingResultJson.numTurns,
+  );
   return {
     ...result,
+    ...(existingTurns > 0 || usage.apiCalls <= 0
+      ? {}
+      : { resultJson: { ...existingResultJson, num_turns: usage.apiCalls } }),
     usage: result.usage ?? usage.usage,
     ...(isInformative(result.model) ? {} : usage.model ? { model: usage.model } : {}),
     ...(isInformative(result.provider) ? {} : usage.provider ? { provider: usage.provider } : {}),

@@ -79,14 +79,15 @@ export function SidebarNavItem({
       )}
       {badge != null && badge > 0 && (
         <span
+          data-testid="sidebar-nav-badge"
           className={cn(
             "ml-auto rounded-full px-1.5 py-0.5 text-xs leading-none",
             badgeTone === "danger"
               ? "bg-red-600/90 text-red-50"
-              : "bg-primary text-primary-foreground",
+              : "bg-primary text-text-inverse",
           )}
         >
-          {badge}
+          {badge > 99 ? "99+" : badge}
         </span>
       )}
     </NavLink>

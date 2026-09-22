@@ -299,9 +299,11 @@ export function Agents() {
                       </span>
                       <span
                         className="w-36 truncate text-left font-mono text-xs text-muted-foreground"
-                        title={getConfiguredModel(agent) ?? undefined}
+                        title={getConfiguredModel(agent)
+                          ?? (agent.adapterType === "hermes_local" ? "inherited from hermes config" : undefined)}
                       >
-                        {getConfiguredModel(agent) ?? "—"}
+                        {getConfiguredModel(agent)
+                          ?? (agent.adapterType === "hermes_local" ? "default*" : "—")}
                       </span>
                       <span className="text-xs text-muted-foreground w-16 text-right">
                         {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}

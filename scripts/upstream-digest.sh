@@ -130,7 +130,11 @@ flush_commit() {
   local file_count="${#files[@]}"
   local file_summary=""
   if [ "$file_count" -gt 0 ]; then
-    file_summary=$(printf '%s\n' "${files[@]}" | head -3 | paste -sd ',' -)
+    # Bash slice instead of a truncated pipeline: with 4+ files a truncating
+    # consumer exits early and the producer gets SIGPIPE, which
+    # `set -o pipefail` escalates into exit 141 and kills the whole run under
+    # `set -e` (broke the 2026-09-22 dispatch).
+    file_summary="$(printf '%s\n' "${files[@]:0:3}" | paste -sd ',' -)"
   fi
   local extra=""
   if [ "$file_count" -gt 3 ]; then
