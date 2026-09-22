@@ -24,6 +24,7 @@ import {
   normalizeAgentAutonomy,
 } from "../services/agent-accountability.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { truncateWithRetry } from "./helpers/truncate.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -181,7 +182,7 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
     // TRUNCATE … CASCADE rather than a list of deletes: agents are referenced by
     // connect codes, keys and budget policies, and a per-table cleanup here
     // fails on whichever dependent table a new test happens to touch.
-    await db.execute(sql`truncate table ${companies}, ${authUsers} cascade`);
+    await truncateWithRetry(db, sql`${companies}, ${authUsers}`);
   });
 
   afterAll(async () => {

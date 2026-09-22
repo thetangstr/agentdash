@@ -22,6 +22,7 @@ import { errorHandler } from "../middleware/index.js";
 import { stewardWebhookRoutes } from "../routes/steward-webhooks.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
+import { truncateWithRetry } from "./helpers/truncate.js";
 import {
   renderStewardWebhookMessage,
   stewardWebhooksService,
@@ -91,8 +92,7 @@ describeEmbeddedPostgres("steward webhooks", () => {
   });
 
   afterEach(async () => {
-    await db.execute(sql`truncate table ${companies} cascade`);
-    await db.execute(sql`truncate table ${authUsers} cascade`);
+    await truncateWithRetry(db, sql`${companies}, ${authUsers}`);
   });
 
   /** A steward with an agent, a name, and one pending approval on the log. */
