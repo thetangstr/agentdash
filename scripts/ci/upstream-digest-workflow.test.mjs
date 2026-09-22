@@ -39,6 +39,12 @@ const WORKFLOW = path.join(
   "upstream-digest.yml",
 );
 
+const DIGEST_SCRIPT = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "upstream-digest.sh",
+);
+
 const RUN_SCALAR_RE = /^(\s*)(?:- )?(?:run|shell-script):\s*[|>][-+\d]*\s*$/;
 // A line that may legitimately terminate a block scalar: a `key:` or a
 // `- ` sequence entry at the scalar's own indentation or shallower.
@@ -119,6 +125,34 @@ test("upstream-digest.yml keeps the daily 09:00 UTC schedule and workflow_dispat
   const text = readFileSync(WORKFLOW, "utf8");
   assert.match(text, /workflow_dispatch:\s*$/m, "workflow_dispatch trigger missing");
   assert.match(text, /cron:\s*["']?0 9 \* \* \*["']?/, "daily 09:00 UTC cron missing");
+});
+
+test("digest script carries no producer|head SIGPIPE trap under pipefail (AGE-29)", () => {
+  // First live dispatch of this workflow (2026-09-22) died with
+  // `printf: write error: Broken pipe` at scripts/upstream-digest.sh:133:
+  // `printf '%s\n' "${files[@]}" | head -3` lets head exit early on 4+ files,
+  // the producer gets SIGPIPE, and `set -euo pipefail` escalates 141 into a
+  // fatal error. The fix uses a bash slice; this test pins that no
+  // write-many-then-truncate pipeline pattern returns to the script.
+  const text = readFileSync(DIGEST_SCRIPT, "utf8");
+  const offending = text
+    .split("\n")
+    .map((line, index) => ({ line: index + 1, text: line }))
+    .filter(
+      ({ text: line }) =>
+        /printf[^\n]*\|\s*head\b/.test(line) ||
+        /echo[^\n]*\|\s*head\b/.test(line) ||
+        /seq\s+\S+\s*\|\s*head\b/.test(line),
+    );
+  assert.deepEqual(
+    offending,
+    [],
+    offending
+      .map((o) => `line ${o.line} pipes a multi-line producer into head: ${o.text.trim()}`)
+      .join("\n"),
+  );
+  // The regression fix itself must be present: a slice, not a pipeline.
+  assert.match(text, /files\[@\]:0:3/, "expected bash-slice file summary fix");
 });
 
 test("every extracted run: script is valid bash", () => {

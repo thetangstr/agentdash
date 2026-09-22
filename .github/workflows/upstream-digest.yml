@@ -29,9 +29,11 @@ jobs:
         with:
           # Full history so the script can compute upstream..HEAD correctly.
           fetch-depth: 0
-          # Ensure we're on the default branch (main) regardless of how cron
-          # delivered the workflow ref.
-          ref: main
+          # Pin to the ref that carried this workflow file: a workflow_dispatch
+          # against a fix branch then validates that branch's digest pipeline
+          # end-to-end before merge (identical behavior for cron, which always
+          # dispatches on main).
+          ref: ${{ github.ref }}
 
       - name: Add upstream remote
         run: |
