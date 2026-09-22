@@ -13,6 +13,7 @@ import path from "node:path";
 
 import {
   envVarNameFor,
+  inboxMcpLaunch,
   mcpEndpointFor,
   normalizeInstanceUrl,
   readClaudeServer,
@@ -20,6 +21,7 @@ import {
   removeClaudeConfig,
   removeCodexToml,
   upsertClaudeConfig,
+  upsertClaudeStdioServer,
   upsertCodexToml,
 } from "./harnesses.mjs";
 import {
@@ -150,14 +152,34 @@ export function applyConnection({ serverName, instanceUrl, key, harnesses, accou
   return { endpoint, envVar, written, secretBackend: backend };
 }
 
+/** The inbox tools' server name sits beside the agent's, so --remove finds both. */
+export const inboxServerNameFor = (serverName) => `${serverName}-inbox`;
+
+/**
+ * Give Claude Code the person's own inbox tools. Separate from
+ * `applyConnection` because it rides the OTHER credential: the agent key above
+ * is the agent, this is the person, and the two must never share a server
+ * entry. The token itself stays in ~/.agentdash/bridge-token; the config names
+ * only the command, so no secret is written here.
+ */
+export function applyInboxMcp({ serverName, instanceUrl, configPath = CLAUDE_CONFIG }) {
+  const name = inboxServerNameFor(serverName);
+  const config = readJsonFile(configPath) ?? {};
+  writeJsonFile(configPath, upsertClaudeStdioServer(config, name, inboxMcpLaunch({ server: instanceUrl })));
+  return { name, file: configPath };
+}
+
 /** Undo everything `applyConnection` did, reporting what was actually there. */
 export function removeConnection({ serverName, account }) {
   const removed = [];
 
-  const claudeConfig = readJsonFile(CLAUDE_CONFIG);
-  if (claudeConfig && readClaudeServer(claudeConfig, serverName)) {
-    writeJsonFile(CLAUDE_CONFIG, removeClaudeConfig(claudeConfig, serverName));
-    removed.push({ harness: "claude", file: CLAUDE_CONFIG });
+  let claudeConfig = readJsonFile(CLAUDE_CONFIG);
+  for (const name of [serverName, inboxServerNameFor(serverName)]) {
+    if (claudeConfig && readClaudeServer(claudeConfig, name)) {
+      claudeConfig = removeClaudeConfig(claudeConfig, name);
+      writeJsonFile(CLAUDE_CONFIG, claudeConfig);
+      removed.push({ harness: "claude", file: `${CLAUDE_CONFIG} (${name})` });
+    }
   }
 
   const codexText = readTextFile(CODEX_CONFIG);

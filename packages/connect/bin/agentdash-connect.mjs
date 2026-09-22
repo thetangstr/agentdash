@@ -15,6 +15,7 @@ import readline from "node:readline";
 import {
   DEFAULT_SERVER_NAME,
   applyConnection,
+  applyInboxMcp,
   checkConnection,
   detectHarnesses,
   mcpEndpointFor,
@@ -33,6 +34,7 @@ import {
   storeBridgeOwner,
   storeBridgeToken,
 } from "../src/inbox.mjs";
+import { runInboxMcp } from "../src/inbox-mcp.mjs";
 
 // Read the real version rather than restating it. A CLI that misreports which
 // version it is turns "did the fix reach me?" into guesswork -- which is
@@ -81,6 +83,8 @@ function usage() {
   npx agentdash-connect --remove         undo everything this wrote
   npx agentdash-connect inbox            read your AgentDash inbox (used by the
                                          SessionStart hook in ~/agentdash-inbox)
+  npx agentdash-connect mcp              serve your own inbox tools (sync, decide,
+                                         assign) to Claude Code over stdio
 
 Options
   --name <name>   MCP server name to write (default: ${DEFAULT_SERVER_NAME})
@@ -172,6 +176,12 @@ async function main() {
       ack: Boolean(args.ack),
       quietWhenEmpty: Boolean(args.quietWhenEmpty),
     });
+  }
+
+  // Launched by Claude Code, not by a person: stdout is the protocol channel,
+  // so nothing else may print to it.
+  if (args._[0] === "mcp") {
+    return runInboxMcp({ server: args.server, tokenFile: args.tokenFile }, { version: pkg.version });
   }
 
   if (args.check) {
@@ -338,6 +348,11 @@ async function main() {
       out(`  token   ${tokenPath}
           your inbox credential (mode 600) — questions for you arrive with it`);
       for (const file of created) out(`  inbox   ${file}`);
+      if (harnesses.claude) {
+        const inboxMcp = applyInboxMcp({ serverName, instanceUrl });
+        out(`  claude  ${inboxMcp.file}
+          "${inboxMcp.name}" — your own inbox tools, so you can approve or reject from Claude`);
+      }
       out("");
       out(`Open ${inboxDir} in Claude Code and anything waiting on you appears as the session starts.`);
     } catch (error) {
