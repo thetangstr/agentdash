@@ -3,6 +3,7 @@ import {
   buildConnectCommand,
   buildWatchPrompt,
   describeCodeLife,
+  pointsElsewhere,
   resolveInstanceOrigin,
   resolveOriginChoices,
 } from "./connect-terminal-copy";
@@ -11,41 +12,39 @@ describe("resolveOriginChoices", () => {
   const PUBLISHED = "http://mkmini.local:3102";
   const TAILNET = "https://mkthinks-mac-mini.tail112187.ts.net:3112";
 
-  /**
-   * The common case, and it must stay invisible. A steward on the office LAN
-   * reaches the box at the published address, so there is nothing to decide and
-   * no control should appear.
-   */
-  it("offers nothing to choose when both addresses agree", () => {
+  it("offers the published address when it is also the one you came through", () => {
     const choices = resolveOriginChoices(PUBLISHED, PUBLISHED);
     expect(choices).toHaveLength(1);
     expect(choices[0]!.url).toBe(PUBLISHED);
   });
 
-  it("treats a trailing slash and case as the same address", () => {
-    expect(resolveOriginChoices(PUBLISHED, "http://MKMini.local:3102/")).toHaveLength(1);
-  });
-
-  /** Someone on the tailnet: the published LAN address is not how they got here. */
-  it("offers both when the door they came through is not the published one", () => {
+  /**
+   * The whole point of the change. A steward reading the page over the tailnet
+   * used to be handed the tailnet address, which is precisely the address the
+   * colleague they are pairing cannot reach. There is now one answer and the
+   * reader does not get to make it worse.
+   */
+  it("gives the published address even when the reader arrived by another door", () => {
     const choices = resolveOriginChoices(PUBLISHED, TAILNET);
-    expect(choices.map((c) => c.url)).toEqual([TAILNET, PUBLISHED]);
-    expect(choices.map((c) => c.kind)).toEqual(["current", "published"]);
+    expect(choices).toHaveLength(1);
+    expect(choices[0]!.url).toBe(PUBLISHED);
+    expect(choices[0]!.kind).toBe("published");
+    expect(resolveInstanceOrigin(PUBLISHED, TAILNET)).toBe(PUBLISHED);
   });
 
   /**
-   * REVERSED on field evidence, deliberately. The first ordering defaulted to
-   * the published address so a forwarded command would be the shared one — and
-   * the first remote steward to use the page hit exactly the failure that
-   * default guarantees: the published LAN name does not resolve over a VPN,
-   * and he had to notice and switch by hand. The page's own copy says "run
-   * this on the machine you work on"; self-use is the dominant case, so the
-   * default is the address the reader is provably using, and the forwarding
-   * caution lives on the published option's label instead.
+   * Superseded on purpose. An earlier release defaulted to the reader's own
+   * address on field evidence — a remote steward's VPN could not resolve the
+   * published LAN name. That failure is real and has not gone away; it is now
+   * the operator's to fix in PAPERCLIP_PUBLIC_URL rather than each reader's to
+   * rediscover, and `pointsElsewhere` is what tells them it happened.
    */
-  it("defaults to the address the reader is using, not the published one", () => {
-    expect(resolveOriginChoices(PUBLISHED, TAILNET)[0]!.kind).toBe("current");
-    expect(resolveInstanceOrigin(PUBLISHED, TAILNET)).toBe(TAILNET);
+  it("says when the command points somewhere other than this reader's door", () => {
+    expect(pointsElsewhere(PUBLISHED, TAILNET)).toBe(true);
+    expect(pointsElsewhere(PUBLISHED, PUBLISHED)).toBe(false);
+    expect(pointsElsewhere(PUBLISHED, "http://MKMini.local:3102/")).toBe(false);
+    expect(pointsElsewhere(null, TAILNET)).toBe(false);
+    expect(pointsElsewhere(PUBLISHED, "")).toBe(false);
   });
 
   it("falls back to the browser address when nothing is published", () => {

@@ -8,32 +8,27 @@
 /**
  * Which address the pasted command should point at.
  *
- * There is no single right answer on this instance, and pretending otherwise is
- * what made the old behaviour wrong for somebody either way. Three doors exist
- * and none of them works for everyone:
+ * The published address, and only the published address. `PAPERCLIP_PUBLIC_URL`
+ * is the one address the operator has declared is the way in; the browser
+ * origin is merely the door this particular reader happened to come through,
+ * and on this instance that is routinely the tailnet host — an address nobody
+ * else can reach and that a managed Mac will not trust.
  *
- *   http://mkmini.local:3102   plain HTTP on the office LAN — the only address a
- *                              client user on a managed Mac can open with no IT ask
- *   https://<host>:3112        real certificate, but only for someone on the tailnet
- *   https://mkmini.local:3112  a private root a managed Mac will not trust
+ * This replaces a two-option picker. The picker was honest about the ambiguity
+ * and it made every reader resolve it, every time, with the default landing on
+ * whichever door they arrived by. Where the two addresses agreed it showed
+ * nothing, so the people who saw a choice were exactly the people least able to
+ * judge it. An operator who wants a different address in the command changes
+ * the one env var that declares it, in one place, for everyone.
  *
- * So `PAPERCLIP_PUBLIC_URL` is a compromise chosen for the majority, and the
- * page used to hand it to everyone — including the person who had demonstrably
- * just reached the server by a different address, since they were reading the
- * page through it.
+ * The cost is real and worth stating: a reader on a VPN or tailnet, for whom
+ * the published address does not resolve, no longer has a one-click escape on
+ * the page. That is why the card says which address the command carries, and
+ * why `PAPERCLIP_PUBLIC_URL` must be an address reachable by the people you
+ * expect to run this — see doc/handoffs/2026-08-19-machine-handoff.md.
  *
- * When the two agree there is nothing to decide and nothing is shown. When they
- * disagree, both are offered.
- *
- * The address you are USING comes first, and that is a reversal, made on field
- * evidence. The first ordering put the published address first, reasoning that
- * the command gets forwarded to colleagues — but the page's own copy says "run
- * this on the machine you work on", and the first remote steward to use it hit
- * exactly the failure the old default guaranteed: the published LAN name does
- * not resolve over a VPN, and he had to notice and switch by hand. Self-use is
- * the dominant case; the person you MIGHT forward to is the exception, so the
- * caution now lives on the published option's label instead of in the default.
- * A steward whose two addresses agree still sees no choice at all.
+ * The browser origin survives in one case only: nothing published at all, where
+ * a wrong-but-present address beats an empty `--url`.
  */
 export type OriginChoice = {
   url: string;
@@ -55,26 +50,28 @@ export function resolveOriginChoices(
   const published = (publicBaseUrl ?? "").trim().replace(/\/+$/, "");
   const current = (browserOrigin ?? "").trim().replace(/\/+$/, "");
 
-  if (!published) {
-    return current ? [{ url: current, kind: "current", label: "The address you are using now" }] : [];
+  if (published) {
+    return [{ url: published, kind: "published", label: "The address this instance publishes" }];
   }
-  const publishedChoice: OriginChoice = {
-    url: published,
-    kind: "published",
-    label: "The address this instance publishes",
-  };
-  if (!current || sameOrigin(published, current)) return [publishedChoice];
-
-  return [
-    { url: current, kind: "current", label: "The address you are using now" },
-    publishedChoice,
-  ];
+  return current ? [{ url: current, kind: "current", label: "The address you are using now" }] : [];
 }
 
 /**
- * The address to use when nobody chooses. First choice wins; see the ordering
- * note above for why that is the one the reader is provably using.
+ * Whether the command points somewhere other than the door this reader came
+ * through. Not a choice any more — just the one fact that makes an unreachable
+ * command explicable instead of mysterious.
  */
+export function pointsElsewhere(
+  publicBaseUrl: string | null | undefined,
+  browserOrigin: string,
+): boolean {
+  const published = (publicBaseUrl ?? "").trim().replace(/\/+$/, "");
+  const current = (browserOrigin ?? "").trim().replace(/\/+$/, "");
+  if (!published || !current) return false;
+  return !sameOrigin(published, current);
+}
+
+/** The address to use. There is only one; this is kept as the named accessor. */
 export function resolveInstanceOrigin(
   publicBaseUrl: string | null | undefined,
   browserOrigin: string,
