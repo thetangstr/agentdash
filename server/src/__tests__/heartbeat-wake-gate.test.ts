@@ -5,10 +5,11 @@ import {
   agents,
   companies,
   createDb,
+  heartbeatRuns,
   issueComments,
   issues,
 } from "@paperclipai/db";
-import { sql } from "drizzle-orm";
+import { isNotNull, sql } from "drizzle-orm";
 import { heartbeatService } from "../services/heartbeat.js";
 import {
   getEmbeddedPostgresTestSupport,
@@ -40,10 +41,24 @@ describeEmbeddedPostgres("heartbeat wake gate", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-wake-gate-");
     db = createDb(tempDb.connectionString);
-    heartbeat = heartbeatService(db);
+    // These tests decide whether a run is *enqueued*; they never need one to
+    // execute. With the default (production) behavior, enqueueWakeup claims the
+    // run and fires `void executeRun(...)`, so the `process` adapter's `echo`
+    // run keeps writing heartbeat_runs/agents in the background after the test
+    // returns — and the afterEach truncate below deadlocked against it in CI
+    // (PostgresError 40P01 on `truncate table companies cascade`, Release lane,
+    // 2026-09-02). Turning dispatch off removes the concurrent writer.
+    heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
   }, 30_000);
 
   afterEach(async () => {
+    // Nothing in this suite may execute a run; if this ever fires, dispatch has
+    // been re-enabled and the truncate below is racing a live run again.
+    const executed = await db
+      .select({ id: heartbeatRuns.id, status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(isNotNull(heartbeatRuns.finishedAt));
+    expect(executed).toEqual([]);
     await db.execute(sql`truncate table ${companies} cascade`);
   });
 
