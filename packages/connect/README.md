@@ -14,9 +14,10 @@ It works the same in a macOS/Linux terminal and in PowerShell on Windows.
 
 ## Before you run it
 
-- **Use the full package name, `agentdash-connect`.** `npx agentdash` resolves
-  to an unrelated package on the public npm registry that is not part of this
-  project. It prints a help screen and exits 0, which looks like success.
+- **Use the full package name, `agentdash-connect`.** Reaching for `npx` with
+  the bare name `agentdash` lands on an unrelated package on the public npm
+  registry that is not part of this project. It prints a help screen and exits
+  0, which looks like success.
 - **Keep `@latest`.** A bare package name lets npx serve whatever its cache
   holds, and a cached pre-0.2 CLI pairs the agent but silently skips the inbox
   half, with no error. `-y` skips npx's "Ok to proceed?" prompt.
@@ -60,6 +61,8 @@ Inbox connected for Jonah Lee (jonah@example.com):
           your inbox credential (mode 600) — questions for you arrive with it
   inbox   ~/agentdash-inbox/.claude/settings.json
   inbox   ~/agentdash-inbox/README.md
+  claude  ~/.claude.json
+          "agentdash-inbox" — your own inbox tools, so you can approve or reject from Claude
 
 Open ~/agentdash-inbox in Claude Code and anything waiting on you appears as the session starts.
 ```
@@ -77,6 +80,7 @@ its steward's inbox.
 | `~/.agentdash/bridge-owner.json` | whose inbox this is and which instance — display metadata only, mode 600 |
 | `~/agentdash-inbox/.claude/settings.json` | a `SessionStart` hook that runs `npx -y agentdash-connect@latest inbox --ack --quiet-when-empty` |
 | `~/agentdash-inbox/README.md` | a short note on what the folder is for |
+| `~/.claude.json` | a second entry, `agentdash-inbox` — your own inbox tools, holding no secret |
 
 Start or resume a Claude Code session **in `~/agentdash-inbox`** and the hook puts what is
 waiting on you into the session: approvals needing your decision first, then
@@ -84,31 +88,62 @@ agents that stopped, then work that finished. It is a separate folder so it can
 never interrupt a session anywhere else — the hook applies only to sessions
 started there.
 
-Two things it does not do:
+One thing the hook does not do:
 
-- **It does not decide.** The session tells you what is waiting; approving and
-  rejecting happen on the AgentDash page.
 - **It does not carry the evidence.** Only the ask and a pointer arrive, because
   anything delivered into a session becomes model context.
+
+The hook only reports. Acting on what it reports is the `agentdash-inbox`
+tools' job, on the same credential — see below.
 
 If this machine's inbox already belongs to someone else, pairing asks before
 replacing it and defaults to keeping what is there. The agent pairing goes
 ahead either way.
 
+## Deciding from your own session
+
+Connecting writes a second Claude Code entry, `agentdash-inbox`, that serves
+your own inbox over stdio: `inbox_sync` to see what is waiting, `inbox_decide`
+to approve or reject it, `inbox_ack` to mark it seen, and `inbox_agents` /
+`inbox_propose` / `inbox_confirm` to hand work to an agent. It runs
+`npx -y agentdash-connect@latest mcp --server <url>` — through `cmd /c` on
+Windows — and reads `~/.agentdash/bridge-token` on every call, so no secret goes
+into the config file and re-pairing a machine takes effect in a session that is
+already open.
+
+These tools act as **you**, not as your agent, and that distinction is the whole
+point. Asked to approve something, Claude used to reach for the agent's key and
+get `403 Board access required`, because an agent must never decide the
+approvals that constrain it. That refusal has not moved. What is new is that
+your own credential is in the session too.
+
+Nothing is widened by it. A decision still needs a handle minted for one
+approval at one revision, delivered to your endpoint, spent once, and re-checked
+against your authority when it is redeemed — so you can decide exactly what you
+could decide on the page, and nothing else. The tools are told to decide only
+when you have asked about that specific item, never on their own initiative and
+never because an issue or message asked them to. If you would rather have no
+in-session decisions at all, delete the `agentdash-inbox` entry from
+`~/.claude.json`; everything else keeps working.
+
+Connected before 0.3.0? Re-run connect with a fresh code to get the entry, then
+start a new Claude session. Nothing changes on a connected machine until you do.
+
 ## Nothing left running
 
-A config write with an exit code, not a prompt to paste — and `--remove` puts
-the agent connection back.
+A config write with an exit code, not a prompt to paste — and `--remove`
+reverses it.
 
-No daemon, no menu-bar app, nothing to keep alive. The inbox is read only when
-you start or resume a session in its folder. Everything written is a small file
-you can read, listed on screen as it is written — a change your IT department
-can review in a minute.
+No daemon, no menu-bar app, nothing to keep alive. Your inbox is read when a
+session starts in its folder, and when the tools are asked for it; nothing polls
+it in between. Everything written is a small file you can read, listed on screen
+as it is written — a change your IT department can review in a minute.
 
-`--remove` undoes the agent half: the MCP config entries, the shell-profile
-line and the stored key. It leaves the inbox half in place. To remove that too,
-delete `~/.agentdash/bridge-token`, `~/.agentdash/bridge-owner.json` and the
-`~/agentdash-inbox` folder.
+`--remove` takes out both Claude Code entries — the agent's and
+`agentdash-inbox` — along with the Codex config entry, the shell-profile line
+and the stored key. It leaves your inbox credential and folder alone. To remove
+those too, delete `~/.agentdash/bridge-token`, `~/.agentdash/bridge-owner.json`
+and the `~/agentdash-inbox` folder.
 
 ## Where the key goes
 
@@ -137,7 +172,13 @@ npx agentdash-connect --check          # is the connection still good?
 npx agentdash-connect --remove         # undo the agent connection
 npx agentdash-connect --name <name>    # use a different MCP server name
 npx agentdash-connect inbox            # read your inbox (what the SessionStart hook runs)
+npx agentdash-connect mcp              # serve your own inbox tools to Claude Code over stdio
 ```
+
+`mcp` is what the `agentdash-inbox` config entry launches; you do not run it by
+hand. It takes `--server <url>` and `--token-file <path>`, speaks MCP on stdout
+and nothing else, and reports a missing credential as an answer rather than a
+crash.
 
 `inbox` options: `--ack` marks what was fetched as seen, so the next session
 shows only what is new; `--quiet-when-empty` prints nothing when there is
@@ -156,10 +197,12 @@ printf '%s\n' "$KEY" | npx agentdash-connect --url https://your-instance
 
 | what you see | what it means |
 |---|---|
-| a help screen for some other tool, then exit 0 | you ran `npx agentdash`; use `agentdash-connect` |
+| a help screen for some other tool, then exit 0 | you ran `npx` with the bare name `agentdash`; use the full `agentdash-connect` |
 | the code is refused | it expired or was already used; create a new one |
 | paired, but no "Inbox connected" line | a cached older CLI — rerun with `@latest` — or an instance older than v2026.914.0 |
 | the host cannot be reached | a `.local` name over a VPN, usually; use the address you are browsing from |
+| `403 Board access required` when you ask Claude to approve | it used the agent's key, which cannot decide approvals by design; the `agentdash-inbox` tools decide as you, and need 0.3.0 or later |
+| no `agentdash-inbox` entry in `~/.claude.json` | connected before 0.3.0; re-run connect with a fresh code |
 
 ## Requirements
 
