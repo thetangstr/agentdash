@@ -10,6 +10,7 @@ import {
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
+import { agentAccountabilityService } from "../services/agent-accountability.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
@@ -54,11 +55,40 @@ export function agentGovernanceRoutes(db: Db) {
     throw forbidden("Only the assigned steward or an authorized administrator can configure this agent");
   }
 
+  /**
+   * Read authority over the enforced policy: the agent's ACCOUNTABLE party
+   * (AGE-3).
+   *
+   * Stewardship makes exactly one human answerable for an agent, and an
+   * accountable human who cannot read the policy being enforced against their
+   * agent is accountable in name only. The configuration guard above is the
+   * wrong rule for a read: it authorizes the ACTIVE STEWARDSHIP holder and the
+   * creator, so for an autonomous agent — which by design has no stewardship
+   * row — the accountable human named on `agents.accountable_user_id` falls
+   * through to 403.
+   *
+   * `agentAccountabilityService` is the one shared definition of "who answers
+   * for this agent" (active steward for a stewarded agent, the assigned
+   * accountable human for an autonomous one) and is already the rule for
+   * approval decisions and escalations. This is deliberately a READ-ONLY
+   * branch: every write route keeps `requireCeilingAuthority` /
+   * `requireRequestAuthority`, and `harness-request` remains the only channel
+   * that narrows the steward request.
+   */
+  async function requirePolicyReadAuthority(req: Request, companyId: string, agentId: string) {
+    assertBoard(req);
+    const authority = await governance.resolveConfigurationAuthority(companyId, agentId, req.actor);
+    if (authority) return;
+    const accountable = await agentAccountabilityService(db).resolveForAgent(companyId, agentId);
+    if (accountable?.userId && accountable.userId === req.actor.userId) return;
+    throw forbidden("Only the agent's accountable party or an authorized administrator can read this policy");
+  }
+
   router.get("/companies/:companyId/agents/:agentId/governance", async (req, res) => {
     const companyId = req.params.companyId as string;
     const agentId = req.params.agentId as string;
     await requireProfileCompany(req, companyId);
-    await requireRequestAuthority(req, companyId, agentId);
+    await requirePolicyReadAuthority(req, companyId, agentId);
     res.json({ policy: await governance.getForAgent(companyId, agentId) });
   });
 
