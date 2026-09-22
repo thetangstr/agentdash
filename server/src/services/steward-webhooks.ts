@@ -121,6 +121,50 @@ function validateWebhookUrl(raw: string): string {
   return url;
 }
 
+/**
+ * Teams "Workflows" webhooks (Power Automate) return 202 for ANY body and then
+ * silently drop everything that is not a `type: "message"` envelope carrying
+ * an Adaptive Card — plain `{text}` is accepted on the wire and never posts.
+ * Diagnosed live 2026-09-22: the challenge and every digest 202'd into the
+ * void. Detection is by host: Power Automate trigger URLs live on
+ * *.powerplatform.com (current) and *.logic.azure.com (older flows); every
+ * other receiver (Slack-style incoming webhooks) keeps plain `{text}`.
+ *
+ * Inside the card each line becomes its own TextBlock (TextBlock swallows
+ * bare newlines), and raw URLs become markdown links so the deep link stays
+ * tappable.
+ */
+export function webhookBodyFor(url: string, text: string): string {
+  const host = new URL(url).hostname;
+  const isPowerAutomate = host.endsWith(".powerplatform.com") || host.endsWith(".logic.azure.com");
+  if (!isPowerAutomate) return JSON.stringify({ text });
+  const deepLink = text.match(/https?:\/\/\S+/)?.[0] ?? null;
+  return JSON.stringify({
+    type: "message",
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.card.adaptive",
+        content: {
+          type: "AdaptiveCard",
+          $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+          version: "1.4",
+          body: text.split("\n").map((line, index) => ({
+            type: "TextBlock",
+            text: line === "" ? "\u00A0" : line.replace(/(https?:\/\/\S+)/g, "[$1]($1)"),
+            wrap: true,
+            spacing: index === 0 ? "Default" : line === "" ? "Small" : "None",
+          })),
+          // A pointer, never a decision: OpenUrl is the ONLY action kind this
+          // card may carry. A Submit/Execute action would come back through
+          // the flow with no verified sender — the exact thing this transport
+          // is forbidden to do. In-card Approve waits for the bot path.
+          actions: deepLink ? [{ type: "Action.OpenUrl", title: "Decide on AgentDash", url: deepLink }] : [],
+        },
+      },
+    ],
+  });
+}
+
 export function stewardWebhooksService(db: Db, deps: { fetchImpl?: typeof fetch } = {}) {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const inbox = stewardInboxService(db);
@@ -150,9 +194,10 @@ export function stewardWebhooksService(db: Db, deps: { fetchImpl?: typeof fetch 
       response = await fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          text: `AgentDash: inbox delivery for ${name ?? "this steward"} is being connected. If you did not expect this, whoever holds this webhook URL is registering it right now.`,
-        }),
+        body: webhookBodyFor(
+          url,
+          `AgentDash: inbox delivery for ${name ?? "this steward"} is being connected. If you did not expect this, whoever holds this webhook URL is registering it right now.`,
+        ),
         signal: AbortSignal.timeout(CHALLENGE_TIMEOUT_MS),
       });
     } catch (error) {
@@ -319,7 +364,7 @@ export function stewardWebhooksService(db: Db, deps: { fetchImpl?: typeof fetch 
         const response = await fetchImpl(hook.url, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: webhookBodyFor(hook.url, text),
           signal: AbortSignal.timeout(DELIVER_TIMEOUT_MS),
         });
         if (response.ok) {
