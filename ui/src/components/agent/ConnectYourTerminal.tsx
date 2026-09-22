@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi } from "../../api/agents";
 import { authApi } from "../../api/auth";
 import { bridgeApi } from "../../api/bridge";
+import { stewardWebhooksApi } from "../../api/steward-webhooks";
 import { healthApi } from "../../api/health";
 import { timeAgo } from "../../lib/timeAgo";
 import { queryKeys } from "../../lib/queryKeys";
@@ -86,6 +87,30 @@ export function ConnectYourTerminal({
     mutationFn: (endpointId: string) => bridgeApi.revoke(companyId, endpointId),
     onSuccess: () =>
       queryClient2.invalidateQueries({ queryKey: ["bridge", "me", "endpoints", companyId] }),
+  });
+
+  /**
+   * Inbox delivery to a webhook — the bot-less Teams push. Registered by the
+   * steward for themselves; the server posts the ask-and-pointer digest when
+   * their log advances, and deciding stays on this page.
+   */
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const webhooks = useQuery({
+    queryKey: ["steward", "me", "webhooks", companyId],
+    queryFn: () => stewardWebhooksApi.list(companyId),
+    enabled: Boolean(companyId),
+  });
+  const registerWebhook = useMutation({
+    mutationFn: () => stewardWebhooksApi.register(companyId, { url: webhookUrl.trim() }),
+    onSuccess: () => {
+      setWebhookUrl("");
+      queryClient2.invalidateQueries({ queryKey: ["steward", "me", "webhooks", companyId] });
+    },
+  });
+  const revokeWebhook = useMutation({
+    mutationFn: (webhookId: string) => stewardWebhooksApi.revoke(companyId, webhookId),
+    onSuccess: () =>
+      queryClient2.invalidateQueries({ queryKey: ["steward", "me", "webhooks", companyId] }),
   });
   const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
   /**
@@ -391,6 +416,81 @@ export function ConnectYourTerminal({
               The terminal is where you are told; approving and declining happen on this page.
             </li>
           </ul>
+        </div>
+      </section>
+
+      {/* The bot-less Teams push. Two stewards hand-built pollers for this; the
+          server now posts the same ask-and-pointer digest the inbox renders
+          whenever this person's log advances. Never the evidence, never a
+          decision handle — deciding stays on this page. */}
+      <section aria-labelledby="connect-webhook-heading" className="rounded-lg border border-border bg-card">
+        <div className="border-b px-4 py-2.5">
+          <h2 id="connect-webhook-heading" className="text-sm font-semibold">
+            Get told in Teams
+          </h2>
+        </div>
+        <div className="px-4 py-4">
+          <p className="text-sm text-muted-foreground">
+            Paste a Teams Workflows webhook URL (channel ⋯ → Workflows → “Post to a channel when a
+            webhook request is received”). Whenever something new needs you, the channel gets the
+            same summary your inbox shows — who is asking and for what, with a link here. Never the
+            contents, and nothing in the channel can approve anything: deciding stays on this page.
+          </p>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Everyone in that channel will see the summaries, so pick the audience deliberately — a
+            private channel or a chat with yourself is the safe default.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              type="url"
+              value={webhookUrl}
+              onChange={(event) => setWebhookUrl(event.target.value)}
+              placeholder="https://…workflows…/triggers/manual/…"
+              className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs"
+              aria-label="Webhook URL"
+            />
+            <Button
+              size="sm"
+              disabled={registerWebhook.isPending || !webhookUrl.trim()}
+              onClick={() => registerWebhook.mutate()}
+            >
+              {registerWebhook.isPending ? "Testing…" : "Connect channel"}
+            </Button>
+          </div>
+          {registerWebhook.error ? (
+            <p className="mt-2 text-xs text-destructive" role="alert">
+              {registerWebhook.error instanceof Error
+                ? registerWebhook.error.message
+                : "Could not register the webhook."}
+            </p>
+          ) : null}
+          {(webhooks.data?.webhooks ?? []).length > 0 ? (
+            <ul className="mt-3 divide-y divide-border rounded-md border">
+              {(webhooks.data?.webhooks ?? []).map((hook) => (
+                <li key={hook.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <span className="text-xs">
+                    <span className="font-medium">{hook.label}</span>
+                    <span className="ml-2 font-mono text-muted-foreground">{hook.urlHint}</span>
+                    {hook.lastError ? (
+                      <span className="ml-2 text-destructive">last delivery failed: {hook.lastError}</span>
+                    ) : hook.lastDeliveredAt ? (
+                      <span className="ml-2 text-muted-foreground">delivered {timeAgo(hook.lastDeliveredAt)}</span>
+                    ) : (
+                      <span className="ml-2 text-muted-foreground">connected — nothing delivered yet</span>
+                    )}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={revokeWebhook.isPending}
+                    onClick={() => revokeWebhook.mutate(hook.id)}
+                  >
+                    Disconnect
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       </section>
     </div>

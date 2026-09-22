@@ -1030,6 +1030,25 @@ export async function startServer(): Promise<StartedServer> {
     healthSignalHandle.unref?.();
   }
 
+  /**
+   * Steward webhook delivery: push the inbox digest to each registered
+   * webhook when that person's durable log advances. Every minute, and cheap
+   * when quiet — one max(seq) comparison per live webhook, and a sweep with
+   * zero webhooks touches one small table. Runs unconditionally because the
+   * webhooks table is the on/off switch: no registrations, no work.
+   */
+  {
+    const { stewardWebhooksService } = await import("./services/steward-webhooks.js");
+    const webhookSweep = stewardWebhooksService(db);
+    const approvalsBaseUrl = process.env.PAPERCLIP_PUBLIC_URL ?? config.authPublicBaseUrl ?? null;
+    const webhookHandle = setInterval(() => {
+      void webhookSweep.sweep({ approvalsBaseUrl }).catch((err) => {
+        logger.warn({ err }, "steward webhook sweep failed");
+      });
+    }, 60 * 1000);
+    webhookHandle.unref?.();
+  }
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 

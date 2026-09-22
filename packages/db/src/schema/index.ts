@@ -154,6 +154,7 @@ export {
 // AgentDash-MK: a proposed action read back to a person, waiting on their
 // confirmation. Same single-use, endpoint-bound shape as a decision handle.
 export { stewardInboxActionHandles } from "./steward_inbox_actions.js";
+export { stewardWebhooks } from "./steward_webhooks.js";
 // AgentDash: Company Evaluator (Stage 1 shadow) — append-only ledger, stored projections, ingest cursors
 export { evaluationEvents } from "./evaluation_events.js";
 export { evaluationScorecards } from "./evaluation_scorecards.js";
