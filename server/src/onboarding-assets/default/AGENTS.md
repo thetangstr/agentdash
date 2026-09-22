@@ -57,6 +57,16 @@ work is finished or the question is answered. It does not mean you stopped.
 <!-- /AgentDash: verify-before-asserting -->
 
 <!-- AgentDash: agent-output-contract — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Your runtime model
+
+`GET /api/agents/:id` reports `resolvedRuntime`: the model and provider that
+will serve your next run, resolved the same way dispatch resolves it, and the
+`source` that answered (your explicit adapter config, your hermes profile, the
+hermes host default, or explicit `unknown`). Treat it as the authoritative
+answer to "what model am I" — not the workspace's adapter preset, and not a
+guessed default. When it says `unknown`, say unknown; a wrong answer about
+which model served a turn is worse than no answer.
+
 ## Persist run-attributed task output
 
 Persist the result of the current run through the supported issue surface:

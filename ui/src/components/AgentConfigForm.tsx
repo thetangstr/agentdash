@@ -949,6 +949,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 refreshingModels={refreshingModels}
                 detectModelLabel="Detect model"
                 emptyDetectHint="No model detected. Select or enter one manually."
+                defaultInheritedLabel={
+                  adapterType === "hermes_local" ? "Default (inherited from hermes config)" : undefined
+                }
               />
               {(refreshModelsError || fetchedModelsError) && (
                 <p className="text-xs text-destructive">
@@ -1320,6 +1323,7 @@ function ModelDropdown({
   detectModelLabel,
   emptyDetectHint,
   defaultLabel,
+  defaultInheritedLabel,
 }: {
   models: AdapterModel[];
   value: string;
@@ -1338,6 +1342,8 @@ function ModelDropdown({
   detectModelLabel?: string;
   emptyDetectHint?: string;
   defaultLabel?: string;
+  /** AGE-1: label explaining what "Default" inherits from (adapter-specific). */
+  defaultInheritedLabel?: string;
 }) {
   const [modelSearch, setModelSearch] = useState("");
   const [detectingModel, setDetectingModel] = useState(false);
@@ -1425,7 +1431,12 @@ function ModelDropdown({
               {selected
                 ? selected.label
                 : value
-                  || (allowDefault ? (defaultLabel ?? "Default") : required ? "Select model (required)" : "Select model")}
+                  || (allowDefault
+                    // AGE-1: bare "Default" told the reader nothing. State the
+                    // provenance: for hermes_local an empty model means the
+                    // hermes config decides and it can change without notice.
+                    ? (defaultLabel ?? defaultInheritedLabel ?? "Default")
+                    : required ? "Select model (required)" : "Select model")}
             </span>
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>
