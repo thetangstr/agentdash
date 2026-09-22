@@ -20,6 +20,7 @@ const mdxEditorMockState = vi.hoisted(() => ({
   emitMountSilentEmptyState: false,
   markdownValues: [] as string[],
   suppressHtmlProcessingValues: [] as boolean[],
+  mountCount: 0,
 }));
 
 function containsHtmlLikeTag(markdown: string) {
@@ -57,6 +58,7 @@ vi.mock("@mdxeditor/editor", async () => {
     },
     forwardedRef: React.ForwardedRef<{ setMarkdown: (value: string) => void; focus: () => void } | null>,
   ) {
+    mdxEditorMockState.mountCount += 1;
     mdxEditorMockState.markdownValues.push(markdown);
     mdxEditorMockState.suppressHtmlProcessingValues.push(Boolean(suppressHtmlProcessing));
     const [content, setContent] = React.useState(markdown);
@@ -193,6 +195,7 @@ describe("MarkdownEditor", () => {
     mdxEditorMockState.emitMountSilentEmptyState = false;
     mdxEditorMockState.markdownValues = [];
     mdxEditorMockState.suppressHtmlProcessingValues = [];
+    mdxEditorMockState.mountCount = 0;
   });
 
   it("applies async external value updates once the editor ref becomes ready", async () => {
@@ -376,6 +379,96 @@ describe("MarkdownEditor", () => {
     const textarea = container.querySelector("textarea");
     expect(textarea).not.toBeNull();
     expect(textarea?.value).toBe("Affected versions: <= v0.3.1");
+    expect(container.textContent).toContain("Rich editor unavailable for this markdown");
+    expect(handleChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("retry remounts the rich editor and returns to it after a successful retry", async () => {
+    mdxEditorMockState.emitMountSilentEmptyState = true;
+    const handleChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <MarkdownEditor
+          value="Affected versions: <= v0.3.1"
+          onChange={handleChange}
+          placeholder="Add a description..."
+        />,
+      );
+    });
+
+    await flush();
+    await vi.waitFor(() => {
+      expect(container.querySelector("textarea")).not.toBeNull();
+    });
+    expect(container.querySelector('[data-testid="mdx-editor"]')).toBeNull();
+    const mountsBeforeRetry = mdxEditorMockState.mountCount;
+
+    // A persistent-failure warning must not appear before any retry.
+    expect(container.querySelector('[data-testid="rich-editor-retry-failed"]')).toBeNull();
+
+    // Succeed on the next mount.
+    mdxEditorMockState.emitMountSilentEmptyState = false;
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[type="button"]')?.click();
+    });
+    await flush();
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="mdx-editor"]')).not.toBeNull();
+    });
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.textContent).not.toContain("Rich editor unavailable");
+    // The remount is real: a fresh editor instance replaced the broken one.
+    expect(mdxEditorMockState.mountCount).toBeGreaterThan(mountsBeforeRetry);
+    // No spurious parent notifications from the remount.
+    expect(handleChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("retry failure re-enters the fallback with a visible persistent-failure alert", async () => {
+    mdxEditorMockState.emitMountSilentEmptyState = true;
+    const handleChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <MarkdownEditor
+          value="Affected versions: <= v0.3.1"
+          onChange={handleChange}
+          placeholder="Add a description..."
+        />,
+      );
+    });
+
+    await flush();
+    await vi.waitFor(() => {
+      expect(container.querySelector("textarea")).not.toBeNull();
+    });
+    const mountsBeforeRetry = mdxEditorMockState.mountCount;
+
+    // Failure repeats on the retry mount.
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[type="button"]')?.click();
+    });
+    await flush();
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="rich-editor-retry-failed"]')).not.toBeNull();
+    });
+    expect(container.textContent).toContain("Retrying the rich editor keeps failing");
+    expect(container.querySelector("textarea")).not.toBeNull();
+    expect(container.querySelector("textarea")?.value).toBe("Affected versions: <= v0.3.1");
+    // A genuine remount was attempted before the error returned.
+    expect(mdxEditorMockState.mountCount).toBeGreaterThan(mountsBeforeRetry);
     expect(container.textContent).toContain("Rich editor unavailable for this markdown");
     expect(handleChange).not.toHaveBeenCalled();
 
