@@ -1,6 +1,8 @@
 ---
 title: Agent Kinds & Stewardship
 summary: Autonomous, stewarded, and "Needs a steward" — what each agent kind means and how to finish pairing
+audience: admin
+order: 6
 ---
 
 Every agent in your company is one of three kinds. The Agents page shows the kind on every agent row and on the agent detail page, so you can always tell "this agent is meant to run alone" apart from "this agent is waiting for somebody to pair with it".

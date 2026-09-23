@@ -43,6 +43,8 @@ import { CompanySkills } from "./pages/CompanySkills";
 import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
+import { Guides } from "./pages/Guides";
+import { Guide } from "./pages/Guide";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -177,6 +179,8 @@ function boardRoutes() {
       <Route path="evaluation/:kind/:id/:tab" element={<EvaluationMilestone />} />
       <Route path="activity" element={<Activity />} />
       <Route path="my-agent" element={<MyAgent />} />
+      <Route path="guides" element={<Guides />} />
+      <Route path="guides/:group/:slug" element={<Guide />} />
       {/* The guide is now a section on My Agent itself. The deep link is kept
           so existing bookmarks and the older release notes still land somewhere
           useful, but there is no second copy of the content to drift. */}
@@ -419,6 +423,8 @@ export function App() {
               company code. Without these, /dashboard looked for a company
               called DASHBOARD and said it could not find one. */}
           <Route path="my-agent" element={<UnprefixedBoardRedirect />} />
+          <Route path="guides" element={<UnprefixedBoardRedirect />} />
+          <Route path="guides/*" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard/*" element={<UnprefixedBoardRedirect />} />
           <Route path="inbox" element={<UnprefixedBoardRedirect />} />

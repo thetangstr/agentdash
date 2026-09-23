@@ -1,6 +1,6 @@
 # Design — "onboard sam@mkthink.com" from Claude
 
-2026-09-22 · Yang · **Draft for internal review** · Companion to [`doc/customers/mkthink/08-onboarding-sop.md`](../customers/mkthink/08-onboarding-sop.md)
+2026-09-22 · Yang · **Draft for internal review** · Companion to the in-app guides (`docs/guides/steward/*`, `docs/guides/board-operator/onboard-a-steward.md`, served at `/guides`) and the MKThink overlay [`doc/customers/mkthink/08-onboarding-sop.md`](../customers/mkthink/08-onboarding-sop.md)
 
 A steward types one sentence in their own Claude Code and the account, the agent and the pairing are set up with **their** authority, in two turns: Claude shows the plan, the person says yes. This automates the admin half of the onboarding SOP. The new person's half — open the link, set a password, run the connect command — cannot be removed and is shortened instead.
 

@@ -10,6 +10,7 @@ import {
   SquarePen,
   Network,
   Bot,
+  BookOpen,
   ShieldAlert,
   Boxes,
   Repeat,
@@ -99,6 +100,7 @@ export function Sidebar() {
           {showMyAgentLink ? (
             <SidebarNavItem to="/my-agent" label="My Agent" icon={Bot} />
           ) : null}
+          <SidebarNavItem to="/guides" label="Guides" icon={BookOpen} />
           {showOverrideLink ? (
             <SidebarNavItem to="/inbox/override" label="Override" icon={ShieldAlert} />
           ) : null}
