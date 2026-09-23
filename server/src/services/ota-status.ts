@@ -65,6 +65,12 @@ export interface AvailableReleaseFile {
    * reads the file while debugging.
    */
   note?: string;
+  /**
+   * Set when the check itself failed — a fetch that could not reach origin, a
+   * repo that would not answer. Written with `release: null` so a stale offer
+   * never reads as fresh; `checkedAt` still says when the failure was recorded.
+   */
+  error?: string;
 }
 
 export interface OtaStatusSources {

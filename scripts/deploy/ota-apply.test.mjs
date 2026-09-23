@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 import {
   approvalAuthorizes,
@@ -899,7 +899,7 @@ test("check: skips a tag the direction guard would refuse and says why", async (
       { repoDir: "/repo", stateDir },
       {
         git: fakeGit({
-          "fetch origin --tags --prune": "",
+          "fetch origin --tags": "",
           "tag --merged origin/main": "v2026.902.1",
         }),
         resolveTagCommit: () => "candidate",
@@ -926,7 +926,7 @@ test("check: unreadable candidate journal is null, not an empty migration list",
       { repoDir: "/repo", stateDir },
       {
         git: fakeGit({
-          "fetch origin --tags --prune": "",
+          "fetch origin --tags": "",
           "tag --merged origin/main": "v2026.902.1",
           "show candidate:packages/db/src/migrations/meta/_journal.json": new Error("no such path"),
           "diff --numstat installed..candidate": "3\t1\tsrc/x.ts\n",
@@ -960,7 +960,7 @@ test("check: picks the newest tag by version order, not lexicographic", async ()
       { repoDir: "/repo", stateDir },
       {
         git: fakeGit({
-          "fetch origin --tags --prune": "",
+          "fetch origin --tags": "",
           // .10 must beat .9 and .2 despite sorting earlier as a string.
           "tag --merged origin/main": "v2026.901.9\nv2026.901.10\nv2026.901.2",
           "show cand:packages/db/src/migrations/meta/_journal.json":
@@ -978,6 +978,115 @@ test("check: picks the newest tag by version order, not lexicographic", async ()
     assert.equal(result.diff.commitCount, 25);
     assert.equal(result.diff.commitSubjects.length, 20);
     assert.equal(result.diff.truncated, true);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: a failed fetch writes the error into the offer file instead of throwing", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": new Error("fatal: unable to connect"),
+        }),
+        now: () => "2026-09-23T00:00:00.000Z",
+      },
+    );
+    const file = JSON.parse(readFileSync(path.join(stateDir, "available-release.json"), "utf8"));
+    assert.equal(file.release, null, "a failed check must not look like a fresh offer");
+    assert.equal(file.checkedAt, "2026-09-23T00:00:00.000Z");
+    assert.match(file.error, /unable to connect/);
+    assert.equal(result.error, file.error);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: reconciles the legacy source-state commit when no canonical state exists", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "source-state.json"),
+      JSON.stringify({ currentSha: "legacy-installed" }),
+    );
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+          "show cand:packages/db/src/migrations/meta/_journal.json":
+            JSON.stringify({ entries: [{ idx: 0, tag: "0000_init" }] }),
+          "diff --numstat legacy-installed..cand": "",
+          "log --format=%s legacy-installed..cand": "change\n",
+          "diff --name-only legacy-installed..cand -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "cand",
+        assessDirection: (repoDir, installed, target) => {
+          assert.equal(installed, "legacy-installed", "the legacy record is the installed truth");
+          return { direction: "forward", ok: true };
+        },
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.902.1");
+    assert.equal(result.diff.commitCount, 1);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: falls back to the checkout HEAD on a box with no state file at all", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+          "rev-parse HEAD": "checkout-head",
+          "show cand:packages/db/src/migrations/meta/_journal.json":
+            JSON.stringify({ entries: [{ idx: 0, tag: "0000_init" }] }),
+          "diff --numstat checkout-head..cand": "",
+          "log --format=%s checkout-head..cand": "change\n",
+          "diff --name-only checkout-head..cand -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "cand",
+        assessDirection: (repoDir, installed, target) => {
+          assert.equal(installed, "checkout-head");
+          return { direction: "forward", ok: true };
+        },
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.902.1");
+    assert.equal(result.diff.commitCount, 1, "the diff is measured from the checkout, not skipped");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: leaves no temp file beside the written offer", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "",
+          "rev-parse HEAD": "head",
+        }),
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    const leftovers = readdirSync(stateDir).filter((name) => name.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
+    assert.ok(existsSync(path.join(stateDir, "available-release.json")));
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

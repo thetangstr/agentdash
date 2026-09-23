@@ -82,10 +82,13 @@ Three things about it are deliberate:
 
 `deploy/agentdash-update.sh` is the scheduled wrapper, installed by
 `install-launchdaemons.sh` as `com.agentdash.update` (09:15 daily). It is
-**check-only by default**: it refreshes the offer file and changes nothing
-else. Set `AGENTDASH_UPDATE_APPLY=1` in the instance env file to let it apply
-a release — and even then only one a human has already approved on the board;
-without an approval it stays check-only.
+**check-only**: it refreshes the offer file and changes nothing else.
+`AGENTDASH_UPDATE_APPLY=1` currently makes the job exit non-zero with a clear
+refusal — unattended apply is unsupported until the `releases/current`
+bootstrap is decided, because a box that serves straight from its git
+checkout would keep running the old code while a receipt said "applied".
+An operator can still run `ota-apply.mjs --tag ...` by hand on a releases
+layout once that layout exists.
 
 That default is a judgement, not timidity. A bad commit reaching `main` can
 reach a customer's Mini within the hour — on 2026-08-18 one did, and broke the

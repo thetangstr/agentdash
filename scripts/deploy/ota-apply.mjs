@@ -30,7 +30,7 @@
 //      plan and taken a backup they intend to use.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { parseArgs } from "node:util";
@@ -50,7 +50,10 @@ export const DEFAULT_HEALTH_TIMEOUT_SEC = 120;
 export const DEFAULT_HEALTH_INTERVAL_MS = 2_000;
 export const APPROVAL_FILENAME = "pending-approval.json";
 export const CANONICAL_STATE_FILENAME = "deployment-state.json";
+export const LEGACY_SOURCE_STATE_FILENAME = "source-state.json";
 export const AVAILABLE_RELEASE_FILENAME = "available-release.json";
+export const GIT_FETCH_TIMEOUT_MS = 180_000;
+export const GH_CLI_TIMEOUT_MS = 30_000;
 export const MAX_COMMIT_SUBJECTS = 20;
 export const JOURNAL_SUBPATH = path.join("packages", "db", "src", "migrations", "meta", "_journal.json");
 const JOURNAL_GIT_PATH = "packages/db/src/migrations/meta/_journal.json";
@@ -151,8 +154,12 @@ export function approvalAuthorizes({ approval, tag, commit }) {
   return { ok: true };
 }
 
-function git(repoDir, args) {
-  const result = spawnSync("git", ["-C", repoDir, ...args], { encoding: "utf8" });
+function git(repoDir, args, timeoutMs = 0) {
+  const result = spawnSync("git", ["-C", repoDir, ...args], {
+    encoding: "utf8",
+    timeout: timeoutMs || undefined,
+  });
+  if (result.error) throw new Error(`git ${args.join(" ")} failed: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr ?? ""}`);
   return (result.stdout ?? "").trim();
 }
@@ -632,6 +639,7 @@ function defaultReleaseNotes(repoDir, tag) {
     const result = spawnSync("gh", ["release", "view", tag, "--json", "body,url,publishedAt"], {
       cwd: repoDir,
       encoding: "utf8",
+      timeout: GH_CLI_TIMEOUT_MS,
     });
     if (result.status !== 0) return { notes: "", url: null, publishedAt: null };
     const parsed = JSON.parse(result.stdout ?? "{}");
@@ -654,6 +662,39 @@ export const defaultCheckDeps = {
 };
 
 /**
+ * What commit is this box actually on? `deployment-state.json` is written by
+ * the apply path and is absent on a box that still serves straight from its
+ * git checkout — exactly the boxes a release offer matters most for, so the
+ * fallbacks reconcile the records those boxes do have, in the order
+ * ota-deployment-state.ts establishes: the legacy source-updater state, then
+ * the checkout itself, whose HEAD is what the running code was cloned at.
+ */
+function installedCommitForCheck(repoDir, stateDir, deps) {
+  const canonical = readJsonFile(path.join(stateDir, CANONICAL_STATE_FILENAME))?.current?.commit;
+  if (typeof canonical === "string" && canonical) return canonical;
+  const legacy = readJsonFile(path.join(stateDir, LEGACY_SOURCE_STATE_FILENAME))?.currentSha;
+  if (typeof legacy === "string" && legacy) return legacy;
+  try {
+    return deps.git(repoDir, ["rev-parse", "HEAD"]);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Write the offer atomically — a reader that opens the file mid-write must
+ * see the previous complete offer or the next one, never a torn half.
+ */
+function writeAvailableRelease(stateDir, file) {
+  mkdirSync(stateDir, { recursive: true });
+  const filePath = path.join(stateDir, AVAILABLE_RELEASE_FILENAME);
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmpPath, filePath);
+  return filePath;
+}
+
+/**
  * Refresh `available-release.json` — the file the board's status endpoint
  * reads. This is the ONLY component allowed to run git and reach the network;
  * the status service stays read-only by design, so the discovery half lives
@@ -668,76 +709,89 @@ export const defaultCheckDeps = {
  * `release: null` means "checked, and there is nothing to apply" — either the
  * instance is already on the newest applicable commit or no release tag
  * exists. It is written rather than left absent so `checkedAt` keeps saying
- * when the answer was last recomputed.
+ * when the answer was last recomputed. A check that fails writes the error
+ * the same way, because a stale success is worse than a fresh failure.
  */
 export async function runCheck(input, overrides = {}) {
   const deps = { ...defaultCheckDeps, ...overrides };
   const stateDir = input.stateDir;
   const checkedAt = deps.now();
 
-  deps.git(input.repoDir, ["fetch", "origin", "--tags", "--prune"]);
-
-  const tags = deps.git(input.repoDir, ["tag", "--merged", "origin/main"])
-    .split("\n")
-    .map((tag) => tag.trim())
-    .filter(isReleaseTag)
-    .sort((a, b) => compareReleaseTags(b, a));
-
-  const installedCommit =
-    readJsonFile(path.join(stateDir, CANONICAL_STATE_FILENAME))?.current?.commit ?? "";
-
-  let candidate = null;
-  const skipped = [];
-  for (const tag of tags) {
-    let commit;
-    try {
-      commit = deps.resolveTagCommit(input.repoDir, tag);
-    } catch {
-      continue;
-    }
-    const direction = deps.assessDirection(input.repoDir, installedCommit || null, commit);
-    if (direction.direction === "backward" || direction.direction === "diverged") {
-      skipped.push(`${tag} (${direction.direction} of the installed commit)`);
-      continue;
-    }
-    candidate = { tag, commit, upToDate: direction.direction === "same" };
-    break;
-  }
-
   let file;
-  if (!candidate || candidate.upToDate) {
-    file = { release: null, diff: null, releaseMigrations: null, checkedAt };
-    if (skipped.length > 0) {
-      file.note = `Newer tag(s) skipped because the apply path would refuse them: ${skipped.join(", ")}.`;
-    } else if (!candidate) {
-      file.note = "No release tag found on origin/main.";
+  try {
+    // No --prune: pruning deletes tags that exist only locally, which on a
+    // bootstrap box can be the record of what was once applied.
+    deps.git(input.repoDir, ["fetch", "origin", "--tags"], GIT_FETCH_TIMEOUT_MS);
+
+    const tags = deps.git(input.repoDir, ["tag", "--merged", "origin/main"])
+      .split("\n")
+      .map((tag) => tag.trim())
+      .filter(isReleaseTag)
+      .sort((a, b) => compareReleaseTags(b, a));
+
+    const installedCommit = installedCommitForCheck(input.repoDir, stateDir, deps);
+
+    let candidate = null;
+    const skipped = [];
+    for (const tag of tags) {
+      let commit;
+      try {
+        commit = deps.resolveTagCommit(input.repoDir, tag);
+      } catch {
+        continue;
+      }
+      const direction = deps.assessDirection(input.repoDir, installedCommit || null, commit);
+      if (direction.direction === "backward" || direction.direction === "diverged") {
+        skipped.push(`${tag} (${direction.direction} of the installed commit)`);
+        continue;
+      }
+      candidate = { tag, commit, upToDate: direction.direction === "same" };
+      break;
     }
-  } else {
-    const notes = deps.releaseNotes(input.repoDir, candidate.tag);
-    const journalTags = readJournalTagsAtCommit(input.repoDir, candidate.commit, deps.git);
+
+    if (!candidate || candidate.upToDate) {
+      file = { release: null, diff: null, releaseMigrations: null, checkedAt };
+      if (skipped.length > 0) {
+        file.note = `Newer tag(s) skipped because the apply path would refuse them: ${skipped.join(", ")}.`;
+      } else if (!candidate) {
+        file.note = "No release tag found on origin/main.";
+      }
+    } else {
+      const notes = deps.releaseNotes(input.repoDir, candidate.tag);
+      const journalTags = readJournalTagsAtCommit(input.repoDir, candidate.commit, deps.git);
+      file = {
+        release: {
+          tag: candidate.tag,
+          version: candidate.tag.replace(/^v/, ""),
+          commit: candidate.commit,
+          channel: "stable",
+          publishedAt: notes.publishedAt,
+          notes: notes.notes,
+          url: notes.url,
+        },
+        diff: installedCommit
+          ? summarizeRangeDiff(input.repoDir, installedCommit, candidate.commit, deps.git)
+          : null,
+        releaseMigrations: journalTags === null
+          ? null
+          : journalTags.map((tag) => ({ id: tag, name: tag, reversible: false })),
+        checkedAt,
+      };
+    }
+  } catch (error) {
+    // A failed check must still say so in the file the board reads: "no new
+    // offer" and "the check never ran" look identical otherwise, and the
+    // second is the one an operator needs to see.
     file = {
-      release: {
-        tag: candidate.tag,
-        version: candidate.tag.replace(/^v/, ""),
-        commit: candidate.commit,
-        channel: "stable",
-        publishedAt: notes.publishedAt,
-        notes: notes.notes,
-        url: notes.url,
-      },
-      diff: installedCommit
-        ? summarizeRangeDiff(input.repoDir, installedCommit, candidate.commit, deps.git)
-        : null,
-      releaseMigrations: journalTags === null
-        ? null
-        : journalTags.map((tag) => ({ id: tag, name: tag, reversible: false })),
+      release: null,
+      diff: null,
+      releaseMigrations: null,
       checkedAt,
+      error: `release check failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 
-  mkdirSync(stateDir, { recursive: true });
-  const filePath = path.join(stateDir, AVAILABLE_RELEASE_FILENAME);
-  writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  const filePath = writeAvailableRelease(stateDir, file);
   return { ...file, written: filePath };
 }
 
