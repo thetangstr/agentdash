@@ -1,0 +1,15 @@
+{
+  "name": "muse-mcp-stub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Throwaway public MCP stub server for the Meta Muse registration spike (GH #674). Not a workspace package; not built by pnpm build.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test server.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.24.2"
+  }
+}
