@@ -79,6 +79,32 @@ test("scripts run when invoked through a symlinked path", (t) => {
   }
 });
 
+test("a nonexistent argv[1] does not throw on import", () => {
+  // `node -e 'import("<script>")' x` sets argv[1] to "x" — a path that does not
+  // exist. A realpathSync call on it throws ENOENT at module load, so the guard
+  // must fall back to false rather than crash the import.
+  for (const rel of HELP_SCRIPTS) {
+    const scriptPath = path.join(SCRIPTS_ROOT, rel);
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `import(${JSON.stringify(scriptPath)})` +
+          '.then(() => console.log("IMPORTED"))' +
+          ".catch((error) => { console.error(error); process.exit(1); })",
+        "definitely-not-a-real-path",
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.strictEqual(
+      result.status,
+      0,
+      `${rel} threw on import when argv[1] named a nonexistent path ` +
+        `(status ${result.status}): ${result.stdout}${result.stderr}`,
+    );
+  }
+});
+
 test("every argv[1]/import.meta.url entry guard compares realpaths", () => {
   const offenders = [];
   for (const file of listMjsFiles(SCRIPTS_ROOT)) {

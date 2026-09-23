@@ -245,8 +245,16 @@ function main() {
 
 // Realpaths on both sides: import.meta.url is resolved, argv[1] is as typed,
 // so a plain comparison silently skips main() when run through a symlink.
-const invokedDirectly =
-  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
 if (invokedDirectly) {
   main();
 }

@@ -328,8 +328,16 @@ async function main() {
 // import.meta.url is the resolved real path while process.argv[1] is the path
 // as typed, so a plain comparison silently skips main() when the script is run
 // through a symlink (e.g. releases/current). Compare realpaths on both sides.
-const invokedDirectly =
-  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
 if (invokedDirectly) {
   main().catch((error) => {
     console.error(`[agentdash-ota-update] ${error.message}`);

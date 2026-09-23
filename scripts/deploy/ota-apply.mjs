@@ -620,8 +620,18 @@ export async function main(argv = process.argv) {
 // import.meta.url is the resolved real path while process.argv[1] is the path
 // as typed, so a plain comparison silently skips main() when the script is run
 // through a symlink (e.g. releases/current). Compare realpaths on both sides.
-const invokedDirectly =
-  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    // argv[1] can name a path that does not exist (e.g. a positional arg under
+    // `node -e`); an unresolvable entry path cannot be this file's direct run.
+    return false;
+  }
+})();
 if (invokedDirectly) {
   main().then((code) => process.exit(code));
 }

@@ -110,8 +110,16 @@ function main() {
 
 // Realpaths on both sides: import.meta.url is resolved, argv[1] is as typed,
 // so a plain path comparison silently skips main() when run through a symlink.
-const isMainModule =
-  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+const isMainModule = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
 
 if (isMainModule) {
   main();
