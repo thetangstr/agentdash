@@ -9,7 +9,7 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-dom";
@@ -148,8 +148,15 @@ describe("guide URLs", () => {
   });
 
   it("uses a route tree that matches App.tsx line for line", () => {
-    // vitest runs with cwd = ui/, and import.meta.url is not a file: URL under jsdom.
-    const appSource = readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+    // import.meta.url is not a file: URL under jsdom, and vitest's cwd is ui/
+    // locally but the repo root in CI's sharded run — so look in both places.
+    const candidates = [
+      path.join(process.cwd(), "src", "App.tsx"),
+      path.join(process.cwd(), "ui", "src", "App.tsx"),
+    ];
+    const appPath = candidates.find((candidate) => existsSync(candidate));
+    expect(appPath, `App.tsx not found at ${candidates.join(" or ")}`).toBeDefined();
+    const appSource = readFileSync(appPath!, "utf8");
     for (const line of [
       '<Route path="guides" element={<Guides />} />',
       '<Route path="guides/:group/:slug" element={<Guide />} />',
