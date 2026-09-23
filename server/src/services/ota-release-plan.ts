@@ -247,6 +247,12 @@ export function approvalAuthorizes(input: {
  * `canApply` is computed here, once, and every false carries a reason. The
  * updater is expected to call this and refuse on `canApply === false` rather
  * than re-deriving the rules.
+ *
+ * `canApprove` is the strictly weaker gate for the UI's approve button: every
+ * blocker except "no matching approval exists yet", since starting the
+ * approval flow is the only way to remove that blocker. Gating the button on
+ * `canApply` made the page circular — the only control that produces an
+ * approval was disabled until one had been produced.
  */
 export function buildUpdateStatus(input: {
   mode: OtaDeploymentMode;
@@ -267,32 +273,37 @@ export function buildUpdateStatus(input: {
     backupPath: input.backupPath ?? null,
   });
 
-  const blockedReasons: string[] = [];
+  // Structural blockers cannot be removed by anything the board can do on this
+  // page; the approval reason can — it is what the approve flow produces.
+  const structuralReasons: string[] = [];
 
   // Phase 0's central guarantee. A process started from a developer checkout
   // cannot be updated safely, because swapping the release directory would not
   // change what it serves — and a `git checkout` under a running server is the
   // exact failure this work removes.
   if (!input.servingFromReleaseDir) {
-    blockedReasons.push(
+    structuralReasons.push(
       "This instance is not running from an immutable release directory, so an update cannot be applied safely. Complete the release-layout cutover first.",
     );
   }
   if (upToDate) {
-    blockedReasons.push("Already on the newest release.");
+    structuralReasons.push("Already on the newest release.");
   }
   if (input.compatibility.verdict === "unknown") {
-    blockedReasons.push(...input.compatibility.reasons);
+    structuralReasons.push(...input.compatibility.reasons);
   }
 
+  const approvalReasons: string[] = [];
   if (input.available) {
     const authorized = approvalAuthorizes({
       approval: input.approval,
       release: input.available,
       currentVerdict: input.compatibility.verdict,
     });
-    if (!authorized.ok) blockedReasons.push(authorized.reason);
+    if (!authorized.ok) approvalReasons.push(authorized.reason);
   }
+
+  const blockedReasons = [...structuralReasons, ...approvalReasons];
 
   return {
     mode: input.mode,
@@ -306,6 +317,7 @@ export function buildUpdateStatus(input: {
     rollback,
     approval: input.approval,
     canApply: blockedReasons.length === 0,
+    canApprove: structuralReasons.length === 0,
     blockedReasons,
     checkedAt: input.checkedAt,
   };
