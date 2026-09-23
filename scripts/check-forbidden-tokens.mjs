@@ -12,7 +12,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,7 +108,10 @@ function main() {
   process.exit(runForbiddenTokenCheck({ repoRoot, tokens }));
 }
 
-const isMainModule = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Realpaths on both sides: import.meta.url is resolved, argv[1] is as typed,
+// so a plain path comparison silently skips main() when run through a symlink.
+const isMainModule =
+  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
 
 if (isMainModule) {
   main();

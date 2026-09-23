@@ -6,6 +6,9 @@
 //
 // Pure `cloudPreflight(env)` is exported for unit testing.
 
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 const DEV_BYPASSES = [
   "AGENTDASH_BILLING_DISABLED",
   "AGENTDASH_RATE_LIMIT_DISABLED",
@@ -117,4 +120,9 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// import.meta.url is the resolved real path while process.argv[1] is the path
+// as typed, so a plain comparison silently skips main() when the script is run
+// through a symlink. Compare realpaths on both sides.
+const invokedDirectly =
+  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+if (invokedDirectly) main();

@@ -6,10 +6,12 @@ import {
   copyFileSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 function requireValue(value, label, pattern) {
@@ -169,7 +171,12 @@ function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// import.meta.url is the resolved real path while process.argv[1] is the path
+// as typed, so a plain comparison silently skips main() when the script is run
+// through a symlink. Compare realpaths on both sides.
+const invokedDirectly =
+  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+if (invokedDirectly) {
   try {
     main();
   } catch (error) {

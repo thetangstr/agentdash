@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 function nowIso() {
@@ -271,7 +272,12 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// import.meta.url is the resolved real path while process.argv[1] is the path
+// as typed, so a plain comparison silently skips main() when the script is run
+// through a symlink. Compare realpaths on both sides.
+const invokedDirectly =
+  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+if (invokedDirectly) {
   main().catch((error) => {
     console.error(`[msp-partner-access-proof] ${error.message}`);
     process.exitCode = 1;

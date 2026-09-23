@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const CANARY_VERSION_RE = /-canary\.\d+$/;
 
@@ -282,7 +283,10 @@ async function main() {
   }
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// Realpaths on both sides: import.meta.url is resolved, argv[1] is as typed,
+// so a plain URL comparison silently skips main() when run through a symlink.
+const isDirectRun =
+  process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
 
 if (isDirectRun) {
   main().catch((error) => {
