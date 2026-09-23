@@ -65,6 +65,7 @@ import { handshakeDemoRoutes } from "./routes/handshake-demo.js";
 import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
 import { activityRoutes } from "./routes/activity.js";
+import { assistantRoutes } from "./routes/assistant.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { mspRoutes } from "./routes/msp.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -443,6 +444,7 @@ export async function createApp(
   api.use(secretRoutes(db));
   api.use(costRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(activityRoutes(db));
+  api.use(assistantRoutes(db));
   api.use(dashboardRoutes(db));
   api.use("/msp", mspRoutes(db));
   api.use(userProfileRoutes(db));
