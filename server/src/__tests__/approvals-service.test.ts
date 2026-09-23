@@ -8,7 +8,8 @@ const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
   terminate: vi.fn(),
   create: vi.fn(),
-  terminate: vi.fn(),
+  listKeys: vi.fn(),
+  createApiKey: vi.fn(),
 }));
 
 const mockNotifyHireApproved = vi.hoisted(() => vi.fn());
@@ -67,6 +68,8 @@ describe("approvalService resolution idempotency", () => {
     mockAgentService.terminate.mockResolvedValue(undefined);
     mockAgentService.create.mockResolvedValue({ id: "agent-1" });
     mockAgentService.terminate.mockResolvedValue(undefined);
+    mockAgentService.listKeys.mockResolvedValue([]);
+    mockAgentService.createApiKey.mockResolvedValue({ id: "key-1" });
     mockNotifyHireApproved.mockResolvedValue(undefined);
   });
 
@@ -109,5 +112,62 @@ describe("approvalService resolution idempotency", () => {
     expect(result.applied).toBe(true);
     expect(mockAgentService.activatePendingApproval).toHaveBeenCalledWith("agent-1");
     expect(mockNotifyHireApproved).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("approvalService autoProvisionDefaultKey", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAgentService.activatePendingApproval.mockResolvedValue(undefined);
+    mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1" });
+    mockAgentService.terminate.mockResolvedValue(undefined);
+    mockAgentService.listKeys.mockResolvedValue([]);
+    mockAgentService.createApiKey.mockResolvedValue({ id: "key-1" });
+    mockNotifyHireApproved.mockResolvedValue(undefined);
+  });
+
+  function approvalWithKeyFlag(flag: boolean): ApprovalRecord {
+    return {
+      ...createApproval("pending"),
+      payload: { agentId: "agent-1", autoProvisionDefaultKey: flag },
+    };
+  }
+
+  it("mints a default API key at activation when the payload asks for one", async () => {
+    const approved = { ...approvalWithKeyFlag(true), status: "approved" };
+    const dbStub = createDbStub([[approvalWithKeyFlag(true)]], [approved]);
+
+    const svc = approvalService(dbStub.db as any);
+    const result = await svc.approve("approval-1", "board", "ship it");
+
+    expect(result.applied).toBe(true);
+    expect(mockAgentService.createApiKey).toHaveBeenCalledWith(
+      "agent-1",
+      "default",
+      expect.objectContaining({ source: "auto_hire" }),
+    );
+  });
+
+  it("does not mint a second default key when one is already live", async () => {
+    mockAgentService.listKeys.mockResolvedValue([
+      { id: "key-0", name: "default", revokedAt: null },
+    ]);
+    const approved = { ...approvalWithKeyFlag(true), status: "approved" };
+    const dbStub = createDbStub([[approvalWithKeyFlag(true)]], [approved]);
+
+    const svc = approvalService(dbStub.db as any);
+    await svc.approve("approval-1", "board", "ship it");
+
+    expect(mockAgentService.createApiKey).not.toHaveBeenCalled();
+  });
+
+  it("does not mint a key when the payload did not ask for one", async () => {
+    const approved = createApproval("approved");
+    const dbStub = createDbStub([[createApproval("pending")]], [approved]);
+
+    const svc = approvalService(dbStub.db as any);
+    await svc.approve("approval-1", "board", "ship it");
+
+    expect(mockAgentService.createApiKey).not.toHaveBeenCalled();
   });
 });

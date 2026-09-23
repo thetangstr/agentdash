@@ -277,6 +277,24 @@ export function approvalService(db: Db) {
           }
           await agentsSvc.activatePendingApproval(payloadAgentId);
           hireApprovedAgentId = payloadAgentId;
+          // AgentDash: a payload-created pending agent could never hold an API
+          // key (`createApiKey` refuses `pending_approval`), so payloads that
+          // need one set `autoProvisionDefaultKey` and the key is minted here —
+          // the first moment the agent is runnable. The reviewer auto-hire
+          // path relies on this; without it the approved reviewer could not
+          // authenticate against /api/* on adapters without local-JWT support.
+          if (payload.autoProvisionDefaultKey === true) {
+            const existingKeys = await agentsSvc.listKeys(payloadAgentId);
+            const hasLiveDefault = existingKeys.some(
+              (key) => key.name === "default" && key.revokedAt === null,
+            );
+            if (!hasLiveDefault) {
+              await agentsSvc.createApiKey(payloadAgentId, "default", {
+                source: "auto_hire",
+                createdByUserId: decidedByUserId,
+              });
+            }
+          }
         } else {
           const created = await agentsSvc.create(updated.companyId, {
             name: String(payload.name ?? "New Agent"),

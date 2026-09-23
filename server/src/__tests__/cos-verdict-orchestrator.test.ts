@@ -51,6 +51,7 @@ function makeDb(stub: DbStub) {
     const result = selectQueue.shift() ?? [];
     const chain: any = {};
     chain.from = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
     chain.where = vi.fn(() => chain);
     chain.orderBy = vi.fn(() => chain);
     chain.limit = vi.fn(() => chain);

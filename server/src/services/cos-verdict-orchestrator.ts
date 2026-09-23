@@ -1,7 +1,8 @@
 // AgentDash: goals-eval-hitl
-import { and, asc, eq, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agents,
   approvals,
   cosReviewerAssignments,
   issueReviewQueueState,
@@ -11,7 +12,7 @@ import { COS_REVIEW_DEFAULTS } from "@paperclipai/shared";
 import { logActivity } from "./activity-log.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import type { FeatureFlagsService } from "./feature-flags.js";
-import type { CosReviewerAutoHireService } from "./cos-reviewer-auto-hire.js";
+import { RUNNABLE_REVIEWER_STATUSES, type CosReviewerAutoHireService } from "./cos-reviewer-auto-hire.js";
 import type { VerdictsService } from "./verdicts.js";
 
 interface OrchestratorDeps {
@@ -47,15 +48,21 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
   }
 
   async function pickAvailableReviewer(companyId: string): Promise<string | null> {
-    // Round-robin / first-available active reviewer (oldest hire wins —
+    // Round-robin / first-available runnable reviewer (oldest hire wins —
     // simple FIFO; sufficient for v1, refinable later without API change).
+    // The join on agents.status is defensive: termination retires the
+    // assignment row, but a reviewer retired any other way must never be
+    // picked either — an issue assigned to a dead reviewer escalates on the
+    // full 24h SLA for no reason anyone can see.
     const rows = await db
       .select({ reviewerAgentId: cosReviewerAssignments.reviewerAgentId })
       .from(cosReviewerAssignments)
+      .innerJoin(agents, eq(cosReviewerAssignments.reviewerAgentId, agents.id))
       .where(
         and(
           eq(cosReviewerAssignments.companyId, companyId),
           isNull(cosReviewerAssignments.retiredAt),
+          inArray(agents.status, [...RUNNABLE_REVIEWER_STATUSES]),
         ),
       )
       .orderBy(asc(cosReviewerAssignments.hiredAt))

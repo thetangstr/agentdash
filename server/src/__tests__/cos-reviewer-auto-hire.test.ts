@@ -1,9 +1,15 @@
-// Phase H3 — reviewer auto-hire convergence + neutrality-conflict unit tests.
+// Phase H3 — reviewer auto-hire convergence + neutrality-conflict unit tests,
+// extended for the runnable/approval-gated reviewer fix.
 //
 // We mock agentService.create via the deps.createAgent injection point and
 // drive db.transaction to call its callback inline. The convergence guard
 // (FOR UPDATE) is exercised by sequencing the SELECT-active result so that
 // the second concurrent call observes the first hire.
+//
+// Slot rows are shaped like the join the service now performs:
+//   { assignment: <cos_reviewer_assignments row>, agentStatus: <agents.status> }
+// The SQL WHERE excludes retired + terminated rows, so fixtures model the
+// post-filter set; JS-side assertions cover the runnable-vs-slot split.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockLogActivity = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -16,9 +22,19 @@ vi.mock("../services/activity-log.js", () => ({
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
+  getById: vi.fn(),
+  update: vi.fn(),
+  createApiKey: vi.fn(),
 }));
 vi.mock("../services/agents.js", () => ({
   agentService: vi.fn(() => mockAgentService),
+}));
+
+const mockApprovalService = vi.hoisted(() => ({
+  create: vi.fn(),
+}));
+vi.mock("../services/approvals.js", () => ({
+  approvalService: vi.fn(() => mockApprovalService),
 }));
 
 const mockCompanyService = vi.hoisted(() => ({
@@ -28,15 +44,40 @@ vi.mock("../services/companies.js", () => ({
   companyService: vi.fn(() => mockCompanyService),
 }));
 
+vi.mock("../services/cos-replier.js", () => ({
+  defaultAgentPlanAdapterType: vi.fn(() => "claude-local"),
+}));
+
+const mockInstructions = vi.hoisted(() => ({
+  materializeManagedBundle: vi.fn(),
+}));
+vi.mock("../services/agent-instructions.js", () => ({
+  agentInstructionsService: vi.fn(() => mockInstructions),
+}));
+
+const mockLoadBundle = vi.hoisted(() => vi.fn());
+vi.mock("../services/default-agent-instructions.js", () => ({
+  loadDefaultAgentInstructionsBundle: mockLoadBundle,
+}));
+
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.ts";
 
 const C = "11111111-1111-1111-1111-111111111111";
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
+interface SlotRow {
+  assignment: { id: string; reviewerAgentId: string };
+  agentStatus: string;
+}
+
+function slotRow(id: string, agentId: string, agentStatus: string): SlotRow {
+  return { assignment: { id, reviewerAgentId: agentId }, agentStatus };
+}
+
 interface DbScript {
-  /** Sequence of rows returned by tx.select().for("update") (active reviewers). */
-  activeReviewerSeq: unknown[][];
+  /** Sequence of slot rows returned by tx.select().for("update") (live assignments). */
+  activeReviewerSeq: SlotRow[][];
   /** Sequence of rows returned by tx.select().from(issueReviewQueueState).where(...) -> [{value: number}]. */
   depthSeq: Array<{ value: number }>;
   /** Inserts collected so we can assert. */
@@ -46,64 +87,41 @@ interface DbScript {
 function makeDb(script: DbScript) {
   const insertedReviewers: Array<Record<string, unknown>> = [];
 
-  // chain factory for SELECT (.from(...).where(...).for("update")? .then(...))
-  function selectChain(rowsProvider: () => unknown[]) {
-    const chain: any = {};
-    chain.from = vi.fn(() => chain);
-    chain.where = vi.fn(() => chain);
-    chain.for = vi.fn(() => chain); // tolerated for the active-reviewers + FOR UPDATE
-    chain.orderBy = vi.fn(() => chain);
-    chain.limit = vi.fn(() => chain);
-    chain.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
-      Promise.resolve(rowsProvider()).then(resolve, reject);
-    return chain;
-  }
-
-  // Track which select call we're on. The auto-hire transaction issues:
-  //  1) SELECT cos_reviewer_assignments WHERE companyId=? AND retiredAt IS NULL FOR UPDATE
-  //  2) (queue_depth path only) SELECT count() FROM issue_review_queue_state WHERE ...
-  let selectN = 0;
-
-  const select = vi.fn(() => {
-    const idx = selectN++;
-    return selectChain(() => {
-      // Even-indexed selects are active-reviewer queries; odd are depth queries.
-      // But because the depth query doesn't always run, we instead track by
-      // inspecting the chain's behavior — simpler: maintain two counters.
-      // For this stub, we hand back active rows on every other call starting 0.
-      // Refined: use an outer counter that we advance through both queues.
-      return [];
-    });
-  });
-
-  // Better approach: route each select() to whichever queue still has data.
-  // The first .from() call won't tell us which table. Instead, we inspect by
-  // whether the chain's `.for("update")` is invoked — but that's a method
-  // call after we've already returned. So just round-robin: the auto-hire
-  // code path always calls activeReviewerSeq first, then depthSeq.
-
+  // The auto-hire transaction issues:
+  //  1) SELECT assignments JOIN agents WHERE companyId=? AND retiredAt IS NULL
+  //     AND status != 'terminated' FOR UPDATE  — identified by .for("update")
+  //  2) (queue_depth path only) SELECT count() FROM issue_review_queue_state
   const activeQ = [...script.activeReviewerSeq];
   const depthQ = [...script.depthSeq];
 
-  const select2 = vi.fn(() => {
-    let resolved = false;
-    let payload: unknown[] = [];
+  const select = vi.fn(() => {
+    let payload: unknown[] | null = null;
+    let usedJoin = false;
     const chain: any = {};
     chain.from = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => {
+      // Both assignment queries (the FOR UPDATE slot lock and the public
+      // activeReviewers lookup) join agents; the depth count does not.
+      usedJoin = true;
+      return chain;
+    });
     chain.where = vi.fn(() => chain);
     chain.for = vi.fn(() => {
-      // Mark this as the active-reviewers query.
+      // Mark this as the live-assignments query.
       payload = activeQ.shift() ?? [];
-      resolved = true;
       return chain;
     });
     chain.orderBy = vi.fn(() => chain);
     chain.limit = vi.fn(() => chain);
     chain.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => {
-      if (!resolved) {
-        // This must be the depth query.
-        const next = depthQ.shift();
-        payload = next ? [next] : [{ value: 0 }];
+      if (payload === null) {
+        if (usedJoin) {
+          payload = activeQ.shift() ?? [];
+        } else {
+          // This must be the depth query.
+          const next = depthQ.shift();
+          payload = next ? [next] : [{ value: 0 }];
+        }
       }
       return Promise.resolve(payload).then(resolve, reject);
     };
@@ -131,13 +149,12 @@ function makeDb(script: DbScript) {
 
   const db: any = {
     execute: vi.fn().mockResolvedValue([]),
-    select: select2,
+    select,
     insert: vi.fn(() => ({ values: insertValues })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
   };
   db.transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
 
-  void select;
   return db;
 }
 
@@ -145,9 +162,23 @@ beforeEach(() => {
   mockLogActivity.mockClear();
   mockAgentService.create.mockReset();
   mockAgentService.list.mockReset();
+  mockAgentService.getById.mockReset();
+  mockAgentService.update.mockReset();
+  mockAgentService.createApiKey.mockReset();
+  mockApprovalService.create.mockReset();
   mockCompanyService.getById.mockReset();
+  mockInstructions.materializeManagedBundle.mockReset();
+  mockLoadBundle.mockReset();
   mockAgentService.list.mockResolvedValue([]);
   mockCompanyService.getById.mockResolvedValue({ id: C, planTier: "pro_active" });
+  mockApprovalService.create.mockResolvedValue({ id: "approval-1", status: "pending" });
+  mockLoadBundle.mockResolvedValue({ "AGENTS.md": "reviewer mandate" });
+  mockInstructions.materializeManagedBundle.mockResolvedValue({
+    bundle: {},
+    adapterConfig: {
+      instructionsBundle: { mode: "managed", rootPath: "/tmp/x", entryFile: "AGENTS.md" },
+    },
+  });
   delete process.env.AGENTDASH_REVIEWER_QUEUE_DEPTH_THRESHOLD;
   delete process.env.AGENTDASH_REVIEWER_MAX_CONCURRENT_HIRES;
   delete process.env.STRIPE_SECRET_KEY;
@@ -161,31 +192,129 @@ afterEach(() => {
   else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
 });
 
-describe("cosReviewerAutoHire — neutrality_conflict", () => {
-  it("hires unconditionally regardless of queue depth", async () => {
+describe("cosReviewerAutoHire — approval-gated hire", () => {
+  it("files a hire_agent approval for a pending_approval reviewer instead of hiring directly", async () => {
     const inserts: DbScript["inserts"] = [];
     const db = makeDb({
-      activeReviewerSeq: [[]], // no active reviewers
-      depthSeq: [{ value: 0 }], // queue is empty
+      activeReviewerSeq: [[]],
+      depthSeq: [{ value: 0 }],
       inserts,
     });
+    const provisionReviewer = vi.fn().mockResolvedValue(undefined);
     const svc = cosReviewerAutoHire(db, {
       createAgent: vi.fn().mockResolvedValue({ id: "agent-new-1" }),
+      provisionReviewer,
     });
 
     const result = await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
     expect(result.hired).toBe(true);
-    expect(result.reason).toBe("hired");
+    expect(result.reason).toBe("approval_pending");
+    expect(result.approvalId).toBe("approval-1");
+    expect(result.reviewerAgentId).toBe("agent-new-1");
+    // Assignment row still lands so the slot is reserved.
     expect(inserts).toHaveLength(1);
-    // activity_log row written with action 'reviewer_hired'
-    const reviewerHiredCalls = mockLogActivity.mock.calls.filter(
-      (call: any[]) => call[1]?.action === "reviewer_hired",
+    // The approval is the same shape a user-initiated hire produces.
+    expect(mockApprovalService.create).toHaveBeenCalledTimes(1);
+    const approvalArg = mockApprovalService.create.mock.calls[0]![1] as Record<string, any>;
+    expect(approvalArg.type).toBe("hire_agent");
+    expect(approvalArg.status).toBe("pending");
+    expect(approvalArg.payload.agentId).toBe("agent-new-1");
+    expect(approvalArg.payload.autoHireReason).toBe("neutrality_conflict");
+    // Provisioning ran after commit.
+    expect(provisionReviewer).toHaveBeenCalledWith("agent-new-1");
+    // Audit row: reviewer_hire_requested (was reviewer_hired before the gate).
+    const hireCalls = mockLogActivity.mock.calls.filter(
+      (call: any[]) => call[1]?.action === "reviewer_hire_requested",
     );
-    expect(reviewerHiredCalls).toHaveLength(1);
-    expect(reviewerHiredCalls[0]![1]).toMatchObject({
-      action: "reviewer_hired",
-      details: { reason: "neutrality_conflict" },
+    expect(hireCalls).toHaveLength(1);
+    expect(hireCalls[0]![1]).toMatchObject({
+      action: "reviewer_hire_requested",
+      details: { reason: "neutrality_conflict", approvalId: "approval-1" },
     });
+  });
+
+  it("creates the reviewer through agentService.create as pending_approval with a real adapter and heartbeat", async () => {
+    const db = makeDb({ activeReviewerSeq: [[]], depthSeq: [], inserts: [] });
+    mockAgentService.create.mockResolvedValue({ id: "agent-real-1" });
+    const svc = cosReviewerAutoHire(db, {
+      provisionReviewer: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const r2 = await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
+    expect(r2.hired).toBe(true);
+    expect(mockAgentService.create).toHaveBeenCalledTimes(1);
+    const created = mockAgentService.create.mock.calls[0]![1] as Record<string, any>;
+    expect(created.status).toBe("pending_approval");
+    // A real adapter, not the old unrunnable "process" stub.
+    expect(created.adapterType).toBe("claude-local");
+    expect(created.role).toBe("reviewer");
+    expect(created.runtimeConfig.heartbeat).toMatchObject({
+      enabled: true,
+      intervalSec: 1800,
+      requireWork: false,
+    });
+    expect(created.metadata).toMatchObject({
+      autoHired: true,
+      autoHireReason: "neutrality_conflict",
+    });
+  });
+});
+
+describe("cosReviewerAutoHire — provisioning", () => {
+  it("materializes the reviewer bundle and persists adapterConfig; the key is deferred to approval", async () => {
+    const db = makeDb({
+      activeReviewerSeq: [[]],
+      depthSeq: [],
+      inserts: [],
+    });
+    mockAgentService.create.mockResolvedValue({ id: "agent-prov-1" });
+    mockAgentService.getById.mockResolvedValue({
+      id: "agent-prov-1",
+      companyId: C,
+      adapterConfig: {},
+    });
+    // No provisionReviewer dep — exercise the real provisioning path.
+    const svc = cosReviewerAutoHire(db, {});
+
+    const result = await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
+    expect(result.hired).toBe(true);
+
+    expect(mockLoadBundle).toHaveBeenCalledWith("reviewer");
+    expect(mockInstructions.materializeManagedBundle).toHaveBeenCalledTimes(1);
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      "agent-prov-1",
+      expect.objectContaining({
+        adapterConfig: expect.objectContaining({
+          instructionsBundle: expect.objectContaining({ mode: "managed" }),
+        }),
+      }),
+    );
+    // The agent is pending_approval — createApiKey refuses that status, so the
+    // approval payload asks the approve path to mint the key at activation.
+    expect(mockAgentService.createApiKey).not.toHaveBeenCalled();
+    const approvalArg = mockApprovalService.create.mock.calls[0]![1] as Record<string, any>;
+    expect(approvalArg.payload.autoProvisionDefaultKey).toBe(true);
+  });
+});
+
+describe("cosReviewerAutoHire — kill switch", () => {
+  it("MAX_CONCURRENT_HIRES=0 disables the feature outright", async () => {
+    process.env.AGENTDASH_REVIEWER_MAX_CONCURRENT_HIRES = "0";
+    const inserts: DbScript["inserts"] = [];
+    const db = makeDb({
+      activeReviewerSeq: [[]],
+      depthSeq: [{ value: 1000 }],
+      inserts,
+    });
+    const createAgent = vi.fn();
+    const svc = cosReviewerAutoHire(db, { createAgent });
+
+    const result = await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
+    expect(result.hired).toBe(false);
+    expect(result.reason).toBe("disabled");
+    expect(createAgent).not.toHaveBeenCalled();
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
   });
 });
 
@@ -194,17 +323,16 @@ describe("cosReviewerAutoHire — queue_depth threshold", () => {
     const inserts: DbScript["inserts"] = [];
     const db = makeDb({
       activeReviewerSeq: [[]],
-      depthSeq: [{ value: 4 }], // below threshold
+      depthSeq: [{ value: 4 }],
       inserts,
     });
-    const svc = cosReviewerAutoHire(db, {
-      createAgent: vi.fn(),
-    });
+    const svc = cosReviewerAutoHire(db, { createAgent: vi.fn() });
 
     const result = await svc.evaluateAndHireIfNeeded(C, "queue_depth");
     expect(result.hired).toBe(false);
     expect(result.reason).toBe("below_threshold");
     expect(inserts).toHaveLength(0);
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
   });
 
   it("hires when depth >= threshold", async () => {
@@ -216,20 +344,100 @@ describe("cosReviewerAutoHire — queue_depth threshold", () => {
     });
     const svc = cosReviewerAutoHire(db, {
       createAgent: vi.fn().mockResolvedValue({ id: "agent-new-2" }),
+      provisionReviewer: vi.fn().mockResolvedValue(undefined),
     });
 
     const result = await svc.evaluateAndHireIfNeeded(C, "queue_depth");
     expect(result.hired).toBe(true);
+    expect(result.reason).toBe("approval_pending");
     expect(inserts).toHaveLength(1);
   });
 });
 
+describe("cosReviewerAutoHire — slot vs capacity counting", () => {
+  it("pending_approval reviewers occupy hire slots but not review capacity", async () => {
+    // One pending reviewer: slotCount=1 (< cap 3) but activeCount=0, so the
+    // depth threshold stays at 5 — the pending reviewer is not reviewing.
+    const inserts: DbScript["inserts"] = [];
+    const db = makeDb({
+      activeReviewerSeq: [[slotRow("a1", "r1", "pending_approval")]],
+      depthSeq: [{ value: 5 }],
+      inserts,
+    });
+    const svc = cosReviewerAutoHire(db, {
+      createAgent: vi.fn().mockResolvedValue({ id: "agent-new-3" }),
+      provisionReviewer: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const result = await svc.evaluateAndHireIfNeeded(C, "queue_depth");
+    expect(result.hired).toBe(true);
+    expect(result.reason).toBe("approval_pending");
+    expect(inserts).toHaveLength(1);
+  });
+
+  it("counts only runnable reviewers toward capacity (pending reviewer does not raise the threshold)", async () => {
+    // idle + pending_approval: activeCount=1 → threshold 5, depth 4 < 5 → skip.
+    // If pending_approval counted as capacity, threshold would be 10 and this
+    // assertion would be indistinguishable — the 5-depth hire case above and
+    // this below-threshold case together pin the runnable filter.
+    const inserts: DbScript["inserts"] = [];
+    const db = makeDb({
+      activeReviewerSeq: [[
+        slotRow("a1", "r1", "idle"),
+        slotRow("a2", "r2", "pending_approval"),
+      ]],
+      depthSeq: [{ value: 4 }],
+      inserts,
+    });
+    const svc = cosReviewerAutoHire(db, { createAgent: vi.fn() });
+
+    const result = await svc.evaluateAndHireIfNeeded(C, "queue_depth");
+    expect(result.hired).toBe(false);
+    expect(result.reason).toBe("below_threshold");
+    expect(result.activeCount).toBe(1);
+  });
+
+  it("pending_approval reviewers still count toward the hire cap", async () => {
+    const inserts: DbScript["inserts"] = [];
+    const db = makeDb({
+      activeReviewerSeq: [[
+        slotRow("a1", "r1", "pending_approval"),
+        slotRow("a2", "r2", "pending_approval"),
+        slotRow("a3", "r3", "pending_approval"),
+      ]],
+      depthSeq: [{ value: 1000 }],
+      inserts,
+    });
+    const svc = cosReviewerAutoHire(db, { createAgent: vi.fn() });
+
+    const result = await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
+    expect(result.hired).toBe(false);
+    expect(result.reason).toBe("cap_reached");
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("activeReviewers returns only runnable-status assignments", async () => {
+    const db = makeDb({
+      activeReviewerSeq: [[
+        slotRow("a1", "r1", "idle"),
+        slotRow("a2", "r2", "running"),
+      ]],
+      depthSeq: [],
+      inserts: [],
+    });
+    const svc = cosReviewerAutoHire(db, {});
+    const rows = await svc.activeReviewers(C);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id)).toEqual(["a1", "a2"]);
+  });
+});
+
 describe("cosReviewerAutoHire — MAX_CONCURRENT_HIRES cap", () => {
-  it("returns cap_reached when activeCount >= cap (default 3)", async () => {
+  it("returns cap_reached when slotCount >= cap (default 3)", async () => {
     const activeRows = [
-      { id: "a1", reviewerAgentId: "r1" },
-      { id: "a2", reviewerAgentId: "r2" },
-      { id: "a3", reviewerAgentId: "r3" },
+      slotRow("a1", "r1", "idle"),
+      slotRow("a2", "r2", "running"),
+      slotRow("a3", "r3", "idle"),
     ];
     const inserts: DbScript["inserts"] = [];
     const db = makeDb({
@@ -242,7 +450,6 @@ describe("cosReviewerAutoHire — MAX_CONCURRENT_HIRES cap", () => {
     expect(result.hired).toBe(false);
     expect(result.reason).toBe("cap_reached");
     expect(inserts).toHaveLength(0);
-    // throttled audit row written
     const throttled = mockLogActivity.mock.calls.filter(
       (c: any[]) => c[1]?.action === "reviewer_hire_throttled",
     );
@@ -277,22 +484,24 @@ describe("cosReviewerAutoHire — Free tier cap", () => {
 describe("cosReviewerAutoHire — convergence (advisory)", () => {
   // Note: a true concurrent FOR UPDATE test requires real PG. Here we
   // sequentially simulate two calls; the second observes the first hire's
-  // row in the active-reviewer set and stops at cap_reached when cap=1.
+  // row in the slot set and stops at cap_reached when cap=1.
   it("second sequential call observes first hire and stops at cap=1", async () => {
     process.env.AGENTDASH_REVIEWER_MAX_CONCURRENT_HIRES = "1";
     const inserts: DbScript["inserts"] = [];
     const db = makeDb({
-      activeReviewerSeq: [[], [{ id: "a1", reviewerAgentId: "r1" }]],
+      activeReviewerSeq: [[], [slotRow("a1", "r1", "pending_approval")]],
       depthSeq: [{ value: 1000 }, { value: 1000 }],
       inserts,
     });
     const svc = cosReviewerAutoHire(db, {
       createAgent: vi.fn().mockResolvedValue({ id: "agent-x" }),
+      provisionReviewer: vi.fn().mockResolvedValue(undefined),
     });
 
     const r1 = await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
     const r2 = await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
     expect(r1.hired).toBe(true);
+    expect(r1.reason).toBe("approval_pending");
     expect(r2.hired).toBe(false);
     expect(r2.reason).toBe("cap_reached");
     expect(inserts).toHaveLength(1);
@@ -331,7 +540,7 @@ describe("cosReviewerAutoHire — convergence (advisory)", () => {
    * Risk if this stays skipped: a regression that removes the FOR UPDATE
    * clause (or wraps the wrong query in the transaction) would not be
    * caught until production. Mitigation: code-review-time check that
-   * `tx.select(...).for("update")` appears in the active-reviewers query
+   * `tx.select(...).for("update")` appears in the live-assignments query
    * inside `evaluateAndHireIfNeeded`.
    */
   it.skip("(real-PG) two concurrent Promise.all calls produce ≤ MAX_CONCURRENT_HIRES inserts", async () => {

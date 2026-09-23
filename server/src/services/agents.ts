@@ -14,6 +14,7 @@ import {
   costEvents,
   heartbeatRunEvents,
   heartbeatRuns,
+  cosReviewerAssignments,
   issueExecutionDecisions,
   issues,
   issueComments,
@@ -504,6 +505,20 @@ export function agentService(db: Db) {
         .set({ revokedAt: new Date() })
         .where(eq(agentApiKeys.agentId, id));
 
+      // AgentDash: a terminated reviewer cannot review. Retire its queue
+      // assignment here — inside terminate, not at the call sites — so every
+      // path that ends an agent (route, rejected hire approval, admin) frees
+      // the slot and stops the orchestrator counting it as capacity.
+      await db
+        .update(cosReviewerAssignments)
+        .set({ retiredAt: new Date() })
+        .where(
+          and(
+            eq(cosReviewerAssignments.reviewerAgentId, id),
+            isNull(cosReviewerAssignments.retiredAt),
+          ),
+        );
+
       // AgentDash: tear down the agent's managed Hermes profile (best-effort,
       // non-fatal; gated off by default).
       if (
@@ -600,6 +615,10 @@ export function agentService(db: Db) {
         //     billed.
         await tx.execute(sql`delete from agent_config_revisions where agent_id = ${id}`);
         await tx.execute(sql`delete from agent_runs where agent_id = ${id}`);
+        // AgentDash: reviewer queue assignments carry a NOT NULL agent
+        // reference — they mean nothing without the agent and would block the
+        // delete with a foreign-key violation.
+        await tx.execute(sql`delete from cos_reviewer_assignments where reviewer_agent_id = ${id}`);
         const deleted = await tx
           .delete(agents)
           .where(eq(agents.id, id))

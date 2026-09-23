@@ -23,6 +23,12 @@ const DEFAULT_AGENT_BUNDLE_FILES = {
   // a read-only principal invoked only for exception review. Its bundle is the
   // mandate alone; it inherits none of the worker's execution contract.
   evaluator: ["AGENTS.md"],
+  // AgentDash: the auto-hired CoS reviewer — a specialist principal like the
+  // evaluator, so its bundle is likewise the mandate alone. Loaded explicitly
+  // by cos-reviewer-auto-hire; `resolveDefaultAgentInstructionsBundleRole`
+  // does NOT map the "reviewer" role here, so a user hiring an agent they
+  // named "reviewer" still gets the worker bundle.
+  reviewer: ["AGENTS.md"],
 } as const;
 
 type DefaultAgentBundleRole = keyof typeof DEFAULT_AGENT_BUNDLE_FILES;
