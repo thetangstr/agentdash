@@ -170,19 +170,76 @@ fi
 # Build
 # -------------------------------------------------------------------
 
-info "Building AgentDash..."
-cd "$APP_DIR"
+# AGENTDASH_INSTALL_SKIP_BUILD=1 skips `pnpm install && pnpm build` for
+# environments where the tree is already built or replaced (tests stage a fake
+# checkout; some deploy flows rebuild separately). It does not skip any launchd
+# or legacy-plist handling.
+if [[ "${AGENTDASH_INSTALL_SKIP_BUILD:-0}" != "1" ]]; then
+    info "Building AgentDash..."
+    cd "$APP_DIR"
 
-"$PNPM_BIN" install --frozen-lockfile || error "Dependency install failed"
-"$PNPM_BIN" build || error "Build failed"
+    "$PNPM_BIN" install --frozen-lockfile || error "Dependency install failed"
+    "$PNPM_BIN" build || error "Build failed"
 
-if [[ ! -d "server/dist" ]]; then
-    error "Build failed: server/dist not found."
+    if [[ ! -d "server/dist" ]]; then
+        error "Build failed: server/dist not found."
+    fi
+    if [[ ! -f "ui/dist/index.html" ]]; then
+        error "Build failed: ui/dist/index.html not found."
+    fi
+    info "Build OK."
+else
+    info "AGENTDASH_INSTALL_SKIP_BUILD=1 — skipping pnpm install/build."
 fi
-if [[ ! -f "ui/dist/index.html" ]]; then
-    error "Build failed: ui/dist/index.html not found."
-fi
-info "Build OK."
+
+# -------------------------------------------------------------------
+# Legacy plist migration (GH #347)
+# -------------------------------------------------------------------
+# A machine migrated from a pre-AgentDash Paperclip install can carry
+# ~/Library/LaunchAgents/com.paperclip.server.plist pointing at
+# ~/.paperclip/paperclip-launchd.sh, which no longer exists after migration.
+# launchd then fails the restore silently, and the broken legacy service
+# fights the new ai.agentdash.agent service for the port. Detect that case
+# here: boot the legacy service out, move its plist aside, and continue.
+#
+# Behavior (ported from the GH #347 fix on codex/invite-token-primitives,
+# 9fbbcde7):
+#   - no legacy plist  -> nothing to do
+#   - plist references a wrapper that still exists -> leave it alone
+#   - plist references anything else (e.g. missing wrapper) -> boot out
+#     com.paperclip.server, move the plist to <name>.migrated.bak.<ts>
+
+LEGACY_PLIST_DST="${HOME}/Library/LaunchAgents/com.paperclip.server.plist"
+LEGACY_WRAPPER="${HOME}/.paperclip/paperclip-launchd.sh"
+LEGACY_LABEL="com.paperclip.server"
+
+disable_broken_legacy_service() {
+    if [[ ! -f "$LEGACY_PLIST_DST" ]]; then
+        return
+    fi
+
+    if [[ -x "$LEGACY_WRAPPER" ]]; then
+        warn "Legacy Paperclip launchd plist found at ${LEGACY_PLIST_DST} and its wrapper ${LEGACY_WRAPPER} still exists — leaving it in place."
+        return
+    fi
+
+    warn "Disabling broken legacy Paperclip launchd plist at ${LEGACY_PLIST_DST} (points at missing ${LEGACY_WRAPPER})."
+
+    # bootout, not just unload: the plist may no longer be parseable or its
+    # program missing, and the goal is that launchd holds no live instance of
+    # the legacy label before ai.agentdash.agent is (re)loaded.
+    launchctl bootout "gui/$(id -u)/${LEGACY_LABEL}" 2>/dev/null || true
+    # Belt-and-braces for older setups still loaded via the deprecated path.
+    launchctl unload "$LEGACY_PLIST_DST" 2>/dev/null || true
+
+    local backup
+    backup="${LEGACY_PLIST_DST}.migrated.bak.$(date +%Y%m%d%H%M%S)"
+    mv "$LEGACY_PLIST_DST" "$backup"
+    info "Legacy plist moved aside to ${backup}."
+}
+# AgentDash: legacy-plist-migration call — runs BEFORE the new service is
+# installed so the remediated state is what launchd sees on re-bootstrap.
+disable_broken_legacy_service
 
 # -------------------------------------------------------------------
 # Prepare directories
