@@ -20,6 +20,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "inbox",
   "u",
   "design-guide",
+  "guides",
   // Missing here meant the sidebar's own "My Agent" link was broken.
   //
   // A root that is not in this set is assumed to BE a company prefix, so

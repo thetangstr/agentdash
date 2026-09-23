@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { agentsApi } from "../../api/agents";
@@ -244,6 +245,11 @@ export function ConnectYourTerminal({
                 creates an <code className="font-mono">~/agentdash-inbox</code> folder — open that
                 folder in Claude Code and anything waiting on you appears as the session starts.
                 Undo any time with <code className="font-mono">npx agentdash-connect --remove</code>.
+                Step by step, with what each file is for:{" "}
+                <Link to="/guides/steward/connect-your-terminal" className="underline">
+                  Connect your terminal
+                </Link>
+                .
               </p>
 
               <Button

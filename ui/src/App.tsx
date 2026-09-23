@@ -43,6 +43,9 @@ import { CompanySkills } from "./pages/CompanySkills";
 import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
+import { NoCompaniesStartPage, UnprefixedBoardRedirect } from "./components/UnprefixedBoardRedirect";
+import { Guides } from "./pages/Guides";
+import { Guide } from "./pages/Guide";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -177,6 +180,8 @@ function boardRoutes() {
       <Route path="evaluation/:kind/:id/:tab" element={<EvaluationMilestone />} />
       <Route path="activity" element={<Activity />} />
       <Route path="my-agent" element={<MyAgent />} />
+      <Route path="guides" element={<Guides />} />
+      <Route path="guides/:group/:slug" element={<Guide />} />
       {/* The guide is now a section on My Agent itself. The deep link is kept
           so existing bookmarks and the older release notes still land somewhere
           useful, but there is no second copy of the content to drift. */}
@@ -272,62 +277,6 @@ function CompanyRootRedirect() {
   return <Navigate to={`/${targetCompany.issuePrefix}/dashboard`} replace />;
 }
 
-function UnprefixedBoardRedirect() {
-  const location = useLocation();
-  const { companies, selectedCompany, loading } = useCompany();
-
-  if (loading) {
-    return <div className="mx-auto max-w-xl py-10 text-sm text-muted-foreground">Loading...</div>;
-  }
-
-  const targetCompany = selectedCompany ?? companies[0] ?? null;
-  if (!targetCompany) {
-    if (
-      shouldRedirectCompanylessRouteToOnboarding({
-        pathname: location.pathname,
-        hasCompanies: false,
-      })
-    ) {
-      return <Navigate to="/onboarding" replace />;
-    }
-    return <NoCompaniesStartPage />;
-  }
-
-  return (
-    <Navigate
-      to={`/${targetCompany.issuePrefix}${location.pathname}${location.search}${location.hash}`}
-      replace
-    />
-  );
-}
-
-function NoCompaniesStartPage() {
-  const { openOnboarding } = useDialogActions();
-
-  // MKThink is the first customer, so their brief is the default prose. Any
-  // other instance still gets a working prompt — just a generic description.
-  const brief = `MKThink is a strategy, design and innovation consultancy. We help
-organizations solve complex problems.
-
-I want a Chief of Staff for myself, plus three agents each belonging to one of my
-leads: Delivery (live client project status and commitments at risk), Platform
-(our SharePoint estate and code repositories), and People (recruiting pipeline
-and who is waiting on us).
-
-Set up three goals with tasks under them:
-  1. Monthly board pack, assembled without a fire drill — the Chief assembles it
-     and the other three each contribute their part, attributed.
-  2. SharePoint and repository cleanup — inventory what is stale, then a deletion
-     proposal a human approves. An agent must NEVER delete anything itself.
-  3. Recruiting pipeline that never silently stalls — weekly review of who is
-     waiting on us and which roles block delivery.
-
-No agent may contact a client or a candidate directly; they draft and a human
-sends. No agent reports a number it cannot source.`;
-
-  return <FirstRunStart onCreateManually={() => openOnboarding()} companyBrief={brief} />;
-}
-
 export function App() {
   return (
     <>
@@ -419,6 +368,8 @@ export function App() {
               company code. Without these, /dashboard looked for a company
               called DASHBOARD and said it could not find one. */}
           <Route path="my-agent" element={<UnprefixedBoardRedirect />} />
+          <Route path="guides" element={<UnprefixedBoardRedirect />} />
+          <Route path="guides/*" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard/*" element={<UnprefixedBoardRedirect />} />
           <Route path="inbox" element={<UnprefixedBoardRedirect />} />

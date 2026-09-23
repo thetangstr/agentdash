@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useNavigate } from "@/lib/router";
 import { onboardingApi } from "@/api/onboarding";
 import { Button } from "@/components/ui/button";
+import { Link } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
 
 export function MemberOnboardingPage() {
@@ -63,6 +64,15 @@ export function MemberOnboardingPage() {
             ? "AgentDash keeps your team’s work, agent activity, and approvals in one place. Your existing company role and permissions stay unchanged."
             : "Open tasks show work that is not done or cancelled. You can leave at any time and this step will resume when you return."}
         </p>
+        {isWelcome ? (
+          <p className="mt-3 text-sm text-muted-foreground">
+            New here?{" "}
+            <Link to="/guides/steward/getting-started" className="underline">
+              Getting started as a steward
+            </Link>{" "}
+            covers My Agent, connecting your terminal, and your inbox — twenty minutes, start to finish.
+          </p>
+        ) : null}
         <div className="mt-8 flex items-center justify-between gap-4">
           <span className="text-xs text-muted-foreground">
             Step {isWelcome ? "1" : "2"} of 2
