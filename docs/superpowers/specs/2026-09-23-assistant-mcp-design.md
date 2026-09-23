@@ -1,10 +1,10 @@
 # Assistant-facing MCP: AgentDash as the back office
 
-2026-09-23 · Draft for founder review · Status: **design only, nothing here ships in this PR**
+2026-09-23 · Revised the same day with the founder's decisions (§10) · Status: **design only, nothing here ships in this PR**
 
 ## 1. The product in one paragraph
 
-A person talks to their own assistant (Meta's Muse, xAI's Grok, Claude). The assistant connects to their AgentDash instance over MCP and runs the product and engineering back office: it reports what agents shipped, files and assigns work, explains blockers, and relays decisions agents are waiting on. The assistant is the front desk; AgentDash's agents do the work. The launch gate: **One real assistant client, connected to a real public AgentDash instance over OAuth, drives a project end to end (start it, staff it, unblock it, approve what it asks for, and report what shipped) with no one opening the AgentDash UI except for the OAuth consent screen.** Section 8 turns that sentence into a script.
+A person talks to their own assistant (Meta's Muse, xAI's Grok, Claude). The assistant connects to their AgentDash instance over MCP and runs the product and engineering back office: it reports what agents shipped, files and assigns work, explains blockers, and relays decisions agents are waiting on. The assistant is the front desk; AgentDash's agents do the work. The launch gate: **Meta Muse, connected to a hosted AgentDash instance on agentdash.cloud over OAuth, drives a project end to end (start it, staff it, unblock it, approve what it asks for, and report what shipped) with no one opening the AgentDash UI except for the OAuth consent screen.** Grok is the second client, and the interim launch client if Muse cannot connect (§6.6). Section 8 turns this into a script.
 
 ## 2. What exists today (and why it is the wrong shape for an assistant)
 
@@ -29,10 +29,7 @@ Transports:
 
 ### 2.2 Why none of this serves Muse or Grok
 
-1. **Wrong principal.** `/api/mcp` authenticates *an agent*. An assistant acts for *a person* (creating work, reading across the company, deciding approvals). The person-scoped surface (bridge/inbox) is stdio-only, with a token stored on a laptop by `agentdash-connect`.
-2. **Wrong auth.** Cloud assistants cannot run `npx` or hold an env-var key. Remote MCP clients expect a public HTTPS URL plus OAuth 2.1 discovery (§6). AgentDash has no OAuth server; the closest is the CLI-auth challenge (`POST /cli-auth/challenges` → browser approval → board key, `server/src/routes/access.ts:2640`).
-3. **Wrong granularity.** "Why is X blocked?" takes five calls today (`list_issues` → `get_issue` → `list_comments` → runs → `list_issue_approvals`), each returning unbounded JSON. A voice assistant needs one call and one relayable sentence.
-4. **Wrong output.** Entity dumps (`src/format.ts`): no summary, no deep link, no bound, no untrusted framing of agent-authored text.
+**Wrong principal:** `/api/mcp` authenticates an agent, but an assistant acts for a person, and the person-scoped inbox is stdio-only. **Wrong auth:** cloud assistants expect a public HTTPS URL plus OAuth 2.1, and AgentDash has no OAuth server (the nearest is the CLI-auth challenge, `server/src/routes/access.ts:2640`). **Wrong granularity:** "why is X blocked?" takes five calls, each returning unbounded JSON. **Wrong output:** no summary, deep link, bound, or untrusted framing (`src/format.ts`).
 
 ### 2.3 Server surfaces the new tools will wrap
 
@@ -52,21 +49,21 @@ Transports:
 
 ## 3. Jobs to be done
 
-Each row is something a person says to their assistant, followed by the tool calls that answer it. Tool names are defined in §4.
+What a person says, the tool calls that answer it (§4), and what they hear.
 
 | # | The person says | Calls | What they hear back |
 |---|---|---|---|
-| J1 | "What did my agents ship overnight?" | `whats_new(since: "12h")` | "4 things finished: PR #212 *checkout retries* (merged), … 1 is blocked, 2 decisions wait for you." Each item has a link. |
-| J2 | "Get someone on the checkout bug. Card declines are retried forever." | `find_work(query: "checkout")` → none open → `create_work_item(title, description, assignee: "best fit")` | "Filed ACME-311 and gave it to Priya (engineer). She has started." If an open match exists, the tool offers it first. |
+| J1 | "What did my agents ship overnight?" | `whats_new(since: "12h")` | "4 things finished (PR #212 merged, …); 1 blocked; 2 decisions wait for you." With links. |
+| J2 | "Get someone on the checkout bug. Card declines are retried forever." | `find_work(query: "checkout")` → none open → `create_work_item(title, description, assignee: "best fit")` | "Filed ACME-311 for Priya; she has started." An open match is offered first. |
 | J3 | "Have Theo take that instead." | `assign_work(ref: "ACME-311", agent: "Theo")` | "Moved ACME-311 from Priya to Theo." |
-| J4 | "Why is the pricing page blocked?" | `find_work(query: "pricing page", status: "blocked")` → `explain_blocker(ref)` | "Jules stopped at 02:14. He needs a Stripe test key, and he asked for it in approval 'connector access'. That approval is waiting for you." |
+| J4 | "Why is the pricing page blocked?" | `find_work(query: "pricing page", status: "blocked")` → `explain_blocker(ref)` | "Jules stopped at 02:14: he needs a Stripe test key and asked you for it." |
 | J5 | "What needs me?" | `list_pending_decisions()` | "Two things: Priya wants to hire a QA agent; Jules wants to send an email to a customer." |
 | J6 | "Approve the hire." / "Say no to the email, it's too pushy." | `prepare_decision(approval, "approve"/"reject", note)` → the person hears the read-back and says yes → `confirm_action(handle)` | "Approved. Priya can hire the QA agent." |
-| J7 | "Start a project to add dark mode to the website." | `start_project(name, goal, lead?)` | "Created project *Dark mode*, with a kickoff task for Casper (Chief of Staff) to plan and staff it." |
+| J7 | "Start a project to add dark mode to the website." | `start_project(name, goal, lead?)` | "Created *Dark mode*; Casper (CoS) has the kickoff task." |
 | J8 | "How's the dark mode project going?" | `get_project(project)` | "6 tasks: 3 done, 2 in progress, 1 blocked. Last shipped: PR #219." |
 | J9 | "Tell Priya to use the existing retry helper." | `comment_on_work(ref, text)` | "Posted on ACME-311. Priya will see it on her next run." |
 | J10 | "Drop the dark mode sidebar task." | `update_work_item(ref, status: "cancelled")` | "Cancelled ACME-318." |
-| J11 | "We need a designer on this." | `request_hire(role, reason, project?)` → read-back → `confirm_action(handle)` | "Filed a hire request for a designer. It needs your approval in AgentDash." Or, when the person holds that authority: "Approved and hired." |
+| J11 | "We need a designer on this." | `request_hire(role, reason, project?)` → read-back → `confirm_action(handle)` | "Filed a hire request for a designer," or "Hired," if the person holds that authority. |
 | J12 | "Who's on my team and what are they doing?" | `list_team()` | "Casper: planning Dark mode. Priya: ACME-311. Theo: idle." |
 
 ## 4. The assistant toolset (17 tools)
@@ -107,17 +104,11 @@ Common inputs: every item reference is `ref: string` (identifier, title fragment
 
 ### 4.3 What happens to the current 17 tools
 
-A **toolset selector**: the assistant endpoint serves only §4.2; journey tools move to a **setup toolset** (stdio and the agent-key `/api/mcp`), never offered to an assistant grant.
+A **toolset selector**: the assistant endpoint serves only §4.2. The 17 journey tools move to a **setup toolset** (stdio and the agent-key `/api/mcp`) and are never offered to an assistant grant:
 
-| Current tool | Disposition |
-|---|---|
-| `agentdash_setup_status`, `_install_checklist`, `_sign_up`, `_setup_adapter`, `_start_interview`, `_interview_turn`, `_get_plan`, `_confirm_plan`, `_revise_plan` | **Move to setup toolset**, names unchanged (they are the documented install runbook, `doc/MCP-LAUNCH.md`) |
-| `agentdash_request_approval`, `_check_approval` | **Keep in setup/agent toolsets.** Agents ask; the assistant side is `list_pending_decisions` + `prepare_decision` + `confirm_action` |
-| `agentdash_list_agents` | Keep in setup; the assistant equivalent is **`list_team`** (renamed, narrowed projection) |
-| `agentdash_list_tasks` | Keep in setup; assistant equivalent **`find_work`** |
-| `agentdash_create_task` | Keep in setup; assistant equivalent **`create_work_item`** (adds name resolution and duplicate check) |
-| `agentdash_get_dashboard` | Keep in setup; assistant equivalents **`whats_new`** and **`get_project`** |
-| `agentdash_pause_agent`, `_resume_agent` | **Setup toolset only**. Not in assistant v1 (resume is board-gated; pause is a follow-up) |
+- **Move, names unchanged:** `agentdash_setup_status`, `_install_checklist`, `_sign_up`, `_setup_adapter`, `_start_interview`, `_interview_turn`, `_get_plan`, `_confirm_plan`, `_revise_plan` (the install runbook, `doc/MCP-LAUNCH.md`), plus `_pause_agent` and `_resume_agent` (not in assistant v1).
+- **Keep for agents:** `agentdash_request_approval` and `_check_approval`. Agents ask; the assistant answers through `list_pending_decisions`, `prepare_decision` and `confirm_action`.
+- **Keep, with an assistant-shaped replacement:** `agentdash_list_agents` → `list_team`; `_list_tasks` → `find_work`; `_create_task` → `create_work_item`; `_get_dashboard` → `whats_new` and `get_project`.
 
 The control-plane, harness and bridge toolsets are unchanged.
 
@@ -157,15 +148,15 @@ Every tool returns both MCP forms:
 | Client | What is public | Confidence |
 |---|---|---|
 | **Grok (xAI)** | Consumer: grok.com/connectors → *Custom* takes "the MCP server URL" and "any required authentication"; the server "must be reachable over the public internet"; Business/Enterprise admins provision first ([xAI: Connectors](https://docs.x.ai/grok/connectors)). Paid tiers, web/iOS/Android, May 2026 ([PortEden](https://porteden.com/blog/grok-connectors/)). API Remote MCP: "Only Streaming HTTP and SSE transports are supported", auth is a token "set in the Authorization header", `allowed_tools` works, **`require_approval` is not supported** ([xAI: Remote MCP](https://docs.x.ai/developers/tools/remote-mcp)) | **High** that Grok consumes remote MCP servers. **Medium** on the consumer OAuth details (DCR/CIMD undocumented) |
-| **Meta Muse** | Launched 2026-09-08 ([Bloomberg](https://www.bloomberg.com/news/articles/2026-09-08/meta-announces-muse-ai-agent-for-personal-tasks-and-organization)). Developer connectors announced about 2026-09-18: submitted for review, listed in a Muse directory; a "Sentinel" agent gates connector actions ([Runtime Wire](https://runtimewire.com/article/meta-opens-muse-connectors-developers), [Social Samosa](https://www.socialsamosa.com/news-2/meta-muse-for-mac-adds-third-party-app-connectors-12559691)). Primary coverage **does not mention MCP**. Secondary sources conflict: "a public MCP server URL with OAuth" ([Parallel](https://parallel.ai/articles/meta-muse-custom-integrations)); an untested developer plan expecting "DCR + OAuth PKCE + MCP" ([imajin-ai#2250](https://github.com/ima-jin/imajin-ai/issues/2250)); a report of no arbitrary MCP URL field ([CellCog](https://cellcog.ai/blog/muse-connector-platform/)). US-only | **Medium** that a reviewed connector path exists. **Low** that it is MCP over OAuth. **Unconfirmed** |
-| **Claude** (reference) | Custom connectors take a remote MCP URL with OAuth | High. Conformance reference, not the launch gate |
+| **Meta Muse** | Launched 2026-09-08 ([Bloomberg](https://www.bloomberg.com/news/articles/2026-09-08/meta-announces-muse-ai-agent-for-personal-tasks-and-organization)). Developer connectors announced about 2026-09-18: submitted for review, listed in a Muse directory; a "Sentinel" agent gates connector actions ([Runtime Wire](https://runtimewire.com/article/meta-opens-muse-connectors-developers), [Social Samosa](https://www.socialsamosa.com/news-2/meta-muse-for-mac-adds-third-party-app-connectors-12559691)). Primary coverage **does not mention MCP**; secondary sources conflict ([Parallel](https://parallel.ai/articles/meta-muse-custom-integrations): MCP URL with OAuth; [imajin-ai#2250](https://github.com/ima-jin/imajin-ai/issues/2250): expects DCR + PKCE, untested; [CellCog](https://cellcog.ai/blog/muse-connector-platform/): no MCP URL field). US-only | **Medium** that a reviewed connector path exists. **Low** that it is MCP over OAuth. **Unconfirmed** |
+| **Claude** (reference) | Custom connectors take a remote MCP URL with OAuth | High. Conformance reference only |
 
-**Design decision:** we build against the **MCP standard**, not against any one client. That means spec revision 2025-11-25 ([Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [Transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)). A server that passes MCP Inspector plus Claude's connector flow is the best available proxy for "Muse will accept it". A static-bearer fallback (§6.4) covers the Grok API and any client that cannot do OAuth.
+**Design decision:** build against the **MCP standard**, revision 2025-11-25 ([Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [Transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)). Muse gates the launch, but its support is the least certain of the three clients. So a spike (M0a, §6.6) proves how Muse connects **before** any tools are built, and its result sets M2's registration and token details. A static-bearer fallback (§6.4) covers the Grok API and any client that cannot do OAuth.
 
 ### 6.2 Endpoint
 
 - **`POST /api/mcp/assistant`**, beside `/api/mcp` in `server/src/routes/mcp.ts`, stateless like it (one server per request, `enableJsonResponse: true`). `GET` answers 405 (allowed when no SSE stream is offered). Validates `Origin` (a Streamable HTTP MUST) and honours `MCP-Protocol-Version`.
-- Canonical resource URI: `https://<publicBaseUrl>/api/mcp/assistant`. The instance **must** be public HTTPS with `publicBaseUrl` set (Grok requires internet reachability). A LAN-only instance such as the MKThink mini needs a tunnel; the docs will say so.
+- Canonical resource URI: `https://<publicBaseUrl>/api/mcp/assistant`, for example `https://app.agentdash.cloud/api/mcp/assistant` on the launch box (§6.5). It must be public HTTPS; a LAN-only instance such as the MKThink mini would need a tunnel.
 - `createAgentDashServer` gains `toolset: "setup" | "agent" | "assistant"`. The assistant toolset's `instructions` are a short new **assistant playbook** in `packages/mcp-server/src/playbook.ts`: untrusted framing (§5), ask before acting, `confirm_action` only after a yes, links over long lists.
 
 ### 6.3 OAuth 2.1 on the instance
@@ -212,6 +203,38 @@ Authority lives in those two limits, not the tool layer: a stolen `pcpa_` token 
 | **Assistant grant** (new) | a person, via one named client, in one company | Listed with revoke on **My Agent → Connections**, beside connected machines |
 | **Personal assistant key** (new fallback) | same as a grant, minted manually | For clients without OAuth (Grok API `authorization` header, curl). Scopes plus 90-day expiry, shown once, stored as a grant with `client_id = "manual"` |
 
+### 6.5 Hosting on agentdash.cloud (M0b)
+
+The founder chose agentdash.cloud and one hosted instance, unless the SaaS discovery (#623, `doc/plans/2026-09-07-agentdash-saas-offering-discovery.md`) argues otherwise. **It does, and this spec follows it:** agents run as subprocesses on the serving host, model credentials are process-wide, and one master key encrypts every company's secrets (#623 §1.3, §3). So **shared multi-tenancy with real agent execution is unsafe as built**.
+
+So M0b is minimal and follows #623's recommended model (Phase 1, "managed box by runbook"):
+
+- **One hosted box** (the launch box) at a stable name such as `app.agentdash.cloud`, public HTTPS, `publicBaseUrl` set, OTA-pinned, with backups. It hosts the launch company and the first design partner, and nobody else.
+- **Signup goes straight to a company** on that box: founding signup (`AGENTDASH_SELF_SERVE_BOOTSTRAP=true`, invite-code gated, as in `doc/MCP-LAUNCH.md`), then CoS onboarding, then the company. Model credentials are bring-your-own (#623 D-S3 default).
+- **A runbook** so the next customer's box takes 30 operator-minutes or less (#623's Phase 1 target), each at `<name>.agentdash.cloud` with its own assistant endpoint.
+- **Out of scope:** automated provisioning, a control plane, and shared tenancy (#623 Phases 2–3).
+
+This needs founder decisions from #623: **D-S4** (substrate: Railway, VPS or Docker host), **D-S6** (what happens to the orphaned live Railway instance behind `www`), DNS and TLS for the chosen name, and the hosting credentials. That is why M0b is held by the orchestrator. It is on the **critical path with M2**.
+
+**Consequence for directory listings:** per-customer boxes mean per-customer MCP URLs. That is fine for custom connectors, where the person pastes their own URL. A reviewed directory listing (Muse) probably needs **one** URL, which would require a front door such as `mcp.agentdash.cloud` that signs people in and routes to their box. That front door is not in launch scope. M0a records whether Muse needs it.
+
+### 6.6 Muse registration spike and fallbacks (M0a)
+
+Before building tools, deploy a **throwaway public stub MCP server** (Streamable HTTP; 1–2 tools such as `echo`, `whoami`; standard OAuth with PRM, AS metadata, PKCE-S256, CIMD **and** DCR; optional static-bearer mode). Connect Muse, and Grok for comparison. Record in `doc/plans/2026-09-XX-muse-mcp-spike.md`:
+
+- Where a connector is added (custom URL field, developer console, or directory submission only)
+- Registration: CIMD, DCR, pre-registered client, or a static header
+- Discovery (`WWW-Authenticate`/PRM), scopes requested, `resource`, redirect URIs
+- Transport, protocol version, and whether it honours annotations or elicitation
+- How Sentinel confirmation appears, and whether it can deny a gated call
+
+| Outcome | What changes |
+|---|---|
+| **A.** Custom connector URL with standard OAuth | The design stands; M2 implements exactly what Muse used |
+| **B.** Directory-only (reviewed listing) | Submit as soon as M5 passes on Grok. **Grok is the interim launch client**; Muse ships on Meta's approval, and the single-URL front door (§6.5) becomes a follow-up milestone |
+| **C.** Static API-key header only | The personal assistant key (§6.4) moves from M5 into M2 and becomes Muse's primary path; the rest is unchanged |
+| **D.** No remote MCP for third parties | Grok is the launch client; Muse waits for Meta's platform, and we re-check monthly |
+
 ## 7. What needs a human, and how approvals round-trip
 
 ### 7.1 Classes
@@ -219,7 +242,7 @@ Authority lives in those two limits, not the tool layer: a stolen `pcpa_` token 
 | Class | Tools | Rule |
 |---|---|---|
 | read | 1–9 | No confirmation |
-| work | 10–14 | Immediate, reversible, echoed back. Playbook: **confirm intent first unless the person's words already specified it**. Per-grant limit 30 writes/hour, 10 new tasks/hour, since new work triggers paid agent runs (question 4) |
+| work | 10–14 | Immediate, reversible, echoed back. Playbook: **confirm intent first unless the person's words already specified it**. Per-grant limit 30 writes/hour, 10 new tasks/hour, since new work triggers paid agent runs (default, §10) |
 | gated | 15–17 | Two-step and server-enforced. `prepare_*` does nothing except mint a handle and return a read-back. `confirm_action(handle)` executes |
 
 ### 7.2 Why gating is server-side
@@ -259,7 +282,7 @@ sequenceDiagram
 
 ## 8. Launch acceptance bar
 
-**Pass:** this script runs on a **real public HTTPS instance** with a **real assistant client** (Grok consumer custom connector; open question 1). Human UI touches: only OAuth consent and the step-12 revocation. Every answer carries a working deep link. Transcript and screen recording go on the launch issue.
+**Pass:** this script runs on the **agentdash.cloud launch box** (§6.5) with **Meta Muse** (or Grok, if M0a ends in outcome B or D). Human UI touches: only OAuth consent and the step-12 revocation. Every answer carries a working deep link. Transcript and screen recording go on the launch issue.
 
 **Setup (unscored):** fresh company with a CoS and 2 engineer agents on a real adapter; a seeded repo on the project workspace; a seeded task that needs a secret nobody has provided (the blocker for step 7); `requireBoardApprovalForNewAgents = true`; the test user holds approval authority.
 
@@ -282,61 +305,46 @@ sequenceDiagram
 - A redaction scanner over the full recorded MCP traffic finds no `pcp_`, `pcpa_`, env-looking keys, `contextSnapshot` or adapter config.
 - The MCP Inspector auth and tool-listing checks pass.
 - The same script passes, headless, as a Playwright plus MCP-SDK-client spec (`tests/e2e/assistant-mcp.spec.ts`) using the SDK's OAuth client against a local HTTPS instance.
-- Claude.ai's custom connector completes steps 1–3 as a second-client conformance check.
+- Grok (and Claude.ai as a reference) completes steps 1–3 as the second-client check.
 
-## 9. Milestones (each is one PR and one GitHub issue)
+## 9. Milestones
 
-Each PR carries `[no-prompt-update]` (person-facing surface; no agent prompt changes). Every milestone also runs `pnpm -r typecheck && pnpm test:run && pnpm build`.
+Each milestone is one GitHub issue (label `mcp-launch`) and one PR carrying the no-prompt-update flag, since this is a person-facing surface. The issues hold the full engineer briefs; this is the summary. Every PR also runs `pnpm -r typecheck && pnpm test:run && pnpm build`.
 
-**M1: Assistant toolset, read side, over stdio.** *Depends on: nothing.*
-- Scope: `packages/mcp-server/src/assistant/` holds tools 1–9, the output envelope, the item card, `redact.ts`, and name resolution. It adds a `toolset` option to `createAgentDashServer` and an `AGENTDASH_TOOLSET=assistant|setup` env var on stdio. The assistant playbook goes in `playbook.ts`. Server: add a `since` filter to `GET /companies/:companyId/activity`, and generalize the steward digest into `assistantDigestService(db)` (user + window) for `whats_new`.
-- Acceptance: each tool returns `content` of 600 characters or fewer plus `structuredContent` that validates against its `outputSchema`. Lists cap at 25 and report `truncated`. Ambiguous refs return `needs_clarification` with no side effects. A redaction test pins wire bytes with no secrets or raw snapshots. Tool descriptions are snapshot-tested the way `brief-tool-names.test.ts` does.
-- Verify: `pnpm --filter @agentdash/mcp-server test`, `pnpm --filter @paperclipai/server exec vitest run src/__tests__/activity-routes.test.ts`, and a manual stdio run with a board key against local dev.
+| # | Issue | Scope | Acceptance (short) | Blocked by |
+|---|---|---|---|---|
+| M0a | #674 | §6.6 spike: a public stub MCP server with OAuth; connect Muse and Grok; write the findings doc | One of outcomes A–D recorded with evidence (transcripts, request logs) | — |
+| M0b | #675 | §6.5 launch box on agentdash.cloud plus the runbook | `https://<name>.agentdash.cloud/api/health` is 200 with `publicBaseUrl`; a new signup lands in its own company via CoS onboarding; backup and restore drilled once | founder: D-S4, D-S6, DNS, credentials |
+| M1 | #676 | Tools 1–9 in `packages/mcp-server/src/assistant/`, output envelope, `redact.ts`, name resolution, toolset selector, assistant playbook, `since` on activity, `assistantDigestService` | Summaries ≤600 characters; `structuredContent` validates; lists cap at 25; ambiguity changes nothing; redaction pinned on wire bytes | — |
+| M2 | #677 | §6.3 OAuth AS, `assistant_grants`, the `pcpa_` actor with the route allowlist, `POST /api/mcp/assistant`, consent page, Connections card. Registration mode per M0a. Security review | An SDK OAuth client passes discovery → token → `tools/list`; wrong audience gets 401; off-allowlist and cross-company get 403; refresh-reuse revokes the token family; revoke takes effect immediately | M0a, M1 |
+| M3 | #678 | Tools 10–14, attribution, per-grant rate limits | Each write matches its summary; attributed to the user plus the client; rate limit returns `refused` | M2 |
+| M4 | #679 | Tools 15–17, handles, authority re-check, "decisions need a tap", decide step-up | Single use; 15-minute TTL; stale or superseded gets `ok:false`; authority revoked between steps gets refused | M3 |
+| M5 | #680 | Muse, Grok (app and API with the personal assistant key), Claude and Inspector against the launch box; interop fixes; `docs/guides/steward/connect-your-assistant.md` | §8 steps 1–3 pass on Muse (or on its M0a fallback) and on Grok; `tests/e2e/assistant-mcp.spec.ts` green | M4, M0b |
+| M6 | #681 | The full §8 run, the redaction scanner, release notes, Muse directory submission and Grok listing | All 12 steps and the automated gates pass; recording attached; founder sign-off | M5; founder: listing entity and accounts |
 
-**M2: OAuth authorization server and `/api/mcp/assistant`.** *Depends on: M1 (toolset option). Security review required.*
-- Scope (may land as two stacked PRs: AS, then endpoint + actor): the better-auth spike (decision recorded in the PR); the `assistant_grants` schema and migration; PRM and AS metadata; DCR plus CIMD (SSRF-guarded); authorize, consent UI page and token (PKCE-S256, `resource`, rotating refresh); revocation; the `pcpa_` actor in `auth.ts` with the company restriction and the route allowlist; `WWW-Authenticate` challenges including `insufficient_scope`; the `POST /api/mcp/assistant` route with `Origin` validation; the Connections card on My Agent with list and revoke.
-- Acceptance: a Node MCP SDK client with OAuth completes discovery, authorize, token and `tools/list` against local HTTPS. A token with the wrong `resource` or audience gets 401. An assistant token on any non-allowlisted route gets 403. Cross-company access gets 403. Refresh reuse after rotation revokes the family. A revoked grant gets 401 within one request. Consent shows the redirect host.
-- Verify: new `server/src/__tests__/assistant-oauth.test.ts` (real Postgres), `assistant-grant-authz.test.ts` (allowlist table), and MCP Inspector against local.
+**Critical path:** M0a → M2 → M3 → M4 → M5 → M6, with **M0b** joining at M5. M1 runs alongside M0a and M0b.
 
-**M3: Work tools.** *Depends on: M2.*
-- Scope: tools 10–14; the `via assistant_grant` activity attribution; per-grant write rate limits; duplicate hint in `create_work_item`; `"best fit"` routes to the CoS.
-- Acceptance: each tool changes exactly what its summary says, with before and after shown. Activity entries are attributed to the user plus the client. The rate limit returns a `refused` envelope, not a 500. A name that resolves to two agents changes nothing.
-- Verify: `server/src/__tests__/assistant-work-tools.test.ts`, `packages/mcp-server` unit tests.
+## 10. Founder decisions (2026-09-23)
 
-**M4: Gated actions.** *Depends on: M3.*
-- Scope: tools 15–17 and the `assistant_action_handles` table (or a generalization of the steward handle table, whichever is smaller). Authority is re-resolved at confirm. `personSaid` is audited. The "decisions need a tap" grant setting is added. Step-up for `agentdash:decide`. Annotations.
-- Acceptance: a handle works once and expires at 15 minutes. A superseded revision or already-decided approval returns `ok:false` with a reason. Removing the user's authority between prepare and confirm leads to refusal. With "tap" on, confirm returns a link and executes nothing. A token without the decide scope gets a 403 `insufficient_scope` challenge.
-- Verify: `server/src/__tests__/assistant-gated-actions.test.ts` (real Postgres); `agentdash-mk-steward-inbox.test.ts` unregressed.
+1. **Launch gate: Muse** is decided. Grok is the second client, and the interim launch client under M0a outcomes B or D.
+2. **Hosting: agentdash.cloud** is decided. The model is one hosted box per #623 (§6.5), not shared multi-tenancy. **Still needed from the founder:** #623 D-S4 and D-S6, the hostname and DNS, and hosting credentials.
+3. **Approvals** are decided: the assistant may decide them, only with the opt-in `agentdash:decide` scope and only through the two-step handle (§7).
+4. **Listings** will be owned by a separate AgentDash legal entity and account, which the founder provides. **Founder action item**, a prerequisite for M6: the entity, the Meta developer account for the Muse directory, xAI/Grok business access, a privacy policy URL and a test account.
+5. **Task-rate cap** (30 writes/hour, 10 new tasks/hour per grant, plus existing budget hard-stops): default unless the founder objects.
+6. **One grant per company** (pick at consent, reconnect to switch): default unless the founder objects.
 
-**M5: Client conformance and fallback key.** *Depends on: M4, plus a public HTTPS instance (open question 2).*
-- Scope: Claude.ai connector, Grok consumer connector, Grok API Remote MCP (personal assistant key as bearer) and MCP Inspector against the launch instance; interop fixes; personal assistant key UI; quirks recorded in `docs/guides/steward/connect-your-assistant.md`.
-- Acceptance: steps 1–3 of §8 pass on each of the three clients. Each quirk is documented with its workaround.
-- Verify: recorded transcripts attached to the issue and `tests/e2e/assistant-mcp.spec.ts` green.
+## 11. Launch date: Wednesday 2026-10-28, if M0a ends in outcome A or C
 
-**M6: Launch run and Muse submission.** *Depends on: M5.*
-- Scope: full §8 run with the gating client; `scripts/assistant-mcp-redaction-scan.mjs`; release notes; Muse connector submission if Meta's intake accepts MCP servers.
-- Acceptance: all 12 steps and the automated gates pass, with the recording attached, and the founder signs off.
-- Verify: the §8 checklist completed in the launch issue.
+**2026-10-21 no longer holds.** Muse first adds the M0a spike in front of M2 and a Muse-specific interop pass to M5. Hosting adds M0b, which waits on founder infrastructure decisions. Assuming one engineer on M0a→M6 and the orchestrator on M0b:
 
-Parallelism: M1 and the M2 spike/schema can run at the same time. After that the critical path is M2 → M3 → M4 → M5 → M6.
+- **M0a** 9/24–9/29 (needs a US Muse account). M1 runs in parallel, 9/24–9/30.
+- **M0b** needs D-S4, D-S6 and DNS from the founder by **9/26** to land by **10/2**.
+- **M2** 9/30–10/8 with security review; **M3** to 10/12; **M4** to 10/15.
+- **M5** 10/16–10/21 (Muse, Grok, Claude against the launch box).
+- **M6** 10/22–10/27: the §8 run, fixes and buffer. Public launch **10/28**.
 
-## 10. Open questions for the founder
-
-1. **Which client gates launch?** Recommendation: **Grok consumer** (custom remote MCP is confirmed), with Claude as the conformance check. Muse follows when Meta's connector review accepts us, because its MCP support is unconfirmed and its listing depends on Meta's review timeline.
-2. **Which public HTTPS instance hosts launch?** Both clients require internet reachability. The HQ mini (tailnet) and MKThink (LAN) do not qualify. Options: an agentdash.cloud tenant, or a Railway staging instance with a real domain.
-3. **May an assistant decide approvals at all in v1?** Recommendation: yes, behind the opt-in `agentdash:decide` scope with the prepare/confirm handle. "Decisions need a tap" (link only) is available per grant. The alternative is read-and-link only, which is the #658 stance.
-4. **Spend guard for assistant-created work.** Every assigned task triggers agent runs. Are the per-grant limits (10 new tasks per hour) plus existing budget hard-stops enough, or should there also be a daily cap the person sets at consent?
-5. **Who owns the Muse and Grok listings?** The Muse directory needs a business entity, a privacy policy URL and a test account. Grok Business needs admin provisioning. Who signs those?
-6. **Multi-company users:** is one grant per company (pick at consent, reconnect to switch) acceptable for v1, or do you want a `switch_company` tool?
-
-## 11. Proposed launch date: Wednesday 2026-10-21
-
-Reasoning, assuming one external engineer full-time plus our review:
-
-- M1 about 4 working days, in parallel with the M2 spike and schema.
-- M2 about 6 days with security review; the largest item and the real unknown. From 2026-09-24 it lands about 10-02.
-- M3 about 2 days (10-06); M4 about 3 days (10-09).
-- M5 about 4 days (10-15); interop is where surprises live, and it needs open question 2 answered by 10-02.
-- M6 about 2 days plus 2 buffer days: 10-21.
-
-Internal demo (steps 1–6 on Claude and Grok) about **2026-10-09**; public launch **2026-10-21** with Grok. A Muse listing is **not** on that date: it ships when Meta's review accepts it. If Muse gates launch (question 1), Meta's review, which we do not control, sets the date.
+**Dependencies:**
+- **M0a outcome A or C** (Muse connects by URL, with OAuth or a key): launch **2026-10-28** on Muse.
+- **Outcome B** (directory only): launch **10/28 on Grok**. The Muse submission goes in once M5 passes (about 10/21), and Muse's launch is **Meta's approval date**, which Meta has not published and we do not control. It may also need the single-URL front door (§6.5).
+- **Outcome D**: launch **10/28 on Grok**. There is no Muse date.
+- Every path also needs M0b's founder decisions by 9/26 (each week they slip moves the date a week) and, for M6, the listing entity (§10 item 4).
