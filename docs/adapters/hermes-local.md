@@ -154,6 +154,46 @@ When enabled:
 
 **When NOT to use:** Local dev where you want all agents to share the same the agent config.
 
+## Liveness and the First-Output Deadline
+
+Hermes runs with `-Q` and prints nothing until it exits, so AgentDash judges a
+running Hermes run by its process and its ledger, not by output silence
+(`server/src/services/run-liveness-probe.ts`).
+
+**Stale-run reviews.** A Hermes run whose process is alive and whose ledger
+(`session_model_usage.last_seen` in the profile's `state.db`) moved within the
+last hour does not get a "Review silent active run" issue. A run whose ledger
+has not moved for an hour still does.
+
+**First-output deadline.** A run whose process is up but whose ledger has no
+row 10 minutes after the process started is a zero-turn hang.
+
+| Setting | Where | Values |
+|---|---|---|
+| `AGENTDASH_FIRST_OUTPUT_DEADLINE_MODE` | server env | `shadow` (default), `enforce`, `off` |
+| `firstOutputDeadlineMode` | agent `adapterConfig` | same; wins over the env |
+| `AGENTDASH_FIRST_OUTPUT_DEADLINE_MS` | server env | deadline in ms; `0` disables |
+| `firstOutputDeadlineSec` | agent `adapterConfig` | deadline in seconds; `0` disables; wins over the env |
+
+- **`shadow` (default)** stops nothing. It records one `would_stop_no_first_output`
+  run event (with the evidence in its payload) and one line in the run log, so
+  an operator can see what `enforce` would have done.
+- **`enforce`** stops the run with stop reason `no_first_output`, but only when
+  all of these hold: the ledger was resolved with certainty, it holds a session
+  that opened within two minutes of this run's process start, that session has
+  no usage row, the process start time is known, and the process is this
+  server's own child (or a persisted pid whose OS start time matches). Anything
+  less is reported as in `shadow`.
+
+**Which ledger.** Certain: `AGENTDASH_HERMES_STATE_DB`; `HERMES_HOME` in the
+agent's `adapterConfig.env` or in the server env; `-p`/`--profile` in
+`extraArgs`; a wrapper script (the `hermesCommand` file) whose text runs
+`hermes -p <profile>` or sets `HERMES_HOME`. Uncertain, and never enough to stop
+a run: the sticky `~/.hermes/active_profile`, and the root `~/.hermes/state.db`.
+A wrapper's file name is never used as a profile name.
+
+Turn on `enforce` for an instance only after reviewing a week of shadow events.
+
 ## CoS Chat Integration
 
 When `AGENTDASH_DEFAULT_ADAPTER=hermes_local`, the Chief of Staff's chat replies are dispatched through the agent (`hermes chat -q "<prompt>" -Q`). This powers the conversational onboarding flow.
