@@ -143,7 +143,16 @@ export function assistantRoutes(db: Db) {
       }),
     );
 
-    res.json({ decisions, total: scoped.length, shown: decisions.length });
+    // "What's waiting on me" is broader than approvals — see the service.
+    const tasks = await digest.tasksAssignedTo(companyId, req.actor.userId ?? null);
+
+    res.json({
+      decisions,
+      total: scoped.length,
+      shown: decisions.length,
+      tasksAssignedToYou: tasks.items,
+      tasksAssignedToYouTotal: tasks.total,
+    });
   });
 
   return router;

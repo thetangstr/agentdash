@@ -161,6 +161,27 @@ async function projectMap(client: PaperclipApiClient, companyId: string): Promis
   return new Map(rows.map((row) => [row.id, row]));
 }
 
+/**
+ * `assigneeUserId` → display name. Tasks can be assigned to a person, and an
+ * owner that renders as nothing reads as "unowned". `/people` is the
+ * board-scoped member list (no privileged permission) — only names are
+ * copied out; emails never reach a card.
+ */
+async function userMap(client: PaperclipApiClient, companyId: string): Promise<Map<string, string>> {
+  const rows = await client
+    .requestJson<{ people?: Array<{ userId?: string; name?: string | null }> }>(
+      "GET",
+      `/companies/${companyId}/people`,
+    )
+    .then((res) => (Array.isArray(res?.people) ? res.people : []))
+    .catch(() => [] as Array<{ userId?: string; name?: string | null }>);
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    if (row.userId && row.name) map.set(row.userId, row.name);
+  }
+  return map;
+}
+
 interface DigestSection {
   total: number;
   shown: number;
@@ -184,7 +205,10 @@ interface DigestResponse {
   since: string | null;
   asOf: string;
   shipped: DigestSection;
-  blocked: DigestSection;
+  /** Every issue whose status IS blocked right now — window-independent. */
+  blockedNow: DigestSection;
+  /** The in-window subset of blockedNow ("became blocked" proxy). */
+  newlyBlocked: DigestSection;
   decisionsWaiting: DigestSection;
   truncated: boolean;
 }
@@ -217,13 +241,22 @@ function boundDigestSection(section: DigestSection): DigestSection {
 export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext): ToolDefinition[] {
   const companyId = () => ctx.companyId;
 
-  async function cardFor(issue: IssueRow, agents: Map<string, AgentRow>, projects: Map<string, ProjectRow>): Promise<ItemCard> {
-    return itemCard(ctx, issue, { agentById: agents, projectById: projects });
+  async function cardFor(
+    issue: IssueRow,
+    agents: Map<string, AgentRow>,
+    projects: Map<string, ProjectRow>,
+    users: Map<string, string> = new Map(),
+  ): Promise<ItemCard> {
+    return itemCard(ctx, issue, { agentById: agents, projectById: projects, userById: users });
   }
 
   async function cardsFor(issues: IssueRow[]): Promise<ItemCard[]> {
-    const [agents, projects] = await Promise.all([agentMap(client, companyId()), projectMap(client, companyId())]);
-    return Promise.all(issues.map((issue) => cardFor(issue, agents, projects)));
+    const [agents, projects, users] = await Promise.all([
+      agentMap(client, companyId()),
+      projectMap(client, companyId()),
+      userMap(client, companyId()),
+    ]);
+    return Promise.all(issues.map((issue) => cardFor(issue, agents, projects, users)));
   }
 
   const whoami = makeAssistantTool(
@@ -266,7 +299,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
 
   const whatsNew = makeAssistantTool(
     "whats_new",
-    "AgentDash: what changed since a time. Finished work with PRs, new blockers, and decisions waiting for you. Start here for \"what happened\".",
+    "AgentDash: what changed since a time. Finished work with PRs, what is blocked now and what became blocked, and decisions waiting for you. Start here for \"what happened\".",
     z.object({ since: sinceInput, project: refInput("A project name or id").optional() }),
     async ({ since, project }) => {
       const resolved = resolveSince(since);
@@ -302,8 +335,10 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           ? `Nothing finished${scope} since ${digest.since ?? "yesterday"}`
           : `${digest.shipped.total} thing${digest.shipped.total === 1 ? "" : "s"} finished${scope}${shippedNames.length ? `: ${shippedNames.join(", ")}` : ""}${shippedMore > 0 ? `, and ${shippedMore} more` : ""}`,
       );
-      if (digest.blocked.total > 0) {
-        parts.push(`${digest.blocked.total} blocked`);
+      if (digest.blockedNow.total > 0) {
+        parts.push(
+          `${digest.blockedNow.total} currently blocked${digest.newlyBlocked.total > 0 ? ` (${digest.newlyBlocked.total} since ${digest.since ?? "then"})` : ""}`,
+        );
       }
       if (digest.decisionsWaiting.total > 0) {
         parts.push(`${digest.decisionsWaiting.total} decision${digest.decisionsWaiting.total === 1 ? "" : "s"} wait${digest.decisionsWaiting.total === 1 ? "s" : ""} for you`);
@@ -313,7 +348,8 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       const boundedDigest = {
         ...digest,
         shipped: boundDigestSection(digest.shipped),
-        blocked: boundDigestSection(digest.blocked),
+        blockedNow: boundDigestSection(digest.blockedNow),
+        newlyBlocked: boundDigestSection(digest.newlyBlocked),
         decisionsWaiting: boundDigestSection(digest.decisionsWaiting),
       };
       return ok({
@@ -387,20 +423,21 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       if (unresolvedResult) return unresolvedResult;
       const found = (resolution as { value: ProjectRow }).value;
 
-      const [detail, issues, agents] = await Promise.all([
+      const [detail, issues, agents, users] = await Promise.all([
         client.requestJson<ProjectRow & { goalId?: string | null }>("GET", `/projects/${found.id}`).catch(() => found),
         client.requestJson<IssueRow[]>("GET", `/companies/${companyId()}/issues?projectId=${found.id}&limit=500`),
         agentMap(client, companyId()),
+        userMap(client, companyId()),
       ]);
       const list = Array.isArray(issues) ? issues : [];
       const counts: Record<string, number> = {};
       for (const issue of list) counts[issue.status] = (counts[issue.status] ?? 0) + 1;
       const projects = await projectMap(client, companyId());
       const inProgress = await Promise.all(
-        list.filter((i) => i.status === "in_progress").slice(0, 5).map((i) => cardFor(i, agents, projects)),
+        list.filter((i) => i.status === "in_progress").slice(0, 5).map((i) => cardFor(i, agents, projects, users)),
       );
       const blockedItems = await Promise.all(
-        list.filter((i) => i.status === "blocked").slice(0, 5).map((i) => cardFor(i, agents, projects)),
+        list.filter((i) => i.status === "blocked").slice(0, 5).map((i) => cardFor(i, agents, projects, users)),
       );
       const shipped = list
         .filter((i) => i.status === "done")
@@ -408,7 +445,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         .slice(0, 3);
       const recentlyShipped = await Promise.all(
         shipped.map(async (issue) => ({
-          card: await cardFor(issue, agents, projects),
+          card: await cardFor(issue, agents, projects, users),
           workProducts: await client
             .requestJson<WorkProductRow[]>("GET", `/issues/${issue.id}/work-products`)
             .then((rows) => (Array.isArray(rows) ? rows.slice(0, 3) : []))
@@ -498,7 +535,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       if (unresolvedResult) return unresolvedResult;
       const found = (resolution as { value: IssueRow }).value;
 
-      const [detail, comments, runs, approvals, agents, projects] = await Promise.all([
+      const [detail, comments, runs, approvals, agents, projects, users] = await Promise.all([
         client.requestJson<IssueRow & {
           project?: ProjectRow | null;
           workProducts?: WorkProductRow[];
@@ -509,16 +546,23 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         client.requestJson<ApprovalRow[]>("GET", `/issues/${found.id}/approvals`).catch(() => [] as ApprovalRow[]),
         agentMap(client, companyId()),
         projectMap(client, companyId()),
+        userMap(client, companyId()),
       ]);
 
-      const card = await cardFor(detail, agents, projects);
-      const latestComments = (Array.isArray(comments) ? comments : []).slice(0, 3).map((comment) => {
+      const card = await cardFor(detail, agents, projects, users);
+      // The newest comment gets room to actually answer — 280 chars truncated
+      // real updates mid-sentence in the client run. Older ones stay terse.
+      const latestComments = (Array.isArray(comments) ? comments : []).slice(0, 3).map((comment, index) => {
         const authorAgent = comment.authorAgentId ? agents.get(comment.authorAgentId) : null;
+        const authorUser = comment.authorUserId ? users.get(comment.authorUserId) : undefined;
+        const bound = index === 0 ? 1200 : 280;
         return {
           agentWrote: Boolean(comment.authorAgentId),
-          author: authorAgent?.name ?? (comment.authorUserId ? "a person" : "system"),
-          text: clip(comment.body, 280),
+          author: authorAgent?.name ?? authorUser ?? (comment.authorUserId ? "a person" : "system"),
+          text: clip(comment.body, bound),
+          truncated: comment.body.length > bound,
           at: comment.createdAt,
+          link: card.link,
         };
       });
       const lastRun = (Array.isArray(runs) ? runs : [])[0] ?? null;
@@ -711,7 +755,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
 
   const listPendingDecisions = makeAssistantTool(
     "list_pending_decisions",
-    "AgentDash: approvals and questions from agents that are waiting on you, most urgent first.",
+    "AgentDash: approvals and questions waiting on you, plus open tasks assigned to you, most urgent first.",
     z.object({ limit: z.number().int().min(1).max(10).optional() }),
     async ({ limit }) => {
       const response = await client.requestJson<{
@@ -727,6 +771,15 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         }>;
         total: number;
         shown: number;
+        /** Open issues assigned to the calling person — "waiting on me" work with no approval row. */
+        tasksAssignedToYou?: Array<{
+          issueId: string;
+          identifier: string | null;
+          title: string;
+          status: string;
+          updatedAt: string;
+        }>;
+        tasksAssignedToYouTotal?: number;
       }>("GET", `/companies/${companyId()}/assistant/pending-decisions`);
 
       const cap = Math.min(limit ?? 10, 10);
@@ -744,18 +797,44 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           link: await ctx.approvalLink(decision.approvalId),
         })),
       );
+      const tasks = await Promise.all(
+        (response.tasksAssignedToYou ?? []).slice(0, cap).map(async (task) => ({
+          ...task,
+          title: clip(task.title, 120),
+          link: task.identifier ? await ctx.issueLink(task.identifier) : await ctx.homeLink(),
+        })),
+      );
+      const taskMore = (response.tasksAssignedToYouTotal ?? tasks.length) - tasks.length;
       const undecidable = items.filter((d) => !d.canDecide).length;
-      const primary = items[0]?.link ?? (await ctx.homeLink());
+      const primary = items[0]?.link ?? tasks[0]?.link ?? (await ctx.homeLink());
       const names = items.slice(0, 3).map((d) => d.summary.replace(/\.$/, ""));
       const more = (response.total ?? items.length) - items.length;
+      const decisionTotal = response.total ?? items.length;
+      const summaryParts: string[] = [];
+      if (decisionTotal > 0) {
+        summaryParts.push(
+          `${decisionTotal} thing${decisionTotal === 1 ? "" : "s"} waiting on you: ${names.join("; ")}${more > 0 ? `; and ${more} more` : ""}${undecidable > 0 ? ` (${undecidable} you cannot decide)` : ""}`,
+        );
+      }
+      if (tasks.length > 0) {
+        summaryParts.push(
+          `${response.tasksAssignedToYouTotal ?? tasks.length} task${(response.tasksAssignedToYouTotal ?? tasks.length) === 1 ? "" : "s"} assigned to you${taskMore > 0 ? ` (showing ${tasks.length})` : ""}`,
+        );
+      }
       return ok({
         summary:
-          items.length === 0
+          summaryParts.length === 0
             ? `Nothing is waiting on you. ${primary}`
-            : `${response.total ?? items.length} thing${(response.total ?? items.length) === 1 ? "" : "s"} waiting on you: ${names.join("; ")}${more > 0 ? `; and ${more} more` : ""}${undecidable > 0 ? ` (${undecidable} you cannot decide)` : ""}. ${primary}`,
-        data: redactAssistantValue({ decisions: items, total: response.total ?? items.length, truncated: more > 0 }),
+            : `${summaryParts.join("; ")}. ${primary}`,
+        data: redactAssistantValue({
+          decisions: items,
+          total: decisionTotal,
+          tasksAssignedToYou: tasks,
+          tasksAssignedToYouTotal: response.tasksAssignedToYouTotal ?? tasks.length,
+          truncated: more > 0 || taskMore > 0,
+        }),
         links: { primary },
-        truncated: more > 0,
+        truncated: more > 0 || taskMore > 0,
       });
     },
   );

@@ -80,7 +80,7 @@ describeEmbeddedPostgres("assistant digest service", () => {
 
   async function seedIssue(
     companyId: string,
-    assigneeAgentId: string,
+    assigneeAgentId: string | null,
     overrides: Record<string, unknown> = {},
   ) {
     const id = randomUUID();
@@ -252,7 +252,7 @@ describeEmbeddedPostgres("assistant digest service", () => {
       since: new Date(Date.now() - 3600_000),
     });
 
-    expect(digest.blocked.total).toBe(1);
+    expect(digest.blockedNow.total).toBe(1);
     expect(digest.decisionsWaiting.total).toBe(1);
     expect(digest.decisionsWaiting.items[0]?.type).toBe("connector_send");
     expect(digest.decisionsWaiting.items[0]?.agentName).toBe("Priya");
@@ -290,6 +290,49 @@ describeEmbeddedPostgres("assistant digest service", () => {
     expect(wp?.url).toBe("https://github.com/x/y/pull/42");
     expect(wp).not.toHaveProperty("metadata");
     expect(JSON.stringify(digest)).not.toContain("providerSecret");
+  });
+
+  it("separates currently blocked from newly blocked across the window", async () => {
+    const companyId = await seedCompany();
+    const me = await seedAgent(companyId, "Priya", "user-1");
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600_000);
+    // Stuck since before the window — must still show as blocked now.
+    await seedIssue(companyId, me, {
+      title: "Stale blocker",
+      status: "blocked",
+      completedAt: null,
+      updatedAt: twoHoursAgo,
+    });
+    // Touched inside the window — the "became blocked" proxy.
+    await seedIssue(companyId, me, { title: "Fresh blocker", status: "blocked", completedAt: null });
+
+    const digest = await assistantDigestService(db).digest({
+      companyId,
+      userId: "user-1",
+      since: new Date(Date.now() - 3600_000),
+    });
+
+    expect(digest.blockedNow.total).toBe(2);
+    expect(digest.newlyBlocked.total).toBe(1);
+    expect(digest.newlyBlocked.items[0]?.title).toBe("Fresh blocker");
+  });
+
+  it("tasksAssignedTo scopes open human tasks to the caller", async () => {
+    const companyId = await seedCompany();
+    // Only statuses where a person can still act — done/cancelled/hidden are out.
+    await seedIssue(companyId, null, { title: "Mine open", assigneeUserId: "user-1", status: "todo", completedAt: null });
+    await seedIssue(companyId, null, { title: "Mine done", assigneeUserId: "user-1", status: "done" });
+    await seedIssue(companyId, null, { title: "Theirs open", assigneeUserId: "user-2", status: "blocked", completedAt: null });
+    await seedIssue(companyId, null, { title: "Mine hidden", assigneeUserId: "user-1", status: "todo", completedAt: null, hiddenAt: new Date() });
+
+    const mine = await assistantDigestService(db).tasksAssignedTo(companyId, "user-1");
+    expect(mine.total).toBe(1);
+    expect(mine.items[0]?.title).toBe("Mine open");
+
+    // A user-less actor answers for the whole company — every human task.
+    const all = await assistantDigestService(db).tasksAssignedTo(companyId, null);
+    expect(all.total).toBe(2);
+    expect(all.items.map((item) => item.title).sort()).toEqual(["Mine open", "Theirs open"]);
   });
 
   it("counts beyond the shown window and marks the digest truncated", async () => {

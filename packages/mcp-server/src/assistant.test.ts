@@ -54,7 +54,28 @@ const ISSUES = [
     updatedAt: "2026-09-22T18:00:00Z",
     completedAt: "2026-09-22T18:00:00Z",
   },
+  {
+    id: "issue-3",
+    companyId: "company-1",
+    identifier: "ACME-313",
+    title: "Pick the launch date",
+    status: "todo",
+    priority: "medium",
+    assigneeAgentId: null,
+    assigneeUserId: "user-1",
+    projectId: "project-1",
+    description: "Decide when dark mode ships",
+    updatedAt: "2026-09-23T09:00:00Z",
+    completedAt: null,
+  },
 ];
+
+const PEOPLE = {
+  people: [
+    { userId: "user-1", name: "Kai", email: "kai@acme.test", status: "active", membershipRole: "owner" },
+    { userId: "user-2", name: "Sam", email: "sam@acme.test", status: "active", membershipRole: "member" },
+  ],
+};
 
 const PROJECTS = [
   { id: "project-1", companyId: "company-1", name: "Dark mode", status: "active", leadAgentId: "agent-1", description: "Add dark mode" },
@@ -88,10 +109,14 @@ function seededClient(overrides: Handler = () => null): PaperclipApiClient {
       };
     }
     if (path.startsWith("/companies/company-1/agents")) return [PRIYA, THEO];
+    if (path === "/companies/company-1/people") return PEOPLE;
     if (path.startsWith("/companies/company-1/projects")) return PROJECTS;
     if (path.startsWith("/projects/")) return PROJECTS[0];
     if (path.startsWith("/companies/company-1/issues")) return ISSUES;
-    if (path === "/issues/issue-1" || path === "/issues/ACME-311") return ISSUES[0];
+    {
+      const byRef = ISSUES.find((issue) => path === `/issues/${issue.id}` || path === `/issues/${issue.identifier}`);
+      if (byRef) return byRef;
+    }
     if (path.startsWith("/issues/issue-1/comments")) {
       return [
         { id: "c1", body: "BLOCKED — needs a Stripe test key from you", createdAt: "2026-09-23T02:14:00Z", authorAgentId: "agent-1" },
@@ -114,7 +139,8 @@ function seededClient(overrides: Handler = () => null): PaperclipApiClient {
         since: "2026-09-22T14:00:00Z",
         asOf: "2026-09-23T14:00:00Z",
         shipped: { total: 1, shown: 1, items: [{ issueId: "issue-2", identifier: "ACME-312", title: "Checkout receipt copy", agentName: "Theo", workProducts: [{ type: "pull_request", provider: "github", title: "PR #212", url: "https://github.test/pr/212", status: "merged", reviewState: "approved" }] }] },
-        blocked: { total: 1, shown: 1, items: [{ issueId: "issue-1", identifier: "ACME-311", title: "Checkout retries loop forever", agentName: "Priya" }] },
+        blockedNow: { total: 1, shown: 1, items: [{ issueId: "issue-1", identifier: "ACME-311", title: "Checkout retries loop forever", agentName: "Priya" }] },
+        newlyBlocked: { total: 1, shown: 1, items: [{ issueId: "issue-1", identifier: "ACME-311", title: "Checkout retries loop forever", agentName: "Priya" }] },
         decisionsWaiting: { total: 1, shown: 1, items: [{ approvalId: "appr-1", type: "connector_send", agentName: "Priya", waitingSince: "2026-09-23T01:00:00Z" }] },
         truncated: false,
       };
@@ -126,6 +152,10 @@ function seededClient(overrides: Handler = () => null): PaperclipApiClient {
         ],
         total: 1,
         shown: 1,
+        tasksAssignedToYou: [
+          { issueId: "issue-3", identifier: "ACME-313", title: "Pick the launch date", status: "todo", updatedAt: "2026-09-23T09:00:00Z" },
+        ],
+        tasksAssignedToYouTotal: 1,
       };
     }
     return null;
@@ -190,7 +220,7 @@ describe("assistant toolset surface", () => {
           "name": "get_work_item",
         },
         {
-          "description": "AgentDash: approvals and questions from agents that are waiting on you, most urgent first.",
+          "description": "AgentDash: approvals and questions waiting on you, plus open tasks assigned to you, most urgent first.",
           "name": "list_pending_decisions",
         },
         {
@@ -202,7 +232,7 @@ describe("assistant toolset surface", () => {
           "name": "list_team",
         },
         {
-          "description": "AgentDash: what changed since a time. Finished work with PRs, new blockers, and decisions waiting for you. Start here for "what happened".",
+          "description": "AgentDash: what changed since a time. Finished work with PRs, what is blocked now and what became blocked, and decisions waiting for you. Start here for "what happened".",
           "name": "whats_new",
         },
         {
@@ -351,7 +381,32 @@ describe("tool outputs", () => {
     const structured = result.structuredContent as Record<string, unknown>;
     const data = structured.data as Record<string, unknown>;
     expect((data.shipped as Record<string, unknown>).total).toBe(1);
+    expect((data.blockedNow as Record<string, unknown>).total).toBe(1);
+    expect((data.newlyBlocked as Record<string, unknown>).total).toBe(1);
     expect((data.decisionsWaiting as Record<string, unknown>).total).toBe(1);
+  });
+
+  it("whats_new reports a stale blocker as currently blocked even when newlyBlocked is empty", async () => {
+    const client = seededClient((path) =>
+      path.startsWith("/companies/company-1/assistant/digest")
+        ? {
+            agentsAnsweredFor: 1,
+            since: "2026-09-22T14:00:00Z",
+            asOf: "2026-09-23T14:00:00Z",
+            shipped: { total: 0, shown: 0, items: [] },
+            blockedNow: { total: 1, shown: 1, items: [{ issueId: "issue-1", identifier: "ACME-311", title: "Checkout retries loop forever", agentName: "Priya" }] },
+            newlyBlocked: { total: 0, shown: 0, items: [] },
+            decisionsWaiting: { total: 0, shown: 0, items: [] },
+            truncated: false,
+          }
+        : undefined,
+    );
+    const { call } = makeTools(client);
+    const result = await call("whats_new", { since: "12h" });
+    expect(result.content[0].text).toMatch(/1 currently blocked/);
+    const data = (result.structuredContent as Record<string, unknown>).data as Record<string, unknown>;
+    expect((data.blockedNow as Record<string, unknown>).total).toBe(1);
+    expect((data.newlyBlocked as Record<string, unknown>).total).toBe(0);
   });
 
   it("get_work_item quotes agent text as agent-authored under agentWrote", async () => {
@@ -387,7 +442,8 @@ describe("tool outputs", () => {
                 },
               ],
             },
-            blocked: { total: 0, shown: 0, items: [] },
+            blockedNow: { total: 0, shown: 0, items: [] },
+            newlyBlocked: { total: 0, shown: 0, items: [] },
             decisionsWaiting: { total: 0, shown: 0, items: [] },
             truncated: false,
           }
@@ -450,6 +506,26 @@ describe("tool outputs", () => {
     const decisions = data.decisions as Array<Record<string, unknown>>;
     expect(decisions[0].canDecide).toBe(true);
     expect(decisions[0].link).toBe("https://dash.example.test/ACME/approvals/appr-1");
+  });
+
+  it("list_pending_decisions includes tasks assigned to the calling person", async () => {
+    const { call } = makeTools();
+    const result = await call("list_pending_decisions");
+    const data = (result.structuredContent as Record<string, unknown>).data as Record<string, unknown>;
+    const tasks = data.tasksAssignedToYou as Array<Record<string, unknown>>;
+    expect(data.tasksAssignedToYouTotal).toBe(1);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].identifier).toBe("ACME-313");
+    expect(tasks[0].link).toBe("https://dash.example.test/ACME/issues/ACME-313");
+    expect(result.content[0].text).toMatch(/1 task assigned to you/);
+  });
+
+  it("get_work_item names the person a task is assigned to", async () => {
+    const { call } = makeTools();
+    const result = await call("get_work_item", { ref: "ACME-313" });
+    const data = (result.structuredContent as Record<string, unknown>).data as Record<string, unknown>;
+    const card = data.item as Record<string, unknown>;
+    expect((card.owner as Record<string, unknown>)?.name).toBe("Kai");
   });
 
   it("list_team reports each agent's state and current item", async () => {

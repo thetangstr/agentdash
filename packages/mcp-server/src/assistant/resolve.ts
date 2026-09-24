@@ -17,6 +17,8 @@ export interface IssueRow {
   status: string;
   priority?: string | null;
   assigneeAgentId?: string | null;
+  /** Set when the task is assigned to a person rather than an agent. */
+  assigneeUserId?: string | null;
   projectId?: string | null;
   description?: string | null;
   updatedAt?: string;

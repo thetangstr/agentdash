@@ -36,17 +36,27 @@ export async function itemCard(
   lookup: {
     agentById?: Map<string, AgentRow>;
     projectById?: Map<string, ProjectRow>;
+    /** Human assignee names — `assigneeUserId` → display name. */
+    userById?: Map<string, string>;
   } = {},
 ): Promise<ItemCard> {
   const ref = issue.identifier ?? issue.id;
-  const ownerRow = issue.assigneeAgentId ? lookup.agentById?.get(issue.assigneeAgentId) : undefined;
+  const agentOwner = issue.assigneeAgentId ? lookup.agentById?.get(issue.assigneeAgentId) : undefined;
+  // A task can be assigned to a person, not only an agent — founder-decision
+  // tasks are the common case. Without this branch they read as unowned.
+  const userOwner = issue.assigneeUserId ? lookup.userById?.get(issue.assigneeUserId) : undefined;
   const projectRow = issue.projectId ? lookup.projectById?.get(issue.projectId) : undefined;
+  const owner = agentOwner
+    ? { name: agentOwner.name, role: agentOwner.role ?? null }
+    : userOwner
+      ? { name: userOwner, role: "person" as string | null }
+      : null;
   return {
     ref,
     title: clip(issue.title, 120),
     status: issue.status,
     priority: issue.priority ?? null,
-    owner: ownerRow ? { name: ownerRow.name, role: ownerRow.role ?? null } : null,
+    owner,
     project: projectRow?.name ?? null,
     updatedAt: issue.updatedAt ?? null,
     oneLine: oneLiner(issue.description, `${issue.status} task`),

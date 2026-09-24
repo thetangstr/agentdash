@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -36,9 +36,14 @@ import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
  *   (`updatedAt` as the fallback when completedAt is unset). There is no
  *   status-transition timestamp, so an issue reopened and re-closed inside
  *   the window appears once — the right answer for a digest either way.
- * - "Blocked" means `status = blocked` AND `updatedAt` in the window — the
- *   best available proxy for "newly blocked", since a blocked issue touched
- *   for any reason reports the same timestamp.
+ * - "Blocked" is two answers, not one: `blockedNow` is every issue whose
+ *   status IS blocked right now regardless of when it entered that state —
+ *   "is anything stuck" must not depend on the window or a caller hears
+ *   "nothing is blocked" while eight tasks sit blocked. `newlyBlocked` is
+ *   the in-window subset, with the caveat that `status = blocked` AND
+ *   `updatedAt` in the window is the closest available proxy for "became
+ *   blocked" — a blocked issue touched for any reason reports the same
+ *   timestamp.
  */
 
 /** How many of each section the digest will list. Counts are never capped. */
@@ -81,6 +86,45 @@ export function assistantDigestService(db: Db) {
       all.map((agent) => agent.id),
     );
     return all.filter((agent) => resolved.get(agent.id)?.userId === userId);
+  }
+
+  /**
+   * "What's waiting on me" is broader than approvals: founder-decision
+   * tasks are plain issues assigned to the person, and no approval row
+   * ever names them. A user-less actor (the local bootstrap operator)
+   * answers for the whole company, so every human-assigned open task
+   * counts — the same reading the digest audience gives that actor.
+   * `items` caps at 25; `total` is the real count.
+   */
+  async function tasksAssignedTo(companyId: string, userId: string | null) {
+    const rows = await db
+      .select({
+        id: issues.id,
+        identifier: issues.identifier,
+        title: issues.title,
+        status: issues.status,
+        updatedAt: issues.updatedAt,
+      })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          isNull(issues.hiddenAt),
+          userId === null ? isNotNull(issues.assigneeUserId) : eq(issues.assigneeUserId, userId),
+          notInArray(issues.status, ["done", "cancelled"]),
+        ),
+      )
+      .orderBy(desc(issues.updatedAt));
+    return {
+      total: rows.length,
+      items: rows.slice(0, 25).map((row) => ({
+        issueId: row.id,
+        identifier: row.identifier,
+        title: row.title,
+        status: row.status,
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+    };
   }
 
   async function digest(input: AssistantDigestInput) {
@@ -129,9 +173,10 @@ export function assistantDigestService(db: Db) {
       )
       .orderBy(desc(issues.updatedAt));
 
-    // 2. Blocked: currently blocked AND touched inside the window — the
-    //    closest available reading of "newly blocked" (see header note).
-    const blocked = await db
+    // 2. Blocked, split into the two questions a person actually asks:
+    //    blockedNow = everything currently stuck (window-independent);
+    //    newlyBlocked = the in-window subset (see header note on the proxy).
+    const blockedNow = await db
       .select({
         id: issues.id,
         identifier: issues.identifier,
@@ -141,14 +186,11 @@ export function assistantDigestService(db: Db) {
         updatedAt: issues.updatedAt,
       })
       .from(issues)
-      .where(
-        and(
-          ...issueConditions,
-          eq(issues.status, "blocked"),
-          gte(issues.updatedAt, input.since),
-        ),
-      )
+      .where(and(...issueConditions, eq(issues.status, "blocked")))
       .orderBy(asc(issues.updatedAt));
+    const newlyBlocked = blockedNow.filter(
+      (row) => row.updatedAt.getTime() >= input.since.getTime(),
+    );
 
     // 3. Decisions waiting: still decidable, so the count is "needs you now",
     //    not "opened in the window". Ranked by the board's own risk order.
@@ -212,7 +254,7 @@ export function assistantDigestService(db: Db) {
     }
 
     const projectIds = [...new Set(
-      [...shipped, ...blocked]
+      [...shipped, ...blockedNow]
         .map((row) => row.projectId)
         .filter((id): id is string => typeof id === "string"),
     )];
@@ -253,7 +295,8 @@ export function assistantDigestService(db: Db) {
         summary: wp.summary,
       })),
     }));
-    const blockedItems = blocked.slice(0, DIGEST_LIMITS.blocked).map(issueItem);
+    const blockedNowItems = blockedNow.slice(0, DIGEST_LIMITS.blocked).map(issueItem);
+    const newlyBlockedItems = newlyBlocked.slice(0, DIGEST_LIMITS.blocked).map(issueItem);
     const decisionItems = ranked.slice(0, DIGEST_LIMITS.decisions).map(({ approval, risk }) => ({
       approvalId: approval.id,
       type: approval.type,
@@ -267,16 +310,18 @@ export function assistantDigestService(db: Db) {
       since: input.since.toISOString(),
       asOf: asOf.toISOString(),
       shipped: { total: shipped.length, shown: shippedItems.length, items: shippedItems },
-      blocked: { total: blocked.length, shown: blockedItems.length, items: blockedItems },
+      blockedNow: { total: blockedNow.length, shown: blockedNowItems.length, items: blockedNowItems },
+      newlyBlocked: { total: newlyBlocked.length, shown: newlyBlockedItems.length, items: newlyBlockedItems },
       decisionsWaiting: { total: ranked.length, shown: decisionItems.length, items: decisionItems },
       truncated:
         shipped.length > shippedItems.length ||
-        blocked.length > blockedItems.length ||
+        blockedNow.length > blockedNowItems.length ||
+        newlyBlocked.length > newlyBlockedItems.length ||
         ranked.length > decisionItems.length,
     };
   }
 
-  return { digest, audienceAgents };
+  return { digest, audienceAgents, tasksAssignedTo };
 }
 
 function emptyDigest(asOf: Date) {
@@ -285,7 +330,8 @@ function emptyDigest(asOf: Date) {
     since: null,
     asOf: asOf.toISOString(),
     shipped: { total: 0, shown: 0, items: [] as unknown[] },
-    blocked: { total: 0, shown: 0, items: [] as unknown[] },
+    blockedNow: { total: 0, shown: 0, items: [] as unknown[] },
+    newlyBlocked: { total: 0, shown: 0, items: [] as unknown[] },
     decisionsWaiting: { total: 0, shown: 0, items: [] as unknown[] },
     truncated: false,
   };

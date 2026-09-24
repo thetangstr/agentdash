@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockDigestService = vi.hoisted(() => ({
   digest: vi.fn(),
   audienceAgents: vi.fn(),
+  tasksAssignedTo: vi.fn(),
 }));
 
 const mockAuthorityService = vi.hoisted(() => ({
@@ -72,11 +73,13 @@ describe("GET /companies/:companyId/assistant/digest", () => {
       since: "2026-09-22T00:00:00.000Z",
       asOf: "2026-09-23T00:00:00.000Z",
       shipped: { total: 1, shown: 1, items: [] },
-      blocked: { total: 0, shown: 0, items: [] },
+      blockedNow: { total: 0, shown: 0, items: [] },
+      newlyBlocked: { total: 0, shown: 0, items: [] },
       decisionsWaiting: { total: 0, shown: 0, items: [] },
       truncated: false,
     });
     mockDigestService.audienceAgents.mockResolvedValue([]);
+    mockDigestService.tasksAssignedTo.mockResolvedValue({ total: 0, items: [] });
   });
 
   it("passes a parsed since through to the digest", async () => {
@@ -146,6 +149,7 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
     mockDigestService.audienceAgents.mockResolvedValue([
       { id: "agent-1", name: "Priya", role: "engineer" },
     ]);
+    mockDigestService.tasksAssignedTo.mockResolvedValue({ total: 0, items: [] });
     mockAuthorityService.requireDecisionActor.mockResolvedValue("steward");
     mockSummarizeApprovalRisk.mockReset().mockReturnValue({ level: "low" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([
@@ -276,5 +280,35 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
       "appr-high-new",
       "appr-low-old",
     ]);
+  });
+
+  it("returns tasks assigned to the calling person alongside decisions", async () => {
+    mockDigestService.tasksAssignedTo.mockResolvedValue({
+      total: 2,
+      items: [
+        { issueId: "issue-9", identifier: "ACME-313", title: "Pick the launch date", status: "todo", updatedAt: "2026-09-23T09:00:00Z" },
+        { issueId: "issue-10", identifier: "ACME-314", title: "Sign the vendor contract", status: "in_progress", updatedAt: "2026-09-23T08:00:00Z" },
+      ],
+    });
+    const app = await createApp();
+    const res = await request(app).get("/companies/company-1/assistant/pending-decisions");
+    expect(res.status).toBe(200);
+    expect(mockDigestService.tasksAssignedTo).toHaveBeenCalledWith("company-1", "user-1");
+    expect(res.body.tasksAssignedToYouTotal).toBe(2);
+    expect(res.body.tasksAssignedToYou).toHaveLength(2);
+    expect(res.body.tasksAssignedToYou[0].identifier).toBe("ACME-313");
+  });
+
+  it("passes a null user id for a user-less actor so every human-assigned task counts", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: null,
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+    const res = await request(app).get("/companies/company-1/assistant/pending-decisions");
+    expect(res.status).toBe(200);
+    expect(mockDigestService.tasksAssignedTo).toHaveBeenCalledWith("company-1", null);
   });
 });
