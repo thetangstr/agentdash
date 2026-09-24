@@ -20,7 +20,7 @@
  *   node scripts/ci/check-workflow-block-scalars.mjs            # check .github/workflows
  *   node scripts/ci/check-workflow-block-scalars.mjs <file...>  # check specific files
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -108,6 +108,16 @@ function main(argv) {
   return 1;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
+if (invokedDirectly) {
   process.exit(main(process.argv.slice(2)));
 }
