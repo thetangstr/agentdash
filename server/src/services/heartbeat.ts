@@ -56,6 +56,7 @@ import type {
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithByteCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
+import { resolveAgentRuntimeModel } from "./agent-runtime-model.js";
 import { computeVisibleUsageCost } from "./usage-billing.js";
 import { agentRunService } from "./agent-runs.js";
 import { quotaEnforcementService, quotaExceededPayload } from "./quota-enforcement.js";
@@ -82,6 +83,12 @@ import {
   classifyRunLiveness,
   type RunLivenessClassificationInput,
 } from "./run-liveness.js";
+import {
+  buildRunFacts,
+  livenessStateToOutcome,
+  normalizeWakeReason,
+  resolveMeteringStatus,
+} from "./run-facts.js";
 import { logActivity, publishPluginDomainEvent, type LogActivityInput } from "./activity-log.js";
 import { agentInstructionRefreshService } from "./agent-instruction-refresh.js";
 import {
@@ -732,7 +739,8 @@ const heartbeatRunSafeResultJsonColumn = sql<Record<string, unknown> | null>`
         'truncated', true,
         'truncationReason', 'oversized_result_json',
         'originalSizeBytes', pg_column_size(${heartbeatRuns.resultJson}),
-        'failureClassification', ${heartbeatRuns.resultJson} -> 'failureClassification'
+        'failureClassification', ${heartbeatRuns.resultJson} -> 'failureClassification',
+        'runFacts', ${heartbeatRuns.resultJson} -> 'runFacts'
       )
     )
   end
@@ -1310,6 +1318,23 @@ function normalizeUsageTotals(usage: UsageSummary | null | undefined): UsageTota
   };
 }
 
+/** A cumulative session counter (num_turns / num_tool_calls) or null. */
+function readCumulativeCounter(value: unknown): number | null {
+  const parsed = Math.floor(asNumber(value, NaN));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Same rule as `deriveNormalizedUsageDelta`: when a session's cumulative
+ * counter resets (new ledger, rotated session) the current reading IS the
+ * delta rather than something that should go negative.
+ */
+function counterDelta(current: number | null, baseline: number | null): number | null {
+  if (current === null) return null;
+  if (baseline === null) return current;
+  return current >= baseline ? current - baseline : current;
+}
+
 function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
   const parsed = parseObject(usageJson);
   if (Object.keys(parsed).length === 0) return null;
@@ -1357,11 +1382,26 @@ const USAGE_BASELINE_SCAN_LIMIT = 500;
  * both have to be skipped rather than treated as zero.
  */
 export function pickUsageBaseline(
-  rows: Array<{ id?: string; usageJson: unknown }>,
-): { id: string | null; totals: UsageTotals } | null {
+  rows: Array<{ id?: string; usageJson: unknown; resultJson?: unknown }>,
+): {
+  id: string | null;
+  totals: UsageTotals;
+  /** Cumulative session counters, when the baseline run recorded them. */
+  numTurns: number | null;
+  numToolCalls: number | null;
+} | null {
   for (const row of rows) {
     const totals = readRawUsageTotals(row.usageJson);
-    if (totals) return { id: row.id ?? null, totals };
+    if (!totals) continue;
+    const resultJson = parseObject(row.resultJson);
+    const numTurns = readCumulativeCounter(resultJson.num_turns);
+    const numToolCalls = readCumulativeCounter(resultJson.num_tool_calls);
+    return {
+      id: row.id ?? null,
+      totals,
+      numTurns,
+      numToolCalls,
+    };
   }
   return null;
 }
@@ -2442,6 +2482,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .select({
         id: heartbeatRuns.id,
         usageJson: heartbeatRuns.usageJson,
+        resultJson: heartbeatRuns.resultJson,
       })
       .from(heartbeatRuns)
       .where(and(...conditions))
@@ -2475,6 +2516,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         normalizedUsage: rawUsage,
         previousRawUsage: null as UsageTotals | null,
         derivedFromSessionTotals: false,
+        baselineNumTurns: null as number | null,
+        baselineNumToolCalls: null as number | null,
       };
     }
 
@@ -2486,6 +2529,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       normalizedUsage: deriveNormalizedUsageDelta(rawUsage, previousRawUsage),
       previousRawUsage,
       derivedFromSessionTotals: previousRawUsage !== null,
+      baselineNumTurns: baseline?.numTurns ?? null,
+      baselineNumToolCalls: baseline?.numToolCalls ?? null,
     };
   }
 
@@ -5216,6 +5261,38 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (!finalizedRun) finalizedRun = await getRun(run.id);
       if (!finalizedRun) continue;
       finalizedRun = await classifyAndPersistRunLiveness(finalizedRun, parseObject(finalizedRun.resultJson)) ?? finalizedRun;
+      // OBS-1: a reaped run never produced an adapter result, so its facts are
+      // honestly unmetered — but they exist, like every other finalized run.
+      if (!parseObject(finalizedRun.resultJson).runFacts) {
+        const factsRun = finalizedRun;
+        await db
+          .update(heartbeatRuns)
+          .set({
+            resultJson: {
+              ...parseObject(factsRun.resultJson),
+              runFacts: buildRunFacts({
+                meteringStatus: "unmetered_no_session",
+                startedAt: factsRun.startedAt ?? factsRun.createdAt,
+                finishedAt: factsRun.finishedAt ?? now,
+                firstOutputAt: factsRun.lastOutputAt ?? null,
+                outcome: livenessStateToOutcome(factsRun.livenessState, factsRun.status),
+                wakeReason: normalizeWakeReason({
+                  invocationSource: factsRun.invocationSource,
+                  triggerDetail: factsRun.triggerDetail,
+                  contextSnapshot: parseObject(factsRun.contextSnapshot),
+                }),
+              }),
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(heartbeatRuns.id, factsRun.id))
+          .then(async () => {
+            finalizedRun = (await getRun(factsRun.id)) ?? factsRun;
+          })
+          .catch((factsErr) => {
+            logger.warn({ err: factsErr, runId: factsRun.id }, "failed to persist runFacts for reaped run");
+          });
+      }
       await releaseEnvironmentLeasesForRun({
         runId: finalizedRun.id,
         companyId: finalizedRun.companyId,
@@ -6178,6 +6255,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       } | null;
     } = { pending: null };
     let persistedLogBytes = Number(run.logBytes ?? 0);
+    // OBS-1: time to first output byte feeds runFacts.firstOutputMs.
+    let firstOutputAt: Date | null = null;
     const flushOutputProgress = async (opts?: { force?: boolean }) => {
       const pendingOutputProgress = outputProgressState.pending;
       if (!pendingOutputProgress) return;
@@ -6264,6 +6343,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (stream === "stdout") stdoutExcerpt = appendExcerpt(stdoutExcerpt, sanitizedChunk);
         if (stream === "stderr") stderrExcerpt = appendExcerpt(stderrExcerpt, sanitizedChunk);
         const ts = new Date().toISOString();
+        if (firstOutputAt === null) firstOutputAt = new Date(ts);
 
         let appendedBytes = 0;
         if (handle) {
@@ -6481,6 +6561,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         rawUsage,
       });
       const normalizedUsage = sessionUsageResolution.normalizedUsage;
+      // OBS-1: the metering status is written for every run, so an unmetered
+      // run is distinguishable from a run that genuinely used zero tokens.
+      const adapterResultJson = parseObject(adapterResult.resultJson);
+      const meteringStatus = resolveMeteringStatus({
+        adapterMeteringStatus: readNonEmptyString(adapterResultJson.meteringStatus),
+        normalizedUsage,
+      });
+      const cumulativeTurns = readCumulativeCounter(adapterResultJson.num_turns ?? adapterResultJson.numTurns);
+      const cumulativeToolCalls = readCumulativeCounter(adapterResultJson.num_tool_calls);
+      const turnsDelta = sessionUsageResolution.derivedFromSessionTotals
+        ? counterDelta(cumulativeTurns, sessionUsageResolution.baselineNumTurns)
+        : cumulativeTurns;
+      const toolCallsDelta = sessionUsageResolution.derivedFromSessionTotals
+        ? counterDelta(cumulativeToolCalls, sessionUsageResolution.baselineNumToolCalls)
+        : cumulativeToolCalls;
       const billingType = normalizeLedgerBillingType(adapterResult.billingType);
       const visibleCost = computeVisibleUsageCost({
         inputTokens: normalizedUsage?.inputTokens ?? 0,
@@ -6561,9 +6656,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               : "failed";
 
       const usageJson =
-        normalizedUsage || adapterResult.costUsd != null || visibleCost.costCents > 0
-          ? ({
+        ({
               ...(normalizedUsage ?? {}),
+              meteringStatus,
               ...(rawUsage ? {
                 rawInputTokens: rawUsage.inputTokens,
                 rawCachedInputTokens: rawUsage.cachedInputTokens,
@@ -6588,10 +6683,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                   }
                 : {}),
               billingType,
-            } as Record<string, unknown>)
-          : null;
+            } as Record<string, unknown>);
 
-      const persistedResultJson = mergeHeartbeatRunResultJson(
+      let persistedResultJson = mergeHeartbeatRunResultJson(
         mergeRunStopMetadataForAgent(agent, outcome, {
           resultJson: mergeModelProfileRunMetadata(
             mergeAdapterRecoveryMetadata({
@@ -6624,6 +6718,43 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       });
       if (persistedRun) {
         persistedRun = await classifyAndPersistRunLiveness(persistedRun, persistedResultJson) ?? persistedRun;
+        // OBS-1: normalized per-run facts, computed AFTER liveness so the
+        // outcome reflects the persisted classification. Written in a second
+        // update because liveness needs the terminal status on the row first.
+        const configuredRuntime = await resolveAgentRuntimeModel({
+          adapterType: agent.adapterType,
+          adapterConfig: runtimeConfig,
+          agentId: agent.id,
+          runtimeConfig: parseObject(agent.runtimeConfig),
+        }).catch(() => null);
+        const runFacts = buildRunFacts({
+          meteringStatus,
+          servedModel: readNonEmptyString(adapterResult.model),
+          servedProvider: readNonEmptyString(adapterResult.provider),
+          configuredModel: configuredRuntime?.model ?? null,
+          inputTokens: normalizedUsage?.inputTokens ?? null,
+          cachedInputTokens: normalizedUsage?.cachedInputTokens ?? null,
+          outputTokens: normalizedUsage?.outputTokens ?? null,
+          turns: turnsDelta,
+          toolCalls: toolCallsDelta,
+          startedAt: persistedRun.startedAt ?? persistedRun.createdAt,
+          finishedAt: persistedRun.finishedAt ?? new Date(),
+          firstOutputAt,
+          outcome: livenessStateToOutcome(persistedRun.livenessState, persistedRun.status),
+          wakeReason: normalizeWakeReason({
+            invocationSource: persistedRun.invocationSource,
+            triggerDetail: persistedRun.triggerDetail,
+            contextSnapshot: parseObject(persistedRun.contextSnapshot),
+          }),
+        });
+        persistedResultJson = { ...(persistedResultJson ?? {}), runFacts };
+        persistedRun =
+          (await db
+            .update(heartbeatRuns)
+            .set({ resultJson: persistedResultJson, updatedAt: new Date() })
+            .where(eq(heartbeatRuns.id, run.id))
+            .returning()
+            .then((rows) => rows[0])) ?? persistedRun;
       }
 
       await setWakeupStatus(run.wakeupRequestId, outcome === "succeeded" ? "completed" : status, {
@@ -6643,6 +6774,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             exitCode: adapterResult.exitCode,
           },
         });
+        // OBS-1: exactly one warning when metering failed at the source —
+        // the run itself is unaffected, but the missing ledger is visible.
+        if (meteringStatus === "unmetered_no_ledger") {
+          await appendRunEvent(finalizedRun, seq++, {
+            eventType: "metering",
+            stream: "system",
+            level: "warn",
+            message:
+              "token metering unavailable: usage ledger missing or unreadable; run recorded as unmetered",
+            payload: { meteringStatus },
+          });
+        }
         const livenessRun = finalizedRun;
         await refreshContinuationSummaryForRun(livenessRun, agent);
         if (issueId && outcome === "succeeded") {
@@ -6721,6 +6864,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         error: message,
         errorCode: "adapter_failed",
         finishedAt: new Date(),
+        // OBS-1: a run that threw before producing a result is unmetered —
+        // record that explicitly rather than leaving usage_json absent.
+        usageJson: { meteringStatus: "unmetered_no_session" },
         resultJson: mergeRunStopMetadataForAgent(agent, "failed", {
           errorCode: "adapter_failed",
           errorMessage: message,
@@ -6744,6 +6890,38 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           message,
         });
         const livenessRun = await classifyAndPersistRunLiveness(failedRun) ?? failedRun;
+        // OBS-1: failed runs get runFacts too — outcome failed, tokens unknown.
+        const failedConfiguredRuntime = await resolveAgentRuntimeModel({
+          adapterType: agent.adapterType,
+          adapterConfig: runtimeConfig,
+          agentId: agent.id,
+          runtimeConfig: parseObject(agent.runtimeConfig),
+        }).catch(() => null);
+        await db
+          .update(heartbeatRuns)
+          .set({
+            resultJson: {
+              ...parseObject(livenessRun.resultJson),
+              runFacts: buildRunFacts({
+                meteringStatus: "unmetered_no_session",
+                configuredModel: failedConfiguredRuntime?.model ?? null,
+                startedAt: livenessRun.startedAt ?? livenessRun.createdAt,
+                finishedAt: livenessRun.finishedAt ?? new Date(),
+                firstOutputAt,
+                outcome: livenessStateToOutcome(livenessRun.livenessState, livenessRun.status),
+                wakeReason: normalizeWakeReason({
+                  invocationSource: livenessRun.invocationSource,
+                  triggerDetail: livenessRun.triggerDetail,
+                  contextSnapshot: parseObject(livenessRun.contextSnapshot),
+                }),
+              }),
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(heartbeatRuns.id, failedRun.id))
+          .catch((factsErr) => {
+            logger.warn({ err: factsErr, runId }, "failed to persist runFacts after error");
+          });
         await refreshContinuationSummaryForRun(livenessRun, agent);
         await finalizeIssueCommentPolicy(livenessRun, agent);
         await releaseIssueExecutionAndPromote(livenessRun);
@@ -6805,6 +6983,32 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               message,
             }).catch(() => undefined);
             const livenessRun = await classifyAndPersistRunLiveness(failedRun).catch(() => failedRun);
+            // OBS-1: setup failures are finalized runs too — honest runFacts
+            // with unknown tokens rather than no record at all.
+            await db
+              .update(heartbeatRuns)
+              .set({
+                resultJson: {
+                  ...parseObject(livenessRun.resultJson),
+                  runFacts: buildRunFacts({
+                    meteringStatus: "unmetered_no_session",
+                    startedAt: livenessRun.startedAt ?? livenessRun.createdAt,
+                    finishedAt: livenessRun.finishedAt ?? new Date(),
+                    firstOutputAt: null,
+                    outcome: livenessStateToOutcome(livenessRun.livenessState, livenessRun.status),
+                    wakeReason: normalizeWakeReason({
+                      invocationSource: livenessRun.invocationSource,
+                      triggerDetail: livenessRun.triggerDetail,
+                      contextSnapshot: parseObject(livenessRun.contextSnapshot),
+                    }),
+                  }),
+                },
+                updatedAt: new Date(),
+              })
+              .where(eq(heartbeatRuns.id, failedRun.id))
+              .catch((factsErr) => {
+                logger.warn({ err: factsErr, runId }, "failed to persist runFacts after setup failure");
+              });
             const failedAgent = setupFailureAgent ?? await getAgent(run.agentId).catch(() => null);
             if (failedAgent) {
               await refreshContinuationSummaryForRun(livenessRun, failedAgent).catch(() => undefined);

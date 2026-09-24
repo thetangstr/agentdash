@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AdapterEnvironmentCheck,
@@ -703,7 +706,7 @@ const piLocalAdapter: ServerAdapterModule = {
 import {
   applyHermesSessionUsage,
   readHermesSessionId,
-  readHermesSessionUsage,
+  readHermesSessionUsageDetailed,
 } from "./hermes-usage.js";
 
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
@@ -719,15 +722,49 @@ const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["exec
  * Wrapped so metering can never fail a run: a missing or unreadable ledger
  * leaves the result exactly as the adapter returned it.
  */
+/**
+ * The managed profile this run used, derived from the command actually
+ * invoked. The alias wrapper's filename IS the profile name
+ * (`hermes-profile.ts` writes `<binDir>/<profileName>` that execs
+ * `hermes -p <profileName>`), so a command whose basename exists as a directory
+ * under the profiles dir ran inside that profile. Anything else is unmanaged
+ * and meters against the Hermes home database.
+ */
+function hermesRunProfile(ctx: { config?: unknown; agent?: unknown }): string | null {
+  const command = getHermesCommandFromContext(ctx).trim();
+  if (!command) return null;
+  // A literal `hermes -p <name>` / `--profile <name>` command string.
+  const flagMatch = command.match(/(?:^|\s)(?:-p|--profile)[=\s]+([^\s]+)/);
+  if (flagMatch?.[1]) return flagMatch[1];
+  const base = path.basename(command.split(/\s+/)[0] ?? "");
+  if (!base || base === "hermes") return null;
+  const profilesDir =
+    process.env.HERMES_PROFILES_DIR?.trim() || path.join(os.homedir(), ".hermes", "profiles");
+  return existsSync(path.join(profilesDir, base)) ? base : null;
+}
+
 async function withHermesSessionUsage(
   result: AdapterExecutionResult,
+  ctx: { config?: unknown; agent?: unknown },
 ): Promise<AdapterExecutionResult> {
+  let read: ReturnType<typeof readHermesSessionUsageDetailed>;
   try {
     const sessionId = readHermesSessionId(result);
-    return applyHermesSessionUsage(result, readHermesSessionUsage(sessionId));
+    read = readHermesSessionUsageDetailed(sessionId, { profile: hermesRunProfile(ctx) });
   } catch {
     return result;
   }
+  // Stamp the metering outcome where the heartbeat's runFacts builder can see
+  // it — a silent zero-token run was the original incident.
+  const resultJson =
+    result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
+      ? result.resultJson
+      : {};
+  const stamped: AdapterExecutionResult = {
+    ...result,
+    resultJson: { ...resultJson, meteringStatus: read.status },
+  };
+  return applyHermesSessionUsage(stamped, read.usage);
 }
 
 /**
@@ -742,6 +779,7 @@ async function executeHermesFailClosed(
   const guard = createHermesHumanQuestionGuard(ctx.onLog);
   const result = await withHermesSessionUsage(
     sanitizeHermesExecutionResult(await executeHermesLocal({ ...ctx, onLog: guard.onLog })),
+    ctx,
   );
   return guard.failClosed(result);
 }
@@ -770,7 +808,10 @@ const hermesLocalAdapter: ServerAdapterModule = {
       // The unauthenticated pass-through hands Hermes the original context
       // untouched (adapter-registry.test.ts pins that); heartbeat always mints
       // an authToken, so every AgentDash run takes the guarded path below.
-      return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)));
+      return withHermesSessionUsage(
+        sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)),
+        taskPatchedCtx,
+      );
     }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;

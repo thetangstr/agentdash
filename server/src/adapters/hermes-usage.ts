@@ -39,6 +39,25 @@ export interface HermesSessionUsage {
   /** Only set when Hermes itself recorded a non-zero cost. */
   costUsd: number | null;
   apiCalls: number;
+  /** Cumulative `sessions.tool_call_count`, when the ledger recorded it. */
+  toolCalls: number | null;
+}
+
+export type HermesMeteringStatus =
+  | "metered"
+  | "unmetered_no_ledger"
+  | "unmetered_no_session";
+
+/**
+ * The result of trying to read the ledger, with the failure mode kept. A run
+ * whose metering failed must be able to say *why* — "unmetered" is a fact about
+ * the record, not a zero.
+ */
+export interface HermesSessionUsageRead {
+  usage: HermesSessionUsage | null;
+  status: HermesMeteringStatus;
+  /** Which candidate file answered (or was tried last), for diagnostics. */
+  dbPath: string | null;
 }
 
 /** One `session_model_usage` row, as far as this module cares. */
@@ -62,18 +81,37 @@ function readString(value: unknown): string | null {
 }
 
 /**
- * Where Hermes keeps its state.
+ * Where Hermes keeps its state, oldest assumption first.
  *
- * Managed profiles select a config within one Hermes home rather than giving
- * each agent its own, so a single database holds them all; the override exists
- * for an operator who has moved it.
+ * Managed profiles (`hermes -p <name>`) write to their own database at
+ * `<profilesDir>/<name>/state.db` — `HERMES_PROFILES_DIR` resolved exactly like
+ * `hermes-profile.ts` does — while unmanaged runs write to the Hermes home.
+ * The earlier version of this function only ever returned the home path, so
+ * profiled agents metered against a stale database and every run read as zero.
+ * The override exists for an operator who has moved the unmanaged database.
  */
-export function resolveHermesStateDbPath(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveHermesStateDbCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { profile?: string | null } = {},
+): string[] {
+  const candidates: string[] = [];
+  const profile = readString(opts.profile);
+  const defaultHermesHome = path.join(os.homedir(), ".hermes");
+  const profilesDir =
+    readString(env.HERMES_PROFILES_DIR) ?? path.join(defaultHermesHome, "profiles");
+  if (profile) {
+    candidates.push(path.join(profilesDir, profile, "state.db"));
+  }
   const explicit = readString(env.AGENTDASH_HERMES_STATE_DB);
-  if (explicit) return path.resolve(explicit);
+  if (explicit) candidates.push(path.resolve(explicit));
   const hermesHome = readString(env.HERMES_HOME);
-  if (hermesHome) return path.resolve(hermesHome, "state.db");
-  return path.join(os.homedir(), ".hermes", "state.db");
+  if (hermesHome) candidates.push(path.resolve(hermesHome, "state.db"));
+  candidates.push(path.join(defaultHermesHome, "state.db"));
+  return [...new Set(candidates)];
+}
+
+export function resolveHermesStateDbPath(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveHermesStateDbCandidates(env)[0]!;
 }
 
 /**
@@ -131,45 +169,93 @@ export function summarizeHermesUsageRows(rows: readonly HermesUsageRow[]): Herme
     provider: dominant?.provider ?? null,
     costUsd: costUsd > 0 ? costUsd : null,
     apiCalls,
+    toolCalls: null,
   };
 }
 
 /**
- * Read one session's usage out of Hermes' state database.
+ * Read one session's usage out of Hermes' state database, trying each
+ * candidate file in order (managed profile first, then the home database).
  *
- * Read-only, and every failure returns null: metering is a by-product of the
- * run, and a database that is missing, locked, or newer than this query must
- * never turn a completed run into a failed one.
+ * Read-only, and every failure is recorded rather than thrown: metering is a
+ * by-product of the run, and a database that is missing, locked, or newer than
+ * this query must never turn a completed run into a failed one — but the run
+ * record must say `unmetered_*` instead of silently reading as zero.
  */
-export function readHermesSessionUsage(
+export function readHermesSessionUsageDetailed(
   sessionId: string | null | undefined,
-  opts: { dbPath?: string; env?: NodeJS.ProcessEnv } = {},
-): HermesSessionUsage | null {
+  opts: { dbPath?: string; profile?: string | null; env?: NodeJS.ProcessEnv } = {},
+): HermesSessionUsageRead {
   const session = readString(sessionId);
-  if (!session) return null;
-  const dbPath = opts.dbPath ?? resolveHermesStateDbPath(opts.env);
+  if (!session) {
+    return { usage: null, status: "unmetered_no_session", dbPath: null };
+  }
+  const candidates = opts.dbPath
+    ? [opts.dbPath]
+    : resolveHermesStateDbCandidates(opts.env, { profile: opts.profile });
 
-  let db: DatabaseSync | null = null;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db
-      .prepare(
-        `SELECT model, billing_provider, api_call_count, input_tokens, output_tokens,
-                cache_read_tokens, estimated_cost_usd, actual_cost_usd
-           FROM session_model_usage
-          WHERE session_id = ?`,
-      )
-      .all(session) as HermesUsageRow[];
-    return summarizeHermesUsageRows(rows);
-  } catch {
-    return null;
-  } finally {
+  let sawReadableDb = false;
+  let lastTried: string | null = null;
+  for (const dbPath of candidates) {
+    lastTried = dbPath;
+    let db: DatabaseSync | null = null;
     try {
-      db?.close();
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      sawReadableDb = true;
+      const rows = db
+        .prepare(
+          `SELECT model, billing_provider, api_call_count, input_tokens, output_tokens,
+                  cache_read_tokens, estimated_cost_usd, actual_cost_usd
+             FROM session_model_usage
+            WHERE session_id = ?`,
+        )
+        .all(session) as HermesUsageRow[];
+      const usage = summarizeHermesUsageRows(rows);
+      if (usage) {
+        usage.toolCalls = readHermesSessionToolCalls(db, session);
+        return { usage, status: "metered", dbPath };
+      }
+      // A readable database without this session keeps looking — a run can be
+      // misattributed to a profile it never used, and the home database may
+      // still hold it.
     } catch {
-      // Nothing useful to do with a close failure on a read-only handle.
+      // Unreadable candidate — try the next one.
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        // Nothing useful to do with a close failure on a read-only handle.
+      }
     }
   }
+  return {
+    usage: null,
+    status: sawReadableDb ? "unmetered_no_session" : "unmetered_no_ledger",
+    dbPath: lastTried,
+  };
+}
+
+/** `sessions.tool_call_count` — cumulative for the session, null when absent. */
+function readHermesSessionToolCalls(db: DatabaseSync, sessionId: string): number | null {
+  try {
+    const row = db
+      .prepare(`SELECT tool_call_count FROM sessions WHERE id = ?`)
+      .get(sessionId) as { tool_call_count?: unknown } | undefined;
+    const count = row?.tool_call_count;
+    return typeof count === "number" && Number.isFinite(count) && count >= 0
+      ? Math.floor(count)
+      : null;
+  } catch {
+    // Older ledgers may lack the table or column — tools stay unrecorded.
+    return null;
+  }
+}
+
+export function readHermesSessionUsage(
+  sessionId: string | null | undefined,
+  opts: { dbPath?: string; profile?: string | null; env?: NodeJS.ProcessEnv } = {},
+): HermesSessionUsage | null {
+  return readHermesSessionUsageDetailed(sessionId, opts).usage;
 }
 
 /** Find the Hermes session a result belongs to, wherever the adapter put it. */
@@ -239,11 +325,19 @@ export function applyHermesSessionUsage(
   const existingTurns = readNumber(
     existingResultJson.num_turns ?? existingResultJson.numTurns,
   );
+  const existingToolCalls = readNumber(existingResultJson.num_tool_calls);
+  const mergedResultJson = {
+    ...existingResultJson,
+    ...(existingTurns > 0 || usage.apiCalls <= 0 ? {} : { num_turns: usage.apiCalls }),
+    ...(existingToolCalls > 0 || usage.toolCalls == null
+      ? {}
+      : { num_tool_calls: usage.toolCalls }),
+  };
   return {
     ...result,
-    ...(existingTurns > 0 || usage.apiCalls <= 0
-      ? {}
-      : { resultJson: { ...existingResultJson, num_turns: usage.apiCalls } }),
+    ...(Object.keys(mergedResultJson).length > Object.keys(existingResultJson).length
+      ? { resultJson: mergedResultJson }
+      : {}),
     usage: result.usage ?? usage.usage,
     ...(isInformative(result.model) ? {} : usage.model ? { model: usage.model } : {}),
     ...(isInformative(result.provider) ? {} : usage.provider ? { provider: usage.provider } : {}),

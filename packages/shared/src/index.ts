@@ -596,6 +596,16 @@ export type {
   ConnectorActionDefinition,
   ConnectorDefinition,
   ConnectorApprovalPayload,
+  // AgentDash: honest per-run record (OBS-1)
+  RunFactOutcome,
+  RunFacts,
+  RunFactWakeReason,
+  RunMeteringStatus,
+} from "./types/index.js";
+export {
+  RUN_FACT_OUTCOMES,
+  RUN_FACT_WAKE_REASONS,
+  RUN_METERING_STATUSES,
 } from "./types/index.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,
