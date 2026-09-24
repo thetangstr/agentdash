@@ -17,6 +17,7 @@ const baseMessage = {
 };
 
 const mockConversationService = vi.hoisted(() => ({
+  getById: vi.fn(),
   postMessage: vi.fn(),
   paginate: vi.fn(),
   setReadPointer: vi.fn(),
@@ -148,6 +149,13 @@ describe.sequential("conversation routes", () => {
     vi.resetAllMocks();
 
     // Default happy-path stubs
+    mockConversationService.getById.mockResolvedValue({
+      id: conversationId,
+      companyId,
+      userId,
+      title: "Company Inbox",
+      status: "active",
+    });
     mockConversationService.postMessage.mockResolvedValue(baseMessage);
     mockConversationService.paginate.mockResolvedValue([baseMessage]);
     mockConversationService.listParticipants.mockResolvedValue([]);
@@ -363,6 +371,116 @@ describe.sequential("conversation routes", () => {
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(1);
       expect(res.body[0]).toMatchObject({ userId });
+    });
+  });
+  describe("company isolation on /:id routes", () => {
+    const otherCompanyId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const outsider = { ...boardActor, companyId: otherCompanyId, companyIds: [otherCompanyId] };
+    const outsiderAgent = { type: "agent", agentId: "agent-1", companyId: otherCompanyId };
+
+    const routes: Array<{
+      name: string;
+      send: (base: string) => request.Test;
+      service: keyof typeof mockConversationService;
+    }> = [
+      {
+        name: "POST /:id/messages",
+        send: (base) =>
+          request(base)
+            .post(`/api/conversations/${conversationId}/messages`)
+            .send({ body: "hi", companyId: otherCompanyId }),
+        service: "postMessage",
+      },
+      {
+        name: "GET /:id/messages",
+        send: (base) => request(base).get(`/api/conversations/${conversationId}/messages`),
+        service: "paginate",
+      },
+      {
+        name: "PATCH /:id/read",
+        send: (base) =>
+          request(base)
+            .patch(`/api/conversations/${conversationId}/read`)
+            .send({ lastReadMessageId: baseMessage.id, companyId: otherCompanyId }),
+        service: "setReadPointer",
+      },
+      {
+        name: "GET /:id/participants",
+        send: (base) => request(base).get(`/api/conversations/${conversationId}/participants`),
+        service: "listParticipants",
+      },
+    ];
+
+    for (const route of routes) {
+      it(`${route.name} rejects a signed-in user from another company`, async () => {
+        const app = await createApp(outsider);
+        const res = await requestApp(app, route.send);
+        expect(res.status).toBe(403);
+        expect(mockConversationService[route.service]).not.toHaveBeenCalled();
+      });
+
+      it(`${route.name} rejects anonymous callers`, async () => {
+        const app = await createApp(noActor);
+        const res = await requestApp(app, route.send);
+        expect(res.status).toBe(401);
+        expect(mockConversationService[route.service]).not.toHaveBeenCalled();
+      });
+
+      it(`${route.name} returns 404 for an unknown conversation`, async () => {
+        mockConversationService.getById.mockResolvedValue(null);
+        const app = await createApp(boardActor);
+        const res = await requestApp(app, route.send);
+        expect(res.status).toBe(404);
+        expect(mockConversationService[route.service]).not.toHaveBeenCalled();
+      });
+    }
+
+    it("GET /:id/messages rejects an agent key from another company", async () => {
+      const app = await createApp(outsiderAgent);
+      const res = await requestApp(app, (base) =>
+        request(base).get(`/api/conversations/${conversationId}/messages`),
+      );
+      expect(res.status).toBe(403);
+      expect(mockConversationService.paginate).not.toHaveBeenCalled();
+    });
+
+    it("GET /:id/messages allows an agent key from the conversation's company", async () => {
+      const app = await createApp({ ...outsiderAgent, companyId });
+      const res = await requestApp(app, (base) =>
+        request(base).get(`/api/conversations/${conversationId}/messages`),
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("POST /:id/messages broadcasts on the conversation's company, not a body-supplied one", async () => {
+      const app = await createApp({ ...boardActor, companyIds: [companyId, otherCompanyId] });
+      const res = await requestApp(app, (base) =>
+        request(base)
+          .post(`/api/conversations/${conversationId}/messages`)
+          .send({ body: "hi", companyId: otherCompanyId }),
+      );
+      expect(res.status).toBe(201);
+      expect(mockConversationService.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ companyId }),
+      );
+      await new Promise((r) => setImmediate(r));
+      expect(mockDispatchOnMessage).toHaveBeenCalledWith(expect.objectContaining({ companyId }));
+    });
+
+    it("PATCH /:id/read emits on the conversation's company, not a body-supplied one", async () => {
+      const app = await createApp({ ...boardActor, companyIds: [companyId, otherCompanyId] });
+      const res = await requestApp(app, (base) =>
+        request(base)
+          .patch(`/api/conversations/${conversationId}/read`)
+          .send({ lastReadMessageId: baseMessage.id, companyId: otherCompanyId }),
+      );
+      expect(res.status).toBe(204);
+      expect(mockConversationService.setReadPointer).toHaveBeenCalledWith(
+        conversationId,
+        userId,
+        baseMessage.id,
+        companyId,
+      );
     });
   });
 });

@@ -9,6 +9,15 @@ import { emitMessageCreated, emitMessageRead } from "../realtime/conversation-ev
 
 export function conversationService(db: Db) {
   return {
+    getById: async (id: string) => {
+      const rows = await db
+        .select()
+        .from(assistantConversations)
+        .where(eq(assistantConversations.id, id))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
     findByCompany: async (companyId: string, opts: { title?: string } = {}) => {
       const conditions = [eq(assistantConversations.companyId, companyId)];
       if (opts.title) {
