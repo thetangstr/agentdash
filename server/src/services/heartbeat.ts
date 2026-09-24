@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { emitSignal } from "../observability/signals.js";
 import { preRunChecks } from "../observability/pre-run-checks.js";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -100,6 +100,14 @@ import {
   normalizeWakeReason,
   resolveMeteringStatus,
 } from "./run-facts.js";
+import {
+  TOKEN_CEILING_INBOX_KIND,
+  TOKEN_CEILING_SKIP_REASON,
+  tokenCeilingDedupeKey,
+  tokenCeilingService,
+} from "./token-ceiling.js";
+import { agentAccountabilityService } from "./agent-accountability.js";
+import { stewardInboxService } from "./steward-inbox.js";
 import { logActivity, publishPluginDomainEvent, type LogActivityInput } from "./activity-log.js";
 import { agentInstructionRefreshService } from "./agent-instruction-refresh.js";
 import {
@@ -2333,6 +2341,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const quotaEnforcement = quotaEnforcementService(db);
   const recovery = recoveryService(db, { enqueueWakeup });
   const productivityReviews = productivityReviewService(db, { enqueueWakeup });
+  const tokenCeiling = tokenCeilingService(db);
+  const accountability = agentAccountabilityService(db);
+  const stewardInbox = stewardInboxService(db);
   let unsafeTextProjectionPromise: Promise<boolean> | null = null;
 
   async function releaseEnvironmentLeasesForRun(input: {
@@ -7551,6 +7562,94 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
 
+  /**
+   * AgentDash (OBS-2 / GH #695): tell someone the ceiling just started
+   * skipping this agent's wakes — once per agent per UTC day.
+   *
+   * Two surfaces, both deduped: one steward-inbox event keyed on
+   * `token_ceiling:<agentId>:<utc-day>` (the stream is gap-free and the key
+   * makes a racing second pause a no-op), and one activity-log entry gated on
+   * this being the day's first `token_ceiling` skip. A company outside the
+   * `agentdash_mk` profile, or an agent with no accountable human, simply gets
+   * no inbox item — the pause still shows on the agent page, which reads the
+   * live sum rather than this notification.
+   */
+  async function announceTokenCeilingPause(
+    agent: typeof agents.$inferSelect,
+    ceiling: Awaited<ReturnType<typeof tokenCeiling.evaluate>>,
+  ) {
+    const window = await tokenCeiling.dailyUsage(agent.companyId, agent.id, new Date());
+    const tokensMillions = (ceiling.tokensToday / 1_000_000).toFixed(1);
+    const noOpPercent =
+      ceiling.tokensToday > 0
+        ? Math.round((window.noOpTokens / ceiling.tokensToday) * 100)
+        : 0;
+    const meteringNote =
+      ceiling.unmeteredRuns > 0
+        ? ` Metering is off for ${ceiling.unmeteredRuns} of today's runs — those never count toward the ceiling.`
+        : "";
+    const message =
+      `${agent.name} paused: ${tokensMillions}M tokens today` +
+      `, ${noOpPercent}% on runs that produced nothing.` +
+      ` Assigned work still runs.${meteringNote}`;
+
+    const [skipCountRow] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(agentWakeupRequests)
+      .where(
+        and(
+          eq(agentWakeupRequests.agentId, agent.id),
+          eq(agentWakeupRequests.status, "skipped"),
+          eq(agentWakeupRequests.reason, TOKEN_CEILING_SKIP_REASON),
+          gte(agentWakeupRequests.requestedAt, window.windowStart),
+        ),
+      );
+    const firstPauseToday = Number(skipCountRow?.n ?? 0) <= 1;
+    if (firstPauseToday) {
+      await logActivity(db, {
+        companyId: agent.companyId,
+        actorType: "system",
+        actorId: "system",
+        agentId: agent.id,
+        runId: null,
+        action: "agent.token_ceiling_paused",
+        entityType: "agent",
+        entityId: agent.id,
+        details: {
+          ceiling: ceiling.ceiling,
+          tokensToday: ceiling.tokensToday,
+          noOpTokens: window.noOpTokens,
+          meteredRuns: ceiling.meteredRuns,
+          unmeteredRuns: ceiling.unmeteredRuns,
+          liftsAt: ceiling.liftsAt,
+        },
+      });
+    }
+
+    const stewardUserId = await accountability.escalationUserId(agent.companyId, agent.id);
+    if (!stewardUserId) return;
+    await stewardInbox.appendEvent({
+      companyId: agent.companyId,
+      stewardUserId,
+      kind: TOKEN_CEILING_INBOX_KIND,
+      refType: "agent",
+      refId: agent.id,
+      agentId: agent.id,
+      dedupeKey: tokenCeilingDedupeKey(agent.id, window.dayKey),
+      payload: {
+        agentName: agent.name,
+        message,
+        ceiling: ceiling.ceiling,
+        isDefault: ceiling.isDefault,
+        tokensToday: ceiling.tokensToday,
+        noOpTokens: window.noOpTokens,
+        meteredRuns: ceiling.meteredRuns,
+        unmeteredRuns: ceiling.unmeteredRuns,
+        liftsAt: ceiling.liftsAt,
+      },
+    });
+  }
+
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
@@ -7650,6 +7749,36 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (source !== "timer" && !policy.wakeOnDemand) {
       await writeSkippedRequest("heartbeat.wakeOnDemand.disabled");
       return null;
+    }
+
+    /*
+     * AgentDash (OBS-2 / GH #695): the daily token ceiling.
+     *
+     * Positioned deliberately after the disabled/wakeOnDemand skips so those
+     * keep their honest reasons, and before the issue/tree work below so an
+     * over-ceiling wake never reaches a lock. Only timer and comment wakes
+     * pause — a wake a person deliberately aimed at the agent (assignment,
+     * mention, approval, manual) still runs, as do retries and automation:
+     * the ceiling exists to stop unattended spend, not to take a working
+     * agent off its queue. Unmetered runs never count toward the sum, so a
+     * ledger outage cannot trip the ceiling.
+     */
+    const ceilingWakeClass = normalizeWakeReason({
+      invocationSource: source,
+      triggerDetail,
+      contextSnapshot: enrichedContextSnapshot,
+    });
+    if (ceilingWakeClass === "timer" || ceilingWakeClass === "comment") {
+      const ceiling = await tokenCeiling.evaluate(agent);
+      if (ceiling.paused) {
+        await writeSkippedRequest(TOKEN_CEILING_SKIP_REASON);
+        await announceTokenCeilingPause(agent, ceiling).catch((err) => {
+          // The notification is best-effort — the pause itself is already
+          // recorded on the skipped wakeup request and never depends on it.
+          logger.warn({ err, agentId }, "failed to record token ceiling pause notice");
+        });
+        return null;
+      }
     }
 
     if (issueId) {

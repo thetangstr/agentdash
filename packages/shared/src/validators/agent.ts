@@ -78,6 +78,10 @@ export const agentRuntimeConfigSchema = z.object({
   modelProfiles: z.object({
     cheap: agentModelProfileConfigSchema.optional(),
   }).strict().optional(),
+  heartbeat: z.object({
+    // OBS-2: `0`/`null` disables the daily ceiling; absent applies the default.
+    maxDailyTokens: z.number().int().nonnegative().nullable().optional(),
+  }).catchall(z.unknown()).optional(),
 }).catchall(z.unknown());
 
 const createAgentBaseSchema = z.object({
@@ -252,6 +256,17 @@ export const testAdapterEnvironmentSchema = z.object({
 });
 
 export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema>;
+
+/**
+ * AgentDash (OBS-2 / GH #695): raise or clear the per-agent daily token
+ * ceiling. `0` and `null` both disable; absent is not a valid body — turning
+ * the ceiling off has to be said out loud.
+ */
+export const updateAgentTokenCeilingSchema = z.object({
+  maxDailyTokens: z.number().int().nonnegative().nullable(),
+});
+
+export type UpdateAgentTokenCeiling = z.infer<typeof updateAgentTokenCeilingSchema>;
 
 export const updateAgentPermissionsSchema = z.object({
   canCreateAgents: z.boolean(),

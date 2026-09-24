@@ -79,6 +79,8 @@ export type {
   AgentModelProfileConfig,
   AgentPermissions,
   AgentRuntimeConfig,
+  AgentHeartbeatRuntimeConfig,
+  AgentTokenCeilingStatus,
   AgentInstructionsBundleMode,
   AgentInstructionsFileSummary,
   AgentInstructionsFileDetail,

@@ -58,7 +58,14 @@ export const STEWARD_INBOX_CAPABILITY = "bridge:inbox";
  * reads as coverage that does not exist — blockers and completions arrive with
  * the code that emits them.
  */
-export const STEWARD_INBOX_KINDS = ["approval.opened", "approval.resolved"] as const;
+export const STEWARD_INBOX_KINDS = [
+  "approval.opened",
+  "approval.resolved",
+  // OBS-2: one per agent per UTC day when the token ceiling starts skipping
+  // its timer/comment wakes. No decision handle — it is a notification, and
+  // the fix lives on the agent page.
+  "agent.token_ceiling",
+] as const;
 export type StewardInboxKind = (typeof STEWARD_INBOX_KINDS)[number];
 
 /**

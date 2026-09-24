@@ -141,6 +141,11 @@ export const agentsApi = {
     api.patch<Agent>(agentPath(id, companyId), data),
   updatePermissions: (id: string, data: AgentPermissionUpdate, companyId?: string) =>
     api.patch<AgentDetail>(agentPath(id, companyId, "/permissions"), data),
+  // OBS-2: raise (positive int) or clear (0/null) the per-agent daily token
+  // ceiling. Returns the refreshed agent detail, including the new
+  // `tokenCeiling` status, so the status line re-renders off the response.
+  updateTokenCeiling: (id: string, maxDailyTokens: number | null, companyId?: string) =>
+    api.patch<AgentDetail>(agentPath(id, companyId, "/token-ceiling"), { maxDailyTokens }),
   // AgentDash (AGE-8): board-driven instruction refresh; for an agent that has no
   // bundle yet this materializes the default one (see agent-instruction-refresh).
   refreshInstructions: (companyId: string, agentId: string) =>

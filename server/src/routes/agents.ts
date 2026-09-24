@@ -20,6 +20,7 @@ import {
   upsertAgentInstructionsFileSchema,
   updateAgentInstructionsBundleSchema,
   updateAgentPermissionsSchema,
+  updateAgentTokenCeilingSchema,
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
   updateAgentSchema,
@@ -105,6 +106,7 @@ import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { tokenCeilingService } from "../services/token-ceiling.js";
 import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
 import {
   DEFAULT_ACPX_LOCAL_AGENT,
@@ -195,6 +197,7 @@ export function agentRoutes(
   const companySkills = companySkillService(db);
   const workspaceOperations = workspaceOperationService(db);
   const instanceSettings = instanceSettingsService(db);
+  const tokenCeiling = tokenCeilingService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function assertAgentEnvironmentSelection(
@@ -674,7 +677,7 @@ export function agentRoutes(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime] = await Promise.all([
+    const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime, tokenCeilingStatus] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
@@ -697,6 +700,10 @@ export function agentRoutes(
             ? agent.runtimeConfig as Record<string, unknown>
             : {},
       }),
+      // OBS-2: the restricted view gets an explicit null — a reader that may
+      // not see configuration should not read the configured ceiling either.
+      // The pause state itself still reaches them through runHealth.
+      options?.restricted ? Promise.resolve(null) : tokenCeiling.evaluate(agent),
     ]);
 
     return {
@@ -721,6 +728,10 @@ export function agentRoutes(
       // AGE-1: what will serve the next run (model/provider/source-of-truth),
       // or explicit nulls when unknown. Never the instance adapter preset.
       resolvedRuntime,
+      // OBS-2: today's token sum vs the ceiling — the "paused: token ceiling"
+      // line on the agent page reads this, and null means the reader was not
+      // shown configuration at all.
+      tokenCeiling: tokenCeilingStatus,
     };
   }
 
@@ -3070,6 +3081,65 @@ export function agentRoutes(
 
     res.json(await buildAgentDetail(agent));
   });
+
+  /**
+   * AgentDash (OBS-2 / GH #695): raise or clear this agent's daily token
+   * ceiling — the "unpause" control the steward reaches for from the agent
+   * page. Dedicated route rather than the generic PATCH because PATCH
+   * replaces `runtimeConfig` wholesale and `runtimeConfig` is not a field a
+   * steward may write; this merges the single key into the stored config.
+   *
+   * `maxDailyTokens` is required: `0` or `null` disables the ceiling, a
+   * positive integer sets it. Removing the key (unset) is not possible here —
+   * unset means the shared default, which is what an absent config already
+   * yields.
+   */
+  router.patch(
+    "/agents/:id/token-ceiling",
+    validate(updateAgentTokenCeilingSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const existing = await svc.getById(id);
+      if (!existing) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      // Admin or steward — the pause is the steward's problem to solve.
+      await requireAgentConfigurationAuthority(req, existing);
+
+      const runtimeConfig = { ...(asRecord(existing.runtimeConfig) ?? {}) };
+      const heartbeat = { ...(asRecord(runtimeConfig.heartbeat) ?? {}) };
+      heartbeat.maxDailyTokens = req.body.maxDailyTokens;
+      runtimeConfig.heartbeat = heartbeat;
+
+      const actor = getActorInfo(req);
+      const agent = await svc.update(id, { runtimeConfig }, {
+        recordRevision: {
+          createdByAgentId: actor.agentId,
+          createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+          source: "patch",
+        },
+      });
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+
+      await logActivity(db, {
+        companyId: agent.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.token_ceiling_updated",
+        entityType: "agent",
+        entityId: agent.id,
+        details: { maxDailyTokens: req.body.maxDailyTokens },
+      });
+
+      res.json(await buildAgentDetail(agent));
+    },
+  );
 
   router.patch("/agents/:id/instructions-path", validate(updateAgentInstructionsPathSchema), async (req, res) => {
     if (req.actor.type !== "board") {

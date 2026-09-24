@@ -112,6 +112,7 @@ import {
   type LiveEvent,
   type WorkspaceOperation,
   type AgentResolvedRuntime,
+  type AgentTokenCeilingStatus,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
@@ -923,6 +924,25 @@ export function AgentDetail() {
     },
   });
 
+  const tokenCeilingUpdate = useMutation({
+    mutationFn: (maxDailyTokens: number | null) =>
+      agentsApi.updateTokenCeiling(agentLookupRef, maxDailyTokens, resolvedCompanyId ?? undefined),
+    onSuccess: (data) => {
+      setActionError(null);
+      // The response is the refreshed detail — land it so the status line
+      // re-renders off the server's own post-write evaluation.
+      if (data) {
+        queryClient.setQueryData(queryKeys.agents.detail(routeAgentRef), data);
+        queryClient.setQueryData(queryKeys.agents.detail(agentLookupRef), data);
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(routeAgentRef) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentLookupRef) });
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Failed to update token ceiling");
+    },
+  });
+
   useEffect(() => {
     const crumbs: { label: string; href?: string }[] = [
       { label: "Agents", href: "/agents" },
@@ -1107,6 +1127,20 @@ export function AgentDetail() {
             <span>Approve agent</span>
           </Button>
         </div>
+      )}
+
+      {/*
+        OBS-2: the daily token ceiling, said out loud. When it is pausing this
+        agent's timer/comment wakes the line turns into a banner with the
+        reason and when the pause lifts; either way the steward can raise or
+        clear the ceiling right here.
+      */}
+      {!urlRunId && agent.tokenCeiling && (
+        <TokenCeilingStatusLine
+          status={agent.tokenCeiling}
+          pending={tokenCeilingUpdate.isPending}
+          onSave={(value) => tokenCeilingUpdate.mutate(value)}
+        />
       )}
 
       {/*
@@ -1573,6 +1607,124 @@ function AgentOverview({
         <h3 className="text-sm font-medium">Costs</h3>
         <CostsSection runtimeState={runtimeState} runs={runs} />
       </div>
+    </div>
+  );
+}
+
+/* ---- Daily token ceiling (OBS-2) ---- */
+
+/**
+ * The pause reason and the lift, said out loud.
+ *
+ * `paused` is computed by the server from today's metered `runFacts` total —
+ * there is no stored flag to get stale, so this line can only ever describe
+ * the current window. The control writes `runtimeConfig.heartbeat
+ * .maxDailyTokens` through the dedicated endpoint: a positive number raises
+ * (or sets) the ceiling, 0 turns it off, and the day boundary resets the
+ * window regardless.
+ */
+export function TokenCeilingStatusLine({
+  status,
+  pending,
+  onSave,
+}: {
+  status: AgentTokenCeilingStatus;
+  pending: boolean;
+  onSave: (maxDailyTokens: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const parsedDraft = Number(draft.trim());
+  const draftValid = draft.trim() !== "" && Number.isFinite(parsedDraft) && parsedDraft >= 0;
+
+  const ceilingLabel =
+    status.ceiling === null
+      ? "off"
+      : `${formatTokens(status.ceiling)} tokens/day${status.isDefault ? " (default)" : ""}`;
+
+  const summary = (
+    <>
+      <span>
+        Daily token ceiling: {ceilingLabel} — {formatTokens(status.tokensToday)} used today
+        {status.unmeteredRuns > 0
+          ? ` (${status.unmeteredRuns} run${status.unmeteredRuns === 1 ? "" : "s"} unmetered)`
+          : ""}
+        .
+      </span>
+      {status.paused ? (
+        <span className="font-medium">
+          {" "}
+          Timer and comment wakes are paused until {formatDate(status.liftsAt)} UTC — assigned
+          work and manual wakes still run.
+        </span>
+      ) : null}
+    </>
+  );
+
+  const editor = editing ? (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <input
+        type="number"
+        min={0}
+        step={100_000}
+        className="h-7 w-32 rounded border border-border bg-background px-2 text-xs tabular-nums"
+        placeholder="tokens/day"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        aria-label="Daily token ceiling"
+      />
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={pending || !draftValid}
+        onClick={() => {
+          onSave(Math.floor(parsedDraft));
+          setEditing(false);
+        }}
+      >
+        Save
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() => {
+          onSave(0);
+          setEditing(false);
+        }}
+      >
+        Turn off
+      </Button>
+      <Button size="sm" variant="ghost" disabled={pending} onClick={() => setEditing(false)}>
+        Cancel
+      </Button>
+    </span>
+  ) : (
+    <Button size="sm" variant="ghost" disabled={pending} onClick={() => {
+      setDraft(status.ceiling !== null && !status.isDefault ? String(status.ceiling) : "");
+      setEditing(true);
+    }}>
+      {status.paused ? "Raise or clear" : "Edit"}
+    </Button>
+  );
+
+  if (status.paused) {
+    return (
+      <div
+        className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-400/40 dark:bg-amber-950/30 dark:text-amber-200"
+        role="status"
+      >
+        {summary}
+        {editor}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
+      {summary}
+      {editor}
     </div>
   );
 }
