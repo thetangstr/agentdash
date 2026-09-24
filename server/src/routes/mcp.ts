@@ -4,6 +4,7 @@ import { Router, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createAgentDashServer } from "@agentdash/mcp-server";
 import { logger } from "../middleware/logger.js";
+import { issuerBaseUrl } from "../services/assistant-oauth.js";
 
 /**
  * The turnkey MCP endpoint: `POST /api/mcp`, bearer = the agent's key.
@@ -94,6 +95,111 @@ export function mcpRoutes() {
     }
   });
 
+  /**
+   * GH #677: the person-facing assistant endpoint. Bearer = an OAuth access
+   * token minted against an `assistant_grant` — never an agent key, never a
+   * session cookie. Three layers hold it in:
+   *
+   *   1. The auth middleware only mints an `assistant_grant` actor when the
+   *     (method, path) is on ASSISTANT_ROUTE_SCOPES and the grant's scopes
+   *     cover it — so by the time this handler runs, the route+scope check
+   *     already passed.
+   *   2. This handler re-checks the actor source, so a future route addition
+   *     cannot accidentally serve MCP to another credential type.
+   *   3. The MCP server it spawns uses the assistant toolset and loops back
+   *     with the caller's own token, so tool calls carry exactly the grant's
+   *     authority — company-pinned, scope-limited, revocable.
+   *
+   * Origin validation is the Streamable-HTTP MUST: browser-originated calls
+   * must declare an Origin the instance recognizes (its own host, or the
+   * configured public URL). Non-browser clients send none, which is fine —
+   * the threat model is a page on another origin driving the endpoint, not
+   * a missing header.
+   */
+  function allowedOrigin(req: Request): boolean {
+    const origin = req.header("origin");
+    if (!origin) return true;
+    let normalized: string;
+    try {
+      const url = new URL(origin);
+      normalized = `${url.protocol}//${url.host}`.toLowerCase();
+    } catch {
+      return false;
+    }
+    const trusted = new Set<string>();
+    const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
+    const host = forwardedHost || req.header("host")?.trim();
+    if (host) {
+      trusted.add(`http://${host}`.toLowerCase());
+      trusted.add(`https://${host}`.toLowerCase());
+    }
+    try {
+      const publicOrigin = new URL(issuerBaseUrl(req));
+      trusted.add(`${publicOrigin.protocol}//${publicOrigin.host}`.toLowerCase());
+    } catch {
+      // issuerBaseUrl should always parse; if it somehow does not, only
+      // host-derived origins remain trusted.
+    }
+    return trusted.has(normalized);
+  }
+
+  router.post("/mcp/assistant", async (req: Request, res: Response) => {
+    const resourceMetadataUrl = `${issuerBaseUrl(req)}/.well-known/oauth-protected-resource/api/mcp/assistant`;
+    if (req.actor.source !== "assistant_grant" || !req.actor.companyId || !req.actor.assistantGrantId) {
+      res.set(
+        "WWW-Authenticate",
+        `Bearer resource_metadata="${resourceMetadataUrl}", error="invalid_token", error_description="An assistant access token is required"`,
+      );
+      res.status(401).json({ error: "invalid_token" });
+      return;
+    }
+    if (!allowedOrigin(req)) {
+      res.status(403).json({ error: "Untrusted Origin" });
+      return;
+    }
+    const token = bearerToken(req);
+    if (!token) {
+      res.set("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl}"`);
+      res.status(401).json({ error: "invalid_token" });
+      return;
+    }
+
+    const selfPort = req.socket.localPort;
+    const server = createAgentDashServer(
+      {
+        apiUrl: `http://127.0.0.1:${selfPort}/api`,
+        apiKey: token,
+        companyId: req.actor.companyId,
+        agentId: null,
+        runId: null,
+      },
+      { toolset: "assistant" },
+    );
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+
+    res.on("close", () => {
+      void transport.close();
+      void server.close();
+    });
+
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (err) {
+      logger.error({ err, grantId: req.actor.assistantGrantId }, "[mcp] assistant request failed");
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal error handling MCP request" },
+          id: null,
+        });
+      }
+    }
+  });
+
   // Stateless mode has no server-initiated stream and no session to delete.
   // Answer plainly rather than 404, so a client probing the endpoint learns
   // what it is talking to instead of concluding the URL is wrong.
@@ -104,6 +210,8 @@ export function mcpRoutes() {
   };
   router.get("/mcp", methodNotAllowed);
   router.delete("/mcp", methodNotAllowed);
+  router.get("/mcp/assistant", methodNotAllowed);
+  router.delete("/mcp/assistant", methodNotAllowed);
 
   return router;
 }

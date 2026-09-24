@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { assistantDigestService } from "../services/assistant-digest.js";
+import { assistantOAuthService } from "../services/assistant-oauth.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalService, issueApprovalService } from "../services/index.js";
 import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "../services/approval-risk.js";
@@ -153,6 +154,47 @@ export function assistantRoutes(db: Db) {
       tasksAssignedToYou: tasks.items,
       tasksAssignedToYouTotal: tasks.total,
     });
+  });
+
+  /**
+   * GH #677 — My Agent → Connections: the OAuth grants this person has given
+   * assistant clients in this company. Same `me/` shape as bridge endpoints:
+   * a person lists and revokes their own connections, never someone else's.
+   */
+  const oauth = assistantOAuthService(db);
+
+  router.get("/companies/:companyId/me/assistant-grants", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const grants = await oauth.listGrantsForUser(companyId, req.actor.userId!);
+    res.json({
+      grants: grants.map((grant) => ({
+        id: grant.id,
+        clientId: grant.clientId,
+        clientName: grant.clientName,
+        redirectHost: grant.redirectHost,
+        scopes: grant.scopes,
+        createdAt: grant.createdAt?.toISOString?.() ?? null,
+        lastUsedAt: grant.lastUsedAt?.toISOString?.() ?? null,
+      })),
+    });
+  });
+
+  router.post("/companies/:companyId/me/assistant-grants/:grantId/revoke", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const revoked = await oauth.revokeGrant(
+      req.params.grantId as string,
+      req.actor.userId!,
+      companyId,
+    );
+    if (!revoked) {
+      res.status(404).json({ error: "Assistant connection not found" });
+      return;
+    }
+    res.json({ revoked: true, grantId: revoked.id });
   });
 
   return router;

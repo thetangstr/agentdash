@@ -11,6 +11,7 @@ import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { requireLicense } from "./middleware/require-license.js";
 import { mcpRoutes } from "./routes/mcp.js";
+import { oauthRoutes } from "./routes/oauth.js";
 import { connectCodeRoutes } from "./routes/connect-codes.js";
 import { meCapabilityRoutes } from "./routes/me-capabilities.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
@@ -647,6 +648,12 @@ export async function createApp(
   // AgentDash (AGE-23): a wrong method on a known route answers 405 + Allow;
   // an unknown path keeps the 404.
   app.use("/api", apiFallthrough(api));
+  // AgentDash (GH #677): OAuth 2.1 authorization server for the assistant MCP
+  // surface. Lives at the app root — /.well-known and /oauth are not API
+  // routes — and after the API mount so an assistant bearer on an /api path
+  // still resolves through the api router first. The session actor the
+  // consent endpoints need is already on req.actor via actorMiddleware.
+  app.use(oauthRoutes(db));
   app.use(pluginUiStaticRoutes(db, {
     localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
     deploymentMode: opts.deploymentMode,

@@ -58,7 +58,15 @@ export function boardMutationGuard(): RequestHandler {
 
     // Local-trusted mode and board bearer keys are not browser-session requests.
     // In these modes, origin/referer headers can be absent; do not block those mutations.
-    if (req.actor.source === "local_implicit" || req.actor.source === "board_key") {
+    // `assistant_grant` is exempt for the same reason: an assistant token is a
+    // bearer credential, not a cookie — a browser cannot be tricked into
+    // attaching it, so CSRF-by-origin is not the threat model here. The MCP
+    // endpoint performs its own Origin validation (GH #677).
+    if (
+      req.actor.source === "local_implicit" ||
+      req.actor.source === "board_key" ||
+      req.actor.source === "assistant_grant"
+    ) {
       next();
       return;
     }

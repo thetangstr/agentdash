@@ -24,6 +24,10 @@ declare global {
         readOnly?: boolean;
         /** Set only for the `bridge_endpoint` source: which enrolled machine this is. */
         bridgeEndpointId?: string;
+        /** AgentDash (GH #677): the grant an assistant bearer resolves to. */
+        assistantGrantId?: string;
+        /** AgentDash (GH #677): OAuth scopes on the assistant grant's token. */
+        assistantScopes?: string[];
         runId?: string;
         source?:
           | "local_implicit"
@@ -34,6 +38,10 @@ declare global {
           // AgentDash-MK: a human's enrolled local machine. Reaches ONLY the
           // bridge poll/result/decline routes — see BRIDGE_ENDPOINT_ROUTES.
           | "bridge_endpoint"
+          // AgentDash (GH #677): an OAuth assistant grant. Board-shaped but
+          // pinned to ONE company and one route allowlist — see
+          // ASSISTANT_ROUTE_SCOPES in @paperclipai/shared.
+          | "assistant_grant"
           | "none";
       };
     }

@@ -1353,3 +1353,4 @@ export {
   type OtaReceiptCheck,
   type OtaReceipt,
 } from "./types/ota.js";
+export * from "./assistant-oauth.js";
