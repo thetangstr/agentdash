@@ -1,6 +1,6 @@
 # Right-sized agent observability
 
-Date: 2026-09-24. Status: proposal, awaiting founder approval. No issues filed yet.
+Date: 2026-09-24. Status: approved by the founder on 2026-09-24 with the decisions in section 8. Work is tracked in #694 to #700.
 
 The goal is that agents are effective and responsive, and that we can see it when they are not. The cheapest path is to record the facts we mostly already have, add a few aggregations, and show them where a founder or steward already looks. This is not a tracing platform.
 
@@ -292,10 +292,24 @@ Take `1e8ede4e1` (SIGKILL on real liveness) with M3. It is the same problem area
 
 ---
 
-## 8. Open decisions for the founder
+## 8. Founder decisions (2026-09-24)
 
-1. **Default daily token ceiling** for new agents (proposed 5M input tokens), and whether it applies to existing agents at rollout or stays opt-in.
-2. **Whether the ceiling pauses only timer and comment wakes** (proposed) or all wakes.
-3. **Per-provider concurrency default** (proposed 3 for `zai`; unset elsewhere).
-4. **Whether M2 lands before 2026-10-28**, or only M1 plus the MCP slice.
-5. **Whether "tokens" may appear in assistant MCP output.** This plan proposes yes, while ceiling values stay redacted as the spec requires.
+These replace the open questions in the first draft. Where they differ from sections 6 and 7, these decisions govern.
+
+1. **Before launch:** M1 in full: the per-run record, the Hermes profile-ledger path fix, "unmetered" instead of 0, and the 30-day backfill. Also the **daily token ceiling** from M2, and the token fields in `whats_new` and `explain_blocker`. The MCP fields are the first thing to drop if the launch path (#676, #677) slips. The rest of M2, and M3 to M5, come after launch.
+2. **Ceiling:** 5M tokens per agent per day by default, configurable per agent. It pauses only timer and comment wakes; assigned work still runs. The pause is visible as a steward inbox item and as the reason on the agent page. The implementation counts input plus output tokens from `runFacts`, with cached input counted as input.
+3. **Owner:** Devin owns the pre-launch slice, starting after the MCP OAuth milestone (#677). The orchestrator owns the rest.
+4. **Assistant MCP may report token counts**: tokens only, never dollars. Ceiling values stay redacted.
+5. **Per-provider concurrency cap:** kept as proposed (default 3 for `zai`), post-launch in OBS-4.
+
+## 9. Issues
+
+| Issue | Scope | Labels | Blocked by |
+|---|---|---|---|
+| #694 OBS-1 | Honest per-run record, Hermes profile ledger, "unmetered", 30-day backfill (M1) | owner:devin, P1 | none; starts after #677 |
+| #695 OBS-2 | Daily token ceiling with a visible pause (from M2) | owner:devin, P1 | #694 |
+| #696 OBS-3 | Token and no-op fields in `whats_new` and `explain_blocker` (M4, MCP part) | owner:devin, mcp-launch | #694, #685 |
+| #697 OBS-4 | Rest of M2: health summary, no-op loop detection, per-provider concurrency cap | owner:orchestrator, P2 | #694 |
+| #698 OBS-5 | M3: stuck vs quiet, first-output deadline, upstream `1e8ede4e1` (AGE-169/170) | owner:orchestrator, P2 | #694 |
+| #699 OBS-6 | M4 surfaces: agent page strip and tab, Costs card, inbox | owner:orchestrator, P2 | #694 |
+| #700 OBS-7 | M5: OpenTelemetry GenAI export, upstream `362c30ccd` + `b01f423cd` | owner:orchestrator, P3 | #694 |
