@@ -12,7 +12,11 @@ export type HeartbeatRunStopReason =
   | "budget_paused"
   | "paused"
   | "process_lost"
-  | "adapter_failed";
+  | "adapter_failed"
+  // AgentDash (OBS-5, #698): the run's process was up but produced no first
+  // output (streaming adapters) or no ledger row (hermes_local) before the
+  // first-output deadline, so it was stopped instead of waiting out the budget.
+  | "no_first_output";
 
 export interface HeartbeatRunTimeoutPolicy {
   effectiveTimeoutSec: number | null;
@@ -82,6 +86,9 @@ export function inferHeartbeatRunStopReason(input: {
   errorMessage?: string | null;
 }): HeartbeatRunStopReason {
   if (input.outcome === "succeeded") return "completed";
+  // AgentDash (OBS-5): checked before the outcome mapping so the reason
+  // survives whichever terminal status the run ends up adopting.
+  if (input.errorCode === "no_first_output") return "no_first_output";
   if (input.outcome === "timed_out") return "timeout";
   if (input.outcome === "failed" && input.errorCode === "process_lost") return "process_lost";
   if (input.outcome === "cancelled") {

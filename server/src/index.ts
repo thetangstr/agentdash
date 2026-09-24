@@ -900,6 +900,10 @@ export async function startServer(): Promise<StartedServer> {
             logger.warn({ ...scanned }, "periodic active-run output watchdog created review work");
           }
         })
+        // AgentDash (OBS-5, #698): stop zero-turn hangs at the first-output deadline.
+        .then(async () => {
+          await heartbeat.enforceFirstOutputDeadlines();
+        })
         .then(async () => {
           const reviewed = await heartbeat.reconcileProductivityReviews();
           if (reviewed.created > 0 || reviewed.updated > 0 || reviewed.failed > 0) {

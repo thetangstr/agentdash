@@ -78,6 +78,13 @@ import {
   buildHeartbeatRunStopMetadata,
   mergeHeartbeatRunStopMetadata,
 } from "./heartbeat-stop-metadata.js";
+// AgentDash (OBS-5, #698): first-output deadline for zero-turn hangs.
+import {
+  NO_FIRST_OUTPUT_ERROR_CODE,
+  hasFirstOutput,
+  probeRunLiveness,
+  resolveFirstOutputDeadlineMs,
+} from "./run-liveness-probe.js";
 import {
   classifyRunLiveness,
   type RunLivenessClassificationInput,
@@ -6519,8 +6526,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // run is the true one. Falling through to "Adapter failed" here replaced
       // an honest `process_lost` diagnosis with a generic one that pointed
       // operators at the adapter instead of at the restart that caused it.
+      // AgentDash (OBS-5): a run the first-output deadline stopped keeps that
+      // diagnosis; the adapter's own exit report only says it was signalled.
+      const adoptedNoFirstOutput =
+        adoptedTerminalStatus && latestRun?.errorCode === NO_FIRST_OUTPUT_ERROR_CODE;
       const runErrorMessage =
-        outcome === "cancelled"
+        adoptedNoFirstOutput
+          ? (latestRun?.error ?? "No first output before the deadline")
+          : outcome === "cancelled"
           ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
           : outcome === "succeeded"
             ? null
@@ -6531,7 +6544,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 currentUserRedactionOptions,
               );
       const runErrorCode =
-        outcome === "timed_out"
+        adoptedNoFirstOutput
+          ? NO_FIRST_OUTPUT_ERROR_CODE
+          : outcome === "timed_out"
           ? "timeout"
           : outcome === "cancelled"
             ? (latestRun?.errorCode ?? "cancelled")
@@ -8186,6 +8201,116 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return runs.length;
   }
 
+  /**
+   * AgentDash (OBS-5, #698): stop zero-turn hangs at the first-output deadline.
+   *
+   * A running run whose process is up, which is older than its agent's
+   * first-output deadline (default 10 minutes for hermes_local, opt-in
+   * elsewhere), and which has shown no first output (streaming adapters) or no
+   * Hermes ledger row (hermes_local) is failed with `no_first_output` and its
+   * process terminated, instead of waiting out the full time budget. A run
+   * whose evidence cannot be read (ledger missing or unreadable) is left
+   * alone: no evidence is not evidence of a hang.
+   */
+  async function enforceFirstOutputDeadlines(opts?: {
+    now?: Date;
+    companyId?: string;
+    env?: NodeJS.ProcessEnv;
+  }) {
+    const now = opts?.now ?? new Date();
+    const env = opts?.env ?? process.env;
+    const candidates = await db
+      .select({
+        run: heartbeatRuns,
+        adapterType: agents.adapterType,
+        adapterConfig: agents.adapterConfig,
+      })
+      .from(heartbeatRuns)
+      .innerJoin(agents, eq(heartbeatRuns.agentId, agents.id))
+      .where(
+        and(
+          opts?.companyId ? eq(heartbeatRuns.companyId, opts.companyId) : undefined,
+          eq(heartbeatRuns.status, "running"),
+        ),
+      )
+      .orderBy(asc(heartbeatRuns.createdAt))
+      .limit(200);
+
+    const stopped: string[] = [];
+    for (const { run, adapterType, adapterConfig } of candidates) {
+      const deadlineMs = resolveFirstOutputDeadlineMs(adapterType, adapterConfig, env);
+      if (deadlineMs === null) continue;
+      const startedAt = run.processStartedAt ?? run.startedAt;
+      if (!startedAt || now.getTime() - startedAt.getTime() < deadlineMs) continue;
+
+      const evidence = probeRunLiveness(run, { adapterType, adapterConfig }, { env });
+      // Only a process we can see and stop is stopped; a dead one is the reaper's.
+      if (evidence.processAlive !== true) continue;
+      if (hasFirstOutput(run, evidence) !== false) continue;
+
+      const deadlineMinutes = Math.round(deadlineMs / 60_000);
+      const reason = evidence.probe === "hermes_ledger"
+        ? `No first output: no Hermes ledger activity ${deadlineMinutes} min after the process started; stopped at the first-output deadline`
+        : `No first output ${deadlineMinutes} min after the process started; stopped at the first-output deadline`;
+
+      const running = runningProcesses.get(run.id);
+      const failedRun = await setRunStatus(run.id, "failed", {
+        finishedAt: now,
+        error: reason,
+        errorCode: NO_FIRST_OUTPUT_ERROR_CODE,
+        resultJson: mergeRunStopMetadataForAgent({ adapterType, adapterConfig }, "failed", {
+          resultJson: {
+            ...parseObject(run.resultJson),
+            firstOutputDeadlineMs: deadlineMs,
+            livenessProbe: evidence.probe,
+            ...(evidence.ledgerPath ? { ledgerStatus: evidence.ledgerStatus } : {}),
+          },
+          errorCode: NO_FIRST_OUTPUT_ERROR_CODE,
+          errorMessage: reason,
+        }),
+      });
+      if (running) {
+        await terminateHeartbeatRunProcess({
+          pid: running.child.pid ?? run.processPid,
+          processGroupId: running.processGroupId ?? run.processGroupId,
+          graceMs: Math.max(1, running.graceSec) * 1000,
+        });
+      } else {
+        await terminateHeartbeatRunProcess({
+          pid: run.processPid,
+          processGroupId: run.processGroupId,
+        });
+      }
+      await setWakeupStatus(run.wakeupRequestId, "failed", { finishedAt: now, error: reason });
+
+      const finalizedRun = failedRun ?? (await getRun(run.id));
+      if (finalizedRun) {
+        await appendRunEvent(finalizedRun, await nextRunEventSeq(finalizedRun.id), {
+          eventType: "lifecycle",
+          stream: "system",
+          level: "error",
+          message: reason,
+          payload: {
+            stopReason: NO_FIRST_OUTPUT_ERROR_CODE,
+            firstOutputDeadlineMs: deadlineMs,
+            livenessProbe: evidence.probe,
+            ...(run.processPid ? { processPid: run.processPid } : {}),
+          },
+        });
+        await releaseIssueExecutionAndPromote(finalizedRun);
+      }
+      runningProcesses.delete(run.id);
+      await finalizeAgentStatus(run.agentId, "failed");
+      await startNextQueuedRunForAgent(run.agentId);
+      stopped.push(run.id);
+    }
+
+    if (stopped.length > 0) {
+      logger.warn({ stoppedCount: stopped.length, runIds: stopped }, "stopped runs with no first output");
+    }
+    return { scanned: candidates.length, stopped: stopped.length, runIds: stopped };
+  }
+
   async function cancelBudgetScopeWork(scope: BudgetEnforcementScope) {
     if (scope.scopeType === "agent") {
       await cancelActiveForAgentInternal(scope.scopeId, "Cancelled due to budget pause");
@@ -8475,6 +8600,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     reconcileIssueGraphLiveness,
 
     scanSilentActiveRuns,
+
+    // AgentDash (OBS-5, #698)
+    enforceFirstOutputDeadlines,
 
     reconcileProductivityReviews,
 
