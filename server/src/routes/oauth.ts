@@ -1,6 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import type { Db } from "@paperclipai/db";
+import type { DeploymentMode } from "@paperclipai/shared";
 import { boardMutationGuard } from "../middleware/board-mutation-guard.js";
+import { createDefaultApiRateLimiter } from "../middleware/rate-limit.js";
 import {
   ASSISTANT_SCOPES,
 } from "@paperclipai/shared";
@@ -30,9 +32,15 @@ import {
  * UI; they authenticate on the same better-auth session actor as everything
  * else.
  */
-export function oauthRoutes(db: Db) {
+export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = {}) {
   const router = Router();
   const oauth = assistantOAuthService(db);
+
+  // These endpoints live at the app root, outside the /api limiter — and
+  // /oauth/authorize writes an auth-request row on every GET, so anonymous
+  // callers get the same 200/15min ceiling as API mutations. No-ops in tests
+  // and local_trusted mode, like everywhere else it is used.
+  router.use(createDefaultApiRateLimiter({ deploymentMode: opts.deploymentMode }));
 
   /** Uniform OAuth error shape; everything else falls through to the app handler. */
   const wrap =

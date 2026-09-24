@@ -653,7 +653,7 @@ export async function createApp(
   // routes — and after the API mount so an assistant bearer on an /api path
   // still resolves through the api router first. The session actor the
   // consent endpoints need is already on req.actor via actorMiddleware.
-  app.use(oauthRoutes(db));
+  app.use(oauthRoutes(db, { deploymentMode: opts.deploymentMode }));
   app.use(pluginUiStaticRoutes(db, {
     localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
     deploymentMode: opts.deploymentMode,
