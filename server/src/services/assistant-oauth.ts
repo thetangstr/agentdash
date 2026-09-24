@@ -260,17 +260,44 @@ export function validateRedirectUri(raw: string): string {
     throw new OAuthError("invalid_redirect_uri", "redirect_uri must not contain a fragment");
   }
   if (parsed.protocol === "https:") return parsed.toString();
-  if (parsed.protocol === "http:") {
-    const host = parsed.hostname.toLowerCase();
-    const loopback =
-      host === "localhost" ||
-      host.endsWith(".localhost") ||
-      host === "[::1]" ||
-      host === "::1" ||
-      /^127\.\d+\.\d+\.\d+$/.test(host);
-    if (loopback) return parsed.toString();
+  if (parsed.protocol === "http:" && isLoopbackHostname(parsed.hostname)) {
+    return parsed.toString();
   }
   throw new OAuthError("invalid_redirect_uri", "redirect_uri must be https (http is loopback-only)");
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    host === "::1" ||
+    /^127\.\d+\.\d+\.\d+$/.test(host)
+  );
+}
+
+/**
+ * Whether a requested redirect_uri is one of the client's registered URIs.
+ * Exact match always wins; beyond that, RFC 8252 §7.3 requires that a
+ * loopback redirect may carry ANY port at request time — native clients
+ * bind an ephemeral port they cannot know at registration. The port is the
+ * only component exempt: scheme, host, path and query must still be
+ * identical, and the exemption never applies to non-loopback URIs.
+ */
+export function redirectUriIsRegistered(requested: string, registered: string[]): boolean {
+  if (registered.includes(requested)) return true;
+  const req = new URL(requested);
+  if (req.protocol !== "http:" || !isLoopbackHostname(req.hostname)) return false;
+  return registered.some((uri) => {
+    const reg = new URL(uri);
+    if (reg.protocol !== "http:" || !isLoopbackHostname(reg.hostname)) return false;
+    const a = new URL(requested);
+    const b = new URL(uri);
+    a.port = "";
+    b.port = "";
+    return a.toString() === b.toString();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -403,11 +430,13 @@ export function assistantOAuthService(db: Db) {
     }
     const client = await resolveClient(params.clientId);
 
-    // Exact-match redirect_uri, always required. Optional-and-substring
-    // matching is where oauth redirect validation bugs live.
+    // Registered-URI match, always required. Exact match first; for
+    // loopback URIs RFC 8252 §7.3 exempts the port (and only the port).
+    // The URI that matched is stored on the request, so the token
+    // exchange still binds the code to this exact redirect — a code
+    // minted for :9999 cannot be exchanged claiming :1234.
     const redirectUri = params.redirectUri ? validateRedirectUri(params.redirectUri) : undefined;
-    const registered = client.redirectUris;
-    if (!redirectUri || !registered.includes(redirectUri)) {
+    if (!redirectUri || !redirectUriIsRegistered(redirectUri, client.redirectUris)) {
       throw new OAuthError("invalid_redirect_uri", "redirect_uri is not registered for this client");
     }
 

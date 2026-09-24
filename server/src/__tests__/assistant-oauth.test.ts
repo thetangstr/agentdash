@@ -277,6 +277,76 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       expect(res.body.error).toBe("invalid_redirect_uri");
     });
 
+    it("accepts any port on a registered loopback redirect (RFC 8252 §7.3)", async () => {
+      const { client_id } = await registerClient(["http://127.0.0.1:1234/callback"]);
+      const res = await authorize({ client_id, redirect_uri: "http://127.0.0.1:54321/callback" });
+      expect(res.status).toBe(302);
+    });
+
+    it("accepts an ephemeral port on a port-less localhost registration", async () => {
+      const { client_id } = await registerClient(["http://localhost/cb"]);
+      const res = await authorize({ client_id, redirect_uri: "http://localhost:48888/cb" });
+      expect(res.status).toBe(302);
+    });
+
+    it("still rejects a loopback URI whose path differs — only the port is exempt", async () => {
+      const { client_id } = await registerClient(["http://127.0.0.1:1234/callback"]);
+      const res = await authorize({ client_id, redirect_uri: "http://127.0.0.1:1234/other" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_redirect_uri");
+    });
+
+    it("still rejects a different loopback host — 127.0.0.1 and localhost do not cross-match", async () => {
+      const { client_id } = await registerClient(["http://127.0.0.1:1234/cb"]);
+      const res = await authorize({ client_id, redirect_uri: "http://localhost:1234/cb" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_redirect_uri");
+    });
+
+    it("never applies the port exemption to https redirects", async () => {
+      const { client_id } = await registerClient(["https://assistant.example:444/cb"]);
+      const res = await authorize({ client_id, redirect_uri: "https://assistant.example:555/cb" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_redirect_uri");
+    });
+
+    it("binds the issued code to the exact ephemeral-port URI at exchange", async () => {
+      const company = await seedCompany();
+      const { client_id } = await registerClient(["http://127.0.0.1:1/callback"]);
+      const { verifier, challenge } = pkcePair();
+      const ephemeral = "http://127.0.0.1:54321/callback";
+      const authz = await authorize({ client_id, code_challenge: challenge, redirect_uri: ephemeral });
+      expect(authz.status).toBe(302);
+      const requestId = new URL(authz.headers.location as string, PUBLIC_BASE).searchParams.get("request")!;
+      const decision = await request(app)
+        .post(`/oauth/consent/${requestId}/decision`)
+        .set("Origin", PUBLIC_BASE)
+        .send({ approved: true, companyId: company.id, scopes: ["agentdash:read"] });
+      expect(decision.status).toBe(200);
+      const code = new URL(decision.body.redirect as string).searchParams.get("code")!;
+      // A different port at exchange is a different URI — the code must not trade.
+      const wrongPort = await request(app).post("/oauth/token").send({
+        grant_type: "authorization_code",
+        code,
+        client_id,
+        redirect_uri: "http://127.0.0.1:1/callback",
+        code_verifier: verifier,
+        resource: CANONICAL_RESOURCE,
+      });
+      expect(wrongPort.status).toBe(400);
+      expect(wrongPort.body.error).toBe("invalid_grant");
+      const right = await request(app).post("/oauth/token").send({
+        grant_type: "authorization_code",
+        code,
+        client_id,
+        redirect_uri: ephemeral,
+        code_verifier: verifier,
+        resource: CANONICAL_RESOURCE,
+      });
+      expect(right.status).toBe(200);
+      expect(right.body.access_token).toMatch(/^pcpa_/);
+    });
+
     it("rejects an unknown client_id", async () => {
       const res = await authorize({ client_id: "dcr_nonexistent" });
       expect(res.status).toBe(400);

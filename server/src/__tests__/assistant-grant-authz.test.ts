@@ -66,6 +66,11 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
     app.get("/api/companies/:companyId/labels", (req, res) => {
       res.json({ reached: true, actor: req.actor });
     });
+    // Probe for the roster read — the allowlist must let a read grant reach
+    // it; the real handler lives in access.ts and needs only company access.
+    app.get("/api/companies/:companyId/people", (req, res) => {
+      res.json({ reached: true });
+    });
     app.use(errorHandler);
   });
 
@@ -159,6 +164,16 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
     // what matters is that authz accepted the actor (not 401/403).
     expect(res.status).toBe(200);
     void grant;
+  });
+
+  it("reaches the member-roster read the toolset uses for human assignee names", async () => {
+    const { company } = await seed();
+    const { token } = await mintToken({ companyId: company.id });
+    const res = await request(app)
+      .get(`/api/companies/${company.id}/people`)
+      .set("authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.reached).toBe(true);
   });
 
   it("returns 401 with WWW-Authenticate for a missing token on the MCP endpoint", async () => {

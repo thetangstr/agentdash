@@ -182,11 +182,15 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
     });
     expect(clientInfo.client_id).toMatch(/^dcr_/);
 
-    // 4. Authorization — the SDK builds the URL (PKCE S256 inside).
+    // 4. Authorization — the SDK builds the URL (PKCE S256 inside). The
+    // redirect uses a different loopback port than registration: native
+    // clients bind an ephemeral port they cannot know when they register,
+    // and RFC 8252 §7.3 requires the AS to accept any port on a loopback
+    // URI. This is the real-client path the conformance run exercised.
     const { authorizationUrl, codeVerifier } = await startAuthorization(baseUrl, {
       metadata: asMetadata as never,
       clientInformation: clientInfo,
-      redirectUrl: "http://127.0.0.1:5555/callback",
+      redirectUrl: "http://127.0.0.1:54321/callback",
       scope: "agentdash:read",
       resource: new URL(resourceUri),
     });
@@ -205,7 +209,7 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
     expect(viewRes.status).toBe(200);
     const view = (await viewRes.json()) as { clientName: string; redirectHost: string };
     expect(view.clientName).toBe("SDK E2E Client");
-    expect(view.redirectHost).toBe("127.0.0.1:5555");
+    expect(view.redirectHost).toBe("127.0.0.1:54321");
 
     // The human step, driven through the consent API. Origin is required —
     // the decision route carries the same trusted-origin CSRF check as every
@@ -229,7 +233,7 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       clientInformation: clientInfo,
       authorizationCode: code,
       codeVerifier,
-      redirectUri: "http://127.0.0.1:5555/callback",
+      redirectUri: "http://127.0.0.1:54321/callback",
       resource: new URL(resourceUri),
     });
     expect(tokens.access_token).toMatch(/^pcpa_/);

@@ -72,6 +72,8 @@ export const ASSISTANT_ROUTE_SCOPES: ReadonlyArray<{
 
   // read: the M1 assistant toolset's loopback surface, one entry per call.
   { method: "GET", pattern: /^\/api\/companies\/[^/]+\/agents$/, scope: ASSISTANT_SCOPE_READ },
+  // Member names — the toolset resolves human task-assignees through this.
+  { method: "GET", pattern: /^\/api\/companies\/[^/]+\/people$/, scope: ASSISTANT_SCOPE_READ },
   { method: "GET", pattern: /^\/api\/companies\/[^/]+\/projects$/, scope: ASSISTANT_SCOPE_READ },
   { method: "GET", pattern: /^\/api\/companies\/[^/]+\/issues$/, scope: ASSISTANT_SCOPE_READ },
   { method: "GET", pattern: /^\/api\/companies\/[^/]+\/assistant\/digest$/, scope: ASSISTANT_SCOPE_READ },
