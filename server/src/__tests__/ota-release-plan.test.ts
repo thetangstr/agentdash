@@ -300,6 +300,31 @@ describe("buildUpdateStatus", () => {
     expect(result.blockedReasons.join(" ")).toContain("No approval");
   });
 
+  // canApprove is the board's gate: every blocker except the missing approval,
+  // which is the one thing the approve flow can produce. Without it the UI
+  // button is circular — disabled until an approval exists, and the only
+  // thing that creates one.
+  it("canApprove stays true when the only blocker is a missing approval", () => {
+    const result = status({ approval: null });
+    expect(result.canApply).toBe(false);
+    expect(result.canApprove).toBe(true);
+  });
+
+  it("canApprove is false when a structural blocker exists alongside the approval", () => {
+    const result = status({ approval: null, servingFromReleaseDir: false });
+    expect(result.canApply).toBe(false);
+    expect(result.canApprove).toBe(false);
+  });
+
+  it("canApprove is false when up to date", () => {
+    const result = status({
+      installed: { ...INSTALLED_FROM_RELEASE, commit: RELEASE.commit },
+      approval: null,
+    });
+    expect(result.canApply).toBe(false);
+    expect(result.canApprove).toBe(false);
+  });
+
   it("refuses when compatibility is unknown", () => {
     const result = status({
       compatibility: assessCompatibility({ appliedMigrationIds: null, releaseMigrations: null }),

@@ -20,6 +20,7 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { join, relative, extname } from "node:path";
@@ -143,7 +144,19 @@ function main() {
   }
 }
 
-// Run only when invoked directly (not when imported by the test).
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// Run only when invoked directly (not when imported by the test). Realpaths on
+// both sides: import.meta.url is resolved, argv[1] is as typed, so a plain
+// comparison silently skips main() when the script is run through a symlink.
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
+if (invokedDirectly) {
   main();
 }

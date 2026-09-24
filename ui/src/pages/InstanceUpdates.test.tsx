@@ -77,6 +77,7 @@ function statusFixture(overrides: Partial<OtaUpdateStatus> = {}): OtaUpdateStatu
     },
     approval: null,
     canApply: true,
+    canApprove: true,
     blockedReasons: [],
     checkedAt: "2026-09-02T00:00:00Z",
     ...overrides,
@@ -146,10 +147,55 @@ describe("InstanceUpdates", () => {
     expect(updateButton()?.disabled).toBe(false);
   });
 
+  // The bug this file exists for: a missing approval is the ONLY blocker the
+  // button itself can remove, so it must not disable the button. Gating on
+  // canApply here made the page circular — disabled until an approval the
+  // page could never create.
+  it("enables the button when a release is available but no approval exists yet", async () => {
+    await render(
+      statusFixture({
+        approval: null,
+        canApply: false,
+        canApprove: true,
+        blockedReasons: ["No approval on record for this release."],
+      }),
+    );
+    expect(container.textContent).toContain("No approval on record");
+    expect(updateButton()?.disabled).toBe(false);
+  });
+
+  // A spent approval is for the release it approved, not for the one now on
+  // offer — after an apply it must not lock the button for the next release.
+  it("enables the button when the existing approval is for a different commit", async () => {
+    await render(
+      statusFixture({
+        approval: {
+          id: "approval-spent",
+          tag: "v2026.827.1",
+          commit: "e912d614c8f81498c842b154182bb764a98d0164",
+          channel: "stable",
+          status: "approved",
+          requestedByUserId: "u1",
+          requestedAt: "2026-08-27T00:00:00Z",
+          decidedByUserId: "u1",
+          decidedAt: "2026-08-27T00:01:00Z",
+          approvedVerdict: "compatible",
+        },
+        canApply: false,
+        canApprove: true,
+        blockedReasons: [
+          "The approval is for a different commit than the release now offered. Re-approve the current release.",
+        ],
+      }),
+    );
+    expect(updateButton()?.disabled).toBe(false);
+  });
+
   it("disables the update button and shows the server's reasons when blocked", async () => {
     await render(
       statusFixture({
         canApply: false,
+        canApprove: false,
         servingFromReleaseDir: false,
         blockedReasons: ["This instance is not running from an immutable release directory."],
       }),
@@ -160,7 +206,7 @@ describe("InstanceUpdates", () => {
   });
 
   it("disables the button when already up to date", async () => {
-    await render(statusFixture({ upToDate: true, available: null, canApply: false, blockedReasons: ["Already on the newest release."] }));
+    await render(statusFixture({ upToDate: true, available: null, canApply: false, canApprove: false, blockedReasons: ["Already on the newest release."] }));
     expect(updateButton()?.disabled).toBe(true);
     expect(container.textContent).toContain("newest release");
   });
@@ -196,6 +242,7 @@ describe("InstanceUpdates", () => {
     await render(
       statusFixture({
         canApply: false,
+        canApprove: false,
         compatibility: {
           verdict: "unknown",
           pendingMigrations: [],

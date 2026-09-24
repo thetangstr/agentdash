@@ -30,9 +30,10 @@
 //      plan and taken a backup they intend to use.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
@@ -664,21 +665,26 @@ export const defaultCheckDeps = {
 /**
  * What commit is this box actually on? `deployment-state.json` is written by
  * the apply path and is absent on a box that still serves straight from its
- * git checkout — exactly the boxes a release offer matters most for, so the
- * fallbacks reconcile the records those boxes do have, in the order
- * ota-deployment-state.ts establishes: the legacy source-updater state, then
- * the checkout itself, whose HEAD is what the running code was cloned at.
+ * git checkout — exactly the boxes a release offer matters most for. On those
+ * boxes HEAD is the only observed fact: it is what the running code was
+ * cloned at, while `source-state.json` is a record someone wrote once and
+ * can go stale the moment a human pulls by hand. The server's
+ * reconcileDeploymentState applies the same rule — the running commit wins
+ * over any recorded state — so the order here is canonical file, then HEAD,
+ * then the legacy file as the last record left when git itself cannot answer.
  */
 function installedCommitForCheck(repoDir, stateDir, deps) {
   const canonical = readJsonFile(path.join(stateDir, CANONICAL_STATE_FILENAME))?.current?.commit;
   if (typeof canonical === "string" && canonical) return canonical;
+  try {
+    const head = deps.git(repoDir, ["rev-parse", "HEAD"]);
+    if (typeof head === "string" && head.trim()) return head.trim();
+  } catch {
+    // Not a git checkout — fall through to the recorded state.
+  }
   const legacy = readJsonFile(path.join(stateDir, LEGACY_SOURCE_STATE_FILENAME))?.currentSha;
   if (typeof legacy === "string" && legacy) return legacy;
-  try {
-    return deps.git(repoDir, ["rev-parse", "HEAD"]);
-  } catch {
-    return "";
-  }
+  return "";
 }
 
 /**
@@ -889,7 +895,22 @@ export async function main(argv = process.argv) {
   return result.outcome === "applied" || result.outcome === "noop" ? 0 : 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// import.meta.url is the resolved real path while process.argv[1] is the path
+// as typed, so a plain comparison silently skips main() when the script is run
+// through a symlink (e.g. releases/current). Compare realpaths on both sides.
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    // argv[1] can name a path that does not exist (e.g. a positional arg under
+    // `node -e`); an unresolvable entry path cannot be this file's direct run.
+    return false;
+  }
+})();
+if (invokedDirectly) {
   main().then((code) => process.exit(code));
 }
 

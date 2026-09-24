@@ -1039,6 +1039,44 @@ test("check: reconciles the legacy source-state commit when no canonical state e
   }
 });
 
+test("check: checkout HEAD beats a stale source-state record", async () => {
+  // A human pulled by hand: HEAD moved, source-state.json did not. The server
+  // reconciles running-over-recorded (ota-deployment-state.ts) and the check
+  // must agree — trusting the stale file would let the backward guard offer
+  // an older tag.
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "source-state.json"),
+      JSON.stringify({ currentSha: "stale-legacy" }),
+    );
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+          "rev-parse HEAD": "actual-head",
+          "show cand:packages/db/src/migrations/meta/_journal.json":
+            JSON.stringify({ entries: [{ idx: 0, tag: "0000_init" }] }),
+          "diff --numstat actual-head..cand": "",
+          "log --format=%s actual-head..cand": "change\n",
+          "diff --name-only actual-head..cand -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "cand",
+        assessDirection: (repoDir, installed, target) => {
+          assert.equal(installed, "actual-head", "the observed checkout wins over the stale record");
+          return { direction: "forward", ok: true };
+        },
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.902.1");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("check: falls back to the checkout HEAD on a box with no state file at all", async () => {
   const stateDir = tempRoot("ota-check-state-");
   try {
