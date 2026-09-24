@@ -52,6 +52,20 @@ export function clampLimit(raw: number | undefined, fallback = LIST_DEFAULT_LIMI
   return Math.max(1, Math.min(LIST_MAX_LIMIT, Math.floor(raw)));
 }
 
+/**
+ * Clip the summary body without ever severing the closing link — every tool
+ * ends its summary with `links.primary`, and a mid-URL cut leaves the person
+ * nothing to open.
+ */
+function clipSummary(summary: string, primaryLink: string | undefined): string {
+  if (summary.length <= SUMMARY_LIMIT) return summary;
+  if (primaryLink && summary.endsWith(primaryLink)) {
+    const body = summary.slice(0, summary.length - primaryLink.length).trimEnd();
+    return `${clip(body, SUMMARY_LIMIT - primaryLink.length - 1)} ${primaryLink}`;
+  }
+  return clip(summary, SUMMARY_LIMIT);
+}
+
 function buildEnvelope(input: {
   status: AssistantEnvelope["status"];
   summary: string;
@@ -62,7 +76,7 @@ function buildEnvelope(input: {
 }): { content: Array<{ type: "text"; text: string }>; structuredContent: Record<string, unknown> } {
   const structured: AssistantEnvelope = {
     status: input.status,
-    summary: clip(input.summary, SUMMARY_LIMIT),
+    summary: clipSummary(input.summary, input.links?.primary),
     ...(input.data ? { data: input.data } : {}),
     ...(input.candidates && input.candidates.length > 0
       ? { candidates: input.candidates.slice(0, CANDIDATE_LIMIT) }

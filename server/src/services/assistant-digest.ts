@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -102,7 +102,11 @@ export function assistantDigestService(db: Db) {
     // 1. Shipped: done inside the window. `completedAt` is the real completion
       //    stamp; `updatedAt` is the documented fallback for rows closed before
       //    the column was written.
-    const shippedRows = await db
+    // The window filter lives in SQL — completedAt-or-updatedAt as two typed
+    // branches mirrors the fallback the projection reports, so no done row
+    // outside the window is ever read into memory. (A raw sql`coalesce` binds
+    // the Date without the column's driver mapping — hence the typed form.)
+    const shipped = await db
       .select({
         id: issues.id,
         identifier: issues.identifier,
@@ -113,11 +117,17 @@ export function assistantDigestService(db: Db) {
         updatedAt: issues.updatedAt,
       })
       .from(issues)
-      .where(and(...issueConditions, eq(issues.status, "done")))
+      .where(
+        and(
+          ...issueConditions,
+          eq(issues.status, "done"),
+          or(
+            and(isNotNull(issues.completedAt), gte(issues.completedAt, input.since)),
+            and(isNull(issues.completedAt), gte(issues.updatedAt, input.since)),
+          ),
+        ),
+      )
       .orderBy(desc(issues.updatedAt));
-    const shipped = shippedRows.filter((row) =>
-      (row.completedAt ?? row.updatedAt).getTime() >= input.since.getTime(),
-    );
 
     // 2. Blocked: currently blocked AND touched inside the window — the
     //    closest available reading of "newly blocked" (see header note).
@@ -148,7 +158,12 @@ export function assistantDigestService(db: Db) {
       .where(
         and(
           eq(approvals.companyId, input.companyId),
-          inArray(approvals.requestedByAgentId, agentIds),
+          // Approvals with no requesting agent are board-filed — they still
+          // wait on a human, so dropping them would hide decidable work.
+          or(
+            inArray(approvals.requestedByAgentId, agentIds),
+            isNull(approvals.requestedByAgentId),
+          ),
           inArray(approvals.status, [...DECIDABLE_STATUSES]),
         ),
       );

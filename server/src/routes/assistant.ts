@@ -3,7 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { assistantDigestService } from "../services/assistant-digest.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalService, issueApprovalService } from "../services/index.js";
-import { summarizeApprovalRisk } from "../services/approval-risk.js";
+import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "../services/approval-risk.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 /**
@@ -16,9 +16,18 @@ import { assertBoard, assertCompanyAccess } from "./authz.js";
  * authority re-resolved there (M3/M4).
  */
 
-/** `since` must be an ISO 8601 timestamp the server can parse. */
+/**
+ * `since` must be an ISO 8601 date or datetime. `new Date` alone is not a
+ * validator — it accepts bare numerals like "1" and locale strings, so the
+ * shape is pinned before parsing.
+ */
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}(?:[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$/;
+
 function parseSince(raw: string | undefined): { since: Date } | { error: string } {
   if (raw === undefined) return { since: new Date(Date.now() - 24 * 60 * 60 * 1000) };
+  if (!ISO_8601.test(raw.trim())) {
+    return { error: "since must be an ISO 8601 timestamp" };
+  }
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) {
     return { error: "since must be an ISO 8601 timestamp" };
@@ -82,31 +91,48 @@ export function assistantRoutes(db: Db) {
     const mineIds = new Set(audience.map((agent) => agent.id));
     const nameById = new Map(audience.map((agent) => [agent.id, agent.name]));
 
+    // Agentless approvals are board-filed — an admin can still decide them,
+    // so they belong in the list rather than silently dropped.
     const scoped = open.filter(
-      (row) => row.requestedByAgentId && mineIds.has(row.requestedByAgentId),
+      (row) => !row.requestedByAgentId || mineIds.has(row.requestedByAgentId),
     );
 
+    // "Most urgent first" is the tool's contract — rank by the board's own
+    // risk order, ties broken by longest wait, before the cap.
+    const ranked = scoped
+      .map((approval) => ({
+        approval,
+        risk: summarizeApprovalRisk(approval.type, approval.payload),
+      }))
+      .sort((a, b) => {
+        const byRisk = APPROVAL_RISK_ORDER[a.risk.level] - APPROVAL_RISK_ORDER[b.risk.level];
+        if (byRisk !== 0) return byRisk;
+        return (a.approval.createdAt?.getTime?.() ?? 0) - (b.approval.createdAt?.getTime?.() ?? 0);
+      });
+
     const decisions = await Promise.all(
-      scoped.slice(0, 50).map(async (approval) => {
+      ranked.slice(0, 50).map(async ({ approval, risk }) => {
         let canDecide = false;
         try {
-          // Null means "no decision role" (e.g. a non-MK company) — only a
-          // thrown refusal and a null return are both "cannot decide".
-          canDecide =
-            (await authority.requireDecisionActor(approval as never, req.actor as never)) !== null;
+          // Match the real decision path: requireDecisionActor returns null
+          // when the company needs no decision role (non-MK), and the caller
+          // substitutes "admin" — null means allowed, not refused. Only a
+          // thrown refusal means this person cannot decide.
+          await authority.requireDecisionActor(approval as never, req.actor as never);
+          canDecide = true;
         } catch {
           canDecide = false;
         }
         const linked = await issueApprovals.listIssuesForApproval(approval.id).catch(() => []);
         const first = Array.isArray(linked) ? linked[0] : null;
-        const risk = summarizeApprovalRisk(approval.type, approval.payload);
         const phrase = APPROVAL_KIND_PHRASES[approval.type] ?? `act on "${approval.type}"`;
+        const asker = approval.requestedByAgentId ? nameById.get(approval.requestedByAgentId) ?? "An agent" : "The board";
         return {
           approvalId: approval.id,
           kind: approval.type,
           revision: approval.revision,
           askedBy: approval.requestedByAgentId ? nameById.get(approval.requestedByAgentId) ?? null : null,
-          summary: `${nameById.get(approval.requestedByAgentId ?? "") ?? "An agent"} asks to ${phrase}.`,
+          summary: `${asker} asks to ${phrase}.`,
           relatedItem: first
             ? { id: first.id, identifier: first.identifier ?? null, title: first.title ?? null }
             : null,

@@ -177,6 +177,51 @@ describeEmbeddedPostgres("assistant digest service", () => {
     expect(digest.shipped.items[0]?.project).toBe("Dark mode");
   });
 
+  it("applies the completedAt-or-updatedAt fallback inside the SQL window filter", async () => {
+    const companyId = await seedCompany();
+    const me = await seedAgent(companyId, "Priya", "user-1");
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600_000);
+    // Rows closed before completedAt existed carry only updatedAt — the
+    // coalesce in the where clause must still honor the window for them.
+    await seedIssue(companyId, me, {
+      title: "Legacy old ship",
+      completedAt: null,
+      updatedAt: twoHoursAgo,
+    });
+    await seedIssue(companyId, me, { title: "Legacy new ship", completedAt: null });
+
+    const digest = await assistantDigestService(db).digest({
+      companyId,
+      userId: "user-1",
+      since: new Date(Date.now() - 3600_000),
+    });
+
+    expect(digest.shipped.total).toBe(1);
+    expect(digest.shipped.items[0]?.title).toBe("Legacy new ship");
+  });
+
+  it("includes board-filed approvals with no requesting agent", async () => {
+    const companyId = await seedCompany();
+    await seedAgent(companyId, "Priya", "user-1");
+    await db.insert(approvals).values({
+      companyId,
+      type: "budget_override",
+      status: "pending",
+      payload: {},
+      requestedByAgentId: null,
+      revision: 1,
+    });
+
+    const digest = await assistantDigestService(db).digest({
+      companyId,
+      userId: "user-1",
+      since: new Date(Date.now() - 3600_000),
+    });
+
+    expect(digest.decisionsWaiting.total).toBe(1);
+    expect(digest.decisionsWaiting.items[0]?.agentName).toBeNull();
+  });
+
   it("reports blocked items and open decisions without leaking secrets", async () => {
     const companyId = await seedCompany();
     const me = await seedAgent(companyId, "Priya", "user-1");

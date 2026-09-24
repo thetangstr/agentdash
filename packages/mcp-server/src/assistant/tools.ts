@@ -5,6 +5,7 @@ import type { ToolDefinition } from "../tools.js";
 import {
   clampLimit,
   clip,
+  FREE_TEXT_LIMIT,
   makeAssistantTool,
   needsClarification,
   notFound,
@@ -89,17 +90,24 @@ interface ApprovalRow {
 }
 
 /** Resolve an ambiguous-or-missing reference into an envelope, or hand the row on. */
-function unresolved(
+async function unresolved(
   resolution: Resolution<unknown>,
   subject: string,
-): ReturnType<typeof needsClarification> | ReturnType<typeof notFound> | null {
+  linkFor: (ref: string) => Promise<string>,
+): Promise<ReturnType<typeof needsClarification> | ReturnType<typeof notFound> | null> {
   if (resolution.kind === "one") return null;
   if (resolution.kind === "none") {
     return notFound({ summary: `I couldn't find ${subject} matching that. Nothing was changed.` });
   }
+  const candidates = await Promise.all(
+    resolution.candidates.map(async (candidate) => ({
+      ...candidate,
+      link: await linkFor(candidate.ref),
+    })),
+  );
   return needsClarification({
     summary: `That could be a few different ${subject}s — which one did you mean?`,
-    candidates: resolution.candidates,
+    candidates,
   });
 }
 
@@ -114,16 +122,22 @@ function durationMs(raw: string): number | null {
 }
 
 /**
- * `since` for whats_new: an ISO timestamp, a duration, or "last_check".
+ * `since` for whats_new: an ISO 8601 timestamp, a duration, or "last_check".
  * There is no grant cursor until M2's OAuth grants exist — "last_check" and
  * an omitted `since` both resolve to the 24-hour default the spec names.
+ * `new Date` alone is not a validator — it accepts bare numerals like "1".
  */
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}(?:[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$/;
+
 function resolveSince(raw: string | undefined): { since: Date } | { error: string } {
   if (!raw || raw === "last_check") {
     return { since: new Date(Date.now() - 24 * 3_600_000) };
   }
   const duration = durationMs(raw);
   if (duration !== null) return { since: new Date(Date.now() - duration) };
+  if (!ISO_8601.test(raw.trim())) {
+    return { error: "since must be an ISO 8601 timestamp or a duration like \"12h\"" };
+  }
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) {
     return { error: "since must be an ISO 8601 timestamp or a duration like \"12h\"" };
@@ -175,6 +189,31 @@ interface DigestResponse {
   truncated: boolean;
 }
 
+/**
+ * Digest rows are agent-authored content — titles clip to 120, work-product
+ * summaries to FREE_TEXT_LIMIT, and every work product is marked `agentWrote`
+ * so the assistant relays the text as quoted material, never instructions.
+ */
+function boundDigestSection(section: DigestSection): DigestSection {
+  return {
+    ...section,
+    items: section.items.map((item) => ({
+      ...item,
+      title: item.title ? clip(item.title, 120) : item.title,
+      workProducts: item.workProducts?.map((wp) => ({
+        agentWrote: true,
+        type: wp.type,
+        provider: wp.provider,
+        title: clip(wp.title, 120),
+        url: wp.url ?? null,
+        status: wp.status,
+        reviewState: wp.reviewState ?? null,
+        summary: wp.summary ? clip(wp.summary, FREE_TEXT_LIMIT) : null,
+      })),
+    })),
+  };
+}
+
 export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext): ToolDefinition[] {
   const companyId = () => ctx.companyId;
 
@@ -208,13 +247,15 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       const scopes = ["read", ...(me.isInstanceAdmin ? ["instance_admin"] : role ? [role] : [])];
       const home = await ctx.homeLink();
       const name = me.user?.name ?? me.user?.email ?? "a board user";
+      // The caller's own email is the one address allowed through redaction —
+      // whoami exists to tell them who they are connected as.
       const data = redactAssistantValue({
         user: { name: me.user?.name ?? null, email: me.user?.email ?? null, userId: me.userId ?? null },
         company: { name: company.name, prefix: company.issuePrefix },
         scopes,
         grant: { client: me.source ?? "stdio", keyId: me.keyId ?? null, createdAt: null },
         links: { home },
-      });
+      }, { allowEmails: me.user?.email ? [me.user.email] : [] });
       return ok({
         summary: `You're connected to ${company.name} on AgentDash as ${name} (${me.source ?? "board session"}), with ${scopes.join(", ")} access. ${home}`,
         data,
@@ -235,7 +276,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       let projectName: string | null = null;
       if (project) {
         const res = await resolveProjectRef(client, companyId(), project);
-        const unresolvedResult = unresolved(res, "project");
+        const unresolvedResult = await unresolved(res, "project", (ref) => ctx.projectLink(ref));
         if (unresolvedResult) return unresolvedResult;
         projectId = (res as { value: ProjectRow }).value.id;
         projectName = (res as { value: ProjectRow }).value.name;
@@ -249,8 +290,9 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       const shippedNames = digest.shipped.items
         .slice(0, 3)
         .map((item) => {
+          const title = item.title ? clip(item.title, 120) : item.title;
           const wp = item.workProducts?.find((w) => w.url);
-          return wp ? `${item.title} (${wp.title})` : item.title;
+          return title && wp ? `${title} (${clip(wp.title, 120)})` : title;
         })
         .filter((title): title is string => Boolean(title));
       const shippedMore = digest.shipped.total - shippedNames.length;
@@ -268,9 +310,15 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       }
       const firstLink = digest.shipped.items.find((item) => item.identifier)?.identifier;
       const primary = firstLink ? await ctx.issueLink(firstLink) : await ctx.homeLink();
+      const boundedDigest = {
+        ...digest,
+        shipped: boundDigestSection(digest.shipped),
+        blocked: boundDigestSection(digest.blocked),
+        decisionsWaiting: boundDigestSection(digest.decisionsWaiting),
+      };
       return ok({
         summary: `${parts.join("; ")}. ${primary}`,
-        data: redactAssistantValue(digest as unknown as Record<string, unknown>),
+        data: redactAssistantValue(boundedDigest as unknown as Record<string, unknown>),
         links: { primary },
         truncated: digest.truncated,
       });
@@ -289,8 +337,10 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         client.requestJson<IssueRow[]>("GET", `/companies/${companyId()}/issues?limit=1000`),
         agentMap(client, companyId()),
       ]);
-      const visible = (status === "all" ? projects : projects.filter((p) => p.status !== "archived" && p.status !== "completed"))
-        .slice(0, 25);
+      const filtered = status === "all"
+        ? projects
+        : projects.filter((p) => p.status !== "archived" && p.status !== "completed");
+      const visible = filtered.slice(0, 25);
       const items = await Promise.all(
         visible.map(async (project) => {
           const projectIssues = (issues ?? []).filter((issue) => issue.projectId === project.id);
@@ -320,8 +370,9 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           items.length === 0
             ? `No ${status === "all" ? "" : "active "}projects yet. ${primary}`
             : `${items.length} project${items.length === 1 ? "" : "s"}${status === "all" ? "" : " active"}: ${items.slice(0, 5).map((i) => i.name).join(", ")}${items.length > 5 ? `, and ${items.length - 5} more` : ""}. ${primary}`,
-        data: redactAssistantValue({ projects: items, total: items.length, truncated: false }),
+        data: redactAssistantValue({ projects: items, total: filtered.length, truncated: filtered.length > items.length }),
         links: { primary },
+        truncated: filtered.length > items.length,
       });
     },
   );
@@ -332,7 +383,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
     z.object({ project: refInput("The project") }),
     async ({ project }) => {
       const resolution = await resolveProjectRef(client, companyId(), project);
-      const unresolvedResult = unresolved(resolution, "project");
+      const unresolvedResult = await unresolved(resolution, "project", (ref) => ctx.projectLink(ref));
       if (unresolvedResult) return unresolvedResult;
       const found = (resolution as { value: ProjectRow }).value;
 
@@ -371,7 +422,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       return ok({
         summary: `${found.name}: ${list.length} task${list.length === 1 ? "" : "s"} (${countText})${lead ? `, led by ${lead}` : ""}${lastShippedTitle ? `. Last shipped: ${lastShippedTitle}` : ""}. ${link}`,
         data: redactAssistantValue({
-          project: { id: found.id, name: found.name, status: detail.status ?? null, goal: detail.description ?? null, lead, targetDate: detail.targetDate ?? null },
+          project: { id: found.id, name: found.name, status: detail.status ?? null, goal: detail.description ? clip(detail.description, FREE_TEXT_LIMIT) : null, lead, targetDate: detail.targetDate ?? null },
           counts,
           total: list.length,
           inProgress,
@@ -388,7 +439,10 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
     "AgentDash: find tasks by words, status, person or project. Use before creating a task, to avoid duplicates.",
     z.object({
       query: z.string().max(280).optional().describe("Words to match in the title or identifier"),
-      status: z.string().max(40).optional(),
+      status: z
+        .enum(["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"])
+        .optional()
+        .describe("Task status filter"),
       agent: refInput("A person or agent").optional(),
       project: refInput("A project").optional(),
       limit: z.number().int().min(1).max(25).optional(),
@@ -400,13 +454,13 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
 
       if (agent) {
         const res = await resolveAgentRef(client, companyId(), agent);
-        const unresolvedResult = unresolved(res, "person or agent");
+        const unresolvedResult = await unresolved(res, "person or agent", (ref) => ctx.agentLink(ref));
         if (unresolvedResult) return unresolvedResult;
         params.set("assigneeAgentId", (res as { value: AgentRow }).value.id);
       }
       if (project) {
         const res = await resolveProjectRef(client, companyId(), project);
-        const unresolvedResult = unresolved(res, "project");
+        const unresolvedResult = await unresolved(res, "project", (ref) => ctx.projectLink(ref));
         if (unresolvedResult) return unresolvedResult;
         params.set("projectId", (res as { value: ProjectRow }).value.id);
       }
@@ -440,7 +494,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
     z.object({ ref: refInput("The task") }),
     async ({ ref }) => {
       const resolution = await resolveIssueRef(client, companyId(), ref);
-      const unresolvedResult = unresolved(resolution, "task");
+      const unresolvedResult = await unresolved(resolution, "task", (r) => ctx.issueLink(r));
       if (unresolvedResult) return unresolvedResult;
       const found = (resolution as { value: IssueRow }).value;
 
@@ -481,7 +535,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       }
       if (workProducts.length > 0) {
         const wp = workProducts.find((w) => w.url) ?? workProducts[0];
-        bits.push(`linked: ${wp.title}`);
+        bits.push(`linked: ${clip(wp.title, 120)}`);
       }
       if (pendingDecisions.length > 0) bits.push(`${pendingDecisions.length} decision${pendingDecisions.length === 1 ? "" : "s"} waiting`);
 
@@ -491,15 +545,16 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           item: card,
           latestComments,
           workProducts: workProducts.map((wp) => ({
-            type: wp.type, provider: wp.provider, title: wp.title, url: wp.url ?? null,
-            status: wp.status, reviewState: wp.reviewState ?? null, summary: wp.summary ? clip(wp.summary, 280) : null,
+            agentWrote: true,
+            type: wp.type, provider: wp.provider, title: clip(wp.title, 120), url: wp.url ?? null,
+            status: wp.status, reviewState: wp.reviewState ?? null, summary: wp.summary ? clip(wp.summary, FREE_TEXT_LIMIT) : null,
           })),
           lastRun: lastRun
             ? {
                 status: lastRun.status,
                 stopReason: lastRun.resultJson?.stopReason ?? null,
-                livenessReason: lastRun.livenessReason ?? null,
-                nextAction: lastRun.nextAction ?? null,
+                livenessReason: lastRun.livenessReason ? clip(lastRun.livenessReason, FREE_TEXT_LIMIT) : null,
+                nextAction: lastRun.nextAction ? clip(lastRun.nextAction, FREE_TEXT_LIMIT) : null,
                 at: lastRun.finishedAt ?? lastRun.startedAt ?? lastRun.createdAt ?? null,
               }
             : null,
@@ -516,7 +571,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
     z.object({ ref: refInput("The blocked task") }),
     async ({ ref }) => {
       const resolution = await resolveIssueRef(client, companyId(), ref);
-      const unresolvedResult = unresolved(resolution, "task");
+      const unresolvedResult = await unresolved(resolution, "task", (r) => ctx.issueLink(r));
       if (unresolvedResult) return unresolvedResult;
       const found = (resolution as { value: IssueRow }).value;
 
@@ -540,17 +595,22 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         /^\s*blocked\b/i.test(c.body),
       );
 
+      const blockerAuthor = blockerComment
+        ? blockerComment.authorAgentId
+          ? agents.get(blockerComment.authorAgentId)?.name ?? "an agent"
+          : "a person"
+        : null;
+
       const evidence: Array<Record<string, unknown>> = [];
       if (blockerComment) {
-        const author = blockerComment.authorAgentId ? agents.get(blockerComment.authorAgentId)?.name ?? "an agent" : "a person";
-        evidence.push({ kind: "blocked_declaration", agentWrote: Boolean(blockerComment.authorAgentId), text: `${author} wrote: "${clip(blockerComment.body, 280)}"`, at: blockerComment.createdAt });
+        evidence.push({ kind: "blocked_declaration", agentWrote: Boolean(blockerComment.authorAgentId), text: `${blockerAuthor} wrote: "${clip(blockerComment.body, 280)}"`, at: blockerComment.createdAt });
       }
       if (lastRun?.resultJson?.stopReason || lastRun?.livenessReason || lastRun?.nextAction) {
         evidence.push({
           kind: "run_stop",
           stopReason: lastRun.resultJson?.stopReason ?? null,
-          livenessReason: lastRun.livenessReason ?? null,
-          nextAction: lastRun.nextAction ?? null,
+          livenessReason: lastRun.livenessReason ? clip(lastRun.livenessReason, FREE_TEXT_LIMIT) : null,
+          nextAction: lastRun.nextAction ? clip(lastRun.nextAction, FREE_TEXT_LIMIT) : null,
           at: lastRun.finishedAt ?? lastRun.startedAt ?? lastRun.createdAt ?? null,
         });
       }
@@ -561,11 +621,13 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         evidence.push({ kind: "pending_decision", approvalId: approval.id, decisionKind: approval.type, waitingSince: approval.createdAt ?? null });
       }
 
+      // A quoted reason must carry its author — "Priya wrote: ..." frames the
+      // text as something an agent said, never as a fact the system asserts.
       const reason =
         detail.status !== "blocked"
           ? `${found.identifier ?? ref} is not marked blocked (it is ${detail.status})${lastRun?.livenessReason ? `, though its last run noted: ${clip(lastRun.livenessReason, 160)}` : ""}`
           : blockerComment
-            ? clip(blockerComment.body.replace(/^\s*blocked[\s:—-]*/i, ""), 200)
+            ? `${blockerAuthor} wrote: "${clip(blockerComment.body.replace(/^\s*blocked[\s:—-]*/i, ""), 200)}"`
             : lastRun?.livenessReason
               ? clip(lastRun.livenessReason, 200)
               : pendingApprovals.length > 0
@@ -610,9 +672,9 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         client.requestJson<AgentRow[]>("GET", `/companies/${companyId()}/agents`),
         client.requestJson<IssueRow[]>("GET", `/companies/${companyId()}/issues?status=in_progress&limit=500`).catch(() => [] as IssueRow[]),
       ]);
-      const roster = (Array.isArray(agentRows) ? agentRows : [])
-        .filter((agent) => agent.status !== "terminated" && agent.status !== "retired")
-        .slice(0, 25);
+      const eligible = (Array.isArray(agentRows) ? agentRows : [])
+        .filter((agent) => agent.status !== "terminated" && agent.status !== "retired");
+      const roster = eligible.slice(0, 25);
       const currentByAgent = new Map<string, IssueRow>();
       for (const issue of Array.isArray(issues) ? issues : []) {
         if (issue.assigneeAgentId && !currentByAgent.has(issue.assigneeAgentId)) {
@@ -640,8 +702,9 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           items.length === 0
             ? `No agents in this company yet. ${primary}`
             : `${items.length} agent${items.length === 1 ? "" : "s"}: ${items.slice(0, 5).map((i) => i.currentItem ? `${i.name} on ${i.currentItem.ref}` : `${i.name} (${i.state})`).join("; ")}${items.length > 5 ? `; and ${items.length - 5} more` : ""}. ${busy} working now. ${primary}`,
-        data: redactAssistantValue({ agents: items, total: items.length }),
+        data: redactAssistantValue({ agents: items, total: eligible.length, truncated: eligible.length > items.length }),
         links: { primary },
+        truncated: eligible.length > items.length,
       });
     },
   );
@@ -671,6 +734,13 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       const items = await Promise.all(
         shown.map(async (decision) => ({
           ...decision,
+          summary: clip(decision.summary, FREE_TEXT_LIMIT),
+          relatedItem: decision.relatedItem
+            ? {
+                ...decision.relatedItem,
+                title: decision.relatedItem.title ? clip(decision.relatedItem.title, 120) : decision.relatedItem.title,
+              }
+            : null,
           link: await ctx.approvalLink(decision.approvalId),
         })),
       );

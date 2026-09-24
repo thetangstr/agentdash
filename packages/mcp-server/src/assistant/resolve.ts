@@ -11,6 +11,7 @@ import type { AssistantCandidate } from "./envelope.js";
 
 export interface IssueRow {
   id: string;
+  companyId: string;
   identifier?: string | null;
   title: string;
   status: string;
@@ -32,6 +33,7 @@ export interface AgentRow {
 
 export interface ProjectRow {
   id: string;
+  companyId: string;
   name: string;
   description?: string | null;
   status?: string | null;
@@ -86,7 +88,10 @@ export async function resolveIssueRef(
       .requestJson<IssueRow>("GET", `/issues/${encodeURIComponent(ref)}`)
       .then((row) => row ?? null)
       .catch(() => null);
-    if (direct) return { kind: "one", value: direct };
+    // GET /issues/:id is company-agnostic — a pasted identifier or UUID can
+    // resolve in another company. Anything outside this company is not_found,
+    // not a leak and not a hint the row exists elsewhere.
+    if (direct) return direct.companyId === companyId ? { kind: "one", value: direct } : { kind: "none" };
   }
 
   const rows = await client.requestJson<IssueRow[]>(
@@ -151,7 +156,8 @@ export async function resolveProjectRef(
       .requestJson<ProjectRow>("GET", `/projects/${encodeURIComponent(ref)}`)
       .then((row) => row ?? null)
       .catch(() => null);
-    if (direct) return { kind: "one", value: direct };
+    // Same company-pinning rule as issues — the :id route does not scope.
+    if (direct) return direct.companyId === companyId ? { kind: "one", value: direct } : { kind: "none" };
   }
   const rows = await client
     .requestJson<ProjectRow[]>("GET", `/companies/${companyId}/projects`)

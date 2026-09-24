@@ -19,6 +19,8 @@ const mockIssueApprovalService = vi.hoisted(() => ({
   listIssuesForApproval: vi.fn(),
 }));
 
+const mockSummarizeApprovalRisk = vi.hoisted(() => vi.fn());
+
 vi.mock("../services/assistant-digest.js", () => ({
   assistantDigestService: () => mockDigestService,
 }));
@@ -28,8 +30,8 @@ vi.mock("../services/approval-authority.js", () => ({
 }));
 
 vi.mock("../services/approval-risk.js", () => ({
-  APPROVAL_RISK_ORDER: { low: 0, medium: 1, high: 2 },
-  summarizeApprovalRisk: vi.fn().mockReturnValue({ level: "low" }),
+  APPROVAL_RISK_ORDER: { high: 0, medium: 1, low: 2 },
+  summarizeApprovalRisk: mockSummarizeApprovalRisk,
 }));
 
 vi.mock("../services/index.js", () => ({
@@ -111,6 +113,15 @@ describe("GET /companies/:companyId/assistant/digest", () => {
     expect(mockDigestService.digest).not.toHaveBeenCalled();
   });
 
+  it("400s on a bare numeral — new Date alone would accept it", async () => {
+    const app = await createApp();
+    const res = await request(app).get(
+      "/companies/company-1/assistant/digest?since=1",
+    );
+    expect(res.status).toBe(400);
+    expect(mockDigestService.digest).not.toHaveBeenCalled();
+  });
+
   it("passes projectId through when given", async () => {
     const app = await createApp();
     const res = await request(app).get(
@@ -136,6 +147,7 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
       { id: "agent-1", name: "Priya", role: "engineer" },
     ]);
     mockAuthorityService.requireDecisionActor.mockResolvedValue("steward");
+    mockSummarizeApprovalRisk.mockReset().mockReturnValue({ level: "low" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([
       { id: "issue-1", identifier: "ACME-311", title: "Checkout retries" },
     ]);
@@ -190,11 +202,79 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
     expect(JSON.stringify(res.body)).not.toContain("not-echoed");
   });
 
-  it("reports canDecide false when the authority refuses or returns no role", async () => {
+  it("reports canDecide false only when the authority throws", async () => {
     mockAuthorityService.requireDecisionActor.mockRejectedValue(new Error("nope"));
     const app = await createApp();
     const res = await request(app).get("/companies/company-1/assistant/pending-decisions");
     expect(res.status).toBe(200);
     expect(res.body.decisions[0].canDecide).toBe(false);
+  });
+
+  it("reports canDecide true when the authority returns null (non-MK admin path)", async () => {
+    // The real decision path substitutes "admin" for a null return — anyone
+    // may decide in a company with no decision role. Null must not read as
+    // a refusal.
+    mockAuthorityService.requireDecisionActor.mockResolvedValue(null);
+    const app = await createApp();
+    const res = await request(app).get("/companies/company-1/assistant/pending-decisions");
+    expect(res.status).toBe(200);
+    expect(res.body.decisions[0].canDecide).toBe(true);
+  });
+
+  it("includes admin-decidable approvals with no requesting agent", async () => {
+    mockApprovalService.list.mockResolvedValue([
+      {
+        id: "appr-board",
+        companyId: "company-1",
+        type: "budget_override",
+        status: "pending",
+        revision: 1,
+        payload: {},
+        requestedByAgentId: null,
+        createdAt: new Date("2026-09-23T03:00:00Z"),
+      },
+    ]);
+    const app = await createApp();
+    const res = await request(app).get("/companies/company-1/assistant/pending-decisions");
+    expect(res.status).toBe(200);
+    expect(res.body.decisions).toHaveLength(1);
+    expect(res.body.decisions[0].approvalId).toBe("appr-board");
+    expect(res.body.decisions[0].askedBy).toBeNull();
+    expect(res.body.decisions[0].summary).toMatch(/The board asks to/);
+  });
+
+  it("orders most urgent first — risk band, then longest waiting", async () => {
+    mockSummarizeApprovalRisk.mockImplementation(
+      (type: string) => ({ level: type === "hire_agent" ? "high" : "low" }),
+    );
+    mockApprovalService.list.mockResolvedValue([
+      {
+        id: "appr-low-old",
+        companyId: "company-1",
+        type: "send_email",
+        status: "pending",
+        revision: 1,
+        payload: {},
+        requestedByAgentId: "agent-1",
+        createdAt: new Date("2026-09-20T01:00:00Z"),
+      },
+      {
+        id: "appr-high-new",
+        companyId: "company-1",
+        type: "hire_agent",
+        status: "pending",
+        revision: 1,
+        payload: {},
+        requestedByAgentId: "agent-1",
+        createdAt: new Date("2026-09-23T01:00:00Z"),
+      },
+    ]);
+    const app = await createApp();
+    const res = await request(app).get("/companies/company-1/assistant/pending-decisions");
+    expect(res.status).toBe(200);
+    expect(res.body.decisions.map((d: { approvalId: string }) => d.approvalId)).toEqual([
+      "appr-high-new",
+      "appr-low-old",
+    ]);
   });
 });

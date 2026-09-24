@@ -30,6 +30,7 @@ const THEO = { id: "agent-2", name: "Theo", role: "engineer", title: "Engineer",
 const ISSUES = [
   {
     id: "issue-1",
+    companyId: "company-1",
     identifier: "ACME-311",
     title: "Checkout retries loop forever",
     status: "blocked",
@@ -42,6 +43,7 @@ const ISSUES = [
   },
   {
     id: "issue-2",
+    companyId: "company-1",
     identifier: "ACME-312",
     title: "Checkout receipt copy",
     status: "done",
@@ -55,7 +57,7 @@ const ISSUES = [
 ];
 
 const PROJECTS = [
-  { id: "project-1", name: "Dark mode", status: "active", leadAgentId: "agent-1", description: "Add dark mode" },
+  { id: "project-1", companyId: "company-1", name: "Dark mode", status: "active", leadAgentId: "agent-1", description: "Add dark mode" },
 ];
 
 type Handler = (path: string) => unknown;
@@ -279,7 +281,7 @@ describe("name resolution", () => {
     expect(structured.status).toBe("not_found");
   });
 
-  it("an ambiguous ref returns needs_clarification with ≤5 candidates", async () => {
+  it("an ambiguous ref returns needs_clarification with ≤5 linked candidates", async () => {
     const many = Array.from({ length: 7 }, (_, i) => ({
       id: `issue-${i}`,
       identifier: `ACME-${300 + i}`,
@@ -294,7 +296,33 @@ describe("name resolution", () => {
     const result = await call("get_work_item", { ref: "checkout" });
     const structured = result.structuredContent as Record<string, unknown>;
     expect(structured.status).toBe("needs_clarification");
-    expect((structured.candidates as unknown[]).length).toBeLessThanOrEqual(5);
+    const candidates = structured.candidates as Array<Record<string, unknown>>;
+    expect(candidates.length).toBeLessThanOrEqual(5);
+    for (const candidate of candidates) {
+      expect(candidate.link).toMatch(/\/ACME\/issues\//);
+    }
+  });
+
+  it("a ref that resolves in another company answers not_found, never the row", async () => {
+    const client = seededClient((path) =>
+      path === "/issues/ACME-311" ? { ...ISSUES[0], companyId: "company-2" } : undefined,
+    );
+    const { call } = makeTools(client);
+    const result = await call("get_work_item", { ref: "ACME-311" });
+    const structured = result.structuredContent as Record<string, unknown>;
+    expect(structured.status).toBe("not_found");
+    expect(JSON.stringify(result)).not.toContain("Checkout retries");
+  });
+
+  it("a project UUID that resolves in another company answers not_found", async () => {
+    const foreignId = "123e4567-e89b-42d3-a456-426614174000";
+    const client = seededClient((path) =>
+      path === `/projects/${foreignId}` ? { ...PROJECTS[0], id: foreignId, companyId: "company-2" } : undefined,
+    );
+    const { call } = makeTools(client);
+    const result = await call("get_project", { project: foreignId });
+    const structured = result.structuredContent as Record<string, unknown>;
+    expect(structured.status).toBe("not_found");
   });
 
   it("an ambiguous agent filter returns needs_clarification, not a guessed assignee", async () => {
@@ -336,6 +364,61 @@ describe("tool outputs", () => {
     expect(result.content[0].text).toMatch(/Priya wrote:/);
   });
 
+  it("whats_new bounds digest titles and work-product text under agentWrote", async () => {
+    const long = "unbounded agent text ".repeat(40);
+    const client = seededClient((path) =>
+      path.startsWith("/companies/company-1/assistant/digest")
+        ? {
+            agentsAnsweredFor: 1,
+            since: "2026-09-22T14:00:00Z",
+            asOf: "2026-09-23T14:00:00Z",
+            shipped: {
+              total: 1,
+              shown: 1,
+              items: [
+                {
+                  issueId: "issue-9",
+                  identifier: "ACME-399",
+                  title: long,
+                  agentName: "Priya",
+                  workProducts: [
+                    { type: "pull_request", provider: "github", title: long, url: "https://github.test/pr/9", status: "merged", reviewState: "approved", summary: long },
+                  ],
+                },
+              ],
+            },
+            blocked: { total: 0, shown: 0, items: [] },
+            decisionsWaiting: { total: 0, shown: 0, items: [] },
+            truncated: false,
+          }
+        : undefined,
+    );
+    const { call } = makeTools(client);
+    const result = await call("whats_new", {});
+    const data = (result.structuredContent as Record<string, unknown>).data as Record<string, unknown>;
+    const item = ((data.shipped as Record<string, unknown>).items as Array<Record<string, unknown>>)[0];
+    expect((item.title as string).length).toBeLessThanOrEqual(120);
+    const wp = (item.workProducts as Array<Record<string, unknown>>)[0];
+    expect(wp.agentWrote).toBe(true);
+    expect((wp.title as string).length).toBeLessThanOrEqual(120);
+    expect((wp.summary as string).length).toBeLessThanOrEqual(280);
+  });
+
+  it("whats_new refuses a non-ISO since like a bare numeral", async () => {
+    const { call } = makeTools();
+    const result = await call("whats_new", { since: "1" });
+    const structured = result.structuredContent as Record<string, unknown>;
+    expect(structured.status).toBe("refused");
+    expect(structured.summary).toMatch(/ISO 8601/);
+  });
+
+  it("find_work refuses a status outside the task-status enum", async () => {
+    const { call } = makeTools();
+    const result = await call("find_work", { status: "nonsense" });
+    const structured = result.structuredContent as Record<string, unknown>;
+    expect(structured.status).toBe("refused");
+  });
+
   it("explain_blocker reports the declaration, the stop reason and options", async () => {
     const { call } = makeTools();
     const result = await call("explain_blocker", { ref: "ACME-311" });
@@ -348,6 +431,15 @@ describe("tool outputs", () => {
     );
     const options = data.unblockOptions as Array<Record<string, unknown>>;
     expect(options.map((o) => o.tool)).toContain("list_pending_decisions");
+  });
+
+  it("explain_blocker frames a comment-derived reason with its author", async () => {
+    const { call } = makeTools();
+    const result = await call("explain_blocker", { ref: "ACME-311" });
+    const structured = result.structuredContent as Record<string, unknown>;
+    const data = structured.data as Record<string, unknown>;
+    expect(data.reason).toMatch(/^Priya wrote: "/);
+    expect(result.content[0].text).toMatch(/Priya wrote:/);
   });
 
   it("list_pending_decisions surfaces canDecide and the approval link", async () => {
@@ -417,6 +509,42 @@ describe("redaction", () => {
     expect(serialized).toMatch(/\[redacted-key\]|\[redacted\]/);
   });
 
+  it("scrubs assistant tokens, provider secrets and foreign emails, keeps the caller's own", () => {
+    const poisoned = {
+      note: [
+        "reach teammate@other.test",
+        "pcpa_abcdefgh12345678",
+        "sk-abcdefghijklmnop",
+        "ghp_abcdefghijklmnop",
+        "github_pat_11ABCDEFG_abcdefghijklmnop",
+        "xoxb-1234567890-abcdefghijkl",
+        "sk_live_abcdefghijklmnop",
+        "rk_live_abcdefghijklmnop",
+      ].join(" "),
+      mine: "kai@acme.test",
+    };
+    const clean = redactAssistantValue(poisoned, { allowEmails: ["kai@acme.test"] });
+    expect(findForbiddenPaths(clean, { allowEmails: ["kai@acme.test"] })).toEqual([]);
+    const serialized = JSON.stringify(clean);
+    for (const shape of [
+      /teammate@other\.test/,
+      /pcpa_/,
+      /sk-/,
+      /ghp_/,
+      /github_pat_/,
+      /xoxb-/,
+      /sk_live_/,
+      /rk_live_/,
+    ]) {
+      expect(serialized).not.toMatch(shape);
+    }
+    expect(serialized).toContain("kai@acme.test");
+    expect(serialized).toContain("[redacted-email]");
+    // Without the allowance even the caller's own address is scrubbed.
+    const strict = redactAssistantValue({ mine: "kai@acme.test" });
+    expect(JSON.stringify(strict)).not.toContain("kai@acme.test");
+  });
+
   it("the real tool outputs carry no forbidden paths", async () => {
     const { call } = makeTools();
     for (const [name, args] of [
@@ -432,7 +560,13 @@ describe("redaction", () => {
     ] as Array<[string, Record<string, unknown>]>) {
       const result = await call(name, args);
       const wire = JSON.stringify(result);
-      expect(findForbiddenPaths(result.structuredContent)).toEqual([]);
+      // whoami is allowed to relay the caller's own email — the same
+      // allowance the tool passes to the redactor.
+      expect(
+        findForbiddenPaths(result.structuredContent, {
+          allowEmails: name === "whoami" ? ["kai@acme.test"] : [],
+        }),
+      ).toEqual([]);
       expect(wire).not.toMatch(/adapterConfig|contextSnapshot|stdoutExcerpt|stderrExcerpt|pcp_[A-Za-z0-9_-]{8,}|mandate|directive/i);
     }
   });
