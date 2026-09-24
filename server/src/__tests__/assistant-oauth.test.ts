@@ -359,6 +359,70 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       expect(res.status).toBe(302);
       expect(res.headers.location).toMatch(/^\/oauth\/consent\?request=/);
     });
+
+    it("defaults an absent resource to this instance's MCP URI (Muse sends none)", async () => {
+      const { client_id } = await registerClient();
+      const res = await authorize({ client_id, resource: "__omit__" });
+      expect(res.status).toBe(302);
+    });
+  });
+
+  describe("pre-registered public clients (Muse, GH #674)", () => {
+    const MUSE_REDIRECT = "https://agent.meta.ai/api/hatch/oauth/callback";
+
+    it("accepts the built-in `muse` client_id with Meta's fixed callback", async () => {
+      const res = await authorize({ client_id: "muse", redirect_uri: MUSE_REDIRECT });
+      expect(res.status).toBe(302);
+      // First use materializes the row so grants/revocation see a real client.
+      const view = await request(app).get(
+        `/oauth/consent/${new URL(res.headers.location, PUBLIC_BASE).searchParams.get("request")}`,
+      );
+      expect(view.status).toBe(200);
+      expect(view.body.clientName).toBe("Muse (Meta)");
+      expect(view.body.redirectHost).toBe("agent.meta.ai");
+    });
+
+    it("still pins muse to its registered redirect — no other URI matches", async () => {
+      const res = await authorize({ client_id: "muse", redirect_uri: "https://agent.meta.ai/other" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_redirect_uri");
+    });
+
+    it("runs the whole Muse flow: authorize with no resource, form token POST with none", async () => {
+      const company = await seedCompany();
+      const { verifier, challenge } = pkcePair();
+      const authz = await authorize({
+        client_id: "muse",
+        redirect_uri: MUSE_REDIRECT,
+        resource: "__omit__",
+        code_challenge: challenge,
+        scope: "agentdash:read agentdash:work",
+      });
+      expect(authz.status).toBe(302);
+      const requestId = new URL(authz.headers.location, PUBLIC_BASE).searchParams.get("request")!;
+      const decision = await request(app)
+        .post(`/oauth/consent/${requestId}/decision`)
+        .set("Origin", PUBLIC_BASE)
+        .send({ approved: true, companyId: company.id, scopes: ["agentdash:read"] });
+      expect(decision.status).toBe(200);
+      const redirect = new URL(decision.body.redirect);
+      expect(redirect.origin + redirect.pathname).toBe(MUSE_REDIRECT);
+      const code = redirect.searchParams.get("code")!;
+      // Muse's token POST is form-encoded, public client, no resource field.
+      const token = await request(app)
+        .post("/oauth/token")
+        .type("form")
+        .send({
+          grant_type: "authorization_code",
+          code,
+          client_id: "muse",
+          redirect_uri: MUSE_REDIRECT,
+          code_verifier: verifier,
+        });
+      expect(token.status).toBe(200);
+      expect(token.body.access_token).toMatch(/^pcpa_/);
+      expect(token.body.scope).toBe("agentdash:read");
+    });
   });
 
   describe("consent", () => {

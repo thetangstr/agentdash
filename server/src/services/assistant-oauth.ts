@@ -300,6 +300,20 @@ export function redirectUriIsRegistered(requested: string, registered: string[])
   });
 }
 
+/**
+ * GH #677 / #674: clients that exist without DCR or CIMD. Muse asks the
+ * person for a host and a pre-issued client_id — it performs neither
+ * registration flow — so `muse` is built in, bound to Meta's fixed OAuth
+ * callback. The row is materialized on first use so grants, revocation, and
+ * the Connections UI treat it exactly like a registered client.
+ */
+const BUILTIN_PUBLIC_CLIENTS: Record<string, { clientName: string; redirectUris: string[] }> = {
+  muse: {
+    clientName: "Muse (Meta)",
+    redirectUris: ["https://agent.meta.ai/api/hatch/oauth/callback"],
+  },
+};
+
 // ---------------------------------------------------------------------------
 // The service
 // ---------------------------------------------------------------------------
@@ -354,15 +368,40 @@ export function assistantOAuthService(db: Db) {
   }
 
   /**
-   * Resolve `client_id` from an authorize request. A `dcr_…` id (or any
-   * non-URL value) must already be registered. An https URL is CIMD: fetch
-   * the document under SSRF guards, enforce that its redirect URIs are
-   * same-origin with the document, and cache the row so grants survive a
-   * re-resolution.
+   * Resolve `client_id` from an authorize request. A `dcr_…` id must already
+   * be registered; a built-in id materializes its row on first use; an https
+   * URL is CIMD: fetch the document under SSRF guards, enforce that its
+   * redirect URIs are same-origin with the document, and cache the row so
+   * grants survive a re-resolution.
    */
   async function resolveClient(clientId: string) {
     const existing = await findClientRow(clientId);
     if (existing) return existing;
+    const builtin = BUILTIN_PUBLIC_CLIENTS[clientId];
+    if (builtin) {
+      const [row] = await db
+        .insert(assistantOauthClients)
+        .values({
+          clientId,
+          registrationType: "builtin",
+          clientName: builtin.clientName,
+          redirectUris: builtin.redirectUris,
+          metadataJson: {
+            client_name: builtin.clientName,
+            redirect_uris: builtin.redirectUris,
+            token_endpoint_auth_method: "none",
+            grant_types: ["authorization_code", "refresh_token"],
+            response_types: ["code"],
+          },
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (row) return row;
+      // Concurrent first use — somebody else materialized it.
+      const raced = await findClientRow(clientId);
+      if (raced) return raced;
+      throw new OAuthError("invalid_client", "unknown client_id", 400);
+    }
     if (!/^https:\/\//i.test(clientId)) {
       throw new OAuthError("invalid_client", "unknown client_id", 400);
     }
@@ -452,10 +491,12 @@ export function assistantOAuthService(db: Db) {
       throw new OAuthError("invalid_request", "code_challenge_method must be S256");
     }
 
-    // RFC 8707: the resource is required and must be exactly this resource.
-    // "Some other audience" is not a smaller grant we can still honor — it is
-    // a request we were never meant to serve.
-    if (params.resource !== params.canonicalResource) {
+    // RFC 8707: when `resource` is sent it must be exactly this resource —
+    // "some other audience" is not a smaller grant we can still honor, it is
+    // a request we were never meant to serve. When it is absent (Muse never
+    // sends it) it defaults to this AS's one resource — there is nothing
+    // else it could mean.
+    if (params.resource !== undefined && params.resource !== params.canonicalResource) {
       throw new OAuthError("invalid_target", "resource must be the canonical assistant MCP resource URI");
     }
 
@@ -731,7 +772,9 @@ export function assistantOAuthService(db: Db) {
     if (expected !== request.codeChallenge) {
       throw new OAuthError("invalid_grant", "code_verifier does not match");
     }
-    if (params.resource !== request.resource) {
+    // Same defaulting as authorize: absent means the one resource this AS
+    // serves; present means it must match the request the code was minted for.
+    if (params.resource !== undefined && params.resource !== request.resource) {
       throw new OAuthError("invalid_target", "resource must match the authorization request");
     }
     if (!request.grantId) {

@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import https from "node:https";
 import express, { type Express } from "express";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -284,5 +284,70 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
         resource: new URL(resourceUri),
       }),
     ).rejects.toThrow();
+  });
+
+  it("accepts Muse's MCP 2025-06-18 handshake: initialize → initialized → tools/list", async () => {
+    // Muse sends no session id and speaks protocol 2025-06-18 — the stateless
+    // transport must accept the sequence as independent POSTs.
+    const cid = await companyId();
+    const grant = await db
+      .insert(assistantGrants)
+      .values({
+        companyId: cid,
+        userId: USER_ID,
+        clientId: "muse",
+        clientName: "Muse (Meta)",
+        redirectHost: "agent.meta.ai",
+        scopes: ["agentdash:read"],
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const token = `pcpa_${randomBytes(24).toString("base64url")}`;
+    await db.insert(assistantAccessTokens).values({
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+      grantId: grant.id,
+      familyId: randomUUID(),
+      resource: resourceUri,
+      scopes: ["agentdash:read"],
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+
+    const post = (body: unknown) =>
+      fetch(`${baseUrl}/api/mcp/assistant`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+    const init = await post({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "muse", version: "1.0.0" },
+      },
+    });
+    expect(init.status).toBe(200);
+    const initBody = await init.json();
+    expect(initBody.result.protocolVersion).toBe("2025-06-18");
+
+    const initialized = await post({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+    });
+    expect(initialized.status).toBe(202);
+
+    const list = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    expect(list.status).toBe(200);
+    const listBody = await list.json();
+    const names = listBody.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toContain("whoami");
+    expect(names).toContain("whats_new");
   });
 });

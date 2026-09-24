@@ -60,7 +60,7 @@ export const assistantOauthClients = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     clientId: text("client_id").notNull(),
-    registrationType: text("registration_type").notNull(), // "dcr" | "cimd"
+    registrationType: text("registration_type").notNull(), // "dcr" | "cimd" | "builtin"
     clientName: text("client_name").notNull(),
     redirectUris: jsonb("redirect_uris").$type<string[]>().notNull().default([]),
     /** The verbatim registration body / fetched CIMD document. */
