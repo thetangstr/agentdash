@@ -115,7 +115,7 @@ describe("approvalService resolution idempotency", () => {
   });
 });
 
-describe("approvalService autoProvisionDefaultKey", () => {
+describe("approvalService legacy autoProvisionDefaultKey payloads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAgentService.activatePendingApproval.mockResolvedValue(undefined);
@@ -126,48 +126,23 @@ describe("approvalService autoProvisionDefaultKey", () => {
     mockNotifyHireApproved.mockResolvedValue(undefined);
   });
 
-  function approvalWithKeyFlag(flag: boolean): ApprovalRecord {
-    return {
+  it("ignores a stale autoProvisionDefaultKey flag — approve never mints keys", async () => {
+    // The flag was removed: runtime auth is the run-scoped local agent JWT the
+    // heartbeat injects, and the route rejects new payloads carrying it. A
+    // payload persisted while the flag existed must not mint one now.
+    const pending = {
       ...createApproval("pending"),
-      payload: { agentId: "agent-1", autoProvisionDefaultKey: flag },
+      payload: { agentId: "agent-1", autoProvisionDefaultKey: true },
     };
-  }
-
-  it("mints a default API key at activation when the payload asks for one", async () => {
-    const approved = { ...approvalWithKeyFlag(true), status: "approved" };
-    const dbStub = createDbStub([[approvalWithKeyFlag(true)]], [approved]);
+    const approved = { ...pending, status: "approved" };
+    const dbStub = createDbStub([[pending]], [approved]);
 
     const svc = approvalService(dbStub.db as any);
     const result = await svc.approve("approval-1", "board", "ship it");
 
     expect(result.applied).toBe(true);
-    expect(mockAgentService.createApiKey).toHaveBeenCalledWith(
-      "agent-1",
-      "default",
-      expect.objectContaining({ source: "auto_hire" }),
-    );
-  });
-
-  it("does not mint a second default key when one is already live", async () => {
-    mockAgentService.listKeys.mockResolvedValue([
-      { id: "key-0", name: "default", revokedAt: null },
-    ]);
-    const approved = { ...approvalWithKeyFlag(true), status: "approved" };
-    const dbStub = createDbStub([[approvalWithKeyFlag(true)]], [approved]);
-
-    const svc = approvalService(dbStub.db as any);
-    await svc.approve("approval-1", "board", "ship it");
-
-    expect(mockAgentService.createApiKey).not.toHaveBeenCalled();
-  });
-
-  it("does not mint a key when the payload did not ask for one", async () => {
-    const approved = createApproval("approved");
-    const dbStub = createDbStub([[createApproval("pending")]], [approved]);
-
-    const svc = approvalService(dbStub.db as any);
-    await svc.approve("approval-1", "board", "ship it");
-
+    expect(mockAgentService.activatePendingApproval).toHaveBeenCalledWith("agent-1");
+    expect(mockAgentService.listKeys).not.toHaveBeenCalled();
     expect(mockAgentService.createApiKey).not.toHaveBeenCalled();
   });
 });

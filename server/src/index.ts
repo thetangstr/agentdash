@@ -1082,6 +1082,45 @@ export async function startServer(): Promise<StartedServer> {
   });
   const stopVerdictApprovalBridge = verdictApprovalBridgeSvc.startWatcher();
 
+  // AgentDash: goals-eval-hitl — the review-cycle sweep. `enqueueForReview`,
+  // reviewer activation/resume, and `terminate`/`remove` all distribute or
+  // free queue items at the moment they happen; this tick is the backstop:
+  // it assigns anything still unassigned to a runnable reviewer and escalates
+  // items past their verdict SLA (AGENTDASH_VERDICT_ESCALATE_AFTER_MS,
+  // default 24h). Default cadence 60s; override with
+  // AGENTDASH_REVIEW_CYCLE_INTERVAL_MS (floor 15s) for tests/manual exercise.
+  const reviewCycleIntervalMs = (() => {
+    const parsed = Number(process.env.AGENTDASH_REVIEW_CYCLE_INTERVAL_MS);
+    const floor = 15 * 1000;
+    return Number.isFinite(parsed) && parsed >= floor ? parsed : 60 * 1000;
+  })();
+  {
+    const {
+      companyService,
+      cosReviewerAutoHire,
+      cosVerdictOrchestrator,
+      featureFlagsService,
+    } = await import("./services/index.js");
+    const reviewCycleCompanies = companyService(db as any);
+    const reviewCycleOrchestrator = cosVerdictOrchestrator(db as any, {
+      verdicts: verdictsService(db as any),
+      featureFlags: featureFlagsService(db as any),
+      autoHire: cosReviewerAutoHire(db as any),
+    });
+    logger.info({ intervalMs: reviewCycleIntervalMs }, "cos_review_cycle: schedule enabled");
+    const reviewCycleHandle = setInterval(() => {
+      void reviewCycleCompanies
+        .list()
+        .then(async (companies) => {
+          for (const company of companies) {
+            await reviewCycleOrchestrator.runReviewCycle(company.id);
+          }
+        })
+        .catch((err) => logger.error({ err }, "cos_review_cycle: scheduled tick failed"));
+    }, reviewCycleIntervalMs);
+    reviewCycleHandle.unref?.();
+  }
+
   // AgentDash: billing-trio (#152) — schedule periodic reconcile of expired
   // pro_trial companies. Bypassed when billing is disabled or no Stripe key
   // is configured (matches require-tier middleware semantics).

@@ -18,12 +18,14 @@ import {
   issueExecutionDecisions,
   issues,
   issueComments,
+  issueReviewQueueState,
 } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, EVALUATOR_AGENT_ROLE, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import type { AgentApiKeySource } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { deprovisionAgentProfile } from "./hermes-profile.js";
+import { assignUnassignedReviewItems } from "./review-queue-assignments.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
 
 function hashToken(token: string) {
@@ -483,6 +485,11 @@ export function agentService(db: Db) {
         .where(eq(agents.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
+      if (updated) {
+        // AgentDash: a resumed reviewer can review again — hand out any
+        // unassigned backlog. No-op for non-reviewers.
+        await assignUnassignedReviewItems(db, updated.companyId);
+      }
       return updated ? normalizeAgentRow(updated) : null;
     },
 
@@ -518,6 +525,15 @@ export function agentService(db: Db) {
             isNull(cosReviewerAssignments.retiredAt),
           ),
         );
+
+      // AgentDash: and free the review-queue items it held. Reviewers judge
+      // only issues assigned to them, so an item left pointing at a dead
+      // reviewer is invisible until the SLA fires — unassigning lets the next
+      // distribution sweep hand it to a live reviewer.
+      await db
+        .update(issueReviewQueueState)
+        .set({ assignedReviewerAgentId: null })
+        .where(eq(issueReviewQueueState.assignedReviewerAgentId, id));
 
       // AgentDash: tear down the agent's managed Hermes profile (best-effort,
       // non-fatal; gated off by default).
@@ -567,6 +583,13 @@ export function agentService(db: Db) {
           .update(issues)
           .set({ assigneeAgentId: null, createdByAgentId: null })
           .where(or(eq(issues.assigneeAgentId, id), eq(issues.createdByAgentId, id)));
+        // AgentDash: review-queue assignments are a nullable FK — detach them
+        // like the issue references so the delete does not fail and the items
+        // can be reassigned to a live reviewer.
+        await tx
+          .update(issueReviewQueueState)
+          .set({ assignedReviewerAgentId: null })
+          .where(eq(issueReviewQueueState.assignedReviewerAgentId, id));
         await tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.agentId, id));
         await tx.delete(agentTaskSessions).where(eq(agentTaskSessions.agentId, id));
         await tx.delete(activityLog).where(
@@ -637,6 +660,11 @@ export function agentService(db: Db) {
         .then((rows) => rows[0] ?? null);
 
       if (updated) {
+        // AgentDash: activation is the moment an approval-gated reviewer
+        // becomes runnable. Review-queue items enqueued while it waited for
+        // approval are still unassigned — distribute them now, or they would
+        // sit invisible to a reviewer that only judges work assigned to it.
+        await assignUnassignedReviewItems(db, updated.companyId);
         return { agent: normalizeAgentRow(updated), activated: true };
       }
 

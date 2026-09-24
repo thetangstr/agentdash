@@ -104,7 +104,18 @@ function makeDb(stub: DbStub) {
     return chain;
   });
 
-  return { select, insert, delete: del } as any;
+  // The assignment sweep issues `update(...).set(...).where(...).returning()`.
+  // It is only reached when its unassigned select returned rows — which the
+  // per-test selectQueue controls — but the chain must exist either way.
+  const update = vi.fn(() => {
+    const chain: any = {};
+    chain.set = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.returning = vi.fn(async () => []);
+    return chain;
+  });
+
+  return { select, insert, delete: del, update } as any;
 }
 
 function makeDeps(over: Partial<{
@@ -323,7 +334,8 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      selectQueue: [[queueRow]],
+      // 1st select: assignment sweep finds no unassigned items. 2nd: queue rows.
+      selectQueue: [[], [queueRow]],
       inserts: [],
       deletes: [],
     };
@@ -349,7 +361,7 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      selectQueue: [[queueRow]],
+      selectQueue: [[], [queueRow]],
       inserts: [],
       deletes: [],
     };
@@ -372,10 +384,10 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      // 1st select: queue rows. 2nd: closingVerdictFor inside escalateToHuman
-      // (we mocked deps.verdicts.closingVerdictFor so this never hits db — but
-      // be defensive in case the orchestrator changes).
-      selectQueue: [[queueRow]],
+      // 1st select: assignment sweep finds no unassigned items. 2nd: queue
+      // rows. closingVerdictFor inside escalateToHuman is mocked on
+      // deps.verdicts so it never hits db.
+      selectQueue: [[], [queueRow]],
       inserts: [],
       deletes: [],
     };
@@ -470,7 +482,7 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      selectQueue: [[queueRow]],
+      selectQueue: [[], [queueRow]],
       inserts: [],
       deletes: [],
     };

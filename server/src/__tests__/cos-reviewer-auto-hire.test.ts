@@ -193,6 +193,22 @@ afterEach(() => {
 });
 
 describe("cosReviewerAutoHire — approval-gated hire", () => {
+  it("takes the per-company advisory lock before reading any counts", async () => {
+    const db = makeDb({ activeReviewerSeq: [[]], depthSeq: [], inserts: [] });
+    const svc = cosReviewerAutoHire(db, {
+      createAgent: vi.fn().mockResolvedValue({ id: "agent-lock-1" }),
+      provisionReviewer: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await svc.evaluateAndHireIfNeeded(C, "neutrality_conflict");
+    // The advisory lock (db.execute) must be issued before the first SELECT —
+    // locking after the count is the race the guard exists to close.
+    expect(db.execute).toHaveBeenCalled();
+    expect(db.execute.mock.invocationCallOrder[0]!).toBeLessThan(
+      (db.select as any).mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("files a hire_agent approval for a pending_approval reviewer instead of hiring directly", async () => {
     const inserts: DbScript["inserts"] = [];
     const db = makeDb({
@@ -289,11 +305,12 @@ describe("cosReviewerAutoHire — provisioning", () => {
         }),
       }),
     );
-    // The agent is pending_approval — createApiKey refuses that status, so the
-    // approval payload asks the approve path to mint the key at activation.
+    // No API key anywhere in this flow: the reviewer authenticates with the
+    // run-scoped local JWT the heartbeat injects at run time, so neither the
+    // provisioning step nor the approval payload carries a key request.
     expect(mockAgentService.createApiKey).not.toHaveBeenCalled();
     const approvalArg = mockApprovalService.create.mock.calls[0]![1] as Record<string, any>;
-    expect(approvalArg.payload.autoProvisionDefaultKey).toBe(true);
+    expect(approvalArg.payload).not.toHaveProperty("autoProvisionDefaultKey");
   });
 });
 
@@ -508,43 +525,11 @@ describe("cosReviewerAutoHire — convergence (advisory)", () => {
   });
 
   /*
-   * ARCHITECTURAL RISK FOLLOW-UP — real-PG `FOR UPDATE` concurrency test.
-   *
-   * The advisory sequential test above proves the cap-check logic, but it
-   * does NOT prove that two genuinely concurrent transactions serialize on
-   * the `SELECT … FOR UPDATE` row lock. The mock-DB cannot observe lock
-   * semantics — only embedded Postgres can.
-   *
-   * To enable: convert this to a real-PG test using the existing helper
-   *   server/src/__tests__/helpers/embedded-postgres.ts
-   * Pattern (mirrors costs-service.test.ts / dashboard-service.test.ts):
-   *   1. Call `startEmbeddedPostgresTestDatabase()` in `beforeAll`,
-   *      teardown in `afterAll`.
-   *   2. Apply the goals-eval-hitl migration (0060) so `cos_reviewer_assignments`
-   *      and `feature_flags` exist.
-   *   3. Seed N=10 concurrent `evaluateAndHireIfNeeded` calls via Promise.all
-   *      with `MAX_CONCURRENT_HIRES=3`.
-   *   4. Assert `SELECT count(*) FROM cos_reviewer_assignments WHERE retiredAt
-   *      IS NULL` ≤ 3 — i.e. the FOR UPDATE serialized correctly and the
-   *      cap held under real concurrency.
-   *
-   * Skipped today because:
-   *   (a) The current vitest harness in this worktree hangs on startup
-   *       (documented in Phase H verification report); switching this to
-   *       embedded-PG would compound the runner risk.
-   *   (b) The convergence-guard logic is exercised by the sequential test
-   *       above and by the production `db.transaction(...)` wrapping in
-   *       cos-reviewer-auto-hire.ts. The real-PG test would prove the row
-   *       lock serializes; it would not change the production code path.
-   *
-   * Risk if this stays skipped: a regression that removes the FOR UPDATE
-   * clause (or wraps the wrong query in the transaction) would not be
-   * caught until production. Mitigation: code-review-time check that
-   * `tx.select(...).for("update")` appears in the live-assignments query
-   * inside `evaluateAndHireIfNeeded`.
+   * The real concurrency proof lives in
+   * `cos-reviewer-auto-hire-embedded.test.ts`: two parallel evaluations on
+   * separate connections race at cap=1 and the per-company advisory lock
+   * (taken before any count, unconditionally) serializes them so exactly one
+   * hire commits. A mock DB cannot observe lock semantics — the sequential
+   * case above only pins the cap-check logic.
    */
-  it.skip("(real-PG) two concurrent Promise.all calls produce ≤ MAX_CONCURRENT_HIRES inserts", async () => {
-    // Stub body — see the comment block above for the implementation plan.
-    expect(true).toBe(true);
-  });
 });

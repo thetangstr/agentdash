@@ -14,6 +14,7 @@ import { approvalService } from "./approvals.js";
 import { companyService } from "./companies.js";
 import { defaultAgentPlanAdapterType } from "./cos-replier.js";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
+import { RUNNABLE_REVIEWER_STATUSES } from "./review-queue-assignments.js";
 import {
   exceededFreeTierCapacityAction,
   isBillingDisabled,
@@ -24,14 +25,7 @@ export type AutoHireReason = "queue_depth" | "neutrality_conflict";
 
 export type CosReviewerAssignmentRow = typeof cosReviewerAssignments.$inferSelect;
 
-/**
- * Agent statuses in which a reviewer can actually do work. `pending_approval`
- * is deliberately not runnable — an approval-gated reviewer occupies a hire
- * slot but cannot review until a human says yes. `paused`, `error` and
- * `active` are also excluded: the queue should not wait on an agent that is
- * not waking.
- */
-export const RUNNABLE_REVIEWER_STATUSES = ["idle", "running"] as const;
+export { RUNNABLE_REVIEWER_STATUSES };
 
 /**
  * How often an auto-hired reviewer wakes to look for `in_review` work.
@@ -72,13 +66,15 @@ export interface HireResult {
 interface AutoHireDeps {
   /**
    * Optional override for agent creation — useful for tests. When omitted,
-   * the service uses the standard `agentService(db).create` path.
+   * the service uses the standard `agentService(tx).create` path bound to the
+   * evaluation transaction so the pending agent rolls back with everything
+   * else on failure.
    */
   createAgent?: (companyId: string, role: string, name: string) => Promise<{ id: string }>;
   /**
    * Optional override for the post-insert provisioning step (instructions
-   * bundle + API key). Tests inject a spy; the default materializes the
-   * `reviewer` instructions bundle and mints a default API key.
+   * bundle). Tests inject a spy; the default materializes the `reviewer`
+   * instructions bundle and persists the resulting adapterConfig.
    */
   provisionReviewer?: (agentId: string) => Promise<void>;
 }
@@ -88,9 +84,14 @@ interface AutoHireDeps {
  * and approval-gated like every other hire.
  *
  * Per the consensus plan §3 Phase C3 + ADR Consequences:
- *  - Convergence guard: a `SELECT … FOR UPDATE` on the live-assignment set
- *    serializes concurrent calls so two simultaneous triggers cannot
- *    double-hire (Risk #6, Risk #8).
+ *  - Convergence guard: a per-company `pg_advisory_xact_lock` is taken at the
+ *    top of the evaluation transaction, BEFORE any count is read. A
+ *    `SELECT … FOR UPDATE` on the live-assignment set alone cannot serialize
+ *    the zero-reviewer case — it locks only rows that already exist, and a
+ *    waiting READ COMMITTED transaction keeps its stale row set, so two
+ *    concurrent evaluations could both hire (Risk #6, Risk #8). The lock is
+ *    the same key the tier-capacity paths use, and it is unconditional — it
+ *    is not skipped when billing is disabled.
  *  - Concurrent-hire ceiling: env `AGENTDASH_REVIEWER_MAX_CONCURRENT_HIRES`
  *    (default 3) bounds the thunder-herd. `0` disables the feature outright —
  *    every evaluation returns `disabled` and no approval is filed.
@@ -160,10 +161,12 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
   /**
    * Post-commit provisioning. Materializes the `reviewer` mandate bundle —
    * the same step the user-initiated hire route runs on a `pending_approval`
-   * agent. The API key is deliberately NOT minted here: `createApiKey`
-   * refuses pending agents (a gated agent must hold no credentials), so the
-   * approval payload carries `autoProvisionDefaultKey` and the approve path
-   * mints it when the human says yes.
+   * agent. No API key is minted anywhere in this flow: the reviewer
+   * authenticates the same way every heartbeat-dispatched worker does — the
+   * server mints a run-scoped local agent JWT at run time and the adapter
+   * injects it as `PAPERCLIP_API_KEY` (`supportsLocalAgentJwt`, which covers
+   * every local adapter). A stored `pcp_` key would be an always-on credential
+   * the reviewer does not need.
    */
   async function provisionReviewer(agentId: string): Promise<void> {
     if (deps.provisionReviewer) {
@@ -186,10 +189,20 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
     let hiredAgentId: string | null = null;
 
     const result = await db.transaction(async (tx) => {
-      // 1. Convergence guard: lock the live-assignment set for this company.
-      //    Concurrent `evaluateAndHireIfNeeded` calls serialize here. The join
-      //    keeps terminated agents out of the slot count defensively — the
-      //    terminating path retires the row, but a count that trusts only
+      const txDb = tx as unknown as Db;
+
+      // 1. Convergence guard: take the per-company advisory lock FIRST,
+      //    before any count is read. FOR UPDATE alone cannot cover the
+      //    zero-reviewer case (it locks only rows that exist, and a waiting
+      //    READ COMMITTED transaction keeps its stale row set), so this lock
+      //    is unconditional — never skipped when billing is disabled — and
+      //    uses the same key the tier-capacity paths take, which serializes
+      //    auto-hire against approval-time agent creation too.
+      await lockCompanyTierCapacity(txDb, companyId);
+
+      //    Then lock and read the live-assignment set for this company. The
+      //    join keeps terminated agents out of the slot count defensively —
+      //    the terminating path retires the row, but a count that trusts only
       //    `retiredAt` is one missed code path away from hiring past the cap.
       const slotRows = await tx
         .select({
@@ -269,12 +282,10 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
         }
       }
 
-      // 5. Tier-cap gate. This service has its own transaction for reviewer
-      //    convergence; take the shared tier advisory lock inside that same
-      //    transaction so auto-hire cannot race other agent-creation paths.
-      const txDb = tx as unknown as Db;
+      // 5. Tier-cap gate. The shared tier advisory lock is already held from
+      //    step 1 — held regardless of billing mode — so this only decides
+      //    whether the company is over its free-tier agent cap.
       if (!isBillingDisabled()) {
-        await lockCompanyTierCapacity(txDb, companyId);
         const blockedTierAction = await exceededFreeTierCapacityAction(
           {
             getCompany: async (id) => {
@@ -309,8 +320,19 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
       //    actually approve into work, not the unrunnable `process` stub this
       //    path used to mint. Approving activates it; rejecting terminates it,
       //    and termination retires this assignment row.
+      //
+      //    The adapter is the instance default: `AGENTDASH_DEFAULT_ADAPTER`
+      //    when the operator set it, otherwise `hermes_local`. There is no
+      //    per-company adapter setting today — "company default" would be a
+      //    different thing and does not exist yet.
+      //
+      //    `agentService` is bound to the transaction, not the outer `db`: the
+      //    pending agent, the assignment row, and the approval must commit or
+      //    roll back together — an agent that outlives a failed approval
+      //    insert is an orphan no human ever decided on.
       const reviewerName = `CoS Reviewer ${new Date().toISOString().slice(0, 19)}`;
       const adapterType = defaultAgentPlanAdapterType();
+      const txAgentsSvc = agentService(txDb);
       const reviewerMetadata = {
         autoHired: true,
         autoHireReason: reason,
@@ -319,7 +341,7 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
       const runtimeConfig = { heartbeat: { ...REVIEWER_HEARTBEAT } };
       const created = deps.createAgent
         ? await deps.createAgent(companyId, "reviewer", reviewerName)
-        : await agentsSvc.create(companyId, {
+        : await txAgentsSvc.create(companyId, {
             name: reviewerName,
             role: "reviewer",
             title: "CoS Reviewer",
@@ -372,10 +394,6 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
           metadata: reviewerMetadata,
           agentId: reviewerAgentId,
           autoHireReason: reason,
-          // Ask the approve path to mint the agent's default API key at
-          // activation — the earliest point a pending_approval agent may hold
-          // one. See the `autoProvisionDefaultKey` handling in approvals.ts.
-          autoProvisionDefaultKey: true,
         } as Record<string, unknown>,
         decisionNote: null,
         decidedByUserId: null,
