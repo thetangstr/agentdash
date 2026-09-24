@@ -521,4 +521,21 @@ describe("approval routes idempotent retries", () => {
       }),
     );
   });
+
+  it("rejects hire_agent payloads that set the removed autoProvisionDefaultKey flag", async () => {
+    const res = await request(await createApp())
+      .post("/api/companies/company-1/approvals")
+      .send({
+        type: "hire_agent",
+        payload: {
+          name: "Caller Controlled",
+          agentId: "agent-1",
+          autoProvisionDefaultKey: true,
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+    expect(mockSecretService.normalizeHireApprovalPayloadForPersistence).not.toHaveBeenCalled();
+  });
 });

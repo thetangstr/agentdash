@@ -226,7 +226,17 @@ export interface AgentDetail extends Agent {
 }
 
 // AgentDash (AGE-24): what minted an agent API key.
-export const AGENT_API_KEY_SOURCES = ["agent_creation", "onboarding", "connect_code", "manual"] as const;
+export const AGENT_API_KEY_SOURCES = [
+  "agent_creation",
+  "onboarding",
+  "connect_code",
+  "manual",
+  // AgentDash: minted by a `hire_agent` approval whose payload asked for a
+  // default key (auto-hired reviewers). A `pending_approval` agent cannot hold
+  // a key — `agentService.createApiKey` refuses — so approval is the earliest
+  // moment the invariant "every agent has a key" can be restored.
+  "auto_hire",
+] as const;
 export type AgentApiKeySource = (typeof AGENT_API_KEY_SOURCES)[number];
 
 export interface AgentApiKeyProvenance {
