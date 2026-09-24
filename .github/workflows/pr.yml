@@ -39,6 +39,14 @@ jobs:
         # (upstream-digest.yml, 2026-05-10 → 2026-09-01); this fails the PR instead.
         run: node scripts/ci/check-workflow-block-scalars.mjs && node --test scripts/ci/check-workflow-block-scalars.test.mjs
 
+      - name: Release log is complete and indexed
+        # releases/*.md is the release log (GitHub Release bodies, in-app
+        # Changelog). Fails when a stable tag has no notes, a note has no
+        # parseable Released date, or releases/README.md misses a file. Tags
+        # come from `git ls-remote origin`, so shallow or tagless checkouts
+        # and local Paperclip `upstream` tags don't matter.
+        run: node scripts/ci/check-release-log.mjs && node --test scripts/ci/check-release-log.test.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
