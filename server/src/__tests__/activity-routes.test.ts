@@ -135,6 +135,36 @@ describe.sequential("activity routes", () => {
     });
   });
 
+  it("passes a parsed since through to the activity list (#676)", async () => {
+    mockActivityService.list.mockResolvedValue([]);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/companies/company-1/activity?since=2026-09-22T00:00:00Z"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockActivityService.list).toHaveBeenCalledWith({
+      companyId: "company-1",
+      agentId: undefined,
+      entityType: undefined,
+      entityId: undefined,
+      since: new Date("2026-09-22T00:00:00Z"),
+      limit: 100,
+    });
+  });
+
+  it("400s on a since the server cannot parse (#676)", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get("/api/companies/company-1/activity?since=not-a-date"),
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/since/);
+    expect(mockActivityService.list).not.toHaveBeenCalled();
+  });
+
   it("resolves issue identifiers before loading runs", async () => {
     mockIssueService.getByIdentifier.mockResolvedValue({
       id: "issue-uuid-1",
