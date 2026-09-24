@@ -107,7 +107,11 @@ describe("legacy plist remediation (GH #347 regression)", () => {
     launchctlCalls: string;
   }
 
-  function runInstallerInSandbox(opts: { legacyWrapperExists: boolean }): SandboxRun {
+  function runInstallerInSandbox(opts: {
+    legacyWrapperExists: boolean;
+    /** Plant a plist whose target is a healthy unrelated executable instead of the legacy wrapper. */
+    healthyTarget?: boolean;
+  }): SandboxRun {
     const home = mkdtempSync(path.join(os.tmpdir(), "launchd-install-test-home-"));
     sandboxDirs.push(home);
     const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
@@ -135,6 +139,11 @@ describe("legacy plist remediation (GH #347 regression)", () => {
     // Plant the legacy plist exactly as a migrated machine would have it.
     const legacyPlist = path.join(launchAgentsDir, "com.paperclip.server.plist");
     const legacyWrapper = path.join(home, ".paperclip", "paperclip-launchd.sh");
+    // A healthy, unrelated target proves the content check: a same-named
+    // plist that does not reference the legacy wrapper must be left alone.
+    const plistTarget = opts.healthyTarget
+      ? path.join(home, "bin", "unrelated-healthy-service.sh")
+      : legacyWrapper;
     writeFileSync(
       legacyPlist,
       [
@@ -144,7 +153,7 @@ describe("legacy plist remediation (GH #347 regression)", () => {
         "<dict>",
         "  <key>Label</key><string>com.paperclip.server</string>",
         "  <key>ProgramArguments</key>",
-        `  <array><string>/bin/bash</string><string>${legacyWrapper}</string></array>`,
+        `  <array><string>/bin/bash</string><string>${plistTarget}</string></array>`,
         "</dict>",
         "</plist>",
         "",
@@ -153,6 +162,9 @@ describe("legacy plist remediation (GH #347 regression)", () => {
     if (opts.legacyWrapperExists) {
       mkdirSync(path.dirname(legacyWrapper), { recursive: true });
       writeExecutable(legacyWrapper, "#!/bin/sh\nexit 0\n");
+    }
+    if (opts.healthyTarget) {
+      writeExecutable(plistTarget, "#!/bin/sh\nexit 0\n");
     }
 
     const result = spawnSync("/bin/bash", [path.join(stagedLaunchdDir, "install.sh")], {
@@ -210,6 +222,18 @@ describe("legacy plist remediation (GH #347 regression)", () => {
     expect(run.status).toBe(0);
     expect(existsSync(run.legacyPlist)).toBe(true);
     // No bootout, no move: the legacy service is somebody's working setup.
+    expect(run.launchctlCalls).not.toContain("com.paperclip.server");
+    expect(readdirSync(path.dirname(run.legacyPlist)).some((name) => name.includes(".migrated.bak"))).toBe(false);
+  }, 60000);
+
+  it("leaves a legacy plist with a healthy unrelated target alone (no false positive)", () => {
+    const run = runInstallerInSandbox({ legacyWrapperExists: false, healthyTarget: true });
+
+    expect(run.status).toBe(0);
+    // The same-named plist targets a healthy executable, not the legacy
+    // wrapper — it is not ours to remove.
+    expect(existsSync(run.legacyPlist)).toBe(true);
+    expect(run.launchctlCalls).not.toContain("bootout gui/");
     expect(run.launchctlCalls).not.toContain("com.paperclip.server");
     expect(readdirSync(path.dirname(run.legacyPlist)).some((name) => name.includes(".migrated.bak"))).toBe(false);
   }, 60000);

@@ -205,8 +205,11 @@ fi
 # Behavior (ported from the GH #347 fix on codex/invite-token-primitives,
 # 9fbbcde7):
 #   - no legacy plist  -> nothing to do
-#   - plist references a wrapper that still exists -> leave it alone
-#   - plist references anything else (e.g. missing wrapper) -> boot out
+#   - plist does not reference the legacy wrapper (healthy, unrelated
+#     service) -> leave it alone
+#   - plist references the wrapper and the wrapper still exists -> leave
+#     it alone
+#   - plist references the wrapper AND the wrapper is missing -> boot out
 #     com.paperclip.server, move the plist to <name>.migrated.bak.<ts>
 
 LEGACY_PLIST_DST="${HOME}/Library/LaunchAgents/com.paperclip.server.plist"
@@ -218,8 +221,17 @@ disable_broken_legacy_service() {
         return
     fi
 
+    # Only remediate the known-broken case: the plist must actually point at
+    # the legacy wrapper. A same-named plist targeting something healthy and
+    # unrelated is not ours to remove (the reference implementation used the
+    # same fixed-string grep).
+    if ! grep -Fq "$LEGACY_WRAPPER" "$LEGACY_PLIST_DST"; then
+        warn "Legacy launchd plist exists at ${LEGACY_PLIST_DST}; leaving it in place because it does not reference ${LEGACY_WRAPPER}."
+        return
+    fi
+
     if [[ -x "$LEGACY_WRAPPER" ]]; then
-        warn "Legacy Paperclip launchd plist found at ${LEGACY_PLIST_DST} and its wrapper ${LEGACY_WRAPPER} still exists — leaving it in place."
+        warn "Legacy Paperclip launchd plist exists and its wrapper ${LEGACY_WRAPPER} is executable; leaving it in place."
         return
     fi
 
