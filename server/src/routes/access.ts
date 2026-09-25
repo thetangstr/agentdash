@@ -96,6 +96,7 @@ import {
   hashToken,
   isInviteTokenHashCollisionError,
 } from "../lib/invite-tokens.js";
+import { buildInviteTokenCookie } from "../lib/signup-gate.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
   claimBoardOwnership,
@@ -3195,6 +3196,18 @@ export function accessRoutes(
           (m) => m.get(invite.invitedByUserId!)?.name ?? null
         )
       : null;
+    // AgentDash (#731): stash the token in a first-party, HttpOnly cookie
+    // scoped to /api/auth so an invited teammate's SSO sign-up can carry the
+    // claim through the OAuth round trip (and email sign-up can read it when
+    // the body field is absent). Only set while the invite could actually
+    // authorize a sign-up: pending company_join invites a human can use.
+    if (
+      invite.inviteType === "company_join" &&
+      invite.allowedJoinTypes !== "agent" &&
+      !invite.acceptedAt
+    ) {
+      res.setHeader("Set-Cookie", buildInviteTokenCookie(token, { secure: req.secure }));
+    }
     res.json({
       ...toInviteSummaryResponse(req, token, invite, companyBranding),
       invitedByUserName: inviterName,

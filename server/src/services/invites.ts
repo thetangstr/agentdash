@@ -21,6 +21,7 @@
 
 import type { Db } from "@paperclipai/db";
 import { invites } from "@paperclipai/db";
+import { and, eq, sql } from "drizzle-orm";
 import {
   COMPANY_INVITE_TTL_MS,
   INVITE_TOKEN_MAX_RETRIES,
@@ -89,4 +90,95 @@ export function inviteService(db: Db) {
       throw new Error("invite_token_collision_retries_exhausted");
     },
   };
+}
+
+// AgentDash (#731): company invites bypass the hosted signup gate.
+//
+// A pending company_join invite IS an invitation to create an account — the
+// invitee cannot accept it without one — so the signup gates (browser email
+// guard, MCP signup, and the SSO user-create hook) accept the invite token as
+// an alternative credential to the shared instance codes. Three rules keep
+// the door narrow:
+//
+//   1. The invite must be pending: company_join, human-joinable, not revoked,
+//      not expired, not already accepted.
+//   2. If the invite was addressed to a specific email (defaultsPayload.email),
+//      only that email may sign up with it.
+//   3. The token is single-use for account creation: the first sign-up claims
+//      it by writing the email into defaultsPayload.signupClaimedEmail with a
+//      compare-and-set update. A second sign-up with a different email fails
+//      the CAS and is refused; the same email may retry a failed attempt.
+//
+// The claim lives in defaultsPayload rather than a new column because it is
+// audit metadata about a short-lived state, never rendered by the invite
+// summary responses, and invite expiry (72h) bounds the rows anyway.
+
+/** defaultsPayload key recording which email claimed this token at sign-up. */
+export const INVITE_SIGNUP_CLAIM_KEY = "signupClaimedEmail";
+
+/** The email this invite was addressed to, or null when it is unbound. */
+export function inviteSignupBoundEmail(
+  invite: Pick<typeof invites.$inferSelect, "defaultsPayload">,
+): string | null {
+  const payload = invite.defaultsPayload;
+  if (!payload || typeof payload !== "object") return null;
+  const email = (payload as Record<string, unknown>).email;
+  if (typeof email !== "string" || !email.trim()) return null;
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Whether `token` entitles `email` to create an account on a gated instance.
+ * Authorizing CLAIMS the token to that email (see above) — callers must only
+ * invoke this at the point they would otherwise let the sign-up through.
+ * Returns false for every refusal; callers intentionally cannot distinguish
+ * them (same response as a missing/invalid invite code).
+ */
+export async function authorizeCompanyInviteSignup(
+  db: Db,
+  token: string,
+  email: string | null | undefined,
+): Promise<boolean> {
+  const normalizedEmail = email?.trim().toLowerCase();
+  const trimmedToken = token.trim();
+  if (!trimmedToken || !normalizedEmail) return false;
+
+  const invite = await db
+    .select()
+    .from(invites)
+    .where(eq(invites.tokenHash, hashToken(trimmedToken)))
+    .then((rows) => rows[0] ?? null);
+  if (
+    !invite ||
+    !invite.companyId ||
+    invite.inviteType !== "company_join" ||
+    invite.allowedJoinTypes === "agent" ||
+    invite.revokedAt ||
+    invite.acceptedAt ||
+    invite.expiresAt.getTime() <= Date.now()
+  ) {
+    return false;
+  }
+  const boundEmail = inviteSignupBoundEmail(invite);
+  if (boundEmail && boundEmail !== normalizedEmail) return false;
+
+  const claimed = await db
+    .update(invites)
+    .set({
+      defaultsPayload: sql`jsonb_set(
+        coalesce(${invites.defaultsPayload}, '{}'::jsonb),
+        ${`{${INVITE_SIGNUP_CLAIM_KEY}}`}::text[],
+        to_jsonb(${normalizedEmail}::text)
+      )`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(invites.id, invite.id),
+        sql`(${invites.defaultsPayload} ->> ${INVITE_SIGNUP_CLAIM_KEY}) IS NULL
+          OR lower(${invites.defaultsPayload} ->> ${INVITE_SIGNUP_CLAIM_KEY}) = ${normalizedEmail}`,
+      ),
+    )
+    .returning({ id: invites.id });
+  return claimed.length > 0;
 }

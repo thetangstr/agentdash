@@ -14,23 +14,35 @@
 //
 // The code is read from the body and DELETED before the request continues, so
 // Better Auth never sees a field it does not model.
+//
+// AgentDash (#731): a pending company invite is itself an invitation to create
+// an account. The invite token opens this gate too — taken from the body's
+// `inviteToken` field (also stripped before Better Auth) or from the
+// `agentdash_invite_token` cookie the invite-summary endpoint sets, the same
+// cookie the SSO user-create hook reads. authorizeCompanyInviteSignup enforces
+// expiry/revocation/acceptance, the invite's own email binding, and claims the
+// token single-use to the signing-up email.
 
 import type { RequestHandler } from "express";
+import type { Db } from "@paperclipai/db";
 // AgentDash (#726): the code list and the match live in lib/signup-gate.ts so
 // the MCP sign-up route and the hosted-box boot guard read them the same way.
 // Either list (general or MK) opens the door: a design partner holds an MK
 // code and should not also need a general one.
-import { isAcceptedSignupInviteCode } from "../lib/signup-gate.js";
+import { isAcceptedSignupInviteCode, readInviteTokenCookie } from "../lib/signup-gate.js";
+import { authorizeCompanyInviteSignup } from "../services/invites.js";
 
 const SIGNUP_PATH_PREFIX = "/sign-up";
 
 export interface InviteCodeSignupGuardOptions {
   enabled: boolean;
+  /** Required for the company-invite token path; without it only codes pass. */
+  db?: Db;
 }
 
-function readInviteCode(body: unknown): string | null {
+function readBodyField(body: unknown, field: string): string | null {
   if (!body || typeof body !== "object") return null;
-  const candidate = (body as Record<string, unknown>).inviteCode;
+  const candidate = (body as Record<string, unknown>)[field];
   if (typeof candidate !== "string") return null;
   const trimmed = candidate.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -41,23 +53,37 @@ export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): Re
     if (!options.enabled) return next();
     if (!req.path.startsWith(SIGNUP_PATH_PREFIX)) return next();
 
-    const code = readInviteCode(req.body);
+    const code = readBodyField(req.body, "inviteCode");
+    const tokenFromBody = readBodyField(req.body, "inviteToken");
+    const email = readBodyField(req.body, "email");
 
-    // Strip before Better Auth sees the body, whether or not it was valid.
+    // Strip before Better Auth sees the body, whether or not they were valid.
     if (req.body && typeof req.body === "object") {
       delete (req.body as Record<string, unknown>).inviteCode;
+      delete (req.body as Record<string, unknown>).inviteToken;
     }
 
-    if (!code || !isAcceptedSignupInviteCode(code)) {
-      // One message for missing and wrong alike: distinguishing them tells a
-      // guesser whether they are close.
-      res.status(403).json({
-        code: "invite_code_required",
-        error: "Signup on this instance requires an invite code.",
-      });
-      return;
-    }
+    if (code && isAcceptedSignupInviteCode(code)) return next();
 
-    next();
+    const token = tokenFromBody ?? readInviteTokenCookie(req.headers.cookie ?? null);
+    const authorizeInvite = async () => {
+      if (!options.db || !token) return false;
+      return authorizeCompanyInviteSignup(options.db, token, email);
+    };
+
+    void authorizeInvite()
+      .then((ok) => {
+        if (ok) {
+          next();
+          return;
+        }
+        // One message for missing, wrong, and unusable credentials alike:
+        // distinguishing them tells a guesser whether they are close.
+        res.status(403).json({
+          code: "invite_code_required",
+          error: "Signup on this instance requires an invite code.",
+        });
+      })
+      .catch(next);
   };
 }

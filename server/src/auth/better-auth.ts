@@ -14,6 +14,8 @@ import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
 import { sendEmail, resetPasswordEmailTemplate, welcomeEmailTemplate } from "./email.js";
 import { buildSocialProviders, ssoAccountCreationAllowed } from "./social-providers.js";
+import { readInviteTokenCookie } from "../lib/signup-gate.js";
+import { authorizeCompanyInviteSignup } from "../services/invites.js";
 import { logger } from "../middleware/logger.js";
 
 export type BetterAuthSessionUser = {
@@ -329,9 +331,11 @@ export function createBetterAuthInstance(
     databaseHooks: {
       user: {
         create: {
-          // AgentDash (#726): on a hosted box, the only way to create a user is
-          // gated email sign-up. See `refuseUngatedUserCreation`.
-          before: async (_user: unknown, context: unknown) => refuseUngatedUserCreation(context),
+          // AgentDash (#726/#731): on a hosted box, the only ways to create a
+          // user are gated email sign-up and a pending company invite.
+          // See `refuseUngatedUserCreation`.
+          before: async (user: unknown, context: unknown) =>
+            refuseUngatedUserCreation(context, { db, email: userEmail(user) }),
           after: async (user: { id: string; email: string; name: string | null }) => {
             // Two independent best-effort steps. Either failing must NOT
             // abort the user-create transaction — the account is already
@@ -386,25 +390,70 @@ export function createBetterAuthInstance(
 /** The Better Auth endpoint whose sign-ups pass the invite-code gate. */
 const GATED_SIGN_UP_PATH = "/sign-up/email";
 
+function userEmail(user: unknown): string | null {
+  if (!user || typeof user !== "object") return null;
+  const email = (user as { email?: unknown }).email;
+  return typeof email === "string" && email.trim() ? email : null;
+}
+
+/** The `Cookie` header on the endpoint context, however it is shaped. */
+function cookieHeaderFromContext(context: unknown): string | null {
+  const headers = context && typeof context === "object"
+    ? (context as { headers?: unknown }).headers
+    : undefined;
+  if (headers instanceof Headers) return headers.get("cookie");
+  if (headers && typeof headers === "object") {
+    const raw = (headers as Record<string, unknown>).cookie;
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) return raw.filter((v) => typeof v === "string").join("; ");
+  }
+  return null;
+}
+
 /**
  * AgentDash (#726): a `user.create.before` hook. Throws (Better Auth then
- * creates nothing and answers with an error) when SSO account creation is off (hosted boxes) and the
- * user is being created by any endpoint other than email sign-up, which
- * `inviteCodeSignupGuard` and `disableSignUp` gate. This covers the OAuth
- * callback and the id-token sign-in path, which ignores the provider's
- * `disableSignUp` in Better Auth 1.6.x. Sign-in of an existing user never
- * creates a user row, so it is unaffected. Calls with no endpoint context
- * (server-internal adapter use) pass.
+ * creates nothing and answers with an error) when SSO account creation is off
+ * (hosted boxes) and the user is being created by any endpoint other than
+ * gated email sign-up, which `inviteCodeSignupGuard` and `disableSignUp` gate.
+ * This covers the OAuth callback and the id-token sign-in path, which ignores
+ * the provider's `disableSignUp` in Better Auth 1.6.x. Sign-in of an existing
+ * user never creates a user row, so it is unaffected. Calls with no endpoint
+ * context (server-internal adapter use) pass.
+ *
+ * AgentDash (#731): one exception — a pending company-invite token delivered
+ * in the `agentdash_invite_token` cookie (set by GET /api/invites/:token and
+ * scoped to /api/auth) authorizes the creation, claimed to the SSO email by
+ * `authorizeCompanyInviteSignup`. The cookie is why the provider-level
+ * `disableSignUp` had to go: the callback honours that flag BEFORE this hook
+ * can see the invite, so the hook is now the single, uniform gate.
  */
-export function refuseUngatedUserCreation(context: unknown): undefined {
-  if (ssoAccountCreationAllowed()) return undefined;
+export async function refuseUngatedUserCreation(
+  context: unknown,
+  opts?: { db?: Db; email?: string | null },
+): Promise<void> {
+  if (ssoAccountCreationAllowed()) return;
   const path = context && typeof context === "object" ? (context as { path?: unknown }).path : undefined;
-  if (typeof path !== "string") return undefined;
-  if (path === GATED_SIGN_UP_PATH) return undefined;
+  if (typeof path !== "string") return;
+  if (path === GATED_SIGN_UP_PATH) return;
+
+  const token = readInviteTokenCookie(cookieHeaderFromContext(context));
+  if (opts?.db && token && opts.email) {
+    try {
+      if (await authorizeCompanyInviteSignup(opts.db, token, opts.email)) return;
+    } catch (err) {
+      // A database hiccup must fail closed, not wave the stranger through.
+      logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "[auth] company-invite signup check failed — refusing SSO account creation",
+      );
+    }
+  }
+
   logger.warn({ path }, "[auth] refused to create a user outside gated email sign-up on a hosted box");
   throw new Error(
     "Account creation through single sign-on is disabled on this instance. "
-      + "Sign up by email with an invite code, then sign in with SSO.",
+      + "Open your company invite link first, or sign up by email with an invite code, "
+      + "then sign in with SSO.",
   );
 }
 

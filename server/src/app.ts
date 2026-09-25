@@ -342,6 +342,8 @@ export async function createApp(
       inviteCodeSignupGuard({
         // AgentDash (#726): same parser as the hosted-box boot guard.
         enabled: signupInviteCodeRequired(),
+        // AgentDash (#731): needed for the company-invite token bypass.
+        db,
       }),
     );
     // AgentDash (#160): rate-limit better-auth handler too (same /api/auth path).

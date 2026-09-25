@@ -30,6 +30,7 @@ import {
   mcpInviteValidationEnabled,
   signupInviteCodeRequired,
 } from "../lib/signup-gate.js";
+import { authorizeCompanyInviteSignup } from "../services/invites.js";
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { count, eq } from "drizzle-orm";
@@ -77,6 +78,10 @@ const mcpSignupBodySchema = z.object({
   email: z.string().trim().email(),
   name: z.string().trim().min(1).max(120),
   inviteCode: z.string().trim().min(1).max(120).optional(),
+  // AgentDash (#731): a pending company-invite token (pcp_invite_*) also
+  // opens the local gate — same rule as the browser sign-up guard. Never sent
+  // to the remote funnel validator; it is a local database credential.
+  inviteToken: z.string().trim().min(1).max(256).optional(),
 });
 
 // AgentDash: invite-code funnel gate. Self-serve signup phones home to the
@@ -96,7 +101,9 @@ function inviteValidationUrl(): string {
   return process.env.AGENTDASH_INVITE_VALIDATION_URL || DEFAULT_INVITE_VALIDATION_URL;
 }
 
-type InviteCheck = { ok: true } | { ok: false; status: number; code: string; error: string };
+type InviteCheck =
+  | { ok: true; via?: "code" | "inviteToken" | "ungated" }
+  | { ok: false; status: number; code: string; error: string };
 
 async function checkInviteCode(inviteCode: string | undefined): Promise<InviteCheck> {
   if (!isInviteValidationEnabled()) return { ok: true };
@@ -153,10 +160,21 @@ function isSelfServeBootstrapEnabled(): boolean {
  * `AGENTDASH_INVITE_CODES`). Before this, MCP sign-up only checked the remote
  * funnel, so a box that gated browser sign-up left this door on a different
  * key, or on none when remote validation was off.
+ *
+ * AgentDash (#731): a pending company-invite token passes this gate too, on
+ * the same terms as the browser guard (claimed single-use to the email).
  */
-function checkLocalSignupGate(inviteCode: string | undefined): InviteCheck {
-  if (!signupInviteCodeRequired()) return { ok: true };
-  if (isAcceptedSignupInviteCode(inviteCode)) return { ok: true };
+async function checkLocalSignupGate(
+  db: Db,
+  inviteCode: string | undefined,
+  inviteToken: string | undefined,
+  email: string,
+): Promise<InviteCheck> {
+  if (!signupInviteCodeRequired()) return { ok: true, via: "ungated" };
+  if (isAcceptedSignupInviteCode(inviteCode)) return { ok: true, via: "code" };
+  if (inviteToken && (await authorizeCompanyInviteSignup(db, inviteToken, email))) {
+    return { ok: true, via: "inviteToken" };
+  }
   return {
     ok: false,
     status: 403,
@@ -210,16 +228,21 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
         });
         return;
       }
-      const { email, name, inviteCode } = parsed.data;
+      const { email, name, inviteCode, inviteToken } = parsed.data;
 
       // Invite-code funnel gate BEFORE any user creation. Fail-closed on
       // transport errors; AGENTDASH_INVITE_VALIDATION=off disables entirely.
-      const localGate = checkLocalSignupGate(inviteCode);
+      const localGate = await checkLocalSignupGate(db, inviteCode, inviteToken, email);
       if (!localGate.ok) {
         res.status(localGate.status).json({ code: localGate.code, error: localGate.error });
         return;
       }
-      const invite = await checkInviteCode(inviteCode);
+      // A company invite token is a local credential — the remote funnel
+      // validator only knows shared codes, so it is skipped only when the
+      // token was the credential that opened the local gate.
+      const invite = localGate.via === "inviteToken"
+        ? ({ ok: true } as const)
+        : await checkInviteCode(inviteCode);
       if (!invite.ok) {
         res.status(invite.status).json({ code: invite.code, error: invite.error });
         return;

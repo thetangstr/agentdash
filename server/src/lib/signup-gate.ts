@@ -62,3 +62,50 @@ export function mcpInviteValidationEnabled(env: Env = process.env): boolean {
 export function selfServeBootstrapEnabled(env: Env = process.env): boolean {
   return envFlagEnabled(env.AGENTDASH_SELF_SERVE_BOOTSTRAP);
 }
+
+// AgentDash (#731): a pending company invite is itself an invitation to create
+// an account. The invite token must survive the OAuth round trip for SSO
+// sign-ups, so GET /api/invites/:token drops it into a first-party cookie and
+// the user-create hook + the email sign-up guard both read it from there.
+// Path=/api/auth keeps it off every other endpoint; SameSite=Lax still lets it
+// ride the top-level GET navigation back from the provider's callback.
+
+/** First-party cookie carrying a pending company-invite token through auth. */
+export const INVITE_TOKEN_COOKIE_NAME = "agentdash_invite_token";
+
+/** The claim only needs to outlive a sign-up sitting open in a tab. */
+export const INVITE_TOKEN_COOKIE_MAX_AGE_SECONDS = 60 * 60;
+
+/** Read `agentdash_invite_token` out of a raw `Cookie` header, or null. */
+export function readInviteTokenCookie(cookieHeader: string | null | undefined): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() !== INVITE_TOKEN_COOKIE_NAME) continue;
+    const raw = part.slice(eq + 1).trim();
+    if (!raw) return null;
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return null;
+}
+
+function serializeInviteTokenCookie(value: string, secure: boolean): string {
+  return [
+    `${INVITE_TOKEN_COOKIE_NAME}=${encodeURIComponent(value)}`,
+    "Path=/api/auth",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${INVITE_TOKEN_COOKIE_MAX_AGE_SECONDS}`,
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+}
+
+/** Set-Cookie value that stores a pending invite token for the auth endpoints. */
+export function buildInviteTokenCookie(token: string, opts: { secure: boolean }): string {
+  return serializeInviteTokenCookie(token, opts.secure);
+}
