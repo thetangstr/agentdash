@@ -69,6 +69,17 @@ RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" &
 # `anthropic` extra is the one provider SDK outside core that a 1.0 provider
 # (Anthropic) needs; Z.AI, OpenRouter and OpenAI use the core openai client.
 #
+# No source builds. Every dependency installs from a locked wheel
+# (`--no-build`); the only thing built is hermes-agent itself (editable, so its
+# bundled skills and plugins stay on disk), with the backend from
+# scripts/docker/hermes-build-backend.txt (pinned, hash-checked, no build
+# isolation). The five sdist-only packages in Hermes' uv.lock are
+# alibabacloud-credentials-api, alibabacloud-endpoint-util,
+# alibabacloud-gateway-dingtalk, alibabacloud-gateway-spi and alibabacloud-tea;
+# all belong to the DingTalk messaging extra, which this image does not
+# install, so `--no-build` never meets them. Adding that extra would fail the
+# build here, on purpose.
+#
 # Upgrade path: pick a tag from https://github.com/NousResearch/hermes-agent/tags,
 # set HERMES_REF and HERMES_COMMIT (`git rev-list -n1 <tag>`), rebuild, and run
 # scripts/docker/hermes-smoke.sh against the image. Record the bump in the
@@ -86,9 +97,13 @@ RUN git clone --depth 1 --branch "$HERMES_REF" https://github.com/NousResearch/h
   && test "$(git -C /opt/hermes rev-parse HEAD)" = "$HERMES_COMMIT" \
   && rm -rf /opt/hermes/.git
 WORKDIR /opt/hermes
-RUN uv sync --frozen --no-dev --extra anthropic \
+COPY scripts/docker/hermes-build-backend.txt /tmp/hermes-build-backend.txt
+RUN uv sync --frozen --no-dev --extra anthropic --no-install-project --no-build \
+  && (cd / && uv pip install --python /opt/hermes/.venv/bin/python --require-hashes \
+    --only-binary :all: --no-deps -r /tmp/hermes-build-backend.txt) \
+  && uv sync --frozen --no-dev --extra anthropic --inexact --no-build-isolation-package hermes-agent \
   && test -x /opt/hermes/.venv/bin/hermes \
-  && rm -rf tests website apps contributors ui-tui node_modules nix docker evals
+  && rm -rf tests website apps contributors ui-tui node_modules nix docker evals /tmp/hermes-build-backend.txt
 
 FROM base AS production
 ARG USER_UID=1000

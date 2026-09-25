@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { mkdir as fsMkdir, writeFile as fsWriteFile, rm as fsRm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { isHostedDeployment } from "./hosted-deployment.js";
+import { isHostedBox } from "./license.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,7 +68,7 @@ function resolved(deps: HermesProfileDeps = {}) {
  * where every run must carry an explicit `-p <profile>` so its ledger is certain.
  */
 export function hermesManagedProfilesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.AGENTDASH_HERMES_MANAGED_PROFILES === "true" || isHostedDeployment(env);
+  return env.AGENTDASH_HERMES_MANAGED_PROFILES === "true" || isHostedBox(env);
 }
 
 /**
@@ -77,7 +77,7 @@ export function hermesManagedProfilesEnabled(env: NodeJS.ProcessEnv = process.en
  * shared root profile and write its usage to the root ledger, silently.
  */
 export function hermesProfilesFailClosed(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isHostedDeployment(env);
+  return isHostedBox(env);
 }
 
 export const HERMES_PROFILE_PROVISION_ERROR_CODE = "hermes_profile_provision_failed";

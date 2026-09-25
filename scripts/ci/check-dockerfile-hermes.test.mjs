@@ -28,6 +28,20 @@ test("Hermes dependencies install from its lockfile with a digest-pinned uv", ()
   assert.match(DOCKERFILE, /uv sync --frozen --no-dev/, "uv sync must use --frozen (uv.lock hashes, no re-resolve)");
 });
 
+test("dependencies never build from source and the build backend is pinned by hash", () => {
+  assert.match(
+    DOCKERFILE,
+    /uv sync --frozen --no-dev --extra anthropic --no-install-project --no-build\b/,
+    "dependencies must install from wheels only (--no-build)",
+  );
+  assert.match(DOCKERFILE, /--require-hashes[\s\\]+--only-binary :all: --no-deps -r \/tmp\/hermes-build-backend\.txt/);
+  assert.match(DOCKERFILE, /--no-build-isolation-package hermes-agent/);
+  const backend = readFileSync(path.join(REPO_ROOT, "scripts", "docker", "hermes-build-backend.txt"), "utf8");
+  const pins = backend.split("\n").filter((line) => line.trim() && !line.startsWith("#"));
+  assert.ok(pins.length >= 2, "setuptools and wheel must both be pinned");
+  for (const line of pins) assert.match(line, /^[A-Za-z0-9_.-]+==[0-9.]+ --hash=sha256:[0-9a-f]{64}$/, line);
+});
+
 test("the production image ships a working hermes on PATH", () => {
   assert.match(DOCKERFILE, /COPY --from=hermes \/opt\/hermes \/opt\/hermes/);
   assert.match(DOCKERFILE, /ln -s \/opt\/hermes\/\.venv\/bin\/hermes \/usr\/local\/bin\/hermes/);

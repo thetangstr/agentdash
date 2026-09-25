@@ -44,6 +44,14 @@ docker run --rm -v "$VOLUME:/paperclip" "$IMAGE" sh -ec '
   touch /paperclip/.write-test && rm /paperclip/.write-test
   echo "node can write the Volume"
 '
+# A root-owned subtree under a node-owned root (a root `docker exec`, say).
+docker run --rm -v "$VOLUME:/paperclip" --entrypoint sh "$IMAGE" -c \
+  'mkdir -p /paperclip/.hermes/stray && touch /paperclip/.hermes/stray/file && chown -R root:root /paperclip/.hermes'
+docker run --rm -v "$VOLUME:/paperclip" "$IMAGE" sh -ec '
+  touch /paperclip/.hermes/stray/file /paperclip/.hermes/stray/new
+  test -z "$(find /paperclip -xdev ! -user node)"
+  echo "root-owned subtree handed to node"
+'
 
 log "provisioning two agents on the Volume"
 docker run --rm -v "$VOLUME:/paperclip" -e AGENTDASH_DEPLOYMENT_KIND=hosted "$IMAGE" sh -ec "
