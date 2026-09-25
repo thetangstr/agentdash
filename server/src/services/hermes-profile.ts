@@ -17,6 +17,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isHostedBox } from "./license.js";
 
+import { defaultHermesCommand } from "./adapter-command-resolution.js";
+
 const execFileAsync = promisify(execFile);
 
 /** Injectable seam so the lifecycle is unit-testable without a real Hermes. */
@@ -42,7 +44,8 @@ export interface HermesProfileDeps {
 
 function resolved(deps: HermesProfileDeps = {}) {
   const env = deps.env ?? process.env;
-  const hermesBin = deps.hermesBin ?? env.AGENTDASH_HERMES_COMMAND ?? "hermes";
+  // AgentDash (#735): the absolute path resolved at boot when there is one.
+  const hermesBin = deps.hermesBin ?? defaultHermesCommand(env);
   return {
     env,
     hermesBin,

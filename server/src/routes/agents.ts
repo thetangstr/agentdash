@@ -1609,13 +1609,14 @@ export function agentRoutes(
     companyId: string,
     adapterConfig: Record<string, unknown>,
     path = "adapterConfig",
+    storedAdapterConfig?: unknown,
   ) {
     assertNoAgentInstructionsConfigMutation(req, adapterConfig, path);
     await assertHostWorkspaceCommandAuthority(
       db,
       req,
       companyId,
-      collectAgentAdapterWorkspaceCommandPaths(adapterConfig, path),
+      collectAgentAdapterWorkspaceCommandPaths(adapterConfig, path, storedAdapterConfig),
     );
   }
 
@@ -3503,7 +3504,13 @@ export function agentRoutes(
         res.status(422).json({ error: "adapterConfig must be an object" });
         return;
       }
-      await assertNoAgentAdapterConfigMutation(req, existing.companyId, adapterConfig);
+      await assertNoAgentAdapterConfigMutation(
+        req,
+        existing.companyId,
+        adapterConfig,
+        "adapterConfig",
+        existing.adapterConfig,
+      );
       const changingInstructionsConfig = adapterConfigTouchesInstructionsConfig(adapterConfig);
       if (changingInstructionsConfig) {
         await assertCanManageInstructionsLocation(req, existing);

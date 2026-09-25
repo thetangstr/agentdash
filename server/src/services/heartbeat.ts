@@ -169,6 +169,7 @@ import {
 import { extractSkillMentionIds } from "@paperclipai/shared";
 import { environmentService } from "./environments.js";
 import { environmentRuntimeService } from "./environment-runtime.js";
+import { filterExecutionAffectingEnv } from "./adapter-host-execution-policy.js";
 import { environmentRunOrchestrator } from "./environment-run-orchestrator.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 
@@ -316,16 +317,22 @@ export async function resolveExecutionRunAdapterConfig(input: {
   const projectEnvResolution = input.projectEnv
     ? await input.secretsSvc.resolveEnvBindings(input.companyId, input.projectEnv)
     : { env: {}, secretKeys: new Set<string>() };
-  if (Object.keys(projectEnvResolution.env).length > 0) {
+  // AgentDash (security, #735): project env is editable by project members and
+  // reaches every run in the project, so the variables that change what runs
+  // (PATH, NODE_OPTIONS, LD_*, GIT_SSH_COMMAND, CLI homes, proxies, the control
+  // plane's own) are dropped here whoever stored them. Writes are refused too
+  // (routes/projects.ts); this covers rows stored before that check.
+  const { env: projectEnv, dropped: droppedProjectEnvKeys } = filterExecutionAffectingEnv(projectEnvResolution.env);
+  if (Object.keys(projectEnv).length > 0) {
     resolvedConfig.env = {
       ...parseObject(resolvedConfig.env),
-      ...projectEnvResolution.env,
+      ...projectEnv,
     };
     for (const key of projectEnvResolution.secretKeys) {
-      secretKeys.add(key);
+      if (!droppedProjectEnvKeys.includes(key)) secretKeys.add(key);
     }
   }
-  return { resolvedConfig, secretKeys };
+  return { resolvedConfig, secretKeys, droppedProjectEnvKeys };
 }
 
 export function extractMentionedSkillIdsFromSources(
@@ -5916,12 +5923,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     });
     const configSnapshot = buildExecutionWorkspaceConfigSnapshot(mergedConfig, selectedEnvironmentId);
     const executionRunConfig = stripWorkspaceRuntimeFromExecutionRunConfig(mergedConfig);
-    const { resolvedConfig, secretKeys } = await resolveExecutionRunAdapterConfig({
+    const { resolvedConfig, secretKeys, droppedProjectEnvKeys } = await resolveExecutionRunAdapterConfig({
       companyId: agent.companyId,
       executionRunConfig,
       projectEnv: projectContext?.env ?? null,
       secretsSvc,
     });
+    if (droppedProjectEnvKeys.length > 0) {
+      logger.warn(
+        { companyId: agent.companyId, agentId: agent.id, runId: run.id, droppedProjectEnvKeys },
+        "Dropped execution-affecting project env variables from the run environment",
+      );
+    }
     const runScopedMentionedSkillKeys = await resolveRunScopedMentionedSkillKeys({
       db,
       companyId: agent.companyId,

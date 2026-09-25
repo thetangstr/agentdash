@@ -136,6 +136,7 @@ import {
   hermesManagedProfilesActive,
   stripForeignHermesProfileArgs,
 } from "../services/adapter-host-execution-policy.js";
+import { defaultHermesCommand, pinDefaultHermesCommand } from "../services/adapter-command-resolution.js";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 import { withHermesSpawnWatch } from "./hermes-spawn-watch.js";
 
@@ -160,15 +161,10 @@ function hermesProfileProvisionFailedResult(error: HermesProfileProvisionError):
   };
 }
 
-const DEFAULT_HERMES_COMMAND = "hermes";
 const DEFAULT_CODEX_COMMAND = "codex-acp";
-
-function defaultHermesCommand(): string {
-  const configured = process.env.AGENTDASH_HERMES_COMMAND;
-  return typeof configured === "string" && configured.trim().length > 0
-    ? configured.trim()
-    : DEFAULT_HERMES_COMMAND;
-}
+// AgentDash (security, #735): the default Hermes command comes from
+// services/adapter-command-resolution.ts, which pins it to the absolute path
+// resolved from the server's PATH at boot.
 
 /**
  * AgentDash: same contract as defaultHermesCommand() for the ACP codex command.
@@ -218,6 +214,14 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand) {
     agentAdapterConfig.hermesCommand = fallbackHermesCommand;
   }
+  // AgentDash (security, #735): the default command by bare name runs the
+  // binary resolved at boot, not whatever `hermes` the run's PATH finds first.
+  if (config && typeof config.hermesCommand === "string") {
+    config.hermesCommand = pinDefaultHermesCommand(config.hermesCommand);
+  }
+  if (agentAdapterConfig && typeof agentAdapterConfig.hermesCommand === "string") {
+    agentAdapterConfig.hermesCommand = pinDefaultHermesCommand(agentAdapterConfig.hermesCommand);
+  }
   // Codex command defaults (parallel to hermesCommand pattern)
   if (config && !config.command && configCommand) {
     config.command = configCommand;
@@ -251,8 +255,7 @@ export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unk
       : null;
   return readNonEmptyString(config?.hermesCommand)
     ?? readNonEmptyString(agentConfig?.hermesCommand)
-    ?? process.env.AGENTDASH_HERMES_COMMAND
-    ?? DEFAULT_HERMES_COMMAND;
+    ?? defaultHermesCommand();
 }
 
 /**

@@ -339,6 +339,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       mode: "agent_safe",
       sourceCompanyId: companyId,
       allowHostExecutionConfig: actorMaySetHostExecutionConfig(req.actor),
+      actorIsAgent: req.actor.type === "agent",
     });
     await logActivity(db, {
       companyId: result.company.id,

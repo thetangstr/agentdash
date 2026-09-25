@@ -334,7 +334,7 @@ describeEmbeddedPostgres("platform authorization hardening", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
   });
 
-  it("requires agents:create to write host-executed workspace commands", async () => {
+  it("requires instance admin to write host-executed workspace commands (#735)", async () => {
     const { company, admin, operator } = await seed();
     const { projectRoutes } = await import("../routes/projects.js");
     const factory = async () => projectRoutes(db);
@@ -356,8 +356,17 @@ describeEmbeddedPostgres("platform authorization hardening", () => {
     expect(denied.status).toBe(403);
     expect(await db.select().from(projects).where(eq(projects.companyId, company.id))).toHaveLength(0);
 
-    // An administrator may still do it — this narrows authority, not capability.
-    const adminApp = await mount(factory, actor(company.id, admin.principalId, "owner"));
+    // AgentDash (#735): a company owner holding agents:create is refused too;
+    // raw host commands are instance-admin only.
+    const ownerApp = await mount(factory, actor(company.id, admin.principalId, "owner"));
+    const ownerDenied = await call(ownerApp, (baseUrl) =>
+      request(baseUrl).post(`/api/companies/${company.id}/projects`).send(body),
+    );
+    expect(ownerDenied.status).toBe(403);
+    expect(await db.select().from(projects).where(eq(projects.companyId, company.id))).toHaveLength(0);
+
+    // The instance admin may still do it — this narrows authority, not capability.
+    const adminApp = await mount(factory, { ...actor(company.id, admin.principalId, "owner"), isInstanceAdmin: true });
     const allowed = await call(adminApp, (baseUrl) =>
       request(baseUrl).post(`/api/companies/${company.id}/projects`).send(body),
     );

@@ -580,10 +580,16 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
     expect(usageJson?.meteringStatus).toBe("unmetered_no_ledger");
     expect(usageJson?.inputTokens).toBeUndefined();
 
-    const events = await db
-      .select()
-      .from(heartbeatRunEvents)
-      .where(eq(heartbeatRunEvents.runId, runId));
+    // The warning is appended after runFacts is persisted (which is what
+    // settle() waits for), so wait for the lifecycle event that precedes it
+    // and the warning itself before counting.
+    const readEvents = () =>
+      db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, runId));
+    await vi.waitFor(async () => {
+      const events = await readEvents();
+      expect(events.some((e) => e.eventType === "metering" && e.level === "warn")).toBe(true);
+    }, { timeout: 5_000 });
+    const events = await readEvents();
     const warnings = events.filter(
       (e) => e.eventType === "metering" && e.level === "warn",
     );
