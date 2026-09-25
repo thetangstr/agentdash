@@ -147,5 +147,7 @@ ENV AGENTDASH_HERMES_COMMAND=/usr/local/bin/hermes \
 # VOLUME ["/paperclip"] — removed for Railway (Dockerfile VOLUME unsupported; use a Railway Volume mounted at /paperclip if persistence is needed; SaaS uses external Postgres)
 EXPOSE 3100
 
+# AgentDash (#721): the container starts as root so the entrypoint can hand a
+# root-owned platform Volume (Railway) to node, then drops to node via gosu.
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]

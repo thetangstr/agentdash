@@ -5,7 +5,9 @@
 #   scripts/docker/hermes-smoke.sh <image>
 #
 # 1. `hermes --version` prints the version pinned in the Dockerfile.
-# 2. With a Volume at /paperclip, provisioning two agents through the server's
+# 2. A root-owned Volume (how Railway mounts one) is writable by the server's
+#    runtime user after the entrypoint runs.
+# 3. With a Volume at /paperclip, provisioning two agents through the server's
 #    own hermes-profile code yields two profiles and two agentdash-<id> wrappers
 #    under /paperclip, and both survive a fresh container on the same Volume.
 #
@@ -33,6 +35,15 @@ if [ -n "$EXPECTED_REF" ] && ! printf '%s' "$VERSION_OUT" | grep -qF "($EXPECTED
 fi
 
 docker volume create "$VOLUME" >/dev/null
+
+# A Railway Volume arrives root-owned; the entrypoint must hand it to node.
+log "starting on a root-owned Volume"
+docker run --rm -v "$VOLUME:/paperclip" --entrypoint sh "$IMAGE" -c 'chown -R root:root /paperclip'
+docker run --rm -v "$VOLUME:/paperclip" "$IMAGE" sh -ec '
+  test "$(id -un)" = node
+  touch /paperclip/.write-test && rm /paperclip/.write-test
+  echo "node can write the Volume"
+'
 
 log "provisioning two agents on the Volume"
 docker run --rm -v "$VOLUME:/paperclip" -e AGENTDASH_DEPLOYMENT_KIND=hosted "$IMAGE" sh -ec "

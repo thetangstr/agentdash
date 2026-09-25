@@ -192,7 +192,7 @@ The image ships a pinned Hermes Agent (`HERMES_REF` / `HERMES_COMMIT` in the [Do
 | `AGENTDASH_HERMES_MANAGED_PROFILES` | `true` | one Hermes profile per agent |
 | `AGENTDASH_DEFAULT_ADAPTER` | `hermes_local` | new agents and CoS chat use Hermes |
 
-Mount a persistent Volume at `/paperclip`, or every profile, key and ledger is lost on redeploy. Do **not** set `HERMES_HOME`: it pins every run's metering to the root ledger instead of the agent's own profile ledger.
+Mount a persistent Volume at `/paperclip`, or every profile, key and ledger is lost on redeploy. Railway mounts a fresh Volume owned by root; the container starts as root, and `scripts/docker-entrypoint.sh` gives `/paperclip` to the `node` user (`chown -R`, only when the owner differs) before dropping to `node` with `gosu`. The server, Hermes' home, every agent profile and the customer's provider key all live on that one Volume. Do not set Railway's run-as-user override: the entrypoint needs root for that one step. Do **not** set `HERMES_HOME`: it pins every run's metering to the root ledger instead of the agent's own profile ledger.
 
 Set `AGENTDASH_DEPLOYMENT_KIND=hosted` on a hosted box. It turns managed profiles on regardless of the flag above and makes profile provisioning fail closed: a run whose profile cannot be provisioned fails with `hermes_profile_provision_failed` instead of running on the shared root profile. Without it (self-hosted, on-prem) a failed provision still falls back to the default command.
 
