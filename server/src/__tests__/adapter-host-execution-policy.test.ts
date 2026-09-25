@@ -9,8 +9,11 @@ import {
   findRestrictedHostExecutionFields,
   isSafeHermesExtraArgs,
   runtimeConfigHostExecutionInputs,
-  stripForeignHermesProfileArgs,
 } from "../services/adapter-host-execution-policy.js";
+import { stripForeignHermesProfileArgs } from "../adapters/hermes-profile-args.js";
+import { hostExecutionContextForCompany } from "../services/host-execution-context.js";
+import { agentProfileName, hermesManagedProfilesEnabled } from "../services/hermes-profile.js";
+import { isHostedBox } from "../services/license.js";
 
 // AgentDash (security, #719): one classifier for host-execution fields, shared
 // by agent create/update/hire/rollback, approvals, import, issue overrides,
@@ -354,5 +357,53 @@ describe("Hermes -p with managed profiles (#737)", () => {
       ),
     ).toEqual({ extraArgs: ["--verbose"], dropped: ["ccworker", "root", "other", "x", "y"] });
     expect(stripForeignHermesProfileArgs(undefined, own)).toEqual({ extraArgs: undefined, dropped: [] });
+  });
+});
+
+describe("write-time -p matches the run-time strip (#737)", () => {
+  const saved = process.env.AGENTDASH_DEPLOYMENT_KIND;
+  const savedManaged = process.env.AGENTDASH_HERMES_MANAGED_PROFILES;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    else process.env.AGENTDASH_DEPLOYMENT_KIND = saved;
+    if (savedManaged === undefined) delete process.env.AGENTDASH_HERMES_MANAGED_PROFILES;
+    else process.env.AGENTDASH_HERMES_MANAGED_PROFILES = savedManaged;
+  });
+
+  const own = "11111111-1111-4111-8111-111111111111";
+  const sibling = "22222222-2222-4222-8222-222222222222";
+
+  function restricted(extraArgs: string[], agentId: string | null) {
+    return findRestrictedHostExecutionFields({
+      adapterType: "hermes_local",
+      adapterConfig: { extraArgs },
+      ...hostExecutionContextForCompany("company-1", { agentId }),
+    });
+  }
+
+  it("on a hosted box accepts only the agent's own profile, never a sibling agent's", () => {
+    process.env.AGENTDASH_DEPLOYMENT_KIND = " Hosted ";
+    expect(restricted(["-p", agentProfileName(own)], own)).toEqual([]);
+    // A sibling's profile is in the same company, but every run of this agent
+    // would drop it (registry.ts keeps only the agent's own profile).
+    expect(restricted(["-p", agentProfileName(sibling)], own)).toEqual(["adapterConfig.extraArgs"]);
+    expect(stripForeignHermesProfileArgs(["-p", agentProfileName(sibling)], agentProfileName(own)).dropped).toEqual([
+      agentProfileName(sibling),
+    ]);
+  });
+
+  it("a configuration with no agent yet may name no profile", () => {
+    process.env.AGENTDASH_HERMES_MANAGED_PROFILES = "true";
+    expect(restricted(["-p", agentProfileName(own)], null)).toEqual(["adapterConfig.extraArgs"]);
+    expect(restricted(["--reasoning-effort", "low"], null)).toEqual([]);
+  });
+
+  it("uses the one managed-profiles helper, which reads the hosted flag through isHostedBox", () => {
+    delete process.env.AGENTDASH_HERMES_MANAGED_PROFILES;
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "HOSTED";
+    expect(hermesManagedProfilesEnabled()).toBe(isHostedBox());
+    expect(isSafeHermesExtraArgs(["-p", "ccworker"])).toBe(false);
+    delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    expect(isSafeHermesExtraArgs(["-p", "ccworker"])).toBe(true);
   });
 });

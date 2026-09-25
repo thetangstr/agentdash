@@ -4024,7 +4024,7 @@ export function accessRoutes(
           adapterType: existing.adapterType,
           adapterConfig: existing.agentDefaultsPayload,
           prefix: "agentDefaultsPayload",
-        }, await hostExecutionContextForCompany(db, companyId));
+        }, hostExecutionContextForCompany(companyId));
       }
 
       const invite = await db

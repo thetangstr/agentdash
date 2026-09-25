@@ -118,3 +118,33 @@ describe("resolveAgentRuntimeModel", () => {
     expect(resolved).toEqual({ model: null, provider: null, source: "unknown" });
   });
 });
+
+describe("resolveAgentRuntimeModel profile path (shared Hermes profile resolver)", () => {
+  it("reads the managed profile's config.yaml under HERMES_PROFILES_DIR, not ~/.hermes/profiles", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { agentProfileName } = await import("./hermes-profile.js");
+    const agentId = "33333333-3333-4333-8333-333333333333";
+    const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-profiles-"));
+    try {
+      const dir = path.join(profilesDir, agentProfileName(agentId));
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "config.yaml"), ["model:", "  default: k3", "  provider: openrouter"].join("\n"));
+      const resolved = await resolveAgentRuntimeModel(
+        { adapterType: HERMES_LOCAL, adapterConfig: {}, agentId },
+        {
+          detectHostModel: async () => null,
+          env: {
+            AGENTDASH_HERMES_MANAGED_PROFILES: "true",
+            HERMES_PROFILES_DIR: profilesDir,
+            AGENTDASH_HERMES_ROOT: path.join(profilesDir, "no-such-root"),
+          } as NodeJS.ProcessEnv,
+        },
+      );
+      expect(resolved).toMatchObject({ model: "k3", source: "agent_profile" });
+    } finally {
+      fs.rmSync(profilesDir, { recursive: true, force: true });
+    }
+  });
+});

@@ -4474,7 +4474,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
                 manifestAgent.runtimeConfig,
                 existingForHostExec?.runtimeConfig,
               ),
-            ], await hostExecutionContextForCompany(db, targetCompany.id));
+            ], hostExecutionContextForCompany(targetCompany.id, { agentId: existingForHostExec?.id ?? null }));
           }
 
           const desiredSkills = (manifestAgent.skills ?? []).map((skillRef) => desiredSkillRefMap.get(skillRef) ?? skillRef);

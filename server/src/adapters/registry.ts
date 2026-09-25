@@ -132,10 +132,7 @@ import {
   HermesProfileProvisionError,
   provisionAgentProfile,
 } from "../services/hermes-profile.js";
-import {
-  hermesManagedProfilesActive,
-  stripForeignHermesProfileArgs,
-} from "../services/adapter-host-execution-policy.js";
+import { stripForeignHermesProfileConfig } from "./hermes-profile-args.js";
 import { defaultHermesCommand, pinDefaultHermesCommand } from "../services/adapter-command-resolution.js";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 import { withHermesSpawnWatch } from "./hermes-spawn-watch.js";
@@ -913,18 +910,26 @@ const hermesLocalAdapter: ServerAdapterModule = {
     }
 
     // AgentDash (security, #737): with managed profiles on, the run uses the
-    // agent's own profile; a `-p <other>` in extraArgs would borrow another
-    // profile's provider credentials (for example an operator's `ccworker`).
-    if (hermesManagedProfilesActive() && taskPatchedCtx.agent?.id) {
-      const stripped = stripForeignHermesProfileArgs(
-        patchedConfig.extraArgs,
-        agentProfileName(taskPatchedCtx.agent.id),
-      );
-      if (stripped.dropped.length > 0) {
-        patchedConfig.extraArgs = stripped.extraArgs;
+    // agent's own profile; a `-p <other>` would borrow another profile's
+    // provider credentials (for example an operator's `ccworker`). Stripped
+    // from every key the ledger resolver reads (`hermesCommand`, `command`,
+    // `extraArgs`, `args`; adapters/hermes-profile-args.ts), in both the
+    // agent config the adapter executes and the run config metering reads, so
+    // the run and its ledger can never name different profiles.
+    let strippedRunConfig: Record<string, unknown> | null = null;
+    if (hermesManagedProfilesEnabled() && taskPatchedCtx.agent?.id) {
+      const ownProfile = agentProfileName(taskPatchedCtx.agent.id);
+      const strippedAgent = stripForeignHermesProfileConfig(patchedConfig, ownProfile);
+      const strippedRun = stripForeignHermesProfileConfig(readRecord(taskPatchedCtx.config) ?? {}, ownProfile);
+      if (strippedAgent.dropped.length > 0) {
+        Object.assign(patchedConfig, strippedAgent.config);
+      }
+      if (strippedRun.dropped.length > 0) strippedRunConfig = strippedRun.config;
+      const dropped = [...new Set([...strippedAgent.dropped, ...strippedRun.dropped])];
+      if (dropped.length > 0) {
         await taskPatchedCtx.onLog(
           "stderr",
-          `[hermes] Ignored -p/--profile ${stripped.dropped.join(", ")}: managed runs use the agent's own profile.\n`,
+          `[hermes] Ignored -p/--profile ${dropped.join(", ")}: managed runs use the agent's own profile.\n`,
         );
       }
     }
@@ -968,8 +973,13 @@ const hermesLocalAdapter: ServerAdapterModule = {
       // run config, and the ledger reader prefers the run config's hermesCommand.
       // Mirror the profile wrapper there so metering resolves the agent's own
       // profile ledger rather than the root one.
-      ...(managedProfileCommand
-        ? { config: { ...(readRecord(taskPatchedCtx.config) ?? {}), hermesCommand: managedProfileCommand } }
+      ...(managedProfileCommand || strippedRunConfig
+        ? {
+            config: {
+              ...(strippedRunConfig ?? readRecord(taskPatchedCtx.config) ?? {}),
+              ...(managedProfileCommand ? { hermesCommand: managedProfileCommand } : {}),
+            },
+          }
         : {}),
       agent: {
         ...taskPatchedCtx.agent,

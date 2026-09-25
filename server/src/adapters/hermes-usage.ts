@@ -3,6 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AdapterExecutionResult, UsageSummary } from "@paperclipai/adapter-utils";
+import {
+  HERMES_PROFILE_ID,
+  hermesConfigCommand,
+  hermesProfileFromConfigArgv,
+  hermesProfileFromConfigCommand,
+} from "./hermes-profile-args.js";
 
 /**
  * Token metering for `hermes_local`.
@@ -133,7 +139,6 @@ export interface HermesStateDbResolveOptions {
 }
 
 const WRAPPER_MAX_BYTES = 64 * 1024;
-const PROFILE_NAME = /^[A-Za-z0-9_.-]+$/;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -148,25 +153,6 @@ function readEnvValue(env: Record<string, unknown> | null, key: string): string 
   const record = readRecord(raw);
   if (record?.type === "plain") return readString(record.value);
   return null;
-}
-
-function hermesProfileFromArgs(args: unknown): string | null {
-  if (!Array.isArray(args)) return null;
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (typeof arg !== "string") continue;
-    if ((arg === "-p" || arg === "--profile") && typeof args[index + 1] === "string") {
-      return readString(args[index + 1]);
-    }
-    if (arg.startsWith("--profile=")) return readString(arg.slice("--profile=".length));
-  }
-  return null;
-}
-
-/** A `-p`/`--profile` inside the command string itself — `hermes -p foo`. */
-function hermesProfileFromCommand(command: string): string | null {
-  const match = /(?:^|\s)(?:-p|--profile)(?:\s+|=)["']?([A-Za-z0-9_.-]+)/.exec(command);
-  return match?.[1] ?? null;
 }
 
 function findOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
@@ -193,7 +179,7 @@ function readWrapperProfile(
     const text = readFileSync(commandPath, "utf8");
     if (text.includes("\u0000")) return null;
     // Only a `-p`/`--profile` on a line that invokes hermes counts (not `mkdir -p`).
-    const profile = /hermes\S*["']?\s(?:[^\n]*\s)?(?:-p|--profile)(?:\s+|=)["']?([A-Za-z0-9_.-]+)/.exec(text)?.[1] ?? null;
+    const profile = /hermes\S*["']?\s(?:[^\n]*\s)?(?:-p|--profile)(?:\s+|=)["']?([a-z0-9][a-z0-9_-]{0,63})\b/.exec(text)?.[1] ?? null;
     const hermesHome = /HERMES_HOME=["']?([^"'\s;]+)/.exec(text)?.[1] ?? null;
     if (!profile && !hermesHome) return null;
     return { profile, hermesHome };
@@ -203,29 +189,139 @@ function readWrapperProfile(
 }
 
 /**
+ * AgentDash: the Hermes root and profile layout, as Hermes itself resolves it
+ * (hermes_cli/main.py `_apply_profile_override`, hermes_cli/profiles.py
+ * `resolve_profile_env`, hermes_constants.py `get_default_hermes_root`,
+ * pinned v2026.9.11).
+ *
+ * - With a profile (`-p NAME`, or the managed profile), the run's home is
+ *   `<root>/profiles/NAME`, where `<root>` is the `HERMES_HOME` the process
+ *   sees (its grandparent when that value is itself a profile dir) or, with no
+ *   `HERMES_HOME`, the default root. `-p default` is `<root>` itself. So a
+ *   `HERMES_HOME` never overrides an explicit profile; it only moves the root
+ *   the profile lives under.
+ * - With no profile, a profile-shaped `HERMES_HOME` is used as is; otherwise
+ *   the sticky `active_profile` applies, then `HERMES_HOME` or the root.
+ *
+ * `AGENTDASH_HERMES_ROOT` stands in for Hermes' `$HOME/.hermes` (tests,
+ * relocated installs) and `HERMES_PROFILES_DIR` for `<default root>/profiles`,
+ * the same way hermes-profile.ts provisions profiles.
+ */
+export interface HermesLayout {
+  /** Hermes' default root (`$HOME/.hermes`). */
+  nativeRoot: string;
+  /** `<nativeRoot>/profiles`, or `HERMES_PROFILES_DIR`. */
+  profilesDir: string;
+}
+
+export function hermesLayout(env: NodeJS.ProcessEnv = process.env): HermesLayout {
+  const nativeRoot = readString(env.AGENTDASH_HERMES_ROOT) ?? path.join(os.homedir(), ".hermes");
+  const profilesDir = readString(env.HERMES_PROFILES_DIR) ?? path.join(nativeRoot, "profiles");
+  return { nativeRoot, profilesDir };
+}
+
+function isProfileShaped(home: string): boolean {
+  return path.basename(path.dirname(path.resolve(home))) === "profiles";
+}
+
+/** `resolve_profile_env`'s root: HERMES_HOME (or its grandparent when profile-shaped). */
+function rootOfHome(home: string): string {
+  const resolved = path.resolve(home);
+  return isProfileShaped(resolved) ? path.dirname(path.dirname(resolved)) : resolved;
+}
+
+/**
+ * The directory Hermes uses as HERMES_HOME for `-p <profile>`, given the
+ * HERMES_HOME the run's process sees (null when unset). The one profile-path
+ * resolver: the ledger resolver below and agent-runtime-model.ts both use it.
+ */
+export function resolveHermesProfileDir(
+  profile: string,
+  opts: { env?: NodeJS.ProcessEnv; hermesHome?: string | null } = {},
+): string {
+  const layout = hermesLayout(opts.env ?? process.env);
+  const home = readString(opts.hermesHome);
+  if (home) {
+    const root = rootOfHome(home);
+    return profile === "default" ? root : path.join(root, "profiles", profile);
+  }
+  return profile === "default" ? layout.nativeRoot : path.join(layout.profilesDir, profile);
+}
+
+/** `get_default_hermes_root`: where `active_profile` is read from. */
+function activeProfileRoot(layout: HermesLayout, home: string | null): string {
+  if (!home) return layout.nativeRoot;
+  const rel = path.relative(path.resolve(layout.nativeRoot), path.resolve(home));
+  const underNative = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return underNative ? layout.nativeRoot : rootOfHome(home);
+}
+
+function configWrapper(config: Record<string, unknown>, env: NodeJS.ProcessEnv) {
+  const command = hermesConfigCommand(config);
+  const commandPath = command ? findOnPath(command.split(/\s+/)[0] ?? "", env) : null;
+  return commandPath ? readWrapperProfile(commandPath) : null;
+}
+
+/**
+ * The HERMES_HOME the run's Hermes process sees: a wrapper's inline
+ * assignment beats the run env, and the run's `adapterConfig.env` beats the
+ * server's. Null when none is set.
+ */
+function runHermesHome(
+  config: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+  wrapper: ReturnType<typeof readWrapperProfile> = configWrapper(config, env),
+): { path: string; source: HermesStateDbSource } | null {
+  if (wrapper?.hermesHome) return { path: wrapper.hermesHome, source: "wrapper_script" };
+  const adapterEnvHome = readEnvValue(readRecord(config.env), "HERMES_HOME");
+  if (adapterEnvHome) return { path: adapterEnvHome, source: "adapter_env_hermes_home" };
+  const serverHome = readString(env.HERMES_HOME);
+  if (serverHome) return { path: serverHome, source: "env_hermes_home" };
+  return null;
+}
+
+/** `resolveHermesProfileDir` for an agent's run: its HERMES_HOME read from its config and env. */
+export function resolveHermesProfileDirForRun(
+  profile: string,
+  opts: { env?: NodeJS.ProcessEnv; adapterConfig?: Record<string, unknown> | null } = {},
+): string {
+  const env = opts.env ?? process.env;
+  const home = runHermesHome(readRecord(opts.adapterConfig) ?? {}, env);
+  return resolveHermesProfileDir(profile, { env, hermesHome: home?.path ?? null });
+}
+
+/**
  * Where Hermes keeps its state, strongest evidence first.
  *
- * Certain sources, in order: the caller-asserted profile (the run provably
- * used it — a `hermes -p` run writes `<profilesDir>/<name>/state.db` wherever
- * the unmanaged database lives); `AGENTDASH_HERMES_STATE_DB`, the operator
- * override for a relocated unmanaged database; a `HERMES_HOME` the run's own
- * `adapterConfig.env` sets; the server's `HERMES_HOME`; an explicit
- * `-p/--profile` (extraArgs/args arrays, the command string itself, or a
- * config `hermesProfile`) or a wrapper script whose text names the profile or
- * `HERMES_HOME` — gated on the profile ledger existing, because a `-p` naming
- * a profile Hermes never created says nothing about where this run writes.
+ * Certain sources, in order:
+ *   1. the caller-asserted profile (`opts.profile`, e.g. the managed profile
+ *      `agentdash-<agentId>` a managed run provably uses; not gated on the
+ *      ledger existing yet);
+ *   2. the explicit profile flag Hermes itself would select: the command
+ *      string's own `-p`, else a wrapper script's `-p` (it precedes `"$@"`),
+ *      else `extraArgs`, else `args` (hermes-profile-args.ts, the same keys the
+ *      managed run path strips), else a config `hermesProfile` — gated on the
+ *      profile ledger existing, because Hermes exits on a profile it never
+ *      created;
+ *   3. `AGENTDASH_HERMES_STATE_DB`, the operator override for a relocated
+ *      unmanaged database;
+ *   4. with no profile, the `HERMES_HOME` the run sees (a wrapper's, else the
+ *      run's own `adapterConfig.env`, else the server's).
  *
- * Uncertain sources, in order: the sticky `active_profile` (Hermes' own
- * default when no `-p` is given, but it can change under a running agent) and
- * the root ledger. `HERMES_PROFILES_DIR` is resolved exactly like
- * `hermes-profile.ts` does; `AGENTDASH_HERMES_ROOT` overrides the Hermes root
- * (tests, relocated installs).
+ * A profile always resolves under the run's `HERMES_HOME` root (see
+ * `resolveHermesProfileDir`), so an explicit per-agent `-p` or the managed
+ * profile wins over a server-level `HERMES_HOME`, exactly as in Hermes.
+ *
+ * Uncertain sources: the sticky `active_profile` (Hermes' own default when no
+ * `-p` is given, but it can change under a running agent) and the root ledger.
+ * Everything after the first entry is a fallback candidate for metering.
  */
 export function resolveHermesStateDbResolutions(
   opts: HermesStateDbResolveOptions = {},
 ): HermesStateDbResolution[] {
   const env = opts.env ?? process.env;
   const config = readRecord(opts.adapterConfig) ?? {};
+  const layout = hermesLayout(env);
   const resolutions: HermesStateDbResolution[] = [];
   const push = (
     dbPath: string,
@@ -238,59 +334,68 @@ export function resolveHermesStateDbResolutions(
     }
   };
 
-  const hermesRoot = readString(env.AGENTDASH_HERMES_ROOT) ?? path.join(os.homedir(), ".hermes");
-  const profilesDir = readString(env.HERMES_PROFILES_DIR) ?? path.join(hermesRoot, "profiles");
+  const wrapper = configWrapper(config, env);
+  const runHome = runHermesHome(config, env, wrapper);
+  const profileDb = (profile: string) =>
+    path.join(resolveHermesProfileDir(profile, { env, hermesHome: runHome?.path ?? null }), "state.db");
   const existingProfileDb = (profile: string | null) =>
-    profile && PROFILE_NAME.test(profile) && existsSync(path.join(profilesDir, profile, "state.db"))
-      ? path.join(profilesDir, profile, "state.db")
+    profile && (profile === "default" || HERMES_PROFILE_ID.test(profile)) && existsSync(profileDb(profile))
+      ? profileDb(profile)
       : null;
 
+  let profileResolved = false;
   const hinted = readString(opts.profile);
-  if (hinted && PROFILE_NAME.test(hinted)) {
-    push(path.join(profilesDir, hinted, "state.db"), "profile_hint", "certain", hinted);
+  if (hinted && HERMES_PROFILE_ID.test(hinted)) {
+    push(profileDb(hinted), "profile_hint", "certain", hinted);
+    profileResolved = true;
   }
 
-  const explicit = readString(env.AGENTDASH_HERMES_STATE_DB);
-  if (explicit) push(path.resolve(explicit), "env_state_db", "certain", null);
-
-  const adapterEnvHome = readEnvValue(readRecord(config.env), "HERMES_HOME");
-  if (adapterEnvHome) {
-    push(path.resolve(adapterEnvHome, "state.db"), "adapter_env_hermes_home", "certain", null);
+  // The first explicit flag is the one Hermes uses; a lower source is never
+  // consulted once a higher one names a profile.
+  const commandProfile = hermesProfileFromConfigCommand(config);
+  const explicit: { profile: string; source: HermesStateDbSource } | null = commandProfile
+    ? { profile: commandProfile, source: "profile_arg" }
+    : wrapper?.profile
+      ? { profile: wrapper.profile, source: "wrapper_script" }
+      : (() => {
+          const argvProfile = hermesProfileFromConfigArgv(config);
+          if (argvProfile) return { profile: argvProfile, source: "profile_arg" as const };
+          const configProfile = readString(config.hermesProfile) ?? readString(config.profile);
+          return configProfile ? { profile: configProfile.toLowerCase(), source: "profile_config" as const } : null;
+        })();
+  const explicitDb = explicit ? existingProfileDb(explicit.profile) : null;
+  if (explicit && explicitDb) {
+    push(explicitDb, explicit.source, profileResolved ? "uncertain" : "certain", explicit.profile);
+    profileResolved = true;
   }
-  const serverHome = readString(env.HERMES_HOME);
-  if (serverHome) push(path.resolve(serverHome, "state.db"), "env_hermes_home", "certain", null);
 
-  const command = readString(config.hermesCommand) ?? readString(config.command);
+  const fallback = (certainty: HermesStateDbCertainty): HermesStateDbCertainty =>
+    profileResolved ? "uncertain" : certainty;
 
-  const argProfile =
-    hermesProfileFromArgs(config.extraArgs)
-    ?? hermesProfileFromArgs(config.args)
-    ?? (command ? hermesProfileFromCommand(command) : null);
-  const argDb = existingProfileDb(argProfile);
-  if (argDb) push(argDb, "profile_arg", "certain", argProfile);
+  const stateDbOverride = readString(env.AGENTDASH_HERMES_STATE_DB);
+  if (stateDbOverride) push(path.resolve(stateDbOverride), "env_state_db", fallback("certain"), null);
 
-  const configProfile = readString(config.hermesProfile) ?? readString(config.profile);
-  const configDb = existingProfileDb(configProfile);
-  if (configDb) push(configDb, "profile_config", "certain", configProfile);
-
-  const commandPath = command ? findOnPath(command.split(/\s+/)[0] ?? "", env) : null;
-  const wrapper = commandPath ? readWrapperProfile(commandPath) : null;
-  if (wrapper?.hermesHome) {
-    push(path.resolve(wrapper.hermesHome, "state.db"), "wrapper_script", "certain", null);
+  if (runHome && isProfileShaped(runHome.path)) {
+    push(path.resolve(runHome.path, "state.db"), runHome.source, fallback("certain"), null);
   }
-  const wrapperDb = existingProfileDb(wrapper?.profile ?? null);
-  if (wrapperDb) push(wrapperDb, "wrapper_script", "certain", wrapper!.profile);
 
   let active: string | null = null;
-  try {
-    active = readString(readFileSync(path.join(hermesRoot, "active_profile"), "utf8"));
-  } catch {
-    active = null;
+  if (!(runHome && isProfileShaped(runHome.path))) {
+    try {
+      active = readString(
+        readFileSync(path.join(activeProfileRoot(layout, runHome?.path ?? null), "active_profile"), "utf8"),
+      );
+    } catch {
+      active = null;
+    }
   }
   const activeDb = active && active !== "default" ? existingProfileDb(active) : null;
   if (activeDb) push(activeDb, "active_profile", "uncertain", active);
 
-  push(path.join(hermesRoot, "state.db"), "root_fallback", "uncertain", null);
+  if (runHome) {
+    push(path.resolve(runHome.path, "state.db"), runHome.source, activeDb ? "uncertain" : fallback("certain"), null);
+  }
+  push(path.join(layout.nativeRoot, "state.db"), "root_fallback", "uncertain", null);
   return resolutions;
 }
 

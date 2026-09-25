@@ -1857,7 +1857,7 @@ export function agentRoutes(
         adapterType: type,
         adapterConfig: req.body?.adapterConfig,
         stored: storedTestConfig,
-      }, await hostExecutionContextForCompany(db, companyId));
+      }, hostExecutionContextForCompany(companyId, { agentId: storedTestConfig ? testedAgentId : null }));
 
       // Closes #315: e2e bypass — when AGENTDASH_ADAPTER_ENV_BYPASS=true
       // is set, short-circuit the adapter probe and return a synthetic
@@ -2356,7 +2356,7 @@ export function agentRoutes(
         assertHostExecutionConfigAllowed(req.actor, [
           { adapterType: snapshotAdapterType, adapterConfig: snapshot.adapterConfig, stored: existing.adapterConfig },
           ...runtimeConfigHostExecutionInputs(snapshotAdapterType, snapshot.runtimeConfig, existing.runtimeConfig),
-        ], await hostExecutionContextForCompany(db, existing.companyId));
+        ], hostExecutionContextForCompany(existing.companyId, { agentId: existing.id }));
       }
     }
 
@@ -2540,7 +2540,7 @@ export function agentRoutes(
     assertHostExecutionConfigAllowed(req.actor, [
       { adapterType: hireInput.adapterType, adapterConfig: rawHireAdapterConfig },
       ...runtimeConfigHostExecutionInputs(hireInput.adapterType, hireInput.runtimeConfig),
-    ], await hostExecutionContextForCompany(db, companyId));
+    ], hostExecutionContextForCompany(companyId));
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       rawHireAdapterConfig,
@@ -2769,7 +2769,7 @@ export function agentRoutes(
     assertHostExecutionConfigAllowed(req.actor, [
       { adapterType: createInput.adapterType, adapterConfig: rawCreateAdapterConfig },
       ...runtimeConfigHostExecutionInputs(createInput.adapterType, createInput.runtimeConfig),
-    ], await hostExecutionContextForCompany(db, companyId));
+    ], hostExecutionContextForCompany(companyId));
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       rawCreateAdapterConfig,
@@ -3543,7 +3543,7 @@ export function agentRoutes(
           }]
         : []),
       ...runtimeConfigHostExecutionInputs(requestedAdapterType, requestedRuntimeConfig, existing.runtimeConfig),
-    ], await hostExecutionContextForCompany(db, existing.companyId));
+    ], hostExecutionContextForCompany(existing.companyId, { agentId: existing.id }));
     const touchesAdapterConfiguration =
       hasOwn(patchData, "adapterType") ||
       hasOwn(patchData, "adapterConfig");

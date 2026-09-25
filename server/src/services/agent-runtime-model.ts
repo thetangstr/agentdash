@@ -23,13 +23,13 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import {
   detectModel,
   parseModelFromConfig,
   resolveProvider,
 } from "hermes-paperclip-adapter/server";
-import { agentProfileName, hermesManagedProfilesEnabled as sharedHermesManagedProfilesEnabled } from "./hermes-profile.js";
+import { agentProfileName, hermesManagedProfilesEnabled } from "./hermes-profile.js";
+import { resolveHermesProfileDirForRun } from "../adapters/hermes-usage.js";
 
 const HERMES_LOCAL_ADAPTER_TYPE = "hermes_local";
 
@@ -70,19 +70,19 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-/** Managed hermes profiles are opt-in (always on for a hosted box); the resolver only consults them when on. */
-function hermesManagedProfilesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return sharedHermesManagedProfilesEnabled(env);
-}
-
-function hermesHome(env: NodeJS.ProcessEnv = process.env): string {
-  return readNonEmptyString(env.HERMES_HOME) ?? join(homedir(), ".hermes");
-}
-
-function defaultReadProfileConfig(profileName: string): Promise<string | null> {
-  return readFile(join(hermesHome(), "profiles", profileName, "config.yaml"), "utf-8").catch(
-    () => null,
-  );
+// AgentDash: the profile's config.yaml, found through the shared Hermes
+// profile resolver (adapters/hermes-usage.ts), so it honours
+// HERMES_PROFILES_DIR and a HERMES_HOME the same way the ledger resolver and
+// Hermes itself do.
+function defaultReadProfileConfig(
+  profileName: string,
+  env: NodeJS.ProcessEnv,
+  adapterConfig: Record<string, unknown> | null | undefined,
+): Promise<string | null> {
+  return readFile(
+    join(resolveHermesProfileDirForRun(profileName, { env, adapterConfig }), "config.yaml"),
+    "utf-8",
+  ).catch(() => null);
 }
 
 function defaultDetectHostModel(): Promise<{ model: string; provider: string } | null> {
@@ -124,7 +124,9 @@ export async function resolveAgentRuntimeModel(
   const env = deps.env ?? process.env;
   const profileName = input.agentId ? agentProfileName(input.agentId) : null;
   if (hermesManagedProfilesEnabled(env) && profileName) {
-    const content = await (deps.readProfileConfig ?? defaultReadProfileConfig)(profileName);
+    const content = deps.readProfileConfig
+      ? await deps.readProfileConfig(profileName)
+      : await defaultReadProfileConfig(profileName, env, input.adapterConfig);
     const profileModel = content ? parseModelFromConfig(content) : null;
     if (profileModel?.model) {
       return {

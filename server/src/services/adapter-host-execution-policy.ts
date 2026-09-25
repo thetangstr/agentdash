@@ -23,6 +23,9 @@ import { normalizeHumanRole } from "./company-member-roles.js";
 import { checkCompanyInstructionsPath } from "./instructions-root-confinement.js";
 import { defaultHermesCommand } from "./adapter-command-resolution.js";
 import { HERMES_PROVIDER_SPECS } from "./hermes-provider-setup.js";
+// AgentDash (#737): the one managed-profiles helper (hermes-profile.ts); it
+// reads the hosted flag through license.ts `isHostedBox`.
+import { hermesManagedProfilesEnabled } from "./hermes-profile.js";
 
 /** The subset of `req.actor` this policy reads. */
 export interface HostExecutionActor {
@@ -147,21 +150,6 @@ function commandKeysFor(adapterType: string | null | undefined): string[] {
 
 export const HERMES_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 
-/**
- * AgentDash (#737): managed per-agent Hermes profiles are on — always on a
- * hosted box (`AGENTDASH_DEPLOYMENT_KIND=hosted`), opt-in elsewhere with
- * `AGENTDASH_HERMES_MANAGED_PROFILES=true`. Each agent then has its own profile
- * (`agentdash-<agentId>`) holding its provider credentials, and a `-p <profile>`
- * a non-admin chooses must name a profile provisioned for this company, so an
- * agent cannot borrow the credentials of the root, template or operator
- * profiles on the box (for example `ccworker`).
- */
-export function hermesManagedProfilesActive(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (
-    env.AGENTDASH_HERMES_MANAGED_PROFILES === "true" ||
-    (env.AGENTDASH_DEPLOYMENT_KIND ?? "").trim().toLowerCase() === "hosted"
-  );
-}
 const HERMES_PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const POSITIVE_INT = /^[1-9][0-9]{0,5}$/;
 
@@ -188,14 +176,17 @@ const HERMES_SAFE_FLAGS: Record<string, ((value: string) => boolean) | null> = {
  * adapter reads `extraArgs` as an array.
  *
  * With managed profiles on (#737), a profile value must also be in
- * `options.allowedProfiles` — the profiles provisioned for this company. When
- * the caller supplies no set, every profile flag is refused.
+ * `options.allowedProfiles`: the agent's own profile when the configuration
+ * belongs to an existing agent, nothing otherwise. That is exactly what the run
+ * path keeps (`stripForeignHermesProfileConfig`, adapters/hermes-profile-args.ts),
+ * so the write-time gate never accepts a value the run would silently drop.
+ * When the caller supplies no set, every profile flag is refused.
  */
 export function isSafeHermesExtraArgs(
   value: unknown,
   options: { allowedProfiles?: ReadonlySet<string> | null; env?: NodeJS.ProcessEnv } = {},
 ): boolean {
-  const restrictProfiles = hermesManagedProfilesActive(options.env);
+  const restrictProfiles = hermesManagedProfilesEnabled(options.env);
   const profileAllowed = (flag: string, profile: string) =>
     !HERMES_PROFILE_FLAGS.has(flag) || !restrictProfiles || (options.allowedProfiles?.has(profile) ?? false);
   if (!Array.isArray(value) || value.length === 0) return false;
@@ -222,56 +213,6 @@ export function isSafeHermesExtraArgs(
   return true;
 }
 
-/**
- * AgentDash (#737): run-time half of the profile rule. With managed profiles
- * on, the agent's wrapper already runs `hermes -p <its own profile>`, so a
- * `-p`/`--profile` in `extraArgs` can only redirect the run to another
- * profile's credentials. Drop every profile flag that does not name the
- * agent's own profile, whoever stored it. The run path has no database, so it
- * keeps the agent's own profile only; the write-time gate above applies the
- * company rule and answers with a 403.
- */
-export function stripForeignHermesProfileArgs(
-  extraArgs: unknown,
-  ownProfile: string,
-): { extraArgs: unknown; dropped: string[] } {
-  if (!Array.isArray(extraArgs)) return { extraArgs, dropped: [] };
-  const kept: unknown[] = [];
-  const dropped: string[] = [];
-  // Hermes parses its argv with argparse, which also accepts `-pNAME` and
-  // unambiguous abbreviations of `--profile` (`--prof NAME`, `--prof=NAME`).
-  const profileFlagOf = (token: string): { flag: string; inlineValue: string | null } | null => {
-    if (token.startsWith("--")) {
-      const eq = token.indexOf("=");
-      const name = eq > 0 ? token.slice(0, eq) : token;
-      if (name.length >= 4 && "--profile".startsWith(name)) {
-        return { flag: name, inlineValue: eq > 0 ? token.slice(eq + 1) : null };
-      }
-      return null;
-    }
-    if (token === "-p") return { flag: "-p", inlineValue: null };
-    if (token.startsWith("-p")) return { flag: "-p", inlineValue: token.slice(2) };
-    return null;
-  };
-  for (let i = 0; i < extraArgs.length; i += 1) {
-    const token = extraArgs[i];
-    const parsed = typeof token === "string" ? profileFlagOf(token) : null;
-    if (!parsed) {
-      kept.push(token);
-      continue;
-    }
-    if (parsed.inlineValue !== null) {
-      if (parsed.inlineValue === ownProfile) kept.push(token);
-      else dropped.push(parsed.inlineValue);
-      continue;
-    }
-    const next = extraArgs[i + 1];
-    if (typeof next === "string" && next === ownProfile) kept.push(token, next);
-    else dropped.push(typeof next === "string" ? next : "");
-    i += 1;
-  }
-  return { extraArgs: kept, dropped };
-}
 
 function isCuratedTopLevelValue(
   adapterType: string | null | undefined,
@@ -316,7 +257,7 @@ function storedTopLevelAliases(
 export interface HostExecutionContext {
   /** Lets a `*Path` value inside this company's instructions area through. */
   companyId?: string | null;
-  /** Hermes profiles provisioned for this company (managed profiles only). */
+  /** The Hermes profiles a `-p` may name: the agent's own (managed profiles only). */
   hermesProfiles?: ReadonlySet<string> | null;
 }
 
