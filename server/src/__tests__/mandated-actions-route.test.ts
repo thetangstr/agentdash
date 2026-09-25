@@ -61,7 +61,9 @@ describeEmbeddedPostgres("POST /companies/:companyId/mandated-actions (integrati
     return { companyId: company.id, agentId: agent.id };
   }
 
-  it("returns 200 with authorized:false, reason:not_found for a nonexistent mandateId (agent actor, flag-off)", async () => {
+  // AgentDash (security): an unknown mandate id is a 404, indistinguishable from
+  // another company's mandate id (tenant binding runs before evaluation).
+  it("returns 404 for a nonexistent mandateId (agent actor, flag-off)", async () => {
     const { companyId, agentId } = await seedCompanyAndAgent();
     const app = appFor({ type: "agent", agentId, companyId });
 
@@ -73,8 +75,7 @@ describeEmbeddedPostgres("POST /companies/:companyId/mandated-actions (integrati
         action: "transfer_funds",
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ authorized: false, reason: "not_found" });
+    expect(res.status).toBe(404);
   });
 
   it("returns 400 when mandateId is missing (validate())", async () => {
