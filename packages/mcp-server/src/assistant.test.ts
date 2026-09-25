@@ -252,7 +252,8 @@ describe("assistant toolset surface", () => {
     expect(setup).toContain("agentdash_setup_status");
     expect(setup).toContain("agentdash_pause_agent");
     expect(setup).toHaveLength(17);
-    expect(assistant).toHaveLength(9);
+    // M1's nine reads plus M3's five work tools (GH #678).
+    expect(assistant).toHaveLength(14);
     expect(assistant).not.toContain("agentdash_setup_status");
     // The agent surface is the union it always was.
     expect(agent).toEqual(expect.arrayContaining(setup));

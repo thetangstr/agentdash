@@ -191,6 +191,7 @@ export function mcpRoutes() {
       membershipRole: req.actor.memberships?.[0]?.membershipRole ?? null,
       grantId: req.actor.assistantGrantId,
       scopes: req.actor.assistantScopes ?? [],
+      clientName: req.actor.assistantClientName ?? "assistant",
     });
 
     const server = createAgentDashServer(

@@ -27,6 +27,7 @@ import {
   assertCanEditOwnedResource,
   assertCanSetCompanyDirection,
   assertCompanyAccess,
+  assistantGrantAttribution,
   canSetCompanyDirection,
   getActorInfo,
 } from "./authz.js";
@@ -267,6 +268,8 @@ export function projectRoutes(db: Db) {
         name: project.name,
         workspaceId: createdWorkspaceId,
         envKeys: project.env ? Object.keys(project.env).sort() : [],
+        // AgentDash (GH #678): provenance when the write came via an assistant grant.
+        ...assistantGrantAttribution(req),
       },
     });
     const telemetryClient = getTelemetryClient();

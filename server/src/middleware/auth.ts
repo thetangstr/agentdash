@@ -9,6 +9,11 @@ import {
   ASSISTANT_ACCESS_TOKEN_PREFIX,
   ASSISTANT_INSUFFICIENT_SCOPE,
   ASSISTANT_LOOPBACK_TOKEN_PREFIX,
+  ASSISTANT_SCOPE_WORK,
+  ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR,
+  ASSISTANT_WRITE_LIMIT_PER_HOUR,
+  ASSISTANT_WRITE_RATE_LIMITED,
+  assistantLoopbackWriteRoute,
   assistantRouteScope,
 } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
@@ -17,6 +22,7 @@ import { boardAuthService } from "../services/board-auth.js";
 import { bridgeService } from "../services/bridge.js";
 import { assistantOAuthService, assistantResourceUri } from "../services/assistant-oauth.js";
 import { resolveAssistantLoopbackToken } from "../services/assistant-loopback.js";
+import { consumeAssistantWriteAllowance } from "../services/assistant-write-limits.js";
 import { logActivity } from "../services/activity-log.js";
 
 function hashToken(token: string) {
@@ -217,6 +223,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         isInstanceAdmin: false,
         assistantGrantId: resolved.grantId,
         assistantScopes: resolved.scopes,
+        assistantClientName: resolved.clientName,
         runId: runIdHeader || undefined,
         source: "assistant_grant",
       };
@@ -231,10 +238,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     // scopes already gated which TOOLS exist, and the toolset's §5 redaction
     // runs before anything leaves the envelope.
     //
-    // Two hard constraints beyond the pcpa_ actor: the credential is
-    // read-only (the M1 toolset is GET-only — a write is a bug, not a
-    // feature), and resolution is in-memory only — a token that survives a
-    // restart is dead, and one that never existed was never minted.
+    // Writes (GH #678): the M1 constraint was GET-only. M3 widens it to the
+    // five routes the work tools wrap (ASSISTANT_LOOPBACK_WRITE_ROUTES), each
+    // requiring `agentdash:work` on the grant, each drawing down the per-grant
+    // hourly write budget (assistant-write-limits.ts). A write to anything
+    // else — or on a read-only grant — is refused here, before the route.
     if (token.startsWith(ASSISTANT_LOOPBACK_TOKEN_PREFIX)) {
       const resolved = resolveAssistantLoopbackToken(token);
       if (!resolved) {
@@ -242,8 +250,30 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
       if (!["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase())) {
-        res.status(403).json({ error: "Assistant loopback credentials are read-only" });
-        return;
+        const writeRoute = assistantLoopbackWriteRoute(req.method, normalizedPath(req));
+        if (!writeRoute) {
+          res.status(403).json({ error: "Assistant loopback credentials cannot write to this route" });
+          return;
+        }
+        if (!resolved.scopes.includes(ASSISTANT_SCOPE_WORK)) {
+          res.status(403).json({ error: ASSISTANT_INSUFFICIENT_SCOPE, required_scope: ASSISTANT_SCOPE_WORK });
+          return;
+        }
+        const allowance = consumeAssistantWriteAllowance(resolved.grantId, {
+          taskCreate: writeRoute.taskCreate === true,
+        });
+        if (!allowance.allowed) {
+          res.set("Retry-After", String(allowance.retryAfterSeconds));
+          res.status(429).json({
+            error: ASSISTANT_WRITE_RATE_LIMITED,
+            limit:
+              allowance.limit === "taskCreates"
+                ? `${ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR} new tasks per hour`
+                : `${ASSISTANT_WRITE_LIMIT_PER_HOUR} writes per hour`,
+            retryAfterSeconds: allowance.retryAfterSeconds,
+          });
+          return;
+        }
       }
       req.actor = {
         type: "board",
@@ -260,6 +290,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         isInstanceAdmin: false,
         assistantGrantId: resolved.grantId,
         assistantScopes: resolved.scopes,
+        assistantClientName: resolved.clientName,
         assistantLoopback: true,
         source: "assistant_grant",
       };

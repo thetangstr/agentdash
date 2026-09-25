@@ -7,13 +7,23 @@ import {
   clip,
   FREE_TEXT_LIMIT,
   makeAssistantTool,
-  needsClarification,
-  notFound,
   ok,
   refused,
 } from "./envelope.js";
 import { itemCard, type ItemCard } from "./cards.js";
 import { redactAssistantValue } from "./redact.js";
+import {
+  agentMap,
+  durationMs,
+  projectMap,
+  refInput,
+  unresolved,
+  userMap,
+  type ApprovalRow,
+  type CommentRow,
+  type RunRow,
+  type WorkProductRow,
+} from "./lookups.js";
 import {
   resolveAgentRef,
   resolveIssueRef,
@@ -21,7 +31,6 @@ import {
   type AgentRow,
   type IssueRow,
   type ProjectRow,
-  type Resolution,
 } from "./resolve.js";
 
 /**
@@ -50,77 +59,6 @@ const sinceInput = z
   .optional()
   .describe("ISO 8601 timestamp, a duration like \"12h\" or \"30m\", or \"last_check\"");
 
-const refInput = (what: string) =>
-  z.string().min(1).max(500).describe(`${what} — identifier, title fragment, UUID or deep link`);
-
-interface RunRow {
-  runId: string;
-  status: string;
-  finishedAt?: string | null;
-  startedAt?: string | null;
-  createdAt?: string | null;
-  resultJson?: { stopReason?: string | null } | null;
-  livenessReason?: string | null;
-  nextAction?: string | null;
-}
-
-interface CommentRow {
-  id: string;
-  body: string;
-  createdAt: string;
-  authorAgentId?: string | null;
-  authorUserId?: string | null;
-}
-
-interface WorkProductRow {
-  type: string;
-  provider: string;
-  title: string;
-  url?: string | null;
-  status: string;
-  reviewState?: string | null;
-  summary?: string | null;
-}
-
-interface ApprovalRow {
-  id: string;
-  type: string;
-  status: string;
-  createdAt?: string;
-}
-
-/** Resolve an ambiguous-or-missing reference into an envelope, or hand the row on. */
-async function unresolved(
-  resolution: Resolution<unknown>,
-  subject: string,
-  linkFor: (ref: string) => Promise<string>,
-): Promise<ReturnType<typeof needsClarification> | ReturnType<typeof notFound> | null> {
-  if (resolution.kind === "one") return null;
-  if (resolution.kind === "none") {
-    return notFound({ summary: `I couldn't find ${subject} matching that. Nothing was changed.` });
-  }
-  const candidates = await Promise.all(
-    resolution.candidates.map(async (candidate) => ({
-      ...candidate,
-      link: await linkFor(candidate.ref),
-    })),
-  );
-  return needsClarification({
-    summary: `That could be a few different ${subject}s — which one did you mean?`,
-    candidates,
-  });
-}
-
-/** "12h" / "30m" / "7d" → ms, or null. */
-function durationMs(raw: string): number | null {
-  const match = raw.trim().match(/^(\d+)\s*([mhd])$/i);
-  if (!match) return null;
-  const n = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  const scale = unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
-  return n * scale;
-}
-
 /**
  * `since` for whats_new: an ISO 8601 timestamp, a duration, or "last_check".
  * There is no grant cursor until M2's OAuth grants exist — "last_check" and
@@ -143,43 +81,6 @@ function resolveSince(raw: string | undefined): { since: Date } | { error: strin
     return { error: "since must be an ISO 8601 timestamp or a duration like \"12h\"" };
   }
   return { since: parsed };
-}
-
-async function agentMap(client: PaperclipApiClient, companyId: string): Promise<Map<string, AgentRow>> {
-  const rows = await client
-    .requestJson<AgentRow[]>("GET", `/companies/${companyId}/agents`)
-    .then((list) => (Array.isArray(list) ? list : []))
-    .catch(() => [] as AgentRow[]);
-  return new Map(rows.map((row) => [row.id, row]));
-}
-
-async function projectMap(client: PaperclipApiClient, companyId: string): Promise<Map<string, ProjectRow>> {
-  const rows = await client
-    .requestJson<ProjectRow[]>("GET", `/companies/${companyId}/projects`)
-    .then((list) => (Array.isArray(list) ? list : []))
-    .catch(() => [] as ProjectRow[]);
-  return new Map(rows.map((row) => [row.id, row]));
-}
-
-/**
- * `assigneeUserId` → display name. Tasks can be assigned to a person, and an
- * owner that renders as nothing reads as "unowned". `/people` is the
- * board-scoped member list (no privileged permission) — only names are
- * copied out; emails never reach a card.
- */
-async function userMap(client: PaperclipApiClient, companyId: string): Promise<Map<string, string>> {
-  const rows = await client
-    .requestJson<{ people?: Array<{ userId?: string; name?: string | null }> }>(
-      "GET",
-      `/companies/${companyId}/people`,
-    )
-    .then((res) => (Array.isArray(res?.people) ? res.people : []))
-    .catch(() => [] as Array<{ userId?: string; name?: string | null }>);
-  const map = new Map<string, string>();
-  for (const row of rows) {
-    if (row.userId && row.name) map.set(row.userId, row.name);
-  }
-  return map;
 }
 
 interface DigestSection {

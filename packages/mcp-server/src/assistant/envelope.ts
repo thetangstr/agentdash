@@ -136,6 +136,48 @@ export const READ_ONLY_ANNOTATIONS = {
 } as const;
 
 /**
+ * GH #678 (spec §7.1): the work class — immediate, reversible mutations.
+ * `readOnlyHint: false` is what annotation-aware clients use to gate a
+ * write; `destructiveHint` marks the one tool (update_work_item) whose
+ * effect needs care, so a client can add its own confirm affordance.
+ */
+export const WORK_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+export const DESTRUCTIVE_WORK_ANNOTATIONS = {
+  ...WORK_ANNOTATIONS,
+  destructiveHint: true,
+} as const;
+
+/**
+ * Map a known upstream refusal to a relayable sentence. The body's `error`
+ * CODE is safe to read (it is the field the server itself exposes to clients)
+ * — anything else in the body stays out of the transcript.
+ */
+function refusalMessage(error: PaperclipApiError): string | null {
+  const body = error.body;
+  const code =
+    body && typeof body === "object" && "error" in body && typeof body.error === "string"
+      ? body.error
+      : null;
+  if (error.status === 403 && code === "insufficient_scope") {
+    return "This assistant connection does not have permission to change work — it needs the agentdash:work scope, granted when the person connects.";
+  }
+  if (error.status === 429 && code === "assistant_write_rate_limited") {
+    const retry =
+      body && typeof body === "object" && "retryAfterSeconds" in body && typeof body.retryAfterSeconds === "number"
+        ? Math.ceil(body.retryAfterSeconds / 60)
+        : null;
+    return `This connection has hit its hourly write limit — changes are capped at 30 per hour (10 new tasks) so a runaway assistant cannot spend freely. ${retry ? `Try again in about ${retry} minute${retry === 1 ? "" : "s"}.` : "Try again a bit later."}`;
+  }
+  return null;
+}
+
+/**
  * `makeTool` for the assistant surface: zod-validates input, returns the §5
  * envelope as `content` + `structuredContent`, and carries `readOnlyHint`.
  */
@@ -147,12 +189,13 @@ export function makeAssistantTool<TSchema extends z.ZodRawShape>(
     content: Array<{ type: "text"; text: string }>;
     structuredContent: Record<string, unknown>;
   }>,
+  options: { annotations?: Record<string, unknown> } = {},
 ): ToolDefinition {
   return {
     name,
     description,
     schema,
-    annotations: { ...READ_ONLY_ANNOTATIONS },
+    annotations: { ...(options.annotations ?? READ_ONLY_ANNOTATIONS) },
     outputSchema: assistantOutputSchema(),
     execute: async (input) => {
       try {
@@ -162,15 +205,19 @@ export function makeAssistantTool<TSchema extends z.ZodRawShape>(
         // The assistant surface never echoes an upstream error body — an API
         // error's `body` is whatever the server happened to return and can
         // carry internals a person-facing transcript must not record. The
-        // message alone is the honest answer; isError keeps MCP semantics.
+        // known refusal codes get a relayable sentence; everything else is
+        // status+method+path only.
+        const refusal =
+          error instanceof PaperclipApiError ? refusalMessage(error) : null;
         const message =
-          error instanceof PaperclipApiError
+          refusal ??
+          (error instanceof PaperclipApiError
             ? `AgentDash answered ${error.status} for ${error.method} ${error.path}.`
             : error instanceof Error
               ? error.message
-              : String(error);
+              : String(error));
         const safe = redactAssistantValue(message) as string;
-        const summary = clip(`Something went wrong reaching AgentDash: ${safe}`, SUMMARY_LIMIT);
+        const summary = clip(refusal ? safe : `Something went wrong reaching AgentDash: ${safe}`, SUMMARY_LIMIT);
         return {
           content: [{ type: "text" as const, text: summary }],
           structuredContent: {

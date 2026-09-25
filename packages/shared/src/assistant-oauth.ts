@@ -49,6 +49,17 @@ export const ASSISTANT_AUTH_REQUEST_TTL_MS = 10 * 60 * 1000;
 /** The OAuth error code sent when a route's scope is not on the grant. */
 export const ASSISTANT_INSUFFICIENT_SCOPE = "insufficient_scope";
 
+/** The error code the loopback write gate returns when a per-grant hourly budget is spent. */
+export const ASSISTANT_WRITE_RATE_LIMITED = "assistant_write_rate_limited";
+
+/**
+ * GH #678 (spec §7.1): the per-grant write budget the work tools live under —
+ * at most this many writes (and newly created tasks) per rolling hour, since
+ * every write can queue a paid agent run.
+ */
+export const ASSISTANT_WRITE_LIMIT_PER_HOUR = 30;
+export const ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR = 10;
+
 /**
  * The ONLY routes an `assistant_grant` credential may reach, and the scope
  * each requires.
@@ -93,6 +104,53 @@ export function assistantRouteScope(method: string, path: string): AssistantScop
   const clean = path.split("?")[0]!.replace(/\/+$/, "");
   for (const route of ASSISTANT_ROUTE_SCOPES) {
     if (route.method === m && route.pattern.test(clean)) return route.scope;
+  }
+  return null;
+}
+
+/**
+ * GH #678 (M3): the ONLY writes the assistant MCP endpoint's `pcin_` loopback
+ * credential may make — one entry per route the work toolset wraps (spec
+ * §4.2, tools 10–14). Everything a work tool can do flows through this list:
+ * a route missing from it is refused before the request reaches a handler,
+ * whatever bug or prompt-injection produced the call.
+ *
+ * The list lives beside ASSISTANT_ROUTE_SCOPES for the same reason that table
+ * does: the allowlist must sit where the credential is resolved, or the next
+ * route added to a tool quietly acquires write power nobody reviewed. Every
+ * entry requires `agentdash:work`; the loopback gate also enforces the
+ * per-grant write and task-create limits (spec §7.1) before the route runs.
+ */
+export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
+  method: string;
+  pattern: RegExp;
+  /** Counts against the tighter per-grant "new tasks per hour" limit too. */
+  taskCreate?: boolean;
+}> = [
+  // start_project — POST /companies/:id/projects
+  { method: "POST", pattern: /^\/api\/companies\/[^/]+\/projects$/ },
+  // create_work_item, start_project's kickoff — POST /companies/:id/issues
+  { method: "POST", pattern: /^\/api\/companies\/[^/]+\/issues$/, taskCreate: true },
+  // assign_work, update_work_item — PATCH /issues/:id
+  { method: "PATCH", pattern: /^\/api\/issues\/[^/]+$/ },
+  // assign_work's nudge — POST /agents/:id/wakeup
+  { method: "POST", pattern: /^\/api\/agents\/[^/]+\/wakeup$/ },
+  // comment_on_work — POST /issues/:id/comments
+  { method: "POST", pattern: /^\/api\/issues\/[^/]+\/comments$/ },
+];
+
+/**
+ * The write route a `pcin_` (method, path) is allowed to reach, or null.
+ * Same normalization contract as `assistantRouteScope`.
+ */
+export function assistantLoopbackWriteRoute(
+  method: string,
+  path: string,
+): (typeof ASSISTANT_LOOPBACK_WRITE_ROUTES)[number] | null {
+  const m = method.toUpperCase();
+  const clean = path.split("?")[0]!.replace(/\/+$/, "");
+  for (const route of ASSISTANT_LOOPBACK_WRITE_ROUTES) {
+    if (route.method === m && route.pattern.test(clean)) return route;
   }
   return null;
 }

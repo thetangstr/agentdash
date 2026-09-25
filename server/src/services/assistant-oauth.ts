@@ -1200,6 +1200,9 @@ export function assistantOAuthService(db: Db) {
       userId: grant.userId,
       companyId: grant.companyId,
       grantId: grant.id,
+      // GH #678: the client's display name rides along so work the assistant
+      // does can be attributed "via assistant_grant <client>" in activity rows.
+      clientName: grant.clientName,
       scopes: row.scopes,
       membershipRole: membership.membershipRole,
     };

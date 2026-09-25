@@ -71,7 +71,7 @@ import {
   checkCompanyInstructionsPath,
   findProtectedHostDirectoryOverlap,
 } from "../services/instructions-root-confinement.js";
-import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
@@ -4022,7 +4022,8 @@ export function agentRoutes(
       action: "heartbeat.invoked",
       entityType: "heartbeat_run",
       entityId: run.id,
-      details: { agentId: id },
+      // AgentDash (GH #678): provenance when the write came via an assistant grant.
+      details: { agentId: id, ...assistantGrantAttribution(req) },
     });
 
     res.status(202).json(run);
@@ -4077,7 +4078,8 @@ export function agentRoutes(
       action: "heartbeat.invoked",
       entityType: "heartbeat_run",
       entityId: run.id,
-      details: { agentId: id },
+      // AgentDash (GH #678): provenance when the write came via an assistant grant.
+      details: { agentId: id, ...assistantGrantAttribution(req) },
     });
 
     res.status(202).json(run);

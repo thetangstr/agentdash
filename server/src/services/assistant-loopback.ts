@@ -18,8 +18,11 @@ import { ASSISTANT_LOOPBACK_TOKEN_PREFIX } from "@paperclipai/shared";
  * actor (still company-pinned, still carrying the grant's scopes), and the
  * `pcpa_` allowlist shrinks to exactly the MCP endpoint. The credential is
  * never sent to the client, never persisted, dies when the response closes
- * (and at TTL regardless), and resolves only safe read methods — the M1
- * toolset is GET-only, so a write attempt is a bug, not a feature.
+ * (and at TTL regardless). Writes were added with M3 (GH #678): a `pcin_`
+ * token may write ONLY to the routes in ASSISTANT_LOOPBACK_WRITE_ROUTES and
+ * only while the grant holds `agentdash:work` — the gate lives in
+ * middleware/auth.ts beside this resolver, so nothing here is reachable by
+ * a route nobody listed.
  */
 
 export interface AssistantLoopbackIdentity {
@@ -28,6 +31,11 @@ export interface AssistantLoopbackIdentity {
   membershipRole: string | null;
   grantId: string;
   scopes: string[];
+  /**
+   * GH #678: the OAuth client's display name, so activity rows written by the
+   * loopback actor can carry `via: assistant_grant <clientName>`.
+   */
+  clientName: string;
 }
 
 interface LoopbackEntry extends AssistantLoopbackIdentity {

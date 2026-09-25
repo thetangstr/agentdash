@@ -71,7 +71,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
-import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo, reportAuthzRefusal } from "./authz.js";
+import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, reportAuthzRefusal } from "./authz.js";
 import {
   WorkspaceFileError,
   contentTypeForWorkspaceFile,
@@ -1952,6 +1952,8 @@ export function issueRoutes(
       details: {
         title: issue.title,
         identifier: issue.identifier,
+        // AgentDash (GH #678): provenance when the write came via an assistant grant.
+        ...assistantGrantAttribution(req),
         ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
         ...summarizeIssueReferenceActivityDetails({
           addedReferencedIssues: referenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
@@ -2490,6 +2492,8 @@ export function issueRoutes(
       details: {
         ...updateFields,
         identifier: issue.identifier,
+        // AgentDash (GH #678): provenance when the write came via an assistant grant.
+        ...assistantGrantAttribution(req),
         ...(commentBody ? { source: "comment" } : {}),
         ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
@@ -2635,6 +2639,8 @@ export function issueRoutes(
           bodySnippet: comment.body.slice(0, 120),
           identifier: issue.identifier,
           issueTitle: issue.title,
+          // AgentDash (GH #678): provenance when the write came via an assistant grant.
+          ...assistantGrantAttribution(req),
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
@@ -3680,6 +3686,8 @@ export function issueRoutes(
           reopened: true,
           reopenedFrom: reopenFromStatus,
           source: "comment",
+          // AgentDash (GH #678): provenance when the write came via an assistant grant.
+          ...assistantGrantAttribution(req),
           ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
           identifier: currentIssue.identifier,
         },
@@ -3743,6 +3751,8 @@ export function issueRoutes(
         bodySnippet: comment.body.slice(0, 120),
         identifier: currentIssue.identifier,
         issueTitle: currentIssue.title,
+        // AgentDash (GH #678): provenance when the write came via an assistant grant.
+        ...assistantGrantAttribution(req),
         ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
