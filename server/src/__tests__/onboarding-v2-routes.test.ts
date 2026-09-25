@@ -95,9 +95,16 @@ vi.mock("../services/index.js", () => ({
   inviteService: () => mockInvites,
 }));
 
+const mockFinalize = vi.fn();
+vi.mock("../services/deep-interview-crystallize.js", () => ({
+  crystallizeAndAdvanceCos: () => mockFinalize,
+}));
+
 vi.mock("@paperclipai/db", () => ({
   authUsers: { id: "id" },
-  assistantConversations: { id: "id" },
+  companies: { id: "id" },
+  assistantConversations: { id: "id", companyId: "company_id" },
+  deepInterviewStates: { id: "id", scope: "scope", scopeRefId: "scope_ref_id" },
   assistantMessages: {
     conversationId: "conversation_id",
     cardKind: "card_kind",
@@ -284,7 +291,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
     // Closes #330: route asserts companyAccess against body.companyId
     // (per PR #282 / #230 security fix). Actor must include the
     // company in its companyIds list or the route returns 403.
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
     const res = await request(app).post("/api/onboarding/agent/confirm").send({
       conversationId: "conv1",
       reportsToAgentId: "cos1",
@@ -311,7 +318,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
       agentId: "cos1",
       apiKey: { id: "k", token: "agk_x" },
     });
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
 
     const res = await request(app).post("/api/onboarding/agent/confirm").send({
       conversationId: "conv1",
@@ -332,7 +339,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
     mockAgents.list.mockResolvedValue([
       { id: "cos1", role: "chief_of_staff", status: "idle" },
     ]);
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
 
     const res = await request(app).post("/api/onboarding/agent/confirm").send({
       conversationId: "conv1",
@@ -378,7 +385,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
       };
     });
 
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }], [{ companyId: "c1" }]]);
     const requestBody = {
       conversationId: "conv1",
       reportsToAgentId: "owner",
@@ -394,6 +401,94 @@ describe("POST /api/onboarding/agent/confirm", () => {
     expect([first.body.code, second.body.code]).toContain("agent_cap_exceeded");
     expect(mockCreator.create).toHaveBeenCalledTimes(1);
     expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+  });
+  it("refuses a conversation from another company (no transcript read, no hire, no post)", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ companyId: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv-of-c2",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+    expect(res.status).toBe(404);
+    expect(mockConversations.paginate).not.toHaveBeenCalled();
+    expect(mockProposer.propose).not.toHaveBeenCalled();
+    expect(mockCreator.create).not.toHaveBeenCalled();
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown conversation", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[]]);
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "missing",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+    expect(res.status).toBe(404);
+    expect(mockCreator.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/onboarding/finalize-assessment", () => {
+  it("refuses a state whose conversation belongs to another company", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "conv-of-c2" }], [{ companyId: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(403);
+  });
+
+  it("404s an unknown state id", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[]]);
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "nope" });
+    expect(res.status).toBe(404);
+  });
+
+  it("finalizes an assess-path state whose scopeRefId is the caller's company id", async () => {
+    mockFinalize.mockResolvedValueOnce({ specId: "spec1", conversationId: "c1" });
+    // db queue: [state row, no conversation with that id, company row]
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "c1" }], [], [{ id: "c1" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(200);
+    expect(res.body.specId).toBe("spec1");
+    expect(mockFinalize).toHaveBeenCalledWith("s1");
+  });
+
+  it("refuses an assess-path state scoped to another company's id", async () => {
+    mockFinalize.mockClear();
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "c2" }], [], [{ id: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(403);
+    expect(mockFinalize).not.toHaveBeenCalled();
+  });
+
+  it("404s a state whose scopeRefId is neither a conversation nor a company", async () => {
+    mockFinalize.mockClear();
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "ghost" }], [], []],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(404);
+    expect(mockFinalize).not.toHaveBeenCalled();
+  });
+
+  it("404s a state that is not a CoS onboarding interview", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "assess_project", scopeRefId: "p1" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(404);
   });
 });
 
@@ -1099,5 +1194,72 @@ describe("POST /api/onboarding/interview/turn — real-LLM plan parse path", () 
     expect(res.status).toBe(200);
     expect(res.body.planGenerated).toBe(false);
     expect(mockDispatchLLM).not.toHaveBeenCalled();
+  });
+});
+
+describe("cosAgentId author validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.PAPERCLIP_E2E_SKIP_LLM = "true";
+    mockConversations.postMessage.mockResolvedValue({ id: "m1" });
+    mockConversations.paginate.mockResolvedValue([]);
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff" },
+      { id: "worker1", role: "general" },
+    ]);
+    mockInterview.nextTurn.mockResolvedValue({
+      state: { status: "interviewing" },
+      assistantMessage: "Tell me more.",
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.PAPERCLIP_E2E_SKIP_LLM;
+  });
+
+  const actor = { type: "board", userId: "u1", source: "session", companyIds: ["c1"] };
+
+  it("interview/turn refuses a cosAgentId that is not the company's CoS (no messages posted)", async () => {
+    for (const cosAgentId of ["worker1", "cos-of-other-company"]) {
+      mockConversations.postMessage.mockClear();
+      const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+      const res = await request(app)
+        .post("/api/onboarding/interview/turn")
+        .send({ conversationId: "conv1", userMessage: "hi", cosAgentId });
+      expect(res.status).toBe(403);
+      expect(mockConversations.postMessage).not.toHaveBeenCalled();
+    }
+    expect(mockAgents.list).toHaveBeenCalledWith("c1");
+  });
+
+  it("interview/turn posts the CoS reply when cosAgentId is the company's CoS", async () => {
+    const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "hi", cosAgentId: "cos1" });
+    expect(res.status).toBe(200);
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ authorKind: "agent", authorId: "cos1" }),
+    );
+  });
+
+  it("agent/reject refuses a cosAgentId that is not the company's CoS", async () => {
+    const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+    const res = await request(app)
+      .post("/api/onboarding/agent/reject")
+      .send({ conversationId: "conv1", cosAgentId: "worker1" });
+    expect(res.status).toBe(403);
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("agent/reject posts the acknowledgement as the company's CoS", async () => {
+    const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+    const res = await request(app)
+      .post("/api/onboarding/agent/reject")
+      .send({ conversationId: "conv1", cosAgentId: "cos1" });
+    expect(res.status).toBe(200);
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ authorKind: "agent", authorId: "cos1" }),
+    );
   });
 });
