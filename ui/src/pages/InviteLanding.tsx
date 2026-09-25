@@ -11,6 +11,7 @@ import { authApi } from "../api/auth";
 import { companiesApi } from "../api/companies";
 import { healthApi } from "../api/health";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { GoogleGlyph, MicrosoftGlyph } from "../components/auth/social-glyphs";
 import { clearPendingInviteToken, rememberPendingInviteToken } from "../lib/invite-memory";
 import { queryKeys } from "../lib/queryKeys";
 import { formatDate } from "../lib/utils";
@@ -247,6 +248,25 @@ export function InviteLandingPage() {
     enabled: token.length > 0,
     retry: false,
   });
+  // AgentDash (#731): SSO for invitees — the invite-summary response dropped
+  // the token into a first-party /api/auth cookie, which the user-create hook
+  // honors on a hosted box. Buttons render only for configured providers.
+  const socialProvidersQuery = useQuery({
+    queryKey: ["auth", "social-providers"],
+    queryFn: () => authApi.getSocialProviders(),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const socialMutation = useMutation({
+    mutationFn: (provider: "google" | "microsoft") =>
+      authApi.signInSocial({ provider, callbackURL: `/invite/${token}` }),
+    onError: (err) => {
+      setAuthFeedback({
+        tone: "error",
+        message: err instanceof Error ? err.message : "Social sign-in failed",
+      });
+    },
+  });
 
   const companiesQuery = useQuery({
     queryKey: INVITE_COMPANIES_QUERY_KEY,
@@ -394,6 +414,7 @@ export function InviteLandingPage() {
         name: name.trim(),
         email: email.trim(),
         password,
+        inviteToken: token,
       });
     },
     onSuccess: async () => {
@@ -723,6 +744,44 @@ export function InviteLandingPage() {
                     I already have an account
                   </button>
                 </div>
+
+                {(socialProvidersQuery.data?.google || socialProvidersQuery.data?.microsoft) ? (
+                  <div className="space-y-3">
+                    {socialProvidersQuery.data.google ? (
+                      <button
+                        type="button"
+                        disabled={socialMutation.isPending}
+                        onClick={() => {
+                          setAuthFeedback(null);
+                          socialMutation.mutate("google");
+                        }}
+                        className="flex w-full items-center justify-center gap-2.5 rounded-[10px] border border-border bg-card px-3 py-2 text-sm font-medium text-foreground outline-none transition-colors hover:border-[var(--accent-500)] focus:border-[var(--accent-500)] disabled:opacity-50"
+                      >
+                        <GoogleGlyph />
+                        Continue with Google
+                      </button>
+                    ) : null}
+                    {socialProvidersQuery.data.microsoft ? (
+                      <button
+                        type="button"
+                        disabled={socialMutation.isPending}
+                        onClick={() => {
+                          setAuthFeedback(null);
+                          socialMutation.mutate("microsoft");
+                        }}
+                        className="flex w-full items-center justify-center gap-2.5 rounded-[10px] border border-border bg-card px-3 py-2 text-sm font-medium text-foreground outline-none transition-colors hover:border-[var(--accent-500)] focus:border-[var(--accent-500)] disabled:opacity-50"
+                      >
+                        <MicrosoftGlyph />
+                        Continue with Microsoft
+                      </button>
+                    ) : null}
+                    <div className="flex items-center gap-3" aria-hidden="true">
+                      <span className="h-px flex-1 bg-border" />
+                      <span className="text-xs text-muted-foreground">or</span>
+                      <span className="h-px flex-1 bg-border" />
+                    </div>
+                  </div>
+                ) : null}
 
                 <form
                   className="space-y-4"

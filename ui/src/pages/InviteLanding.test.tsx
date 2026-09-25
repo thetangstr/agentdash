@@ -13,6 +13,8 @@ const acceptInviteMock = vi.hoisted(() => vi.fn());
 const getSessionMock = vi.hoisted(() => vi.fn());
 const signInEmailMock = vi.hoisted(() => vi.fn());
 const signUpEmailMock = vi.hoisted(() => vi.fn());
+const socialProvidersMock = vi.hoisted(() => vi.fn());
+const signInSocialMock = vi.hoisted(() => vi.fn());
 const healthGetMock = vi.hoisted(() => vi.fn());
 const listCompaniesMock = vi.hoisted(() => vi.fn());
 const setSelectedCompanyIdMock = vi.hoisted(() => vi.fn());
@@ -29,6 +31,8 @@ vi.mock("../api/auth", () => ({
     getSession: () => getSessionMock(),
     signInEmail: (input: unknown) => signInEmailMock(input),
     signUpEmail: (input: unknown) => signUpEmailMock(input),
+    getSocialProviders: () => socialProvidersMock(),
+    signInSocial: (input: unknown) => signInSocialMock(input),
   },
 }));
 
@@ -111,6 +115,8 @@ describe("InviteLandingPage", () => {
     getSessionMock.mockResolvedValue(null);
     signInEmailMock.mockResolvedValue(undefined);
     signUpEmailMock.mockResolvedValue(undefined);
+    socialProvidersMock.mockResolvedValue({ google: false, microsoft: false });
+    signInSocialMock.mockResolvedValue(undefined);
     setSelectedCompanyIdMock.mockReset();
   });
 
@@ -194,6 +200,7 @@ describe("InviteLandingPage", () => {
       name: "Jane Example",
       email: "jane@example.com",
       password: "supersecret",
+      inviteToken: "pcp_invite_test",
     });
     expect(container.textContent).toContain("An account already exists for jane@example.com. Sign in below to continue with this invite.");
     expect(container.querySelector('input[name="name"]')).toBeNull();
@@ -353,6 +360,7 @@ describe("InviteLandingPage", () => {
       name: "Jane Example",
       email: "jane@example.com",
       password: "supersecret",
+      inviteToken: "pcp_invite_test",
     });
     expect(acceptInviteMock).toHaveBeenCalledWith("pcp_invite_test", { requestType: "human" });
     expect(setSelectedCompanyIdMock).toHaveBeenCalledWith("company-1", { source: "manual" });
@@ -437,6 +445,7 @@ describe("InviteLandingPage", () => {
       name: "Jane Example",
       email: "jane@example.com",
       password: "supersecret",
+      inviteToken: "pcp_invite_test",
     });
     expect(acceptInviteMock).toHaveBeenCalledWith("pcp_invite_test", { requestType: "human" });
     expect(container.querySelector('[data-testid="invite-pending-approval"]')).not.toBeNull();
@@ -810,6 +819,80 @@ describe("InviteLandingPage", () => {
 
     expect(acceptInviteMock).toHaveBeenCalledWith("pcp_invite_test", { requestType: "human" });
     expect(container.textContent).toContain("Request to join Acme Robotics");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("offers SSO buttons that return the browser to the invite after the OAuth round-trip", async () => {
+    socialProvidersMock.mockResolvedValue({ google: true, microsoft: true });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("Continue with Google");
+    expect(container.textContent).toContain("Continue with Microsoft");
+
+    const googleButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Continue with Google"),
+    );
+    expect(googleButton).toBeDefined();
+
+    await act(async () => {
+      googleButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    expect(signInSocialMock).toHaveBeenCalledWith({
+      provider: "google",
+      callbackURL: "/invite/pcp_invite_test",
+    });
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("hides SSO buttons when the server reports no configured providers", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).not.toContain("Continue with Google");
+    expect(container.textContent).not.toContain("Continue with Microsoft");
+    expect(container.querySelector('[data-testid="invite-inline-auth"]')).not.toBeNull();
 
     await act(async () => {
       root.unmount();

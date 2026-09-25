@@ -14,6 +14,7 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
+  authUsers,
   companies,
   companyMemberships,
   createDb,
@@ -52,6 +53,7 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
     await db.delete(companies);
+    await db.delete(authUsers);
   });
 
   afterAll(async () => {
@@ -96,19 +98,53 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
     return companyId;
   }
 
-  async function seedInvite(companyId: string, autoApprove: boolean) {
+  async function seedInvite(
+    companyId: string,
+    autoApprove: boolean,
+    opts: { boundEmail?: string } = {},
+  ) {
     const token = createInviteToken();
     await db.insert(invites).values({
       companyId,
       inviteType: "company_join",
       allowedJoinTypes: "human",
       autoApprove,
-      defaultsPayload: { humanRole: "operator" },
+      defaultsPayload: {
+        humanRole: "operator",
+        ...(opts.boundEmail ? { email: opts.boundEmail } : {}),
+      },
       tokenHash: hashToken(token),
       expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
       invitedByUserId: "inviter-1",
     });
     return token;
+  }
+
+  async function seedAuthUser(email: string) {
+    const userId = `user-${randomUUID()}`;
+    await db.insert(authUsers).values({
+      id: userId,
+      email,
+      name: "Accepting User",
+      emailVerified: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    return userId;
+  }
+
+  async function membershipFor(companyId: string, userId: string) {
+    return db
+      .select()
+      .from(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.companyId, companyId),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, userId),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
   }
 
   it("grants active membership immediately and approves the join request when auto_approve is true", async () => {
@@ -218,5 +254,76 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
       .from(onboardingSessions)
       .where(eq(onboardingSessions.companyId, companyId));
     expect(onboarding).toHaveLength(0);
+  });
+
+  // GH #743 re-review: an invite addressed to a specific email may only be
+  // redeemed by that email — the check runs at ACCEPT, where membership is
+  // actually granted, not just in the sign-up gate.
+  describe("invite email binding at accept time", () => {
+    it("accepts when the actor's email matches the binding (case-insensitive)", async () => {
+      const companyId = await seedCompany();
+      const token = await seedInvite(companyId, true, {
+        boundEmail: "Invited@Example.com",
+      });
+      const userId = await seedAuthUser("invited@example.com");
+      const app = createApp(userId);
+
+      const res = await request(app)
+        .post(`/api/invites/${token}/accept`)
+        .send({ requestType: "human" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(202);
+      expect(res.body.status).toBe("approved");
+      expect((await membershipFor(companyId, userId))?.status).toBe("active");
+    });
+
+    it("rejects a different actor email — no membership, invite unconsumed", async () => {
+      const companyId = await seedCompany();
+      const token = await seedInvite(companyId, true, {
+        boundEmail: "invited@example.com",
+      });
+      const userId = await seedAuthUser("stranger@example.com");
+      const app = createApp(userId);
+
+      const res = await request(app)
+        .post(`/api/invites/${token}/accept`)
+        .send({ requestType: "human" });
+
+      expect(res.status).toBe(403);
+      expect(await membershipFor(companyId, userId)).toBeNull();
+      const row = await db
+        .select()
+        .from(invites)
+        .where(eq(invites.companyId, companyId))
+        .then((rows) => rows[0] ?? null);
+      expect(row?.acceptedAt).toBeNull();
+      expect(
+        await db
+          .select()
+          .from(joinRequests)
+          .where(eq(joinRequests.companyId, companyId)),
+      ).toHaveLength(0);
+    });
+
+    it("rejects a bound invite through the non-auto-approve path too", async () => {
+      const companyId = await seedCompany();
+      const token = await seedInvite(companyId, false, {
+        boundEmail: "invited@example.com",
+      });
+      const userId = await seedAuthUser("stranger@example.com");
+      const app = createApp(userId);
+
+      const res = await request(app)
+        .post(`/api/invites/${token}/accept`)
+        .send({ requestType: "human" });
+
+      expect(res.status).toBe(403);
+      expect(
+        await db
+          .select()
+          .from(joinRequests)
+          .where(eq(joinRequests.companyId, companyId)),
+      ).toHaveLength(0);
+    });
   });
 });

@@ -21,16 +21,15 @@ export function configuredMicrosoftTenant(env: Env = process.env): string {
 }
 
 /**
- * AgentDash (#726): whether Google or Microsoft sign-in may CREATE an account.
+ * AgentDash (#726): whether SSO sign-in may CREATE an account outright.
  *
- * Off on hosted boxes. Neither sign-up gate sees SSO: the invite-code guard
- * only runs on `/api/auth/sign-up/*`, and `PAPERCLIP_AUTH_DISABLE_SIGN_UP`
- * only covers email. Microsoft defaults to tenant `common`, so any Microsoft
- * account could create a user, and with self-serve bootstrap the first one to
- * create a company becomes instance admin. There is no company-invite token to
- * carry through the OAuth round trip yet (#731), so on a hosted box SSO signs
- * in people who already have an account and creates nobody. Everywhere else
- * behaviour is unchanged.
+ * Off on hosted boxes — the enforcement point is the `user.create.before`
+ * hook (`refuseUngatedUserCreation` in better-auth.ts), which sees every
+ * account-creation path uniformly, including the id-token sign-in that
+ * ignores a provider's `disableSignUp` in Better Auth 1.6.x. Since #731 the
+ * hook also honours the company-invite token cookie, which is why the
+ * provider-level `disableSignUp` flag is gone: the OAuth callback honours
+ * that flag before the hook runs, and it has no way to know about the invite.
  */
 export function ssoAccountCreationAllowed(env: Env = process.env): boolean {
   return !isHostedBox(env as NodeJS.ProcessEnv);
@@ -61,16 +60,16 @@ export function getConfiguredSocialProviders(
  */
 export function buildSocialProviders(env: Env = process.env): Record<string, unknown> {
   const providers: Record<string, unknown> = {};
-  // AgentDash (#726): Better Auth's own switch for "sign in existing users
-  // only". The OAuth callback honours it; the id-token sign-in path does not
-  // read it in 1.6.x, so better-auth.ts also refuses the user row itself.
-  const signUpOptions = ssoAccountCreationAllowed(env) ? {} : { disableSignUp: true };
+  // AgentDash (#726/#731): account-creation policy is enforced entirely by the
+  // `user.create.before` hook in better-auth.ts, which covers the OAuth
+  // callback AND the id-token path AND can honour the company-invite cookie.
+  // A provider-level `disableSignUp` would fire before that hook could read
+  // the invite claim, so it is deliberately not set here.
 
   if (present(env.GOOGLE_CLIENT_ID) && present(env.GOOGLE_CLIENT_SECRET)) {
     providers.google = {
       clientId: env.GOOGLE_CLIENT_ID.trim(),
       clientSecret: env.GOOGLE_CLIENT_SECRET.trim(),
-      ...signUpOptions,
     };
   }
 
@@ -79,7 +78,6 @@ export function buildSocialProviders(env: Env = process.env): Record<string, unk
       clientId: env.MICROSOFT_CLIENT_ID.trim(),
       clientSecret: env.MICROSOFT_CLIENT_SECRET.trim(),
       tenantId: configuredMicrosoftTenant(env),
-      ...signUpOptions,
     };
   }
 

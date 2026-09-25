@@ -56,6 +56,36 @@ describe("redactUrlQuery", () => {
   ])("non-string input %p returns the placeholder", (input, expected) => {
     expect(redactUrlQuery(input)).toBe(expected);
   });
+
+  // GH #743 re-review: invite tokens ride in PATH segments, not just the
+  // query — `GET /api/invites/<token>` and the SPA landing `/invite/<token>`
+  // hit every log line at info level, plaintext. The segment AFTER the
+  // invite prefix is the credential; trailing sub-paths stay diagnosable.
+  describe("token path segments (GH #743 re-review)", () => {
+    it.each([
+      ["/api/invites/pcp_invite_abc123", "/api/invites/[REDACTED]", "invite summary"],
+      ["/api/invites/pcp_invite_abc123/accept", "/api/invites/[REDACTED]/accept", "invite accept keeps sub-path"],
+      ["/invite/pcp_invite_abc123", "/invite/[REDACTED]", "SPA invite landing"],
+      ["/api/invites/pcp_invite_abc123?ref=nav", "/api/invites/[REDACTED]?ref=nav", "path token + benign query"],
+      [
+        "https://host.example/api/invites/pcp_invite_abc123?x=1",
+        "https://host.example/api/invites/[REDACTED]?x=1",
+        "absolute-form origin preserved, segment still redacted",
+      ],
+      ["/api/invites", "/api/invites", "bare list route has no token segment"],
+      ["/api/invites/", "/api/invites/", "trailing slash with empty segment untouched"],
+      ["/api/companies/c1/invites", "/api/companies/c1/invites", "create route is a different prefix"],
+      ["/invite", "/invite", "bare SPA route untouched"],
+    ] as const)("handles %s", (input, expected) => {
+      expect(redactUrlQuery(input)).toBe(expected);
+    });
+
+    it("redacts BOTH the path segment and a query token on the same URL", () => {
+      expect(redactUrlQuery("/api/invites/pcp_invite_abc?code=xyz")).toBe(
+        "/api/invites/[REDACTED]?code=[REDACTED]",
+      );
+    });
+  });
 });
 
 describe("redactQueryObject", () => {

@@ -14,6 +14,15 @@ import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
 import { sendEmail, resetPasswordEmailTemplate, welcomeEmailTemplate } from "./email.js";
 import { buildSocialProviders, ssoAccountCreationAllowed } from "./social-providers.js";
+import {
+  buildInviteTokenCookieClear,
+  inviteCookieSecureFlag,
+  readInviteTokenCookie,
+} from "../lib/signup-gate.js";
+import {
+  reserveCompanyInviteSignup,
+  claimCompanyInviteSignup,
+} from "../services/invites.js";
 import { logger } from "../middleware/logger.js";
 
 export type BetterAuthSessionUser = {
@@ -289,7 +298,15 @@ export function createBetterAuthInstance(
       enabled: true,
       requireEmailVerification: false,
       resetPasswordTokenExpiresIn: resetTokenTtlSeconds,
-      disableSignUp: config.authDisableSignUp,
+      // GH #743 review: Better Auth's own disableSignUp is deliberately NOT
+      // set even when config.authDisableSignUp is true — a hard refuse at the
+      // endpoint would make company invites useless on hosted boxes (the
+      // invitee could never create the account the invite requires). The
+      // closure is enforced by the Express invite gate instead
+      // (inviteCodeSignupGuard inviteOnly mode), which admits sign-up only
+      // with a valid company-invite token — and by this file's
+      // user.create.before hook for every non-email path.
+      disableSignUp: false,
       // Better Auth 1.4.x fires this from POST /api/auth/request-password-reset
       // (not /forget-password — that was the 1.3.x path). It hands us:
       //   user  — the row to email
@@ -329,10 +346,18 @@ export function createBetterAuthInstance(
     databaseHooks: {
       user: {
         create: {
-          // AgentDash (#726): on a hosted box, the only way to create a user is
-          // gated email sign-up. See `refuseUngatedUserCreation`.
-          before: async (_user: unknown, context: unknown) => refuseUngatedUserCreation(context),
-          after: async (user: { id: string; email: string; name: string | null }) => {
+          // AgentDash (#726/#731): on a hosted box, the only ways to create a
+          // user are gated email sign-up and a pending company invite.
+          // See `refuseUngatedUserCreation`.
+          before: async (user: unknown, context: unknown) =>
+            refuseUngatedUserCreation(context, { db, email: userEmail(user) }),
+          after: async (
+            user: { id: string; email: string; name: string | null },
+            context: unknown,
+          ) => {
+            // GH #743 review: claim the invite token only once the user row
+            // exists, and expire the invite cookie on the response.
+            await claimInviteSignupAfterCreate(context, { db, email: user.email });
             // Two independent best-effort steps. Either failing must NOT
             // abort the user-create transaction — the account is already
             // committed by the time this runs, so all we'd do is leave a
@@ -386,26 +411,128 @@ export function createBetterAuthInstance(
 /** The Better Auth endpoint whose sign-ups pass the invite-code gate. */
 const GATED_SIGN_UP_PATH = "/sign-up/email";
 
+function userEmail(user: unknown): string | null {
+  if (!user || typeof user !== "object") return null;
+  const email = (user as { email?: unknown }).email;
+  return typeof email === "string" && email.trim() ? email : null;
+}
+
+/** The `Cookie` header on the endpoint context, however it is shaped. */
+function cookieHeaderFromContext(context: unknown): string | null {
+  const headers = context && typeof context === "object"
+    ? (context as { headers?: unknown }).headers
+    : undefined;
+  if (headers instanceof Headers) return headers.get("cookie");
+  if (headers && typeof headers === "object") {
+    const raw = (headers as Record<string, unknown>).cookie;
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) return raw.filter((v) => typeof v === "string").join("; ");
+  }
+  return null;
+}
+
 /**
  * AgentDash (#726): a `user.create.before` hook. Throws (Better Auth then
- * creates nothing and answers with an error) when SSO account creation is off (hosted boxes) and the
- * user is being created by any endpoint other than email sign-up, which
- * `inviteCodeSignupGuard` and `disableSignUp` gate. This covers the OAuth
- * callback and the id-token sign-in path, which ignores the provider's
- * `disableSignUp` in Better Auth 1.6.x. Sign-in of an existing user never
- * creates a user row, so it is unaffected. Calls with no endpoint context
- * (server-internal adapter use) pass.
+ * creates nothing and answers with an error) when SSO account creation is off
+ * (hosted boxes) and the user is being created by any endpoint other than
+ * gated email sign-up, which `inviteCodeSignupGuard` and `disableSignUp` gate.
+ * This covers the OAuth callback and the id-token sign-in path, which ignores
+ * the provider's `disableSignUp` in Better Auth 1.6.x. Sign-in of an existing
+ * user never creates a user row, so it is unaffected. Calls with no endpoint
+ * context (server-internal adapter use) pass.
+ *
+ * AgentDash (#731): one exception — a pending company-invite token delivered
+ * in the `agentdash_invite_token` cookie (set by GET /api/invites/:token and
+ * scoped to /api/auth) authorizes the creation, atomically RESERVED here by
+ * `reserveCompanyInviteSignup` (2-minute TTL, CAS — one email holds it at a
+ * time). The cookie is why the provider-level `disableSignUp` had to go:
+ * the callback honours that flag BEFORE this hook can see the invite, so
+ * the hook is now the single, uniform gate.
+ *
+ * GH #743 review/re-review: this hook RESERVES (not claims) — parallel
+ * sign-ups on one token cannot all land, and a sign-up that fails before
+ * the user row exists only holds the token until the TTL lapses. The
+ * single-use claim is written by `claimInviteSignupAfterCreate` in
+ * `user.create.after`.
  */
-export function refuseUngatedUserCreation(context: unknown): undefined {
-  if (ssoAccountCreationAllowed()) return undefined;
+export async function refuseUngatedUserCreation(
+  context: unknown,
+  opts?: { db?: Db; email?: string | null },
+): Promise<void> {
+  if (ssoAccountCreationAllowed()) return;
   const path = context && typeof context === "object" ? (context as { path?: unknown }).path : undefined;
-  if (typeof path !== "string") return undefined;
-  if (path === GATED_SIGN_UP_PATH) return undefined;
+  if (typeof path !== "string") return;
+  if (path === GATED_SIGN_UP_PATH) return;
+
+  const token = readInviteTokenCookie(cookieHeaderFromContext(context));
+  if (opts?.db && token && opts.email) {
+    try {
+      if (await reserveCompanyInviteSignup(opts.db, token, opts.email)) return;
+    } catch (err) {
+      // A database hiccup must fail closed, not wave the stranger through.
+      logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "[auth] company-invite signup check failed — refusing SSO account creation",
+      );
+    }
+  }
+
   logger.warn({ path }, "[auth] refused to create a user outside gated email sign-up on a hosted box");
   throw new Error(
     "Account creation through single sign-on is disabled on this instance. "
-      + "Sign up by email with an invite code, then sign in with SSO.",
+      + "Open your company invite link first, or sign up by email with an invite code, "
+      + "then sign in with SSO.",
   );
+}
+
+/** The `Set-Cookie` collector on the endpoint context, however it is shaped. */
+function responseHeadersFromContext(context: unknown): Headers | null {
+  if (!context || typeof context !== "object") return null;
+  const headers = (context as { responseHeaders?: unknown }).responseHeaders;
+  return headers instanceof Headers ? headers : null;
+}
+
+/**
+ * AgentDash (#743 review): `user.create.after` counterpart to the invite
+ * gates. Runs for EVERY account creation on every deployment kind:
+ *
+ *   - Claims the invite cookie's token to the just-created email
+ *     (`claimCompanyInviteSignup`, a CAS whose WHERE re-checks revocation,
+ *     acceptance, and expiry — see services/invites.ts).
+ *   - Appends a Set-Cookie that expires `agentdash_invite_token`, so a
+ *     consumed-or-stale token cannot ride along on the user's next request.
+ *
+ * Both steps are best-effort: the user row is already committed when this
+ * runs, and a failed claim only means the token stays spendable for the
+ * SAME email (any other email still fails the check).
+ */
+export async function claimInviteSignupAfterCreate(
+  context: unknown,
+  opts: { db?: Db; email?: string | null },
+): Promise<void> {
+  const token = readInviteTokenCookie(cookieHeaderFromContext(context));
+  if (!token) return;
+
+  const headers = responseHeadersFromContext(context);
+  headers?.append(
+    "set-cookie",
+    buildInviteTokenCookieClear({ secure: inviteCookieSecureFlag() }),
+  );
+
+  if (!opts.db || !opts.email) return;
+  try {
+    const claimed = await claimCompanyInviteSignup(opts.db, token, opts.email);
+    if (!claimed) {
+      logger.warn(
+        "[auth] company-invite signup claim matched no live invite — token left unclaimed",
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      "[auth] company-invite signup claim failed",
+    );
+  }
 }
 
 /**

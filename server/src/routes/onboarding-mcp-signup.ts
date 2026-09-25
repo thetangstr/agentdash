@@ -77,6 +77,12 @@ const mcpSignupBodySchema = z.object({
   email: z.string().trim().email(),
   name: z.string().trim().min(1).max(120),
   inviteCode: z.string().trim().min(1).max(120).optional(),
+  // GH #743 review: a company-invite token must NOT open this route. An
+  // invite authorizes creating an account to JOIN that company — it must
+  // never mint the founding instance_admin of a fresh install. The field
+  // stays in the schema so misuse gets an explicit refusal rather than a
+  // silently ignored credential.
+  inviteToken: z.string().trim().min(1).max(256).optional(),
 });
 
 // AgentDash: invite-code funnel gate. Self-serve signup phones home to the
@@ -96,7 +102,9 @@ function inviteValidationUrl(): string {
   return process.env.AGENTDASH_INVITE_VALIDATION_URL || DEFAULT_INVITE_VALIDATION_URL;
 }
 
-type InviteCheck = { ok: true } | { ok: false; status: number; code: string; error: string };
+type InviteCheck =
+  | { ok: true; via?: "code" | "ungated" }
+  | { ok: false; status: number; code: string; error: string };
 
 async function checkInviteCode(inviteCode: string | undefined): Promise<InviteCheck> {
   if (!isInviteValidationEnabled()) return { ok: true };
@@ -153,10 +161,15 @@ function isSelfServeBootstrapEnabled(): boolean {
  * `AGENTDASH_INVITE_CODES`). Before this, MCP sign-up only checked the remote
  * funnel, so a box that gated browser sign-up left this door on a different
  * key, or on none when remote validation was off.
+ *
+ *
+ * GH #743 review: company-invite tokens are deliberately NOT accepted here —
+ * this route mints the founding instance_admin, and an invite may only
+ * authorize joining an existing company. The refusal happens in the handler.
  */
 function checkLocalSignupGate(inviteCode: string | undefined): InviteCheck {
-  if (!signupInviteCodeRequired()) return { ok: true };
-  if (isAcceptedSignupInviteCode(inviteCode)) return { ok: true };
+  if (!signupInviteCodeRequired()) return { ok: true, via: "ungated" };
+  if (isAcceptedSignupInviteCode(inviteCode)) return { ok: true, via: "code" };
   return {
     ok: false,
     status: 403,
@@ -210,7 +223,23 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
         });
         return;
       }
-      const { email, name, inviteCode } = parsed.data;
+      const { email, name, inviteCode, inviteToken } = parsed.data;
+
+      // GH #743 review: refuse a company-invite token outright. It is a
+      // credential for joining an existing company — on this founding-user
+      // route it would mint instance_admin privilege from a company-scoped
+      // invite. Refuse BEFORE the gates so the answer is the same on gated
+      // and ungated installs alike.
+      if (inviteToken) {
+        res.status(400).json({
+          code: "invite_token_not_allowed",
+          error:
+            "inviteToken is not accepted here — a company invite authorizes "
+            + "joining that company through browser/SSO sign-up, not claiming a "
+            + "fresh install. MCP signup requires an inviteCode instead.",
+        });
+        return;
+      }
 
       // Invite-code funnel gate BEFORE any user creation. Fail-closed on
       // transport errors; AGENTDASH_INVITE_VALIDATION=off disables entirely.

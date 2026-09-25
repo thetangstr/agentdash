@@ -129,6 +129,77 @@ describe("GET /invites/:token", () => {
     expect(res.body.inviteType).toBe("company_join");
   }, 10_000);
 
+  it("sets the invite-token cookie on a pending human invite (#731)", async () => {
+    // The cookie is how the token reaches /api/auth through the OAuth round
+    // trip: HttpOnly, SameSite=Lax (top-level callback GET still carries it),
+    // Path-scoped to the auth endpoints only.
+    const invite = {
+      id: "invite-1",
+      companyId: "company-1",
+      inviteType: "company_join",
+      allowedJoinTypes: "human",
+      tokenHash: "hash",
+      defaultsPayload: null,
+      expiresAt: new Date("2027-03-07T00:10:00.000Z"),
+      invitedByUserId: null,
+      revokedAt: null,
+      acceptedAt: null,
+      createdAt: new Date("2026-03-07T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-07T00:00:00.000Z"),
+    };
+    const app = await createApp(
+      createDbStub(
+        [invite],
+        [{ name: "Acme Robotics", brandColor: "#114488", logoAssetId: null }],
+      ),
+    );
+
+    const res = await request(app).get("/api/invites/pcp_invite_test");
+
+    expect(res.status).toBe(200);
+    const setCookie = res.headers["set-cookie"];
+    const header = Array.isArray(setCookie) ? setCookie.join("; ") : String(setCookie ?? "");
+    expect(header).toContain("agentdash_invite_token=pcp_invite_test");
+    expect(header).toContain("HttpOnly");
+    expect(header).toContain("Path=/api/auth");
+    expect(header).toContain("SameSite=Lax");
+  }, 10_000);
+
+  it("does NOT set the cookie on an agent-only invite — it clears a stale one (#731/#743)", async () => {
+    // Agents don't create accounts — the claim would be dead weight. Since
+    // #743 the response actively expires any invite cookie the browser may
+    // already hold, so the name appears with an empty value + Max-Age=0.
+    const invite = {
+      id: "invite-1",
+      companyId: "company-1",
+      inviteType: "company_join",
+      allowedJoinTypes: "agent",
+      tokenHash: "hash",
+      defaultsPayload: null,
+      expiresAt: new Date("2027-03-07T00:10:00.000Z"),
+      invitedByUserId: null,
+      revokedAt: null,
+      acceptedAt: null,
+      createdAt: new Date("2026-03-07T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-07T00:00:00.000Z"),
+    };
+    const app = await createApp(
+      createDbStub(
+        [invite],
+        [{ name: "Acme Robotics", brandColor: "#114488", logoAssetId: null }],
+      ),
+    );
+
+    const res = await request(app).get("/api/invites/pcp_invite_test");
+
+    expect(res.status).toBe(200);
+    const setCookie = res.headers["set-cookie"];
+    const header = Array.isArray(setCookie) ? setCookie.join("; ") : String(setCookie ?? "");
+    expect(header).not.toContain("agentdash_invite_token=pcp_invite_test");
+    expect(header).toContain("agentdash_invite_token=;");
+    expect(header).toContain("Max-Age=0");
+  }, 10_000);
+
   it("omits companyLogoUrl when the stored logo object is missing", async () => {
     mockStorage.headObject.mockResolvedValue({ exists: false });
 

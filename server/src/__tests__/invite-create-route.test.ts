@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const logActivityMock = vi.fn();
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
+const originalDeploymentKind = process.env.AGENTDASH_DEPLOYMENT_KIND;
 const tierDepsMock = {
   getCompany: vi.fn(async (_id: string) => ({ planTier: "pro_active" })),
   counts: {
@@ -163,6 +164,8 @@ describe("POST /companies/:companyId/invites", () => {
     else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
     if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
     else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
+    if (originalDeploymentKind === undefined) delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    else process.env.AGENTDASH_DEPLOYMENT_KIND = originalDeploymentKind;
   });
 
   it("returns an absolute invite URL using the request base URL", async () => {
@@ -404,6 +407,60 @@ describe("POST /companies/:companyId/invites", () => {
         .send({ allowedJoinTypes: "human", humanRole: "admin" });
 
       expect(res.status).toBe(201);
+    });
+  });
+
+  // GH #743 re-review: on hosted boxes an auto-approve human-capable invite
+  // must carry an email binding — an unbound link would grant ANY holder
+  // active membership with nothing to check at accept time.
+  describe("hosted auto-approve email binding", () => {
+    it("rejects an unbound auto-approve human invite on a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", autoApprove: true });
+
+      expect(res.status).toBe(400);
+      expect(res.body.details?.code).toBe("hosted_auto_approve_requires_email");
+    });
+
+    it("accepts an email-bound auto-approve invite on a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({
+          allowedJoinTypes: "human",
+          autoApprove: true,
+          defaultsPayload: { email: "invited@example.com" },
+        });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    });
+
+    it("still allows agent-only auto-approve invites on a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "agent", autoApprove: true });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    });
+
+    it("still allows unbound auto-approve invites off hosted boxes", async () => {
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", autoApprove: true });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
     });
   });
 });

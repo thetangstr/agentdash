@@ -47,6 +47,11 @@ const SENSITIVE_KEYS = new Set<string>([
   "codeverifier",
   "assertion",
   "client_assertion",
+  // GH #743 review: company-invite tokens are signup credentials — a refused
+  // sign-up POST logs its body verbatim on the 4xx line, and a logged token
+  // is spendable until claimed or expired.
+  "invitetoken",
+  "invite_token",
 ]);
 
 const MAX_DEPTH = 6;
@@ -139,6 +144,30 @@ const SENSITIVE_QUERY_KEY_SUFFIXES = ["_token", "_secret", "_key", "_code", "_pa
 
 const UNPARSEABLE_URL = "[UNPARSEABLE_URL]";
 
+// GH #743 re-review: credentials also ride in PATH segments, not just the
+// query — `GET /api/invites/<token>` (and the SPA landing route /invite/
+// <token>) and the password-reset link's /reset-password/<token> hit the
+// request log on every line, plaintext, at info level. For these prefixes
+// the NEXT segment is the credential; it is replaced, keeping any trailing
+// sub-path (/accept, /logo, /test-resolution) for diagnosability.
+const TOKEN_PATH_PREFIXES = ["/api/invites/", "/invite/", "/reset-password/"];
+
+function redactTokenPathSegments(path: string): string {
+  for (const prefix of TOKEN_PATH_PREFIXES) {
+    // indexOf (not startsWith): pino-http can hand us the absolute-form
+    // origin (http://host/api/invites/...) on some requests.
+    const start = path.indexOf(prefix);
+    if (start === -1) continue;
+    const rest = path.slice(start + prefix.length);
+    if (!rest) return path;
+    const slash = rest.indexOf("/");
+    return slash === -1
+      ? `${path.slice(0, start + prefix.length)}${REDACTED}`
+      : `${path.slice(0, start + prefix.length)}${REDACTED}${rest.slice(slash)}`;
+  }
+  return path;
+}
+
 function isSensitiveQueryKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (SENSITIVE_QUERY_KEYS.has(lower)) return true;
@@ -160,11 +189,13 @@ export function redactUrlQuery(url: unknown): string {
   try {
     if (typeof url !== "string") return UNPARSEABLE_URL;
     const qIndex = url.indexOf("?");
-    if (qIndex === -1) return url;
+    const scrubbedPath = redactTokenPathSegments(
+      qIndex === -1 ? url : url.slice(0, qIndex),
+    );
+    if (qIndex === -1) return scrubbedPath;
 
-    const prefix = url.slice(0, qIndex + 1);
     const query = url.slice(qIndex + 1);
-    if (query.length === 0) return url;
+    if (query.length === 0) return scrubbedPath + "?";
 
     const scrubbed = query
       .split("&")
@@ -179,7 +210,7 @@ export function redactUrlQuery(url: unknown): string {
       })
       .join("&");
 
-    return `${prefix}${scrubbed}`;
+    return `${scrubbedPath}?${scrubbed}`;
   } catch {
     return UNPARSEABLE_URL;
   }

@@ -48,6 +48,8 @@ export const LOG_REDACT_PATHS = [
   "req.headers.authorization",
   "req.headers.cookie",
   ...SECRET_BODY_FIELDS.map((field) => `reqBody.${field}`),
+  // GH #743 re-review: `/api/invites/:token` path params attach as reqParams.
+  "reqParams.token",
 ];
 
 export const logger = pino({
@@ -107,11 +109,13 @@ export const httpLogger = pinoHttp({
         return {
           errorContext: ctx.error,
           reqBody: redactSensitive(ctx.reqBody),
-          reqParams: redactSensitive(ctx.reqParams),
-          // AGE-83: reqQuery is the query channel — the query-key list with
-          // the suffix rule, not the body list. reqBody/reqParams stay on
-          // the body list on purpose (a body key named `code` is NOT
-          // newly redacted; pinned by regression test).
+          // reqParams are URL-derived (path params are part of the request
+          // target), so they use the QUERY channel with the broader key
+          // list — a `/api/invites/:token/...` 4xx would otherwise log the
+          // raw invite token (GH #743 re-review). reqBody stays on the body
+          // list on purpose (a body key named `code` is NOT newly redacted;
+          // pinned by regression test).
+          reqParams: redactQueryObject(ctx.reqParams),
           reqQuery: redactQueryObject(ctx.reqQuery),
         };
       }
@@ -121,7 +125,7 @@ export const httpLogger = pinoHttp({
         props.reqBody = redactSensitive(body);
       }
       if (params && typeof params === "object" && Object.keys(params).length > 0) {
-        props.reqParams = redactSensitive(params);
+        props.reqParams = redactQueryObject(params);
       }
       if (query && typeof query === "object" && Object.keys(query).length > 0) {
         props.reqQuery = redactQueryObject(query);

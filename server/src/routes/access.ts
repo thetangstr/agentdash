@@ -96,6 +96,13 @@ import {
   hashToken,
   isInviteTokenHashCollisionError,
 } from "../lib/invite-tokens.js";
+import {
+  buildInviteTokenCookie,
+  buildInviteTokenCookieClear,
+  inviteCookieSecureFlag,
+} from "../lib/signup-gate.js";
+import { inviteSignupBoundEmail } from "../services/invites.js";
+import { isHostedBox } from "../services/license.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
   claimBoardOwnership,
@@ -2868,6 +2875,22 @@ export function accessRoutes(
       input.allowedJoinTypes === "agent"
         ? null
         : input.humanRole ?? "member";
+    // GH #743 re-review: on hosted boxes an auto-approving human-capable
+    // invite needs an email binding — otherwise anyone holding the link
+    // lands with active membership and there is nothing to check them
+    // against at accept time. Agent-only invites exempt (auto-approve is
+    // human-only). Mirrors inviteService.createCompanyInvite.
+    if (
+      input.autoApprove === true &&
+      input.allowedJoinTypes !== "agent" &&
+      isHostedBox() &&
+      !inviteSignupBoundEmail({ defaultsPayload: input.defaultsPayload ?? null })
+    ) {
+      throw badRequest(
+        "Auto-approve invites on a hosted deployment must be bound to a recipient email",
+        { code: "hosted_auto_approve_requires_email" },
+      );
+    }
     const insertValues = {
       companyId: input.companyId,
       inviteType: "company_join" as const,
@@ -3195,6 +3218,27 @@ export function accessRoutes(
           (m) => m.get(invite.invitedByUserId!)?.name ?? null
         )
       : null;
+    // AgentDash (#731): stash the token in a first-party, HttpOnly cookie
+    // scoped to /api/auth so an invited teammate's SSO sign-up can carry the
+    // claim through the OAuth round trip (and email sign-up can read it when
+    // the body field is absent). Only set while the invite could actually
+    // authorize a sign-up: pending company_join invites a human can use.
+    //
+    // GH #743 review: `secure` comes from the CONFIGURED public URL, not
+    // req.secure — behind a TLS-terminating proxy the request is http and the
+    // attribute would be dropped exactly on hosted deployments. An unusable
+    // invite (agent-only, accepted) CLEARS any stale cookie instead of
+    // leaving it to ride the next sign-up.
+    const inviteCookieSecure = inviteCookieSecureFlag();
+    if (
+      invite.inviteType === "company_join" &&
+      invite.allowedJoinTypes !== "agent" &&
+      !invite.acceptedAt
+    ) {
+      res.setHeader("Set-Cookie", buildInviteTokenCookie(token, { secure: inviteCookieSecure }));
+    } else {
+      res.setHeader("Set-Cookie", buildInviteTokenCookieClear({ secure: inviteCookieSecure }));
+    }
     res.json({
       ...toInviteSummaryResponse(req, token, invite, companyBranding),
       invitedByUserName: inviterName,
@@ -3468,6 +3512,21 @@ export function accessRoutes(
       ) {
         throw conflict("You already belong to this company");
       }
+      // GH #743 re-review: an invite addressed to a specific email may only
+      // be redeemed by that email. The signup gate's binding is not enough —
+      // accept is where membership is actually granted, and an invited
+      // stranger must not join with any account.
+      const actorEmail =
+        requestType === "human" ? await resolveActorEmail(db, req) : null;
+      const inviteBoundEmail =
+        requestType === "human" ? inviteSignupBoundEmail(invite) : null;
+      if (requestType === "human" && inviteBoundEmail) {
+        if (!actorEmail || actorEmail.trim().toLowerCase() !== inviteBoundEmail) {
+          throw forbidden(
+            "This invite was issued to a specific email address — sign in with that account to accept it"
+          );
+        }
+      }
       if (requestType === "agent" && !req.body.agentName) {
         if (
           !inviteAlreadyAccepted ||
@@ -3574,7 +3633,7 @@ export function accessRoutes(
                 status: "approved",
                 requestIp: requestIp(req),
                 requestingUserId,
-                requestEmailSnapshot: await resolveActorEmail(db, req),
+                requestEmailSnapshot: actorEmail,
                 approvedByUserId:
                   req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
                 approvedAt: new Date(),
@@ -3672,8 +3731,6 @@ export function accessRoutes(
         ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
         : null;
 
-      const actorEmail =
-        requestType === "human" ? await resolveActorEmail(db, req) : null;
       const existingHumanJoinRequest =
         requestType === "human"
           ? findReusableHumanJoinRequest(
