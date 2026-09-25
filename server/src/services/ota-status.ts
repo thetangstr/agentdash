@@ -58,6 +58,19 @@ export interface AvailableReleaseFile {
   /** Migrations carried by the candidate release. Null when unreadable. */
   releaseMigrations: OtaMigrationSummary[] | null;
   checkedAt: string;
+  /**
+   * Operator-facing explanation the check may leave behind — e.g. that a newer
+   * tag was skipped because the apply path would refuse it, or that no release
+   * tag exists at all. Not part of the rendered status; present for whoever
+   * reads the file while debugging.
+   */
+  note?: string;
+  /**
+   * Set when the check itself failed — a fetch that could not reach origin, a
+   * repo that would not answer. Written with `release: null` so a stale offer
+   * never reads as fresh; `checkedAt` still says when the failure was recorded.
+   */
+  error?: string;
 }
 
 export interface OtaStatusSources {

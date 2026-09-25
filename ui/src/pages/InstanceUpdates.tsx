@@ -19,9 +19,11 @@ import { queryKeys } from "@/lib/queryKeys";
  * Instance updates.
  *
  * The design rule for this page: never let it look more certain than the server
- * is. `canApply` and `blockedReasons` come from the server and are rendered
- * verbatim rather than re-derived here, because a button that offers an update
- * the updater will refuse is worse than no button.
+ * is. `canApprove`, `canApply` and `blockedReasons` come from the server and are
+ * rendered verbatim rather than re-derived here, because a button that offers
+ * an update the updater will refuse is worse than no button — and a button
+ * gated on the updater's `canApply` can never create the approval `canApply`
+ * requires.
  *
  * Two things are shown even though they are unflattering, because hiding them
  * would make this page a liar: that release signatures are not verified, and
@@ -243,7 +245,11 @@ export function InstanceUpdates() {
     );
   }
 
-  const approved = status.approval?.status === "approved";
+  // "Approved" means approved for the release on offer, not merely that some
+  // approval object says approved — a spent approval for the release just
+  // installed must not keep the button locked for the next one.
+  const approved =
+    status.approval?.status === "approved" && status.approval.commit === status.available?.commit;
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 py-6">
@@ -319,7 +325,7 @@ export function InstanceUpdates() {
       <div className="flex items-center gap-3">
         <Button
           onClick={() => setConfirming(true)}
-          disabled={!status.available || status.upToDate || approved || approve.isPending || !status.canApply}
+          disabled={!status.available || status.upToDate || approved || approve.isPending || !status.canApprove}
         >
           Update this instance
         </Button>

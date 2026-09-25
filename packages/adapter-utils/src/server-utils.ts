@@ -146,7 +146,8 @@ function resolveProcessGroupId(child: ChildProcess) {
   return typeof child.pid === "number" && child.pid > 0 ? child.pid : null;
 }
 
-function signalRunningProcess(
+// Exported so the direct-child fallback branch can be unit-tested directly.
+export function signalRunningProcess(
   running: Pick<RunningProcess, "child" | "processGroupId">,
   signal: NodeJS.Signals,
 ) {
@@ -158,7 +159,10 @@ function signalRunningProcess(
       // Fall back to the direct child signal if group signaling fails.
     }
   }
-  if (!running.child.killed) {
+  // Gate on real liveness: `child.killed` only means a signal was sent, not that
+  // the process exited, so escalating on it would suppress a follow-up SIGKILL.
+  // `exitCode`/`signalCode` are null until the child actually closes.
+  if (running.child.exitCode === null && running.child.signalCode === null) {
     running.child.kill(signal);
   }
 }

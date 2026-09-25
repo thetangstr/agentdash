@@ -44,6 +44,12 @@ import {
   type IssueLivenessFinding,
 } from "./issue-graph-liveness.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
+// AgentDash (OBS-5, #698): liveness probe so quiet-but-alive Hermes runs are not flagged.
+import {
+  effectiveActivityAt,
+  probeRunLiveness,
+  type RunLivenessEvidence,
+} from "../run-liveness-probe.js";
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
@@ -297,7 +303,20 @@ function buildLivenessOriginalIssueComment(finding: IssueLivenessFinding, escala
   ].join("\n");
 }
 
-export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup }) {
+export type RecoveryLivenessProbe = (
+  run: typeof heartbeatRuns.$inferSelect,
+  agent: Pick<typeof agents.$inferSelect, "adapterType" | "adapterConfig">,
+) => RunLivenessEvidence;
+
+export function recoveryService(
+  db: Db,
+  deps: {
+    enqueueWakeup: RecoveryWakeup;
+    // AgentDash (OBS-5): injectable for tests; defaults to the real probe.
+    livenessProbe?: RecoveryLivenessProbe;
+  },
+) {
+  const livenessProbe: RecoveryLivenessProbe = deps.livenessProbe ?? ((run, agent) => probeRunLiveness(run, agent));
   const issuesSvc = issueService(db);
   const treeControlSvc = issueTreeControlService(db);
   const budgets = budgetService(db);
@@ -746,6 +765,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     sourceIssue: typeof issues.$inferSelect | null;
     prefix: string;
     now: Date;
+    // AgentDash (OBS-5): when the liveness probe saw later activity (a Hermes
+    // ledger row), silence is measured from it instead of from the last output.
+    activityAt?: Date | null;
   }) {
     const [tail, recentEvents, childIssues, blockers] = await Promise.all([
       readRunLogTailForEvidence(input.run),
@@ -785,7 +807,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     ]);
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
     const safeTail = truncateEvidenceText(redactWatchdogEvidenceText(tail, currentUserRedactionOptions));
-    const silenceAgeMs = silenceAgeMsForRun(input.run, input.now);
+    const silenceAgeMs = input.activityAt
+      ? Math.max(0, input.now.getTime() - input.activityAt.getTime())
+      : silenceAgeMsForRun(input.run, input.now);
     return {
       safeTail,
       silenceAgeMs,
@@ -808,6 +832,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     evidence: Awaited<ReturnType<typeof collectStaleRunEvidence>>;
     level: "suspicious" | "critical";
     now: Date;
+    liveness?: RunLivenessEvidence | null;
   }) {
     const sourceIssue = input.sourceIssue
       ? issueUiLink({ identifier: input.sourceIssue.identifier, id: input.sourceIssue.id }, input.prefix)
@@ -843,6 +868,13 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       `- Silent for: ${formatDuration(input.evidence.silenceAgeMs)}`,
       `- Thresholds: suspicious after ${formatDuration(ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS)}, critical after ${formatDuration(ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS)}`,
       `- Process metadata: pid \`${input.run.processPid ?? "unknown"}\`, process group \`${input.run.processGroupId ?? "unknown"}\`, in-memory handle \`${runningProcesses.has(input.run.id) ? "yes" : "no"}\``,
+      // AgentDash (OBS-5): say what the liveness probe saw, so a reviewer can
+      // tell "quiet adapter" from "stuck" without opening the host.
+      ...(input.liveness && input.liveness.probe === "hermes_ledger"
+        ? [
+          `- Liveness probe: Hermes ledger (${input.liveness.ledgerStatus}), process alive \`${input.liveness.processAlive === null ? "unknown" : input.liveness.processAlive ? "yes" : "no"}\`, last ledger activity ${input.liveness.ledgerActivityAt?.toISOString() ?? "none since the run started"}`,
+        ]
+        : []),
       "",
       "## Last Output Excerpt",
       "",
@@ -930,6 +962,8 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   async function createOrUpdateStaleRunEvaluation(input: {
     run: typeof heartbeatRuns.$inferSelect;
     now: Date;
+    liveness?: RunLivenessEvidence | null;
+    activityAt?: Date | null;
   }) {
     const runningAgent = await getAgent(input.run.agentId);
     if (!runningAgent || runningAgent.companyId !== input.run.companyId) return { kind: "skipped" as const };
@@ -941,6 +975,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       sourceIssue,
       prefix,
       now: input.now,
+      activityAt: input.activityAt ?? null,
     });
     const level = (evidence.silenceAgeMs ?? 0) >= ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS ? "critical" : "suspicious";
     const existing = await findOpenStaleRunEvaluation(input.run.companyId, input.run.id);
@@ -982,6 +1017,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       evidence,
       level,
       now: input.now,
+      liveness: input.liveness ?? null,
     });
     let evaluation: Awaited<ReturnType<typeof issuesSvc.create>>;
     try {
@@ -1079,6 +1115,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       escalated: 0,
       snoozed: 0,
       skipped: 0,
+      // AgentDash (OBS-5): runs that were silent on output but whose liveness
+      // probe (Hermes ledger) showed recent activity from a live process.
+      quietButAlive: 0,
       evaluationIssueIds: [] as string[],
     };
 
@@ -1087,7 +1126,25 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         result.snoozed += 1;
         continue;
       }
-      const outcome = await createOrUpdateStaleRunEvaluation({ run, now });
+      // AgentDash (OBS-5): ask the adapter's liveness probe before opening an
+      // evaluation. Output silence stays the signal for streaming adapters;
+      // for hermes_local a live process plus an advancing ledger is activity.
+      let liveness: RunLivenessEvidence | null = null;
+      let activityAt: Date | null = null;
+      const runAgent = await getAgent(run.agentId);
+      if (runAgent) {
+        try {
+          liveness = livenessProbe(run, runAgent);
+          activityAt = effectiveActivityAt(run, liveness);
+        } catch (err) {
+          logger.warn({ err, runId: run.id }, "run liveness probe failed; falling back to output silence");
+        }
+      }
+      if (activityAt && now.getTime() - activityAt.getTime() < ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS) {
+        result.quietButAlive += 1;
+        continue;
+      }
+      const outcome = await createOrUpdateStaleRunEvaluation({ run, now, liveness, activityAt });
       if (outcome.kind === "created") result.created += 1;
       else if (outcome.kind === "existing") result.existing += 1;
       else if (outcome.kind === "escalated") result.escalated += 1;

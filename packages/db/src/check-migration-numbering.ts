@@ -1,6 +1,7 @@
+import { realpathSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const migrationsDir = fileURLToPath(new URL("./migrations", import.meta.url));
 const metaDir = fileURLToPath(new URL("./migrations/meta", import.meta.url));
@@ -137,6 +138,18 @@ async function main() {
 
 // Run main() only when executed directly (pnpm run check:migrations / build /
 // typecheck / generate / migrate), not when imported by the vitest suite.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+// Realpaths on both sides so a symlinked invocation still runs; an argv[1]
+// that cannot be resolved is not this file's direct run.
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
+if (invokedDirectly) {
   await main();
 }

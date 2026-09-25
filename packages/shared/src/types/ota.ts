@@ -181,9 +181,13 @@ export interface OtaApproval {
 /**
  * The complete read-only surface behind the Update button.
  *
- * `canApply` is the single field the UI should gate on, and `blockedReasons`
- * explains a false. Keeping the decision here rather than in the client means
- * the board and the updater cannot disagree about whether an update is allowed.
+ * Two gates, for two different actors. `canApply` is the updater's: may the
+ * privileged process switch releases right now — it requires a matching
+ * approval. `canApprove` is the board's: may a person start the approval
+ * flow — it holds every blocker EXCEPT the missing-approval reason, because
+ * that reason is what the flow removes. `blockedReasons` explains either
+ * false. Keeping both decisions here rather than in the client means the
+ * board and the updater cannot disagree about what is allowed.
  */
 export interface OtaUpdateStatus {
   mode: OtaDeploymentMode;
@@ -199,6 +203,7 @@ export interface OtaUpdateStatus {
   rollback: OtaRollbackPlan;
   approval: OtaApproval | null;
   canApply: boolean;
+  canApprove: boolean;
   blockedReasons: string[];
   checkedAt: string;
 }

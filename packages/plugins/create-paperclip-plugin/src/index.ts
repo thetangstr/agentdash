@@ -714,6 +714,18 @@ function runCli() {
   console.log(`Created plugin scaffold at ${out}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Realpaths on both sides so a symlinked invocation still runs; an argv[1]
+// that cannot be resolved is not this file's direct run.
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
+if (invokedDirectly) {
   runCli();
 }

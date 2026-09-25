@@ -958,6 +958,15 @@ export function issueRoutes(
       unreadForUserFilterRaw === "me" && req.actor.type === "board"
         ? req.actor.userId
         : unreadForUserFilterRaw;
+    // AgentDash: goals-eval-hitl — `reviewerAgentId=me` resolves to the calling
+    // agent so a CoS reviewer can list exactly the issues the queue assigned
+    // to it without knowing another call surface. A literal id stays allowed:
+    // the data is company-scoped and read-only either way.
+    const reviewerAgentFilterRaw = req.query.reviewerAgentId as string | undefined;
+    const reviewerAgentId =
+      reviewerAgentFilterRaw === "me" && req.actor.type === "agent"
+        ? req.actor.agentId
+        : reviewerAgentFilterRaw;
     // AgentDash: age-2 — always tell the service who is looking at the board
     // so awaitingReviewByViewer can be derived without any user filter set.
     const viewerUserId =
@@ -988,6 +997,10 @@ export function issueRoutes(
       res.status(403).json({ error: "unreadForUserId=me requires board authentication" });
       return;
     }
+    if (reviewerAgentFilterRaw === "me" && (!reviewerAgentId || req.actor.type !== "agent")) {
+      res.status(403).json({ error: "reviewerAgentId=me requires agent authentication" });
+      return;
+    }
     if (rawLimit !== undefined && (parsedLimit === null || !Number.isInteger(parsedLimit) || parsedLimit <= 0)) {
       res.status(400).json({ error: `limit must be a positive integer up to ${ISSUE_LIST_MAX_LIMIT}` });
       return;
@@ -1004,6 +1017,7 @@ export function issueRoutes(
       status: req.query.status as string | undefined,
       assigneeAgentId: req.query.assigneeAgentId as string | undefined,
       participantAgentId: req.query.participantAgentId as string | undefined,
+      reviewerAgentId,
       assigneeUserId,
       touchedByUserId,
       inboxArchivedByUserId,

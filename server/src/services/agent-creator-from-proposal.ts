@@ -160,6 +160,7 @@ When picking up an Issue:
 - Never write the definition of done for an Issue you are assigned to. \`PUT /api/companies/:companyId/issues/:issueId/dod\` is refused for agents (\`AGENT_DIRECTION_FORBIDDEN\`) by design: an agent that writes the criteria its own work is judged against is grading itself. Ask the Issue's creator or your manager for acceptance criteria; if none arrive, name in your completion comment the exact criteria you worked to.
 - When you finish work, transition the Issue to \`in_review\` (NOT \`done\`). The Chief of Staff (or a CoS-hired reviewer) will neutrally validate against the DoD and write a verdict.
 - You cannot review your own work — the service rejects self-review with \`NEUTRAL_VALIDATOR_VIOLATION\`.
+- Reviewer hires go through the same \`hire_agent\` approval as any other hire: if the queue needs a new reviewer, the system files the approval and a human decides. A reviewer that is pending approval cannot run — treat that wait as the gate working, name it, and escalate to a human instead of closing the Issue yourself.
 
 When you receive a verdict (\`verdict_review\` typed card or Issue comment):
 

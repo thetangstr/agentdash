@@ -21,6 +21,7 @@ export function InstanceChangelog() {
               <div className="flex flex-wrap items-center gap-2">
                 <CardTitle className="text-base">{note.version}</CardTitle>
                 {note.releasedAt ? <Badge variant="secondary">{note.releasedAt}</Badge> : null}
+                {note.upstream ? <Badge variant="outline">Paperclip upstream</Badge> : null}
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
