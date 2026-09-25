@@ -152,6 +152,11 @@ ALLOWED="$HOST"; [ -z "$CUSTOM_DOMAIN" ] || ALLOWED="${CUSTOM_DOMAIN},${HOST}"
 say "public URL ${PUBLIC_URL}"
 
 # --- 6. Variables -------------------------------------------------------------
+# The hosted-box boot guard (#726, PR #729) refuses to start a box with
+# AGENTDASH_DEPLOYMENT_KIND=hosted unless: authenticated mode, an https
+# PAPERCLIP_PUBLIC_URL, AGENTDASH_HERMES_MANAGED_PROFILES=true, and gated
+# sign-up (AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE=true + AGENTDASH_INVITE_CODES).
+# Everything below satisfies it. See doc/deploy/railway.md from #729.
 EXISTING="$(variable_names "$PROJECT_ID" "$ENV_ID" "$WEB_ID" || true)"
 has_var() { grep -qx "$1" <<<"$EXISTING"; }
 

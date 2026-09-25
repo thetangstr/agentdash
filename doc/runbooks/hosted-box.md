@@ -71,6 +71,7 @@ Local state (the CLI link and the invite code file) lives in `~/.agentdash-boxes
 BOX=https://<host>
 curl -s $BOX/api/health | jq '{status,deploymentMode,bootstrapStatus,selfServeBootstrap,instanceHasCompany}'
 # expect status ok, deploymentMode authenticated, bootstrapStatus bootstrap_pending, instanceHasCompany false
+# (and hostedBox true once #729 is in the running release)
 curl -s -o /dev/null -w '%{http_code}\n' $BOX/api/companies           # expect 401 or 403
 curl -s -X POST $BOX/api/auth/sign-up/email -H 'Content-Type: application/json' \
   -H "Origin: $BOX" -d '{"name":"x","email":"stranger@example.com","password":"x-long-password-1"}'
@@ -165,7 +166,7 @@ Boxes do not auto-deploy. `.github/workflows/deploy.yml` targets only the old `a
 
 - **Browser sign-up cannot send an invite code.** `Auth.tsx` and `InviteLanding.tsx` post only name, email and password, so with the gate on, a teammate following a company invite is refused. The guard should also accept a valid company invite token. Until then teammates need the operator's rotated code and `claim-box.sh`.
 - **`AGENTDASH_FREE_AGENT_CAP=2` has no effect without Stripe:** with `STRIPE_SECRET_KEY` unset, tier caps are bypassed (`services/tier-policy.ts`). Per-box Stripe wiring is CUJ-7.
-- **The hosted flag** `AGENTDASH_DEPLOYMENT_KIND=hosted` is the name proposed in #726, which is not merged. Today `deploymentKind()` treats any value other than `on_prem` as `cloud`, so the variable is inert until #726 lands.
+- **The hosted-box boot guard** (#726, PR #729, not merged) reads `AGENTDASH_DEPLOYMENT_KIND=hosted` and refuses to start unless the deployment mode is `authenticated`, `PAPERCLIP_PUBLIC_URL` is `https://`, `AGENTDASH_HERMES_MANAGED_PROFILES=true`, and sign-up is gated (`AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE=true` with `AGENTDASH_INVITE_CODES` set, or `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true`). The script sets all of them, so a box already satisfies the guard when #729 lands; after that, `/api/health` also reports `hostedBox: true`. On `v2026.924.0` the flag is inert. The generic Railway reference from #729 is `doc/deploy/railway.md` and `.env.railway.example`; this runbook is the per-customer procedure on top of it.
 - **No Hermes in the image** until #721; `AGENTDASH_HERMES_MANAGED_PROFILES=true` is set in advance.
 - **No model adapter** is configured; CoS chat returns stub replies until the founder brings a key (CUJ-2).
 - **No email:** without `RESEND_API_KEY`, password-reset and invite emails are not sent.
@@ -186,7 +187,7 @@ Boxes do not auto-deploy. `.github/workflows/deploy.yml` targets only the old `a
 | `AGENTDASH_INVITE_CODES` | generated secret | The founder's one-time code; rotated after the claim |
 | `AGENTDASH_INVITE_VALIDATION_URL` | `https://<host>/api/invites/validate` | MCP sign-up validates against the box itself |
 | `AGENTDASH_FREE_AGENT_CAP` | `2` | 1.0 plan: the CoS does not use up the only Free agent |
-| `AGENTDASH_DEPLOYMENT_KIND` | `hosted` | Hosted-box boot guard flag (#726, pending) |
+| `AGENTDASH_DEPLOYMENT_KIND` | `hosted` | Hosted-box boot guard (#726, PR #729); the four variables it requires are all set here |
 | `AGENTDASH_HERMES_MANAGED_PROFILES` | `true` | Per-agent Hermes profiles (#721, pending) |
 | `AGENTDASH_RELEASE_TAG`, `AGENTDASH_BOX_SLUG` | tag, slug | Operator bookkeeping |
 | `BETTER_AUTH_SECRET` | generated, 32 bytes hex | Session signing |
