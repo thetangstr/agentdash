@@ -12,7 +12,11 @@
 //   - no generated secret and no Railway token ever appears on a command line;
 //   - the script refuses to run under bash -x;
 //   - --close-signup turns sign-up off and removes the code file, and a
-//     --no-deploy rotation warns that the old code stays valid.
+//     --no-deploy rotation warns that the old code stays valid;
+//   - --redeploy paired with a --release that does not match the box's
+//     recorded AGENTDASH_RELEASE_TAG refuses (an upgrade attempt that would
+//     silently keep the old build), unless --force-redeploy-same-build is
+//     given or the release matches (config-only redeploy, e.g. --close-signup).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -24,6 +28,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, "provision-box.sh");
+const REPO_ROOT = execFileSync("git", ["-C", HERE, "rev-parse", "--show-toplevel"]).toString().trim();
 const REAL_JQ = execFileSync("sh", ["-c", "command -v jq"]).toString().trim();
 const TOKEN = "fake-railway-token-DO-NOT-LEAK";
 
@@ -193,6 +198,60 @@ test("refuses to run under bash -x", () => {
     assert.equal(r.status, 2);
     assert.match(r.stderr, /refusing to run with xtrace/);
     assert.equal(read(ctx, "requests.log"), "", "no API call before the refusal");
+  } finally { rmSync(ctx.root, { recursive: true, force: true }); }
+});
+
+test("scripts/hosted/*.sh (except lib.sh) are tracked executable", () => {
+  const out = execFileSync("git", ["-C", REPO_ROOT, "ls-files", "-s", "scripts/hosted/"]).toString();
+  const modes = Object.fromEntries(
+    out.trim().split("\n").filter(Boolean).map((line) => {
+      const [mode, , , file] = line.split(/\s+/);
+      return [file, mode];
+    }),
+  );
+  for (const f of ["scripts/hosted/provision-box.sh", "scripts/hosted/claim-box.sh", "scripts/hosted/backup-box.sh"]) {
+    assert.equal(modes[f], "100755", `${f} must be tracked as executable (git update-index --chmod=+x)`);
+  }
+  assert.equal(modes["scripts/hosted/lib.sh"], "100644", "lib.sh is sourced, never executed directly, and must stay non-executable");
+});
+
+test("--redeploy with a different --release than the box's recorded tag refuses", () => {
+  const ctx = setup({ deployed: true, vars: { ...SECRETS, AGENTDASH_RELEASE_TAG: "v2026.900.0" } });
+  try {
+    const r = run(ctx, [...BASE, "--redeploy"]); // BASE release is v2026.924.0
+    assert.notEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr, /--redeploy restarts the current build/);
+    assert.match(r.stderr, /to upgrade to v2026\.924\.0 run without --redeploy/);
+    assert.equal(read(ctx, "upsert.json"), "", "no variable write may happen");
+  } finally { rmSync(ctx.root, { recursive: true, force: true }); }
+});
+
+test("--force-redeploy-same-build overrides the release-mismatch refusal", () => {
+  const ctx = setup({ deployed: true, vars: { ...SECRETS, AGENTDASH_RELEASE_TAG: "v2026.900.0" } });
+  try {
+    const r = run(ctx, [...BASE, "--redeploy", "--force-redeploy-same-build"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /--redeploy restarts the current build/);
+  } finally { rmSync(ctx.root, { recursive: true, force: true }); }
+});
+
+test("--redeploy with the same recorded --release still works (config-only change)", () => {
+  const ctx = setup({ deployed: true, vars: { ...SECRETS, AGENTDASH_RELEASE_TAG: "v2026.924.0" } });
+  try {
+    const r = run(ctx, [...BASE, "--close-signup", "--redeploy"]); // BASE release is v2026.924.0
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /--redeploy restarts the current build/);
+    const sent = JSON.parse(read(ctx, "upsert.json")).i.variables;
+    assert.equal(sent.PAPERCLIP_AUTH_DISABLE_SIGN_UP, "true");
+  } finally { rmSync(ctx.root, { recursive: true, force: true }); }
+});
+
+test("--redeploy on a box with no recorded release tag yet is allowed (nothing to compare against)", () => {
+  const ctx = setup({ deployed: true, vars: { ...SECRETS } }); // no AGENTDASH_RELEASE_TAG
+  try {
+    const r = run(ctx, [...BASE, "--redeploy"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /--redeploy restarts the current build/);
   } finally { rmSync(ctx.root, { recursive: true, force: true }); }
 });
 

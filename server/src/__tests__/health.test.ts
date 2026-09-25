@@ -238,4 +238,91 @@ describe("GET /health", () => {
       expect(res.body).toMatchObject({ status: "ok", deploymentMode: "authenticated", hostedBox: true });
     });
   });
+
+  // AgentDash: operators need to tell which build is live on a hosted box
+  // without signing in (doc/runbooks/hosted-box.md section 10/12); the
+  // release tag comes from the AGENTDASH_RELEASE_TAG Railway variable
+  // scripts/hosted/provision-box.sh sets, and is public/non-sensitive.
+  describe("releaseTag", () => {
+    const ORIGINAL_TAG = process.env.AGENTDASH_RELEASE_TAG;
+    afterEach(() => {
+      if (ORIGINAL_TAG === undefined) delete process.env.AGENTDASH_RELEASE_TAG;
+      else process.env.AGENTDASH_RELEASE_TAG = ORIGINAL_TAG;
+    });
+
+    it("is absent when AGENTDASH_RELEASE_TAG is unset, but version is still reported", async () => {
+      delete process.env.AGENTDASH_RELEASE_TAG;
+      const res = await request(createApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty("releaseTag");
+      expect(res.body.version).toBe(serverVersion);
+    });
+
+    it("reports the release tag on the public (no-db, redacted) response of a hosted box", async () => {
+      process.env.AGENTDASH_RELEASE_TAG = "v2026.925.0";
+      const app = express();
+      app.use(
+        "/health",
+        healthRoutes(undefined, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "ok", version: serverVersion, releaseTag: "v2026.925.0" });
+    });
+
+    it("reports the release tag for anonymous requests with a db (redacted path)", async () => {
+      process.env.AGENTDASH_RELEASE_TAG = "v2026.925.0";
+      const db = {
+        execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ count: 0 }]) })),
+        })),
+      } as unknown as Db;
+      const app = express();
+      app.use(
+        "/health",
+        healthRoutes(db, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ version: serverVersion, releaseTag: "v2026.925.0" });
+    });
+
+    it("reports the release tag for authenticated (full-details) requests", async () => {
+      process.env.AGENTDASH_RELEASE_TAG = "v2026.925.0";
+      const db = {
+        execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ count: 0 }]) })),
+        })),
+      } as unknown as Db;
+      const app = express();
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: "board", userId: "user-1", source: "session" };
+        next();
+      });
+      app.use(
+        "/health",
+        healthRoutes(db, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ version: serverVersion, releaseTag: "v2026.925.0" });
+    });
+  });
 });
