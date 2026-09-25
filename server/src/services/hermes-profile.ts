@@ -12,9 +12,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
-import { writeFile as fsWriteFile, rm as fsRm } from "node:fs/promises";
+import { mkdir as fsMkdir, writeFile as fsWriteFile, rm as fsRm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { isHostedBox } from "./license.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,10 +50,49 @@ function resolved(deps: HermesProfileDeps = {}) {
     binDir: deps.binDir ?? env.AGENTDASH_HERMES_BIN_DIR ?? join(homedir(), ".local", "bin"),
     run: deps.run ?? (async (args: string[]) => execFileAsync(hermesBin, args)),
     writeFile: deps.writeFile ?? ((p: string, c: string) => fsWriteFile(p, c, { mode: 0o600 })),
-    writeWrapper: deps.writeWrapper ?? ((p: string, c: string) => fsWriteFile(p, c, { mode: 0o755 })),
+    // AgentDash (#721): the wrapper dir may not exist yet on a fresh Volume.
+    writeWrapper:
+      deps.writeWrapper
+      ?? (async (p: string, c: string) => {
+        await fsMkdir(dirname(p), { recursive: true });
+        await fsWriteFile(p, c, { mode: 0o755 });
+      }),
     removeFile: deps.removeFile ?? ((p: string) => fsRm(p, { force: true })),
     exists: deps.exists ?? ((p: string) => existsSync(p)),
   };
+}
+
+/**
+ * AgentDash: managed per-agent profiles are opt-in on a founder's own machine
+ * (`AGENTDASH_HERMES_MANAGED_PROFILES=true`) and always on for a hosted box,
+ * where every run must carry an explicit `-p <profile>` so its ledger is certain.
+ */
+export function hermesManagedProfilesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENTDASH_HERMES_MANAGED_PROFILES === "true" || isHostedBox(env);
+}
+
+/**
+ * AgentDash (#721): on a hosted box a profile that cannot be provisioned fails
+ * the run. Falling back to the root `hermes` command would run the agent on the
+ * shared root profile and write its usage to the root ledger, silently.
+ */
+export function hermesProfilesFailClosed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isHostedBox(env);
+}
+
+export const HERMES_PROFILE_PROVISION_ERROR_CODE = "hermes_profile_provision_failed";
+
+/** Named failure for a managed profile that could not be provisioned (fail-closed mode). */
+export class HermesProfileProvisionError extends Error {
+  readonly code = HERMES_PROFILE_PROVISION_ERROR_CODE;
+  readonly agentId: string | null;
+  readonly profileName: string | null;
+  constructor(message: string, opts: { agentId?: string | null; profileName?: string | null; cause?: unknown } = {}) {
+    super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
+    this.name = "HermesProfileProvisionError";
+    this.agentId = opts.agentId ?? null;
+    this.profileName = opts.profileName ?? null;
+  }
 }
 
 /** Deterministic, Hermes-safe profile name (lowercase alphanumeric, one hyphen). */
@@ -88,21 +128,27 @@ export async function provisionAgentProfile(
   const profileName = agentProfileName(agentId);
   const template = opts.template ?? r.env.AGENTDASH_HERMES_PROFILE_TEMPLATE ?? "agentdash";
 
+  // AgentDash (#721): a profile that already exists is kept. On a hosted box the
+  // profiles live on the Volume, so after a redeploy the profile can be present
+  // while its wrapper is being rewritten; `profile create` would error on it.
+  const profileExists = r.exists(join(r.profilesDir, profileName));
   // Clone from a managed template via Hermes' native `--clone-from` so the
   // working provider auth carries over. A bare `create` + manually copying
   // .env/config.yaml/auth.json yields `HTTP 401: invalid api key` (verified on
   // the mini 2026-06-25) — the provider credentials are NOT fully captured by
   // copying those files; only `--clone-from` clones a working provider.
-  await r.run([
-    "profile",
-    "create",
-    profileName,
-    "--clone-from",
-    template,
-    "--no-alias",
-    "--description",
-    `AgentDash agent ${agentId}`,
-  ]);
+  if (!profileExists) {
+    await r.run([
+      "profile",
+      "create",
+      profileName,
+      "--clone-from",
+      template,
+      "--no-alias",
+      "--description",
+      `AgentDash agent ${agentId}`,
+    ]);
+  }
 
   const gwBase = r.env.AGENTDASH_GATEWAY_BASE_URL?.trim();
   const gwKey = r.env.AGENTDASH_GATEWAY_API_KEY?.trim();
@@ -136,24 +182,50 @@ export async function provisionAgentProfile(
  * Return the per-agent managed-profile wrapper command, provisioning the profile
  * first if it is missing. This makes managed Hermes work for an agent created by
  * ANY path (direct API create, seed, import) — not only the hire-approval flow
- * that fires onHireApproved. Returns undefined when there is no agentId or when
+ * that fires onHireApproved.
+ *
+ * Default (on-prem): returns undefined when there is no agentId or when
  * provisioning could not produce a usable wrapper, so callers fall back to the
- * default hermes command. Non-fatal: provisioning errors are swallowed.
+ * default hermes command; provisioning errors are swallowed.
+ *
+ * `failClosed` (hosted box, #721): throws HermesProfileProvisionError instead,
+ * so no run can fall back to the shared root profile.
  */
 export async function ensureAgentProfileCommand(
   agentId: string | undefined | null,
   deps: HermesProfileDeps = {},
+  opts: { failClosed?: boolean } = {},
 ): Promise<string | undefined> {
-  if (!agentId) return undefined;
+  if (!agentId) {
+    if (opts.failClosed) {
+      throw new HermesProfileProvisionError(
+        "Hermes profile provisioning failed: the run has no agent id, so it has no managed profile.",
+      );
+    }
+    return undefined;
+  }
   const r = resolved(deps);
-  const command = join(r.binDir, agentProfileName(agentId));
+  const profileName = agentProfileName(agentId);
+  const command = join(r.binDir, profileName);
   if (r.exists(command)) return command;
+  let failure: unknown = null;
   try {
     await provisionAgentProfile(agentId, {}, deps);
-  } catch {
-    /* non-fatal — fall through to the existence re-check */
+  } catch (error) {
+    /* non-fatal unless fail-closed — fall through to the existence re-check */
+    failure = error;
   }
-  return r.exists(command) ? command : undefined;
+  if (r.exists(command)) return command;
+  if (opts.failClosed) {
+    const raw = failure instanceof Error ? failure.message : failure ? String(failure) : "the wrapper was not written";
+    const reason = raw.trim().replace(/\s+/g, " ").slice(0, 500);
+    throw new HermesProfileProvisionError(
+      `Hermes profile provisioning failed for agent ${agentId} (profile ${profileName}): ${reason}. ` +
+        "The run was not started on the shared root profile.",
+      { agentId, profileName, cause: failure ?? undefined },
+    );
+  }
+  return undefined;
 }
 
 /** Remove the alias wrapper and delete the profile. Best-effort; never throws. */

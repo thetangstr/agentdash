@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1.20
+# AgentDash (#721): uv, pinned by digest, only to install Hermes from its lockfile.
+FROM ghcr.io/astral-sh/uv:0.11.6@sha256:b1e699368d24c57cda93c338a57a8c5a119009ba809305cc8e86986d4a006754 AS uv_source
+
 FROM node:lts-trixie-slim AS base
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -58,6 +61,50 @@ RUN pnpm --filter @paperclipai/ui build
 RUN pnpm --filter @paperclipai/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
 
+# AgentDash (#721): Hermes Agent, the only runtime on a hosted 1.0 box.
+#
+# Pinned to a release tag AND its commit; the build fails if the tag ever
+# points elsewhere. Python dependencies come from Hermes' own uv.lock
+# (`--frozen`: exact versions and sha256 hashes, no re-resolution). The
+# `anthropic` extra is the one provider SDK outside core that a 1.0 provider
+# (Anthropic) needs; Z.AI, OpenRouter and OpenAI use the core openai client.
+#
+# No source builds. Every dependency installs from a locked wheel
+# (`--no-build`); the only thing built is hermes-agent itself (editable, so its
+# bundled skills and plugins stay on disk), with the backend from
+# scripts/docker/hermes-build-backend.txt (pinned, hash-checked, no build
+# isolation). The five sdist-only packages in Hermes' uv.lock are
+# alibabacloud-credentials-api, alibabacloud-endpoint-util,
+# alibabacloud-gateway-dingtalk, alibabacloud-gateway-spi and alibabacloud-tea;
+# all belong to the DingTalk messaging extra, which this image does not
+# install, so `--no-build` never meets them. Adding that extra would fail the
+# build here, on purpose.
+#
+# Upgrade path: pick a tag from https://github.com/NousResearch/hermes-agent/tags,
+# set HERMES_REF and HERMES_COMMIT (`git rev-list -n1 <tag>`), rebuild, and run
+# scripts/docker/hermes-smoke.sh against the image. Record the bump in the
+# Railway runbook (#675).
+FROM base AS hermes
+ARG HERMES_REF=v2026.9.11
+ARG HERMES_COMMIT=939e45c91d751fadd94dcd1b873ac3cb44846213
+COPY --from=uv_source /uv /usr/local/bin/uv
+ENV UV_PYTHON=/usr/bin/python3 \
+  UV_PYTHON_DOWNLOADS=never \
+  UV_PROJECT_ENVIRONMENT=/opt/hermes/.venv \
+  UV_LINK_MODE=copy \
+  UV_NO_CACHE=1
+RUN git clone --depth 1 --branch "$HERMES_REF" https://github.com/NousResearch/hermes-agent.git /opt/hermes \
+  && test "$(git -C /opt/hermes rev-parse HEAD)" = "$HERMES_COMMIT" \
+  && rm -rf /opt/hermes/.git
+WORKDIR /opt/hermes
+COPY scripts/docker/hermes-build-backend.txt /tmp/hermes-build-backend.txt
+RUN uv sync --frozen --no-dev --extra anthropic --no-install-project --no-build \
+  && (cd / && uv pip install --python /opt/hermes/.venv/bin/python --require-hashes \
+    --only-binary :all: --no-deps -r /tmp/hermes-build-backend.txt) \
+  && uv sync --frozen --no-dev --extra anthropic --inexact --no-build-isolation-package hermes-agent \
+  && test -x /opt/hermes/.venv/bin/hermes \
+  && rm -rf tests website apps contributors ui-tui node_modules nix docker evals /tmp/hermes-build-backend.txt
+
 FROM base AS production
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -69,6 +116,13 @@ RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/cod
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /paperclip \
   && chown node:node /paperclip
+
+# AgentDash (#721): Hermes (source tree + venv; the install is editable, so the
+# tree stays). Root-owned and read-only at runtime; Hermes state lives under
+# $HOME/.hermes on the Volume.
+COPY --from=hermes /opt/hermes /opt/hermes
+RUN ln -s /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes \
+  && hermes --version
 
 COPY scripts/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -87,8 +141,28 @@ ENV NODE_ENV=production \
   PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
   OPENCODE_ALLOW_ALL_MODELS=true
 
+# AgentDash (#721): hosted-box Hermes defaults. Everything Hermes keeps
+# (profiles, provider credentials, sessions, state.db ledgers) and the
+# per-agent `agentdash-<id>` wrappers live under /paperclip, the Volume mount,
+# so they survive a redeploy. HERMES_HOME is deliberately NOT set: it would
+# pin every run's ledger to the root state.db and hide the per-profile ledgers
+# a `hermes -p <profile>` run writes. Hermes finds its root at $HOME/.hermes.
+# Managed per-agent profiles and the Hermes default adapter are image defaults;
+# a self-hoster can override them with `-e`. Code defaults for non-Docker
+# installs are unchanged. The hosted flag itself (AGENTDASH_DEPLOYMENT_KIND=hosted)
+# is set on the service, not here.
+ENV AGENTDASH_HERMES_COMMAND=/usr/local/bin/hermes \
+  AGENTDASH_HERMES_ROOT=/paperclip/.hermes \
+  HERMES_PROFILES_DIR=/paperclip/.hermes/profiles \
+  AGENTDASH_HERMES_BIN_DIR=/paperclip/.hermes/bin \
+  AGENTDASH_HERMES_MANAGED_PROFILES=true \
+  AGENTDASH_DEFAULT_ADAPTER=hermes_local \
+  PYTHONDONTWRITEBYTECODE=1
+
 # VOLUME ["/paperclip"] — removed for Railway (Dockerfile VOLUME unsupported; use a Railway Volume mounted at /paperclip if persistence is needed; SaaS uses external Postgres)
 EXPOSE 3100
 
+# AgentDash (#721): the container starts as root so the entrypoint can hand a
+# root-owned platform Volume (Railway) to node, then drops to node via gosu.
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]

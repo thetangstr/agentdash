@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
-import { ensureAgentProfileCommand } from "./hermes-profile.js";
+import { ensureAgentProfileCommand, hermesProfilesFailClosed } from "./hermes-profile.js";
 
 /** One decision the demo asks a real agent to make. */
 export interface HandshakeAgentDecisionInput {
@@ -47,8 +47,10 @@ export interface HandshakeAgentRunnerDeps {
   execute?: HandshakeExecuteFn;
   /** Resolve/provision the agent's per-agent hermes profile command. */
   ensureCommand?: (agentId: string) => Promise<string | undefined>;
-  /** Fallback command when profile provisioning fails. */
+  /** Fallback command when profile provisioning fails (never used when fail-closed). */
   defaultHermesCommand?: string;
+  /** Refuse the fallback command. Defaults to hermesProfilesFailClosed() (a hosted box). */
+  failClosed?: boolean;
   /** Make a fresh temp cwd for the run (returns its path). */
   mkdtemp?: (prefix: string) => string;
   /** Write the role AGENTS.md into the run cwd. */
@@ -87,7 +89,9 @@ export function extractReasoning(raw: string): string {
 
 export function handshakeAgentRunner(deps: HandshakeAgentRunnerDeps = {}) {
   const execute = deps.execute ?? defaultExecute;
-  const ensureCommand = deps.ensureCommand ?? ((agentId: string) => ensureAgentProfileCommand(agentId));
+  const ensureCommand =
+    deps.ensureCommand
+    ?? ((agentId: string) => ensureAgentProfileCommand(agentId, {}, { failClosed: hermesProfilesFailClosed() }));
   const defaultHermesCommand =
     deps.defaultHermesCommand ?? process.env.AGENTDASH_HERMES_COMMAND ?? "hermes";
   const mkdtemp = deps.mkdtemp ?? ((prefix: string) => mkdtempSync(join(tmpdir(), prefix)));
@@ -96,7 +100,15 @@ export function handshakeAgentRunner(deps: HandshakeAgentRunnerDeps = {}) {
   async function runDecision(input: HandshakeAgentDecisionInput): Promise<HandshakeAgentDecision> {
     // Resolve the agent's own hermes profile; fall back to the default command
     // if provisioning is unavailable (non-fatal — the adapter still runs).
-    const hermesCommand = (await ensureCommand(input.agentId).catch(() => undefined)) ?? defaultHermesCommand;
+    // AgentDash (#721): a hosted box never falls back to the shared root profile.
+    const failClosed = deps.failClosed ?? hermesProfilesFailClosed();
+    const ensured = failClosed
+      ? await ensureCommand(input.agentId)
+      : await ensureCommand(input.agentId).catch(() => undefined);
+    if (!ensured && failClosed) {
+      throw new Error(`Hermes profile provisioning failed for agent ${input.agentId}; refusing the shared root profile.`);
+    }
+    const hermesCommand = ensured ?? defaultHermesCommand;
 
     const cwd = mkdtemp(`hermes-${input.name.toLowerCase()}-`);
     writeFile(join(cwd, "AGENTS.md"), input.agentsMd);

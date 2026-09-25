@@ -124,15 +124,35 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
-import { ensureAgentProfileCommand, provisionAgentProfile } from "../services/hermes-profile.js";
+import {
+  ensureAgentProfileCommand,
+  hermesManagedProfilesEnabled,
+  hermesProfilesFailClosed,
+  HermesProfileProvisionError,
+  provisionAgentProfile,
+} from "../services/hermes-profile.js";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 import { withHermesSpawnWatch } from "./hermes-spawn-watch.js";
 
-// AgentDash: opt-in managed per-agent Hermes profiles. When enabled, each agent
-// is hired into its own Hermes profile (isolated model/MCP/skills/state) and runs
-// are scoped via the profile's alias wrapper. Off by default — no behavior change.
-function hermesManagedProfilesEnabled(): boolean {
-  return process.env.AGENTDASH_HERMES_MANAGED_PROFILES === "true";
+// AgentDash: managed per-agent Hermes profiles. When enabled, each agent is
+// hired into its own Hermes profile (isolated model/MCP/skills/state) and runs
+// are scoped via the profile's alias wrapper. Off by default on a founder's own
+// machine; always on for a hosted box (hermesManagedProfilesEnabled, #721).
+
+/**
+ * AgentDash (#721): the result of a hosted run whose managed profile could not
+ * be provisioned. Hermes is never spawned, so nothing lands on the shared root
+ * profile or its ledger.
+ */
+function hermesProfileProvisionFailedResult(error: HermesProfileProvisionError): AdapterExecutionResult {
+  return {
+    exitCode: 1,
+    signal: null,
+    timedOut: false,
+    errorCode: error.code,
+    errorMessage: error.message,
+    errorMeta: { agentId: error.agentId, hermesProfile: error.profileName },
+  };
 }
 
 const DEFAULT_HERMES_COMMAND = "hermes";
@@ -866,11 +886,22 @@ const hermesLocalAdapter: ServerAdapterModule = {
     // AgentDash: when managed profiles are enabled, scope this run to the agent's
     // own Hermes profile by invoking its alias wrapper (`hermes -p <profile>`).
     // Provisions the profile if it is missing (covers agents created by any path,
-    // not just the hire-approval flow); falls back to the default command if it
-    // could not be provisioned.
+    // not just the hire-approval flow). On-prem falls back to the default command
+    // if it could not be provisioned; a hosted box fails the run instead (#721).
+    let managedProfileCommand: string | undefined;
     if (hermesManagedProfilesEnabled()) {
-      const profileCmd = await ensureAgentProfileCommand(taskPatchedCtx.agent?.id);
-      if (profileCmd) patchedConfig.hermesCommand = profileCmd;
+      try {
+        managedProfileCommand = await ensureAgentProfileCommand(
+          taskPatchedCtx.agent?.id,
+          {},
+          { failClosed: hermesProfilesFailClosed() },
+        );
+        if (managedProfileCommand) patchedConfig.hermesCommand = managedProfileCommand;
+      } catch (error) {
+        if (!(error instanceof HermesProfileProvisionError)) throw error;
+        await taskPatchedCtx.onLog("stderr", `[hermes] ${error.message}\n`);
+        return hermesProfileProvisionFailedResult(error);
+      }
     }
 
     // Hermes' package default prompt predates authenticated mode and shows bare curl examples.
@@ -908,6 +939,13 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     const patchedCtx = {
       ...taskPatchedCtx,
+      // AgentDash (#721): normalizeHermesConfig stamps the default command on the
+      // run config, and the ledger reader prefers the run config's hermesCommand.
+      // Mirror the profile wrapper there so metering resolves the agent's own
+      // profile ledger rather than the root one.
+      ...(managedProfileCommand
+        ? { config: { ...(readRecord(taskPatchedCtx.config) ?? {}), hermesCommand: managedProfileCommand } }
+        : {}),
       agent: {
         ...taskPatchedCtx.agent,
         adapterConfig: patchedConfig,
@@ -922,7 +960,18 @@ const hermesLocalAdapter: ServerAdapterModule = {
   testEnvironment: async (ctx) => {
     if (hermesManagedProfilesEnabled()) {
       const agentId = (ctx as { agent?: { id?: string | null } }).agent?.id;
-      const profileCmd = await ensureAgentProfileCommand(agentId);
+      let profileCmd: string | undefined;
+      try {
+        profileCmd = await ensureAgentProfileCommand(agentId, {}, { failClosed: hermesProfilesFailClosed() });
+      } catch (error) {
+        if (!(error instanceof HermesProfileProvisionError)) throw error;
+        return {
+          adapterType: "hermes_local",
+          status: "fail",
+          checks: [{ code: error.code, level: "error", message: error.message }],
+          testedAt: new Date().toISOString(),
+        };
+      }
       if (profileCmd) {
         const cfg =
           ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)

@@ -24,7 +24,7 @@ import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, EVALUATOR_AGENT_ROLE, isUuidLike, no
 import type { AgentApiKeySource } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
-import { deprovisionAgentProfile } from "./hermes-profile.js";
+import { deprovisionAgentProfile, hermesManagedProfilesEnabled } from "./hermes-profile.js";
 import { assignUnassignedReviewItems } from "./review-queue-assignments.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
 
@@ -536,11 +536,8 @@ export function agentService(db: Db) {
         .where(eq(issueReviewQueueState.assignedReviewerAgentId, id));
 
       // AgentDash: tear down the agent's managed Hermes profile (best-effort,
-      // non-fatal; gated off by default).
-      if (
-        existing.adapterType === "hermes_local" &&
-        process.env.AGENTDASH_HERMES_MANAGED_PROFILES === "true"
-      ) {
+      // non-fatal; gated off by default, always on for a hosted box).
+      if (existing.adapterType === "hermes_local" && hermesManagedProfilesEnabled()) {
         await deprovisionAgentProfile(id).catch(() => undefined);
       }
 

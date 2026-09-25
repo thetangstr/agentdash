@@ -4,6 +4,10 @@ import {
   agentProfileName,
   deprovisionAgentProfile,
   ensureAgentProfileCommand,
+  HERMES_PROFILE_PROVISION_ERROR_CODE,
+  hermesManagedProfilesEnabled,
+  HermesProfileProvisionError,
+  hermesProfilesFailClosed,
   provisionAgentProfile,
   type HermesProfileDeps,
 } from "./hermes-profile.js";
@@ -174,5 +178,65 @@ describe("deprovisionAgentProfile", () => {
       }),
     };
     await expect(deprovisionAgentProfile("agent-4", deps)).resolves.toBeUndefined();
+  });
+});
+
+// AgentDash (#721): hosted boxes keep profiles on the Railway Volume and must
+// never fall back to the shared root profile.
+describe("hosted-box profile policy", () => {
+  it("managed profiles are opt-in on-prem and always on when hosted", () => {
+    expect(hermesManagedProfilesEnabled({})).toBe(false);
+    expect(hermesManagedProfilesEnabled({ AGENTDASH_HERMES_MANAGED_PROFILES: "true" })).toBe(true);
+    expect(hermesManagedProfilesEnabled({ AGENTDASH_DEPLOYMENT_KIND: "hosted" })).toBe(true);
+    expect(hermesManagedProfilesEnabled({ AGENTDASH_DEPLOYMENT_KIND: "cloud" })).toBe(false);
+    expect(hermesManagedProfilesEnabled({ AGENTDASH_DEPLOYMENT_KIND: "on_prem" })).toBe(false);
+  });
+
+  it("fails closed only on a hosted box", () => {
+    expect(hermesProfilesFailClosed({})).toBe(false);
+    expect(hermesProfilesFailClosed({ AGENTDASH_HERMES_MANAGED_PROFILES: "true" })).toBe(false);
+    expect(hermesProfilesFailClosed({ AGENTDASH_DEPLOYMENT_KIND: "hosted" })).toBe(true);
+  });
+
+  it("fail-closed: a failed provision throws a named error instead of returning undefined", async () => {
+    const { deps } = harness({});
+    deps.run = vi.fn(async () => {
+      throw new Error("Command failed: hermes profile create: template 'agentdash' not found");
+    });
+    const attempt = ensureAgentProfileCommand("agent-9", deps, { failClosed: true });
+    await expect(attempt).rejects.toBeInstanceOf(HermesProfileProvisionError);
+    await expect(attempt).rejects.toMatchObject({
+      name: "HermesProfileProvisionError",
+      code: HERMES_PROFILE_PROVISION_ERROR_CODE,
+      agentId: "agent-9",
+      profileName: "agentdash-agent9",
+    });
+    await expect(attempt).rejects.toThrow(/template 'agentdash' not found/);
+  });
+
+  it("fail-closed: a run with no agent id is refused", async () => {
+    const { deps, runs } = harness({});
+    await expect(ensureAgentProfileCommand(undefined, deps, { failClosed: true })).rejects.toBeInstanceOf(
+      HermesProfileProvisionError,
+    );
+    expect(runs).toHaveLength(0);
+  });
+
+  it("fail-closed: a provision that writes no wrapper is refused", async () => {
+    const { deps } = harness({});
+    deps.writeWrapper = vi.fn(async () => {});
+    await expect(ensureAgentProfileCommand("agent-9", deps, { failClosed: true })).rejects.toThrow(
+      /the wrapper was not written/,
+    );
+  });
+
+  it("keeps an existing profile and rewrites only its wrapper (redeploy with profiles on the Volume)", async () => {
+    const { deps, runs, wrappers, existing } = harness({});
+    existing.add("/profiles/agentdash-agent9");
+    const cmd = await ensureAgentProfileCommand("agent-9", deps, { failClosed: true });
+    expect(cmd).toBe("/bin/agentdash-agent9");
+    expect(runs).toHaveLength(0);
+    expect(wrappers).toHaveLength(1);
+    expect(wrappers[0].content).toContain("exec hermes -p agentdash-agent9");
   });
 });
