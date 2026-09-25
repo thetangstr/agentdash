@@ -129,7 +129,7 @@ function commandKeysFor(adapterType: string | null | undefined): string[] {
   return (adapterType && COMMAND_KEYS_BY_ADAPTER[adapterType]) || ["command"];
 }
 
-export const HERMES_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+export const HERMES_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 const HERMES_PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const POSITIVE_INT = /^[1-9][0-9]{0,5}$/;
 
@@ -147,15 +147,17 @@ const HERMES_SAFE_FLAGS: Record<string, ((value: string) => boolean) | null> = {
   "--verbose": null,
 };
 
-/** True when every token of a Hermes `extraArgs` list is an allowlisted flag. */
+/**
+ * True when every token of a Hermes `extraArgs` list is an allowlisted flag.
+ * Validates the exact array the adapter will pass to Hermes: no trimming, no
+ * dropping, and an empty or whitespace-bearing token is refused, because it
+ * would reach the CLI as a stray argument. A string is not accepted — the
+ * adapter reads `extraArgs` as an array.
+ */
 export function isSafeHermesExtraArgs(value: unknown): boolean {
-  const tokens =
-    typeof value === "string"
-      ? value.split(/\s+/).filter(Boolean)
-      : Array.isArray(value) && value.every((t) => typeof t === "string")
-        ? (value as string[]).map((t) => t.trim()).filter(Boolean)
-        : null;
-  if (!tokens) return false;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  if (!value.every((t) => typeof t === "string" && t.length > 0 && !/\s/.test(t))) return false;
+  const tokens = value as string[];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i]!;
     const eq = token.indexOf("=");

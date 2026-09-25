@@ -117,11 +117,20 @@ describe("findRestrictedHostExecutionFields", () => {
     ).toEqual(["adapterConfig.extraArgs"]);
   });
 
-  it("parses --flag=value and string forms of Hermes extraArgs", () => {
+  it("validates the exact Hermes extraArgs tokens that reach the CLI", () => {
     expect(isSafeHermesExtraArgs(["--reasoning-effort=medium", "--profile=work_1"])).toBe(true);
-    expect(isSafeHermesExtraArgs("-p agentdash --max-turns 40 --checkpoints")).toBe(true);
+    expect(isSafeHermesExtraArgs(["-p", "agentdash", "--max-turns", "40", "--checkpoints"])).toBe(true);
     expect(isSafeHermesExtraArgs(["--reasoning-effort=extreme"])).toBe(false);
     expect(isSafeHermesExtraArgs([1, 2])).toBe(false);
+    // Empty or whitespace tokens would reach Hermes as stray arguments.
+    expect(isSafeHermesExtraArgs(["-p", "", "x"])).toBe(false);
+    expect(isSafeHermesExtraArgs(["-p", " agentdash"])).toBe(false);
+    expect(isSafeHermesExtraArgs(["-p", "agentdash", "  "])).toBe(false);
+    // The adapter reads an array; a string is not what it will pass.
+    expect(isSafeHermesExtraArgs("-p agentdash")).toBe(false);
+    // Only the documented reasoning-effort levels.
+    expect(isSafeHermesExtraArgs(["--reasoning-effort", "xhigh"])).toBe(false);
+    expect(isSafeHermesExtraArgs(["--reasoning-effort", "minimal"])).toBe(false);
   });
 
   it("accepts values unchanged from the stored config, including env envelopes", () => {

@@ -1809,6 +1809,63 @@ describe("company portability", () => {
     expect(issueSvc.create).not.toHaveBeenCalled();
   });
 
+  // AgentDash (security, #719): an imported issue's assigneeAdapterOverrides
+  // merge into the assignee's run config at heartbeat, so a caller without
+  // instance admin (including an agent on /imports/apply) cannot import one
+  // that sets a command, env or cwd. Refused before anything is created.
+  function taskOverrideFiles(adapterConfig: Record<string, unknown>) {
+    return {
+      "COMPANY.md": ['---', 'schema: "agentcompanies/v1"', 'name: "Imported Paperclip"', "---", ""].join("\n"),
+      "tasks/fix-build/TASK.md": ['---', 'name: "Fix build"', "---", "", "Fix it.", ""].join("\n"),
+      ".paperclip.yaml": [
+        'schema: "paperclip/v1"',
+        "tasks:",
+        "  fix-build:",
+        "    assigneeAdapterOverrides:",
+        `      adapterConfig: ${JSON.stringify(adapterConfig)}`,
+        "",
+      ].join("\n"),
+    };
+  }
+
+  it.each([
+    ["command", { command: "/bin/sh" }],
+    ["env", { env: { NODE_OPTIONS: "--require /tmp/x.js" } }],
+    ["cwd", { cwd: "/etc" }],
+  ])("refuses an imported issue override that sets %s without instance admin", async (_label, adapterConfig) => {
+    const portability = companyPortabilityService({} as any);
+    const input = {
+      source: { type: "inline" as const, rootPath: "paperclip-demo", files: taskOverrideFiles(adapterConfig) },
+      include: { company: true, agents: false, projects: false, issues: true, skills: false },
+      target: { mode: "new_company" as const, newCompanyName: "Imported Paperclip" },
+      collisionStrategy: "rename" as const,
+    };
+    const preview = await portability.previewImport(input);
+    expect(preview.manifest.issues[0]?.assigneeAdapterOverrides).toEqual({ adapterConfig });
+
+    await expect(
+      portability.importBundle(input, "user-1", { allowHostExecutionConfig: false }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(companySvc.create).not.toHaveBeenCalled();
+    expect(issueSvc.create).not.toHaveBeenCalled();
+  });
+
+  it("imports an issue override that sets only a model without instance admin", async () => {
+    const portability = companyPortabilityService({} as any);
+    companySvc.create.mockResolvedValue({ id: "company-imported", name: "Imported Paperclip" });
+    const input = {
+      source: { type: "inline" as const, rootPath: "paperclip-demo", files: taskOverrideFiles({ model: "glm-5.3" }) },
+      include: { company: true, agents: false, projects: false, issues: true, skills: false },
+      target: { mode: "new_company" as const, newCompanyName: "Imported Paperclip" },
+      collisionStrategy: "rename" as const,
+    };
+    await portability.importBundle(input, "user-1", { allowHostExecutionConfig: false });
+    expect(issueSvc.create).toHaveBeenCalledWith(
+      "company-imported",
+      expect.objectContaining({ assigneeAdapterOverrides: { adapterConfig: { model: "glm-5.3" } } }),
+    );
+  });
+
   it("flags recurring task imports that are missing routine-required fields", async () => {
     const portability = companyPortabilityService({} as any);
 

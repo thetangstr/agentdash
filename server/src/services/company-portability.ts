@@ -4004,6 +4004,23 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     const sourceManifest = plan.source.manifest;
     const warnings = [...plan.preview.warnings];
     const include = plan.include;
+
+    // AgentDash (security, #719): an issue's assigneeAdapterOverrides.adapterConfig
+    // merges into the assignee's run config at heartbeat, so an imported one
+    // carries the same host-execution gate as an agent's adapterConfig. Checked
+    // up front, before anything is written, so a refusal leaves no partial import.
+    if (options?.allowHostExecutionConfig === false && include.issues) {
+      assertHostExecutionConfigAllowed(
+        null,
+        (sourceManifest.issues ?? []).map((manifestIssue) => ({
+          adapterType: null,
+          adapterConfig: isPlainRecord(manifestIssue.assigneeAdapterOverrides)
+            ? manifestIssue.assigneeAdapterOverrides.adapterConfig
+            : undefined,
+          prefix: `issues.${manifestIssue.slug}.assigneeAdapterOverrides.adapterConfig`,
+        })),
+      );
+    }
     const plannedAgentCreates = include.agents
       ? plan.preview.plan.agentPlans.filter((entry) => entry.action === "create").length
       : 0;
