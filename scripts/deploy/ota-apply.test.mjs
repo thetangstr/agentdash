@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 import {
   approvalAuthorizes,
@@ -754,6 +754,405 @@ test("persistOutcome writes a receipt even for a failure", () => {
     });
     assert.ok(written.receiptPath);
     assert.equal(readdirSync(path.join(stateDir, "receipts")).length, 1);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// ---- --check: the producer of available-release.json -------------------------
+//
+// The status endpoint is read-only by design, so the discovery half — fetch,
+// pick the newest applicable tag, measure the diff — lives here. The two
+// end-to-end tests run real git against a local `origin` remote, because the
+// failure this file guards against is "the file nobody writes"; a fake that
+// always writes it would prove nothing about the path a launchd job takes.
+
+import { runCheck, persistOutcome as persistOutcomeForCheck } from "./ota-apply.mjs";
+
+/** An origin repo with two commits on main and a release tag on the second. */
+function makeOrigin() {
+  const origin = tempRoot("ota-origin-");
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@e",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@e",
+  };
+  const git = (...args) => execFileSync("git", ["-C", origin, ...args], { encoding: "utf8", env }).trim();
+  execFileSync("git", ["init", "-q", "-b", "main", origin], { env });
+  writeFileSync(path.join(origin, "a.txt"), "one\n");
+  git("add", ".");
+  git("commit", "-qm", "first");
+  const older = git("rev-parse", "HEAD");
+  // The candidate carries a migration journal, as a real release does.
+  const journalDir = path.join(origin, "packages", "db", "src", "migrations", "meta");
+  mkdirSync(journalDir, { recursive: true });
+  writeFileSync(
+    path.join(journalDir, "_journal.json"),
+    JSON.stringify({ version: "7", dialect: "postgresql", entries: [{ idx: 0, tag: "0000_init" }, { idx: 1, tag: "0001_more" }] }),
+  );
+  writeFileSync(path.join(origin, "a.txt"), "two\n");
+  git("add", ".");
+  git("commit", "-qm", "second");
+  const newer = git("rev-parse", "HEAD");
+  git("tag", "v2026.901.1");
+  return { dir: origin, older, newer, env };
+}
+
+/** A work repo that fetches from the origin — what --check runs against. */
+function makeWorkClone(originDir) {
+  const work = tempRoot("ota-work-");
+  execFileSync("git", ["init", "-q", "-b", "main", work]);
+  execFileSync("git", ["-C", work, "remote", "add", "origin", originDir]);
+  return work;
+}
+
+const NO_NOTES = { notes: "", url: null, publishedAt: null };
+
+test("check: offers the newest release tag with diff and migration inventory (real git)", async () => {
+  const origin = makeOrigin();
+  const work = makeWorkClone(origin.dir);
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "deployment-state.json"),
+      JSON.stringify({ schemaVersion: 2, current: { commit: origin.older } }),
+    );
+    const result = await runCheck(
+      { repoDir: work, stateDir },
+      { releaseNotes: () => NO_NOTES, now: () => "2026-09-23T00:00:00.000Z" },
+    );
+
+    const file = JSON.parse(readFileSync(path.join(stateDir, "available-release.json"), "utf8"));
+    assert.equal(file.checkedAt, "2026-09-23T00:00:00.000Z");
+    assert.equal(file.release.tag, "v2026.901.1");
+    assert.equal(file.release.version, "2026.901.1");
+    assert.equal(file.release.commit, origin.newer);
+    assert.equal(file.release.channel, "stable");
+
+    assert.equal(file.diff.commitCount, 1);
+    assert.deepEqual(file.diff.commitSubjects, ["second"]);
+    assert.equal(file.diff.truncated, false);
+    assert.ok(file.diff.filesChanged >= 1);
+    assert.ok(
+      file.diff.migrationsAdded.some((p) => p.endsWith("meta/_journal.json")),
+      "the new journal counts as a migration addition",
+    );
+
+    assert.deepEqual(
+      file.releaseMigrations,
+      [
+        { id: "0000_init", name: "0000_init", reversible: false },
+        { id: "0001_more", name: "0001_more", reversible: false },
+      ],
+    );
+    assert.equal(result.written, path.join(stateDir, "available-release.json"));
+  } finally {
+    rmSync(origin.dir, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: writes release null when the instance is already on the newest tag (real git)", async () => {
+  const origin = makeOrigin();
+  const work = makeWorkClone(origin.dir);
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "deployment-state.json"),
+      JSON.stringify({ schemaVersion: 2, current: { commit: origin.newer } }),
+    );
+    await runCheck({ repoDir: work, stateDir }, { releaseNotes: () => NO_NOTES });
+    const file = JSON.parse(readFileSync(path.join(stateDir, "available-release.json"), "utf8"));
+    assert.equal(file.release, null);
+    assert.ok(file.checkedAt, "a null offer still says when it was computed");
+  } finally {
+    rmSync(origin.dir, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+/** git seams for runCheck, answered from a table. */
+function fakeGit(outputs) {
+  return (repoDir, args) => {
+    const key = args.join(" ");
+    if (key in outputs) {
+      const value = outputs[key];
+      if (value instanceof Error) throw value;
+      return value;
+    }
+    throw new Error(`unexpected git call: ${key}`);
+  };
+}
+
+test("check: skips a tag the direction guard would refuse and says why", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "deployment-state.json"),
+      JSON.stringify({ schemaVersion: 2, current: { commit: "installed" } }),
+    );
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+        }),
+        resolveTagCommit: () => "candidate",
+        assessDirection: () => ({ direction: "backward", ok: false }),
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release, null);
+    assert.match(result.note, /v2026\.902\.1/);
+    assert.match(result.note, /refuse/);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: unreadable candidate journal is null, not an empty migration list", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "deployment-state.json"),
+      JSON.stringify({ schemaVersion: 2, current: { commit: "installed" } }),
+    );
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+          "show candidate:packages/db/src/migrations/meta/_journal.json": new Error("no such path"),
+          "diff --numstat installed..candidate": "3\t1\tsrc/x.ts\n",
+          "log --format=%s installed..candidate": "change\n",
+          "diff --name-only installed..candidate -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "candidate",
+        assessDirection: () => ({ direction: "forward", ok: true }),
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.902.1");
+    assert.equal(result.releaseMigrations, null, "unknown stays unknown so the planner blocks");
+    assert.equal(result.diff.filesChanged, 1);
+    assert.equal(result.diff.insertions, 3);
+    assert.equal(result.diff.deletions, 1);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: picks the newest tag by version order, not lexicographic", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "deployment-state.json"),
+      JSON.stringify({ schemaVersion: 2, current: { commit: "installed" } }),
+    );
+    const subjects = Array.from({ length: 25 }, (_, i) => `commit-${i}`).join("\n");
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          // .10 must beat .9 and .2 despite sorting earlier as a string.
+          "tag --merged origin/main": "v2026.901.9\nv2026.901.10\nv2026.901.2",
+          "show cand:packages/db/src/migrations/meta/_journal.json":
+            JSON.stringify({ entries: [{ idx: 0, tag: "0000_init" }] }),
+          "diff --numstat installed..cand": "",
+          "log --format=%s installed..cand": subjects,
+          "diff --name-only installed..cand -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "cand",
+        assessDirection: () => ({ direction: "forward", ok: true }),
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.901.10");
+    assert.equal(result.diff.commitCount, 25);
+    assert.equal(result.diff.commitSubjects.length, 20);
+    assert.equal(result.diff.truncated, true);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: a failed fetch writes the error into the offer file instead of throwing", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": new Error("fatal: unable to connect"),
+        }),
+        now: () => "2026-09-23T00:00:00.000Z",
+      },
+    );
+    const file = JSON.parse(readFileSync(path.join(stateDir, "available-release.json"), "utf8"));
+    assert.equal(file.release, null, "a failed check must not look like a fresh offer");
+    assert.equal(file.checkedAt, "2026-09-23T00:00:00.000Z");
+    assert.match(file.error, /unable to connect/);
+    assert.equal(result.error, file.error);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: reconciles the legacy source-state commit when no canonical state exists", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "source-state.json"),
+      JSON.stringify({ currentSha: "legacy-installed" }),
+    );
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+          "show cand:packages/db/src/migrations/meta/_journal.json":
+            JSON.stringify({ entries: [{ idx: 0, tag: "0000_init" }] }),
+          "diff --numstat legacy-installed..cand": "",
+          "log --format=%s legacy-installed..cand": "change\n",
+          "diff --name-only legacy-installed..cand -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "cand",
+        assessDirection: (repoDir, installed, target) => {
+          assert.equal(installed, "legacy-installed", "the legacy record is the installed truth");
+          return { direction: "forward", ok: true };
+        },
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.902.1");
+    assert.equal(result.diff.commitCount, 1);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: checkout HEAD beats a stale source-state record", async () => {
+  // A human pulled by hand: HEAD moved, source-state.json did not. The server
+  // reconciles running-over-recorded (ota-deployment-state.ts) and the check
+  // must agree — trusting the stale file would let the backward guard offer
+  // an older tag.
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "source-state.json"),
+      JSON.stringify({ currentSha: "stale-legacy" }),
+    );
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+          "rev-parse HEAD": "actual-head",
+          "show cand:packages/db/src/migrations/meta/_journal.json":
+            JSON.stringify({ entries: [{ idx: 0, tag: "0000_init" }] }),
+          "diff --numstat actual-head..cand": "",
+          "log --format=%s actual-head..cand": "change\n",
+          "diff --name-only actual-head..cand -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "cand",
+        assessDirection: (repoDir, installed, target) => {
+          assert.equal(installed, "actual-head", "the observed checkout wins over the stale record");
+          return { direction: "forward", ok: true };
+        },
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.902.1");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: falls back to the checkout HEAD on a box with no state file at all", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    const result = await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "v2026.902.1",
+          "rev-parse HEAD": "checkout-head",
+          "show cand:packages/db/src/migrations/meta/_journal.json":
+            JSON.stringify({ entries: [{ idx: 0, tag: "0000_init" }] }),
+          "diff --numstat checkout-head..cand": "",
+          "log --format=%s checkout-head..cand": "change\n",
+          "diff --name-only checkout-head..cand -- packages/db/src/migrations": "",
+        }),
+        resolveTagCommit: () => "cand",
+        assessDirection: (repoDir, installed, target) => {
+          assert.equal(installed, "checkout-head");
+          return { direction: "forward", ok: true };
+        },
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    assert.equal(result.release.tag, "v2026.902.1");
+    assert.equal(result.diff.commitCount, 1, "the diff is measured from the checkout, not skipped");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("check: leaves no temp file beside the written offer", async () => {
+  const stateDir = tempRoot("ota-check-state-");
+  try {
+    await runCheck(
+      { repoDir: "/repo", stateDir },
+      {
+        git: fakeGit({
+          "fetch origin --tags": "",
+          "tag --merged origin/main": "",
+          "rev-parse HEAD": "head",
+        }),
+        releaseNotes: () => NO_NOTES,
+      },
+    );
+    const leftovers = readdirSync(stateDir).filter((name) => name.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
+    assert.ok(existsSync(path.join(stateDir, "available-release.json")));
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("persistOutcome clears the offer after a successful apply", () => {
+  const stateDir = tempRoot("ota-clear-");
+  try {
+    writeFileSync(
+      path.join(stateDir, "available-release.json"),
+      JSON.stringify({ release: { tag: "v2026.901.1", commit: COMMIT }, diff: {}, releaseMigrations: [], checkedAt: "earlier" }),
+    );
+    persistOutcomeForCheck({
+      stateDir,
+      result: {
+        outcome: "applied",
+        tag: "v2026.901.1",
+        commit: COMMIT,
+        releaseDir: NEW_DIR,
+        checks: [],
+        startedAt: "2026-09-23T00:00:00.000Z",
+        finishedAt: "2026-09-23T00:05:00.000Z",
+        error: null,
+      },
+    });
+    const file = JSON.parse(readFileSync(path.join(stateDir, "available-release.json"), "utf8"));
+    assert.equal(file.release, null, "the applied release must not keep being offered");
+    assert.equal(file.checkedAt, "2026-09-23T00:05:00.000Z");
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

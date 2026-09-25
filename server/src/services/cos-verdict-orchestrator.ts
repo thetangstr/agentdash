@@ -3,7 +3,6 @@ import { and, asc, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   approvals,
-  cosReviewerAssignments,
   issueReviewQueueState,
   issues,
 } from "@paperclipai/db";
@@ -11,6 +10,10 @@ import { COS_REVIEW_DEFAULTS } from "@paperclipai/shared";
 import { logActivity } from "./activity-log.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import type { FeatureFlagsService } from "./feature-flags.js";
+import {
+  assignUnassignedReviewItems,
+  pickAvailableReviewer,
+} from "./review-queue-assignments.js";
 import type { CosReviewerAutoHireService } from "./cos-reviewer-auto-hire.js";
 import type { VerdictsService } from "./verdicts.js";
 
@@ -46,27 +49,10 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
     return COS_REVIEW_DEFAULTS.ESCALATE_AFTER_MS;
   }
 
-  async function pickAvailableReviewer(companyId: string): Promise<string | null> {
-    // Round-robin / first-available active reviewer (oldest hire wins —
-    // simple FIFO; sufficient for v1, refinable later without API change).
-    const rows = await db
-      .select({ reviewerAgentId: cosReviewerAssignments.reviewerAgentId })
-      .from(cosReviewerAssignments)
-      .where(
-        and(
-          eq(cosReviewerAssignments.companyId, companyId),
-          isNull(cosReviewerAssignments.retiredAt),
-        ),
-      )
-      .orderBy(asc(cosReviewerAssignments.hiredAt))
-      .limit(1);
-    return rows[0]?.reviewerAgentId ?? null;
-  }
-
   async function enqueueForReview(companyId: string, issueId: string): Promise<void> {
     const now = new Date();
     const escalateAfter = new Date(now.getTime() + escalateAfterMs());
-    const reviewerAgentId = await pickAvailableReviewer(companyId);
+    const reviewerAgentId = await pickAvailableReviewer(db, companyId);
 
     // Idempotent UPSERT keyed on issueId. Do NOT reset enqueuedAt on conflict.
     await db
@@ -83,6 +69,11 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
     // If no reviewer was available, trigger queue-depth-driven auto-hire.
     // Always evaluate after enqueue so growing depth eventually triggers.
     await deps.autoHire.evaluateAndHireIfNeeded(companyId, "queue_depth");
+
+    // Distribute any unassigned backlog to runnable reviewers — items enqueued
+    // while a hire approval was pending, or freed by a termination, otherwise
+    // sit invisible to reviewers that only judge work assigned to them.
+    await assignUnassignedReviewItems(db, companyId);
 
     await logActivity(db, {
       companyId,
@@ -155,6 +146,12 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
    * Phase D / app bootstrap is responsible for invoking this on a timer.
    */
   async function runReviewCycle(companyId: string): Promise<void> {
+    // Hand unassigned items to runnable reviewers first — an item nobody owns
+    // can neither be judged (reviewers only take assigned work) nor escalated
+    // sensibly (escalateToHuman would kick another hire instead of using the
+    // reviewer already here).
+    await assignUnassignedReviewItems(db, companyId);
+
     const queueRows = await db
       .select()
       .from(issueReviewQueueState)

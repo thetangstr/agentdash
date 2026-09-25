@@ -20,8 +20,14 @@ export interface ToolDefinition {
   name: string;
   description: string;
   schema: z.AnyZodObject;
+  /** MCP tool annotations (e.g. readOnlyHint on the assistant reads). */
+  annotations?: Record<string, unknown>;
+  /** Declared output schema — required when execute returns structuredContent. */
+  outputSchema?: Record<string, unknown>;
   execute: (input: Record<string, unknown>) => Promise<{
     content: Array<{ type: "text"; text: string }>;
+    structuredContent?: Record<string, unknown>;
+    isError?: boolean;
   }>;
 }
 

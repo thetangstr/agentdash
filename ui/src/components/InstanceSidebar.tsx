@@ -10,6 +10,10 @@ export function InstanceSidebar() {
   const { data: plugins } = useQuery({
     queryKey: queryKeys.plugins.all,
     queryFn: () => pluginsApi.list(),
+    // AgentDash (security): the plugin registry is instance-admin only. For a
+    // plain company member this 403s — don't retry; the per-plugin links are
+    // simply omitted.
+    retry: false,
   });
 
   return (

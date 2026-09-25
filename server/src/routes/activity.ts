@@ -38,11 +38,26 @@ export function activityRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
+    // AgentDash assistant MCP (#676): `since` bounds the feed to an ISO
+    // timestamp so `whats_new` can ask "what changed since T" instead of
+    // paging the tail. Invalid input is a 400, not a silent full feed.
+    let since: Date | undefined;
+    const rawSince = req.query.since as string | undefined;
+    if (rawSince !== undefined) {
+      const parsed = new Date(rawSince);
+      if (Number.isNaN(parsed.getTime())) {
+        res.status(400).json({ error: "since must be an ISO 8601 timestamp" });
+        return;
+      }
+      since = parsed;
+    }
+
     const filters = {
       companyId,
       agentId: req.query.agentId as string | undefined,
       entityType: req.query.entityType as string | undefined,
       entityId: req.query.entityId as string | undefined,
+      since,
       limit: normalizeActivityLimit(Number(req.query.limit)),
     };
     const result = await svc.list(filters);

@@ -8,7 +8,8 @@ const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
   terminate: vi.fn(),
   create: vi.fn(),
-  terminate: vi.fn(),
+  listKeys: vi.fn(),
+  createApiKey: vi.fn(),
 }));
 
 const mockNotifyHireApproved = vi.hoisted(() => vi.fn());
@@ -67,6 +68,8 @@ describe("approvalService resolution idempotency", () => {
     mockAgentService.terminate.mockResolvedValue(undefined);
     mockAgentService.create.mockResolvedValue({ id: "agent-1" });
     mockAgentService.terminate.mockResolvedValue(undefined);
+    mockAgentService.listKeys.mockResolvedValue([]);
+    mockAgentService.createApiKey.mockResolvedValue({ id: "key-1" });
     mockNotifyHireApproved.mockResolvedValue(undefined);
   });
 
@@ -109,5 +112,37 @@ describe("approvalService resolution idempotency", () => {
     expect(result.applied).toBe(true);
     expect(mockAgentService.activatePendingApproval).toHaveBeenCalledWith("agent-1");
     expect(mockNotifyHireApproved).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("approvalService legacy autoProvisionDefaultKey payloads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAgentService.activatePendingApproval.mockResolvedValue(undefined);
+    mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1" });
+    mockAgentService.terminate.mockResolvedValue(undefined);
+    mockAgentService.listKeys.mockResolvedValue([]);
+    mockAgentService.createApiKey.mockResolvedValue({ id: "key-1" });
+    mockNotifyHireApproved.mockResolvedValue(undefined);
+  });
+
+  it("ignores a stale autoProvisionDefaultKey flag — approve never mints keys", async () => {
+    // The flag was removed: runtime auth is the run-scoped local agent JWT the
+    // heartbeat injects, and the route rejects new payloads carrying it. A
+    // payload persisted while the flag existed must not mint one now.
+    const pending = {
+      ...createApproval("pending"),
+      payload: { agentId: "agent-1", autoProvisionDefaultKey: true },
+    };
+    const approved = { ...pending, status: "approved" };
+    const dbStub = createDbStub([[pending]], [approved]);
+
+    const svc = approvalService(dbStub.db as any);
+    const result = await svc.approve("approval-1", "board", "ship it");
+
+    expect(result.applied).toBe(true);
+    expect(mockAgentService.activatePendingApproval).toHaveBeenCalledWith("agent-1");
+    expect(mockAgentService.listKeys).not.toHaveBeenCalled();
+    expect(mockAgentService.createApiKey).not.toHaveBeenCalled();
   });
 });

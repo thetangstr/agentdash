@@ -180,6 +180,28 @@ vi.mock("../services/index.js", () => ({
   routineService: vi.fn(() => ({
     tickScheduledTriggers: vi.fn(async () => ({ triggered: 0 })),
   })),
+  companyService: vi.fn(() => ({
+    list: vi.fn(async () => []),
+    hasActiveCompany: vi.fn(async () => false),
+    getById: vi.fn(async () => ({ id: "company-1" })),
+  })),
+  cosReviewerAutoHire: vi.fn(() => ({
+    evaluateAndHireIfNeeded: vi.fn(async () => ({ hired: false })),
+  })),
+  cosVerdictOrchestrator: vi.fn(() => ({
+    runReviewCycle: vi.fn(async () => undefined),
+    enqueueForReview: vi.fn(async () => undefined),
+    onIssueStatusChanged: vi.fn(async () => undefined),
+    escalateToHuman: vi.fn(async () => undefined),
+    findEscalatable: vi.fn(async () => []),
+    dequeue: vi.fn(async () => undefined),
+  })),
+  featureFlagsService: vi.fn(() => ({
+    isEnabled: vi.fn(async () => true),
+    set: vi.fn(async () => undefined),
+    get: vi.fn(async () => null),
+    listForCompany: vi.fn(async () => []),
+  })),
   verdictsService: vi.fn((_db: unknown) => ({
     create: vi.fn(async () => ({ id: "verdict-1" })),
     coverage: vi.fn(async () => ({ totalInFlight: 0, coveredInFlight: 0, coverageRatio: 0 })),

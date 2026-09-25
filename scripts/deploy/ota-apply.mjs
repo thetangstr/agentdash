@@ -30,7 +30,7 @@
 //      plan and taken a backup they intend to use.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -44,13 +44,21 @@ import {
   swapCurrent as defaultSwapCurrent,
   readCurrent as defaultReadCurrent,
   resolveTagCommit,
+  isReleaseTag,
 } from "./ota-release-layout.mjs";
 
 export const DEFAULT_HEALTH_TIMEOUT_SEC = 120;
 export const DEFAULT_HEALTH_INTERVAL_MS = 2_000;
 export const APPROVAL_FILENAME = "pending-approval.json";
 export const CANONICAL_STATE_FILENAME = "deployment-state.json";
+export const LEGACY_SOURCE_STATE_FILENAME = "source-state.json";
+export const AVAILABLE_RELEASE_FILENAME = "available-release.json";
+export const GIT_FETCH_TIMEOUT_MS = 180_000;
+export const GH_CLI_TIMEOUT_MS = 30_000;
+export const MAX_COMMIT_SUBJECTS = 20;
 export const JOURNAL_SUBPATH = path.join("packages", "db", "src", "migrations", "meta", "_journal.json");
+const JOURNAL_GIT_PATH = "packages/db/src/migrations/meta/_journal.json";
+const MIGRATIONS_GIT_DIR = "packages/db/src/migrations";
 
 function nowIso() {
   return new Date().toISOString();
@@ -147,8 +155,12 @@ export function approvalAuthorizes({ approval, tag, commit }) {
   return { ok: true };
 }
 
-function git(repoDir, args) {
-  const result = spawnSync("git", ["-C", repoDir, ...args], { encoding: "utf8" });
+function git(repoDir, args, timeoutMs = 0) {
+  const result = spawnSync("git", ["-C", repoDir, ...args], {
+    encoding: "utf8",
+    timeout: timeoutMs || undefined,
+  });
+  if (result.error) throw new Error(`git ${args.join(" ")} failed: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr ?? ""}`);
   return (result.stdout ?? "").trim();
 }
@@ -535,6 +547,15 @@ export function persistOutcome({ stateDir, result, mode = "source-release", chan
         { mode: 0o600 },
       );
       written.statePath = statePath;
+
+      // The offer was consumed by this apply. Clearing it means the board reads
+      // "up to date" until the next --check writes a fresh offer — otherwise a
+      // stale file would keep offering the release just installed.
+      writeFileSync(
+        path.join(stateDir, AVAILABLE_RELEASE_FILENAME),
+        `${JSON.stringify({ release: null, diff: null, releaseMigrations: null, checkedAt: result.finishedAt }, null, 2)}\n`,
+        { mode: 0o600 },
+      );
     }
   } catch (error) {
     written.error = error instanceof Error ? error.message : String(error);
@@ -542,9 +563,250 @@ export function persistOutcome({ stateDir, result, mode = "source-release", chan
   return written;
 }
 
+/**
+ * Compare release tags by version, not by name: v2026.901.10 > v2026.901.2.
+ */
+function compareReleaseTags(a, b) {
+  const pa = a.replace(/^v/, "").split(".").map(Number);
+  const pb = b.replace(/^v/, "").split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/**
+ * Ordered migration tags at a commit, read via `git show` so a check does not
+ * need to materialize the candidate. Null when unreadable — "cannot tell" must
+ * never collapse into "no migrations", the same rule readJournalTags follows.
+ */
+export function readJournalTagsAtCommit(repoDir, commit, gitFn = git) {
+  let raw;
+  try {
+    raw = gitFn(repoDir, ["show", `${commit}:${JOURNAL_GIT_PATH}`]);
+  } catch {
+    return null;
+  }
+  try {
+    const journal = JSON.parse(raw);
+    if (!Array.isArray(journal.entries)) return null;
+    return journal.entries.slice().sort((a, b) => a.idx - b.idx).map((entry) => entry.tag);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The diff a person needs before approving: counts, commit subjects, and which
+ * migration files arrive. Mirrors `summarizeDiff` in the TS planner.
+ */
+export function summarizeRangeDiff(repoDir, fromCommit, toCommit, gitFn = git) {
+  const numstat = gitFn(repoDir, ["diff", "--numstat", `${fromCommit}..${toCommit}`]);
+  let filesChanged = 0;
+  let insertions = 0;
+  let deletions = 0;
+  for (const line of numstat.split("\n")) {
+    const match = line.match(/^(\S+)\t(\S+)\t/);
+    if (!match) continue;
+    filesChanged += 1;
+    // Binary files numstat as "-\t-"; they count as changed files, not lines.
+    if (match[1] !== "-") insertions += Number(match[1]);
+    if (match[2] !== "-") deletions += Number(match[2]);
+  }
+  const commitSubjects = gitFn(repoDir, ["log", "--format=%s", `${fromCommit}..${toCommit}`])
+    .split("\n").map((s) => s.trim()).filter(Boolean);
+  const migrationsAdded = gitFn(repoDir, ["diff", "--name-only", `${fromCommit}..${toCommit}`, "--", MIGRATIONS_GIT_DIR])
+    .split("\n").map((s) => s.trim()).filter(Boolean);
+  return {
+    commitCount: commitSubjects.length,
+    filesChanged,
+    insertions,
+    deletions,
+    commitSubjects: commitSubjects.slice(0, MAX_COMMIT_SUBJECTS),
+    truncated: commitSubjects.length > MAX_COMMIT_SUBJECTS,
+    migrationsAdded,
+  };
+}
+
+/**
+ * Release notes from the GitHub Release, best-effort. The offer is still
+ * written when `gh` is absent or the tag has no Release — notes, url and
+ * publishedAt are all nullable in the contract, and a missing body is a
+ * smaller lie than no offer at all.
+ */
+function defaultReleaseNotes(repoDir, tag) {
+  try {
+    const result = spawnSync("gh", ["release", "view", tag, "--json", "body,url,publishedAt"], {
+      cwd: repoDir,
+      encoding: "utf8",
+      timeout: GH_CLI_TIMEOUT_MS,
+    });
+    if (result.status !== 0) return { notes: "", url: null, publishedAt: null };
+    const parsed = JSON.parse(result.stdout ?? "{}");
+    return {
+      notes: typeof parsed.body === "string" ? parsed.body : "",
+      url: typeof parsed.url === "string" ? parsed.url : null,
+      publishedAt: typeof parsed.publishedAt === "string" ? parsed.publishedAt : null,
+    };
+  } catch {
+    return { notes: "", url: null, publishedAt: null };
+  }
+}
+
+export const defaultCheckDeps = {
+  git,
+  resolveTagCommit,
+  assessDirection: assessUpdateDirection,
+  releaseNotes: defaultReleaseNotes,
+  now: nowIso,
+};
+
+/**
+ * What commit is this box actually on? `deployment-state.json` is written by
+ * the apply path and is absent on a box that still serves straight from its
+ * git checkout — exactly the boxes a release offer matters most for. On those
+ * boxes HEAD is the only observed fact: it is what the running code was
+ * cloned at, while `source-state.json` is a record someone wrote once and
+ * can go stale the moment a human pulls by hand. The server's
+ * reconcileDeploymentState applies the same rule — the running commit wins
+ * over any recorded state — so the order here is canonical file, then HEAD,
+ * then the legacy file as the last record left when git itself cannot answer.
+ */
+function installedCommitForCheck(repoDir, stateDir, deps) {
+  const canonical = readJsonFile(path.join(stateDir, CANONICAL_STATE_FILENAME))?.current?.commit;
+  if (typeof canonical === "string" && canonical) return canonical;
+  try {
+    const head = deps.git(repoDir, ["rev-parse", "HEAD"]);
+    if (typeof head === "string" && head.trim()) return head.trim();
+  } catch {
+    // Not a git checkout — fall through to the recorded state.
+  }
+  const legacy = readJsonFile(path.join(stateDir, LEGACY_SOURCE_STATE_FILENAME))?.currentSha;
+  if (typeof legacy === "string" && legacy) return legacy;
+  return "";
+}
+
+/**
+ * Write the offer atomically — a reader that opens the file mid-write must
+ * see the previous complete offer or the next one, never a torn half.
+ */
+function writeAvailableRelease(stateDir, file) {
+  mkdirSync(stateDir, { recursive: true });
+  const filePath = path.join(stateDir, AVAILABLE_RELEASE_FILENAME);
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmpPath, filePath);
+  return filePath;
+}
+
+/**
+ * Refresh `available-release.json` — the file the board's status endpoint
+ * reads. This is the ONLY component allowed to run git and reach the network;
+ * the status service stays read-only by design, so the discovery half lives
+ * here, on the updater side, where launchd can run it on a schedule.
+ *
+ * The candidate is the newest release tag on origin/main that the apply path
+ * could actually move to: a tag the direction guard would refuse (an ancestor
+ * of, or diverged from, the installed commit) is skipped rather than offered,
+ * because a button offering an update the updater then refuses is worse than
+ * no button.
+ *
+ * `release: null` means "checked, and there is nothing to apply" — either the
+ * instance is already on the newest applicable commit or no release tag
+ * exists. It is written rather than left absent so `checkedAt` keeps saying
+ * when the answer was last recomputed. A check that fails writes the error
+ * the same way, because a stale success is worse than a fresh failure.
+ */
+export async function runCheck(input, overrides = {}) {
+  const deps = { ...defaultCheckDeps, ...overrides };
+  const stateDir = input.stateDir;
+  const checkedAt = deps.now();
+
+  let file;
+  try {
+    // No --prune: pruning deletes tags that exist only locally, which on a
+    // bootstrap box can be the record of what was once applied.
+    deps.git(input.repoDir, ["fetch", "origin", "--tags"], GIT_FETCH_TIMEOUT_MS);
+
+    const tags = deps.git(input.repoDir, ["tag", "--merged", "origin/main"])
+      .split("\n")
+      .map((tag) => tag.trim())
+      .filter(isReleaseTag)
+      .sort((a, b) => compareReleaseTags(b, a));
+
+    const installedCommit = installedCommitForCheck(input.repoDir, stateDir, deps);
+
+    let candidate = null;
+    const skipped = [];
+    for (const tag of tags) {
+      let commit;
+      try {
+        commit = deps.resolveTagCommit(input.repoDir, tag);
+      } catch {
+        continue;
+      }
+      const direction = deps.assessDirection(input.repoDir, installedCommit || null, commit);
+      if (direction.direction === "backward" || direction.direction === "diverged") {
+        skipped.push(`${tag} (${direction.direction} of the installed commit)`);
+        continue;
+      }
+      candidate = { tag, commit, upToDate: direction.direction === "same" };
+      break;
+    }
+
+    if (!candidate || candidate.upToDate) {
+      file = { release: null, diff: null, releaseMigrations: null, checkedAt };
+      if (skipped.length > 0) {
+        file.note = `Newer tag(s) skipped because the apply path would refuse them: ${skipped.join(", ")}.`;
+      } else if (!candidate) {
+        file.note = "No release tag found on origin/main.";
+      }
+    } else {
+      const notes = deps.releaseNotes(input.repoDir, candidate.tag);
+      const journalTags = readJournalTagsAtCommit(input.repoDir, candidate.commit, deps.git);
+      file = {
+        release: {
+          tag: candidate.tag,
+          version: candidate.tag.replace(/^v/, ""),
+          commit: candidate.commit,
+          channel: "stable",
+          publishedAt: notes.publishedAt,
+          notes: notes.notes,
+          url: notes.url,
+        },
+        diff: installedCommit
+          ? summarizeRangeDiff(input.repoDir, installedCommit, candidate.commit, deps.git)
+          : null,
+        releaseMigrations: journalTags === null
+          ? null
+          : journalTags.map((tag) => ({ id: tag, name: tag, reversible: false })),
+        checkedAt,
+      };
+    }
+  } catch (error) {
+    // A failed check must still say so in the file the board reads: "no new
+    // offer" and "the check never ran" look identical otherwise, and the
+    // second is the one an operator needs to see.
+    file = {
+      release: null,
+      diff: null,
+      releaseMigrations: null,
+      checkedAt,
+      error: `release check failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  const filePath = writeAvailableRelease(stateDir, file);
+  return { ...file, written: filePath };
+}
+
 function usage() {
   return `Apply an approved AgentDash release.
 
+  --check                    Refresh available-release.json (what the board
+                             offers) and exit. Applies nothing; this is what
+                             the daily launchd job runs.
   --repo-dir <path>          Git clone used only as a source of releases
   --releases-root <path>     Where immutable release directories live
   --state-dir <path>         Deployment state and approval directory
@@ -581,17 +843,33 @@ export async function main(argv = process.argv) {
       "health-timeout": { type: "string" },
       "dry-run": { type: "boolean" },
       force: { type: "boolean" },
+      check: { type: "boolean" },
       help: { type: "boolean" },
     },
     allowPositionals: false,
   });
 
-  if (values.help || !values.tag) {
+  const home = os.homedir();
+
+  if (values.help) {
     console.log(usage());
-    return values.help ? 0 : 1;
+    return 0;
   }
 
-  const home = os.homedir();
+  if (values.check) {
+    const result = await runCheck({
+      repoDir: values["repo-dir"] ?? path.join(home, "agentdash"),
+      releasesRoot: values["releases-root"] ?? path.join(home, ".agentdash", "releases"),
+      stateDir: values["state-dir"] ?? path.join(home, ".agentdash", "deployments"),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
+
+  if (!values.tag) {
+    console.log(usage());
+    return 1;
+  }
   const result = await runApply({
     repoDir: values["repo-dir"] ?? path.join(home, "agentdash"),
     releasesRoot: values["releases-root"] ?? path.join(home, ".agentdash", "releases"),

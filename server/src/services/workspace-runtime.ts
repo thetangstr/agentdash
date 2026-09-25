@@ -29,6 +29,11 @@ import {
 import type { WorkspaceOperationRecorder } from "./workspace-operations.js";
 import { readExecutionWorkspaceConfig } from "./execution-workspaces.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
+// AgentDash (security): confine runtime recursive deletes to managed roots.
+import {
+  removeRuntimeManagedWorkspaceDirectory,
+  resolveRuntimeManagedWorkspaceRoots,
+} from "./workspace-cleanup-confinement.js";
 
 export function resolveShell(): string {
   const fallback = process.platform === "win32" ? "sh" : "/bin/sh";
@@ -1305,6 +1310,8 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
 export async function cleanupExecutionWorkspaceArtifacts(input: {
   workspace: {
     id: string;
+    // AgentDash (security): owning company scopes the managed deletion roots.
+    companyId?: string | null;
     cwd: string | null;
     providerType: string;
     providerRef: string | null;
@@ -1432,8 +1439,17 @@ export async function cleanupExecutionWorkspaceArtifacts(input: {
     if (containsProjectWorkspace) {
       warnings.push(`Refusing to remove path "${workspacePath}" because it contains the project workspace.`);
     } else {
-      await fs.rm(resolvedWorkspacePath, { recursive: true, force: true });
-      if (input.recorder) {
+      // AgentDash (security): never `rm -rf` a path taken from the row as-is.
+      // Canonicalise it (realpath: resolves `..` and symlinked parents) and
+      // require it to sit strictly inside a runtime-managed workspace root.
+      const removal = await removeRuntimeManagedWorkspaceDirectory({
+        targetPath: workspacePath,
+        managedRoots: resolveRuntimeManagedWorkspaceRoots({ companyId: input.workspace.companyId ?? null }),
+        workspaceId: input.workspace.id,
+      });
+      if (removal.status === "refused") {
+        warnings.push(`Refusing to remove path "${workspacePath}": ${removal.reason}.`);
+      } else if (removal.status === "removed" && input.recorder) {
         await input.recorder.recordOperation({
           phase: "workspace_teardown",
           cwd: projectWorkspaceCwd ?? process.cwd(),

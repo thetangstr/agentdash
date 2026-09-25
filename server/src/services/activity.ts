@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -24,6 +24,8 @@ export interface ActivityFilters {
   agentId?: string;
   entityType?: string;
   entityId?: string;
+  /** Inclusive lower bound on `created_at` (assistant MCP `since`). */
+  since?: Date;
   limit?: number;
 }
 
@@ -351,6 +353,9 @@ export function activityService(db: Db) {
       }
       if (filters.entityId) {
         conditions.push(eq(activityLog.entityId, filters.entityId));
+      }
+      if (filters.since) {
+        conditions.push(gte(activityLog.createdAt, filters.since));
       }
 
       return db
