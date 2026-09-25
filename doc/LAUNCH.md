@@ -179,6 +179,25 @@ Costs for the API path are minimal at chat scale — the system prompt is cached
 
 Real LLM-powered **agent execution** (the "hire an agent and have it actually do work" flow) is a separate path through the adapter system. CoS chat is the only LLM-call surface wired today.
 
+### 4a. Hermes in the image (hosted 1.0 boxes)
+
+The image ships a pinned Hermes Agent (`HERMES_REF` / `HERMES_COMMIT` in the [Dockerfile](../Dockerfile); dependencies from Hermes' own `uv.lock`). Hermes is the only runtime on a hosted 1.0 box. The image sets these defaults; override any of them with the platform's env vars:
+
+| Var | Image default | Why |
+|---|---|---|
+| `AGENTDASH_HERMES_COMMAND` | `/usr/local/bin/hermes` | the pinned install |
+| `AGENTDASH_HERMES_ROOT` | `/paperclip/.hermes` | Hermes' root is `$HOME/.hermes`, and `HOME=/paperclip` is the Volume |
+| `HERMES_PROFILES_DIR` | `/paperclip/.hermes/profiles` | per-agent profiles, credentials, sessions and `state.db` ledgers |
+| `AGENTDASH_HERMES_BIN_DIR` | `/paperclip/.hermes/bin` | the per-agent `agentdash-<id>` wrappers (`hermes -p <profile>`) |
+| `AGENTDASH_HERMES_MANAGED_PROFILES` | `true` | one Hermes profile per agent |
+| `AGENTDASH_DEFAULT_ADAPTER` | `hermes_local` | new agents and CoS chat use Hermes |
+
+Mount a persistent Volume at `/paperclip`, or every profile, key and ledger is lost on redeploy. Do **not** set `HERMES_HOME`: it pins every run's metering to the root ledger instead of the agent's own profile ledger.
+
+Set `AGENTDASH_DEPLOYMENT_KIND=hosted` on a hosted box. It turns managed profiles on regardless of the flag above and makes profile provisioning fail closed: a run whose profile cannot be provisioned fails with `hermes_profile_provision_failed` instead of running on the shared root profile. Without it (self-hosted, on-prem) a failed provision still falls back to the default command.
+
+Smoke-test an image with `scripts/docker/hermes-smoke.sh <image>`. To upgrade Hermes, change `HERMES_REF` and `HERMES_COMMIT` (`git rev-list -n1 <tag>`), rebuild, and rerun the smoke test.
+
 ---
 
 ## 4b. Email — welcome + password reset (Resend)

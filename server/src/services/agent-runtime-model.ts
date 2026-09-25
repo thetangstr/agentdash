@@ -29,7 +29,7 @@ import {
   parseModelFromConfig,
   resolveProvider,
 } from "hermes-paperclip-adapter/server";
-import { agentProfileName } from "./hermes-profile.js";
+import { agentProfileName, hermesManagedProfilesEnabled as sharedHermesManagedProfilesEnabled } from "./hermes-profile.js";
 
 const HERMES_LOCAL_ADAPTER_TYPE = "hermes_local";
 
@@ -70,9 +70,9 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-/** Managed hermes profiles are opt-in; the resolver only consults them when on. */
+/** Managed hermes profiles are opt-in (always on for a hosted box); the resolver only consults them when on. */
 function hermesManagedProfilesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.AGENTDASH_HERMES_MANAGED_PROFILES === "true";
+  return sharedHermesManagedProfilesEnabled(env);
 }
 
 function hermesHome(env: NodeJS.ProcessEnv = process.env): string {

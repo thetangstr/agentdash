@@ -22,6 +22,13 @@ if [ "$(id -g node)" -ne "$PGID" ]; then
     changed=1
 fi
 
+# AgentDash (#721): a platform Volume can arrive root-owned (Railway mounts
+# them that way). The server and Hermes run as node and keep all state under
+# /paperclip, so hand the mount to node once.
+if [ "$(stat -c %u /paperclip)" != "$(id -u node)" ]; then
+    changed=1
+fi
+
 if [ "$changed" = "1" ]; then
     chown -R node:node /paperclip
 fi

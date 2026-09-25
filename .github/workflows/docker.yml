@@ -54,7 +54,18 @@ jobs:
           # Pull requests build a single platform for speed; main and tags build both.
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
+          # AgentDash (#721): pull requests load the single-platform image so the
+          # Hermes smoke test below can run it.
+          load: ${{ github.event_name == 'pull_request' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # AgentDash (#721): the image must carry a working, pinned Hermes whose
+      # per-agent profiles and wrappers land on the /paperclip Volume.
+      - name: Hermes smoke test
+        if: github.event_name == 'pull_request'
+        run: |
+          IMAGE="$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -1)"
+          bash scripts/docker/hermes-smoke.sh "$IMAGE"
