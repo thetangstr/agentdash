@@ -30,6 +30,17 @@ function shouldExposeFullHealthDetails(
   return actorType === "board" || actorType === "agent";
 }
 
+// AgentDash: hosted-box operators need to tell which build is running
+// (scripts/hosted/provision-box.sh sets AGENTDASH_RELEASE_TAG as a Railway
+// variable; doc/runbooks/hosted-box.md section 12). This endpoint is public
+// and unauthenticated on a hosted box, so it exposes only the release tag
+// and package version here — nothing that isn't already safe to show an
+// anonymous caller.
+function currentReleaseTag(): string | undefined {
+  const tag = process.env.AGENTDASH_RELEASE_TAG?.trim();
+  return tag ? tag : undefined;
+}
+
 function hasDevServerStatusToken(providedToken: string | undefined) {
   const expectedToken = process.env.PAPERCLIP_DEV_SERVER_STATUS_TOKEN?.trim();
   const token = providedToken?.trim();
@@ -69,12 +80,20 @@ export function healthRoutes(
     // AgentDash (#726): whether this is a hosted box, on every response shape,
     // so the runbook and the launch run can assert it without signing in.
     const hostedBox = isHostedBox();
+    // AgentDash: release tag, on every response shape (see currentReleaseTag above).
+    const releaseTag = currentReleaseTag();
 
     if (!db) {
       res.json(
         exposeFullDetails
-          ? { status: "ok", version: serverVersion, hostedBox }
-          : { status: "ok", deploymentMode: opts.deploymentMode, hostedBox },
+          ? { status: "ok", version: serverVersion, hostedBox, ...(releaseTag ? { releaseTag } : {}) }
+          : {
+              status: "ok",
+              deploymentMode: opts.deploymentMode,
+              hostedBox,
+              version: serverVersion,
+              ...(releaseTag ? { releaseTag } : {}),
+            },
       );
       return;
     }
@@ -90,7 +109,8 @@ export function healthRoutes(
       res.status(503).json({
         status: "unhealthy",
         version: serverVersion,
-        error: "database_unreachable"
+        error: "database_unreachable",
+        ...(releaseTag ? { releaseTag } : {}),
       });
       return;
     }
@@ -161,6 +181,8 @@ export function healthRoutes(
         status: checks.status,
         deploymentMode: opts.deploymentMode,
         hostedBox,
+        version: serverVersion,
+        ...(releaseTag ? { releaseTag } : {}),
         bootstrapStatus,
         bootstrapInviteActive,
         selfServeBootstrap,
@@ -181,6 +203,7 @@ export function healthRoutes(
       runs: checks.runs,
       alerter: alerterStatus(),
       version: serverVersion,
+      ...(releaseTag ? { releaseTag } : {}),
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
       hostedBox,

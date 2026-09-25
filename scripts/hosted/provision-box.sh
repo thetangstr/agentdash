@@ -37,7 +37,15 @@
 #                          --rotate-invite to issue a code
 #   --no-deploy            converge config only; do not deploy (variable changes are not live)
 #   --redeploy             restart the current build with the converged variables
-#                          (no new image pull or build)
+#                          (no new image pull or build). Refuses (exit non-zero) when
+#                          --release differs from the box's recorded AGENTDASH_RELEASE_TAG,
+#                          since that would silently leave the old code running; run
+#                          without --redeploy to upgrade (add --from-source if no image
+#                          exists yet), or pass --force-redeploy-same-build to override.
+#   --force-redeploy-same-build
+#                          allow --redeploy with a --release that does not match the
+#                          box's recorded release (only for relabeling a restart; it does
+#                          NOT build or pull the new release)
 #   --i-know-this-destroys-secrets
 #                          allow generating an auth secret / master key on a box that has
 #                          already been deployed (only for a box whose data you are discarding)
@@ -52,7 +60,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
 
 SLUG="" RELEASE="" IMAGE="" FROM_SOURCE=0 CUSTOM_DOMAIN="" USE_CUSTOM=0 ROTATE_INVITE=0 DEPLOY=1 REDEPLOY=0
-CLOSE_SIGNUP=0 OPEN_SIGNUP=0 DESTROY_SECRETS=0
+CLOSE_SIGNUP=0 OPEN_SIGNUP=0 DESTROY_SECRETS=0 FORCE_REDEPLOY_SAME_BUILD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --slug) SLUG="$2"; shift 2 ;;
@@ -67,7 +75,8 @@ while [ $# -gt 0 ]; do
     --i-know-this-destroys-secrets) DESTROY_SECRETS=1; shift ;;
     --no-deploy) DEPLOY=0; shift ;;
     --redeploy) REDEPLOY=1; shift ;;
-    -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
+    --force-redeploy-same-build) FORCE_REDEPLOY_SAME_BUILD=1; shift ;;
+    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -205,6 +214,21 @@ say "public URL ${PUBLIC_URL}"
 EXISTING="$(variable_names "$PROJECT_ID" "$ENV_ID" "$WEB_ID")" \
   || die "could not read the box's current variables; refusing to continue (nothing was changed)"
 has_var() { grep -qx "$1" <<<"$EXISTING"; }
+
+# --redeploy only restarts the current build with converged variables; it never
+# pulls or builds a new image. Pairing it with a --release that does not match
+# the box's own record is almost always an operator meaning to upgrade and
+# silently keeping the old code running instead.
+if [ "$REDEPLOY" = "1" ] && [ "$FORCE_REDEPLOY_SAME_BUILD" = "0" ] && has_var AGENTDASH_RELEASE_TAG; then
+  CURRENT_RELEASE="$(variable_value "$PROJECT_ID" "$ENV_ID" "$WEB_ID" AGENTDASH_RELEASE_TAG)" \
+    || die "could not read the box's current AGENTDASH_RELEASE_TAG; refusing to continue"
+  if [ -n "$CURRENT_RELEASE" ] && [ "$CURRENT_RELEASE" != "$RELEASE" ]; then
+    die "--redeploy restarts the current build; to upgrade to ${RELEASE} run without --redeploy \
+(add --from-source if no image exists). Pass --force-redeploy-same-build if you really mean to \
+restart the current build under the ${RELEASE} label."
+  fi
+fi
+
 LAST_DEPLOYMENT_LINE="$(latest_deployment "$PROJECT_ID" "$ENV_ID" "$WEB_ID")" \
   || die "could not read the box's deployments; refusing to continue"
 read -r LAST_DEPLOYMENT _ <<<"$LAST_DEPLOYMENT_LINE" || true
@@ -357,4 +381,8 @@ Founder claim (the founder does this; we never see their password):
      The first company on a fresh box makes its creator the instance admin.
   4. The operator closes sign-up (teammates then join by company invite, which needs #731):
        scripts/hosted/provision-box.sh --slug ${SLUG} --release ${RELEASE} --close-signup --redeploy
+     (config-only change, same release ${RELEASE}: --redeploy is correct here.)
+  5. To upgrade this box to a new release later, run WITHOUT --redeploy (it only
+     restarts the current build; it does not pull or build the new release):
+       scripts/hosted/provision-box.sh --slug ${SLUG} --release <new tag> [--from-source]
 EOF

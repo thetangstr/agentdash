@@ -161,6 +161,8 @@ It restores `db.dump` into a throwaway local Postgres container of the same majo
 scripts/hosted/provision-box.sh --slug <slug> --release <new tag> [--from-source]
 ```
 
+**Do not add `--redeploy` here.** `--redeploy` only restarts the box's *current* build with the converged variables; it never pulls or builds the new release, so a box upgraded with `--release <new tag> --redeploy` would silently keep running the old code. The script refuses to run when `--redeploy` is paired with a `--release` that does not match the box's recorded `AGENTDASH_RELEASE_TAG`, and prints the correct command instead. (`--force-redeploy-same-build` overrides this, only for the rare case of relabeling a restart without actually changing the running build.) `--redeploy` alone (same tag) is still correct for a config-only change such as section 7's `--close-signup --redeploy`, or resuming a suspended box (section 11).
+
 Migrations apply on boot (`PAPERCLIP_MIGRATION_AUTO_APPLY=true`). Take a backup first. **Rollback:** Railway keeps earlier deployments; redeploy the previous one from the dashboard (service, Deployments). A rollback across a migration needs the pre-update `db.dump`.
 
 Boxes do not auto-deploy. `.github/workflows/deploy.yml` targets only the old `agentdash` project's `web` service; never add a box to it.
