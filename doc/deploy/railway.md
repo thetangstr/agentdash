@@ -52,13 +52,23 @@ Copy [`.env.railway.example`](../../.env.railway.example) into the service's
 
 - **Hosted-box boot guard (#726):** `AGENTDASH_DEPLOYMENT_KIND=hosted` marks a
   hosted agentdash.cloud box. With it set, the server refuses to start unless
-  `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, `PAPERCLIP_PUBLIC_URL` is an
-  `https://` URL, `AGENTDASH_HERMES_MANAGED_PROFILES=true`, and sign-up is gated
+  `PAPERCLIP_DEPLOYMENT_MODE=authenticated`; `PAPERCLIP_PUBLIC_URL` and the auth
+  base URL (`PAPERCLIP_AUTH_PUBLIC_BASE_URL`) are `https://`;
+  `AGENTDASH_HERMES_MANAGED_PROFILES=true`; sign-up is gated
   (`AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE=true` with `AGENTDASH_INVITE_CODES`, or
-  `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true`). The boot log names each missing
-  setting. Check it took with `curl -s https://your-app.up.railway.app/api/health`
-  and look for `"hostedBox": true`. `local_trusted` stays the right mode for a
-  founder's own machine; the flag is only for hosted boxes.
+  `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true`); every invite code is real (not
+  `CHANGEME...`, 12 characters or more; `openssl rand -hex 12`);
+  `AGENTDASH_INVITE_VALIDATION` is not `off` while
+  `AGENTDASH_SELF_SERVE_BOOTSTRAP=true`; and a Microsoft SSO app is pinned to
+  one tenant (or `AGENTDASH_HOSTED_ALLOW_MULTI_TENANT_MICROSOFT=true`). The
+  template's invite code is a placeholder on purpose, so the first deploy
+  fails until you replace it. The boot log names each missing setting. On a
+  hosted box, Google and Microsoft sign-in only sign in existing users; new
+  people sign up by email with an invite code, and MCP sign-up needs the same
+  code. Check the flag took with
+  `curl -s https://your-app.up.railway.app/api/health` and look for
+  `"hostedBox": true`. `local_trusted` stays the right mode for a founder's own
+  machine; the flag is only for hosted boxes.
 
 Leave `PAPERCLIP_AUTH_PUBLIC_BASE_URL` / `BILLING_PUBLIC_BASE_URL` as the
 placeholder for the first deploy — you fix them in step 4 once the domain exists.

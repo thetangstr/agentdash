@@ -10,19 +10,46 @@
 // Nothing here runs when the flag is unset: local dev (`pnpm dev` in
 // local_trusted), on-prem and every existing self-hoster boot exactly as before.
 
-import type { DeploymentMode } from "@paperclipai/shared";
+import type { AuthBaseUrlMode, DeploymentMode } from "@paperclipai/shared";
+import {
+  configuredMicrosoftTenant,
+  getConfiguredSocialProviders,
+  MULTI_TENANT_MICROSOFT_TENANTS,
+} from "./auth/social-providers.js";
+import {
+  acceptedSignupInviteCodes,
+  envFlagEnabled,
+  isWeakInviteCode,
+  MIN_HOSTED_INVITE_CODE_LENGTH,
+  mcpInviteValidationEnabled,
+  selfServeBootstrapEnabled,
+  signupInviteCodeRequired,
+} from "./lib/signup-gate.js";
 import { isHostedBox } from "./services/license.js";
 
 export interface HostedBoxGuardConfig {
   deploymentMode: DeploymentMode;
   authDisableSignUp: boolean;
+  /**
+   * The auth base URL the app actually uses, resolved by `loadConfig` from
+   * PAPERCLIP_AUTH_PUBLIC_BASE_URL, BETTER_AUTH_URL, BETTER_AUTH_BASE_URL,
+   * PAPERCLIP_PUBLIC_URL or the config file.
+   */
+  authPublicBaseUrl: string | undefined;
+  authBaseUrlMode: AuthBaseUrlMode;
 }
 
-function listFromEnv(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+/** Operator override for a multi-tenant Microsoft app on a hosted box. */
+export const ALLOW_MULTI_TENANT_MICROSOFT_ENV = "AGENTDASH_HOSTED_ALLOW_MULTI_TENANT_MICROSOFT";
+
+function httpsProblem(name: string, value: string): string | null {
+  let protocol: string | null = null;
+  try {
+    protocol = new URL(value).protocol;
+  } catch {
+    protocol = null;
+  }
+  return protocol === "https:" ? null : `${name} must be an https:// URL on a hosted box (got "${value}").`;
 }
 
 /**
@@ -50,28 +77,31 @@ export function hostedBoxConfigErrors(
         + "(OAuth issuer, approval links and connect commands are built from it).",
     );
   } else {
-    let protocol: string | null = null;
-    try {
-      protocol = new URL(publicUrl).protocol;
-    } catch {
-      protocol = null;
-    }
-    if (protocol !== "https:") {
-      errors.push(`PAPERCLIP_PUBLIC_URL must be an https:// URL on a hosted box (got "${publicUrl}").`);
-    }
+    const problem = httpsProblem("PAPERCLIP_PUBLIC_URL", publicUrl);
+    if (problem) errors.push(problem);
   }
 
-  if (env.AGENTDASH_HERMES_MANAGED_PROFILES?.trim() !== "true") {
+  // The address Better Auth actually signs cookies and callbacks for. It can
+  // come from a different variable than PAPERCLIP_PUBLIC_URL, so check it too.
+  const authUrl = config.authPublicBaseUrl?.trim() ?? "";
+  if (config.authBaseUrlMode !== "explicit" || !authUrl) {
+    errors.push(
+      "The auth base URL is not explicit; set PAPERCLIP_AUTH_PUBLIC_BASE_URL (or BETTER_AUTH_URL) "
+        + "to the box's https:// address.",
+    );
+  } else {
+    const problem = httpsProblem("The auth base URL (PAPERCLIP_AUTH_PUBLIC_BASE_URL / BETTER_AUTH_URL)", authUrl);
+    if (problem) errors.push(problem);
+  }
+
+  if (!envFlagEnabled(env.AGENTDASH_HERMES_MANAGED_PROFILES)) {
     errors.push(
       "AGENTDASH_HERMES_MANAGED_PROFILES must be \"true\" on a hosted box, so every agent runs in its own Hermes profile.",
     );
   }
 
-  const inviteGateOn = env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE?.trim() === "true";
-  const inviteCodes = [
-    ...listFromEnv(env.AGENTDASH_INVITE_CODES),
-    ...listFromEnv(env.AGENTDASH_MK_INVITE_CODES),
-  ];
+  const inviteGateOn = signupInviteCodeRequired(env);
+  const inviteCodes = acceptedSignupInviteCodes(env);
   const signUpGated = config.authDisableSignUp || (inviteGateOn && inviteCodes.length > 0);
   if (!signUpGated) {
     errors.push(
@@ -82,10 +112,37 @@ export function hostedBoxConfigErrors(
           + "with AGENTDASH_INVITE_CODES, or set PAPERCLIP_AUTH_DISABLE_SIGN_UP=true.",
     );
   }
+  const weakCodes = inviteCodes.filter(isWeakInviteCode);
+  if (weakCodes.length > 0) {
+    errors.push(
+      `${weakCodes.length} invite code(s) in AGENTDASH_INVITE_CODES / AGENTDASH_MK_INVITE_CODES are template `
+        + `placeholders (CHANGEME...) or shorter than ${MIN_HOSTED_INVITE_CODE_LENGTH} characters; `
+        + "replace them with real random codes (for example `openssl rand -hex 12`).",
+    );
+  }
+
+  if (selfServeBootstrapEnabled(env) && !mcpInviteValidationEnabled(env)) {
+    errors.push(
+      "AGENTDASH_INVITE_VALIDATION=off with AGENTDASH_SELF_SERVE_BOOTSTRAP=true lets anyone claim the box "
+        + "through MCP sign-up; unset AGENTDASH_INVITE_VALIDATION or turn self-serve bootstrap off.",
+    );
+  }
+
+  if (getConfiguredSocialProviders(env).microsoft) {
+    const tenant = configuredMicrosoftTenant(env);
+    if (
+      MULTI_TENANT_MICROSOFT_TENANTS.includes(tenant.toLowerCase())
+      && !envFlagEnabled(env[ALLOW_MULTI_TENANT_MICROSOFT_ENV])
+    ) {
+      errors.push(
+        `MICROSOFT_TENANT_ID is "${tenant}", which admits accounts from any Microsoft tenant; set it to the `
+          + `customer's tenant id, or set ${ALLOW_MULTI_TENANT_MICROSOFT_ENV}=true to accept that deliberately.`,
+      );
+    }
+  }
 
   return errors;
 }
-
 /** Throws one error naming every failed precondition. No-op off hosted boxes. */
 export function assertHostedBoxConfig(
   config: HostedBoxGuardConfig,

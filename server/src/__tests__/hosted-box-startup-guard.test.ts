@@ -27,14 +27,20 @@ function safeHostedEnv(overrides: Record<string, string | undefined> = {}): Node
     PAPERCLIP_PUBLIC_URL: "https://acme.agentdash.cloud",
     AGENTDASH_HERMES_MANAGED_PROFILES: "true",
     AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE: "true",
-    AGENTDASH_INVITE_CODES: "acme-2026",
+    AGENTDASH_INVITE_CODES: "acme-7f3a9c21e4b8",
     ...overrides,
   };
   for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
   return env as NodeJS.ProcessEnv;
 }
 
-const authenticated = { deploymentMode: "authenticated" as const, authDisableSignUp: false };
+const authenticated = {
+  deploymentMode: "authenticated" as const,
+  authDisableSignUp: false,
+  authPublicBaseUrl: "https://acme.agentdash.cloud" as string | undefined,
+  authBaseUrlMode: "explicit" as "explicit" | "auto",
+};
+const localTrusted = { ...authenticated, deploymentMode: "local_trusted" as const };
 
 describe("hosted-box boot guard (#726)", () => {
   describe("the hosted flag", () => {
@@ -59,9 +65,9 @@ describe("hosted-box boot guard (#726)", () => {
 
   describe("without the hosted flag", () => {
     it("accepts local_trusted with nothing else set, as local dev does today", () => {
-      expect(hostedBoxConfigErrors({ deploymentMode: "local_trusted", authDisableSignUp: false }, {})).toEqual([]);
+      expect(hostedBoxConfigErrors(localTrusted, {})).toEqual([]);
       expect(() =>
-        assertHostedBoxConfig({ deploymentMode: "local_trusted", authDisableSignUp: false }, {})).not.toThrow();
+        assertHostedBoxConfig(localTrusted, {})).not.toThrow();
     });
 
     it("accepts an on-prem box with open sign-up and no public URL", () => {
@@ -87,7 +93,7 @@ describe("hosted-box boot guard (#726)", () => {
 
     it("refuses local_trusted and names it", () => {
       const errors = hostedBoxConfigErrors(
-        { deploymentMode: "local_trusted", authDisableSignUp: false },
+        localTrusted,
         safeHostedEnv(),
       );
       expect(errors).toHaveLength(1);
@@ -130,10 +136,87 @@ describe("hosted-box boot guard (#726)", () => {
       expect(errors).toEqual([expect.stringContaining("AGENTDASH_INVITE_CODES is empty")]);
     });
 
+    it("refuses when the auth base URL the app uses is missing, implicit or http", () => {
+      expect(hostedBoxConfigErrors({ ...authenticated, authPublicBaseUrl: undefined }, safeHostedEnv()))
+        .toEqual([expect.stringContaining("The auth base URL is not explicit")]);
+      expect(hostedBoxConfigErrors({ ...authenticated, authBaseUrlMode: "auto" }, safeHostedEnv()))
+        .toEqual([expect.stringContaining("The auth base URL is not explicit")]);
+      expect(
+        hostedBoxConfigErrors({ ...authenticated, authPublicBaseUrl: "http://acme.agentdash.cloud" }, safeHostedEnv()),
+      ).toEqual([expect.stringContaining("PAPERCLIP_AUTH_PUBLIC_BASE_URL / BETTER_AUTH_URL) must be an https:// URL")]);
+    });
+
+    it("refuses placeholder and short invite codes", () => {
+      for (const codes of ["CHANGEME_one_or_more_comma_separated_codes", "changeme-real-looking-code", "short-code", "acme-7f3a9c21e4b8,abc"]) {
+        const errors = hostedBoxConfigErrors(authenticated, safeHostedEnv({ AGENTDASH_INVITE_CODES: codes }));
+        expect(errors, codes).toEqual([expect.stringContaining("template placeholders (CHANGEME...) or shorter than 12")]);
+      }
+      const mk = hostedBoxConfigErrors(authenticated, safeHostedEnv({ AGENTDASH_MK_INVITE_CODES: "mk1" }));
+      expect(mk).toEqual([expect.stringContaining("template placeholders")]);
+    });
+
+    it("fails the Railway template as shipped, until real values are filled in", async () => {
+      const { readFileSync } = await import("node:fs");
+      const text = readFileSync(new URL("../../../.env.railway.example", import.meta.url), "utf8");
+      const env: Record<string, string> = {};
+      for (const line of text.split("\n")) {
+        const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+        if (match) env[match[1]!] = match[2]!.replace(/\s+#.*$/, "");
+      }
+      expect(env.AGENTDASH_DEPLOYMENT_KIND).toBe("hosted");
+      const errors = hostedBoxConfigErrors(
+        { ...authenticated, authPublicBaseUrl: env.PAPERCLIP_AUTH_PUBLIC_BASE_URL },
+        env as NodeJS.ProcessEnv,
+      );
+      expect(errors).toEqual([expect.stringContaining("template placeholders")]);
+    });
+
+    it("refuses MCP invite validation off while self-serve bootstrap is on", () => {
+      const errors = hostedBoxConfigErrors(
+        authenticated,
+        safeHostedEnv({ AGENTDASH_SELF_SERVE_BOOTSTRAP: "true", AGENTDASH_INVITE_VALIDATION: " OFF " }),
+      );
+      expect(errors).toEqual([expect.stringContaining("AGENTDASH_INVITE_VALIDATION=off")]);
+      expect(
+        hostedBoxConfigErrors(authenticated, safeHostedEnv({ AGENTDASH_INVITE_VALIDATION: "off" })),
+      ).toEqual([]);
+      expect(
+        hostedBoxConfigErrors(authenticated, safeHostedEnv({ AGENTDASH_SELF_SERVE_BOOTSTRAP: "true" })),
+      ).toEqual([]);
+    });
+
+    it("refuses a multi-tenant Microsoft app unless explicitly allowed", () => {
+      const microsoft = { MICROSOFT_CLIENT_ID: "client", MICROSOFT_CLIENT_SECRET: "secret" };
+      for (const tenant of [undefined, "common", "organizations", "Consumers"]) {
+        const errors = hostedBoxConfigErrors(
+          authenticated,
+          safeHostedEnv({ ...microsoft, MICROSOFT_TENANT_ID: tenant }),
+        );
+        expect(errors, String(tenant)).toEqual([expect.stringContaining("admits accounts from any Microsoft tenant")]);
+      }
+      expect(
+        hostedBoxConfigErrors(authenticated, safeHostedEnv({ ...microsoft, MICROSOFT_TENANT_ID: "0b6c1f7e-acme-tenant" })),
+      ).toEqual([]);
+      expect(
+        hostedBoxConfigErrors(
+          authenticated,
+          safeHostedEnv({ ...microsoft, AGENTDASH_HOSTED_ALLOW_MULTI_TENANT_MICROSOFT: "true" }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("reads the invite gate flag the same way the app does", () => {
+      const errors = hostedBoxConfigErrors(
+        authenticated,
+        safeHostedEnv({ AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE: " TRUE " }),
+      );
+      expect(errors).toEqual([]);
+    });
+
     it("names every failed precondition in one error", () => {
       expect(() =>
         assertHostedBoxConfig(
-          { deploymentMode: "local_trusted", authDisableSignUp: false },
+          localTrusted,
           { AGENTDASH_DEPLOYMENT_KIND: "hosted" },
         )).toThrowError(
         /Refusing to start: AGENTDASH_DEPLOYMENT_KIND=hosted[\s\S]*local_trusted[\s\S]*PAPERCLIP_PUBLIC_URL[\s\S]*AGENTDASH_HERMES_MANAGED_PROFILES[\s\S]*Sign-up is open/,
@@ -165,11 +248,7 @@ describe("hosted-box boot guard (#726)", () => {
 
     it("exits at startup, before opening the database, when a hosted box is configured local_trusted", async () => {
       Object.assign(process.env, safeHostedEnv());
-      loadConfigMock.mockReturnValue({
-        deploymentMode: "local_trusted",
-        deploymentExposure: "private",
-        authDisableSignUp: false,
-      });
+      loadConfigMock.mockReturnValue({ ...localTrusted, deploymentExposure: "private" });
 
       await expect(startServer()).rejects.toThrow(
         /Refusing to start: AGENTDASH_DEPLOYMENT_KIND=hosted[\s\S]*"local_trusted"/,

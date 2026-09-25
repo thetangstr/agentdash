@@ -17,6 +17,7 @@ import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middlewa
 import { apiFallthrough } from "./middleware/method-not-allowed.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
+import { signupInviteCodeRequired } from "./lib/signup-gate.js";
 // AgentDash (#160): tiered API rate limiting — auth/billing tighter than default.
 import {
   createAuthRateLimiter,
@@ -338,7 +339,8 @@ export async function createApp(
     app.use(
       "/api/auth",
       inviteCodeSignupGuard({
-        enabled: process.env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE === "true",
+        // AgentDash (#726): same parser as the hosted-box boot guard.
+        enabled: signupInviteCodeRequired(),
       }),
     );
     // AgentDash (#160): rate-limit better-auth handler too (same /api/auth path).
