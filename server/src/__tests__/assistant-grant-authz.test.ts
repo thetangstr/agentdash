@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +18,11 @@ import { actorMiddleware } from "../middleware/auth.js";
 import { errorHandler } from "../middleware/index.js";
 import { assistantRoutes } from "../routes/assistant.js";
 import { mcpRoutes } from "../routes/mcp.js";
+import {
+  mintAssistantLoopbackToken,
+  resetAssistantLoopbackTokens,
+  revokeAssistantLoopbackToken,
+} from "../services/assistant-loopback.js";
 
 /**
  * GH #677: the `assistant_grant` actor and its route/scope allowlist. These
@@ -61,21 +66,28 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
     );
     app.use("/api", assistantRoutes(db));
     app.use("/api", mcpRoutes());
-    // Probe endpoint standing in for a route the allowlist does NOT cover —
-    // if the middleware lets a request through, this records the actor it saw.
-    app.get("/api/companies/:companyId/labels", (req, res) => {
+    // Probe endpoints standing in for raw REST routes the allowlist does NOT
+    // cover — if the middleware lets a request through, this records the actor
+    // it saw. The security review (GH #688) named these three specifically:
+    // agents leaks adapterConfig, runs leaks contextSnapshot, people leaks
+    // member emails. `pcpa_` must 403 on all of them now.
+    const probe = (req: Request, res: Response) => {
       res.json({ reached: true, actor: req.actor });
-    });
-    // Probe for the roster read — the allowlist must let a read grant reach
-    // it; the real handler lives in access.ts and needs only company access.
-    app.get("/api/companies/:companyId/people", (req, res) => {
-      res.json({ reached: true });
-    });
+    };
+    app.get("/api/companies/:companyId/labels", probe);
+    app.get("/api/companies/:companyId/people", probe);
+    app.get("/api/companies/:companyId/agents", probe);
+    app.get("/api/issues/:id/runs", probe);
+    app.post("/api/companies/:companyId/agents", probe);
+    app.post("/api/companies/:companyId/issues", probe);
+    app.patch("/api/issues/:id", probe);
+    app.post("/api/approvals/:id/approve", probe);
     app.use(errorHandler);
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    resetAssistantLoopbackTokens();
     await db.delete(assistantAccessTokens);
     await db.delete(assistantRefreshTokens);
     await db.delete(assistantGrants);
@@ -154,26 +166,17 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
     return { grant, token };
   }
 
-  it("mints a board-shaped actor pinned to the grant's company", async () => {
+  it("returns 403 for a pcpa_ token on the assistant read routes — no raw REST", async () => {
     const { company } = await seed();
     const { grant, token } = await mintToken({ companyId: company.id });
     const res = await request(app)
       .get(`/api/companies/${company.id}/assistant/digest`)
       .set("authorization", `Bearer ${token}`);
-    // The digest service runs against a real company — an empty digest is fine;
-    // what matters is that authz accepted the actor (not 401/403).
-    expect(res.status).toBe(200);
+    // GH #688: even the toolset's own read surface is closed to the raw
+    // bearer — tool calls loop back on an internal pcin_ credential instead.
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Assistant credentials/);
     void grant;
-  });
-
-  it("reaches the member-roster read the toolset uses for human assignee names", async () => {
-    const { company } = await seed();
-    const { token } = await mintToken({ companyId: company.id });
-    const res = await request(app)
-      .get(`/api/companies/${company.id}/people`)
-      .set("authorization", `Bearer ${token}`);
-    expect(res.status).toBe(200);
-    expect(res.body.reached).toBe(true);
   });
 
   it("returns 401 with WWW-Authenticate for a missing token on the MCP endpoint", async () => {
@@ -184,6 +187,8 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
     expect(res.headers["www-authenticate"]).toContain(
       "/.well-known/oauth-protected-resource/api/mcp/assistant",
     );
+    // RFC 6750 §3: the challenge advertises the scope the endpoint needs.
+    expect(res.headers["www-authenticate"]).toContain('scope="agentdash:read"');
   });
 
   it("returns 401 for a garbage token", async () => {
@@ -256,31 +261,128 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
     expect(res.status).toBe(403);
   });
 
-  it("returns 403 insufficient_scope on a work route with a read-only grant", async () => {
-    const { company } = await seed();
-    const { token } = await mintToken({ companyId: company.id, scopes: ["agentdash:read"] });
-    const res = await request(app)
-      .post(`/api/companies/${company.id}/issues`)
-      .set("authorization", `Bearer ${token}`)
-      .send({ title: "x" });
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("insufficient_scope");
-    expect(res.body.required_scope).toBe("agentdash:work");
+  // GH #688 HIGH/M5: the raw-REST side door is closed entirely. A pcpa_
+  // bearer — at ANY scope, including work and decide — reaches nothing but
+  // POST /api/mcp/assistant. These probes would have answered with
+  // unredacted adapterConfig / contextSnapshot / member emails before the
+  // security round.
+  describe("REST side door closed (GH #688)", () => {
+    const rawReads: Array<[string, string]> = [
+      ["agents roster (adapterConfig)", "/api/companies/{id}/agents"],
+      ["member roster (emails)", "/api/companies/{id}/people"],
+      ["issue runs (contextSnapshot)", "/api/issues/{id}/runs"],
+      ["assistant digest", "/api/companies/{id}/assistant/digest"],
+      ["pending decisions", "/api/companies/{id}/assistant/pending-decisions"],
+    ];
+    const rawWrites: Array<[string, string, string]> = [
+      ["agent create incl. process adapter (decide)", "POST", "/api/companies/{id}/agents"],
+      ["issue create (work)", "POST", "/api/companies/{id}/issues"],
+      ["arbitrary issue PATCH (work)", "PATCH", "/api/issues/{id}"],
+      ["approval decision (decide)", "POST", "/api/approvals/{id}/approve"],
+    ];
+
+    it.each(rawReads)("403s on %s even with all scopes", async (_label, pathTemplate) => {
+      const { company } = await seed();
+      const { token } = await mintToken({
+        companyId: company.id,
+        scopes: ["agentdash:read", "agentdash:work", "agentdash:decide"],
+      });
+      const res = await request(app)
+        .get(pathTemplate.replace("{id}", company.id))
+        .set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/Assistant credentials/);
+      expect(res.body.reached).toBeUndefined();
+    });
+
+    it.each(rawWrites)("403s on %s even with all scopes", async (_label, method, pathTemplate) => {
+      const { company } = await seed();
+      const { token } = await mintToken({
+        companyId: company.id,
+        scopes: ["agentdash:read", "agentdash:work", "agentdash:decide"],
+      });
+      const res = await request(app)
+        [method.toLowerCase() as "post" | "patch"](pathTemplate.replace("{id}", company.id))
+        .set("authorization", `Bearer ${token}`)
+        .send({ adapterType: "process", name: "x" });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/Assistant credentials/);
+      expect(res.body.reached).toBeUndefined();
+    });
+
+    it("the allowlist contains zero raw REST routes", async () => {
+      const { ASSISTANT_ROUTE_SCOPES } = await import("@paperclipai/shared");
+      for (const route of ASSISTANT_ROUTE_SCOPES) {
+        expect(route.pattern.source).toContain("mcp");
+      }
+      expect(ASSISTANT_ROUTE_SCOPES).toHaveLength(3);
+    });
   });
 
-  it("returns 403 insufficient_scope on a decide route without the decide scope", async () => {
-    const { company } = await seed();
-    const { token } = await mintToken({
-      companyId: company.id,
-      scopes: ["agentdash:read", "agentdash:work"],
+  // GH #688: the internal loopback credential the MCP endpoint mints for its
+  // tool calls. In-memory only, read-only, dies on revoke — and an unknown
+  // pcin_ resolves to nothing rather than falling through to other lookups.
+  describe("assistant loopback credential (pcin_)", () => {
+    function mintLoopback(companyId: string, grantId = randomUUID()) {
+      return mintAssistantLoopbackToken({
+        userId: USER_ID,
+        companyId,
+        membershipRole: "owner",
+        grantId,
+        scopes: ["agentdash:read"],
+      });
+    }
+
+    it("resolves to the grant's board-shaped actor and reaches GET routes", async () => {
+      const { company } = await seed();
+      const token = mintLoopback(company.id);
+      const res = await request(app)
+        .get(`/api/companies/${company.id}/agents`)
+        .set("authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.reached).toBe(true);
+      expect(res.body.actor.type).toBe("board");
+      expect(res.body.actor.companyId).toBe(company.id);
+      expect(res.body.actor.assistantLoopback).toBe(true);
+      expect(res.body.actor.source).toBe("assistant_grant");
     });
-    const res = await request(app)
-      .post(`/api/approvals/${randomUUID()}/approve`)
-      .set("authorization", `Bearer ${token}`)
-      .send({});
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("insufficient_scope");
-    expect(res.body.required_scope).toBe("agentdash:decide");
+
+    it("refuses writes — the loopback credential is read-only", async () => {
+      const { company } = await seed();
+      const token = mintLoopback(company.id);
+      for (const [method, path] of [
+        ["post", `/api/companies/${company.id}/agents`],
+        ["post", `/api/companies/${company.id}/issues`],
+        ["patch", `/api/issues/${randomUUID()}`],
+      ] as const) {
+        const res = await request(app)
+          [method](path)
+          .set("authorization", `Bearer ${token}`)
+          .send({ adapterType: "process", name: "x" });
+        expect(res.status).toBe(403);
+        expect(res.body.error).toMatch(/read-only/);
+        expect(res.body.reached).toBeUndefined();
+      }
+    });
+
+    it("an unknown pcin_ token resolves to no actor — no fall-through", async () => {
+      const { company } = await seed();
+      const res = await request(app)
+        .get(`/api/companies/${company.id}/agents`)
+        .set("authorization", "Bearer pcin_never-minted");
+      expect(res.status).toBe(200);
+      expect(res.body.actor.type).toBe("none");
+    });
+
+    it("a revoked pcin_ token is dead immediately", async () => {
+      const { company } = await seed();
+      const token = mintLoopback(company.id);
+      revokeAssistantLoopbackToken(token);
+      const res = await request(app)
+        .get(`/api/companies/${company.id}/agents`)
+        .set("authorization", `Bearer ${token}`);
+      expect(res.body.actor.type).toBe("none");
+    });
   });
 
   it("returns 405 for GET on the MCP assistant endpoint", async () => {

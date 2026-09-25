@@ -8,6 +8,7 @@ import { EVALUATOR_AGENT_ROLE, EVALUATOR_READ_ONLY_REASON, isEvaluatorWriteAllow
 import {
   ASSISTANT_ACCESS_TOKEN_PREFIX,
   ASSISTANT_INSUFFICIENT_SCOPE,
+  ASSISTANT_LOOPBACK_TOKEN_PREFIX,
   assistantRouteScope,
 } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
@@ -15,6 +16,7 @@ import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { bridgeService } from "../services/bridge.js";
 import { assistantOAuthService, assistantResourceUri } from "../services/assistant-oauth.js";
+import { resolveAssistantLoopbackToken } from "../services/assistant-loopback.js";
 import { logActivity } from "../services/activity-log.js";
 
 function hashToken(token: string) {
@@ -216,6 +218,49 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         assistantGrantId: resolved.grantId,
         assistantScopes: resolved.scopes,
         runId: runIdHeader || undefined,
+        source: "assistant_grant",
+      };
+      next();
+      return;
+    }
+
+    // AgentDash (GH #677 security round): the assistant MCP endpoint's own
+    // loopback credential. A `pcin_` token is minted in-process per MCP
+    // request (see assistant-loopback.ts) so the toolset can call real REST
+    // routes without a `pcpa_` bearer ever being valid there — the grant's
+    // scopes already gated which TOOLS exist, and the toolset's §5 redaction
+    // runs before anything leaves the envelope.
+    //
+    // Two hard constraints beyond the pcpa_ actor: the credential is
+    // read-only (the M1 toolset is GET-only — a write is a bug, not a
+    // feature), and resolution is in-memory only — a token that survives a
+    // restart is dead, and one that never existed was never minted.
+    if (token.startsWith(ASSISTANT_LOOPBACK_TOKEN_PREFIX)) {
+      const resolved = resolveAssistantLoopbackToken(token);
+      if (!resolved) {
+        next();
+        return;
+      }
+      if (!["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase())) {
+        res.status(403).json({ error: "Assistant loopback credentials are read-only" });
+        return;
+      }
+      req.actor = {
+        type: "board",
+        userId: resolved.userId,
+        companyId: resolved.companyId,
+        companyIds: [resolved.companyId],
+        memberships: [
+          {
+            companyId: resolved.companyId,
+            membershipRole: resolved.membershipRole,
+            status: "active",
+          },
+        ],
+        isInstanceAdmin: false,
+        assistantGrantId: resolved.grantId,
+        assistantScopes: resolved.scopes,
+        assistantLoopback: true,
         source: "assistant_grant",
       };
       next();

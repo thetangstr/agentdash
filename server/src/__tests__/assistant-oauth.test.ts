@@ -22,6 +22,8 @@ import { errorHandler } from "../middleware/index.js";
 import { oauthRoutes } from "../routes/oauth.js";
 import { assistantRoutes } from "../routes/assistant.js";
 
+import { EventEmitter } from "node:events";
+
 /** CIMD tests drive `dns.lookup` through this hoisted mock — a document host
  * resolving to a private address is the DNS-rebinding SSRF case. */
 const dnsLookupMock = vi.hoisted(() =>
@@ -35,6 +37,58 @@ vi.mock("node:dns/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:dns/promises")>();
   return { ...original, lookup: dnsLookupMock };
 });
+
+/** The CIMD transport is a pinned `node:https` request — never global fetch,
+ * so the socket can only reach addresses the SSRF guard already classified.
+ * Tests stub it at the module seam; the default answers a TCP error. */
+const httpsRequestMock = vi.hoisted(() =>
+  vi.fn((_options: unknown, callback?: (res: unknown) => void) => {
+    void callback;
+    const req = new EventEmitter() as EventEmitter & {
+      end: () => void;
+      destroy: () => void;
+    };
+    req.end = () => queueMicrotask(() => req.emit("error", new Error("unstubbed https.request")));
+    req.destroy = vi.fn();
+    return req;
+  }),
+);
+
+vi.mock("node:https", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:https")>();
+  return { ...original, request: httpsRequestMock };
+});
+
+/** Serve a CIMD response through the mocked transport: status + body, or a
+ * synthetic socket error when `body` is null. Captures the options the
+ * service passed so tests can assert the pinned lookup/SNI wiring. */
+function stubCimdHttps(body: string | null, status = 200) {
+  httpsRequestMock.mockImplementation((options: unknown, callback?: (res: unknown) => void) => {
+    const req = new EventEmitter() as EventEmitter & {
+      end: () => void;
+      destroy: () => void;
+    };
+    req.destroy = vi.fn();
+    req.end = () => {
+      if (body === null) {
+        queueMicrotask(() => req.emit("error", new Error("ECONNREFUSED")));
+        return;
+      }
+      const res = new EventEmitter() as EventEmitter & {
+        statusCode: number;
+        resume: () => void;
+      };
+      res.statusCode = status;
+      res.resume = vi.fn();
+      callback?.(res);
+      queueMicrotask(() => {
+        res.emit("data", Buffer.from(body));
+        res.emit("end");
+      });
+    };
+    return req;
+  });
+}
 
 /**
  * GH #677: the OAuth 2.1 authorization-server surface, exercised end-to-end
@@ -70,6 +124,16 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
 
   beforeEach(() => {
     vi.stubEnv("PAPERCLIP_PUBLIC_URL", PUBLIC_BASE);
+    // Reset the pinned-transport seam: default = connection error, so a CIMD
+    // test that forgets to stub fails closed instead of dialing the network.
+    httpsRequestMock.mockReset();
+    httpsRequestMock.mockImplementation((_options: unknown, callback?: (res: unknown) => void) => {
+      void callback;
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      req.end = () => queueMicrotask(() => req.emit("error", new Error("unstubbed https.request")));
+      req.destroy = vi.fn();
+      return req;
+    });
     app = express();
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
@@ -83,7 +147,7 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       }),
     );
     app.use("/api", assistantRoutes(db));
-    app.use(oauthRoutes(db));
+    app.use(oauthRoutes(db, { deploymentMode: "authenticated" }));
     app.use(errorHandler);
   });
 
@@ -335,6 +399,7 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       });
       expect(wrongPort.status).toBe(400);
       expect(wrongPort.body.error).toBe("invalid_grant");
+      // The failed exchange burns the code — a correct retry is rejected too.
       const right = await request(app).post("/oauth/token").send({
         grant_type: "authorization_code",
         code,
@@ -343,8 +408,8 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
         code_verifier: verifier,
         resource: CANONICAL_RESOURCE,
       });
-      expect(right.status).toBe(200);
-      expect(right.body.access_token).toMatch(/^pcpa_/);
+      expect(right.status).toBe(400);
+      expect(right.body.error).toBe("invalid_grant");
     });
 
     it("rejects an unknown client_id", async () => {
@@ -426,6 +491,23 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
   });
 
   describe("consent", () => {
+    it("serves the consent view and decision behind clickjacking headers", async () => {
+      const company = await seedCompany();
+      const { client_id } = await registerClient();
+      const authz = await authorize({ client_id });
+      const requestId = new URL(authz.headers.location, PUBLIC_BASE).searchParams.get("request")!;
+      const view = await request(app).get(`/oauth/consent/${requestId}`);
+      expect(view.status).toBe(200);
+      expect(view.headers["content-security-policy"]).toBe("frame-ancestors 'none'");
+      expect(view.headers["x-frame-options"]).toBe("DENY");
+      const decision = await request(app)
+        .post(`/oauth/consent/${requestId}/decision`)
+        .set("Origin", PUBLIC_BASE)
+        .send({ approved: true, companyId: company.id, scopes: ["agentdash:read"] });
+      expect(decision.headers["content-security-policy"]).toBe("frame-ancestors 'none'");
+      expect(decision.headers["x-frame-options"]).toBe("DENY");
+    });
+
     it("shows the client name, redirect host, scopes and companies", async () => {
       await seedCompany("Acme");
       const { client_id } = await registerClient();
@@ -613,6 +695,184 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       expect(replay.status).toBe(400);
       expect(replay.body.error).toBe("invalid_grant");
     });
+
+    // GH #688: once a real code has been looked up, EVERY failed exchange
+    // burns it — a code that survives a mismatch can be probed until a guess
+    // lands. Each case below: fail once, then retry with EVERYTHING correct —
+    // the retry must fail because the code is already consumed.
+    describe("burn-on-exchange-failure", () => {
+      /** Full approve → code, in one helper (decision is one-shot). */
+      async function mintCode(scopes = ["agentdash:read"]) {
+        const company = await seedCompany();
+        const { client_id } = await registerClient();
+        const { verifier, challenge } = pkcePair();
+        const authz = await authorize({ client_id, code_challenge: challenge });
+        const requestId = new URL(authz.headers.location, PUBLIC_BASE).searchParams.get("request")!;
+        const decision = await request(app)
+          .post(`/oauth/consent/${requestId}/decision`)
+          .set("Origin", PUBLIC_BASE)
+          .send({ approved: true, companyId: company.id, scopes });
+        const code = new URL(decision.body.redirect as string).searchParams.get("code")!;
+        return { company, client_id, verifier, code };
+      }
+
+      function correctExchange(code: string, client_id: string, verifier: string) {
+        return request(app).post("/oauth/token").send({
+          grant_type: "authorization_code",
+          code,
+          client_id,
+          redirect_uri: "https://assistant.example/callback",
+          code_verifier: verifier,
+          resource: CANONICAL_RESOURCE,
+        });
+      }
+
+      it("burns the code on a wrong client_id, then refuses the correct retry", async () => {
+        const { client_id, verifier, code } = await mintCode();
+        const wrong = await request(app).post("/oauth/token").send({
+          grant_type: "authorization_code",
+          code,
+          client_id: "dcr_somebody_else",
+          redirect_uri: "https://assistant.example/callback",
+          code_verifier: verifier,
+          resource: CANONICAL_RESOURCE,
+        });
+        expect(wrong.status).toBe(400);
+        const retry = await correctExchange(code, client_id, verifier);
+        expect(retry.status).toBe(400);
+        expect(retry.body.error).toBe("invalid_grant");
+      });
+
+      it("burns the code on a redirect_uri mismatch", async () => {
+        const { client_id, verifier, code } = await mintCode();
+        const wrong = await request(app).post("/oauth/token").send({
+          grant_type: "authorization_code",
+          code,
+          client_id,
+          redirect_uri: "https://assistant.example/other",
+          code_verifier: verifier,
+          resource: CANONICAL_RESOURCE,
+        });
+        expect(wrong.status).toBe(400);
+        const retry = await correctExchange(code, client_id, verifier);
+        expect(retry.status).toBe(400);
+      });
+
+      it("burns the code on a wrong code_verifier", async () => {
+        const { client_id, verifier, code } = await mintCode();
+        const wrong = await request(app).post("/oauth/token").send({
+          grant_type: "authorization_code",
+          code,
+          client_id,
+          redirect_uri: "https://assistant.example/callback",
+          code_verifier: randomBytes(32).toString("base64url"),
+          resource: CANONICAL_RESOURCE,
+        });
+        expect(wrong.status).toBe(400);
+        const retry = await correctExchange(code, client_id, verifier);
+        expect(retry.status).toBe(400);
+      });
+
+      it("burns the code on a resource mismatch", async () => {
+        const { client_id, verifier, code } = await mintCode();
+        const wrong = await request(app).post("/oauth/token").send({
+          grant_type: "authorization_code",
+          code,
+          client_id,
+          redirect_uri: "https://assistant.example/callback",
+          code_verifier: verifier,
+          resource: "https://other.example/mcp",
+        });
+        expect(wrong.status).toBe(400);
+        expect(wrong.body.error).toBe("invalid_target");
+        const retry = await correctExchange(code, client_id, verifier);
+        expect(retry.status).toBe(400);
+        expect(retry.body.error).toBe("invalid_grant");
+      });
+
+      it("burns an expired code rather than leaving it live", async () => {
+        const { client_id, verifier, code } = await mintCode();
+        await db
+          .update(assistantAuthRequests)
+          .set({ expiresAt: new Date(Date.now() - 1000) })
+          .where(eq(assistantAuthRequests.codeHash, createHash("sha256").update(code).digest("hex")));
+        const res = await correctExchange(code, client_id, verifier);
+        expect(res.status).toBe(400);
+        expect(res.body.error_description).toMatch(/expired/);
+        const row = await db
+          .select()
+          .from(assistantAuthRequests)
+          .where(eq(assistantAuthRequests.codeHash, createHash("sha256").update(code).digest("hex")))
+          .then((rows) => rows[0]!);
+        expect(row.status).toBe("consumed");
+      });
+    });
+
+    it("a replayed code revokes the token family its first exchange minted (RFC 6819)", async () => {
+      const { code, client_id } = await completeFlow();
+      // The first exchange succeeded and minted a live family.
+      let accessRows = await db.select().from(assistantAccessTokens);
+      expect(accessRows[0]!.revokedAt).toBeNull();
+      await request(app).post("/oauth/token").send({
+        grant_type: "authorization_code",
+        code,
+        client_id,
+        redirect_uri: "https://assistant.example/callback",
+        code_verifier: "anything",
+        resource: CANONICAL_RESOURCE,
+      });
+      // Replay detected → exactly that family is dead, not just the code.
+      accessRows = await db.select().from(assistantAccessTokens);
+      const refreshRows = await db.select().from(assistantRefreshTokens);
+      for (const row of [...accessRows, ...refreshRows]) {
+        expect(row.revokedAt).not.toBeNull();
+      }
+    });
+
+    it("honors resource on the refresh grant — a wrong one is invalid_target", async () => {
+      const { tokens, client_id } = await completeFlow();
+      const res = await request(app).post("/oauth/token").send({
+        grant_type: "refresh_token",
+        refresh_token: tokens.refresh_token,
+        client_id,
+        resource: "https://other.example/mcp",
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_target");
+    });
+
+    it("re-consent with a changed scope set retires the old token families", async () => {
+      const { client_id, tokens } = await completeFlow("agentdash:read");
+      // Re-run the flow for the same user+client+company, now adding work —
+      // the grant's scope set changes, so tokens minted under the old consent
+      // must not survive to mint under the new one.
+      const company = await db.select().from(assistantGrants).then((r) => r[0]!.companyId);
+      const { verifier, challenge } = pkcePair();
+      const authz = await authorize({
+        client_id,
+        code_challenge: challenge,
+        scope: "agentdash:read agentdash:work",
+      });
+      const requestId = new URL(authz.headers.location, PUBLIC_BASE).searchParams.get("request")!;
+      const decision = await request(app)
+        .post(`/oauth/consent/${requestId}/decision`)
+        .set("Origin", PUBLIC_BASE)
+        .send({ approved: true, companyId: company, scopes: ["agentdash:read", "agentdash:work"] });
+      expect(decision.status).toBe(200);
+      const refreshRows = await db.select().from(assistantRefreshTokens);
+      const oldFamily = refreshRows.filter((r) => r.tokenHash === createHash("sha256").update(tokens.refresh_token).digest("hex"));
+      expect(oldFamily[0]!.revokedAt).not.toBeNull();
+      void verifier;
+    });
+  });
+
+  describe("issuer fail-closed (GH #688)", () => {
+    it("authenticated mode without a public URL refuses to advertise or mint", async () => {
+      vi.stubEnv("PAPERCLIP_PUBLIC_URL", undefined as unknown as string);
+      const res = await request(app).get("/.well-known/oauth-authorization-server");
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe("server_error");
+    });
   });
 
   describe("refresh rotation and reuse", () => {
@@ -694,21 +954,11 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
   describe("CIMD (client_id as https URL)", () => {
     const CIMD_URL = "https://client.example/mcp-client.json";
 
-    function stubCimdFetch(body: unknown, status = 200) {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(JSON.stringify(body), {
-          status,
-          headers: { "content-type": "application/json" },
-        })),
-      );
-    }
-
     it("fetches the metadata document and completes the flow", async () => {
-      stubCimdFetch({
+      stubCimdHttps(JSON.stringify({
         client_name: "CIMD Client",
         redirect_uris: ["https://client.example/callback"],
-      });
+      }));
       const company = await seedCompany();
       const { challenge, verifier } = pkcePair();
       const authz = await authorize({
@@ -737,25 +987,151 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       expect(grant.clientName).toBe("CIMD Client");
     });
 
+    it("pins the connection to the validated addresses and keeps the URL hostname for TLS", async () => {
+      stubCimdHttps(JSON.stringify({ client_name: "Pinned", redirect_uris: ["https://client.example/cb"] }));
+      const res = await authorize({
+        client_id: CIMD_URL,
+        redirect_uri: "https://client.example/cb",
+      });
+      expect(res.status).toBe(302);
+      expect(httpsRequestMock).toHaveBeenCalledTimes(1);
+      const options = httpsRequestMock.mock.calls[0]![0] as {
+        hostname: string;
+        lookup: (h: string, o: unknown, cb: (e: unknown, a?: string, f?: number) => void) => void;
+      };
+      // SNI/certificate identity stays the URL's hostname...
+      expect(options.hostname).toBe("client.example");
+      // ...while the connect() path is force-fed ONLY the addresses the guard
+      // already classified — a second DNS answer cannot rebind.
+      const pinned = await new Promise((resolve) => {
+        options.lookup("client.example", {}, (_e, address, family) => resolve({ address, family }));
+      });
+      expect(pinned).toEqual({ address: "93.184.216.34", family: 4 });
+    });
+
     it("rejects a CIMD document whose redirect_uris are off-origin", async () => {
-      stubCimdFetch({
+      stubCimdHttps(JSON.stringify({
         client_name: "Evil",
         redirect_uris: ["https://victim.example/callback"],
-      });
+      }));
       const res = await authorize({ client_id: CIMD_URL, redirect_uri: "https://victim.example/callback" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_client_metadata");
+    });
+
+    it("rejects a document whose client_id field does not match the document URL", async () => {
+      stubCimdHttps(JSON.stringify({
+        client_id: "https://other.example/not-this-doc.json",
+        client_name: "Mismatched",
+        redirect_uris: ["https://client.example/callback"],
+      }));
+      const res = await authorize({
+        client_id: CIMD_URL,
+        redirect_uri: "https://client.example/callback",
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_client_metadata");
+    });
+
+    it("accepts a document whose client_id matches the document URL", async () => {
+      stubCimdHttps(JSON.stringify({
+        client_id: CIMD_URL,
+        client_name: "Matched",
+        redirect_uris: ["https://client.example/callback"],
+      }));
+      const res = await authorize({
+        client_id: CIMD_URL,
+        redirect_uri: "https://client.example/callback",
+      });
+      expect(res.status).toBe(302);
+    });
+
+    it("rejects a redirect response — redirect hops are never followed", async () => {
+      stubCimdHttps("redirect", 302);
+      const res = await authorize({ client_id: CIMD_URL });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_client_metadata");
+      expect(res.body.error_description).toMatch(/redirect/i);
+    });
+
+    it("returns a generic error on transport failure — no internals leak", async () => {
+      stubCimdHttps(null);
+      const res = await authorize({ client_id: CIMD_URL });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_client_metadata");
+      expect(res.body.error_description).not.toMatch(/ECONNREFUSED/);
+    });
+
+    it("caches a fetched document instead of re-fetching per authorize", async () => {
+      stubCimdHttps(JSON.stringify({
+        client_name: "Cached",
+        redirect_uris: ["https://client.example/callback"],
+      }));
+      for (let i = 0; i < 2; i++) {
+        const res = await authorize({
+          client_id: CIMD_URL,
+          redirect_uri: "https://client.example/callback",
+        });
+        expect(res.status).toBe(302);
+      }
+      expect(httpsRequestMock).toHaveBeenCalledTimes(1);
     });
 
     it("rejects a client_id that is not https", async () => {
       const res = await authorize({ client_id: "http://client.example/doc.json" });
       expect(res.status).toBe(400);
     });
+
+    it("rejects a client_id over the length cap", async () => {
+      const res = await authorize({ client_id: `https://client.example/${"a".repeat(2100)}` });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_client");
+    });
   });
 
   describe("SSRF guard", () => {
     it("rejects private literal IPs as CIMD hosts", async () => {
-      for (const host of ["127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.1"]) {
+      for (const host of ["127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.1", "100.64.0.1"]) {
+        const res = await authorize({ client_id: `https://${host}/doc.json` });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_client_metadata");
+      }
+    });
+
+    it("rejects IPv4-mapped IPv6 literals in both dotted and hex-normalized form", async () => {
+      // WHATWG normalizes [::ffff:127.0.0.1] to ::ffff:7f00:1 BEFORE we see
+      // it — the dotted form never reaches our classifier, so the hex form
+      // is the one that must fail.
+      for (const host of [
+        "[::ffff:7f00:1]",
+        "[::ffff:127.0.0.1]",
+        "[::ffff:0a00:0009]",
+        "[::ffff:a9fe:a9fe]",
+        "[::ffff:169.254.169.254]",
+      ]) {
+        const res = await authorize({ client_id: `https://${host}/doc.json` });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_client_metadata");
+      }
+    });
+
+    it("rejects IPv4-compatible, NAT64, link-local and other IPv6 traps", async () => {
+      for (const host of [
+        "[::1]",
+        "[::]",
+        "[::7f00:1]",
+        "[::127.0.0.1]",
+        "[64:ff9b::a00:9]",
+        "[64:ff9b::7f00:1]",
+        "[fe80::1]",
+        "[fec0::1]",
+        "[fc00::1]",
+        "[fd00::1]",
+        "[ff02::1]",
+        "[2001:db8::1]",
+        "[2002::1]",
+        "[100::1]",
+      ]) {
         const res = await authorize({ client_id: `https://${host}/doc.json` });
         expect(res.status).toBe(400);
         expect(res.body.error).toBe("invalid_client_metadata");
@@ -775,13 +1151,7 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
     });
 
     it("rejects a metadata document over 64 KB", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response("x".repeat(70 * 1024), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })),
-      );
+      stubCimdHttps("x".repeat(70 * 1024));
       const res = await authorize({ client_id: "https://client.example/doc.json" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_client_metadata");

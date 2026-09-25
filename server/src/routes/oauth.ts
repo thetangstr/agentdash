@@ -2,14 +2,14 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import type { Db } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import { boardMutationGuard } from "../middleware/board-mutation-guard.js";
-import { createDefaultApiRateLimiter } from "../middleware/rate-limit.js";
+import { createOAuthEndpointRateLimiter } from "../middleware/rate-limit.js";
 import {
   ASSISTANT_SCOPES,
 } from "@paperclipai/shared";
 import {
   assistantOAuthService,
   assistantResourceUri,
-  issuerBaseUrl,
+  issuerBaseUrlStrict,
   OAuthError,
 } from "../services/assistant-oauth.js";
 
@@ -36,11 +36,33 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
   const router = Router();
   const oauth = assistantOAuthService(db);
 
-  // These endpoints live at the app root, outside the /api limiter — and
-  // /oauth/authorize writes an auth-request row on every GET, so anonymous
-  // callers get the same 200/15min ceiling as API mutations. No-ops in tests
-  // and local_trusted mode, like everywhere else it is used.
-  router.use(createDefaultApiRateLimiter({ deploymentMode: opts.deploymentMode }));
+  // Per-endpoint limiters, applied route-locally — this router mounts at the
+  // app root, so a blanket router.use() would rate-limit every anonymous
+  // request in the app (SPA pages, assets, plugin UI), not just the AS.
+  // Tighter than the /api default where a hit costs more than a read:
+  // /authorize inserts a row (and may fire an outbound CIMD fetch) and
+  // /register inserts one; /token is keyed client_id+IP so a shared-egress
+  // client population does not share one bucket. No-ops in tests and
+  // local_trusted mode, like everywhere else the limiter is used.
+  const metaLimiter = createOAuthEndpointRateLimiter({
+    deploymentMode: opts.deploymentMode, envKey: "AGENTDASH_RATE_LIMIT_OAUTH_META_MAX", defaultMax: 200,
+  });
+  const authorizeLimiter = createOAuthEndpointRateLimiter({
+    deploymentMode: opts.deploymentMode, envKey: "AGENTDASH_RATE_LIMIT_OAUTH_AUTHORIZE_MAX", defaultMax: 100,
+  });
+  const registerLimiter = createOAuthEndpointRateLimiter({
+    deploymentMode: opts.deploymentMode, envKey: "AGENTDASH_RATE_LIMIT_OAUTH_REGISTER_MAX", defaultMax: 30,
+  });
+  const consentLimiter = createOAuthEndpointRateLimiter({
+    deploymentMode: opts.deploymentMode, envKey: "AGENTDASH_RATE_LIMIT_OAUTH_CONSENT_MAX", defaultMax: 120,
+  });
+  const tokenLimiter = createOAuthEndpointRateLimiter({
+    deploymentMode: opts.deploymentMode, envKey: "AGENTDASH_RATE_LIMIT_OAUTH_TOKEN_MAX", defaultMax: 60,
+    keyByClientId: true,
+  });
+  const revokeLimiter = createOAuthEndpointRateLimiter({
+    deploymentMode: opts.deploymentMode, envKey: "AGENTDASH_RATE_LIMIT_OAUTH_REVOKE_MAX", defaultMax: 60,
+  });
 
   /** Uniform OAuth error shape; everything else falls through to the app handler. */
   const wrap =
@@ -59,21 +81,21 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
 
   const protectedResourceMetadata = (req: Request) => ({
     resource: assistantResourceUri(req),
-    authorization_servers: [issuerBaseUrl(req)],
+    authorization_servers: [issuerBaseUrlStrict(req, opts.deploymentMode)],
     scopes_supported: [...ASSISTANT_SCOPES],
     bearer_methods_supported: ["header"],
     resource_name: "AgentDash assistant MCP",
   });
 
-  router.get("/.well-known/oauth-protected-resource", (req, res) => {
+  router.get("/.well-known/oauth-protected-resource", metaLimiter, wrap((req, res) => {
     res.json(protectedResourceMetadata(req));
-  });
-  router.get("/.well-known/oauth-protected-resource/api/mcp/assistant", (req, res) => {
+  }));
+  router.get("/.well-known/oauth-protected-resource/api/mcp/assistant", metaLimiter, wrap((req, res) => {
     res.json(protectedResourceMetadata(req));
-  });
+  }));
 
-  router.get("/.well-known/oauth-authorization-server", (req, res) => {
-    const base = issuerBaseUrl(req);
+  router.get("/.well-known/oauth-authorization-server", metaLimiter, wrap((req, res) => {
+    const base = issuerBaseUrlStrict(req, opts.deploymentMode);
     res.json({
       issuer: base,
       authorization_endpoint: `${base}/oauth/authorize`,
@@ -90,7 +112,7 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
       // RFC 8707: the token endpoint honors the resource parameter.
       resource_parameter_supported: true,
     });
-  });
+  }));
 
   /** Responses carrying credentials or registration details must not be cached (RFC 6749 §5.1). */
   const noStore = (res: Response) => {
@@ -100,6 +122,7 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
 
   router.post(
     "/oauth/register",
+    registerLimiter,
     wrap(async (req, res) => {
       const body = (req.body ?? {}) as Record<string, unknown>;
       const client = await oauth.registerClient(body);
@@ -124,6 +147,7 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
    */
   router.get(
     "/oauth/authorize",
+    authorizeLimiter,
     wrap(async (req, res) => {
       const q = req.query as Record<string, string | undefined>;
       const clientId = q.client_id;
@@ -137,7 +161,10 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
         resource: q.resource,
         codeChallenge: q.code_challenge,
         codeChallengeMethod: q.code_challenge_method,
-        canonicalResource: assistantResourceUri(req),
+        // Minting path — the audience bound into the request row must come
+        // from the configured issuer, never the request's Host header, in
+        // authenticated mode.
+        canonicalResource: `${issuerBaseUrlStrict(req, opts.deploymentMode)}/api/mcp/assistant`,
       });
       res.redirect(`/oauth/consent?request=${encodeURIComponent(request.id)}`);
     }),
@@ -153,7 +180,12 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
 
   router.get(
     "/oauth/consent/:requestId",
+    consentLimiter,
     wrap(async (req, res) => {
+      // Clickjacking guard, defense-in-depth with the page-level headers in
+      // app.ts — a framed consent flow must not render anywhere.
+      res.set("Content-Security-Policy", "frame-ancestors 'none'");
+      res.set("X-Frame-Options", "DENY");
       const userId = consentActor(req);
       if (!userId) {
         res.status(401).json({ error: "Sign in to continue" });
@@ -175,8 +207,11 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
   // need it.
   router.post(
     "/oauth/consent/:requestId/decision",
+    consentLimiter,
     boardMutationGuard(),
     wrap(async (req, res) => {
+      res.set("Content-Security-Policy", "frame-ancestors 'none'");
+      res.set("X-Frame-Options", "DENY");
       const userId = consentActor(req);
       if (!userId) {
         res.status(401).json({ error: "Sign in to continue" });
@@ -200,7 +235,7 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
         userId,
         companyId: body.companyId,
         scopes,
-        issuerBase: issuerBaseUrl(req),
+        issuerBase: issuerBaseUrlStrict(req, opts.deploymentMode),
       });
       res.json({ redirect: result.redirect });
     }),
@@ -208,6 +243,7 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
 
   router.post(
     "/oauth/token",
+    tokenLimiter,
     wrap(async (req, res) => {
       noStore(res);
       const body = (req.body ?? {}) as Record<string, string | undefined>;
@@ -232,7 +268,8 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
           await oauth.refreshAccessToken({
             refreshToken: body.refresh_token,
             clientId: body.client_id,
-            canonicalResource: assistantResourceUri(req),
+            canonicalResource: `${issuerBaseUrlStrict(req, opts.deploymentMode)}/api/mcp/assistant`,
+            resource: body.resource,
           }),
         );
         return;
@@ -247,6 +284,7 @@ export function oauthRoutes(db: Db, opts: { deploymentMode?: DeploymentMode } = 
    */
   router.post(
     "/oauth/revoke",
+    revokeLimiter,
     wrap(async (req, res) => {
       const token = (req.body as Record<string, unknown> | undefined)?.token;
       if (typeof token === "string" && token) {

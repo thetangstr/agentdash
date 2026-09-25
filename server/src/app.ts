@@ -705,6 +705,20 @@ export async function createApp(
     res.sendFile(tarball);
   });
 
+  /**
+   * Clickjacking guard for the OAuth consent surface (GH #688). The consent
+   * page is an SPA route — whichever UI mode serves its HTML, the response
+   * must forbid framing so a hostile page cannot overlay an Approve click.
+   * Mounted here (before the UI handlers) it covers the SPA document in both
+   * static and vite-dev modes; the JSON consent endpoints set the same
+   * headers route-locally in routes/oauth.ts.
+   */
+  app.use("/oauth/consent", (_req, res, next) => {
+    res.set("Content-Security-Policy", "frame-ancestors 'none'");
+    res.set("X-Frame-Options", "DENY");
+    next();
+  });
+
   if (opts.uiMode === "static") {
     // Try published location first (server/ui-dist/), then monorepo dev location (../../ui/dist)
     const candidates = [

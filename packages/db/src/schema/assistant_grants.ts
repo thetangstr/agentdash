@@ -104,6 +104,12 @@ export const assistantAuthRequests = pgTable(
     grantId: uuid("grant_id").references(() => assistantGrants.id),
     /** SHA-256 of the authorization code — the code itself is never stored. */
     codeHash: text("code_hash"),
+    /**
+     * The token family this request's code exchange minted. Recorded at
+     * exchange so a REPLAYED code can revoke exactly the tokens it bought
+     * (RFC 6819 §4.4.1.1) rather than the whole grant.
+     */
+    issuedFamilyId: uuid("issued_family_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

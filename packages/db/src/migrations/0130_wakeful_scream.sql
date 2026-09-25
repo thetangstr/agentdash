@@ -1,0 +1,1 @@
+ALTER TABLE "assistant_auth_requests" ADD COLUMN "issued_family_id" uuid;

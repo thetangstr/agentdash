@@ -212,3 +212,30 @@ export function createTrialRateLimiter(opts: RateLimiterFactoryOptions = {}): Re
   if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_TRIAL_MAX", 30));
 }
+
+/**
+ * Per-endpoint limiter for the OAuth 2.1 authorization server (GH #677
+ * security round). The AS endpoints sit at the app root OUTSIDE the /api
+ * limiter, and each has a different abuse shape: /register and /authorize
+ * write rows (and /authorize may trigger an outbound CIMD fetch), /token is
+ * the brute-force surface — keyed client_id+IP because a shared-egress
+ * client population (e.g. Muse via Meta) must not share one bucket.
+ */
+export function createOAuthEndpointRateLimiter(opts: {
+  deploymentMode?: DeploymentMode;
+  envKey: string;
+  defaultMax: number;
+  keyByClientId?: boolean;
+}): RequestHandler {
+  if (isDisabled(opts)) return noopMiddleware;
+  return makeHandler(parseEnvInt(opts.envKey, opts.defaultMax), {
+    keyGenerator: opts.keyByClientId
+      ? (req: Request) => {
+          const body = (req as { body?: Record<string, unknown> }).body;
+          const clientId =
+            typeof body?.client_id === "string" ? body.client_id.slice(0, 200) : "none";
+          return `oauth-client:${clientId}:${req.ip ?? "unknown"}`;
+        }
+      : keyGenerator,
+  });
+}

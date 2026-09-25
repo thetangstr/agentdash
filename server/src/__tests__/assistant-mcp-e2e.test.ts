@@ -16,6 +16,7 @@ import {
   exchangeAuthorization,
   refreshAuthorization,
 } from "@modelcontextprotocol/sdk/client/auth.js";
+import { eq } from "drizzle-orm";
 import {
   assistantAccessTokens,
   assistantAuthRequests,
@@ -34,6 +35,7 @@ import { actorMiddleware } from "../middleware/auth.js";
 import { errorHandler } from "../middleware/index.js";
 import { oauthRoutes } from "../routes/oauth.js";
 import { mcpRoutes } from "../routes/mcp.js";
+import { assistantRoutes } from "../routes/assistant.js";
 
 /**
  * GH #677 acceptance: a Node `@modelcontextprotocol/sdk` client completes
@@ -96,6 +98,28 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
     );
     const api = express.Router();
     api.use(mcpRoutes());
+    // list_pending_decisions' tool call loops back to this route on the
+    // internal pcin_ credential — mounting the REAL route is what makes that
+    // leg real (its assertBoard is the authz check under test).
+    api.use(assistantRoutes(db));
+    // Link-building context fetches /companies/:id and /health — minimal
+    // stand-ins, still behind the real actorMiddleware, so a pcin_ that fails
+    // to resolve surfaces as the tool's error, not a stub's silence.
+    api.get("/companies/:id", async (req, res) => {
+      const row = await db
+        .select()
+        .from(companies)
+        .where(eq(companies.id, req.params.id as string))
+        .then((rows) => rows[0]);
+      if (!row) {
+        res.status(404).json({ error: "not found" });
+        return;
+      }
+      res.json({ id: row.id, name: row.name, issuePrefix: row.issuePrefix });
+    });
+    api.get("/health", (_req, res) => {
+      res.json({ publicBaseUrl: baseUrl });
+    });
     app.use("/api", api);
     app.use(oauthRoutes(db));
     app.use(errorHandler);
@@ -349,5 +373,21 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
     const names = listBody.result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toContain("whoami");
     expect(names).toContain("whats_new");
+
+    // tools/call is the GH #688 proof: the tool loops back over HTTP on the
+    // in-process pcin_ credential — the caller's pcpa_ is never sent to a raw
+    // REST route. A live pending-decisions answer means the loopback actor
+    // resolved through the real actorMiddleware AND passed the real route's
+    // assertBoard/assertCompanyAccess.
+    const call = await post({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "list_pending_decisions", arguments: {} },
+    });
+    expect(call.status).toBe(200);
+    const callBody = await call.json();
+    expect(callBody.result.isError).not.toBe(true);
+    expect(callBody.result.content?.[0]?.text).toBeTruthy();
   });
 });

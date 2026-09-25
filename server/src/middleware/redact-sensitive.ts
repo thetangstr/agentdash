@@ -39,6 +39,14 @@ const SENSITIVE_KEYS = new Set<string>([
   "sessiontoken",
   "private_key",
   "privatekey",
+  // OAuth 2.1 assistant AS (GH #688): a failed /oauth/token exchange logs the
+  // request body on the 4xx line — the authorization code and PKCE verifier
+  // in it are live credentials until burned, so they must never reach disk.
+  "code",
+  "code_verifier",
+  "codeverifier",
+  "assertion",
+  "client_assertion",
 ]);
 
 const MAX_DEPTH = 6;

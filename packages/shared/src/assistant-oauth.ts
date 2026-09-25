@@ -32,6 +32,13 @@ export function isAssistantScope(value: string): value is AssistantScope {
 export const ASSISTANT_ACCESS_TOKEN_PREFIX = "pcpa_";
 export const ASSISTANT_REFRESH_TOKEN_PREFIX = "pcpr_";
 export const ASSISTANT_CLIENT_ID_PREFIX = "dcr_";
+/**
+ * Ephemeral internal credentials the assistant MCP endpoint mints for its own
+ * loopback tool calls (GH #677 security round). Never issued to a client,
+ * never persisted — the token lives only inside one MCP request and the
+ * actor middleware resolves it straight from an in-process registry.
+ */
+export const ASSISTANT_LOOPBACK_TOKEN_PREFIX = "pcin_";
 
 /** Access tokens live one hour; refresh tokens thirty days (design doc). */
 export const ASSISTANT_ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -53,10 +60,15 @@ export const ASSISTANT_INSUFFICIENT_SCOPE = "insufficient_scope";
  * if the token doubles as a general board key, so anything not listed here is
  * refused with 403 even when the token is otherwise valid.
  *
- * Read entries mirror the M1 toolset's loopback calls one-for-one. Work and
- * decide entries exist so a consent that granted those scopes can already
- * reach the routes they will need; nothing mints work/decide-only behavior
- * without the person checking the box.
+ * Security review (GH #688): the allowlist is deliberately ONE route. A
+ * `pcpa_` token on a raw REST route skips the toolset's §5 redaction —
+ * `GET /companies/:id/agents` leaks adapterConfig, `/issues/:id/runs` leaks
+ * raw contextSnapshot, `/people` leaks member emails — and the work/decide
+ * entries handed a bearer token raw write powers (agent create, issue PATCH)
+ * that bypass the tool contract. Tool calls therefore loop back on an
+ * ephemeral `pcin_` internal credential (see assistant-loopback.ts), not on
+ * the client's token; the scopes on the grant gate what the MCP surface
+ * itself will do.
  */
 export const ASSISTANT_ROUTE_SCOPES: ReadonlyArray<{
   method: string;
@@ -69,38 +81,6 @@ export const ASSISTANT_ROUTE_SCOPES: ReadonlyArray<{
   { method: "POST", pattern: /^\/api\/mcp\/assistant$/, scope: ASSISTANT_SCOPE_READ },
   { method: "GET", pattern: /^\/api\/mcp\/assistant$/, scope: ASSISTANT_SCOPE_READ },
   { method: "DELETE", pattern: /^\/api\/mcp\/assistant$/, scope: ASSISTANT_SCOPE_READ },
-
-  // read: the M1 assistant toolset's loopback surface, one entry per call.
-  { method: "GET", pattern: /^\/api\/companies\/[^/]+\/agents$/, scope: ASSISTANT_SCOPE_READ },
-  // Member names — the toolset resolves human task-assignees through this.
-  { method: "GET", pattern: /^\/api\/companies\/[^/]+\/people$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/companies\/[^/]+\/projects$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/companies\/[^/]+\/issues$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/companies\/[^/]+\/assistant\/digest$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/companies\/[^/]+\/assistant\/pending-decisions$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/projects\/[^/]+$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/issues\/[^/]+$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/issues\/[^/]+\/work-products$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/issues\/[^/]+\/comments$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/issues\/[^/]+\/runs$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/issues\/[^/]+\/approvals$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/cli-auth\/me$/, scope: ASSISTANT_SCOPE_READ },
-  { method: "GET", pattern: /^\/api\/health$/, scope: ASSISTANT_SCOPE_READ },
-
-  // work: creating and moving work, waking an agent (design doc §4.2).
-  { method: "POST", pattern: /^\/api\/companies\/[^/]+\/projects$/, scope: ASSISTANT_SCOPE_WORK },
-  { method: "POST", pattern: /^\/api\/companies\/[^/]+\/issues$/, scope: ASSISTANT_SCOPE_WORK },
-  { method: "PATCH", pattern: /^\/api\/issues\/[^/]+$/, scope: ASSISTANT_SCOPE_WORK },
-  { method: "POST", pattern: /^\/api\/issues\/[^/]+\/comments$/, scope: ASSISTANT_SCOPE_WORK },
-  { method: "POST", pattern: /^\/api\/agents\/[^/]+\/wakeup$/, scope: ASSISTANT_SCOPE_WORK },
-
-  // decide: reading an approval in full, resolving it, hiring an agent.
-  // `agentdash:decide` is opt-in at consent and unchecked by default.
-  { method: "GET", pattern: /^\/api\/approvals\/[^/]+$/, scope: ASSISTANT_SCOPE_DECIDE },
-  { method: "POST", pattern: /^\/api\/approvals\/[^/]+\/approve$/, scope: ASSISTANT_SCOPE_DECIDE },
-  { method: "POST", pattern: /^\/api\/approvals\/[^/]+\/reject$/, scope: ASSISTANT_SCOPE_DECIDE },
-  { method: "POST", pattern: /^\/api\/approvals\/[^/]+\/request-revision$/, scope: ASSISTANT_SCOPE_DECIDE },
-  { method: "POST", pattern: /^\/api\/companies\/[^/]+\/agents$/, scope: ASSISTANT_SCOPE_DECIDE },
 ];
 
 /**

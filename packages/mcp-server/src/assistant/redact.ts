@@ -60,6 +60,9 @@ const SECRET_VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /\bpcp_[A-Za-z0-9_-]{8,}\b/g, replacement: "[redacted-key]" },
   // M2 assistant OAuth tokens (access + refresh) — same treatment as pcp_ keys.
   { pattern: /\bpcp[ar]_[A-Za-z0-9_-]{8,}\b/g, replacement: "[redacted-key]" },
+  // The internal loopback credential (pcin_) must never leave the process —
+  // if it ever lands inside a tool payload, it is scrubbed like any key.
+  { pattern: /\bpcin_[A-Za-z0-9_-]{8,}\b/g, replacement: "[redacted-key]" },
   { pattern: /\bsk-[A-Za-z0-9_-]{8,}\b/g, replacement: "[redacted-key]" },
   { pattern: /\bghp_[A-Za-z0-9]{8,}\b/g, replacement: "[redacted-key]" },
   { pattern: /\bgithub_pat_[A-Za-z0-9_]{8,}\b/g, replacement: "[redacted-key]" },

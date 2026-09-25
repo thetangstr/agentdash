@@ -3,8 +3,13 @@
 import { Router, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createAgentDashServer } from "@agentdash/mcp-server";
+import { ASSISTANT_SCOPE_READ } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { issuerBaseUrl } from "../services/assistant-oauth.js";
+import {
+  mintAssistantLoopbackToken,
+  revokeAssistantLoopbackToken,
+} from "../services/assistant-loopback.js";
 
 /**
  * The turnkey MCP endpoint: `POST /api/mcp`, bearer = the agent's key.
@@ -44,6 +49,17 @@ export function mcpRoutes() {
     return match ? match[1]!.trim() : null;
   }
 
+  /**
+   * The scheme this request's listener speaks. Behind a TLS-terminating
+   * proxy the socket is plain HTTP; on an instance that terminates TLS
+   * itself the loopback must dial https or every tool call fails on the
+   * handshake.
+   */
+  function loopbackApiUrl(req: Request): string {
+    const scheme = (req.socket as { encrypted?: boolean }).encrypted ? "https" : "http";
+    return `${scheme}://127.0.0.1:${req.socket.localPort}/api`;
+  }
+
   router.post("/mcp", async (req: Request, res: Response) => {
     if (req.actor.type !== "agent" || !req.actor.agentId || !req.actor.companyId) {
       res.status(401).json({
@@ -62,9 +78,8 @@ export function mcpRoutes() {
     // Loop back over this same listener. `localPort` is the port this request
     // actually arrived on, so the config is correct no matter which instance
     // this is or what PORT it was started with.
-    const selfPort = req.socket.localPort;
     const server = createAgentDashServer({
-      apiUrl: `http://127.0.0.1:${selfPort}/api`,
+      apiUrl: loopbackApiUrl(req),
       apiKey: token,
       companyId: req.actor.companyId,
       agentId: req.actor.agentId,
@@ -145,10 +160,18 @@ export function mcpRoutes() {
 
   router.post("/mcp/assistant", async (req: Request, res: Response) => {
     const resourceMetadataUrl = `${issuerBaseUrl(req)}/.well-known/oauth-protected-resource/api/mcp/assistant`;
-    if (req.actor.source !== "assistant_grant" || !req.actor.companyId || !req.actor.assistantGrantId) {
+    const challenge =
+      `Bearer resource_metadata="${resourceMetadataUrl}", scope="${ASSISTANT_SCOPE_READ}"`;
+    if (
+      req.actor.source !== "assistant_grant"
+      || req.actor.assistantLoopback
+      || !req.actor.companyId
+      || !req.actor.assistantGrantId
+      || !req.actor.userId
+    ) {
       res.set(
         "WWW-Authenticate",
-        `Bearer resource_metadata="${resourceMetadataUrl}", error="invalid_token", error_description="An assistant access token is required"`,
+        `${challenge}, error="invalid_token", error_description="An assistant access token is required"`,
       );
       res.status(401).json({ error: "invalid_token" });
       return;
@@ -157,18 +180,23 @@ export function mcpRoutes() {
       res.status(403).json({ error: "Untrusted Origin" });
       return;
     }
-    const token = bearerToken(req);
-    if (!token) {
-      res.set("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl}"`);
-      res.status(401).json({ error: "invalid_token" });
-      return;
-    }
 
-    const selfPort = req.socket.localPort;
+    // Tool calls loop back over this listener on an INTERNAL credential —
+    // never on the caller's `pcpa_` token, which is valid on zero raw REST
+    // routes. The loopback actor keeps the grant's company pin and scopes;
+    // the token dies when this response does (see assistant-loopback.ts).
+    const loopbackToken = mintAssistantLoopbackToken({
+      userId: req.actor.userId,
+      companyId: req.actor.companyId,
+      membershipRole: req.actor.memberships?.[0]?.membershipRole ?? null,
+      grantId: req.actor.assistantGrantId,
+      scopes: req.actor.assistantScopes ?? [],
+    });
+
     const server = createAgentDashServer(
       {
-        apiUrl: `http://127.0.0.1:${selfPort}/api`,
-        apiKey: token,
+        apiUrl: loopbackApiUrl(req),
+        apiKey: loopbackToken,
         companyId: req.actor.companyId,
         agentId: null,
         runId: null,
@@ -181,6 +209,7 @@ export function mcpRoutes() {
     });
 
     res.on("close", () => {
+      revokeAssistantLoopbackToken(loopbackToken);
       void transport.close();
       void server.close();
     });
