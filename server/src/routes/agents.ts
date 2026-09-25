@@ -15,11 +15,13 @@ import {
   isUuidLike,
   resetAgentSessionSchema,
   testAdapterEnvironmentSchema,
+  type AgentRunHealth,
   type AgentSkillSnapshot,
   type InstanceSchedulerHeartbeatAgent,
   upsertAgentInstructionsFileSchema,
   updateAgentInstructionsBundleSchema,
   updateAgentPermissionsSchema,
+  updateAgentTokenCeilingSchema,
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
   updateAgentSchema,
@@ -105,6 +107,7 @@ import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { resolveMaxDailyTokens, tokenCeilingService } from "../services/token-ceiling.js";
 import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
 import {
   DEFAULT_ACPX_LOCAL_AGENT,
@@ -195,6 +198,7 @@ export function agentRoutes(
   const companySkills = companySkillService(db);
   const workspaceOperations = workspaceOperationService(db);
   const instanceSettings = instanceSettingsService(db);
+  const tokenCeiling = tokenCeilingService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function assertAgentEnvironmentSelection(
@@ -627,7 +631,10 @@ export function agentRoutes(
    * placeholder `process` agent whose command does not exist sits here for
    * ever, looking exactly like a working agent nobody has assigned work to.
    */
-  async function buildAgentRunHealth(agentId: string) {
+  async function buildAgentRunHealth(
+    agentId: string,
+    tokenCeilingPause: AgentRunHealth["tokenCeilingPause"] = null,
+  ) {
     const [tally] = await db
       .select({
         total: count(),
@@ -658,6 +665,7 @@ export function agentRoutes(
       failed: Number(tally?.failed ?? 0),
       succeededWithoutEvidence: Number(tally?.withoutEvidence ?? 0),
       neverRan: total === 0,
+      tokenCeilingPause,
       last: last
         ? {
             status: last.status,
@@ -674,12 +682,23 @@ export function agentRoutes(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
+    // OBS-2: the ceiling's figures are configuration — the restricted view
+    // gets an explicit null rather than the spend. But the pause itself is
+    // run health, not configuration: it reaches restricted viewers through
+    // `runHealth.tokenCeilingPause` — reason and liftsAt only, no numbers.
+    const tokenCeilingStatus = await tokenCeiling.evaluate(agent);
+    const tokenCeilingPause = tokenCeilingStatus.paused
+      ? {
+          reason: tokenCeilingStatus.pauseReason ?? "token_ceiling",
+          liftsAt: tokenCeilingStatus.liftsAt,
+        }
+      : null;
     const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
       accountability.resolveForAgent(agent.companyId, agent.id),
-      buildAgentRunHealth(agent.id),
+      buildAgentRunHealth(agent.id, tokenCeilingPause),
       // AgentDash (AGE-1): state the model/provider that will serve the next
       // run, resolved the same way heartbeat resolves it, or an explicit
       // unknown — never the instance-level adapter preset. Present and null
@@ -721,6 +740,11 @@ export function agentRoutes(
       // AGE-1: what will serve the next run (model/provider/source-of-truth),
       // or explicit nulls when unknown. Never the instance adapter preset.
       resolvedRuntime,
+      // OBS-2: today's token sum vs the ceiling — the "paused: token ceiling"
+      // line on the agent page reads this, and null means the reader was not
+      // shown configuration at all. Restricted readers still see the pause
+      // through runHealth.tokenCeilingPause.
+      tokenCeiling: options?.restricted ? null : tokenCeilingStatus,
     };
   }
 
@@ -3071,6 +3095,65 @@ export function agentRoutes(
     res.json(await buildAgentDetail(agent));
   });
 
+  /**
+   * AgentDash (OBS-2 / GH #695): raise or clear this agent's daily token
+   * ceiling — the "unpause" control the steward reaches for from the agent
+   * page. Dedicated route rather than the generic PATCH because PATCH
+   * replaces `runtimeConfig` wholesale and `runtimeConfig` is not a field a
+   * steward may write; this merges the single key into the stored config.
+   *
+   * `maxDailyTokens` is required: `0` or `null` disables the ceiling, a
+   * positive integer sets it. Removing the key (unset) is not possible here —
+   * unset means the shared default, which is what an absent config already
+   * yields.
+   */
+  router.patch(
+    "/agents/:id/token-ceiling",
+    validate(updateAgentTokenCeilingSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const existing = await svc.getById(id);
+      if (!existing) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      // Admin or steward — the pause is the steward's problem to solve.
+      await requireAgentConfigurationAuthority(req, existing);
+
+      const runtimeConfig = { ...(asRecord(existing.runtimeConfig) ?? {}) };
+      const heartbeat = { ...(asRecord(runtimeConfig.heartbeat) ?? {}) };
+      heartbeat.maxDailyTokens = req.body.maxDailyTokens;
+      runtimeConfig.heartbeat = heartbeat;
+
+      const actor = getActorInfo(req);
+      const agent = await svc.update(id, { runtimeConfig }, {
+        recordRevision: {
+          createdByAgentId: actor.agentId,
+          createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+          source: "patch",
+        },
+      });
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+
+      await logActivity(db, {
+        companyId: agent.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.token_ceiling_updated",
+        entityType: "agent",
+        entityId: agent.id,
+        details: { maxDailyTokens: req.body.maxDailyTokens },
+      });
+
+      res.json(await buildAgentDetail(agent));
+    },
+  );
+
   router.patch("/agents/:id/instructions-path", validate(updateAgentInstructionsPathSchema), async (req, res) => {
     if (req.actor.type !== "board") {
       throw forbidden("Only board-authenticated callers can manage instructions path or bundle configuration");
@@ -3527,6 +3610,29 @@ export function agentRoutes(
       if (!runtimeConfig) {
         res.status(422).json({ error: "runtimeConfig must be an object" });
         return;
+      }
+      // OBS-2: the daily token ceiling is a safety bound with the same
+      // authority as the dedicated /token-ceiling route — a human with
+      // agent-configuration authority (or the mk steward). An agent key must
+      // not move it, including by omission: this PATCH replaces runtimeConfig
+      // wholesale, so dropping `heartbeat.maxDailyTokens` here would reset a
+      // steward-set ceiling to the default. Compared on the resolved value so
+      // an unchanged ceiling (or an equivalent spelling of it) still passes.
+      // Self-edits of runtimeConfig are already refused by the
+      // AGENT_SELF_PATCHABLE_FIELDS allowlist above; this guard is what stops
+      // an agent authority (CEO, agents:create holder) moving another agent's
+      // ceiling.
+      if (updateAuthority === "agent") {
+        const before = resolveMaxDailyTokens(existing.runtimeConfig).ceiling;
+        const after = resolveMaxDailyTokens(runtimeConfig).ceiling;
+        if (before !== after) {
+          res.status(403).json({
+            error:
+              "Only a human with agent-configuration authority may change runtimeConfig.heartbeat.maxDailyTokens; " +
+              "ask an owner, admin or operator — or use PATCH /api/agents/:id/token-ceiling",
+          });
+          return;
+        }
       }
       await assertNoAgentRuntimeConfigAdapterConfigMutation(req, existing.companyId, runtimeConfig);
       requestedRuntimeConfig = runtimeConfig;

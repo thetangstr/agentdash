@@ -10,6 +10,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  heartbeatRuns,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -162,6 +163,7 @@ describeEmbeddedPostgres("agent steward visibility", () => {
   afterEach(async () => {
     await db.delete(activityLog);
     await db.delete(agentStewardships);
+    await db.delete(heartbeatRuns);
     await db.delete(agents);
     await db.delete(companyMemberships);
     await db.delete(companies);
@@ -394,5 +396,63 @@ describeEmbeddedPostgres("agent steward visibility", () => {
     // does not report stewards", so the key is always present.
     expect(res.body).toHaveProperty("steward");
     expect(res.body.steward).toBeNull();
+  });
+
+  // OBS-2 (GH #695): the ceiling's figures are configuration and stay behind
+  // the restricted view, but the pause itself is run health — an agent whose
+  // colleague went quiet must be able to see why. `tokenCeiling` stays null;
+  // `runHealth.tokenCeilingPause` carries reason and lift time, no numbers.
+  it("shows a token-ceiling pause to restricted readers through runHealth, without the figures", async () => {
+    const company = await createCompany(db);
+    const casper = await createAgent(db, company.id, "Casper");
+    const reader = await createAgent(db, company.id, "Reader");
+
+    // Trip the unmetered runaway guard: enough unmetered timer runs that spend
+    // can no longer be verified. A certain ledger with no session counts even
+    // though the seeded agent's adapter never meters on its own.
+    for (let i = 0; i < 49; i += 1) {
+      await db.insert(heartbeatRuns).values({
+        companyId: company.id,
+        agentId: casper.id,
+        invocationSource: "timer",
+        triggerDetail: "system",
+        status: "succeeded",
+        resultJson: {
+          runFacts: {
+            meteringStatus: "unmetered_no_session",
+            ledgerCertainty: "certain",
+            inputTokens: null,
+            outputTokens: null,
+            outcome: "no_op",
+            wakeReason: "timer",
+          },
+        },
+      });
+    }
+
+    const app = await createApp(db, makeAgentActor(company.id, reader.id));
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/agents/${casper.id}`),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.tokenCeiling).toBeNull();
+    expect(res.body.runHealth?.tokenCeilingPause).toMatchObject({
+      reason: "unmetered runaway guard",
+    });
+    expect(res.body.runHealth.tokenCeilingPause.liftsAt).toBeTruthy();
+    // The restricted view must not smuggle the figures back out.
+    expect(res.body.runHealth.tokenCeilingPause).not.toHaveProperty("tokensToday");
+
+    // Self-read still gets the full status.
+    const selfApp = await createApp(db, makeAgentActor(company.id, casper.id));
+    const selfRes = await requestApp(selfApp, (baseUrl) =>
+      request(baseUrl).get("/api/agents/me"),
+    );
+    expect(selfRes.status).toBe(200);
+    expect(selfRes.body.tokenCeiling).toMatchObject({
+      paused: true,
+      pauseReason: "unmetered runaway guard",
+    });
   });
 });

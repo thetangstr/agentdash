@@ -21,8 +21,55 @@ export interface AgentModelProfileConfig {
   adapterConfig: Record<string, unknown>;
 }
 
+/**
+ * AgentDash (OBS-2 / GH #695): heartbeat section of `runtimeConfig`. Only the
+ * ceiling is typed — the rest of the heartbeat keys predate the type and stay
+ * open.
+ *
+ * `maxDailyTokens`: per-agent daily token ceiling counted from `runFacts`
+ * (input + cached-input + output). Unset means the shared default
+ * (`AGENT_DEFAULT_MAX_DAILY_TOKENS`); an explicit `0` or `null` disables the
+ * ceiling for this agent.
+ */
+export interface AgentHeartbeatRuntimeConfig extends Record<string, unknown> {
+  maxDailyTokens?: number | null;
+}
+
 export interface AgentRuntimeConfig extends Record<string, unknown> {
   modelProfiles?: Partial<Record<ModelProfileKey, AgentModelProfileConfig>>;
+  heartbeat?: AgentHeartbeatRuntimeConfig;
+}
+
+/**
+ * OBS-2: the daily token ceiling as it stands for one agent right now.
+ * `paused` means today's metered total is at or over the effective ceiling, so
+ * timer and comment wakes are being skipped until `liftsAt` — or until a
+ * steward raises the ceiling. `meteredRuns`/`unmeteredRuns` let a reader tell
+ * "metering is off" apart from "nothing ran".
+ */
+export interface AgentTokenCeilingStatus {
+  /** The ceiling actually enforced; null when disabled (configured `0`/`null`). */
+  ceiling: number | null;
+  /** True when nothing is configured and the shared default is what `ceiling` shows. */
+  isDefault: boolean;
+  tokensToday: number;
+  meteredRuns: number;
+  unmeteredRuns: number;
+  /**
+   * Unmetered timer/comment runs today where metering was expected (a
+   * certain ledger, or an adapter that normally reports usage) — the
+   * runaway guard's input.
+   */
+  unmeteredPausableRuns: number;
+  paused: boolean;
+  /**
+   * Which guard paused the agent: "token_ceiling" when the metered sum hit
+   * the ceiling, "unmetered runaway guard" when unmetered unattended runs
+   * outran what can be verified. Null when not paused.
+   */
+  pauseReason: "token_ceiling" | "unmetered runaway guard" | null;
+  /** Next UTC midnight — when the window resets and paused wakes resume. */
+  liftsAt: string;
 }
 
 export type AgentInstructionsBundleMode = "managed" | "external";
@@ -98,6 +145,16 @@ export interface AgentRunHealth {
   failed: number;
   succeededWithoutEvidence: number;
   neverRan: boolean;
+  /**
+   * OBS-2: non-null while a token-ceiling pause (or the unmetered runaway
+   * guard) is skipping this agent's unattended wakes. Carries no figures, so
+   * the restricted detail view can show it — "this agent is paused" is health,
+   * not configuration.
+   */
+  tokenCeilingPause: {
+    reason: "token_ceiling" | "unmetered runaway guard";
+    liftsAt: string;
+  } | null;
   last: {
     status: string;
     error: string | null;
@@ -191,6 +248,11 @@ export interface Agent {
    * from builds older than AGE-1.
    */
   resolvedRuntime?: AgentResolvedRuntime | null;
+  /**
+   * OBS-2: daily token-ceiling state. Present on the detail view; absent on
+   * list responses and older builds.
+   */
+  tokenCeiling?: AgentTokenCeilingStatus | null;
 }
 
 /**
