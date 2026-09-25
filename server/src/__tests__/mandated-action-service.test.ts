@@ -10,8 +10,10 @@ function svc(over: { mandates?: any; clock?: any; identity?: any; approvals?: an
   const identity = over.identity ?? { resolveAgentDid: vi.fn(async () => "did:vega") };
   const approvals = over.approvals ?? { create: vi.fn(async () => ({ id: "ap1" })) };
   const agents = over.agents ?? { pause: vi.fn(async () => {}) };
+  const tenancy = { loadMandateInCompany: vi.fn(async () => ({})), assertAgentsInCompany: vi.fn(async () => {}) } as any;
   return {
-    s: mandatedActionService({} as any, clock, identity, mandates, approvals, agents),
+    // Tenant binding is covered against a real DB in mandate-tenant-binding.test.ts.
+    s: mandatedActionService({} as any, clock, identity, mandates, approvals, agents, undefined, tenancy),
     mandates,
     clock,
     identity,

@@ -963,9 +963,30 @@ export function agentRoutes(
     };
   }
 
+  // AgentDash (security): the fields an agent may change on ITSELF through
+  // `PATCH /agents/:id`. An allowlist, not a denylist: the previous denylist
+  // (budgetMonthlyCents, reportsTo, adapterType, adapterConfig) omitted `role`,
+  // so an ordinary agent could PATCH itself to `role: "ceo"` and then use CEO
+  // status to modify every other agent. Every other authority-bearing field
+  // had the same hole — `status` (un-pause yourself), `spentMonthlyCents`
+  // (reset your own spend), `runtimeConfig` (heartbeat schedule and cheap-model
+  // adapter config), `defaultEnvironmentId`, `metadata` (harness-preflight
+  // results), `autonomy`/`accountableUserId`, `instructionsBundle`,
+  // `desiredSkills`. New fields added to `updateAgentSchema` are refused for
+  // self-edits until someone decides they belong here. What remains is
+  // presentation: how the agent is named and described. Role and authority
+  // changes are reserved for humans with agent-configuration authority.
+  const AGENT_SELF_PATCHABLE_FIELDS: ReadonlySet<string> = new Set([
+    "name",
+    "title",
+    "icon",
+    "capabilities",
+  ]);
+
   async function assertCanUpdateAgent(
     req: Request,
     targetAgent: { id: string; companyId: string },
+    selfEditableFields: ReadonlySet<string>,
   ): Promise<"admin" | "steward" | "agent"> {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
@@ -979,26 +1000,21 @@ export function agentRoutes(
     }
 
     if (actorAgent.id === targetAgent.id) {
-      // Self-update is allowed, but not of the things that bound it. Verified
-      // live: an agent PATCHed its own budgetMonthlyCents from 0 to 99,999,999
-      // and got 200. The spend cap is the brake; an agent that can release its
-      // own brake has no cap. `reportsTo` goes with it — rewriting your own
-      // chain of command is the same move.
-      // AGE-113: `adapterType` and `adapterConfig` join the list. An agent
-      // choosing its own adapter or model is the same class of self-release —
-      // the invariant says only a human with agent-configuration authority may
-      // change them, and "the agent itself" is not that.
-      for (const field of [
-        "budgetMonthlyCents",
-        "reportsTo",
-        "adapterType",
-        "adapterConfig",
-      ] as const) {
-        if (req.body && Object.prototype.hasOwnProperty.call(req.body, field)) {
-          throw forbidden(
-            `An agent cannot change its own ${field}. Ask an owner, admin or operator.`,
-          );
-        }
+      // Self-update is allowed, but only of the fields the calling route names
+      // as self-editable. Verified live: an agent PATCHed its own
+      // budgetMonthlyCents from 0 to 99,999,999 and got 200 — the spend cap is
+      // the brake, and an agent that can release its own brake has no cap.
+      // AGE-113 extended that to adapterType/adapterConfig; the AgentDash
+      // (security) fix turns the list around so `role` and every future
+      // authority-bearing field is refused by default.
+      const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+      const refused = Object.keys(body)
+        .filter((field) => !selfEditableFields.has(field))
+        .sort();
+      if (refused.length > 0) {
+        throw forbidden(
+          `An agent cannot change its own ${refused.join(", ")}. Ask an owner, admin or operator.`,
+        );
       }
       return "agent";
     }
@@ -1923,7 +1939,8 @@ export function agentRoutes(
         res.status(404).json({ error: "Agent not found" });
         return;
       }
-      await assertCanUpdateAgent(req, agent);
+      // Self skill sync stays allowed: it is documented agent behaviour.
+      await assertCanUpdateAgent(req, agent, new Set(["desiredSkills"]));
 
       const requestedSkills = Array.from(
         new Set(
@@ -2274,13 +2291,22 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    const rollbackAuthority = await assertCanUpdateAgent(req, existing);
+    const rollbackAuthority = await assertCanUpdateAgent(req, existing, new Set());
     // A rollback restores a whole prior configuration — including fields no
     // ceiling dimension covers (role, adapterConfig) and values captured before
     // the current ceiling existed. Stewardship alone is not sufficient.
     if (rollbackAuthority === "steward") {
       throw forbidden(
         "Stewardship does not permit configuration rollback; an administrator with agents:create must perform it",
+      );
+    }
+    // AgentDash (security): a rollback restores role, reportsTo, budget and
+    // adapter configuration wholesale, so an agent rolling back (itself, after
+    // a demotion, or another agent) would sidestep the self-edit allowlist and
+    // AGE-113. Configuration rollback is a human operation.
+    if (rollbackAuthority === "agent") {
+      throw forbidden(
+        "An agent cannot roll back agent configuration. Ask an owner, admin or operator.",
       );
     }
 
@@ -3276,7 +3302,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    const updateAuthority = await assertCanUpdateAgent(req, existing);
+    const updateAuthority = await assertCanUpdateAgent(req, existing, AGENT_SELF_PATCHABLE_FIELDS);
     assertStewardPatchScope(updateAuthority, req.body as Record<string, unknown>);
 
     if (hasOwn(req.body as object, "permissions")) {

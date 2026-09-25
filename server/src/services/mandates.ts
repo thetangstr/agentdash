@@ -64,11 +64,14 @@ export function mandatesService(db: Db, clock = clockchainService(), identity = 
     const [row] = await db.select().from(mandates).where(eq(mandates.id, id));
     if (!row) return { status: "unauthorized", reason: "not_found" };
     // Cheap local pre-checks before spending a chain call.
-    if (row.status === "revoked") return { status: "unauthorized", reason: "revoked" };
-    if (row.expiresAt.getTime() <= at.getTime()) return { status: "unauthorized", reason: "expired" };
+    // AgentDash (security): identity before expiry. "expired" is a bounce-back
+    // reason that pauses the named grantee, so it must never be returned for an
+    // agent that is not this mandate's grantee.
     if (expectedGranteeAgentId && row.granteeAgentId !== expectedGranteeAgentId) {
       return { status: "unauthorized", reason: "not_grantee" };
     }
+    if (row.status === "revoked") return { status: "unauthorized", reason: "revoked" };
+    if (row.expiresAt.getTime() <= at.getTime()) return { status: "unauthorized", reason: "expired" };
     // The gateway has no verify_delegation_at tool, so the mandate's validity is proven
     // by its real on-chain grant anchor: confirm the delegate_authority ledgerId is real
     // and anchored. The local window/cap/scope (checked by the gate) govern the rest.

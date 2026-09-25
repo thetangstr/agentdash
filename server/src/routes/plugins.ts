@@ -615,7 +615,8 @@ export function pluginRoutes(
    * Response: `PluginRecord[]`
    */
   router.get("/plugins", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     const rawStatus = req.query.status;
     if (rawStatus !== undefined) {
       if (typeof rawStatus !== "string" || !(PLUGIN_STATUSES as readonly string[]).includes(rawStatus)) {
@@ -639,7 +640,8 @@ export function pluginRoutes(
    * These can be installed through the normal local-path install flow.
    */
   router.get("/plugins/examples", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     res.json(listBundledPluginExamples());
   });
 
@@ -684,6 +686,10 @@ export function pluginRoutes(
    * Response: PluginUiContribution[]
    */
   router.get("/plugins/ui-contributions", async (req, res) => {
+    // AgentDash (security): intentionally reachable by any company member — the
+    // UI needs it to render plugin slots. The response is built field-by-field
+    // from the manifest's UI metadata only (no config, package path, lastError
+    // or manifest capabilities), so it carries no instance-private data.
     assertBoardOrgAccess(req);
     const plugins = await registry.listByStatus("ready");
 
@@ -1549,7 +1555,8 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
     const plugin = await resolvePlugin(registry, pluginId);
     if (!plugin) {
@@ -1694,7 +1701,8 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/health", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
 
     const plugin = await resolvePlugin(registry, pluginId);
@@ -1762,7 +1770,8 @@ export function pluginRoutes(
    * Response: Array of log entries, newest first.
    */
   router.get("/plugins/:pluginId/logs", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
 
     const plugin = await resolvePlugin(registry, pluginId);
@@ -1864,7 +1873,8 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/config", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
 
     const plugin = await resolvePlugin(registry, pluginId);
@@ -1999,7 +2009,8 @@ export function pluginRoutes(
    * - 502 if the worker is unavailable
    */
   router.post("/plugins/:pluginId/config/test", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
 
     if (!bridgeDeps) {
       res.status(501).json({ error: "Plugin bridge is not enabled" });
@@ -2096,7 +2107,8 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/jobs", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     if (!jobDeps) {
       res.status(501).json({ error: "Job scheduling is not enabled" });
       return;
@@ -2142,7 +2154,8 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/jobs/:jobId/runs", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     if (!jobDeps) {
       res.status(501).json({ error: "Job scheduling is not enabled" });
       return;
@@ -2396,7 +2409,8 @@ export function pluginRoutes(
    * Errors: 404 if plugin not found
    */
   router.get("/plugins/:pluginId/dashboard", async (req, res) => {
-    assertBoardOrgAccess(req);
+    // AgentDash (security): instance-global plugin state, not tenant-scoped — instance admin only.
+    assertInstanceAdmin(req);
     const { pluginId } = req.params;
 
     const plugin = await resolvePlugin(registry, pluginId);
