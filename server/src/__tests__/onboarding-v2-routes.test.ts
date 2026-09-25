@@ -874,6 +874,9 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
   ];
   const saved: Record<string, string | undefined> = {};
   let tmpDir: string;
+  // AgentDash (security): setup-adapter is instance-scoped (process env + the
+  // env file launchd sources), so the happy paths run as an instance admin.
+  const INSTANCE_ADMIN = { type: "board", userId: "u1", source: "session", isInstanceAdmin: true };
 
   beforeEach(() => {
     for (const k of ENV_KEYS) saved[k] = process.env[k];
@@ -920,7 +923,7 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
   });
 
   it("applies the claude preset (201, ready, key persisted)", async () => {
-    const app = buildApp({ type: "board", userId: "u1" });
+    const app = buildApp(INSTANCE_ADMIN);
     const res = await request(app)
       .post("/api/onboarding/setup-adapter")
       .send({ preset: "claude", apiKey: "sk-ant-route-test" });
@@ -933,7 +936,7 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
   });
 
   it("applies the stub preset without a key", async () => {
-    const app = buildApp({ type: "board", userId: "u1" });
+    const app = buildApp(INSTANCE_ADMIN);
     const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });
     expect(res.status).toBe(201);
     expect(res.body.status.ready).toBe(true);
@@ -941,15 +944,54 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
   });
 
   it("400s on a hosted preset with no key", async () => {
-    const app = buildApp({ type: "board", userId: "u1" });
+    const app = buildApp(INSTANCE_ADMIN);
     const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "openai" });
     expect(res.status).toBe(400);
   });
 
   it("400s on an unknown preset", async () => {
-    const app = buildApp({ type: "board", userId: "u1" });
+    const app = buildApp(INSTANCE_ADMIN);
     const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "grok" });
     expect(res.status).toBe(400);
+  });
+
+  // AgentDash (security): any signed-in board user used to pass.
+  it("403s setup-adapter for a signed-in board user who is not instance admin", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u2",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["c1"],
+    });
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "claude", apiKey: "sk-ant-member" });
+    expect(res.status).toBe(403);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    const { existsSync } = require("node:fs");
+    expect(existsSync(process.env.AGENTDASH_ENV_FILE!)).toBe(false);
+  });
+
+  it("allows setup-adapter for the local_implicit board (local_trusted founder)", async () => {
+    const app = buildApp({ type: "board", userId: "local-board", source: "local_implicit" });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });
+    expect(res.status).toBe(201);
+  });
+
+  it.each([
+    ["single-quote breakout", "sk-ant'; touch /tmp/pwn; '"],
+    ["command substitution", "sk-ant-$(touch /tmp/pwn)"],
+    ["backticks", "sk-ant-`touch /tmp/pwn`"],
+    ["embedded newline", "sk-ant-x\nPWN=1"],
+    ["semicolon", "sk-ant-x;touch /tmp/pwn"],
+  ])("400s an API key with shell metacharacters (%s) and writes nothing", async (_label, apiKey) => {
+    const app = buildApp(INSTANCE_ADMIN);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "claude", apiKey });
+    expect(res.status).toBe(400);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    const { existsSync } = require("node:fs");
+    expect(existsSync(process.env.AGENTDASH_ENV_FILE!)).toBe(false);
   });
 });
 

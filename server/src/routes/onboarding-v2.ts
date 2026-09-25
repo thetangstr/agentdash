@@ -23,7 +23,7 @@ import {
   type MemberOnboardingStep,
 } from "../services/member-onboarding.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertCompanyAccess, assertInstanceAdmin } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import {
   exceededFreeTierCapacityAction,
@@ -1055,6 +1055,13 @@ No greetings. No markdown headings outside the JSON block.`;
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
+    // AgentDash (security): this rewrites process-wide adapter settings and the
+    // env file the service manager sources on restart, so it is an instance
+    // operation, not a company one — any signed-in user used to pass. The
+    // founding user is instance admin on every bootstrap path (local_implicit
+    // in local_trusted; bootstrap-ceo claim, self-serve bootstrap or MCP
+    // signup promotion in authenticated mode), so onboarding is unaffected.
+    assertInstanceAdmin(req);
     const { preset, apiKey } = req.body as { preset?: string; apiKey?: string };
     if (!preset || typeof preset !== "string") {
       throw badRequest("preset required (claude | openai | gemini | stub)");

@@ -144,6 +144,36 @@ function readLiveRunsQueryInt(value: unknown, max: number, fallback = 0) {
   return Math.min(max, Math.trunc(parsed));
 }
 
+// AgentDash (security): adapterConfig keys that decide WHAT runs on the host
+// during an adapter environment test — the binary (`command`,
+// `hermesCommand`, `agentCommand`), its argv (`args`, `extraArgs`), its
+// environment (`env`), its working directory (`cwd`) and CLI state/home
+// directories (`stateDir`, ...) that CLIs load config — and hooks — from.
+const HOST_EXECUTION_CONFIG_KEY = /^(command|args|env|cwd)$|(Command|Args|Env|Cwd|Dir|Home)$/;
+
+function isEmptyConfigValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value as object).length === 0;
+  return false;
+}
+
+export function collectHostExecutionConfigKeys(adapterConfig: unknown, prefix = "adapterConfig"): string[] {
+  if (typeof adapterConfig !== "object" || adapterConfig === null || Array.isArray(adapterConfig)) return [];
+  const found: string[] = [];
+  for (const [key, value] of Object.entries(adapterConfig as Record<string, unknown>)) {
+    const path = `${prefix}.${key}`;
+    if (HOST_EXECUTION_CONFIG_KEY.test(key)) {
+      // Empty values select the server default, so they are not an override.
+      if (!isEmptyConfigValue(value)) found.push(path);
+      continue;
+    }
+    found.push(...collectHostExecutionConfigKeys(value, path));
+  }
+  return found;
+}
+
 export function agentRoutes(
   db: Db,
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
@@ -1757,6 +1787,27 @@ export function agentRoutes(
       const companyId = req.params.companyId as string;
       const type = assertKnownAdapterType(req.params.type as string);
       await assertCanReadConfigurations(req, companyId);
+
+      // AgentDash (security): the environment probe spawns the adapter CLI on
+      // the host — some adapters (opencode/pi model discovery) with the full
+      // server env and NEVER_SANDBOX — and resolves company secret refs into
+      // its env first. Letting any company member choose the binary, its
+      // args, its env or its working directory is host code execution plus
+      // secret extraction. Those fields therefore require instance admin
+      // (local_implicit counts, so local_trusted dev is unaffected). Everyone
+      // else can still probe the server-configured default binary.
+      const hostExecKeys = collectHostExecutionConfigKeys(req.body?.adapterConfig);
+      if (hostExecKeys.length > 0) {
+        if (
+          req.actor.type !== "board" ||
+          !(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)
+        ) {
+          throw forbidden(
+            "Instance admin access required to test an adapter environment with a custom " +
+              `command, arguments, environment or working directory (${hostExecKeys.join(", ")}).`,
+          );
+        }
+      }
 
       // Closes #315: e2e bypass — when AGENTDASH_ADAPTER_ENV_BYPASS=true
       // is set, short-circuit the adapter probe and return a synthetic
