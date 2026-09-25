@@ -12,25 +12,15 @@ import {
 import { badRequest } from "../errors.js";
 import type { Request, Response } from "express";
 import type { ConnectorActionClass } from "@paperclipai/shared";
+import { authorizeNamedConnection } from "./connector-acting-as.js";
 
 export function gmailRoutes(db: Db) {
   const router = Router();
   const gmailSvc = gmailConnectorService(db);
   const connSvc = connectorService(db);
 
-  /**
-   * AgentDash (security): authorize the caller against the exact connection
-   * named in the path before any token is decrypted. Company membership alone
-   * is not enough — a private connection belongs to one human (or to one
-   * agent / that agent's current steward), so a colleague naming its id must
-   * be refused. Returns the resolution, or writes a 403 and returns null.
-   *
-   * - An agent key acts as itself; a body `agentId` naming another agent is
-   *   refused.
-   * - A human acts as themselves (and may use connections they own), or as
-   *   the body `agentId` when given. Acting through an agent never unlocks a
-   *   different human's private connection.
-   */
+  // AgentDash (security): shared with the Slack route — see connector-acting-as.ts.
+  // Returns the resolution, or writes a 403 and returns null.
   async function authorizeConnection(
     req: Request,
     res: Response,
@@ -39,48 +29,18 @@ export function gmailRoutes(db: Db) {
     actionClass: ConnectorActionClass,
     requestedAgentId?: unknown,
   ) {
-    const actor = getActorInfo(req);
-    const deny = (error: string, code: string) => {
-      res.status(403).json({ error, code });
-      return null;
-    };
-    const agentIdArg = typeof requestedAgentId === "string" && requestedAgentId ? requestedAgentId : undefined;
-
-    let actingId: string;
-    let actingType: "agent" | "user";
-    if (actor.actorType === "agent") {
-      if (agentIdArg && agentIdArg !== actor.actorId) {
-        return deny("An agent may only act as itself", "not_authorized");
-      }
-      actingId = actor.actorId;
-      actingType = "agent";
-    } else if (agentIdArg) {
-      actingId = agentIdArg;
-      actingType = "agent";
-    } else {
-      actingId = actor.actorId;
-      actingType = "user";
-    }
-
-    const resolution = await connSvc.resolveActingAs(companyId, actingId, actionClass, "google", {
+    const result = await authorizeNamedConnection(connSvc, req, {
+      companyId,
       connectionId,
-      actorType: actingType,
+      provider: "google",
+      actionClass,
+      requestedAgentId,
     });
-    if (!resolution.ok) return deny(resolution.blocked.message, resolution.blocked.reason);
-    if (resolution.resolution.connectionId !== connectionId) {
-      return deny("Connection is not authorized for this agent", "not_authorized");
+    if (!result.ok) {
+      res.status(403).json({ error: result.message, code: result.code });
+      return null;
     }
-
-    // A human acting through an agent (e.g. a steward-resolved connection)
-    // still may not reach another human's private connection.
-    if (actor.actorType === "user" && actingType === "agent" && resolution.resolution.ownerType === "user") {
-      const conn = await connSvc.getById(connectionId);
-      if (!conn || (conn.visibility !== "workspace" && conn.ownerId !== actor.actorId)) {
-        return deny("Connection is not authorized for this agent", "not_authorized");
-      }
-    }
-
-    return { resolution: resolution.resolution, actingId };
+    return result;
   }
 
   // -------------------------------------------------------------------------

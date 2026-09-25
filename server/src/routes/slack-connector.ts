@@ -5,10 +5,13 @@ import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { slackConnectorService, verifySlackSignature } from "../services/slack-connector.js";
 import type { SlackEventPayload, SlackInteractionPayload } from "../services/slack-connector.js";
 import { logger } from "../middleware/logger.js";
+import { connectorService } from "../services/connectors.js";
+import { authorizeNamedConnection } from "./connector-acting-as.js";
 
 export function slackConnectorRoutes(db: Db) {
   const router = Router();
   const svc = slackConnectorService(db);
+  const connSvc = connectorService(db);
 
   // -------------------------------------------------------------------------
   // OAuth: initiate
@@ -251,12 +254,27 @@ export function slackConnectorRoutes(db: Db) {
 
     assertCompanyAccess(req, companyId);
 
-    const result = await svc.postMessage(connectionId, {
+    // AgentDash (security): same rule as Gmail — a human naming an agent may
+    // not reach another human's private connection (e.g. via the steward
+    // fallback in agentdash_mk companies). Checked before any token is used.
+    const authorized = await authorizeNamedConnection(connSvc, req, {
+      companyId,
+      connectionId,
+      provider: "slack",
+      actionClass: "send",
+      requestedAgentId: agentId,
+    });
+    if (!authorized.ok) {
+      res.status(403).json({ error: authorized.message, code: authorized.code });
+      return;
+    }
+
+    const result = await svc.postMessage(authorized.resolution.connectionId, {
       channel,
       text,
       threadTs,
       companyId,
-      agentId,
+      agentId: authorized.actingId,
     });
 
     res.json(result);

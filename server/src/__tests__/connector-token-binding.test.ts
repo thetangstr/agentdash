@@ -7,8 +7,11 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
+  agentGovernancePolicies,
+  agentStewardships,
   agents,
   companies,
+  companyMemberships,
   connections,
   connectorWorkspaceDefaults,
   createDb,
@@ -69,6 +72,7 @@ const { slackConnectorService } = await import("../services/slack-connector.js")
 const { slackConnectorRoutes } = await import("../routes/slack-connector.js");
 const { gmailRoutes } = await import("../routes/gmail.js");
 const { errorHandler } = await import("../middleware/index.js");
+const { agentStewardshipService } = await import("../services/agent-stewardships.js");
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -94,7 +98,10 @@ describeEmbeddedPostgres("connector send paths bind the token to the authorized 
     await db.delete(activityLog);
     await db.delete(connections);
     await db.delete(connectorWorkspaceDefaults);
+    await db.delete(agentGovernancePolicies);
+    await db.delete(agentStewardships);
     await db.delete(agents);
+    await db.delete(companyMemberships);
     await db.delete(companies);
   });
 
@@ -454,6 +461,110 @@ describeEmbeddedPostgres("connector send paths bind the token to the authorized 
       expect(draft.status).toBe(403);
       expect(draft.body.code).toBe("autonomy_blocked");
       expect(gmailReadCalls).toEqual([{ op: "search", connectionId: sharedReadOnly.id }]);
+    });
+  });
+  describe("steward fallback: a human naming a colleague's stewarded agent (agentdash_mk)", () => {
+    async function seedStewarded(provider: "slack" | "google") {
+      const company = await db
+        .insert(companies)
+        .values({
+          name: `Stew ${randomUUID()}`,
+          issuePrefix: `S${randomUUID().slice(0, 6).toUpperCase()}`,
+          productProfile: "agentdash_mk",
+        })
+        .returning()
+        .then((rows) => rows[0]!);
+      const agent = await db
+        .insert(agents)
+        .values({ companyId: company.id, name: `Agent ${randomUUID()}`, role: "engineer", status: "idle", adapterType: "process" })
+        .returning()
+        .then((rows) => rows[0]!);
+      const steward = randomUUID();
+      const colleague = randomUUID();
+      const owner = randomUUID();
+      await db.insert(companyMemberships).values([
+        { companyId: company.id, principalType: "user", principalId: steward, status: "active", membershipRole: "operator" },
+        { companyId: company.id, principalType: "user", principalId: colleague, status: "active", membershipRole: "owner" },
+        { companyId: company.id, principalType: "user", principalId: owner, status: "active", membershipRole: "owner" },
+      ]);
+      await agentStewardshipService(db).assign(company.id, {
+        agentId: agent.id,
+        userId: steward,
+        assignedByUserId: owner,
+      });
+      const stewardPrivate = await connectorService(db).create(company.id, {
+        ownerType: "user",
+        ownerId: steward,
+        provider,
+        autonomy: { ...fullSend },
+        visibility: "private",
+        token: { accessToken: "token-steward-private" },
+      });
+      return { company, agent, steward, colleague, stewardPrivate };
+    }
+
+    function appAs(userId: string, companyId: string, role: string, mount: "slack" | "gmail") {
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        (req as any).actor = {
+          type: "board",
+          userId,
+          source: "session",
+          isInstanceAdmin: false,
+          companyIds: [companyId],
+          memberships: [{ companyId, membershipRole: role, status: "active" }],
+        };
+        next();
+      });
+      if (mount === "slack") app.use("/api/connectors", slackConnectorRoutes(db));
+      else app.use("/api", gmailRoutes(db));
+      app.use(errorHandler);
+      return app;
+    }
+
+    it("the resolver does fall back to the steward's private connection for the agent", async () => {
+      const { company, agent, stewardPrivate } = await seedStewarded("slack");
+      const r = await connectorService(db).resolveActingAs(company.id, agent.id, "send", "slack", {
+        connectionId: stewardPrivate.id,
+      });
+      expect(r.ok).toBe(true);
+    });
+
+    it("slack: a colleague naming the stewarded agent cannot send with the steward's private token", async () => {
+      const { company, agent, colleague, stewardPrivate } = await seedStewarded("slack");
+      const res = await request(appAs(colleague, company.id, "owner", "slack"))
+        .post("/api/connectors/slack/send")
+        .send({ companyId: company.id, connectionId: stewardPrivate.id, channel: "C1", text: "hi", agentId: agent.id });
+      expect(res.status).toBe(403);
+      expect(slackTokensUsed).toHaveLength(0);
+    });
+
+    it("slack: the steward can send through their agent with their own private connection", async () => {
+      const { company, agent, steward, stewardPrivate } = await seedStewarded("slack");
+      const res = await request(appAs(steward, company.id, "operator", "slack"))
+        .post("/api/connectors/slack/send")
+        .send({ companyId: company.id, connectionId: stewardPrivate.id, channel: "C1", text: "hi", agentId: agent.id });
+      expect(res.status).toBe(200);
+      expect(slackTokensUsed).toEqual(["token-steward-private"]);
+    });
+
+    it("gmail: a colleague naming the stewarded agent cannot send from the steward's private mailbox", async () => {
+      const { company, agent, colleague, stewardPrivate } = await seedStewarded("google");
+      const res = await request(appAs(colleague, company.id, "owner", "gmail"))
+        .post(`/api/companies/${company.id}/connectors/gmail/${stewardPrivate.id}/send`)
+        .send({ to: "x@example.com", subject: "s", body: "b", agentId: agent.id });
+      expect(res.status).toBe(403);
+      expect(gmailSendCalls).toHaveLength(0);
+    });
+
+    it("gmail: the steward can send through their agent from their own private mailbox", async () => {
+      const { company, agent, steward, stewardPrivate } = await seedStewarded("google");
+      const res = await request(appAs(steward, company.id, "owner", "gmail"))
+        .post(`/api/companies/${company.id}/connectors/gmail/${stewardPrivate.id}/send`)
+        .send({ to: "x@example.com", subject: "s", body: "b", agentId: agent.id });
+      expect(res.status).toBe(200);
+      expect(gmailSendCalls).toEqual([stewardPrivate.id]);
     });
   });
 });
