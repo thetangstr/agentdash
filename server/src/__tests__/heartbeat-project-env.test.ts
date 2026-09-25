@@ -47,6 +47,58 @@ describe("resolveExecutionRunAdapterConfig", () => {
     expect(Array.from(result.secretKeys).sort()).toEqual(["AGENT_SECRET", "PROJECT_SECRET"]);
   });
 
+  // AgentDash (security, #735): project env cannot redirect what runs.
+  it("drops execution-affecting project env keys and keeps the rest", async () => {
+    const resolveAdapterConfigForRuntime = vi.fn().mockResolvedValue({
+      config: { env: { PATH: "/usr/bin:/bin", AGENT_ONLY: "agent-only" } },
+      secretKeys: new Set<string>(),
+    });
+    const resolveEnvBindings = vi.fn().mockResolvedValue({
+      env: {
+        PATH: "/tmp/evil:/usr/bin",
+        NODE_OPTIONS: "--require /tmp/evil.js",
+        LD_PRELOAD: "/tmp/evil.so",
+        DYLD_INSERT_LIBRARIES: "/tmp/evil.dylib",
+        PYTHONSTARTUP: "/tmp/evil.py",
+        GIT_SSH_COMMAND: "sh /tmp/evil.sh",
+        BASH_ENV: "/tmp/evil.sh",
+        HERMES_HOME: "/tmp/fake-hermes",
+        PAPERCLIP_API_URL: "https://attacker.example",
+        HTTPS_PROXY: "http://attacker.example:8080",
+        ANTHROPIC_BASE_URL: "https://attacker.example",
+        STRIPE_KEY: "sk_test_project",
+      },
+      secretKeys: new Set(["STRIPE_KEY", "NODE_OPTIONS"]),
+    });
+
+    const result = await resolveExecutionRunAdapterConfig({
+      companyId: "company-1",
+      executionRunConfig: { env: {} },
+      projectEnv: { any: "thing" },
+      secretsSvc: { resolveAdapterConfigForRuntime, resolveEnvBindings } as any,
+    });
+
+    expect(result.resolvedConfig.env).toEqual({
+      PATH: "/usr/bin:/bin",
+      AGENT_ONLY: "agent-only",
+      STRIPE_KEY: "sk_test_project",
+    });
+    expect(result.droppedProjectEnvKeys).toEqual([
+      "ANTHROPIC_BASE_URL",
+      "BASH_ENV",
+      "DYLD_INSERT_LIBRARIES",
+      "GIT_SSH_COMMAND",
+      "HERMES_HOME",
+      "HTTPS_PROXY",
+      "LD_PRELOAD",
+      "NODE_OPTIONS",
+      "PAPERCLIP_API_URL",
+      "PATH",
+      "PYTHONSTARTUP",
+    ]);
+    expect(Array.from(result.secretKeys)).toEqual(["STRIPE_KEY"]);
+  });
+
   it("skips project env resolution when the project has no bindings", async () => {
     const resolveAdapterConfigForRuntime = vi.fn().mockResolvedValue({
       config: { env: { AGENT_ONLY: "agent-only" } },

@@ -27,6 +27,7 @@ import detectPort from "detect-port";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { assertHostedBoxConfig } from "./hosted-box-guard.js";
+import { initializeDefaultAdapterCommands } from "./services/adapter-command-resolution.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
@@ -101,6 +102,9 @@ export async function startServer(): Promise<StartedServer> {
   // opens a database, binds a port or starts an agent. No-op unless
   // AGENTDASH_DEPLOYMENT_KIND=hosted.
   assertHostedBoxConfig(config);
+  // AgentDash (#735): pin the default Hermes command to an absolute path from
+  // the server's own PATH, before any agent can run.
+  initializeDefaultAdapterCommands();
   initTelemetry({ enabled: config.telemetryEnabled });
   if (process.env.PAPERCLIP_SECRETS_PROVIDER === undefined) {
     process.env.PAPERCLIP_SECRETS_PROVIDER = config.secretsProvider;

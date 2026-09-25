@@ -1,5 +1,6 @@
 import {
   assertHostExecutionConfigAllowed,
+  findExecutionAffectingEnvKeys,
   runtimeConfigHostExecutionInputs,
 } from "./adapter-host-execution-policy.js";
 import { hostExecutionContextForCompany } from "./host-execution-context.js";
@@ -577,6 +578,12 @@ type ImportBehaviorOptions = {
    * internal callers.
    */
   allowHostExecutionConfig?: boolean;
+  /**
+   * AgentDash (security, #735): the importing actor is an agent key. Agents
+   * may not set a project's env through an import any more than through the
+   * project routes.
+   */
+  actorIsAgent?: boolean;
 };
 
 type AgentLike = {
@@ -2776,6 +2783,94 @@ export function parseGitHubSourceUrl(rawUrl: string) {
 }
 
 
+function nonEmptyCommand(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function workspaceStrategyCommandPaths(strategy: unknown, prefix: string): string[] {
+  if (!isPlainRecord(strategy)) return [];
+  return ["provisionCommand", "teardownCommand"]
+    .filter((key) => nonEmptyCommand(strategy[key]))
+    .map((key) => `${prefix}.${key}`);
+}
+
+/**
+ * AgentDash (security, #735): the import half of the workspace-command and
+ * project-env rules in adapter-host-execution-policy.ts.
+ */
+function assertImportedHostWorkspaceCommandsAllowed(
+  manifest: CompanyPortabilityManifest,
+  include: { agents?: boolean; projects?: boolean; issues?: boolean },
+  options?: ImportBehaviorOptions,
+) {
+  if (include.projects) {
+    for (const project of manifest.projects ?? []) {
+      if (options?.actorIsAgent && isPlainRecord(project.env) && Object.keys(project.env).length > 0) {
+        throw forbidden(`Agent keys cannot set a project's env (projects.${project.slug}.env).`);
+      }
+      const denied = findExecutionAffectingEnvKeys(project.env);
+      if (denied.length > 0) {
+        throw unprocessable(
+          `Project env cannot set execution-affecting variables (projects.${project.slug}.env: ${denied.join(", ")}).`,
+        );
+      }
+    }
+  }
+  if (options?.allowHostExecutionConfig !== false) return;
+  const paths: string[] = [];
+  if (include.projects) {
+    for (const project of manifest.projects ?? []) {
+      const policy = isPlainRecord(project.executionWorkspacePolicy) ? project.executionWorkspacePolicy : null;
+      paths.push(
+        ...workspaceStrategyCommandPaths(
+          policy?.workspaceStrategy,
+          `projects.${project.slug}.executionWorkspacePolicy.workspaceStrategy`,
+        ),
+      );
+      for (const workspace of project.workspaces ?? []) {
+        if (nonEmptyCommand(workspace.cleanupCommand)) {
+          paths.push(`projects.${project.slug}.workspaces.${workspace.key}.cleanupCommand`);
+        }
+      }
+    }
+  }
+  if (include.issues) {
+    for (const issue of manifest.issues ?? []) {
+      const settings = isPlainRecord(issue.executionWorkspaceSettings) ? issue.executionWorkspaceSettings : null;
+      paths.push(
+        ...workspaceStrategyCommandPaths(
+          settings?.workspaceStrategy,
+          `issues.${issue.slug}.executionWorkspaceSettings.workspaceStrategy`,
+        ),
+      );
+      const overrides = isPlainRecord(issue.assigneeAdapterOverrides) ? issue.assigneeAdapterOverrides : null;
+      const overrideConfig = overrides && isPlainRecord(overrides.adapterConfig) ? overrides.adapterConfig : null;
+      paths.push(
+        ...workspaceStrategyCommandPaths(
+          overrideConfig?.workspaceStrategy,
+          `issues.${issue.slug}.assigneeAdapterOverrides.adapterConfig.workspaceStrategy`,
+        ),
+      );
+    }
+  }
+  if (include.agents) {
+    for (const agent of manifest.agents ?? []) {
+      const adapterConfig = isPlainRecord(agent.adapterConfig) ? agent.adapterConfig : null;
+      paths.push(
+        ...workspaceStrategyCommandPaths(
+          adapterConfig?.workspaceStrategy,
+          `agents.${agent.slug}.adapterConfig.workspaceStrategy`,
+        ),
+      );
+    }
+  }
+  if (paths.length > 0) {
+    throw forbidden(
+      `Instance admin access required to import host-executed workspace commands (${paths.join(", ")}).`,
+    );
+  }
+}
+
 export function companyPortabilityService(db: Db, storage?: StorageService) {
   const companies = companyService(db);
   const agents = agentService(db);
@@ -4022,6 +4117,12 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         })),
       );
     }
+    // AgentDash (security, #735): host-executed workspace commands and project
+    // env ride along in an import too — a project's execution workspace policy,
+    // a project workspace's cleanupCommand, an issue's execution workspace
+    // settings and an agent's adapterConfig.workspaceStrategy. Checked up
+    // front, like the overrides above, so a refusal writes nothing.
+    assertImportedHostWorkspaceCommandsAllowed(sourceManifest, include, options);
     const plannedAgentCreates = include.agents
       ? plan.preview.plan.agentPlans.filter((entry) => entry.action === "create").length
       : 0;

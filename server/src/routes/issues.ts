@@ -2051,7 +2051,15 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
-    await assertHostWorkspaceCommandAuthority(db, req, existing.companyId, collectIssueWorkspaceCommandPaths(req.body));
+    await assertHostWorkspaceCommandAuthority(
+      db,
+      req,
+      existing.companyId,
+      collectIssueWorkspaceCommandPaths(req.body, {
+        executionWorkspaceSettings: existing.executionWorkspaceSettings,
+        assigneeAdapterOverrides: existing.assigneeAdapterOverrides,
+      }),
+    );
     assertIssueOverrideHostExecutionAllowed(req, existing.assigneeAdapterOverrides);
     // AGE-113: overrides change which adapter/model runs this issue. Only a
     // human may set or clear them, on create or update alike.

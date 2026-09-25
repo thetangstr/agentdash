@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
-import { accessService } from "../services/access.js";
+import { actorMaySetHostWorkspaceCommand } from "../services/adapter-host-execution-policy.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -15,31 +15,35 @@ function prefixPath(prefix: string, key: string) {
   return prefix.length > 0 ? `${prefix}.${key}` : key;
 }
 
-function collectWorkspaceStrategyCommandPaths(raw: unknown, prefix: string): string[] {
+function isEmptyCommand(value: unknown) {
+  return value === undefined || value === null || (typeof value === "string" && value.trim().length === 0);
+}
+
+/**
+ * AgentDash (#735): a command key counts when it SETS a command — a non-empty
+ * value different from the stored one. Clearing a command, or resending the
+ * stored value (an edit form echoing the row), changes nothing that runs.
+ */
+function collectCommandKeys(raw: unknown, stored: unknown, prefix: string, keys: string[]): string[] {
   if (!isRecord(raw)) return [];
+  const storedRecord = isRecord(stored) ? stored : {};
   const paths: string[] = [];
-  if (hasOwn(raw, "provisionCommand")) {
-    paths.push(prefixPath(prefix, "provisionCommand"));
-  }
-  if (hasOwn(raw, "teardownCommand")) {
-    paths.push(prefixPath(prefix, "teardownCommand"));
+  for (const key of keys) {
+    if (!hasOwn(raw, key)) continue;
+    const value = raw[key];
+    if (isEmptyCommand(value)) continue;
+    if (value === storedRecord[key]) continue;
+    paths.push(prefixPath(prefix, key));
   }
   return paths;
 }
 
-function collectExecutionWorkspaceConfigCommandPaths(raw: unknown, prefix: string): string[] {
-  if (!isRecord(raw)) return [];
-  const paths: string[] = [];
-  if (hasOwn(raw, "provisionCommand")) {
-    paths.push(prefixPath(prefix, "provisionCommand"));
-  }
-  if (hasOwn(raw, "teardownCommand")) {
-    paths.push(prefixPath(prefix, "teardownCommand"));
-  }
-  if (hasOwn(raw, "cleanupCommand")) {
-    paths.push(prefixPath(prefix, "cleanupCommand"));
-  }
-  return paths;
+function collectWorkspaceStrategyCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
+  return collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand"]);
+}
+
+function collectExecutionWorkspaceConfigCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
+  return collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand", "cleanupCommand"]);
 }
 
 export function assertNoAgentHostWorkspaceCommandMutation(req: Request, paths: string[]) {
@@ -51,18 +55,21 @@ export function assertNoAgentHostWorkspaceCommandMutation(req: Request, paths: s
 
 /**
  * Writing a host-executed workspace command is arbitrary code execution on the
- * Paperclip host the next time the workspace is provisioned. Blocking only
- * agent keys left it open to every board member, including a plain `operator`
- * with no administrative permission at all — so board callers must hold
- * `agents:create` (the repository's administrator-equivalent capability).
+ * Paperclip host the next time the workspace is provisioned or torn down.
  *
- * Applies in every product profile: this closes a pre-existing platform gap,
- * not an AgentDash-MK one.
+ * AgentDash (security, #735): this used to accept any board member holding
+ * `agents:create`, which company owners (and CEO agents, by permission) hold.
+ * It now applies the host-execution policy's rule: instance admin, or the
+ * local_trusted implicit board, only. On a hosted box that is the founder; on
+ * a self-hosted install it is whoever runs the instance. Agent keys never.
+ *
+ * Callers pass only paths that set a command (see `collectCommandKeys`), so
+ * clearing one or resending the stored value is not refused.
  */
 export async function assertHostWorkspaceCommandAuthority(
-  db: Db,
+  _db: Db,
   req: Request,
-  companyId: string,
+  _companyId: string,
   paths: string[],
 ) {
   if (paths.length === 0) return;
@@ -70,52 +77,64 @@ export async function assertHostWorkspaceCommandAuthority(
   if (req.actor.type !== "board") {
     throw forbidden(`Host-executed workspace commands require board access (${paths.join(", ")}).`);
   }
-  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-  if (await accessService(db).canUser(companyId, req.actor.userId, "agents:create")) return;
+  if (actorMaySetHostWorkspaceCommand(req.actor)) return;
   throw forbidden(
-    `Modifying host-executed workspace commands requires the agents:create permission (${paths.join(", ")}).`,
+    `Instance admin access required to set a host-executed workspace command (${paths.join(", ")}). ` +
+      "Leave it empty, or ask the instance admin to set it.",
   );
+}
+
+function sub(value: unknown, key: string): unknown {
+  return isRecord(value) ? value[key] : undefined;
 }
 
 export function collectAgentAdapterWorkspaceCommandPaths(
   adapterConfig: unknown,
   prefix = "adapterConfig",
+  storedAdapterConfig?: unknown,
 ): string[] {
   if (!isRecord(adapterConfig)) return [];
   return collectWorkspaceStrategyCommandPaths(
     adapterConfig.workspaceStrategy,
     `${prefix}.workspaceStrategy`,
+    sub(storedAdapterConfig, "workspaceStrategy"),
   );
 }
 
-export function collectProjectExecutionWorkspaceCommandPaths(policy: unknown): string[] {
+export function collectProjectExecutionWorkspaceCommandPaths(policy: unknown, storedPolicy?: unknown): string[] {
   if (!isRecord(policy)) return [];
   return collectWorkspaceStrategyCommandPaths(
     policy.workspaceStrategy,
     "executionWorkspacePolicy.workspaceStrategy",
+    sub(storedPolicy, "workspaceStrategy"),
   );
 }
 
 export function collectProjectWorkspaceCommandPaths(
   workspacePatch: unknown,
   prefix = "",
+  storedWorkspace?: unknown,
 ): string[] {
-  if (!isRecord(workspacePatch)) return [];
-  return hasOwn(workspacePatch, "cleanupCommand")
-    ? [prefixPath(prefix, "cleanupCommand")]
-    : [];
+  return collectCommandKeys(workspacePatch, storedWorkspace, prefix, ["cleanupCommand"]);
 }
 
-export function collectIssueWorkspaceCommandPaths(input: {
-  executionWorkspaceSettings?: unknown;
-  assigneeAdapterOverrides?: unknown;
-}): string[] {
+export function collectIssueWorkspaceCommandPaths(
+  input: {
+    executionWorkspaceSettings?: unknown;
+    assigneeAdapterOverrides?: unknown;
+  },
+  stored: {
+    executionWorkspaceSettings?: unknown;
+    assigneeAdapterOverrides?: unknown;
+  } = {},
+): string[] {
   const paths: string[] = [];
   if (isRecord(input.executionWorkspaceSettings)) {
     paths.push(
       ...collectWorkspaceStrategyCommandPaths(
         input.executionWorkspaceSettings.workspaceStrategy,
         "executionWorkspaceSettings.workspaceStrategy",
+        sub(stored.executionWorkspaceSettings, "workspaceStrategy"),
       ),
     );
   }
@@ -126,6 +145,7 @@ export function collectIssueWorkspaceCommandPaths(input: {
         ...collectWorkspaceStrategyCommandPaths(
           adapterConfig.workspaceStrategy,
           "assigneeAdapterOverrides.adapterConfig.workspaceStrategy",
+          sub(sub(stored.assigneeAdapterOverrides, "adapterConfig"), "workspaceStrategy"),
         ),
       );
     }
@@ -133,16 +153,25 @@ export function collectIssueWorkspaceCommandPaths(input: {
   return paths;
 }
 
-export function collectExecutionWorkspaceCommandPaths(input: {
-  config?: unknown;
-  metadata?: unknown;
-}): string[] {
+export function collectExecutionWorkspaceCommandPaths(
+  input: {
+    config?: unknown;
+    metadata?: unknown;
+  },
+  stored: { config?: unknown; metadata?: unknown } = {},
+): string[] {
   const paths: string[] = [];
   if (input.config !== undefined) {
-    paths.push(...collectExecutionWorkspaceConfigCommandPaths(input.config, "config"));
+    paths.push(...collectExecutionWorkspaceConfigCommandPaths(input.config, "config", stored.config));
   }
   if (isRecord(input.metadata) && hasOwn(input.metadata, "config")) {
-    paths.push(...collectExecutionWorkspaceConfigCommandPaths(input.metadata.config, "metadata.config"));
+    paths.push(
+      ...collectExecutionWorkspaceConfigCommandPaths(
+        input.metadata.config,
+        "metadata.config",
+        sub(stored.metadata, "config"),
+      ),
+    );
   }
   return paths;
 }

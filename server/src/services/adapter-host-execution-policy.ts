@@ -18,9 +18,10 @@
 // configuration never trips the gate. The comparison is against the stored
 // row on the server, never against anything the client claims.
 
-import { forbidden } from "../errors.js";
+import { forbidden, unprocessable } from "../errors.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
 import { checkCompanyInstructionsPath } from "./instructions-root-confinement.js";
+import { defaultHermesCommand } from "./adapter-command-resolution.js";
 
 /** The subset of `req.actor` this policy reads. */
 export interface HostExecutionActor {
@@ -45,10 +46,12 @@ export interface HostExecutionActor {
 const HOST_EXECUTION_CONFIG_KEY = /^(command|args|env|cwd)$|(Command|Args|Env|Cwd|Dir|Home|Path)$/;
 
 /**
- * Subtrees with their own, separately decided gate.
- * `workspaceStrategy.{provision,teardown}Command` is governed by
- * `assertHostWorkspaceCommandAuthority` (agents:create) in
- * routes/workspace-command-authz.ts, the same rule projects and issues use.
+ * Subtrees with their own gate.
+ * `workspaceStrategy.{provision,teardown}Command` is checked by
+ * `assertHostWorkspaceCommandAuthority` in routes/workspace-command-authz.ts,
+ * the same check projects, project workspaces, issues and execution workspaces
+ * use. Since #735 it applies this module's authority rule
+ * (`actorMaySetHostWorkspaceCommand`: instance admin only, agents never).
  */
 const SEPARATELY_GATED_SUBTREES = new Set(["workspaceStrategy"]);
 
@@ -108,8 +111,13 @@ export function defaultAdapterCommands(adapterType: string | null | undefined): 
     return configured ? [...defaults, configured] : defaults;
   };
   switch (adapterType) {
-    case "hermes_local":
-      return withEnv(["hermes"], "AGENTDASH_HERMES_COMMAND");
+    case "hermes_local": {
+      // AgentDash (#735): the absolute path the default resolved to at boot
+      // is the same binary, so it counts as the default too.
+      const commands = withEnv(["hermes"], "AGENTDASH_HERMES_COMMAND");
+      const pinned = defaultHermesCommand();
+      return commands.includes(pinned) ? commands : [...commands, pinned];
+    }
     case "codex_local":
       return withEnv(["codex", "codex-acp"], "AGENTDASH_CODEX_COMMAND");
     case "claude_local":
@@ -462,4 +470,150 @@ export function actorMayApplyAdapterPreset(
   if (actorMaySetHostExecutionConfig(actor)) return true;
   if (!actor || actor.type !== "board") return false;
   return COMPANY_OWNER_ADAPTER_PRESETS.has(preset) && isActiveCompanyOwner(actor);
+}
+
+// ---------------------------------------------------------------------------
+// Workspace commands and project env (#735)
+// ---------------------------------------------------------------------------
+
+/**
+ * Host-executed workspace commands — `workspaceStrategy.provisionCommand` and
+ * `teardownCommand` (agent adapterConfig, project execution workspace policy,
+ * issue execution workspace settings and assignee overrides), a project
+ * workspace's `cleanupCommand`, and an execution workspace's config commands —
+ * are raw shell run on the host. They used to need only `agents:create`, which
+ * company owners and CEO agents can hold. The rule is now the one for every
+ * other host-execution field: instance admin (or the local_trusted implicit
+ * board) only, and never an agent key.
+ */
+export function actorMaySetHostWorkspaceCommand(actor: HostExecutionActor | null | undefined): boolean {
+  return actorMaySetHostExecutionConfig(actor);
+}
+
+/**
+ * Environment variables that change WHAT runs or where its code, config and
+ * credentials come from, rather than configuring the agent's work. A
+ * project's `env` is merged into every run of every agent working in that
+ * project, and any member who can edit the project can set it, so none of
+ * these may come from project env:
+ *
+ * - binary and library lookup: PATH, LD_*, DYLD_*, NODE_OPTIONS, NODE_PATH,
+ *   PYTHON*, PERL5LIB/PERL5OPT/PERLLIB, RUBYOPT/RUBYLIB, GEM_*, CLASSPATH,
+ *   JAVA_TOOL_OPTIONS and friends, DOTNET_STARTUP_HOOKS, CORECLR_*, BUN_*,
+ *   npm_config_*;
+ * - shell start-up and interpreters: BASH_ENV, ENV, ZDOTDIR, SHELL, HOME,
+ *   PROMPT_COMMAND, IFS, EDITOR/VISUAL/PAGER;
+ * - git hooks into argv: GIT_SSH, GIT_SSH_COMMAND, GIT_*_COMMAND, GIT_EXEC_PATH,
+ *   GIT_ASKPASS/SSH_ASKPASS, GIT_CONFIG*, GIT_DIR/GIT_WORK_TREE, GIT_TEMPLATE_DIR,
+ *   GIT_EDITOR/GIT_PAGER;
+ * - CLI state and config homes, which load hooks and MCP servers: any
+ *   *_HOME, *_CONFIG_DIR, XDG_*;
+ * - traffic and trust redirection that would hand the box's provider key or
+ *   the agent's API token to someone else: *_PROXY, *_BASE_URL, *_API_BASE,
+ *   SSL_CERT_*, NODE_EXTRA_CA_CERTS, NODE_TLS_REJECT_UNAUTHORIZED,
+ *   REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE;
+ * - the control plane's own variables: PAPERCLIP_*, AGENTDASH_*, HERMES_*.
+ *
+ * It is a denylist, so it is kept broad; names are compared case-insensitively.
+ */
+const EXECUTION_AFFECTING_ENV_EXACT = new Set([
+  "PATH",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
+  "BASH_ENV",
+  "ENV",
+  "ZDOTDIR",
+  "SHELL",
+  "HOME",
+  "PROMPT_COMMAND",
+  "IFS",
+  "EDITOR",
+  "VISUAL",
+  "PAGER",
+  "PERL5LIB",
+  "PERL5OPT",
+  "PERLLIB",
+  "RUBYOPT",
+  "RUBYLIB",
+  "CLASSPATH",
+  "JAVA_TOOL_OPTIONS",
+  "_JAVA_OPTIONS",
+  "JDK_JAVA_OPTIONS",
+  "DOTNET_STARTUP_HOOKS",
+  "SSH_ASKPASS",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+  "TMPDIR",
+]);
+const EXECUTION_AFFECTING_ENV_PREFIXES = [
+  "LD_",
+  "DYLD_",
+  "PYTHON",
+  "GEM_",
+  "CORECLR_",
+  "BUN_",
+  "NPM_CONFIG_",
+  "GIT_",
+  "XDG_",
+  "SSL_CERT_",
+  "PAPERCLIP_",
+  "AGENTDASH_",
+  "HERMES_",
+];
+const EXECUTION_AFFECTING_ENV_SUFFIXES = ["_HOME", "_CONFIG_DIR", "_PROXY", "_BASE_URL", "_API_BASE"];
+
+export function isExecutionAffectingEnvKey(key: string): boolean {
+  const upper = key.trim().toUpperCase();
+  if (upper.length === 0) return false;
+  if (EXECUTION_AFFECTING_ENV_EXACT.has(upper)) return true;
+  if (EXECUTION_AFFECTING_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
+  return EXECUTION_AFFECTING_ENV_SUFFIXES.some((suffix) => upper.endsWith(suffix));
+}
+
+/** The keys of an env record (plain values or binding envelopes) that the denylist refuses. */
+export function findExecutionAffectingEnvKeys(env: unknown): string[] {
+  if (!isRecord(env)) return [];
+  return Object.keys(env).filter(isExecutionAffectingEnvKey).sort();
+}
+
+/** Drop denylisted keys from a resolved env map (run time). */
+export function filterExecutionAffectingEnv<T>(env: Record<string, T>): { env: Record<string, T>; dropped: string[] } {
+  const kept: Record<string, T> = {};
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (isExecutionAffectingEnvKey(key)) dropped.push(key);
+    else kept[key] = value;
+  }
+  return { env: kept, dropped: dropped.sort() };
+}
+
+/**
+ * Write-time rule for a project's `env`:
+ * - an agent key may not change it at all — it would reach every other agent
+ *   working in the project;
+ * - nobody, instance admin included, may put a denylisted key in it; the run
+ *   path drops them anyway, and an instance admin who needs PATH or a CLI home
+ *   sets it on the agent's own `adapterConfig.env`, which is instance-admin only.
+ * Values unchanged from `stored` pass for agents, so a PATCH that resends the
+ * project is not refused for echoing its env.
+ */
+export function assertProjectEnvAllowed(
+  actor: HostExecutionActor | null | undefined,
+  env: unknown,
+  stored?: unknown,
+): void {
+  if (env === undefined) return;
+  if (actor?.type === "agent" && !sameValue(env ?? null, stored ?? null)) {
+    throw forbidden("Agent keys cannot change a project's env; ask a board member to set it.");
+  }
+  const denied = findExecutionAffectingEnvKeys(env);
+  if (denied.length > 0) {
+    throw unprocessable(
+      `Project env cannot set execution-affecting variables (${denied.join(", ")}). They would change ` +
+        "what runs for every agent in the project. An instance admin can set them on an agent's " +
+        "adapterConfig.env instead.",
+    );
+  }
 }

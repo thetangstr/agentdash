@@ -485,10 +485,13 @@ export function executionWorkspaceRoutes(db: Db) {
       db,
       req,
       existing.companyId,
-      collectExecutionWorkspaceCommandPaths({
-        config: req.body.config,
-        metadata: req.body.metadata,
-      }),
+      collectExecutionWorkspaceCommandPaths(
+        {
+          config: req.body.config,
+          metadata: req.body.metadata,
+        },
+        { config: (existing as { config?: unknown }).config, metadata: existing.metadata },
+      ),
     );
     const patch: Record<string, unknown> = {
       ...(req.body.name === undefined ? {} : { name: req.body.name }),

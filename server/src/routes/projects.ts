@@ -42,6 +42,7 @@ import {
   collectProjectExecutionWorkspaceCommandPaths,
   collectProjectWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
+import { assertProjectEnvAllowed } from "../services/adapter-host-execution-policy.js";
 import { assertCanManageProjectWorkspaceRuntimeServices } from "./workspace-runtime-service-authz.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { appendWithCap } from "../adapters/utils.js";
@@ -225,6 +226,8 @@ export function projectRoutes(db: Db) {
         ...collectProjectWorkspaceCommandPaths(workspace, "workspace"),
       ],
     );
+    // AgentDash (security, #735): project env reaches every run in the project.
+    assertProjectEnvAllowed(req.actor, projectData.env);
     if (projectData.env !== undefined) {
       projectData.env = await secretsSvc.normalizeEnvBindingsForPersistence(
         companyId,
@@ -302,7 +305,7 @@ export function projectRoutes(db: Db) {
       db,
       req,
       existing.companyId,
-      collectProjectExecutionWorkspaceCommandPaths(body.executionWorkspacePolicy),
+      collectProjectExecutionWorkspaceCommandPaths(body.executionWorkspacePolicy, existing.executionWorkspacePolicy),
     );
     await assertProjectEnvironmentSelection(
       existing.companyId,
@@ -311,6 +314,8 @@ export function projectRoutes(db: Db) {
     if (typeof body.archivedAt === "string") {
       body.archivedAt = new Date(body.archivedAt);
     }
+    // AgentDash (security, #735): project env reaches every run in the project.
+    assertProjectEnvAllowed(req.actor, body.env, existing.env);
     if (body.env !== undefined) {
       body.env = await secretsSvc.normalizeEnvBindingsForPersistence(existing.companyId, body.env, {
         strictMode: strictSecretsMode,
@@ -408,14 +413,14 @@ export function projectRoutes(db: Db) {
         return;
       }
       assertCompanyAccess(req, existing.companyId);
+      const existingWorkspace = (await svc.listWorkspaces(id)).find((workspace) => workspace.id === workspaceId);
       await assertHostWorkspaceCommandAuthority(
         db,
         req,
         existing.companyId,
-        collectProjectWorkspaceCommandPaths(req.body),
+        collectProjectWorkspaceCommandPaths(req.body, "", existingWorkspace),
       );
-      const workspaceExists = (await svc.listWorkspaces(id)).some((workspace) => workspace.id === workspaceId);
-      if (!workspaceExists) {
+      if (!existingWorkspace) {
         res.status(404).json({ error: "Project workspace not found" });
         return;
       }
