@@ -36,13 +36,35 @@ import {
 import { createJourneyToolDefinitions } from "./journey.js";
 import { bridgeTools } from "./bridge.js";
 import { harnessTools } from "./harness.js";
+import { createAssistantToolDefinitions } from "./assistant/index.js";
 import { selectPlaybook } from "./playbook.js";
 import { RESOURCE_TEMPLATES, listResources, readAgentDashResource } from "./resources.js";
 import { toolInputSchema } from "./schema.js";
 import { createToolDefinitions, type ToolDefinition } from "./tools.js";
 
 export const SERVER_NAME = "agentdash";
-export const SERVER_VERSION = "0.2.0";
+export const SERVER_VERSION = "0.3.0";
+
+/**
+ * AgentDash assistant MCP (spec §4.3): which of the server's toolsets to
+ * expose. `agent` is the long-standing control-plane surface; `setup` is the
+ * install/onboarding runbook an agent standing up a fresh instance follows;
+ * `assistant` is the nine person-facing read tools (M1) a cloud assistant
+ * relays to a person. stdio picks via AGENTDASH_TOOLSET; /api/mcp stays
+ * `agent`.
+ */
+export type AgentDashToolset = "setup" | "agent" | "assistant";
+
+export const AGENTDASH_TOOLSETS: readonly AgentDashToolset[] = ["setup", "agent", "assistant"];
+
+export function parseToolset(raw: string | undefined | null): AgentDashToolset {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) return "agent";
+  if ((AGENTDASH_TOOLSETS as readonly string[]).includes(normalized)) {
+    return normalized as AgentDashToolset;
+  }
+  throw new Error(`Unknown AGENTDASH_TOOLSET "${raw}" (expected ${AGENTDASH_TOOLSETS.join(", ")})`);
+}
 
 /**
  * The tools this credential can actually use.
@@ -58,6 +80,7 @@ export const SERVER_VERSION = "0.2.0";
 export function buildToolSurface(
   client: PaperclipApiClient,
   config: PaperclipMcpConfig,
+  toolset: AgentDashToolset = "agent",
 ): ToolDefinition[] {
   if (!isControlPlaneCredential(config.apiKey)) return [...bridgeTools(client)];
   // No bridge tools on a control-plane credential — the exclusion cuts BOTH
@@ -70,14 +93,25 @@ export function buildToolSurface(
   // reach it even if the routes could be widened. bridge.ts says the same from
   // the other side: the endpoint token "is deliberately NOT an AgentDash API
   // key". Two credentials, two surfaces, no overlap.
-  return [
-    ...createToolDefinitions(client),
-    ...createJourneyToolDefinitions(client),
-    ...harnessTools(client),
-  ];
+  switch (toolset) {
+    case "setup":
+      return [...createJourneyToolDefinitions(client)];
+    case "assistant":
+      return createAssistantToolDefinitions(client, config);
+    case "agent":
+    default:
+      return [
+        ...createToolDefinitions(client),
+        ...createJourneyToolDefinitions(client),
+        ...harnessTools(client),
+      ];
+  }
 }
 
-export function createAgentDashServer(config: PaperclipMcpConfig): Server {
+export function createAgentDashServer(
+  config: PaperclipMcpConfig,
+  options: { toolset?: AgentDashToolset } = {},
+): Server {
   const client = new PaperclipApiClient(config);
   /**
    * A bridge endpoint token authenticates the bridge tools and nothing else, so
@@ -88,7 +122,8 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
    * The control-plane toolset stays the default, including for an empty key: a
    * fresh install has none yet and bootstraps one through the signup tools.
    */
-  const tools = buildToolSurface(client, config);
+  const toolset = options.toolset ?? "agent";
+  const tools = buildToolSurface(client, config, toolset);
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 
   const server = new Server(
@@ -98,7 +133,9 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
       // Scoped to one agent → that agent's own contract; otherwise the
       // operator's. Serving the operator's playbook to a person's harness tells
       // it to go provision a company instead of doing the work it was given.
-      instructions: selectPlaybook(config),
+      // The assistant toolset gets its own contract: relaying to a person,
+      // not doing the work.
+      instructions: selectPlaybook({ agentId: config.agentId, toolset }),
     },
   );
 
@@ -107,6 +144,8 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
       name: tool.name,
       description: tool.description,
       inputSchema: toolInputSchema(tool.schema),
+      ...(tool.annotations ? { annotations: tool.annotations } : {}),
+      ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
     })),
   }));
 
@@ -124,7 +163,16 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
 
   const appBaseUrl = config.apiUrl.replace(/\/api$/, "");
 
-  const resources = listResources();
+  // AgentDash GH #676: the assistant toolset serves no raw resources. The
+  // static agent/task URIs and the derivation record are control-plane data —
+  // adapter config, budgets, mandates — which the person-facing contract
+  // forbids on this surface. Only the playbook survives: it is the contract
+  // the assistant is supposed to read. Listings advertise nothing else and
+  // reads of anything else fail closed.
+  const assistantOnly = toolset === "assistant";
+  const resources = assistantOnly
+    ? listResources().filter((resource) => resource.uri === "agentdash://playbook")
+    : listResources();
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources }));
 
@@ -136,18 +184,21 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
    * verifies that a harness read any of it, and the descriptions say so.
    */
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
-    resourceTemplates: RESOURCE_TEMPLATES.map((template) => ({ ...template })),
+    resourceTemplates: assistantOnly ? [] : RESOURCE_TEMPLATES.map((template) => ({ ...template })),
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
+    if (assistantOnly && uri !== "agentdash://playbook") {
+      throw new Error(`Resource not available in the assistant toolset: ${uri}`);
+    }
     // Tried first, and returns null for anything it does not own, so the static
     // resources below are unchanged by its existence.
     const derivation = await readAgentDashResource(client, { companyId: config.companyId }, uri);
     if (derivation) return derivation;
     if (uri === "agentdash://playbook") {
       return {
-        contents: [{ uri, mimeType: "text/markdown", text: selectPlaybook(config) }],
+        contents: [{ uri, mimeType: "text/markdown", text: selectPlaybook({ agentId: config.agentId, toolset }) }],
       };
     }
     if (uri === "agentdash://dashboard") {
@@ -195,9 +246,10 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
 
 export async function runServer(): Promise<void> {
   const config = readConfigFromEnv();
-  const server = createAgentDashServer(config);
+  const toolset = parseToolset(process.env.AGENTDASH_TOOLSET);
+  const server = createAgentDashServer(config, { toolset });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // eslint-disable-next-line no-console
-  console.error(`AgentDash MCP Server v${SERVER_VERSION} running on stdio (${config.apiUrl})`);
+  console.error(`AgentDash MCP Server v${SERVER_VERSION} running on stdio (${config.apiUrl}, toolset=${toolset})`);
 }

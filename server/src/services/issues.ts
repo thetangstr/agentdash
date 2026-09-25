@@ -20,6 +20,7 @@ import {
   issueLabels,
   issueRelations,
   issueComments,
+  issueReviewQueueState,
   issueDocuments,
   issueWorkProducts,
   issueReadStates,
@@ -143,6 +144,14 @@ export interface IssueFilters {
   status?: string;
   assigneeAgentId?: string;
   participantAgentId?: string;
+  /**
+   * AgentDash: goals-eval-hitl — restrict to issues whose review-queue row
+   * names this reviewer (`issue_review_queue_state.assigned_reviewer_agent_id`).
+   * CoS reviewers judge only work assigned to them; without this filter a
+   * `status=in_review` list hands every reviewer the whole queue and verdicts
+   * get duplicated.
+   */
+  reviewerAgentId?: string;
   assigneeUserId?: string;
   touchedByUserId?: string;
   inboxArchivedByUserId?: string;
@@ -2427,6 +2436,17 @@ export function issueService(db: Db) {
       }
       if (filters?.participantAgentId) {
         conditions.push(participatedByAgentCondition(companyId, filters.participantAgentId));
+      }
+      if (filters?.reviewerAgentId) {
+        conditions.push(sql<boolean>`
+          EXISTS (
+            SELECT 1
+            FROM ${issueReviewQueueState}
+            WHERE ${issueReviewQueueState.issueId} = ${issues.id}
+              AND ${issueReviewQueueState.companyId} = ${companyId}
+              AND ${issueReviewQueueState.assignedReviewerAgentId} = ${filters.reviewerAgentId}
+          )
+        `);
       }
       if (filters?.assigneeUserId) {
         conditions.push(eq(issues.assigneeUserId, filters.assigneeUserId));

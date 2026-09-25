@@ -29,7 +29,7 @@ import {
   secretService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { forbidden } from "../errors.js";
+import { badRequest, forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { approvalUrl } from "../lib/public-base-url.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -177,6 +177,23 @@ export function approvalRoutes(
     }
   }
 
+  /**
+   * `autoProvisionDefaultKey` was a server-internal hint the approve path once
+   * used to mint a default API key at activation. It was removed: runtime auth
+   * is the run-scoped local agent JWT the heartbeat injects, and no hire
+   * should hold an always-on `pcp_` key just for existing. Callers may not set
+   * internal provisioning flags — reject the field outright rather than let a
+   * stale payload smuggle one in.
+   */
+  function assertHirePayloadOmitsInternalFlags(payload: unknown) {
+    if (typeof payload !== "object" || payload === null) return;
+    if ("autoProvisionDefaultKey" in (payload as Record<string, unknown>)) {
+      throw badRequest(
+        "Hire approval payloads must not set autoProvisionDefaultKey; the field was removed and is no longer honored",
+      );
+    }
+  }
+
   async function requireApprovalAccess(req: Request, id: string) {
     const approval = await svc.getById(id);
     if (!approval) {
@@ -268,6 +285,7 @@ export function approvalRoutes(
     const { issueIds: _issueIds, ...approvalInput } = req.body;
     if (approvalInput.type === "hire_agent") {
       assertHirePayloadHasNoHostCommands(approvalInput.payload);
+      assertHirePayloadOmitsInternalFlags(approvalInput.payload);
     }
     const normalizedPayload =
       approvalInput.type === "hire_agent"
@@ -541,6 +559,7 @@ export function approvalRoutes(
 
     if (existing.type === "hire_agent" && req.body.payload) {
       assertHirePayloadHasNoHostCommands(req.body.payload);
+      assertHirePayloadOmitsInternalFlags(req.body.payload);
     }
     const normalizedPayload = req.body.payload
       ? existing.type === "hire_agent"

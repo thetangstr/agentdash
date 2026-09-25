@@ -1423,6 +1423,8 @@ function AgentOverview({
   );
   const creatorId = agent.createdByUserId ?? null;
   const creatorProfile = creatorId ? userProfiles.get(creatorId) : undefined;
+  const agentMetadata = asRecord(agent.metadata);
+  const autoHireReason = asNonEmptyString(agentMetadata?.autoHireReason);
   const steward = agent.steward ?? null;
   const stewardLabel = steward ? (steward.name ?? steward.email ?? steward.userId) : null;
   const accountable = agent.accountable ?? null;
@@ -1500,6 +1502,13 @@ function AgentOverview({
                   {creatorProfile?.label ?? `${creatorId.slice(0, 5)} (no longer a member)`}
                 </span>
               </>
+            ) : agentMetadata?.autoHired === true ? (
+              <span className="text-xs text-muted-foreground">
+                Hired automatically by the review queue
+                {autoHireReason === "neutrality_conflict"
+                  ? " — no neutral reviewer was available"
+                  : " — queue depth outgrew the active reviewers"}
+              </span>
             ) : (
               <span className="text-xs text-muted-foreground">Hired by an agent</span>
             )}

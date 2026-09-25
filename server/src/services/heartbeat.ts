@@ -79,6 +79,17 @@ import {
   buildHeartbeatRunStopMetadata,
   mergeHeartbeatRunStopMetadata,
 } from "./heartbeat-stop-metadata.js";
+// AgentDash (OBS-5, #698): first-output deadline for zero-turn hangs.
+import {
+  NO_FIRST_OUTPUT_ERROR_CODE,
+  WOULD_STOP_NO_FIRST_OUTPUT_EVENT,
+  classifyFirstOutput,
+  isSameProcess,
+  probeRunLiveness,
+  resolveFirstOutputDeadlineMode,
+  resolveFirstOutputDeadlineMs,
+  type RunLivenessEvidence,
+} from "./run-liveness-probe.js";
 import {
   classifyRunLiveness,
   type RunLivenessClassificationInput,
@@ -3038,11 +3049,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     runId: string,
     status: string,
     patch?: Partial<typeof heartbeatRuns.$inferInsert>,
+    // AgentDash (OBS-5): a compare-and-set, so a caller acting on a stale read
+    // (the first-output deadline) cannot overwrite a run that already finished.
+    options?: { onlyIfStatus?: string },
   ) {
     const updated = await db
       .update(heartbeatRuns)
       .set({ status, ...patch, updatedAt: new Date() })
-      .where(eq(heartbeatRuns.id, runId))
+      .where(
+        options?.onlyIfStatus
+          ? and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, options.onlyIfStatus))
+          : eq(heartbeatRuns.id, runId),
+      )
       .returning()
       .then((rows) => rows[0] ?? null);
 
@@ -6614,8 +6632,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // run is the true one. Falling through to "Adapter failed" here replaced
       // an honest `process_lost` diagnosis with a generic one that pointed
       // operators at the adapter instead of at the restart that caused it.
+      // AgentDash (OBS-5): a run the first-output deadline stopped keeps that
+      // diagnosis; the adapter's own exit report only says it was signalled.
+      const adoptedNoFirstOutput =
+        adoptedTerminalStatus && latestRun?.errorCode === NO_FIRST_OUTPUT_ERROR_CODE;
       const runErrorMessage =
-        outcome === "cancelled"
+        adoptedNoFirstOutput
+          ? (latestRun?.error ?? "No first output before the deadline")
+          : outcome === "cancelled"
           ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
           : outcome === "succeeded"
             ? null
@@ -6626,7 +6650,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 currentUserRedactionOptions,
               );
       const runErrorCode =
-        outcome === "timed_out"
+        adoptedNoFirstOutput
+          ? NO_FIRST_OUTPUT_ERROR_CODE
+          : outcome === "timed_out"
           ? "timeout"
           : outcome === "cancelled"
             ? (latestRun?.errorCode ?? "cancelled")
@@ -8390,6 +8416,210 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return runs.length;
   }
 
+  /**
+   * AgentDash (OBS-5, #698): the first-output deadline for zero-turn hangs.
+   *
+   * For each running run older than its agent's first-output deadline (default
+   * 10 minutes for hermes_local; streaming adapters opt in), the liveness probe
+   * judges whether the run has shown model work (`classifyFirstOutput`).
+   *
+   * Mode (`resolveFirstOutputDeadlineMode`) defaults to **shadow**: the run is
+   * reported once, as a `would_stop_no_first_output` run event plus a run-log
+   * line, and nothing is stopped. Only `enforce` stops runs, and only on a
+   * `none_certain` verdict (ledger resolved with certainty, a session
+   * attributed to this run, no ledger row, known process start) for a process
+   * this server can identify: the in-memory child handle, or a persisted pid
+   * whose OS start time matches `process_started_at`. The status change is
+   * conditional on the run still being `running`, and the process is signalled
+   * only if that update won, so a run that finished in the meantime keeps its
+   * real outcome. Errors are isolated per run.
+   */
+  async function enforceFirstOutputDeadlines(opts?: {
+    now?: Date;
+    companyId?: string;
+    env?: NodeJS.ProcessEnv;
+    /** Test seams. */
+    probe?: (
+      run: typeof heartbeatRuns.$inferSelect,
+      agent: { adapterType: string; adapterConfig: unknown },
+    ) => RunLivenessEvidence | Promise<RunLivenessEvidence>;
+    readProcessStart?: (pid: number) => Date | null;
+  }) {
+    const now = opts?.now ?? new Date();
+    const env = opts?.env ?? process.env;
+    const probe = opts?.probe ?? ((run, agent) => probeRunLiveness(run, agent, { env }));
+    const candidates = await db
+      .select({
+        run: heartbeatRuns,
+        adapterType: agents.adapterType,
+        adapterConfig: agents.adapterConfig,
+      })
+      .from(heartbeatRuns)
+      .innerJoin(agents, eq(heartbeatRuns.agentId, agents.id))
+      .where(
+        and(
+          opts?.companyId ? eq(heartbeatRuns.companyId, opts.companyId) : undefined,
+          eq(heartbeatRuns.status, "running"),
+        ),
+      )
+      .orderBy(asc(heartbeatRuns.createdAt))
+      .limit(200);
+
+    const result = { scanned: candidates.length, stopped: 0, wouldStop: 0, errors: 0, runIds: [] as string[] };
+    for (const { run, adapterType, adapterConfig } of candidates) {
+      try {
+        const outcome = await applyFirstOutputDeadline({ run, adapterType, adapterConfig, now, env, probe, readProcessStart: opts?.readProcessStart });
+        if (outcome === "stopped") {
+          result.stopped += 1;
+          result.runIds.push(run.id);
+        } else if (outcome === "would_stop") {
+          result.wouldStop += 1;
+        }
+      } catch (err) {
+        result.errors += 1;
+        logger.warn({ err, runId: run.id }, "first-output deadline check failed for run");
+      }
+    }
+    if (result.stopped > 0 || result.wouldStop > 0) {
+      logger.warn({ ...result }, "first-output deadline: runs with no first output");
+    }
+    return result;
+  }
+
+  async function applyFirstOutputDeadline(input: {
+    run: typeof heartbeatRuns.$inferSelect;
+    adapterType: string;
+    adapterConfig: unknown;
+    now: Date;
+    env: NodeJS.ProcessEnv;
+    probe: (
+      run: typeof heartbeatRuns.$inferSelect,
+      agent: { adapterType: string; adapterConfig: unknown },
+    ) => RunLivenessEvidence | Promise<RunLivenessEvidence>;
+    readProcessStart?: (pid: number) => Date | null;
+  }): Promise<"none" | "would_stop" | "stopped"> {
+    const { run, adapterType, adapterConfig, now, env } = input;
+    const mode = resolveFirstOutputDeadlineMode(adapterConfig, env);
+    if (mode === "off") return "none";
+    const deadlineMs = resolveFirstOutputDeadlineMs(adapterType, adapterConfig, env);
+    if (deadlineMs === null) return "none";
+    // The clock starts at the process start; the run start is only a fallback
+    // and never enough to stop a run (see classifyFirstOutput).
+    const clockStart = run.processStartedAt ?? run.startedAt;
+    if (!clockStart || now.getTime() - clockStart.getTime() < deadlineMs) return "none";
+
+    const evidence = await input.probe(run, { adapterType, adapterConfig });
+    if (evidence.processAlive !== true) return "none"; // a dead process is the reaper's
+    const verdict = classifyFirstOutput(run, evidence);
+    if (verdict.kind === "seen" || verdict.kind === "unknown") return "none";
+
+    const running = runningProcesses.get(run.id);
+    const pid = running?.child.pid ?? run.processPid ?? null;
+    const identified = running
+      ? true
+      : typeof pid === "number" && isSameProcess(pid, run.processStartedAt, input.readProcessStart);
+    const deadlineMinutes = Math.round(deadlineMs / 60_000);
+    const evidencePayload = {
+      firstOutputDeadlineMs: deadlineMs,
+      mode,
+      verdict: verdict.kind,
+      reason: verdict.reason,
+      livenessProbe: evidence.probe,
+      ledgerStatus: evidence.ledgerStatus,
+      ledgerCertainty: evidence.ledgerCertainty,
+      ledgerSource: evidence.ledgerSource,
+      windowSessionIds: evidence.windowSessionIds,
+      inMemoryHandle: evidence.inMemoryHandle,
+      processIdentified: identified,
+      clockStartedAt: clockStart.toISOString(),
+    };
+
+    const canStop = mode === "enforce" && verdict.kind === "none_certain" && identified;
+    if (!canStop) {
+      await reportWouldStopNoFirstOutput(run, deadlineMinutes, evidencePayload);
+      return "would_stop";
+    }
+
+    const reason = `No first output: no Hermes ledger activity ${deadlineMinutes} min after the process started; stopped at the first-output deadline`;
+    const failedRun = await setRunStatus(
+      run.id,
+      "failed",
+      {
+        finishedAt: now,
+        error: reason,
+        errorCode: NO_FIRST_OUTPUT_ERROR_CODE,
+        resultJson: mergeRunStopMetadataForAgent({ adapterType, adapterConfig: adapterConfig as Record<string, unknown> }, "failed", {
+          resultJson: { ...parseObject(run.resultJson), ...evidencePayload },
+          errorCode: NO_FIRST_OUTPUT_ERROR_CODE,
+          errorMessage: reason,
+        }),
+      },
+      { onlyIfStatus: "running" },
+    );
+    // Lost the race: the run finished (or was cancelled) since it was read.
+    if (!failedRun) return "none";
+
+    if (running) {
+      await terminateHeartbeatRunProcess({
+        pid: running.child.pid ?? run.processPid,
+        processGroupId: running.processGroupId ?? run.processGroupId,
+        graceMs: Math.max(1, running.graceSec) * 1000,
+      });
+    } else {
+      await terminateHeartbeatRunProcess({ pid: run.processPid, processGroupId: run.processGroupId });
+    }
+    await setWakeupStatus(run.wakeupRequestId, "failed", { finishedAt: now, error: reason });
+    await appendRunEvent(failedRun, await nextRunEventSeq(failedRun.id), {
+      eventType: "lifecycle",
+      stream: "system",
+      level: "error",
+      message: reason,
+      payload: { stopReason: NO_FIRST_OUTPUT_ERROR_CODE, ...evidencePayload },
+    });
+    await releaseIssueExecutionAndPromote(failedRun);
+    runningProcesses.delete(run.id);
+    await finalizeAgentStatus(run.agentId, "failed");
+    await startNextQueuedRunForAgent(run.agentId);
+    return "stopped";
+  }
+
+  /** Report a run the deadline would stop, once per run: a run event plus a run-log line. */
+  async function reportWouldStopNoFirstOutput(
+    run: typeof heartbeatRuns.$inferSelect,
+    deadlineMinutes: number,
+    payload: Record<string, unknown>,
+  ) {
+    const already = await db
+      .select({ id: heartbeatRunEvents.id })
+      .from(heartbeatRunEvents)
+      .where(
+        and(
+          eq(heartbeatRunEvents.runId, run.id),
+          sql`${heartbeatRunEvents.payload}->>'kind' = ${WOULD_STOP_NO_FIRST_OUTPUT_EVENT}`,
+        ),
+      )
+      .limit(1);
+    if (already.length > 0) return;
+    const message = `${WOULD_STOP_NO_FIRST_OUTPUT_EVENT}: no first output ${deadlineMinutes} min after the process started (${String(payload.verdict)}: ${String(payload.reason)}); not stopped (mode ${String(payload.mode)})`;
+    await appendRunEvent(run, await nextRunEventSeq(run.id), {
+      eventType: "lifecycle",
+      stream: "system",
+      level: "warn",
+      message,
+      payload: { kind: WOULD_STOP_NO_FIRST_OUTPUT_EVENT, ...payload },
+    });
+    if (run.logStore && run.logRef) {
+      try {
+        await runLogStore.append(
+          { store: run.logStore as RunLogHandle["store"], logRef: run.logRef },
+          { stream: "system", chunk: `[agentdash] ${message}\n`, ts: new Date().toISOString() },
+        );
+      } catch (err) {
+        logger.debug({ err, runId: run.id }, "could not append first-output shadow line to run log");
+      }
+    }
+  }
+
   async function cancelBudgetScopeWork(scope: BudgetEnforcementScope) {
     if (scope.scopeType === "agent") {
       await cancelActiveForAgentInternal(scope.scopeId, "Cancelled due to budget pause");
@@ -8679,6 +8909,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     reconcileIssueGraphLiveness,
 
     scanSilentActiveRuns,
+
+    // AgentDash (OBS-5, #698)
+    enforceFirstOutputDeadlines,
 
     reconcileProductivityReviews,
 

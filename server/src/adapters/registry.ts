@@ -129,6 +129,7 @@ import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 import { ensureAgentProfileCommand, provisionAgentProfile } from "../services/hermes-profile.js";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
+import { withHermesSpawnWatch } from "./hermes-spawn-watch.js";
 
 // AgentDash: opt-in managed per-agent Hermes profiles. When enabled, each agent
 // is hired into its own Hermes profile (isolated model/MCP/skills/state) and runs
@@ -942,6 +943,11 @@ const hermesLocalAdapter: ServerAdapterModule = {
     }
   },
 };
+
+// AgentDash (OBS-5, #698): report the Hermes child's spawn (pid, start time)
+// to the heartbeat; the vendored adapter does not forward ctx.onSpawn.
+const executeHermesLocalUnwatched = hermesLocalAdapter.execute;
+hermesLocalAdapter.execute = (ctx) => withHermesSpawnWatch(ctx, () => executeHermesLocalUnwatched(ctx));
 
 const adaptersByType = new Map<string, ServerAdapterModule>();
 
