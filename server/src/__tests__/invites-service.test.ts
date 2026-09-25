@@ -96,4 +96,62 @@ describeEmbeddedPostgres("inviteService.createCompanyInvite", () => {
     const [row] = await db.select().from(invites).where(eq(invites.id, result.id));
     expect(row?.allowedJoinTypes).toBe("agent");
   });
+
+  // GH #743 re-review: on hosted boxes an auto-approve human-capable invite
+  // MUST be email-bound — anyone holding an unbound auto-approve link would
+  // otherwise land with active membership.
+  describe("hosted auto-approve email binding", () => {
+    const ORIGINAL = process.env.AGENTDASH_DEPLOYMENT_KIND;
+    afterEach(() => {
+      if (ORIGINAL === undefined) delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      else process.env.AGENTDASH_DEPLOYMENT_KIND = ORIGINAL;
+    });
+
+    it("rejects an unbound auto-approve human invite on a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const companyId = await seedCompany();
+      await expect(
+        inviteService(db).createCompanyInvite({
+          companyId,
+          invitedByUserId: "u1",
+          autoApprove: true,
+        }),
+      ).rejects.toThrow("hosted_auto_approve_requires_email");
+    });
+
+    it("accepts an email-bound auto-approve invite on a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const companyId = await seedCompany();
+      const result = await inviteService(db).createCompanyInvite({
+        companyId,
+        invitedByUserId: "u1",
+        email: "invited@example.com",
+        autoApprove: true,
+      });
+      expect(result.id).toBeTruthy();
+    });
+
+    it("still allows agent-only auto-approve invites on a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const companyId = await seedCompany();
+      const result = await inviteService(db).createCompanyInvite({
+        companyId,
+        invitedByUserId: "u1",
+        allowedJoinTypes: "agent",
+        autoApprove: true,
+      });
+      expect(result.id).toBeTruthy();
+    });
+
+    it("allows unbound auto-approve invites off hosted boxes", async () => {
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      const companyId = await seedCompany();
+      const result = await inviteService(db).createCompanyInvite({
+        companyId,
+        invitedByUserId: "u1",
+        autoApprove: true,
+      });
+      expect(result.id).toBeTruthy();
+    });
+  });
 });

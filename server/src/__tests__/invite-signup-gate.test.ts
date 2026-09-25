@@ -8,12 +8,13 @@
 // invite-summary endpoint sets (the cookie is what lets the SSO round trip
 // carry the claim).
 //
-// GH #743 review: the gate CHECKS, it does not claim. The token is bound to
-// the email only once the account actually exists — the user.create.after
-// hook writes defaultsPayload.signupClaimedEmail via a CAS update — so a
-// sign-up that fails before the user row lands cannot burn the invite, and
-// a signup-disabled box (inviteOnly mode) still admits invited teammates
-// while refusing shared codes.
+// GH #743 review/re-review: the gate RESERVES, it does not claim — an
+// atomic CAS writes signupReservedEmail + a 2-minute TTL before any user
+// exists, so N parallel sign-ups on one token can no longer all land. The
+// token is bound to the email only once the account actually exists —
+// the user.create.after hook writes defaultsPayload.signupClaimedEmail
+// via a CAS update — and the reservation is released when the sign-up
+// fails, so a failed attempt cannot burn or park the invite.
 
 import express from "express";
 import request from "supertest";
@@ -150,6 +151,18 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
       .from(invites)
       .where(eq(invites.tokenHash, hashToken(token)))
       .then((rows) => rows[0] ?? null);
+  }
+
+  /** Poll until `check` holds — the reservation release is intentionally
+   * fire-and-forget off the response lifecycle, so tests must wait for the
+   * write rather than assume it landed. */
+  async function waitFor(check: () => Promise<boolean>, timeoutMs = 3000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(await check()).toBe(true);
   }
 
   it("accepts a pending company invite token in the sign-up body", async () => {
@@ -313,7 +326,8 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
   });
 
   it("a sign-up that fails before user create does not burn the token", async () => {
-    // GH #743 review: claiming happens in user.create.after, so a token that
+    // GH #743 review/re-review: claiming happens in user.create.after and
+    // the reservation releases on a failed response, so a token that
     // passed the gate but never produced an account stays spendable — by a
     // DIFFERENT email, even (the claim belongs to whoever lands the account).
     const { token } = await createInvite();
@@ -325,9 +339,13 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
     expect(failed.status).toBe(400);
     expect(seen).toHaveLength(1); // reached the auth layer; no user created
 
-    expect(
-      (await inviteRow(token))?.defaultsPayload as Record<string, unknown> | null,
-    ).not.toMatchObject({ signupClaimedEmail: expect.anything() });
+    // The failed response released the reservation — wait for the
+    // fire-and-forget write rather than racing it.
+    await waitFor(async () => {
+      const payload =
+        ((await inviteRow(token))?.defaultsPayload as Record<string, unknown> | null) ?? {};
+      return !("signupClaimedEmail" in payload) && !("signupReservedEmail" in payload);
+    });
 
     const retry = await request(app)
       .post("/api/auth/sign-up/email")
@@ -337,6 +355,79 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
       ((await inviteRow(token))?.defaultsPayload as Record<string, unknown>)
         ?.signupClaimedEmail,
     ).toBe("teammate@example.com");
+  });
+
+  it("admits only one of several parallel sign-ups on the same token", async () => {
+    // GH #743 re-review blocker: the read-only check let every concurrent
+    // sign-up through. The reservation CAS is serialized by the row lock —
+    // exactly one request holds the token; the rest get the same refusal
+    // as a bad credential.
+    const { token } = await createInvite();
+    const { app, seen } = buildApp();
+
+    const results = await Promise.all(
+      ["one", "two", "three", "four"].map((name) =>
+        request(app)
+          .post("/api/auth/sign-up/email")
+          .send({
+            email: `${name}@example.com`,
+            name,
+            password: "x",
+            inviteToken: token,
+          }),
+      ),
+    );
+
+    expect(results.map((r) => r.status).sort()).toEqual([200, 403, 403, 403]);
+    expect(seen).toHaveLength(1);
+    const payload =
+      ((await inviteRow(token))?.defaultsPayload as Record<string, unknown>) ?? {};
+    expect(payload.signupClaimedEmail).toBe(
+      (seen[0] as { email?: string }).email,
+    );
+  });
+
+  it("lets a different email take over once an abandoned reservation expires", async () => {
+    // A browser that closed mid-sign-up holds the token for nobody — the
+    // TTL, not a manual reset, frees it.
+    const { token } = await createInvite();
+    await db
+      .update(invites)
+      .set({
+        defaultsPayload: {
+          signupReservedEmail: "gone@example.com",
+          signupReservedUntil: new Date(Date.now() - 60_000).toISOString(),
+        },
+      })
+      .where(eq(invites.tokenHash, hashToken(token)));
+
+    const { app } = buildApp();
+    const res = await request(app)
+      .post("/api/auth/sign-up/email")
+      .send({ email: "teammate@example.com", name: "T", password: "x", inviteToken: token });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("blocks a different email while a live reservation is held", async () => {
+    const { token } = await createInvite();
+    await db
+      .update(invites)
+      .set({
+        defaultsPayload: {
+          signupReservedEmail: "inflight@example.com",
+          signupReservedUntil: new Date(Date.now() + 60_000).toISOString(),
+        },
+      })
+      .where(eq(invites.tokenHash, hashToken(token)));
+
+    const { app, seen } = buildApp();
+    const res = await request(app)
+      .post("/api/auth/sign-up/email")
+      .send({ email: "other@example.com", name: "O", password: "x", inviteToken: token });
+
+    expect(res.status).toBe(403);
+    expect(seen).toHaveLength(0);
   });
 
   it("expires the invite cookie on the successful sign-up response", async () => {
@@ -485,7 +576,8 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
       const app = buildClosedApp();
 
       // Better Auth rejects the short password BEFORE creating the user —
-      // the token must survive that attempt unclaimed.
+      // the token must survive that attempt unclaimed, and the failed
+      // response releases the gate's reservation.
       const failed = await request(app)
         .post("/api/auth/sign-up/email")
         .set("Origin", "http://127.0.0.1:3100")
@@ -496,9 +588,11 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
           inviteToken: token,
         });
       expect(failed.status).not.toBe(200);
-      expect(
-        (await inviteRow(token))?.defaultsPayload as Record<string, unknown> | null,
-      ).not.toMatchObject({ signupClaimedEmail: expect.anything() });
+      await waitFor(async () => {
+        const payload =
+          ((await inviteRow(token))?.defaultsPayload as Record<string, unknown> | null) ?? {};
+        return !("signupClaimedEmail" in payload) && !("signupReservedEmail" in payload);
+      });
 
       const retry = await request(app)
         .post("/api/auth/sign-up/email")
@@ -514,6 +608,44 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
         ((await inviteRow(token))?.defaultsPayload as Record<string, unknown>)
           ?.signupClaimedEmail,
       ).toBe("teammate@example.com");
+    });
+
+    it("admits exactly one of several parallel sign-ups on one invite", async () => {
+      // GH #743 re-review blocker — the reviewer's probe: four concurrent
+      // email sign-ups on one token produced four users. The reservation
+      // CAS (row-lock serialized) now lets exactly one through the gate.
+      const { token } = await createInvite();
+      const app = buildClosedApp();
+
+      const results = await Promise.all(
+        ["one", "two", "three", "four"].map((name) =>
+          request(app)
+            .post("/api/auth/sign-up/email")
+            .set("Origin", "http://127.0.0.1:3100")
+            .send({
+              email: `${name}@example.com`,
+              name,
+              password: "a-long-enough-password-1",
+              inviteToken: token,
+            }),
+        ),
+      );
+
+      const succeeded = results.filter((r) => r.status === 200);
+      expect(
+        results.map((r) => r.status).sort(),
+        results.map((r) => `${r.status}: ${JSON.stringify(r.body)}`).join("\n"),
+      ).toEqual([200, 403, 403, 403]);
+      const created = await db.select().from(authUsers);
+      expect(created).toHaveLength(1);
+      expect(created[0]?.email).toBe(
+        (succeeded[0]?.body as { user?: { email?: string } })?.user?.email ??
+          created[0]?.email,
+      );
+      expect(
+        ((await inviteRow(token))?.defaultsPayload as Record<string, unknown>)
+          ?.signupClaimedEmail,
+      ).toBe(created[0]?.email);
     });
   });
 

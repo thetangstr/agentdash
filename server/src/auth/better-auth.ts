@@ -20,7 +20,7 @@ import {
   readInviteTokenCookie,
 } from "../lib/signup-gate.js";
 import {
-  checkCompanyInviteSignup,
+  reserveCompanyInviteSignup,
   claimCompanyInviteSignup,
 } from "../services/invites.js";
 import { logger } from "../middleware/logger.js";
@@ -443,14 +443,17 @@ function cookieHeaderFromContext(context: unknown): string | null {
  *
  * AgentDash (#731): one exception — a pending company-invite token delivered
  * in the `agentdash_invite_token` cookie (set by GET /api/invites/:token and
- * scoped to /api/auth) authorizes the creation, READ-ONLY checked here by
- * `checkCompanyInviteSignup`. The cookie is why the provider-level
- * `disableSignUp` had to go: the callback honours that flag BEFORE this hook
- * can see the invite, so the hook is now the single, uniform gate.
+ * scoped to /api/auth) authorizes the creation, atomically RESERVED here by
+ * `reserveCompanyInviteSignup` (2-minute TTL, CAS — one email holds it at a
+ * time). The cookie is why the provider-level `disableSignUp` had to go:
+ * the callback honours that flag BEFORE this hook can see the invite, so
+ * the hook is now the single, uniform gate.
  *
- * GH #743 review: this hook only CHECKS; the single-use claim is written by
- * `claimInviteSignupAfterCreate` in `user.create.after`, so a sign-up that
- * never lands cannot burn the token.
+ * GH #743 review/re-review: this hook RESERVES (not claims) — parallel
+ * sign-ups on one token cannot all land, and a sign-up that fails before
+ * the user row exists only holds the token until the TTL lapses. The
+ * single-use claim is written by `claimInviteSignupAfterCreate` in
+ * `user.create.after`.
  */
 export async function refuseUngatedUserCreation(
   context: unknown,
@@ -464,7 +467,7 @@ export async function refuseUngatedUserCreation(
   const token = readInviteTokenCookie(cookieHeaderFromContext(context));
   if (opts?.db && token && opts.email) {
     try {
-      if (await checkCompanyInviteSignup(opts.db, token, opts.email)) return;
+      if (await reserveCompanyInviteSignup(opts.db, token, opts.email)) return;
     } catch (err) {
       // A database hiccup must fail closed, not wave the stranger through.
       logger.warn(

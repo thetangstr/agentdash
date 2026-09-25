@@ -258,6 +258,26 @@ describeEmbeddedPostgres("hosted SSO account creation against a real Better Auth
     expect(await userCount("second@example.com")).toBe(0);
   });
 
+  it("admits exactly one of several parallel SSO sign-ups on one invite", async () => {
+    // GH #743 re-review: the reservation CAS runs in the user-create before
+    // hook, serialized by the row lock — one concurrent OAuth callback holds
+    // the token, the rest fail closed before a user row can exist.
+    setHosted(true);
+    const { token } = await createInvite();
+    const app = buildApp();
+
+    const emails = ["one@example.com", "two@example.com", "three@example.com", "four@example.com"];
+    const results = await Promise.all(
+      emails.map((email) => googleSignIn(app, email, token)),
+    );
+
+    const succeeded = results.filter((r) => r.status === 200);
+    expect(succeeded).toHaveLength(1);
+    let total = 0;
+    for (const email of emails) total += await userCount(email);
+    expect(total).toBe(1);
+  });
+
   it("enforces the invite's email binding over SSO too", async () => {
     setHosted(true);
     const { token } = await createInvite({ email: "bound@example.com" });

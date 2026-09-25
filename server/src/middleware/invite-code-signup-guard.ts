@@ -26,7 +26,7 @@
 //     Better Auth's disableSignUp is deliberately left OFF so this gate can
 //     admit sign-ups carrying a valid company-invite token; shared invite
 //     codes do NOT open a signup-disabled box.
-//   - checkCompanyInviteSignup is READ-ONLY; the single-use claim is written
+//   - reserveCompanyInviteSignup atomically RESERVES the token (2-min TTL) before any user exists — the fix for parallel sign-ups on one token — and the single-use claim is written
 //     by the user.create.after hook, so a sign-up that never lands cannot
 //     burn the token. When the token arrived in the BODY the guard copies it
 //     into the request's cookie header so the after hook sees one transport.
@@ -42,7 +42,11 @@ import {
   isAcceptedSignupInviteCode,
   readInviteTokenCookie,
 } from "../lib/signup-gate.js";
-import { checkCompanyInviteSignup } from "../services/invites.js";
+import {
+  releaseCompanyInviteSignup,
+  reserveCompanyInviteSignup,
+} from "../services/invites.js";
+import { logger } from "./logger.js";
 
 const SIGNUP_PATH_PREFIX = "/sign-up";
 
@@ -117,7 +121,7 @@ export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): Re
     const token = tokenFromBody ?? readInviteTokenCookie(req.headers.cookie ?? null);
     const authorizeInvite = async () => {
       if (!options.db || !token) return false;
-      return checkCompanyInviteSignup(options.db, token, email);
+      return reserveCompanyInviteSignup(options.db, token, email);
     };
 
     void authorizeInvite()
@@ -126,6 +130,33 @@ export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): Re
           // Body-delivered tokens are invisible to the create.after claim
           // hook — normalize them onto the cookie transport.
           if (tokenFromBody) injectInviteTokenCookie(req, tokenFromBody);
+          // GH #743 re-review: the reservation was taken BEFORE the auth
+          // layer ran. If that layer refuses the sign-up (weak password,
+          // duplicate account) or the client hangs up mid-request, release
+          // the hold so the token isn't parked for the TTL. A completed
+          // sign-up has already written the claim, which the release CAS
+          // refuses to touch.
+          if (options.db && token && email) {
+            let released = false;
+            const release = () => {
+              if (released || !options.db || !token || !email) return;
+              released = true;
+              void releaseCompanyInviteSignup(options.db, token, email).catch(
+                (err: unknown) => {
+                  logger.warn(
+                    { error: err instanceof Error ? err.message : String(err) },
+                    "[signup-gate] failed to release invite reservation",
+                  );
+                },
+              );
+            };
+            res.once("finish", () => {
+              if (res.statusCode >= 400) release();
+            });
+            res.once("close", () => {
+              if (!res.writableEnded) release();
+            });
+          }
           next();
           return;
         }
