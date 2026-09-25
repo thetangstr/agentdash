@@ -189,10 +189,11 @@ type LedgerRead = {
 function readLedgerForSession(
   sessionId: string,
   profiles: (string | null)[],
+  adapterConfig: Record<string, unknown> | null,
 ): LedgerRead {
   let sawNoSession = false;
   for (const profile of profiles) {
-    const read = readHermesSessionUsageDetailed(sessionId, { profile });
+    const read = readHermesSessionUsageDetailed(sessionId, { profile, adapterConfig });
     if (read.status === "metered" && read.usage) {
       return {
         totals: {
@@ -329,7 +330,7 @@ for (const agent of agentRows) {
         const cacheKey = `${agent.id}:${sessionId}`;
         let ledger = ledgerCache.get(cacheKey);
         if (!ledger) {
-          ledger = readLedgerForSession(sessionId, profiles);
+          ledger = readLedgerForSession(sessionId, profiles, asObject(agent.adapterConfig));
           ledgerCache.set(cacheKey, ledger);
         }
         meteringStatus = ledger.status;

@@ -744,6 +744,18 @@ function hermesRunProfile(ctx: { config?: unknown; agent?: unknown }): string | 
   return existsSync(path.join(profilesDir, base)) ? base : null;
 }
 
+/** The adapterConfig the run used — effective config over the stored agent config. */
+function hermesRunAdapterConfig(ctx: { config?: unknown; agent?: unknown }): Record<string, unknown> | null {
+  const asRecord = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  const agent = asRecord(ctx.agent);
+  const agentConfig = asRecord(agent?.adapterConfig);
+  const config = asRecord(ctx.config);
+  return config || agentConfig ? { ...(agentConfig ?? {}), ...(config ?? {}) } : null;
+}
+
 async function withHermesSessionUsage(
   result: AdapterExecutionResult,
   ctx: { config?: unknown; agent?: unknown },
@@ -751,7 +763,10 @@ async function withHermesSessionUsage(
   let read: ReturnType<typeof readHermesSessionUsageDetailed>;
   try {
     const sessionId = readHermesSessionId(result);
-    read = readHermesSessionUsageDetailed(sessionId, { profile: hermesRunProfile(ctx) });
+    read = readHermesSessionUsageDetailed(sessionId, {
+      profile: hermesRunProfile(ctx),
+      adapterConfig: hermesRunAdapterConfig(ctx),
+    });
   } catch {
     return result;
   }

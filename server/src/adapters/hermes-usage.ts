@@ -1,3 +1,4 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -80,38 +81,222 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-/**
- * Where Hermes keeps its state, oldest assumption first.
- *
- * Managed profiles (`hermes -p <name>`) write to their own database at
- * `<profilesDir>/<name>/state.db` — `HERMES_PROFILES_DIR` resolved exactly like
- * `hermes-profile.ts` does — while unmanaged runs write to the Hermes home.
- * The earlier version of this function only ever returned the home path, so
- * profiled agents metered against a stale database and every run read as zero.
- * The override exists for an operator who has moved the unmanaged database.
- */
-export function resolveHermesStateDbCandidates(
-  env: NodeJS.ProcessEnv = process.env,
-  opts: { profile?: string | null } = {},
-): string[] {
-  const candidates: string[] = [];
-  const profile = readString(opts.profile);
-  const defaultHermesHome = path.join(os.homedir(), ".hermes");
-  const profilesDir =
-    readString(env.HERMES_PROFILES_DIR) ?? path.join(defaultHermesHome, "profiles");
-  if (profile) {
-    candidates.push(path.join(profilesDir, profile, "state.db"));
-  }
-  const explicit = readString(env.AGENTDASH_HERMES_STATE_DB);
-  if (explicit) candidates.push(path.resolve(explicit));
-  const hermesHome = readString(env.HERMES_HOME);
-  if (hermesHome) candidates.push(path.resolve(hermesHome, "state.db"));
-  candidates.push(path.join(defaultHermesHome, "state.db"));
-  return [...new Set(candidates)];
+// ── Ledger location ──────────────────────────────────────────────────────
+//
+// One resolver answers "which state.db does this Hermes run write" for both
+// readers: metering below, which tries every candidate in order, and the
+// liveness probe (`services/run-liveness-probe.ts`), which needs the single
+// best answer plus how sure it is — a `certain` resolution is what licenses
+// the probe's first-output deadline to act. OBS-5's probe kept its own copy
+// of this logic; OBS-1 folded the two together so the answer can never drift
+// between "where we meter" and "where we look for signs of life".
+
+/** `certain`: the run provably writes this ledger. `uncertain`: a best guess (sticky active profile, root fallback). */
+export type HermesStateDbCertainty = "certain" | "uncertain";
+
+/** How the path was found, for evidence and logs. */
+export type HermesStateDbSource =
+  | "profile_hint"
+  | "env_state_db"
+  | "adapter_env_hermes_home"
+  | "env_hermes_home"
+  | "profile_arg"
+  | "profile_config"
+  | "wrapper_script"
+  | "active_profile"
+  | "root_fallback";
+
+export interface HermesStateDbResolution {
+  path: string;
+  certainty: HermesStateDbCertainty;
+  source: HermesStateDbSource;
+  profile: string | null;
 }
 
-export function resolveHermesStateDbPath(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveHermesStateDbCandidates(env)[0]!;
+export interface HermesStateDbResolveOptions {
+  env?: NodeJS.ProcessEnv;
+  /** The run's adapter config — `env`, `extraArgs`/`args`, `hermesProfile`, `hermesCommand`. */
+  adapterConfig?: Record<string, unknown> | null;
+  /**
+   * The profile this run provably used — e.g. derived from the command the
+   * adapter actually invoked. Asserted evidence rather than inference, so it
+   * ranks first and is not gated on the ledger file existing yet.
+   */
+  profile?: string | null;
+}
+
+const WRAPPER_MAX_BYTES = 64 * 1024;
+const PROFILE_NAME = /^[A-Za-z0-9_.-]+$/;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** adapterConfig.env values are plain strings or `{ type: "plain", value }` envelopes. */
+function readEnvValue(env: Record<string, unknown> | null, key: string): string | null {
+  const raw = env?.[key];
+  if (typeof raw === "string") return readString(raw);
+  const record = readRecord(raw);
+  if (record?.type === "plain") return readString(record.value);
+  return null;
+}
+
+function hermesProfileFromArgs(args: unknown): string | null {
+  if (!Array.isArray(args)) return null;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (typeof arg !== "string") continue;
+    if ((arg === "-p" || arg === "--profile") && typeof args[index + 1] === "string") {
+      return readString(args[index + 1]);
+    }
+    if (arg.startsWith("--profile=")) return readString(arg.slice("--profile=".length));
+  }
+  return null;
+}
+
+function findOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
+  if (command.includes("/") || command.includes(path.sep)) return existsSync(command) ? command : null;
+  for (const dir of (env.PATH ?? process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, command);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * What a wrapper script says about its profile. Returns null when the command
+ * is not a small text script or names no profile; a wrapper we cannot read
+ * is treated as unknown, never guessed from its file name.
+ */
+function readWrapperProfile(
+  commandPath: string,
+): { profile: string | null; hermesHome: string | null } | null {
+  try {
+    const stat = statSync(commandPath);
+    if (!stat.isFile() || stat.size > WRAPPER_MAX_BYTES) return null;
+    const text = readFileSync(commandPath, "utf8");
+    if (text.includes("\u0000")) return null;
+    // Only a `-p`/`--profile` on a line that invokes hermes counts (not `mkdir -p`).
+    const profile = /hermes\S*["']?\s(?:[^\n]*\s)?(?:-p|--profile)(?:\s+|=)["']?([A-Za-z0-9_.-]+)/.exec(text)?.[1] ?? null;
+    const hermesHome = /HERMES_HOME=["']?([^"'\s;]+)/.exec(text)?.[1] ?? null;
+    if (!profile && !hermesHome) return null;
+    return { profile, hermesHome };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where Hermes keeps its state, strongest evidence first.
+ *
+ * Certain sources, in order: the caller-asserted profile (the run provably
+ * used it — a `hermes -p` run writes `<profilesDir>/<name>/state.db` wherever
+ * the unmanaged database lives); `AGENTDASH_HERMES_STATE_DB`, the operator
+ * override for a relocated unmanaged database; a `HERMES_HOME` the run's own
+ * `adapterConfig.env` sets; the server's `HERMES_HOME`; an explicit
+ * `-p/--profile` (args or config) or a wrapper script whose text names the
+ * profile or `HERMES_HOME` — gated on the profile ledger existing, because a
+ * `-p` naming a profile Hermes never created says nothing about where this
+ * run writes.
+ *
+ * Uncertain sources, in order: the sticky `active_profile` (Hermes' own
+ * default when no `-p` is given, but it can change under a running agent) and
+ * the root ledger. `HERMES_PROFILES_DIR` is resolved exactly like
+ * `hermes-profile.ts` does; `AGENTDASH_HERMES_ROOT` overrides the Hermes root
+ * (tests, relocated installs).
+ */
+export function resolveHermesStateDbResolutions(
+  opts: HermesStateDbResolveOptions = {},
+): HermesStateDbResolution[] {
+  const env = opts.env ?? process.env;
+  const config = readRecord(opts.adapterConfig) ?? {};
+  const resolutions: HermesStateDbResolution[] = [];
+  const push = (
+    dbPath: string,
+    source: HermesStateDbSource,
+    certainty: HermesStateDbCertainty,
+    profile: string | null,
+  ) => {
+    if (!resolutions.some((r) => r.path === dbPath)) {
+      resolutions.push({ path: dbPath, source, certainty, profile });
+    }
+  };
+
+  const hermesRoot = readString(env.AGENTDASH_HERMES_ROOT) ?? path.join(os.homedir(), ".hermes");
+  const profilesDir = readString(env.HERMES_PROFILES_DIR) ?? path.join(hermesRoot, "profiles");
+  const existingProfileDb = (profile: string | null) =>
+    profile && PROFILE_NAME.test(profile) && existsSync(path.join(profilesDir, profile, "state.db"))
+      ? path.join(profilesDir, profile, "state.db")
+      : null;
+
+  const hinted = readString(opts.profile);
+  if (hinted && PROFILE_NAME.test(hinted)) {
+    push(path.join(profilesDir, hinted, "state.db"), "profile_hint", "certain", hinted);
+  }
+
+  const explicit = readString(env.AGENTDASH_HERMES_STATE_DB);
+  if (explicit) push(path.resolve(explicit), "env_state_db", "certain", null);
+
+  const adapterEnvHome = readEnvValue(readRecord(config.env), "HERMES_HOME");
+  if (adapterEnvHome) {
+    push(path.resolve(adapterEnvHome, "state.db"), "adapter_env_hermes_home", "certain", null);
+  }
+  const serverHome = readString(env.HERMES_HOME);
+  if (serverHome) push(path.resolve(serverHome, "state.db"), "env_hermes_home", "certain", null);
+
+  const argProfile = hermesProfileFromArgs(config.extraArgs) ?? hermesProfileFromArgs(config.args);
+  const argDb = existingProfileDb(argProfile);
+  if (argDb) push(argDb, "profile_arg", "certain", argProfile);
+
+  const configProfile = readString(config.hermesProfile) ?? readString(config.profile);
+  const configDb = existingProfileDb(configProfile);
+  if (configDb) push(configDb, "profile_config", "certain", configProfile);
+
+  const command = readString(config.hermesCommand) ?? readString(config.command);
+  const commandPath = command ? findOnPath(command, env) : null;
+  const wrapper = commandPath ? readWrapperProfile(commandPath) : null;
+  if (wrapper?.hermesHome) {
+    push(path.resolve(wrapper.hermesHome, "state.db"), "wrapper_script", "certain", null);
+  }
+  const wrapperDb = existingProfileDb(wrapper?.profile ?? null);
+  if (wrapperDb) push(wrapperDb, "wrapper_script", "certain", wrapper!.profile);
+
+  let active: string | null = null;
+  try {
+    active = readString(readFileSync(path.join(hermesRoot, "active_profile"), "utf8"));
+  } catch {
+    active = null;
+  }
+  const activeDb = active && active !== "default" ? existingProfileDb(active) : null;
+  if (activeDb) push(activeDb, "active_profile", "uncertain", active);
+
+  push(path.join(hermesRoot, "state.db"), "root_fallback", "uncertain", null);
+  return resolutions;
+}
+
+/** The single best answer — the probe's certainty-gated resolution. */
+export function resolveHermesStateDbResolution(
+  opts: HermesStateDbResolveOptions = {},
+): HermesStateDbResolution {
+  return resolveHermesStateDbResolutions(opts)[0]!;
+}
+
+/** Every candidate in precedence order — metering tries each until one answers. */
+export function resolveHermesStateDbCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: Omit<HermesStateDbResolveOptions, "env"> = {},
+): string[] {
+  return resolveHermesStateDbResolutions({ ...opts, env }).map((r) => r.path);
+}
+
+export function resolveHermesStateDbPath(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: Omit<HermesStateDbResolveOptions, "env"> = {},
+): string {
+  return resolveHermesStateDbResolution({ ...opts, env }).path;
 }
 
 /**
@@ -184,7 +369,12 @@ export function summarizeHermesUsageRows(rows: readonly HermesUsageRow[]): Herme
  */
 export function readHermesSessionUsageDetailed(
   sessionId: string | null | undefined,
-  opts: { dbPath?: string; profile?: string | null; env?: NodeJS.ProcessEnv } = {},
+  opts: {
+    dbPath?: string;
+    profile?: string | null;
+    adapterConfig?: Record<string, unknown> | null;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): HermesSessionUsageRead {
   const session = readString(sessionId);
   if (!session) {
@@ -192,7 +382,10 @@ export function readHermesSessionUsageDetailed(
   }
   const candidates = opts.dbPath
     ? [opts.dbPath]
-    : resolveHermesStateDbCandidates(opts.env, { profile: opts.profile });
+    : resolveHermesStateDbCandidates(opts.env, {
+        profile: opts.profile,
+        adapterConfig: opts.adapterConfig,
+      });
 
   let sawReadableDb = false;
   let lastTried: string | null = null;
@@ -253,7 +446,12 @@ function readHermesSessionToolCalls(db: DatabaseSync, sessionId: string): number
 
 export function readHermesSessionUsage(
   sessionId: string | null | undefined,
-  opts: { dbPath?: string; profile?: string | null; env?: NodeJS.ProcessEnv } = {},
+  opts: {
+    dbPath?: string;
+    profile?: string | null;
+    adapterConfig?: Record<string, unknown> | null;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): HermesSessionUsage | null {
   return readHermesSessionUsageDetailed(sessionId, opts).usage;
 }

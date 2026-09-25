@@ -10,6 +10,7 @@ import {
   readHermesSessionUsageDetailed,
   resolveHermesStateDbCandidates,
   resolveHermesStateDbPath,
+  resolveHermesStateDbResolution,
   summarizeHermesUsageRows,
 } from "./hermes-usage.js";
 
@@ -135,6 +136,23 @@ describe("readHermesSessionUsage", () => {
   });
 });
 
+/** An isolated Hermes root, so the real ~/.hermes can't leak into a test. */
+function tempHermesRoot(opts: { profiles?: string[]; active?: string } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-root-"));
+  for (const profile of opts.profiles ?? []) {
+    fs.mkdirSync(path.join(root, "profiles", profile), { recursive: true });
+    fs.writeFileSync(path.join(root, "profiles", profile, "state.db"), "");
+  }
+  if (opts.active) fs.writeFileSync(path.join(root, "active_profile"), `${opts.active}\n`);
+  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+
+const cleanups: Array<() => void> = [];
+afterAll(() => {
+  while (cleanups.length > 0) cleanups.pop()!();
+});
+
 describe("resolveHermesStateDbPath", () => {
   it("prefers the explicit override", () => {
     expect(resolveHermesStateDbPath({ AGENTDASH_HERMES_STATE_DB: "/srv/hermes/state.db" })).toBe(
@@ -144,7 +162,51 @@ describe("resolveHermesStateDbPath", () => {
 
   it("falls back to the Hermes home, then to the default", () => {
     expect(resolveHermesStateDbPath({ HERMES_HOME: "/srv/hermes" })).toBe("/srv/hermes/state.db");
-    expect(resolveHermesStateDbPath({})).toBe(path.join(os.homedir(), ".hermes", "state.db"));
+    // With nothing configured the answer lives under the Hermes root — the
+    // root ledger, or the sticky active profile's when one exists.
+    expect(resolveHermesStateDbPath({}).startsWith(path.join(os.homedir(), ".hermes"))).toBe(true);
+    const root = tempHermesRoot();
+    expect(resolveHermesStateDbPath({ AGENTDASH_HERMES_ROOT: root })).toBe(
+      path.join(root, "state.db"),
+    );
+  });
+});
+
+describe("resolveHermesStateDbResolution", () => {
+  it("marks the adapter's own HERMES_HOME certain", () => {
+    const root = tempHermesRoot();
+    const env = { AGENTDASH_HERMES_ROOT: root, HERMES_HOME: "/server" };
+    expect(
+      resolveHermesStateDbResolution({
+        env,
+        adapterConfig: { env: { HERMES_HOME: { type: "plain", value: "/agent/home" } } },
+      }),
+    ).toMatchObject({
+      path: path.resolve("/agent/home", "state.db"),
+      certainty: "certain",
+      source: "adapter_env_hermes_home",
+    });
+  });
+
+  it("marks a -p arg naming an existing profile certain, and guesses uncertain", () => {
+    const root = tempHermesRoot({ profiles: ["agentdash"], active: "agentdash" });
+    const env = { AGENTDASH_HERMES_ROOT: root };
+    expect(
+      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["-p", "agentdash"] } }),
+    ).toMatchObject({
+      path: path.join(root, "profiles", "agentdash", "state.db"),
+      certainty: "certain",
+      source: "profile_arg",
+    });
+    expect(resolveHermesStateDbResolution({ env })).toMatchObject({
+      path: path.join(root, "profiles", "agentdash", "state.db"),
+      certainty: "uncertain",
+      source: "active_profile",
+    });
+    expect(resolveHermesStateDbResolution({ env: { AGENTDASH_HERMES_ROOT: tempHermesRoot() } })).toMatchObject({
+      certainty: "uncertain",
+      source: "root_fallback",
+    });
   });
 });
 
@@ -153,39 +215,44 @@ describe("resolveHermesStateDbCandidates", () => {
     // OBS-1: a `hermes -p <profile>` run writes to
     // <HERMES_PROFILES_DIR>/<profile>/state.db, NOT the root state.db — the
     // original incident was metering 467 runs against the wrong file.
+    const root = tempHermesRoot();
     const candidates = resolveHermesStateDbCandidates(
-      { HERMES_PROFILES_DIR: "/srv/hermes/profiles" },
+      { HERMES_PROFILES_DIR: "/srv/hermes/profiles", AGENTDASH_HERMES_ROOT: root },
       { profile: "agentdash-abc" },
     );
     expect(candidates[0]).toBe("/srv/hermes/profiles/agentdash-abc/state.db");
-    expect(candidates[candidates.length - 1]).toBe(
-      path.join(os.homedir(), ".hermes", "state.db"),
-    );
+    expect(candidates[candidates.length - 1]).toBe(path.join(root, "state.db"));
   });
 
   it("defaults HERMES_PROFILES_DIR exactly like hermes-profile.ts", () => {
-    const candidates = resolveHermesStateDbCandidates({}, { profile: "p1" });
-    expect(candidates[0]).toBe(path.join(os.homedir(), ".hermes", "profiles", "p1", "state.db"));
+    const root = tempHermesRoot();
+    const candidates = resolveHermesStateDbCandidates(
+      { AGENTDASH_HERMES_ROOT: root },
+      { profile: "p1" },
+    );
+    expect(candidates[0]).toBe(path.join(root, "profiles", "p1", "state.db"));
   });
 
   it("keeps the env override ahead of the home fallback but behind the profile", () => {
+    const root = tempHermesRoot();
     const candidates = resolveHermesStateDbCandidates(
-      { HERMES_PROFILES_DIR: "/srv/p", AGENTDASH_HERMES_STATE_DB: "/srv/custom.db" },
+      { HERMES_PROFILES_DIR: "/srv/p", AGENTDASH_HERMES_STATE_DB: "/srv/custom.db", AGENTDASH_HERMES_ROOT: root },
       { profile: "p1" },
     );
     expect(candidates).toEqual([
       "/srv/p/p1/state.db",
       "/srv/custom.db",
-      path.join(os.homedir(), ".hermes", "state.db"),
+      path.join(root, "state.db"),
     ]);
   });
 
   it("dedupes when the override points at the same file", () => {
-    const home = path.join(os.homedir(), ".hermes");
+    const root = tempHermesRoot();
     const candidates = resolveHermesStateDbCandidates({
-      AGENTDASH_HERMES_STATE_DB: path.join(home, "state.db"),
+      AGENTDASH_HERMES_ROOT: root,
+      AGENTDASH_HERMES_STATE_DB: path.join(root, "state.db"),
     });
-    expect(candidates).toEqual([path.join(home, "state.db")]);
+    expect(candidates).toEqual([path.join(root, "state.db")]);
   });
 });
 

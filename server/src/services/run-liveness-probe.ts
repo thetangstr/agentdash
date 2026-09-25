@@ -16,17 +16,20 @@
 // window; anything less is reported, never acted on. See
 // `classifyFirstOutput`.
 //
-// Overlap note: OBS-1 (#694) is teaching `server/src/adapters/hermes-usage.ts`
-// to read the per-profile ledger for metering. This module deliberately keeps
-// its own small read-only reader and resolver instead of touching that file;
-// once #694 lands, the two resolvers should become one.
+// The ledger location itself is resolved by `adapters/hermes-usage.ts` —
+// one resolver shared with metering, so "where we meter" and "where we look
+// for signs of life" can never disagree. This module deliberately keeps its
+// own small read-only reader: the probe needs session-attribution semantics
+// the metering reader doesn't have.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { runningProcesses } from "../adapters/index.js";
+import {
+  resolveHermesStateDbResolution,
+  type HermesStateDbResolution,
+} from "../adapters/hermes-usage.js";
 
 export const DEFAULT_FIRST_OUTPUT_DEADLINE_MS = 10 * 60 * 1000;
 export const NO_FIRST_OUTPUT_ERROR_CODE = "no_first_output";
@@ -43,29 +46,18 @@ const SESSION_START_SLACK_MS = 30_000;
  * session opened much later belongs to some other run on a shared profile.
  */
 const SESSION_ATTRIBUTION_WINDOW_MS = 2 * 60 * 1000;
-const WRAPPER_MAX_BYTES = 64 * 1024;
-const PROFILE_NAME = /^[A-Za-z0-9_.-]+$/;
 
 export type RunLivenessProbeKind = "output" | "hermes_ledger";
 export type LedgerReadStatus = "not_applicable" | "read" | "missing" | "unreadable";
 /** `certain`: the run provably writes this ledger. `uncertain`: a best guess (sticky active profile, root fallback). */
-export type LedgerCertainty = "certain" | "uncertain";
+export type LedgerCertainty = HermesStateDbResolution["certainty"];
 
-export interface HermesLedgerResolution {
-  path: string;
-  certainty: LedgerCertainty;
-  /** How the path was found, for evidence and logs. */
-  source:
-    | "env_state_db"
-    | "adapter_env_hermes_home"
-    | "env_hermes_home"
-    | "profile_arg"
-    | "profile_config"
-    | "wrapper_script"
-    | "active_profile"
-    | "root_fallback";
-  profile: string | null;
-}
+/**
+ * Which Hermes ledger a run writes to, and how sure we are — resolved by the
+ * single shared resolver in `adapters/hermes-usage.ts`. `source` says how the
+ * path was found, for evidence and logs.
+ */
+export type HermesLedgerResolution = HermesStateDbResolution;
 
 export interface RunForLivenessProbe {
   id: string;
@@ -123,15 +115,6 @@ function readString(value: unknown): string | null {
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-/** adapterConfig.env values are plain strings or `{ type: "plain", value }` envelopes. */
-function readEnvValue(env: Record<string, unknown> | null, key: string): string | null {
-  const raw = env?.[key];
-  if (typeof raw === "string") return readString(raw);
-  const record = readRecord(raw);
-  if (record?.type === "plain") return readString(record.value);
-  return null;
 }
 
 export function isLedgerProbedAdapter(adapterType: string) {
@@ -217,112 +200,21 @@ export function isSameProcess(
   return Math.abs(actual.getTime() - recordedStartedAt.getTime()) <= toleranceMs;
 }
 
-function hermesProfileFromArgs(args: unknown): string | null {
-  if (!Array.isArray(args)) return null;
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (typeof arg !== "string") continue;
-    if ((arg === "-p" || arg === "--profile") && typeof args[index + 1] === "string") {
-      return readString(args[index + 1]);
-    }
-    if (arg.startsWith("--profile=")) return readString(arg.slice("--profile=".length));
-  }
-  return null;
-}
-
-function findOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
-  if (command.includes("/") || command.includes(path.sep)) return existsSync(command) ? command : null;
-  for (const dir of (env.PATH ?? process.env.PATH ?? "").split(path.delimiter)) {
-    if (!dir) continue;
-    const candidate = path.join(dir, command);
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
 /**
- * What a wrapper script says about its profile. Returns null when the command
- * is not a small text script or names no profile; a wrapper we cannot read
- * is treated as unknown, never guessed from its file name.
- */
-function readWrapperProfile(
-  commandPath: string,
-): { profile: string | null; hermesHome: string | null } | null {
-  try {
-    const stat = statSync(commandPath);
-    if (!stat.isFile() || stat.size > WRAPPER_MAX_BYTES) return null;
-    const text = readFileSync(commandPath, "utf8");
-    if (text.includes("\u0000")) return null;
-    // Only a `-p`/`--profile` on a line that invokes hermes counts (not `mkdir -p`).
-    const profile = /hermes\S*["']?\s(?:[^\n]*\s)?(?:-p|--profile)(?:\s+|=)["']?([A-Za-z0-9_.-]+)/.exec(text)?.[1] ?? null;
-    const hermesHome = /HERMES_HOME=["']?([^"'\s;]+)/.exec(text)?.[1] ?? null;
-    if (!profile && !hermesHome) return null;
-    return { profile, hermesHome };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Which Hermes ledger a run writes to, and how sure we are.
- *
- * Certain: `AGENTDASH_HERMES_STATE_DB`; a `HERMES_HOME` the run's own
- * `adapterConfig.env` sets; the server's `HERMES_HOME`; an explicit
- * `-p/--profile` (args or config) naming an existing profile; a wrapper
- * script whose text names the profile or `HERMES_HOME`.
- * Uncertain: the sticky `active_profile` (Hermes' own default when no `-p`
- * is given, but it can change under a running agent), and the root ledger.
+ * Which Hermes ledger a run writes to, and how sure we are — the shared
+ * resolver's single best answer. Certain: `AGENTDASH_HERMES_STATE_DB`; a
+ * `HERMES_HOME` the run's own `adapterConfig.env` sets; the server's
+ * `HERMES_HOME`; an explicit `-p/--profile` (args or config) naming an
+ * existing profile; a wrapper script whose text names the profile or
+ * `HERMES_HOME`. Uncertain: the sticky `active_profile` (Hermes' own default
+ * when no `-p` is given, but it can change under a running agent), and the
+ * root ledger.
  */
 export function resolveHermesLedgerForRun(
   adapterConfig: Record<string, unknown> | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): HermesLedgerResolution {
-  const explicit = readString(env.AGENTDASH_HERMES_STATE_DB);
-  if (explicit) return { path: path.resolve(explicit), certainty: "certain", source: "env_state_db", profile: null };
-
-  const config = adapterConfig ?? {};
-  const adapterEnvHome = readEnvValue(readRecord(config.env), "HERMES_HOME");
-  if (adapterEnvHome) {
-    return { path: path.resolve(adapterEnvHome, "state.db"), certainty: "certain", source: "adapter_env_hermes_home", profile: null };
-  }
-  const serverHome = readString(env.HERMES_HOME);
-  if (serverHome) {
-    return { path: path.resolve(serverHome, "state.db"), certainty: "certain", source: "env_hermes_home", profile: null };
-  }
-
-  const hermesRoot = readString(env.AGENTDASH_HERMES_ROOT) ?? path.join(os.homedir(), ".hermes");
-  const profilesDir = readString(env.HERMES_PROFILES_DIR) ?? path.join(hermesRoot, "profiles");
-  const profileDb = (profile: string | null) =>
-    profile && PROFILE_NAME.test(profile) && existsSync(path.join(profilesDir, profile, "state.db"))
-      ? path.join(profilesDir, profile, "state.db")
-      : null;
-
-  const argProfile = hermesProfileFromArgs(config.extraArgs) ?? hermesProfileFromArgs(config.args);
-  const argDb = profileDb(argProfile);
-  if (argDb) return { path: argDb, certainty: "certain", source: "profile_arg", profile: argProfile };
-
-  const configProfile = readString(config.hermesProfile) ?? readString(config.profile);
-  const configDb = profileDb(configProfile);
-  if (configDb) return { path: configDb, certainty: "certain", source: "profile_config", profile: configProfile };
-
-  const command = readString(config.hermesCommand) ?? readString(config.command);
-  const commandPath = command ? findOnPath(command, env) : null;
-  const wrapper = commandPath ? readWrapperProfile(commandPath) : null;
-  if (wrapper?.hermesHome) {
-    return { path: path.resolve(wrapper.hermesHome, "state.db"), certainty: "certain", source: "wrapper_script", profile: null };
-  }
-  const wrapperDb = profileDb(wrapper?.profile ?? null);
-  if (wrapperDb) return { path: wrapperDb, certainty: "certain", source: "wrapper_script", profile: wrapper!.profile };
-
-  let active: string | null = null;
-  try {
-    active = readString(readFileSync(path.join(hermesRoot, "active_profile"), "utf8"));
-  } catch {
-    active = null;
-  }
-  const activeDb = active && active !== "default" ? profileDb(active) : null;
-  if (activeDb) return { path: activeDb, certainty: "uncertain", source: "active_profile", profile: active };
-  return { path: path.join(hermesRoot, "state.db"), certainty: "uncertain", source: "root_fallback", profile: null };
+  return resolveHermesStateDbResolution({ adapterConfig, env });
 }
 
 function toDate(seconds: unknown): Date | null {
