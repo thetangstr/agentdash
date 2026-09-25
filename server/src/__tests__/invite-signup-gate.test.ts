@@ -8,9 +8,12 @@
 // invite-summary endpoint sets (the cookie is what lets the SSO round trip
 // carry the claim).
 //
-// Single-use is claimed, not just checked: the first sign-up binds the token
-// to that email in defaultsPayload.signupClaimedEmail via a CAS update, so a
-// second sign-up with a different email against the same link is refused.
+// GH #743 review: the gate CHECKS, it does not claim. The token is bound to
+// the email only once the account actually exists — the user.create.after
+// hook writes defaultsPayload.signupClaimedEmail via a CAS update — so a
+// sign-up that fails before the user row lands cannot burn the invite, and
+// a signup-disabled box (inviteOnly mode) still admits invited teammates
+// while refusing shared codes.
 
 import express from "express";
 import request from "supertest";
@@ -33,6 +36,11 @@ import { inviteCodeSignupGuard } from "../middleware/invite-code-signup-guard.js
 import { INVITE_TOKEN_COOKIE_NAME } from "../lib/signup-gate.js";
 import { hashToken } from "../lib/invite-tokens.js";
 import { inviteService } from "../services/invites.js";
+import {
+  claimInviteSignupAfterCreate,
+  createBetterAuthHandler,
+  createBetterAuthInstance,
+} from "../auth/better-auth.js";
 import { onboardingMcpSignupRoutes } from "../routes/onboarding-mcp-signup.js";
 import { errorHandler } from "../middleware/error-handler.js";
 
@@ -47,6 +55,7 @@ const ENV_KEYS = [
   "AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE",
   "AGENTDASH_SELF_SERVE_BOOTSTRAP",
   "AGENTDASH_INVITE_VALIDATION",
+  "BETTER_AUTH_SECRET",
 ] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -84,18 +93,47 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
     await tempDb?.cleanup();
   });
 
-  /** Mounts the guard exactly where app.ts does: in front of the auth router. */
-  function buildApp(withDb = true) {
+  /**
+   * Mounts the guard exactly where app.ts does: in front of the auth router.
+   * The stub stands in for Better Auth and emulates what the real endpoint
+   * does on a successful user create — the GH #743 claim-after-create step
+   * (claimInviteSignupAfterCreate) — so the single-use claim is exercised
+   * through the same code path production uses. `failSignupFor` makes the
+   * stub refuse that email before "creating" it, proving a failed sign-up
+   * cannot burn the token.
+   */
+  function buildApp(opts: {
+    withDb?: boolean;
+    inviteOnly?: boolean;
+    failSignupFor?: string;
+  } = {}) {
     const seen: Array<Record<string, unknown>> = [];
+    const clearingCookies: string[][] = [];
     const app = express();
     app.use(express.json());
-    app.use("/api/auth", inviteCodeSignupGuard({ enabled: true, ...(withDb ? { db } : {}) }));
-    app.use("/api/auth", (req, res) => {
+    app.use("/api/auth", inviteCodeSignupGuard({
+      enabled: true,
+      inviteOnly: opts.inviteOnly ?? false,
+      ...(opts.withDb === false ? {} : { db }),
+    }));
+    app.use("/api/auth", async (req, res) => {
       // Stands in for Better Auth: records what actually reached it.
       seen.push({ ...(req.body as Record<string, unknown>) });
+      if (opts.failSignupFor && (req.body as { email?: string }).email === opts.failSignupFor) {
+        res.status(400).json({ error: "sign-up failed before user create" });
+        return;
+      }
+      const responseHeaders = new Headers();
+      await claimInviteSignupAfterCreate(
+        { headers: req.headers, responseHeaders },
+        { db, email: (req.body as { email?: string }).email },
+      );
+      const cookies = responseHeaders.getSetCookie();
+      clearingCookies.push(cookies);
+      for (const cookie of cookies) res.append("Set-Cookie", cookie);
       res.status(200).json({ ok: true });
     });
-    return { app, seen };
+    return { app, seen, clearingCookies };
   }
 
   function createInvite(opts: Parameters<ReturnType<typeof inviteService>["createCompanyInvite"]>[0] = {}) {
@@ -274,9 +312,52 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("a sign-up that fails before user create does not burn the token", async () => {
+    // GH #743 review: claiming happens in user.create.after, so a token that
+    // passed the gate but never produced an account stays spendable — by a
+    // DIFFERENT email, even (the claim belongs to whoever lands the account).
+    const { token } = await createInvite();
+    const { app, seen } = buildApp({ failSignupFor: "burned@example.com" });
+
+    const failed = await request(app)
+      .post("/api/auth/sign-up/email")
+      .send({ email: "burned@example.com", name: "B", password: "x", inviteToken: token });
+    expect(failed.status).toBe(400);
+    expect(seen).toHaveLength(1); // reached the auth layer; no user created
+
+    expect(
+      (await inviteRow(token))?.defaultsPayload as Record<string, unknown> | null,
+    ).not.toMatchObject({ signupClaimedEmail: expect.anything() });
+
+    const retry = await request(app)
+      .post("/api/auth/sign-up/email")
+      .send({ email: "teammate@example.com", name: "T", password: "x", inviteToken: token });
+    expect(retry.status).toBe(200);
+    expect(
+      ((await inviteRow(token))?.defaultsPayload as Record<string, unknown>)
+        ?.signupClaimedEmail,
+    ).toBe("teammate@example.com");
+  });
+
+  it("expires the invite cookie on the successful sign-up response", async () => {
+    const { token } = await createInvite();
+    const { app, clearingCookies } = buildApp();
+
+    const res = await request(app)
+      .post("/api/auth/sign-up/email")
+      .set("Cookie", `${INVITE_TOKEN_COOKIE_NAME}=${token}`)
+      .send({ email: "teammate@example.com", name: "T", password: "x" });
+
+    expect(res.status).toBe(200);
+    expect(clearingCookies.flat().join(";")).toContain(`${INVITE_TOKEN_COOKIE_NAME}=`);
+    expect(clearingCookies.flat().join(";")).toContain("Max-Age=0");
+    const setCookies = res.headers["set-cookie"] as unknown as string[] | string;
+    expect([setCookies].flat().join(";")).toContain(`${INVITE_TOKEN_COOKIE_NAME}=`);
+  });
+
   it("fails closed when no db handle is wired (legacy callers)", async () => {
     const { token } = await createInvite();
-    const { app, seen } = buildApp(false);
+    const { app, seen } = buildApp({ withDb: false });
 
     const res = await request(app)
       .post("/api/auth/sign-up/email")
@@ -286,15 +367,164 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
     expect(seen).toHaveLength(0);
   });
 
-  // AgentDash (#731): the MCP self-serve sign-up reads the same local gate —
-  // a pending company-invite token is an alternative credential to the shared
-  // instance codes, and it is NOT forwarded to the remote funnel validator.
+  // GH #743 review (HIGH-1): PAPERCLIP_AUTH_DISABLE_SIGN_UP means CLOSED —
+  // the box runs inviteOnly, where only a pending company invite opens
+  // sign-up and the shared instance codes deliberately do not.
+  describe("inviteOnly mode (signup-disabled box)", () => {
+    it("admits a pending invite token but refuses the shared code", async () => {
+      const { token } = await createInvite();
+      const { app, seen } = buildApp({ inviteOnly: true });
+
+      const code = await request(app)
+        .post("/api/auth/sign-up/email")
+        .send({ email: "a@b.com", name: "A", password: "x", inviteCode: "GENERAL-CODE" });
+      expect(code.status).toBe(403);
+
+      const invited = await request(app)
+        .post("/api/auth/sign-up/email")
+        .send({ email: "a@b.com", name: "A", password: "x", inviteToken: token });
+      expect(invited.status).toBe(200);
+      expect(seen).toHaveLength(1);
+    });
+
+    it("admits the cookie-delivered token and refuses bare strangers", async () => {
+      const { token } = await createInvite();
+      const { app } = buildApp({ inviteOnly: true });
+
+      const bare = await request(app)
+        .post("/api/auth/sign-up/email")
+        .send({ email: "a@b.com", name: "A", password: "x" });
+      expect(bare.status).toBe(403);
+
+      const invited = await request(app)
+        .post("/api/auth/sign-up/email")
+        .set("Cookie", `${INVITE_TOKEN_COOKIE_NAME}=${token}`)
+        .send({ email: "a@b.com", name: "A", password: "x" });
+      expect(invited.status).toBe(200);
+    });
+  });
+
+  // GH #743 review (HIGH-1): the same closed box against a REAL Better Auth
+  // instance — the endpoint must still exist (disableSignUp stays off) so an
+  // invited teammate can create the account their invite promises.
+  describe("closed box against real Better Auth (#743)", () => {
+    beforeEach(() => {
+      process.env.BETTER_AUTH_SECRET = "invite-gate-test-secret-0123456789abcdef";
+    });
+
+    afterEach(async () => {
+      await truncateWithRetry(db, sql`${authUsers}`);
+    });
+
+    function buildClosedApp() {
+      const auth = createBetterAuthInstance(
+        db,
+        {
+          authBaseUrlMode: "explicit",
+          authPublicBaseUrl: "http://127.0.0.1:3100",
+          // The production flag — wired through so the config shape mirrors
+          // the hosted box even though BA's internal flag stays off.
+          authDisableSignUp: true,
+        } as Parameters<typeof createBetterAuthInstance>[1],
+        ["http://127.0.0.1:3100"],
+      );
+      const app = express();
+      app.use(express.json());
+      app.use("/api/auth", inviteCodeSignupGuard({
+        enabled: false,
+        inviteOnly: true,
+        db,
+      }));
+      app.all("/api/auth/{*authPath}", createBetterAuthHandler(auth));
+      return app;
+    }
+
+    it("admits email sign-up carrying a valid invite while sign-up is disabled", async () => {
+      const { token } = await createInvite();
+      const res = await request(buildClosedApp())
+        .post("/api/auth/sign-up/email")
+        .set("Origin", "http://127.0.0.1:3100")
+        .send({
+          email: "invited@example.com",
+          name: "Invited",
+          password: "a-long-enough-password-1",
+          inviteToken: token,
+        });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const rows = await db.select().from(authUsers).where(eq(authUsers.email, "invited@example.com"));
+      expect(rows).toHaveLength(1);
+      // The create.after hook claimed the token to the created email…
+      expect(
+        ((await inviteRow(token))?.defaultsPayload as Record<string, unknown>)
+          ?.signupClaimedEmail,
+      ).toBe("invited@example.com");
+      // …and expired the invite cookie on the response.
+      const setCookies = res.headers["set-cookie"] as unknown as string[] | string;
+      expect([setCookies].flat().join(";")).toContain(`${INVITE_TOKEN_COOKIE_NAME}=`);
+    });
+
+    it("refuses sign-up with no credential while sign-up is disabled", async () => {
+      const res = await request(buildClosedApp())
+        .post("/api/auth/sign-up/email")
+        .set("Origin", "http://127.0.0.1:3100")
+        .send({
+          email: "stranger@example.com",
+          name: "Stranger",
+          password: "a-long-enough-password-1",
+        });
+
+      expect(res.status).toBe(403);
+      expect(
+        await db.select().from(authUsers).where(eq(authUsers.email, "stranger@example.com")),
+      ).toHaveLength(0);
+    });
+
+    it("a failed sign-up does not burn the invite token", async () => {
+      const { token } = await createInvite();
+      const app = buildClosedApp();
+
+      // Better Auth rejects the short password BEFORE creating the user —
+      // the token must survive that attempt unclaimed.
+      const failed = await request(app)
+        .post("/api/auth/sign-up/email")
+        .set("Origin", "http://127.0.0.1:3100")
+        .send({
+          email: "burned@example.com",
+          name: "Burned",
+          password: "x",
+          inviteToken: token,
+        });
+      expect(failed.status).not.toBe(200);
+      expect(
+        (await inviteRow(token))?.defaultsPayload as Record<string, unknown> | null,
+      ).not.toMatchObject({ signupClaimedEmail: expect.anything() });
+
+      const retry = await request(app)
+        .post("/api/auth/sign-up/email")
+        .set("Origin", "http://127.0.0.1:3100")
+        .send({
+          email: "teammate@example.com",
+          name: "Teammate",
+          password: "a-long-enough-password-1",
+          inviteToken: token,
+        });
+      expect(retry.status, JSON.stringify(retry.body)).toBe(200);
+      expect(
+        ((await inviteRow(token))?.defaultsPayload as Record<string, unknown>)
+          ?.signupClaimedEmail,
+      ).toBe("teammate@example.com");
+    });
+  });
+
+  // GH #743 review (HIGH-2): MCP self-serve sign-up mints the founding
+  // instance_admin — a company invite must NEVER open it. Only the shared
+  // instance codes may pass the local gate.
   describe("MCP signup gate", () => {
     beforeEach(() => {
       process.env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE = "true";
       process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP = "true";
-      // Remote funnel validation would otherwise try to phone home; the token
-      // path must not need it at all.
+      // Remote funnel validation would otherwise try to phone home.
       process.env.AGENTDASH_INVITE_VALIDATION = "off";
     });
 
@@ -327,33 +557,27 @@ describeEmbeddedPostgres("company-invite signup gate bypass (#731)", () => {
       return app;
     }
 
-    it("accepts a pending company invite token and creates the founding user", async () => {
+    it("refuses a company invite token — it cannot mint the founding admin", async () => {
       const { token } = await createInvite();
       const res = await request(buildMcpApp())
         .post("/api/onboarding/mcp-signup")
         .send({ email: "founder@example.com", name: "Founder", inviteToken: token });
 
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("invite_token_not_allowed");
+      expect(
+        await db.select().from(authUsers).where(eq(authUsers.email, "founder@example.com")),
+      ).toHaveLength(0);
+    });
+
+    it("still accepts the shared invite code and creates the founding user", async () => {
+      const res = await request(buildMcpApp())
+        .post("/api/onboarding/mcp-signup")
+        .send({ email: "founder@example.com", name: "Founder", inviteCode: "GENERAL-CODE" });
+
       expect(res.status, JSON.stringify(res.body)).toBe(201);
       expect(res.body.email).toBe("founder@example.com");
       expect(res.body.apiKey).toBeTruthy();
-    });
-
-    it("refuses a second sign-up claiming the same token to another email", async () => {
-      const { token } = await createInvite();
-      const app = buildMcpApp();
-
-      const first = await request(app)
-        .post("/api/onboarding/mcp-signup")
-        .send({ email: "first@example.com", name: "First", inviteToken: token });
-      expect(first.status, JSON.stringify(first.body)).toBe(201);
-
-      const second = await request(app)
-        .post("/api/onboarding/mcp-signup")
-        .send({ email: "second@example.com", name: "Second", inviteToken: token });
-      // The token is claimed to first@, so the gate refuses before the
-      // founding-only 409 even gets a say.
-      expect(second.status).toBe(403);
-      expect(second.body.code).toBe("invite_code_required");
     });
 
     it("still refuses sign-up with neither code nor token", async () => {

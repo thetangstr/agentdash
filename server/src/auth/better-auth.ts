@@ -14,8 +14,15 @@ import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
 import { sendEmail, resetPasswordEmailTemplate, welcomeEmailTemplate } from "./email.js";
 import { buildSocialProviders, ssoAccountCreationAllowed } from "./social-providers.js";
-import { readInviteTokenCookie } from "../lib/signup-gate.js";
-import { authorizeCompanyInviteSignup } from "../services/invites.js";
+import {
+  buildInviteTokenCookieClear,
+  inviteCookieSecureFlag,
+  readInviteTokenCookie,
+} from "../lib/signup-gate.js";
+import {
+  checkCompanyInviteSignup,
+  claimCompanyInviteSignup,
+} from "../services/invites.js";
 import { logger } from "../middleware/logger.js";
 
 export type BetterAuthSessionUser = {
@@ -291,7 +298,15 @@ export function createBetterAuthInstance(
       enabled: true,
       requireEmailVerification: false,
       resetPasswordTokenExpiresIn: resetTokenTtlSeconds,
-      disableSignUp: config.authDisableSignUp,
+      // GH #743 review: Better Auth's own disableSignUp is deliberately NOT
+      // set even when config.authDisableSignUp is true — a hard refuse at the
+      // endpoint would make company invites useless on hosted boxes (the
+      // invitee could never create the account the invite requires). The
+      // closure is enforced by the Express invite gate instead
+      // (inviteCodeSignupGuard inviteOnly mode), which admits sign-up only
+      // with a valid company-invite token — and by this file's
+      // user.create.before hook for every non-email path.
+      disableSignUp: false,
       // Better Auth 1.4.x fires this from POST /api/auth/request-password-reset
       // (not /forget-password — that was the 1.3.x path). It hands us:
       //   user  — the row to email
@@ -336,7 +351,13 @@ export function createBetterAuthInstance(
           // See `refuseUngatedUserCreation`.
           before: async (user: unknown, context: unknown) =>
             refuseUngatedUserCreation(context, { db, email: userEmail(user) }),
-          after: async (user: { id: string; email: string; name: string | null }) => {
+          after: async (
+            user: { id: string; email: string; name: string | null },
+            context: unknown,
+          ) => {
+            // GH #743 review: claim the invite token only once the user row
+            // exists, and expire the invite cookie on the response.
+            await claimInviteSignupAfterCreate(context, { db, email: user.email });
             // Two independent best-effort steps. Either failing must NOT
             // abort the user-create transaction — the account is already
             // committed by the time this runs, so all we'd do is leave a
@@ -422,10 +443,14 @@ function cookieHeaderFromContext(context: unknown): string | null {
  *
  * AgentDash (#731): one exception — a pending company-invite token delivered
  * in the `agentdash_invite_token` cookie (set by GET /api/invites/:token and
- * scoped to /api/auth) authorizes the creation, claimed to the SSO email by
- * `authorizeCompanyInviteSignup`. The cookie is why the provider-level
+ * scoped to /api/auth) authorizes the creation, READ-ONLY checked here by
+ * `checkCompanyInviteSignup`. The cookie is why the provider-level
  * `disableSignUp` had to go: the callback honours that flag BEFORE this hook
  * can see the invite, so the hook is now the single, uniform gate.
+ *
+ * GH #743 review: this hook only CHECKS; the single-use claim is written by
+ * `claimInviteSignupAfterCreate` in `user.create.after`, so a sign-up that
+ * never lands cannot burn the token.
  */
 export async function refuseUngatedUserCreation(
   context: unknown,
@@ -439,7 +464,7 @@ export async function refuseUngatedUserCreation(
   const token = readInviteTokenCookie(cookieHeaderFromContext(context));
   if (opts?.db && token && opts.email) {
     try {
-      if (await authorizeCompanyInviteSignup(opts.db, token, opts.email)) return;
+      if (await checkCompanyInviteSignup(opts.db, token, opts.email)) return;
     } catch (err) {
       // A database hiccup must fail closed, not wave the stranger through.
       logger.warn(
@@ -455,6 +480,56 @@ export async function refuseUngatedUserCreation(
       + "Open your company invite link first, or sign up by email with an invite code, "
       + "then sign in with SSO.",
   );
+}
+
+/** The `Set-Cookie` collector on the endpoint context, however it is shaped. */
+function responseHeadersFromContext(context: unknown): Headers | null {
+  if (!context || typeof context !== "object") return null;
+  const headers = (context as { responseHeaders?: unknown }).responseHeaders;
+  return headers instanceof Headers ? headers : null;
+}
+
+/**
+ * AgentDash (#743 review): `user.create.after` counterpart to the invite
+ * gates. Runs for EVERY account creation on every deployment kind:
+ *
+ *   - Claims the invite cookie's token to the just-created email
+ *     (`claimCompanyInviteSignup`, a CAS whose WHERE re-checks revocation,
+ *     acceptance, and expiry — see services/invites.ts).
+ *   - Appends a Set-Cookie that expires `agentdash_invite_token`, so a
+ *     consumed-or-stale token cannot ride along on the user's next request.
+ *
+ * Both steps are best-effort: the user row is already committed when this
+ * runs, and a failed claim only means the token stays spendable for the
+ * SAME email (any other email still fails the check).
+ */
+export async function claimInviteSignupAfterCreate(
+  context: unknown,
+  opts: { db?: Db; email?: string | null },
+): Promise<void> {
+  const token = readInviteTokenCookie(cookieHeaderFromContext(context));
+  if (!token) return;
+
+  const headers = responseHeadersFromContext(context);
+  headers?.append(
+    "set-cookie",
+    buildInviteTokenCookieClear({ secure: inviteCookieSecureFlag() }),
+  );
+
+  if (!opts.db || !opts.email) return;
+  try {
+    const claimed = await claimCompanyInviteSignup(opts.db, token, opts.email);
+    if (!claimed) {
+      logger.warn(
+        "[auth] company-invite signup claim matched no live invite — token left unclaimed",
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      "[auth] company-invite signup claim failed",
+    );
+  }
 }
 
 /**

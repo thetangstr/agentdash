@@ -96,7 +96,11 @@ import {
   hashToken,
   isInviteTokenHashCollisionError,
 } from "../lib/invite-tokens.js";
-import { buildInviteTokenCookie } from "../lib/signup-gate.js";
+import {
+  buildInviteTokenCookie,
+  buildInviteTokenCookieClear,
+  inviteCookieSecureFlag,
+} from "../lib/signup-gate.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
   claimBoardOwnership,
@@ -3201,12 +3205,21 @@ export function accessRoutes(
     // claim through the OAuth round trip (and email sign-up can read it when
     // the body field is absent). Only set while the invite could actually
     // authorize a sign-up: pending company_join invites a human can use.
+    //
+    // GH #743 review: `secure` comes from the CONFIGURED public URL, not
+    // req.secure — behind a TLS-terminating proxy the request is http and the
+    // attribute would be dropped exactly on hosted deployments. An unusable
+    // invite (agent-only, accepted) CLEARS any stale cookie instead of
+    // leaving it to ride the next sign-up.
+    const inviteCookieSecure = inviteCookieSecureFlag();
     if (
       invite.inviteType === "company_join" &&
       invite.allowedJoinTypes !== "agent" &&
       !invite.acceptedAt
     ) {
-      res.setHeader("Set-Cookie", buildInviteTokenCookie(token, { secure: req.secure }));
+      res.setHeader("Set-Cookie", buildInviteTokenCookie(token, { secure: inviteCookieSecure }));
+    } else {
+      res.setHeader("Set-Cookie", buildInviteTokenCookieClear({ secure: inviteCookieSecure }));
     }
     res.json({
       ...toInviteSummaryResponse(req, token, invite, companyBranding),

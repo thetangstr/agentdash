@@ -763,6 +763,9 @@ export async function startServer(): Promise<StartedServer> {
     // who want the old behavior back without a code change. Set
     // AGENTDASH_REQUIRE_CORP_EMAIL=true on the server to re-enforce.
     requireCorpEmail: process.env.AGENTDASH_REQUIRE_CORP_EMAIL === "true",
+    // AgentDash (#743 review): hosted boxes set this — the invite guard then
+    // runs invite-only (Better Auth's own disableSignUp stays off).
+    authDisableSignUp: config.authDisableSignUp,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 

@@ -95,19 +95,27 @@ export function inviteService(db: Db) {
 // AgentDash (#731): company invites bypass the hosted signup gate.
 //
 // A pending company_join invite IS an invitation to create an account — the
-// invitee cannot accept it without one — so the signup gates (browser email
-// guard, MCP signup, and the SSO user-create hook) accept the invite token as
-// an alternative credential to the shared instance codes. Three rules keep
-// the door narrow:
+// invitee cannot accept it without one — so the signup gates (the browser
+// email guard, which is also the only gate on a signup-disabled box, and
+// the SSO user-create hook) accept the invite token as an alternative
+// credential to the shared instance codes. Three rules keep the door
+// narrow:
 //
 //   1. The invite must be pending: company_join, human-joinable, not revoked,
 //      not expired, not already accepted.
 //   2. If the invite was addressed to a specific email (defaultsPayload.email),
 //      only that email may sign up with it.
-//   3. The token is single-use for account creation: the first sign-up claims
-//      it by writing the email into defaultsPayload.signupClaimedEmail with a
-//      compare-and-set update. A second sign-up with a different email fails
-//      the CAS and is refused; the same email may retry a failed attempt.
+//   3. The token is single-use for account creation: the first COMPLETED
+//      sign-up claims it by writing the email into
+//      defaultsPayload.signupClaimedEmail with a compare-and-set update. A
+//      second sign-up with a different email fails the CAS and is refused;
+//      the same email may retry.
+//
+// The check is READ-ONLY and the claim is a separate step run by the
+// user.create.after hook — a sign-up that never lands (bad password, dead
+// OAuth round trip) must not burn the token (GH #743 review). The claim's
+// WHERE clause re-verifies every validity predicate, so the check's verdict
+// cannot go stale between the gate and the claim.
 //
 // The claim lives in defaultsPayload rather than a new column because it is
 // audit metadata about a short-lived state, never rendered by the invite
@@ -127,14 +135,45 @@ export function inviteSignupBoundEmail(
   return email.trim().toLowerCase();
 }
 
+/** The email that claimed this token at sign-up, or null when unclaimed. */
+export function inviteSignupClaimedEmail(
+  invite: Pick<typeof invites.$inferSelect, "defaultsPayload">,
+): string | null {
+  const payload = invite.defaultsPayload;
+  if (!payload || typeof payload !== "object") return null;
+  const email = (payload as Record<string, unknown>)[INVITE_SIGNUP_CLAIM_KEY];
+  if (typeof email !== "string" || !email.trim()) return null;
+  return email.trim().toLowerCase();
+}
+
+function inviteSignupValidityPredicate(invite: typeof invites.$inferSelect): boolean {
+  return Boolean(
+    invite.companyId &&
+      invite.inviteType === "company_join" &&
+      invite.allowedJoinTypes !== "agent" &&
+      !invite.revokedAt &&
+      !invite.acceptedAt &&
+      invite.expiresAt.getTime() > Date.now(),
+  );
+}
+
+async function findInviteBySignupToken(db: Db, token: string) {
+  return db
+    .select()
+    .from(invites)
+    .where(eq(invites.tokenHash, hashToken(token.trim())))
+    .then((rows) => rows[0] ?? null);
+}
+
 /**
- * Whether `token` entitles `email` to create an account on a gated instance.
- * Authorizing CLAIMS the token to that email (see above) — callers must only
- * invoke this at the point they would otherwise let the sign-up through.
- * Returns false for every refusal; callers intentionally cannot distinguish
- * them (same response as a missing/invalid invite code).
+ * Read-only gate check: whether `token` entitles `email` to create an
+ * account. Runs the pending-invite predicates, the invite's own email
+ * binding, and refuses when the token was already claimed by a DIFFERENT
+ * email (the same email may retry). Returns false for every refusal;
+ * callers intentionally cannot distinguish them (same response as a
+ * missing/invalid invite code).
  */
-export async function authorizeCompanyInviteSignup(
+export async function checkCompanyInviteSignup(
   db: Db,
   token: string,
   email: string | null | undefined,
@@ -143,24 +182,35 @@ export async function authorizeCompanyInviteSignup(
   const trimmedToken = token.trim();
   if (!trimmedToken || !normalizedEmail) return false;
 
-  const invite = await db
-    .select()
-    .from(invites)
-    .where(eq(invites.tokenHash, hashToken(trimmedToken)))
-    .then((rows) => rows[0] ?? null);
-  if (
-    !invite ||
-    !invite.companyId ||
-    invite.inviteType !== "company_join" ||
-    invite.allowedJoinTypes === "agent" ||
-    invite.revokedAt ||
-    invite.acceptedAt ||
-    invite.expiresAt.getTime() <= Date.now()
-  ) {
-    return false;
-  }
+  const invite = await findInviteBySignupToken(db, trimmedToken);
+  if (!invite || !inviteSignupValidityPredicate(invite)) return false;
   const boundEmail = inviteSignupBoundEmail(invite);
   if (boundEmail && boundEmail !== normalizedEmail) return false;
+  const claimedEmail = inviteSignupClaimedEmail(invite);
+  if (claimedEmail && claimedEmail !== normalizedEmail) return false;
+  return true;
+}
+
+/**
+ * Claim `token` to `email` — the single-use write, executed AFTER the user
+ * row exists (the check is advisory; this CAS is the enforcement). The
+ * WHERE clause re-checks revocation, acceptance and expiry (GH #743
+ * review): a token revoked or accepted between the check and this update
+ * simply writes nothing rather than stamping a claim on a dead invite.
+ * Returns false when nothing was claimed — callers only log; the account
+ * already exists by then either way.
+ */
+export async function claimCompanyInviteSignup(
+  db: Db,
+  token: string,
+  email: string | null | undefined,
+): Promise<boolean> {
+  const normalizedEmail = email?.trim().toLowerCase();
+  const trimmedToken = token.trim();
+  if (!trimmedToken || !normalizedEmail) return false;
+
+  const invite = await findInviteBySignupToken(db, trimmedToken);
+  if (!invite) return false;
 
   const claimed = await db
     .update(invites)
@@ -175,6 +225,11 @@ export async function authorizeCompanyInviteSignup(
     .where(
       and(
         eq(invites.id, invite.id),
+        eq(invites.inviteType, "company_join"),
+        sql`${invites.allowedJoinTypes} <> 'agent'`,
+        sql`${invites.revokedAt} IS NULL`,
+        sql`${invites.acceptedAt} IS NULL`,
+        sql`${invites.expiresAt} > now()`,
         sql`(${invites.defaultsPayload} ->> ${INVITE_SIGNUP_CLAIM_KEY}) IS NULL
           OR lower(${invites.defaultsPayload} ->> ${INVITE_SIGNUP_CLAIM_KEY}) = ${normalizedEmail}`,
       ),

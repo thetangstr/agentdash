@@ -263,6 +263,10 @@ export async function createApp(
     mcpSignupCaptureResetUrl?: McpSignupCaptureResetUrl;
     // AgentDash (AGE-60): when true, reject free-mail signups at the auth endpoint.
     requireCorpEmail?: boolean;
+    // AgentDash (#743 review): PAPERCLIP_AUTH_DISABLE_SIGN_UP — the invite
+    // guard runs in invite-only mode (company-invite tokens open sign-up,
+    // shared codes do not).
+    authDisableSignUp?: boolean;
   },
 ) {
   const app = express();
@@ -342,6 +346,10 @@ export async function createApp(
       inviteCodeSignupGuard({
         // AgentDash (#726): same parser as the hosted-box boot guard.
         enabled: signupInviteCodeRequired(),
+        // AgentDash (#743 review): a signup-disabled box is not open — the
+        // guard is the actual gate (Better Auth's disableSignUp stays off so
+        // company invites still work) and only a pending invite admits.
+        inviteOnly: opts.authDisableSignUp ?? false,
         // AgentDash (#731): needed for the company-invite token bypass.
         db,
       }),

@@ -30,7 +30,6 @@ import {
   mcpInviteValidationEnabled,
   signupInviteCodeRequired,
 } from "../lib/signup-gate.js";
-import { authorizeCompanyInviteSignup } from "../services/invites.js";
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { count, eq } from "drizzle-orm";
@@ -78,9 +77,11 @@ const mcpSignupBodySchema = z.object({
   email: z.string().trim().email(),
   name: z.string().trim().min(1).max(120),
   inviteCode: z.string().trim().min(1).max(120).optional(),
-  // AgentDash (#731): a pending company-invite token (pcp_invite_*) also
-  // opens the local gate — same rule as the browser sign-up guard. Never sent
-  // to the remote funnel validator; it is a local database credential.
+  // GH #743 review: a company-invite token must NOT open this route. An
+  // invite authorizes creating an account to JOIN that company — it must
+  // never mint the founding instance_admin of a fresh install. The field
+  // stays in the schema so misuse gets an explicit refusal rather than a
+  // silently ignored credential.
   inviteToken: z.string().trim().min(1).max(256).optional(),
 });
 
@@ -102,7 +103,7 @@ function inviteValidationUrl(): string {
 }
 
 type InviteCheck =
-  | { ok: true; via?: "code" | "inviteToken" | "ungated" }
+  | { ok: true; via?: "code" | "ungated" }
   | { ok: false; status: number; code: string; error: string };
 
 async function checkInviteCode(inviteCode: string | undefined): Promise<InviteCheck> {
@@ -161,20 +162,14 @@ function isSelfServeBootstrapEnabled(): boolean {
  * funnel, so a box that gated browser sign-up left this door on a different
  * key, or on none when remote validation was off.
  *
- * AgentDash (#731): a pending company-invite token passes this gate too, on
- * the same terms as the browser guard (claimed single-use to the email).
+ *
+ * GH #743 review: company-invite tokens are deliberately NOT accepted here —
+ * this route mints the founding instance_admin, and an invite may only
+ * authorize joining an existing company. The refusal happens in the handler.
  */
-async function checkLocalSignupGate(
-  db: Db,
-  inviteCode: string | undefined,
-  inviteToken: string | undefined,
-  email: string,
-): Promise<InviteCheck> {
+function checkLocalSignupGate(inviteCode: string | undefined): InviteCheck {
   if (!signupInviteCodeRequired()) return { ok: true, via: "ungated" };
   if (isAcceptedSignupInviteCode(inviteCode)) return { ok: true, via: "code" };
-  if (inviteToken && (await authorizeCompanyInviteSignup(db, inviteToken, email))) {
-    return { ok: true, via: "inviteToken" };
-  }
   return {
     ok: false,
     status: 403,
@@ -230,19 +225,30 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
       }
       const { email, name, inviteCode, inviteToken } = parsed.data;
 
+      // GH #743 review: refuse a company-invite token outright. It is a
+      // credential for joining an existing company — on this founding-user
+      // route it would mint instance_admin privilege from a company-scoped
+      // invite. Refuse BEFORE the gates so the answer is the same on gated
+      // and ungated installs alike.
+      if (inviteToken) {
+        res.status(400).json({
+          code: "invite_token_not_allowed",
+          error:
+            "inviteToken is not accepted here — a company invite authorizes "
+            + "joining that company through browser/SSO sign-up, not claiming a "
+            + "fresh install. MCP signup requires an inviteCode instead.",
+        });
+        return;
+      }
+
       // Invite-code funnel gate BEFORE any user creation. Fail-closed on
       // transport errors; AGENTDASH_INVITE_VALIDATION=off disables entirely.
-      const localGate = await checkLocalSignupGate(db, inviteCode, inviteToken, email);
+      const localGate = checkLocalSignupGate(inviteCode);
       if (!localGate.ok) {
         res.status(localGate.status).json({ code: localGate.code, error: localGate.error });
         return;
       }
-      // A company invite token is a local credential — the remote funnel
-      // validator only knows shared codes, so it is skipped only when the
-      // token was the credential that opened the local gate.
-      const invite = localGate.via === "inviteToken"
-        ? ({ ok: true } as const)
-        : await checkInviteCode(inviteCode);
+      const invite = await checkInviteCode(inviteCode);
       if (!invite.ok) {
         res.status(invite.status).json({ code: invite.code, error: invite.error });
         return;

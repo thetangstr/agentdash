@@ -94,18 +94,39 @@ export function readInviteTokenCookie(cookieHeader: string | null | undefined): 
   return null;
 }
 
-function serializeInviteTokenCookie(value: string, secure: boolean): string {
+function serializeInviteTokenCookie(value: string, maxAgeSeconds: number, secure: boolean): string {
   return [
     `${INVITE_TOKEN_COOKIE_NAME}=${encodeURIComponent(value)}`,
     "Path=/api/auth",
     "HttpOnly",
     "SameSite=Lax",
-    `Max-Age=${INVITE_TOKEN_COOKIE_MAX_AGE_SECONDS}`,
+    `Max-Age=${maxAgeSeconds}`,
     ...(secure ? ["Secure"] : []),
   ].join("; ");
 }
 
+/**
+ * Whether the invite cookie should carry `Secure`. GH #743 review: decide
+ * from the CONFIGURED public URL, not `req.secure` — behind a TLS-
+ * terminating proxy the request itself is http and the attribute would be
+ * dropped exactly on the deployments that need it. No public URL → not
+ * secure (plain-http dev box).
+ */
+export function inviteCookieSecureFlag(env: Env = process.env): boolean {
+  const publicUrl =
+    env.PAPERCLIP_PUBLIC_URL ??
+    env.PAPERCLIP_AUTH_PUBLIC_BASE_URL ??
+    env.BETTER_AUTH_URL ??
+    env.BETTER_AUTH_BASE_URL;
+  return (publicUrl ?? "").trim().toLowerCase().startsWith("https://");
+}
+
 /** Set-Cookie value that stores a pending invite token for the auth endpoints. */
 export function buildInviteTokenCookie(token: string, opts: { secure: boolean }): string {
-  return serializeInviteTokenCookie(token, opts.secure);
+  return serializeInviteTokenCookie(token, INVITE_TOKEN_COOKIE_MAX_AGE_SECONDS, opts.secure);
+}
+
+/** Set-Cookie value that expires the invite token cookie immediately. */
+export function buildInviteTokenCookieClear(opts: { secure: boolean }): string {
+  return serializeInviteTokenCookie("", 0, opts.secure);
 }

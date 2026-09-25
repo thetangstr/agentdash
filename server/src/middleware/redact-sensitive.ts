@@ -47,6 +47,11 @@ const SENSITIVE_KEYS = new Set<string>([
   "codeverifier",
   "assertion",
   "client_assertion",
+  // GH #743 review: company-invite tokens are signup credentials — a refused
+  // sign-up POST logs its body verbatim on the 4xx line, and a logged token
+  // is spendable until claimed or expired.
+  "invitetoken",
+  "invite_token",
 ]);
 
 const MAX_DEPTH = 6;
