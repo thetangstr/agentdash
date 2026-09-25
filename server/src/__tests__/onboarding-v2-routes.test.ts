@@ -97,7 +97,8 @@ vi.mock("../services/index.js", () => ({
 
 vi.mock("@paperclipai/db", () => ({
   authUsers: { id: "id" },
-  assistantConversations: { id: "id" },
+  assistantConversations: { id: "id", companyId: "company_id" },
+  deepInterviewStates: { id: "id", scope: "scope", scopeRefId: "scope_ref_id" },
   assistantMessages: {
     conversationId: "conversation_id",
     cardKind: "card_kind",
@@ -284,7 +285,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
     // Closes #330: route asserts companyAccess against body.companyId
     // (per PR #282 / #230 security fix). Actor must include the
     // company in its companyIds list or the route returns 403.
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
     const res = await request(app).post("/api/onboarding/agent/confirm").send({
       conversationId: "conv1",
       reportsToAgentId: "cos1",
@@ -311,7 +312,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
       agentId: "cos1",
       apiKey: { id: "k", token: "agk_x" },
     });
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
 
     const res = await request(app).post("/api/onboarding/agent/confirm").send({
       conversationId: "conv1",
@@ -332,7 +333,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
     mockAgents.list.mockResolvedValue([
       { id: "cos1", role: "chief_of_staff", status: "idle" },
     ]);
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
 
     const res = await request(app).post("/api/onboarding/agent/confirm").send({
       conversationId: "conv1",
@@ -378,7 +379,7 @@ describe("POST /api/onboarding/agent/confirm", () => {
       };
     });
 
-    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }], [{ companyId: "c1" }]]);
     const requestBody = {
       conversationId: "conv1",
       reportsToAgentId: "owner",
@@ -394,6 +395,59 @@ describe("POST /api/onboarding/agent/confirm", () => {
     expect([first.body.code, second.body.code]).toContain("agent_cap_exceeded");
     expect(mockCreator.create).toHaveBeenCalledTimes(1);
     expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+  });
+  it("refuses a conversation from another company (no transcript read, no hire, no post)", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ companyId: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv-of-c2",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+    expect(res.status).toBe(404);
+    expect(mockConversations.paginate).not.toHaveBeenCalled();
+    expect(mockProposer.propose).not.toHaveBeenCalled();
+    expect(mockCreator.create).not.toHaveBeenCalled();
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown conversation", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[]]);
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "missing",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+    expect(res.status).toBe(404);
+    expect(mockCreator.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/onboarding/finalize-assessment", () => {
+  it("refuses a state whose conversation belongs to another company", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "conv-of-c2" }], [{ companyId: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(403);
+  });
+
+  it("404s an unknown state id", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[]]);
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "nope" });
+    expect(res.status).toBe(404);
+  });
+
+  it("404s a state that is not a CoS onboarding interview", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "assess_project", scopeRefId: "p1" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(404);
   });
 });
 

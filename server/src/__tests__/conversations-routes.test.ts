@@ -159,7 +159,7 @@ describe.sequential("conversation routes", () => {
     mockConversationService.postMessage.mockResolvedValue(baseMessage);
     mockConversationService.paginate.mockResolvedValue([baseMessage]);
     mockConversationService.listParticipants.mockResolvedValue([]);
-    mockConversationService.setReadPointer.mockResolvedValue(undefined);
+    mockConversationService.setReadPointer.mockResolvedValue(true);
     mockAgentService.list.mockResolvedValue([]);
     mockDispatchOnMessage.mockResolvedValue(undefined);
     mockConversationDispatch.mockReturnValue({ onMessage: mockDispatchOnMessage });
@@ -419,10 +419,11 @@ describe.sequential("conversation routes", () => {
         expect(mockConversationService[route.service]).not.toHaveBeenCalled();
       });
 
-      it(`${route.name} rejects anonymous callers`, async () => {
+      it(`${route.name} rejects anonymous callers before looking the conversation up`, async () => {
         const app = await createApp(noActor);
         const res = await requestApp(app, route.send);
         expect(res.status).toBe(401);
+        expect(mockConversationService.getById).not.toHaveBeenCalled();
         expect(mockConversationService[route.service]).not.toHaveBeenCalled();
       });
 
@@ -465,6 +466,17 @@ describe.sequential("conversation routes", () => {
       );
       await new Promise((r) => setImmediate(r));
       expect(mockDispatchOnMessage).toHaveBeenCalledWith(expect.objectContaining({ companyId }));
+    });
+
+    it("PATCH /:id/read rejects a message id from another conversation", async () => {
+      mockConversationService.setReadPointer.mockResolvedValue(false);
+      const app = await createApp(boardActor);
+      const res = await requestApp(app, (base) =>
+        request(base)
+          .patch(`/api/conversations/${conversationId}/read`)
+          .send({ lastReadMessageId: "ffffffff-ffff-4fff-8fff-ffffffffffff" }),
+      );
+      expect(res.status).toBe(400);
     });
 
     it("PATCH /:id/read emits on the conversation's company, not a body-supplied one", async () => {

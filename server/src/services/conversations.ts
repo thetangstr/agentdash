@@ -67,6 +67,19 @@ export function conversationService(db: Db) {
       lastReadMessageId: string,
       companyId?: string,
     ) => {
+      // AgentDash (security): the read pointer must name a message in this
+      // conversation; a message id from another conversation is refused.
+      const owned = await db
+        .select({ id: assistantMessages.id })
+        .from(assistantMessages)
+        .where(
+          and(
+            eq(assistantMessages.id, lastReadMessageId),
+            eq(assistantMessages.conversationId, conversationId),
+          ),
+        )
+        .limit(1);
+      if (owned.length === 0) return false;
       await db
         .update(assistantConversationParticipants)
         .set({ lastReadMessageId })
@@ -79,6 +92,7 @@ export function conversationService(db: Db) {
       if (companyId) {
         emitMessageRead({ conversationId, userId, lastReadMessageId, companyId });
       }
+      return true;
     },
 
     postMessage: async (input: {
@@ -118,7 +132,14 @@ export function conversationService(db: Db) {
         const cursor = await db
           .select({ createdAt: assistantMessages.createdAt })
           .from(assistantMessages)
-          .where(eq(assistantMessages.id, opts.before))
+          // AgentDash (security): resolve the cursor inside this conversation
+          // only, so another conversation's message id cannot steer paging.
+          .where(
+            and(
+              eq(assistantMessages.id, opts.before),
+              eq(assistantMessages.conversationId, conversationId),
+            ),
+          )
           .limit(1);
         if (cursor[0]) {
           conditions.push(lt(assistantMessages.createdAt, cursor[0].createdAt));

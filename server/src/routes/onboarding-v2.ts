@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { authUsers, assistantConversations, assistantMessages } from "@paperclipai/db";
+import { authUsers, assistantConversations, assistantMessages, deepInterviewStates } from "@paperclipai/db";
 import { and, desc, eq } from "drizzle-orm";
 import {
   onboardingOrchestrator,
@@ -451,6 +451,16 @@ export function onboardingV2Routes(db: Db) {
     // materialize an agent in someone else's company. Verify the actor has
     // active access to the target companyId before any side effect.
     assertCompanyAccess(req, companyId);
+    // AgentDash (security): the conversation must belong to the same company.
+    // Otherwise a member of A could name B's conversation, read its transcript
+    // into a new A agent, and post the hire card into B's thread.
+    const convoRows = await db
+      .select({ companyId: assistantConversations.companyId })
+      .from(assistantConversations)
+      .where(eq(assistantConversations.id, conversationId));
+    if (!convoRows[0] || convoRows[0].companyId !== companyId) {
+      throw notFound("Conversation not found");
+    }
     if (!(await enforceFreeTierCapacity(companyId, { agents: 1 }, res))) return;
     const transcript = await loadInterviewTranscript(db, conversationId);
     const proposal = await agentProposer({ llm: realProposerLlm }).propose(
@@ -689,6 +699,24 @@ ${kpis || "- (none captured)"}
     if (!stateId || typeof stateId !== "string") {
       throw badRequest("stateId required");
     }
+    // AgentDash (security): authorize the state through the conversation it
+    // belongs to before crystallizing; a bare state id is not a capability.
+    const stateRows = await db
+      .select({ scope: deepInterviewStates.scope, scopeRefId: deepInterviewStates.scopeRefId })
+      .from(deepInterviewStates)
+      .where(eq(deepInterviewStates.id, stateId));
+    const state = stateRows[0];
+    if (!state || state.scope !== "cos_onboarding") {
+      throw notFound("Interview state not found");
+    }
+    const stateConvoRows = await db
+      .select({ companyId: assistantConversations.companyId })
+      .from(assistantConversations)
+      .where(eq(assistantConversations.id, state.scopeRefId));
+    if (!stateConvoRows[0]) {
+      throw notFound("Interview state not found");
+    }
+    assertCompanyAccess(req, stateConvoRows[0].companyId);
     const finalize = crystallizeAndAdvanceCos({ db });
     const { specId, conversationId } = await finalize(stateId);
     res.json({ specId, conversationId, redirectUrl: "/cos" });

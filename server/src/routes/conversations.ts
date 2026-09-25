@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { type Db, deepInterviewSpecs as deepInterviewSpecsTable } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
   conversationService,
   conversationDispatch,
@@ -69,6 +69,9 @@ export function conversationRoutes(db: Db) {
   // never taken from the request body — a caller-supplied companyId used to
   // pick which company's live-event stream a message was broadcast on.
   async function loadAuthorizedConversation(req: Request) {
+    // Authenticate before the lookup, so an anonymous caller cannot tell an
+    // existing conversation id (401) from a missing one (404).
+    assertAuthenticated(req);
     const conversation = await svc.getById(req.params.id as string);
     if (!conversation) {
       throw notFound("Conversation not found");
@@ -152,12 +155,15 @@ export function conversationRoutes(db: Db) {
       throw badRequest("lastReadMessageId required");
     }
     const conversation = await loadAuthorizedConversation(req);
-    await svc.setReadPointer(
+    const updated = await svc.setReadPointer(
       conversation.id,
       req.actor.userId,
       lastReadMessageId,
       conversation.companyId,
     );
+    if (!updated) {
+      throw badRequest("lastReadMessageId is not a message in this conversation");
+    }
     res.status(204).end();
   });
 
