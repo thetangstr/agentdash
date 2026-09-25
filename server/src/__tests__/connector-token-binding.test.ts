@@ -32,8 +32,9 @@ vi.mock("@slack/web-api", () => ({
   },
 }));
 
-// Record which connection the Gmail send is executed against.
+// Record which connection each Gmail call is executed against.
 const gmailSendCalls: string[] = [];
+const gmailReadCalls: Array<{ op: string; connectionId: string }> = [];
 vi.mock("../services/gmail-connector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/gmail-connector.js")>();
   return {
@@ -42,6 +43,22 @@ vi.mock("../services/gmail-connector.js", async (importOriginal) => {
       sendEmail: async (connectionId: string) => {
         gmailSendCalls.push(connectionId);
         return { type: "sent", result: { id: "m1", threadId: "t1" } };
+      },
+      search: async (connectionId: string) => {
+        gmailReadCalls.push({ op: "search", connectionId });
+        return { messages: [], nextPageToken: null };
+      },
+      listMessages: async (connectionId: string) => {
+        gmailReadCalls.push({ op: "messages", connectionId });
+        return { messages: [], nextPageToken: null };
+      },
+      readThread: async (connectionId: string) => {
+        gmailReadCalls.push({ op: "thread", connectionId });
+        return { id: "t1", messages: [] };
+      },
+      createDraft: async (connectionId: string) => {
+        gmailReadCalls.push({ op: "draft", connectionId });
+        return { draftId: "d1" };
       },
     }),
   };
@@ -70,6 +87,7 @@ describeEmbeddedPostgres("connector send paths bind the token to the authorized 
   beforeEach(() => {
     slackTokensUsed.length = 0;
     gmailSendCalls.length = 0;
+    gmailReadCalls.length = 0;
   });
 
   afterEach(async () => {
@@ -290,6 +308,152 @@ describeEmbeddedPostgres("connector send paths bind the token to the authorized 
         .send(body(a.agent.id));
       expect(res.status).toBe(200);
       expect(gmailSendCalls).toEqual([authorized.id]);
+    });
+  });
+  describe("gmail read and draft routes (closes #720)", () => {
+    type Actor = Record<string, unknown>;
+    function appFor(actor: Actor) {
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        (req as any).actor = actor;
+        next();
+      });
+      app.use("/api", gmailRoutes(db));
+      app.use(errorHandler);
+      return app;
+    }
+    const member = (userId: string, companyId: string, role = "operator"): Actor => ({
+      type: "board",
+      userId,
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+      memberships: [{ companyId, membershipRole: role, status: "active" }],
+    });
+    const agentKey = (agentId: string, companyId: string): Actor => ({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+    });
+
+    async function seedMailboxes() {
+      const svc = connectorService(db);
+      const a = await seedCompany();
+      const userA = `user-a-${randomUUID()}`;
+      const userB = `user-b-${randomUUID()}`;
+      const aPrivate = await svc.create(a.company.id, {
+        ownerType: "user",
+        ownerId: userA,
+        provider: "google",
+        scopes: ["gmail.readonly", "gmail.send"],
+        autonomy: { ...fullSend },
+        visibility: "private",
+        token: { accessToken: "token-userA-private" },
+      });
+      const agentOwn = await svc.create(a.company.id, {
+        ownerType: "agent",
+        ownerId: a.agent.id,
+        provider: "google",
+        scopes: ["gmail.readonly"],
+        autonomy: { ...fullSend },
+        visibility: "private",
+        token: { accessToken: "token-agent-own" },
+      });
+      const sharedReadOnly = await svc.create(a.company.id, {
+        ownerType: "user",
+        ownerId: userA,
+        provider: "google",
+        scopes: ["gmail.readonly"],
+        autonomy: { read: "full", draft: "blocked", send: "blocked" },
+        visibility: "workspace",
+        token: { accessToken: "token-shared" },
+      });
+      return { a, userA, userB, aPrivate, agentOwn, sharedReadOnly };
+    }
+
+    const readPaths = (companyId: string, connectionId: string) => [
+      `/api/companies/${companyId}/connectors/gmail/${connectionId}/search?q=invoice`,
+      `/api/companies/${companyId}/connectors/gmail/${connectionId}/messages`,
+      `/api/companies/${companyId}/connectors/gmail/${connectionId}/threads/t1`,
+    ];
+    const draftBody = { to: "x@example.com", subject: "s", body: "b" };
+
+    it("a member cannot search, list, read threads, or draft in a colleague's private connection", async () => {
+      const { a, userB, aPrivate } = await seedMailboxes();
+      const app = appFor(member(userB, a.company.id));
+      for (const path of readPaths(a.company.id, aPrivate.id)) {
+        const res = await request(app).get(path);
+        expect(res.status, path).toBe(403);
+      }
+      // Even a company admin may not draft in a member's private mailbox.
+      const adminApp = appFor(member(userB, a.company.id, "owner"));
+      const draft = await request(adminApp)
+        .post(`/api/companies/${a.company.id}/connectors/gmail/${aPrivate.id}/drafts`)
+        .send(draftBody);
+      expect(draft.status).toBe(403);
+      const adminRead = await request(adminApp).get(readPaths(a.company.id, aPrivate.id)[0]!);
+      expect(adminRead.status).toBe(403);
+      expect(gmailReadCalls).toHaveLength(0);
+    });
+
+    it("a member cannot reach a colleague's private connection by naming an agent", async () => {
+      const { a, userB, aPrivate } = await seedMailboxes();
+      const app = appFor(member(userB, a.company.id, "owner"));
+      const res = await request(app)
+        .post(`/api/companies/${a.company.id}/connectors/gmail/${aPrivate.id}/send`)
+        .send({ ...draftBody, agentId: a.agent.id });
+      expect(res.status).toBe(403);
+      expect(gmailSendCalls).toHaveLength(0);
+    });
+
+    it("an agent key cannot read a human's private connection or act as another agent", async () => {
+      const { a, aPrivate, agentOwn } = await seedMailboxes();
+      const app = appFor(agentKey(a.agent.id, a.company.id));
+      for (const path of readPaths(a.company.id, aPrivate.id)) {
+        const res = await request(app).get(path);
+        expect(res.status, path).toBe(403);
+      }
+      expect(gmailReadCalls).toHaveLength(0);
+
+      // Legitimate: the agent reads its own connection.
+      const own = await request(app).get(readPaths(a.company.id, agentOwn.id)[0]!);
+      expect(own.status).toBe(200);
+      expect(gmailReadCalls).toEqual([{ op: "search", connectionId: agentOwn.id }]);
+    });
+
+    it("the owner can search, list, read, draft, and send from their own private connection", async () => {
+      const { a, userA, aPrivate } = await seedMailboxes();
+      const app = appFor(member(userA, a.company.id, "owner"));
+      for (const path of readPaths(a.company.id, aPrivate.id)) {
+        const res = await request(app).get(path);
+        expect(res.status, path).toBe(200);
+      }
+      const draft = await request(app)
+        .post(`/api/companies/${a.company.id}/connectors/gmail/${aPrivate.id}/drafts`)
+        .send(draftBody);
+      expect(draft.status).toBe(201);
+      const send = await request(app)
+        .post(`/api/companies/${a.company.id}/connectors/gmail/${aPrivate.id}/send`)
+        .send(draftBody);
+      expect(send.status).toBe(200);
+      expect(gmailReadCalls.map((c) => c.op)).toEqual(["search", "messages", "thread", "draft"]);
+      expect(gmailReadCalls.every((c) => c.connectionId === aPrivate.id)).toBe(true);
+      expect(gmailSendCalls).toEqual([aPrivate.id]);
+    });
+
+    it("a workspace-visible connection follows its autonomy settings", async () => {
+      const { a, userB, sharedReadOnly } = await seedMailboxes();
+      const app = appFor(member(userB, a.company.id, "owner"));
+      const read = await request(app).get(readPaths(a.company.id, sharedReadOnly.id)[0]!);
+      expect(read.status).toBe(200);
+      const draft = await request(app)
+        .post(`/api/companies/${a.company.id}/connectors/gmail/${sharedReadOnly.id}/drafts`)
+        .send(draftBody);
+      expect(draft.status).toBe(403);
+      expect(draft.body.code).toBe("autonomy_blocked");
+      expect(gmailReadCalls).toEqual([{ op: "search", connectionId: sharedReadOnly.id }]);
     });
   });
 });
