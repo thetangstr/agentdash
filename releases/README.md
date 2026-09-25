@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.925.0](v2026.925.0.md) | 2026-09-25 | Assistant MCP read tools and OAuth; Hermes in the image; token ceiling; 13 security fixes | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.925.0) |
 | [v2026.924.0](v2026.924.0.md) | 2026-09-24 | Instance updates work from the board; approval-gated reviewer auto-hire | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.924.0) |
 | [v2026.923.0](v2026.923.0.md) | 2026-09-23 | Steward guides as pages in the app | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.923.0) |
 | [v2026.922.1](v2026.922.1.md) | 2026-09-22 | Teams Workflows webhooks deliver messages again | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.922.1) |
