@@ -165,8 +165,10 @@ describe("GET /invites/:token", () => {
     expect(header).toContain("SameSite=Lax");
   }, 10_000);
 
-  it("does NOT set the cookie on an agent-only invite (#731)", async () => {
-    // Agents don't create accounts — the claim would be dead weight.
+  it("does NOT set the cookie on an agent-only invite — it clears a stale one (#731/#743)", async () => {
+    // Agents don't create accounts — the claim would be dead weight. Since
+    // #743 the response actively expires any invite cookie the browser may
+    // already hold, so the name appears with an empty value + Max-Age=0.
     const invite = {
       id: "invite-1",
       companyId: "company-1",
@@ -193,7 +195,9 @@ describe("GET /invites/:token", () => {
     expect(res.status).toBe(200);
     const setCookie = res.headers["set-cookie"];
     const header = Array.isArray(setCookie) ? setCookie.join("; ") : String(setCookie ?? "");
-    expect(header).not.toContain("agentdash_invite_token");
+    expect(header).not.toContain("agentdash_invite_token=pcp_invite_test");
+    expect(header).toContain("agentdash_invite_token=;");
+    expect(header).toContain("Max-Age=0");
   }, 10_000);
 
   it("omits companyLogoUrl when the stored logo object is missing", async () => {
