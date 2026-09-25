@@ -10,11 +10,38 @@ import {
   GMAIL_SCOPES_READ_SEND,
 } from "../services/gmail-connector.js";
 import { badRequest } from "../errors.js";
+import type { Request, Response } from "express";
+import type { ConnectorActionClass } from "@paperclipai/shared";
+import { authorizeNamedConnection } from "./connector-acting-as.js";
 
 export function gmailRoutes(db: Db) {
   const router = Router();
   const gmailSvc = gmailConnectorService(db);
   const connSvc = connectorService(db);
+
+  // AgentDash (security): shared with the Slack route — see connector-acting-as.ts.
+  // Returns the resolution, or writes a 403 and returns null.
+  async function authorizeConnection(
+    req: Request,
+    res: Response,
+    companyId: string,
+    connectionId: string,
+    actionClass: ConnectorActionClass,
+    requestedAgentId?: unknown,
+  ) {
+    const result = await authorizeNamedConnection(connSvc, req, {
+      companyId,
+      connectionId,
+      provider: "google",
+      actionClass,
+      requestedAgentId,
+    });
+    if (!result.ok) {
+      res.status(403).json({ error: result.message, code: result.code });
+      return null;
+    }
+    return result;
+  }
 
   // -------------------------------------------------------------------------
   // OAuth: initiate flow
@@ -160,7 +187,10 @@ export function gmailRoutes(db: Db) {
         : 20;
       const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
 
-      const result = await gmailSvc.search(connectionId, companyId, {
+      const authorized = await authorizeConnection(req, res, companyId, connectionId, "read");
+      if (!authorized) return;
+
+      const result = await gmailSvc.search(authorized.resolution.connectionId, companyId, {
         query: q,
         maxResults,
         pageToken,
@@ -191,7 +221,10 @@ export function gmailRoutes(db: Db) {
         ? req.query.labelIds.split(",").filter(Boolean)
         : undefined;
 
-      const result = await gmailSvc.listMessages(connectionId, companyId, {
+      const authorized = await authorizeConnection(req, res, companyId, connectionId, "read");
+      if (!authorized) return;
+
+      const result = await gmailSvc.listMessages(authorized.resolution.connectionId, companyId, {
         maxResults,
         pageToken,
         labelIds,
@@ -215,7 +248,10 @@ export function gmailRoutes(db: Db) {
       const connectionId = req.params.connectionId as string;
       const threadId = req.params.threadId as string;
 
-      const result = await gmailSvc.readThread(connectionId, companyId, threadId);
+      const authorized = await authorizeConnection(req, res, companyId, connectionId, "read");
+      if (!authorized) return;
+
+      const result = await gmailSvc.readThread(authorized.resolution.connectionId, companyId, threadId);
       res.json(result);
     },
   );
@@ -241,16 +277,16 @@ export function gmailRoutes(db: Db) {
         throw badRequest("to, subject, and body are required");
       }
 
-      const conn = await connSvc.getById(connectionId);
-      if (!conn) throw badRequest("Connection not found");
+      const authorized = await authorizeConnection(req, res, companyId, connectionId, "draft");
+      if (!authorized) return;
 
       const result = await gmailSvc.createDraft(
-        connectionId,
+        authorized.resolution.connectionId,
         companyId,
         { to, subject, body, cc, bcc, threadId, inReplyTo, references },
         actor.actorId,
         agentName,
-        conn.sendIdentity as any,
+        authorized.resolution.sendIdentity,
       );
       res.status(201).json(result);
     },
@@ -286,32 +322,23 @@ export function gmailRoutes(db: Db) {
         throw badRequest("to, subject, and body are required");
       }
 
-      // Resolve the effective autonomy and send identity
-      const effectiveAgentId = agentId ?? actor.actorId;
-      const resolution = await connSvc.resolveActingAs(
-        companyId,
-        effectiveAgentId,
-        "send",
-        "google",
-      );
+      // AgentDash (security): bind authorization to the connection named in the
+      // path, so the send below can only use a connection this caller may use.
+      // The owner of a private connection may send from it directly.
+      const authorized = await authorizeConnection(req, res, companyId, connectionId, "send", agentId);
+      if (!authorized) return;
+      const effectiveAgentId = authorized.actingId;
 
-      if (!resolution.ok) {
-        res.status(403).json({
-          error: resolution.blocked.message,
-          code: resolution.blocked.reason,
-        });
-        return;
-      }
-
+      // AgentDash (security): only the authorized connection is ever decrypted.
       const result = await gmailSvc.sendEmail(
-        connectionId,
+        authorized.resolution.connectionId,
         companyId,
         { to, subject, body, cc, bcc, threadId, inReplyTo, references, agentName },
         {
           actorId: actor.actorId,
           agentId: effectiveAgentId,
-          autonomyLevel: resolution.resolution.effectiveAutonomy,
-          sendIdentity: resolution.resolution.sendIdentity,
+          autonomyLevel: authorized.resolution.effectiveAutonomy,
+          sendIdentity: authorized.resolution.sendIdentity,
         },
       );
       res.json(result);

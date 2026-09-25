@@ -379,7 +379,19 @@ export function connectorService(db: Db) {
     agentId: string,
     actionClass: ConnectorActionClass,
     provider: string,
+    // AgentDash (security): a caller that names a specific connection (e.g. a
+    // `connectionId` from a request body or path) passes it here so the
+    // authorization decision is made about THAT connection, not about some
+    // other one the agent happens to be allowed to use. Callers must then
+    // decrypt only `resolution.connectionId`.
+    //
+    // `actorType: "user"` means `agentId` is a human's user id acting directly
+    // (not through an agent). The human may use connections they own, and
+    // agent-only controls (owner ceiling, per-agent overrides, stewardship)
+    // do not apply to them. Defaults to "agent".
+    options?: { connectionId?: string; actorType?: "agent" | "user" },
   ): Promise<ActingAsResult> {
+    const actorType = options?.actorType ?? "agent";
     // AgentDash-MK: the owner ceiling gates provider selection before anything
     // else. Checking it first is deliberate — answering `no_connection` for a
     // provider the owner disallowed would read as "set one up" instead of "you
@@ -388,7 +400,9 @@ export function connectorService(db: Db) {
     //
     // `resolveAgentPolicy` returns null outside `agentdash_mk`, so every check
     // below is a no-op for default-profile companies.
-    const policy = await governance.resolveAgentPolicy(companyId, agentId);
+    const policy = actorType === "user"
+      ? null
+      : await governance.resolveAgentPolicy(companyId, agentId);
     if (policy && !policyListAllows(policy.providers, provider)) {
       return {
         ok: false,
@@ -414,11 +428,12 @@ export function connectorService(db: Db) {
       .orderBy(desc(connections.createdAt));
 
     // Filter to connections this agent can use:
-    // - agent's own connections (ownerId = agentId, ownerType = "agent")
+    // - the actor's own connections (ownerId = agentId, ownerType = actorType;
+    //   for a human acting directly that includes their private connections)
     // - workspace-visible connections from any owner
     let usable = agentConnections.filter(
       (c) =>
-        (c.ownerType === "agent" && c.ownerId === agentId) ||
+        (c.ownerType === actorType && c.ownerId === agentId) ||
         c.visibility === "workspace",
     );
 
@@ -491,11 +506,29 @@ export function connectorService(db: Db) {
       }
     }
 
-    const conn = permitted[0];
+    // AgentDash (security): when the caller named a connection, it must be one
+    // of the connections this agent is authorized to use — same company, same
+    // provider, active, agent-owned / workspace-visible / current steward's,
+    // and within the owner ceiling. Anything else (another company's row,
+    // another human's private row, a different provider) is refused, and the
+    // caller never gets to decrypt it.
+    const requestedConnectionId = options?.connectionId;
+    const conn = requestedConnectionId
+      ? permitted.find((c) => c.id === requestedConnectionId)
+      : permitted[0];
+    if (!conn) {
+      return {
+        ok: false,
+        blocked: {
+          reason: "not_authorized",
+          message: `The requested ${provider} connection is not available to this agent`,
+        },
+      };
+    }
 
     // 2. Resolve autonomy: per-agent → per-connection → workspace default
     const wsDefaults = await getWorkspaceDefaults(companyId);
-    const agentOverride = await getAgentOverrides(companyId, agentId);
+    const agentOverride = actorType === "user" ? null : await getAgentOverrides(companyId, agentId);
 
     const connAutonomy = conn.autonomy as ConnectionAutonomyConfig;
     const wsAutonomy = wsDefaults.autonomy;
