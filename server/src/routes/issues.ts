@@ -1,3 +1,4 @@
+import { assertHostExecutionConfigAllowed } from "../services/adapter-host-execution-policy.js";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
@@ -399,6 +400,24 @@ function buildExecutionStageWakeup(input: {
   }
 
   return null;
+}
+
+// AgentDash (security, #719): an issue's assigneeAdapterOverrides.adapterConfig
+// merges into the assignee's run config, so it carries the same host-execution
+// gate as the agent's own adapterConfig. Compared against the stored override.
+function assertIssueOverrideHostExecutionAllowed(req: Request, storedOverrides: unknown) {
+  const overrides = (req.body as Record<string, unknown> | undefined)?.assigneeAdapterOverrides;
+  if (typeof overrides !== "object" || overrides === null) return;
+  const stored =
+    typeof storedOverrides === "object" && storedOverrides !== null
+      ? (storedOverrides as Record<string, unknown>).adapterConfig
+      : undefined;
+  assertHostExecutionConfigAllowed(req.actor, {
+    adapterType: null,
+    adapterConfig: (overrides as Record<string, unknown>).adapterConfig,
+    stored,
+    prefix: "assigneeAdapterOverrides.adapterConfig",
+  });
 }
 
 export function issueRoutes(
@@ -1892,6 +1911,7 @@ export function issueRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     await assertHostWorkspaceCommandAuthority(db, req, companyId, collectIssueWorkspaceCommandPaths(req.body));
+    assertIssueOverrideHostExecutionAllowed(req, undefined);
     // AGE-113: assignee adapter overrides change which adapter/model runs an
     // assigned issue. That is agent configuration, and only a human may set it.
     if (req.actor.type === "agent" && req.body.assigneeAdapterOverrides !== undefined) {
@@ -1967,6 +1987,7 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, parent.companyId);
     await assertHostWorkspaceCommandAuthority(db, req, parent.companyId, collectIssueWorkspaceCommandPaths(req.body));
+    assertIssueOverrideHostExecutionAllowed(req, undefined);
     // AGE-113: same gate as issue create — overrides are agent configuration.
     if (req.actor.type === "agent" && req.body.assigneeAdapterOverrides !== undefined) {
       res.status(403).json({
@@ -2031,6 +2052,7 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     await assertHostWorkspaceCommandAuthority(db, req, existing.companyId, collectIssueWorkspaceCommandPaths(req.body));
+    assertIssueOverrideHostExecutionAllowed(req, existing.assigneeAdapterOverrides);
     // AGE-113: overrides change which adapter/model runs this issue. Only a
     // human may set or clear them, on create or update alike.
     if (req.actor.type === "agent" && req.body.assigneeAdapterOverrides !== undefined) {

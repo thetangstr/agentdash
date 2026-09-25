@@ -283,6 +283,57 @@ describeEmbeddedPostgres("platform authorization hardening", () => {
     expect(await db.select().from(approvals).where(eq(approvals.companyId, company.id))).toHaveLength(0);
   });
 
+  // AgentDash (security, #719): approving a hire creates the agent with the
+  // payload's adapterConfig, so the requester needs instance admin to choose
+  // the binary, argv, env or cwd — a company owner included. The curated
+  // Hermes preset stays open.
+  it.each([
+    ["command", { command: "/bin/sh" }],
+    ["env", { env: { NODE_OPTIONS: "--require /tmp/x.js" } }],
+    ["cwd", { cwd: "/etc" }],
+  ])("refuses a company owner's hire payload that sets %s", async (_label, injected) => {
+    const { company, admin } = await seed();
+    const { approvalRoutes } = await import("../routes/approvals.js");
+    const app = await mount(
+      async () => approvalRoutes(db, { autoDispatchQueuedRuns: false }),
+      actor(company.id, admin.principalId, "owner"),
+    );
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/approvals`)
+        .send({ type: "hire_agent", payload: { name: "svc", adapterType: "claude_local", adapterConfig: injected } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toMatch(/Instance admin access required/);
+    expect(await db.select().from(approvals).where(eq(approvals.companyId, company.id))).toHaveLength(0);
+  });
+
+  it("accepts a company owner's hire payload built from the Hermes preset", async () => {
+    const { company, admin } = await seed();
+    const { approvalRoutes } = await import("../routes/approvals.js");
+    const app = await mount(
+      async () => approvalRoutes(db, { autoDispatchQueuedRuns: false }),
+      actor(company.id, admin.principalId, "owner"),
+    );
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/approvals`)
+        .send({
+          type: "hire_agent",
+          payload: {
+            name: "svc",
+            adapterType: "hermes_local",
+            adapterConfig: {
+              model: "glm-5.3-flash",
+              hermesCommand: "hermes",
+              extraArgs: ["-p", "agentdash", "--reasoning-effort", "medium"],
+            },
+          },
+        }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+
   it("requires agents:create to write host-executed workspace commands", async () => {
     const { company, admin, operator } = await seed();
     const { projectRoutes } = await import("../routes/projects.js");

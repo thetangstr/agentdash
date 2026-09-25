@@ -451,6 +451,14 @@ Every completed agent task (heartbeat run) is recorded as exactly one **agent-ru
 
 Agent-runs are recorded automatically; you do not need to take any action. Monthly run counts are available at \`GET /api/companies/:companyId/agent-runs/monthly\` and \`/monthly-by-agent\`.
 <!-- /AgentDash: agent-run-metering -->
+
+<!-- AgentDash: host-execution-config — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Agent adapter commands, env and working directory are instance-admin only
+
+When you create, hire, update or import an agent, or set \`assigneeAdapterOverrides\` on an issue, leave the host-execution fields out of \`adapterConfig\`. These are \`command\`, \`args\`, \`extraArgs\`, \`env\` and \`cwd\`, plus any key ending in \`Command\`, \`Args\`, \`Env\`, \`Cwd\`, \`Dir\` or \`Home\`. They decide what runs on the host, so only an instance admin may set or change them. An agent request that includes one gets 403 \`Instance admin access required\`. Retrying with a different spelling will not help.
+
+These stay open to everyone: empty values (the server default), the adapter's default command, values unchanged from what is already stored, and, for Hermes (\`hermes_local\`), \`extraArgs\` made only of \`-p <profile>\`, \`--reasoning-effort <low|medium|high>\`, \`--max-turns <n>\`, \`--checkpoints\` or \`-v\`. If a hire needs a custom binary, environment or working directory, file the hire without it and ask a human instance admin in the issue or approval thread.
+<!-- /AgentDash: host-execution-config -->
 `;
 }
 

@@ -1,3 +1,7 @@
+import {
+  assertHostExecutionConfigAllowed,
+  runtimeConfigHostExecutionInputs,
+} from "./adapter-host-execution-policy.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
@@ -565,6 +569,13 @@ type ImportMode = "board_full" | "agent_safe";
 type ImportBehaviorOptions = {
   mode?: ImportMode;
   sourceCompanyId?: string | null;
+  /**
+   * AgentDash (security, #719): whether the importing actor may set an
+   * agent's host-execution fields (command, args, env, cwd). Routes pass
+   * `actorMaySetHostExecutionConfig(req.actor)`; omitted means allowed, for
+   * internal callers.
+   */
+  allowHostExecutionConfig?: boolean;
 };
 
 type AgentLike = {
@@ -4289,6 +4300,27 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           const baseAdapterConfig = adapterOverride?.adapterConfig
             ? { ...adapterOverride.adapterConfig }
             : { ...manifestAgent.adapterConfig } as Record<string, unknown>;
+
+          if (options?.allowHostExecutionConfig === false) {
+            const existingForHostExec =
+              planAgent.action === "update" && planAgent.existingAgentId
+                ? await agents.getById(planAgent.existingAgentId)
+                : null;
+            const importAdapterType = adapterOverride?.adapterType ?? manifestAgent.adapterType;
+            assertHostExecutionConfigAllowed(null, [
+              {
+                adapterType: importAdapterType,
+                adapterConfig: baseAdapterConfig,
+                stored: existingForHostExec?.adapterConfig,
+                prefix: `agents.${planAgent.slug}.adapterConfig`,
+              },
+              ...runtimeConfigHostExecutionInputs(
+                importAdapterType,
+                manifestAgent.runtimeConfig,
+                existingForHostExec?.runtimeConfig,
+              ),
+            ]);
+          }
 
           const desiredSkills = (manifestAgent.skills ?? []).map((skillRef) => desiredSkillRefMap.get(skillRef) ?? skillRef);
           const normalizedAdapter = await prepareImportedAgentAdapter(

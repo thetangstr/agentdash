@@ -25,6 +25,7 @@ import {
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { assertCompanyAccess, assertInstanceAdmin } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
+import { actorMayApplyAdapterPreset } from "../services/adapter-host-execution-policy.js";
 import {
   exceededFreeTierCapacityAction,
   freeTierCapExceededPayload,
@@ -1055,13 +1056,6 @@ No greetings. No markdown headings outside the JSON block.`;
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    // AgentDash (security): this rewrites process-wide adapter settings and the
-    // env file the service manager sources on restart, so it is an instance
-    // operation, not a company one — any signed-in user used to pass. The
-    // founding user is instance admin on every bootstrap path (local_implicit
-    // in local_trusted; bootstrap-ceo claim, self-serve bootstrap or MCP
-    // signup promotion in authenticated mode), so onboarding is unaffected.
-    assertInstanceAdmin(req);
     const { preset, apiKey } = req.body as { preset?: string; apiKey?: string };
     if (!preset || typeof preset !== "string") {
       throw badRequest("preset required (claude | openai | gemini | stub)");
@@ -1069,6 +1063,16 @@ No greetings. No markdown headings outside the JSON block.`;
     const allowed = adapterPresetOptions().map((o) => o.preset);
     if (!allowed.includes(preset as AdapterPreset)) {
       throw badRequest(`preset must be one of: ${allowed.join(", ")}`);
+    }
+    // AgentDash (security): this rewrites process-wide adapter settings and the
+    // env file the service manager sources on restart, so it is an instance
+    // operation — any signed-in user used to pass. The founding user is
+    // instance admin on every bootstrap path. A company owner may still apply
+    // the Hermes preset (no key; it only selects the hermes_local adapter),
+    // which is the one runtime on a hosted box. Key-bearing presets stay
+    // instance-admin only. Policy: services/adapter-host-execution-policy.ts.
+    if (!actorMayApplyAdapterPreset(req.actor, preset)) {
+      assertInstanceAdmin(req);
     }
     const result = applyAdapterPreset({ preset: preset as AdapterPreset, apiKey });
     logger.info(

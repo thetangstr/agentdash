@@ -973,6 +973,44 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
     expect(existsSync(process.env.AGENTDASH_ENV_FILE!)).toBe(false);
   });
 
+  // AgentDash (security): Hermes is the only runtime on a hosted box, so a
+  // company owner (not the instance admin) may still select it. The preset
+  // collects no key and only sets AGENTDASH_DEFAULT_ADAPTER=hermes_local.
+  const COMPANY_OWNER = {
+    type: "board",
+    userId: "u-owner",
+    source: "session",
+    isInstanceAdmin: false,
+    companyIds: ["c1"],
+    memberships: [{ companyId: "c1", status: "active", membershipRole: "owner" }],
+  };
+
+  it("lets a company owner apply the Hermes preset", async () => {
+    const app = buildApp(COMPANY_OWNER);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "hermes" });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBe("hermes_local");
+  });
+
+  it("403s a company owner applying a key-bearing preset", async () => {
+    const app = buildApp(COMPANY_OWNER);
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "claude", apiKey: "sk-ant-owner" });
+    expect(res.status).toBe(403);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it("403s an ordinary member applying the Hermes preset", async () => {
+    const app = buildApp({
+      ...COMPANY_OWNER,
+      userId: "u-member",
+      memberships: [{ companyId: "c1", status: "active", membershipRole: "member" }],
+    });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "hermes" });
+    expect(res.status).toBe(403);
+  });
+
   it("allows setup-adapter for the local_implicit board (local_trusted founder)", async () => {
     const app = buildApp({ type: "board", userId: "local-board", source: "local_implicit" });
     const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });

