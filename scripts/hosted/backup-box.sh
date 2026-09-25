@@ -45,7 +45,7 @@ PROJECT_JSON="$(find_project "$PROJECT_NAME")"
 [ -n "$PROJECT_JSON" ] || die "no project ${PROJECT_NAME}"
 PROJECT_ID="$(jq -r .id <<<"$PROJECT_JSON")"
 ENV_ID="$(env_id_of "$PROJECT_JSON")"
-PG_ID="$(service_id_of "$PROJECT_JSON" Postgres)"
+PG_ID="$(postgres_service_id_of "$PROJECT_JSON")"
 WEB_ID="$(service_id_of "$PROJECT_JSON" web)"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -74,7 +74,7 @@ PROXY_ID="$(jq -r .data.tcpProxyCreate.id <<<"$PROXY")"
 PROXY_HOST="$(jq -r '.data.tcpProxyCreate.domain | rtrimstr(".")' <<<"$PROXY")"
 PROXY_PORT="$(jq -r .data.tcpProxyCreate.proxyPort <<<"$PROXY")"
 say "opened a temporary Postgres TCP proxy"
-# The DB URL goes to docker through an env file (mode 600), never argv or output.
+# Credentials go to docker through an env file (mode 600), never argv or output.
 {
   printf 'PGHOST=%s\nPGPORT=%s\n' "$PROXY_HOST" "$PROXY_PORT"
   printf 'PGUSER=%s\n' "$(variable_value "$PROJECT_ID" "$ENV_ID" "$PG_ID" PGUSER)"
@@ -137,11 +137,12 @@ say "backup written to ${OUT}"
 
 # --- 5. Restore test into a scratch container ---------------------------------
 NAME="agentdash-restore-test-${SLUG}-$$"
-SCRATCH_PW="$(random_hex 16)"
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; close_proxy; }
+SCRATCH_ENV="$(mktemp "${STATE_DIR}/scratchenv.XXXXXX")"
+{ printf 'POSTGRES_PASSWORD='; openssl rand -hex 16; printf 'POSTGRES_DB=restore\n'; } >"$SCRATCH_ENV"
+cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -f "$SCRATCH_ENV"; close_proxy; }
 trap cleanup EXIT
 say "restore test: starting scratch ${PG_IMAGE} container ${NAME}"
-docker run -d --name "$NAME" -e POSTGRES_PASSWORD="$SCRATCH_PW" -e POSTGRES_DB=restore \
+docker run -d --name "$NAME" --env-file "$SCRATCH_ENV" \
   -v "$OUT:/in:ro" "$PG_IMAGE" >/dev/null
 for _ in $(seq 1 30); do
   docker exec "$NAME" pg_isready -U postgres -d restore >/dev/null 2>&1 && break

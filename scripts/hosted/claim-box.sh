@@ -2,17 +2,23 @@
 # AgentDash: the founder claims their hosted box.
 #
 # Run by the FOUNDER (not the operator). Creates the founder's account on a
-# fresh box with the one-time invite code, using a password only the founder
-# types. The browser sign-up form does not yet send an invite code, which is
+# fresh box with the invite code the operator handed over, using a password
+# only the founder types. The password never reaches a command line: it goes
+# from `read -s` to a mode-600 temp file that jq reads with --rawfile, and the
+# request body reaches curl on stdin. The browser sign-up form does not yet send an invite code, which is
 # why this step is a script (see doc/runbooks/hosted-box.md, "Known gaps").
 #
 # Usage:
 #   scripts/hosted/claim-box.sh https://<box-host> --code-file <path>
 #
 # After it succeeds: sign in at <box>/auth and create your company. The first
-# company on a fresh box makes its creator the box's instance admin.
+# company on a fresh box makes its creator the box's instance admin. Then tell
+# the operator, who closes sign-up (provision-box.sh --close-signup).
 
 set -euo pipefail
+case "$-" in
+  *x*) set +x; echo "error: refusing to run with xtrace (bash -x / set -x); it would print your password" >&2; exit 2 ;;
+esac
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -39,12 +45,17 @@ read -r -s -p "Repeat the password: " PASSWORD2; echo
 [ "$PASSWORD" = "$PASSWORD2" ] || die "passwords do not match"
 [ "${#PASSWORD}" -ge 12 ] || die "use at least 12 characters"
 
-# Everything goes through stdin; nothing sensitive reaches argv or the terminal.
-status="$(jq -n --arg n "$NAME" --arg e "$EMAIL" --arg p "$PASSWORD" --rawfile c "$CODE_FILE" \
+PW_FILE="$(mktemp "${TMPDIR:-/tmp}/agentdash-claim.XXXXXX")"
+chmod 600 "$PW_FILE"
+trap 'rm -f "$PW_FILE"' EXIT
+printf '%s' "$PASSWORD" >"$PW_FILE"   # printf is a builtin: no argv exposure
+unset PASSWORD PASSWORD2
+
+status="$(jq -n --arg n "$NAME" --arg e "$EMAIL" --rawfile p "$PW_FILE" --rawfile c "$CODE_FILE" \
     '{name:$n, email:$e, password:$p, inviteCode:($c | gsub("\\s"; ""))}' \
   | curl -sS -o /dev/null -w '%{http_code}' -X POST "$URL/api/auth/sign-up/email" \
-      -H 'Content-Type: application/json' -H "Origin: $URL" -d @-)"
-unset PASSWORD PASSWORD2
+      -H 'Content-Type: application/json' -H "Origin: $URL" --data-binary @-)"
+rm -f "$PW_FILE"
 
 case "$status" in
   200|201) ;;
@@ -58,4 +69,5 @@ cat <<EOF
 Account created for ${EMAIL}.
 Next: open ${URL}/auth, sign in, and create your company.
 The first company on this box makes you its instance admin.
+Then tell the operator, so they can close sign-up on the box.
 EOF
