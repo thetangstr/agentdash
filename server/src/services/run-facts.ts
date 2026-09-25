@@ -35,12 +35,23 @@ function parseObject(value: unknown): Record<string, unknown> {
  * that a comment wake and a retry both arrive as "automation".
  */
 const WAKE_REASON_BY_CONTEXT_REASON: Record<string, RunFactWakeReason> = {
+  // The scheduler's own wake (`enqueueWakeup` in tickTimers stamps reason
+  // "heartbeat_timer" into contextSnapshot.wakeReason) — without this entry a
+  // routine interval wake falls through to "automation" and a timer-driven
+  // spend loop reads as deliberate work.
+  heartbeat_timer: "timer",
   issue_commented: "comment",
   issue_reopened_via_comment: "comment",
   issue_comment_mentioned: "mention",
   approval_approved: "approval",
+  // Issue-tree gate transitions are human decisions, so they bucket with the
+  // approval wake rather than generic automation.
   execution_approval_requested: "approval",
+  execution_review_requested: "approval",
+  execution_changes_requested: "approval",
   issue_assigned: "assignment",
+  // A human restored a held issue tree — an operator action, not automation.
+  issue_tree_restored: "manual",
   process_lost_retry: "retry",
   transient_failure_retry: "retry",
   run_liveness_continuation: "retry",
@@ -111,7 +122,8 @@ export function resolveMeteringStatus(input: {
     stamped === "metered" ||
     stamped === "adapter_reported" ||
     stamped === "unmetered_no_ledger" ||
-    stamped === "unmetered_no_session"
+    stamped === "unmetered_no_session" ||
+    stamped === "unmetered_backfill_ambiguous"
   ) {
     return stamped;
   }
@@ -124,6 +136,8 @@ export function resolveMeteringStatus(input: {
 
 export function buildRunFacts(input: {
   meteringStatus: RunMeteringStatus;
+  ledgerSource?: string | null;
+  ledgerCertainty?: "certain" | "uncertain" | null;
   servedModel?: string | null;
   servedProvider?: string | null;
   configuredModel?: string | null;
@@ -160,10 +174,16 @@ export function buildRunFacts(input: {
 
   const unmetered =
     input.meteringStatus === "unmetered_no_ledger" ||
-    input.meteringStatus === "unmetered_no_session";
+    input.meteringStatus === "unmetered_no_session" ||
+    input.meteringStatus === "unmetered_backfill_ambiguous";
 
   return {
     meteringStatus: input.meteringStatus,
+    ledgerSource: readString(input.ledgerSource),
+    ledgerCertainty:
+      input.ledgerCertainty === "certain" || input.ledgerCertainty === "uncertain"
+        ? input.ledgerCertainty
+        : null,
     servedModel: readString(input.servedModel),
     servedProvider: readString(input.servedProvider),
     configuredModel: readString(input.configuredModel),

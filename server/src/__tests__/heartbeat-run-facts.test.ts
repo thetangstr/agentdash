@@ -473,6 +473,87 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
     expect((second?.usageJson as Record<string, unknown>)?.usageSource).toBe("session_delta");
   });
 
+  it("skips metering-status-only rows when finding the session baseline", async () => {
+    // OBS-1 writes `usageJson: { meteringStatus }` even for runs that recorded
+    // no usage — failures included. A `isNotNull(usageJson)` baseline scan
+    // would chew those rows before reaching the last real reading.
+    const { agentId, runId } = await seedQueuedRun();
+    const sessionId = "sess-failed-baseline";
+
+    mockAdapterExecute.mockImplementationOnce(async () => ({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      summary: "first",
+      model: "m",
+      provider: "p",
+      sessionId,
+      usage: { inputTokens: 1000, outputTokens: 100 },
+    }));
+    const heartbeat = heartbeatService(db);
+    await heartbeat.resumeQueuedRuns();
+    const first = await settle(runId);
+    expect(first?.status).toBe("succeeded");
+
+    // The failed run between them — exactly what finalize stamps today.
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId: first!.companyId,
+      agentId,
+      invocationSource: "timer",
+      status: "failed",
+      sessionIdAfter: sessionId,
+      usageJson: { meteringStatus: "unmetered_no_session" },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const runId2 = randomUUID();
+    const wakeupRequestId2 = randomUUID();
+    await db.insert(agentWakeupRequests).values({
+      id: wakeupRequestId2,
+      companyId: first!.companyId,
+      agentId,
+      source: "timer",
+      triggerDetail: "system",
+      reason: "timer",
+      status: "queued",
+      runId: runId2,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId2,
+      companyId: first!.companyId,
+      agentId,
+      invocationSource: "timer",
+      triggerDetail: "system",
+      status: "queued",
+      wakeupRequestId: wakeupRequestId2,
+      contextSnapshot: {},
+      sessionIdBefore: sessionId,
+    });
+
+    mockAdapterExecute.mockImplementationOnce(async () => ({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      summary: "second",
+      model: "m",
+      provider: "p",
+      sessionId,
+      usage: { inputTokens: 2500, outputTokens: 260 },
+    }));
+    await heartbeat.resumeQueuedRuns();
+    const second = await settle(runId2);
+    expect(second?.status).toBe("succeeded");
+    // Baseline is the first run's totals — the failed row is not even a
+    // candidate — so the delta is 1500/160, not the cumulative 2500/260.
+    expect(runFactsOf(second)).toMatchObject({
+      meteringStatus: "adapter_reported",
+      inputTokens: 1500,
+      outputTokens: 160,
+    });
+  });
+
   it("marks an unmetered run honestly and emits exactly one warning event", async () => {
     const { runId } = await seedQueuedRun();
     mockAdapterExecute.mockImplementationOnce(async () => ({

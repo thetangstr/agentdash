@@ -58,6 +58,39 @@ describe("normalizeWakeReason", () => {
     ).toBe("assignment");
   });
 
+  it("classifies the scheduler's real timer wake as timer, not automation", () => {
+    // tickTimers enqueues exactly this shape: source "timer" plus reason
+    // "heartbeat_timer" landed on contextSnapshot.wakeReason. An unmapped
+    // reason falls through to "automation", which is how timer spend hid from
+    // both the runFacts label and the OBS-2 ceiling gate.
+    expect(
+      normalizeWakeReason({
+        invocationSource: "timer",
+        triggerDetail: "system",
+        contextSnapshot: {
+          wakeReason: "heartbeat_timer",
+          source: "scheduler",
+          reason: "interval_elapsed",
+        },
+      }),
+    ).toBe("timer");
+  });
+
+  it("maps issue-tree gate transitions to the human buckets", () => {
+    for (const [contextReason, expected] of [
+      ["execution_review_requested", "approval"],
+      ["execution_changes_requested", "approval"],
+      ["issue_tree_restored", "manual"],
+    ] as const) {
+      expect(
+        normalizeWakeReason({
+          invocationSource: "automation",
+          contextSnapshot: { wakeReason: contextReason },
+        }),
+      ).toBe(expected);
+    }
+  });
+
   it("reads unrecognized context reasons as automation, not manual", () => {
     expect(
       normalizeWakeReason({
@@ -83,6 +116,7 @@ describe("resolveMeteringStatus", () => {
       "adapter_reported",
       "unmetered_no_ledger",
       "unmetered_no_session",
+      "unmetered_backfill_ambiguous",
     ] as const) {
       expect(resolveMeteringStatus({ adapterMeteringStatus: status })).toBe(status);
     }
@@ -126,9 +160,15 @@ describe("buildRunFacts", () => {
   };
 
   it("assembles the normalized record", () => {
-    const facts = buildRunFacts(base);
+    const facts = buildRunFacts({
+      ...base,
+      ledgerSource: "wrapper_script",
+      ledgerCertainty: "certain",
+    });
     expect(facts).toEqual({
       meteringStatus: "metered",
+      ledgerSource: "wrapper_script",
+      ledgerCertainty: "certain",
       servedModel: "glm-5.3-flash",
       servedProvider: "zai",
       configuredModel: "glm-5.3-flash",
@@ -158,6 +198,22 @@ describe("buildRunFacts", () => {
     // Non-token facts are still recorded.
     expect(facts.turns).toBe(3);
     expect(facts.wallMs).toBe(90_000);
+  });
+
+  it("treats unmetered_backfill_ambiguous as unmetered — nulls, not zeros", () => {
+    const facts = buildRunFacts({
+      ...base,
+      meteringStatus: "unmetered_backfill_ambiguous",
+      ledgerSource: "wrapper_script",
+      ledgerCertainty: "certain",
+      inputTokens: 9999,
+      outputTokens: 9999,
+    });
+    expect(facts.inputTokens).toBeNull();
+    expect(facts.outputTokens).toBeNull();
+    // The ledger WAS resolved — only the per-run share is unknown.
+    expect(facts.ledgerSource).toBe("wrapper_script");
+    expect(facts.ledgerCertainty).toBe("certain");
   });
 
   it("keeps token fields for adapter_reported runs", () => {

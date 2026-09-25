@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { emitSignal } from "../observability/signals.js";
 import { preRunChecks } from "../observability/pre-run-checks.js";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -2470,11 +2470,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
    * booked at 11,622,466 input tokens, roughly doubling the reported spend for
    * that agent. The tokens were real once; they were counted twice.
    *
-   * `isNotNull` drops the failures in SQL, and `pickUsageBaseline` then skips
-   * any row whose totals are present but empty. The scan is bounded because an
-   * unbounded one on a busy session is a table scan on a hot write path;
-   * `USAGE_BASELINE_SCAN_LIMIT` is far above any real run of failures, and
-   * exhausting it leaves the previous behaviour rather than a wrong number.
+   * The SQL filter requires actual token fields, not just a non-null
+   * `usage_json`: since OBS-1 every finalized run — including failures that
+   * never recorded usage — carries `usageJson: { meteringStatus: ... }`, so
+   * `isNotNull` alone no longer drops the failures and a long enough run of
+   * them would exhaust the scan before a real baseline turned up.
+   * `pickUsageBaseline` then skips any row whose totals are present but
+   * empty. The scan is bounded because an unbounded one on a busy session is
+   * a table scan on a hot write path; `USAGE_BASELINE_SCAN_LIMIT` is far
+   * above any real run of failures, and exhausting it leaves the previous
+   * behaviour rather than a wrong number.
    */
   async function getLatestUsageBaselineForSession(
     agentId: string,
@@ -2484,7 +2489,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const conditions = [
       eq(heartbeatRuns.agentId, agentId),
       eq(heartbeatRuns.sessionIdAfter, sessionId),
-      isNotNull(heartbeatRuns.usageJson),
+      sql`(${heartbeatRuns.usageJson} ->> 'inputTokens' is not null
+        or ${heartbeatRuns.usageJson} ->> 'rawInputTokens' is not null
+        or ${heartbeatRuns.usageJson} ->> 'outputTokens' is not null
+        or ${heartbeatRuns.usageJson} ->> 'rawOutputTokens' is not null
+        or ${heartbeatRuns.usageJson} ->> 'cachedInputTokens' is not null
+        or ${heartbeatRuns.usageJson} ->> 'rawCachedInputTokens' is not null)`,
     ];
     if (opts?.excludeRunId) {
       conditions.push(sql`${heartbeatRuns.id} <> ${opts.excludeRunId}`);
@@ -5292,7 +5302,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 meteringStatus: "unmetered_no_session",
                 startedAt: factsRun.startedAt ?? factsRun.createdAt,
                 finishedAt: factsRun.finishedAt ?? now,
-                firstOutputAt: factsRun.lastOutputAt ?? null,
+                // lastOutputAt is the LAST observed byte, not the first —
+                // recording it as first-output latency would state a number
+                // we never measured. Reaped runs get null.
+                firstOutputAt: null,
                 outcome: livenessStateToOutcome(factsRun.livenessState, factsRun.status),
                 wakeReason: normalizeWakeReason({
                   invocationSource: factsRun.invocationSource,
@@ -6753,8 +6766,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           agentId: agent.id,
           runtimeConfig: parseObject(agent.runtimeConfig),
         }).catch(() => null);
+        const meteringLedger = parseObject(adapterResultJson.meteringLedger);
         const runFacts = buildRunFacts({
           meteringStatus,
+          ledgerSource: readNonEmptyString(meteringLedger.source),
+          ledgerCertainty:
+            meteringLedger.certainty === "certain" || meteringLedger.certainty === "uncertain"
+              ? meteringLedger.certainty
+              : null,
           servedModel: readNonEmptyString(adapterResult.model),
           servedProvider: readNonEmptyString(adapterResult.provider),
           configuredModel: configuredRuntime?.model ?? null,

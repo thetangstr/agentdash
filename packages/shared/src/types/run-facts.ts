@@ -20,6 +20,12 @@ export const RUN_METERING_STATUSES = [
   "unmetered_no_ledger",
   /** The ledger was readable but held no row for this run's session. */
   "unmetered_no_session",
+  /**
+   * Backfill only: the ledger held rows whose activity span straddles this
+   * run's window, so the share attributable to the run is unknown — the
+   * honest answer is "ambiguous", not a guessed split of a cumulative row.
+   */
+  "unmetered_backfill_ambiguous",
 ] as const;
 export type RunMeteringStatus = (typeof RUN_METERING_STATUSES)[number];
 
@@ -49,6 +55,17 @@ export type RunFactWakeReason = (typeof RUN_FACT_WAKE_REASONS)[number];
 
 export interface RunFacts {
   meteringStatus: RunMeteringStatus;
+  /**
+   * How the metering ledger was located (OBS-1 unified resolver): e.g.
+   * `profile_arg`, `wrapper_script`, `env_hermes_home`, `active_profile`,
+   * `root_fallback`. Null when no resolution ran (pinned path, no session).
+   */
+  ledgerSource: string | null;
+  /**
+   * `certain` = the run provably writes that ledger; `uncertain` = a best
+   * guess (sticky active profile, root fallback). Null when `ledgerSource` is.
+   */
+  ledgerCertainty: "certain" | "uncertain" | null;
   /** Model/provider that actually served the run (adapter ledger or report). */
   servedModel: string | null;
   servedProvider: string | null;

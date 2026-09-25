@@ -1,8 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AdapterEnvironmentCheck,
@@ -724,28 +721,15 @@ const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["exec
  * leaves the result exactly as the adapter returned it.
  */
 /**
- * The managed profile this run used, derived from the command actually
- * invoked. The alias wrapper's filename IS the profile name
- * (`hermes-profile.ts` writes `<binDir>/<profileName>` that execs
- * `hermes -p <profileName>`), so a command whose basename exists as a directory
- * under the profiles dir ran inside that profile. Anything else is unmanaged
- * and meters against the Hermes home database.
+ * The adapterConfig the run used — effective config over the stored agent
+ * config, with the command actually invoked folded in so the ledger resolver
+ * sees it (env `AGENTDASH_HERMES_COMMAND` and every `hermesCommand` source).
+ * Profile/ledger resolution — `-p` in args or the command string,
+ * `env.HERMES_HOME`, wrapper scripts, the sticky active profile — all lives in
+ * `resolveHermesStateDbResolutions` (adapters/hermes-usage.ts); this function
+ * deliberately does no derivation of its own.
  */
-function hermesRunProfile(ctx: { config?: unknown; agent?: unknown }): string | null {
-  const command = getHermesCommandFromContext(ctx).trim();
-  if (!command) return null;
-  // A literal `hermes -p <name>` / `--profile <name>` command string.
-  const flagMatch = command.match(/(?:^|\s)(?:-p|--profile)[=\s]+([^\s]+)/);
-  if (flagMatch?.[1]) return flagMatch[1];
-  const base = path.basename(command.split(/\s+/)[0] ?? "");
-  if (!base || base === "hermes") return null;
-  const profilesDir =
-    process.env.HERMES_PROFILES_DIR?.trim() || path.join(os.homedir(), ".hermes", "profiles");
-  return existsSync(path.join(profilesDir, base)) ? base : null;
-}
-
-/** The adapterConfig the run used — effective config over the stored agent config. */
-function hermesRunAdapterConfig(ctx: { config?: unknown; agent?: unknown }): Record<string, unknown> | null {
+function hermesRunAdapterConfig(ctx: { config?: unknown; agent?: unknown }): Record<string, unknown> {
   const asRecord = (value: unknown) =>
     value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -753,7 +737,12 @@ function hermesRunAdapterConfig(ctx: { config?: unknown; agent?: unknown }): Rec
   const agent = asRecord(ctx.agent);
   const agentConfig = asRecord(agent?.adapterConfig);
   const config = asRecord(ctx.config);
-  return config || agentConfig ? { ...(agentConfig ?? {}), ...(config ?? {}) } : null;
+  const command = getHermesCommandFromContext(ctx).trim();
+  return {
+    ...(agentConfig ?? {}),
+    ...(config ?? {}),
+    ...(command ? { hermesCommand: command } : {}),
+  };
 }
 
 async function withHermesSessionUsage(
@@ -764,21 +753,32 @@ async function withHermesSessionUsage(
   try {
     const sessionId = readHermesSessionId(result);
     read = readHermesSessionUsageDetailed(sessionId, {
-      profile: hermesRunProfile(ctx),
       adapterConfig: hermesRunAdapterConfig(ctx),
     });
   } catch {
     return result;
   }
   // Stamp the metering outcome where the heartbeat's runFacts builder can see
-  // it — a silent zero-token run was the original incident.
+  // it — a silent zero-token run was the original incident. The resolution is
+  // stamped alongside so runFacts records how sure the attribution is.
   const resultJson =
     result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
       ? result.resultJson
       : {};
   const stamped: AdapterExecutionResult = {
     ...result,
-    resultJson: { ...resultJson, meteringStatus: read.status },
+    resultJson: {
+      ...resultJson,
+      meteringStatus: read.status,
+      meteringLedger: read.ledger
+        ? {
+            path: read.ledger.path,
+            source: read.ledger.source,
+            certainty: read.ledger.certainty,
+            profile: read.ledger.profile,
+          }
+        : null,
+    },
   };
   return applyHermesSessionUsage(stamped, read.usage);
 }

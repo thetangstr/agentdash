@@ -12,10 +12,14 @@
  * Honesty rules, same as the live path:
  *   - a run whose ledger/session produced no usage is `unmetered_*`, with
  *     null token fields — never zero;
- *   - hermes ledger rows are CUMULATIVE per session, so a session's total is
- *     attributed to its first run in the window and later runs of the same
- *     session meter a delta of what remains — summed across runs the numbers
- *     reconcile with `session_model_usage` exactly;
+ *   - hermes `session_model_usage` rows are CUMULATIVE over their own
+ *     lifetime, so a row is attributed to a run only when its
+ *     `[first_seen, last_seen]` span sits inside that run's
+ *     `[startedAt, finishedAt]` window. A session with exactly one run is
+ *     whole-session attributable. A token-carrying row that straddles a run
+ *     boundary — or carries no timestamps at all — cannot be split honestly,
+ *     so the run is marked `unmetered_backfill_ambiguous` rather than
+ *     guessing a share;
  *   - runs that already carry `runFacts` are skipped, so the script is safe
  *     to re-run (`--force` recomputes).
  *
@@ -29,18 +33,17 @@
  *   --days N             window length (default 30)
  *   --since ISO-8601     explicit window start (overrides --days)
  *   --agent ID           one agent only
+ *   --company ID         one company only
  *   --force              recompute runs that already have runFacts
  */
 
-import { existsSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { and, asc, desc, eq, gte, lt, isNotNull } from "drizzle-orm";
+import { and, asc, eq, gte, count } from "drizzle-orm";
 import { createDb, agents, heartbeatRuns } from "@paperclipai/db";
 import { loadConfig } from "../src/config.js";
 import {
-  readHermesSessionUsageDetailed,
-  type HermesMeteringStatus,
+  readHermesSessionUsageRowsDetailed,
+  type HermesSessionRowsRead,
+  type HermesSessionUsageRowDetail,
 } from "../src/adapters/hermes-usage.js";
 import {
   buildRunFacts,
@@ -58,6 +61,7 @@ const flags = {
   dryRun: argv.includes("--dry-run"),
   force: argv.includes("--force"),
   agent: argValue("--agent"),
+  company: argValue("--company"),
   since: argValue("--since"),
   days: Number(argValue("--days") ?? "30"),
 };
@@ -118,17 +122,6 @@ function counterDelta(current: number | null, baseline: number | null): number |
 
 type TokenTotals = { inputTokens: number; cachedInputTokens: number; outputTokens: number };
 
-/** Raw cumulative totals recorded in usage_json (raw* fields preferred). */
-function rawTotals(usageJson: unknown): TokenTotals | null {
-  const u = asObject(usageJson);
-  const input = nonNegInt(u.rawInputTokens ?? u.inputTokens);
-  const cached = nonNegInt(u.rawCachedInputTokens ?? u.cachedInputTokens) ?? 0;
-  const output = nonNegInt(u.rawOutputTokens ?? u.outputTokens);
-  if (input === null && output === null) return null;
-  if ((input ?? 0) === 0 && output === 0 && cached === 0) return null;
-  return { inputTokens: input ?? 0, cachedInputTokens: cached, outputTokens: output ?? 0 };
-}
-
 /** The normalized per-run delta recorded in usage_json (non-raw fields). */
 function deltaTotals(usageJson: unknown): TokenTotals | null {
   const u = asObject(usageJson);
@@ -140,106 +133,156 @@ function deltaTotals(usageJson: unknown): TokenTotals | null {
   return { inputTokens: input ?? 0, cachedInputTokens: cached, outputTokens: output ?? 0 };
 }
 
-function usageDelta(current: TokenTotals, previous: TokenTotals | null): TokenTotals {
-  if (!previous) return { ...current };
-  return {
-    inputTokens: current.inputTokens >= previous.inputTokens ? current.inputTokens - previous.inputTokens : current.inputTokens,
-    cachedInputTokens:
-      current.cachedInputTokens >= previous.cachedInputTokens
-        ? current.cachedInputTokens - previous.cachedInputTokens
-        : current.cachedInputTokens,
-    outputTokens: current.outputTokens >= previous.outputTokens ? current.outputTokens - previous.outputTokens : current.outputTokens,
-  };
+/**
+ * Slack applied to a run's `[startedAt, finishedAt]` window before a ledger
+ * row is judged contained or straddling: ledger timestamps are unix seconds
+ * written by the adapter process, run timestamps are millisecond-precision
+ * server times, and the last ledger write can lag the process exit.
+ */
+const ROW_ATTRIBUTION_SLACK_MS = 60_000;
+
+function rowHasTokens(row: HermesSessionUsageRowDetail): boolean {
+  return row.inputTokens > 0 || row.outputTokens > 0 || row.cachedInputTokens > 0;
 }
 
 /**
- * The managed profile an agent's runs used — the same derivation as the live
- * path (`hermesRunProfile` in adapters/registry.ts), plus the deterministic
- * `agentdash-<agentId>` name as a second candidate for agents whose command was
+ * A session's rows, resolved the same way the live path resolves them —
+ * command/args/env/wrapper/active-profile through
+ * `resolveHermesStateDbResolutions` — plus the deterministic managed profile
+ * `agentdash-<agentId>` as a last candidate for agents whose command was
  * later re-pointed at bare `hermes`.
  */
-function hermesProfilesFor(agent: { id: string; adapterConfig: unknown }): (string | null)[] {
-  const cfg = asObject(agent.adapterConfig);
-  const command = typeof cfg.hermesCommand === "string" ? cfg.hermesCommand.trim() : "";
-  const profilesDir =
-    process.env.HERMES_PROFILES_DIR?.trim() || path.join(os.homedir(), ".hermes", "profiles");
-  const out: (string | null)[] = [];
-  const flagMatch = command.match(/(?:^|\s)(?:-p|--profile)[=\s]+([^\s]+)/);
-  if (flagMatch?.[1]) out.push(flagMatch[1]);
-  const base = command ? path.basename(command.split(/\s+/)[0] ?? "") : "";
-  if (base && base !== "hermes" && existsSync(path.join(profilesDir, base))) out.push(base);
-  const deterministic = agentProfileName(agent.id);
-  if (!out.includes(deterministic) && existsSync(path.join(profilesDir, deterministic))) {
-    out.push(deterministic);
+function readSessionLedgerRows(
+  sessionId: string,
+  agentId: string,
+  adapterConfig: Record<string, unknown> | null,
+): HermesSessionRowsRead {
+  const primary = readHermesSessionUsageRowsDetailed(sessionId, { adapterConfig });
+  if (primary.status === "metered") return primary;
+  const hinted = readHermesSessionUsageRowsDetailed(sessionId, {
+    adapterConfig,
+    profile: agentProfileName(agentId),
+  });
+  // Keep whichever read got further: metered > saw-a-ledger > nothing.
+  if (hinted.status === "metered") return hinted;
+  if (primary.status === "unmetered_no_ledger" && hinted.status === "unmetered_no_session") {
+    return hinted;
   }
-  out.push(null); // unmanaged/home database last
-  return out;
+  return primary;
 }
 
-type LedgerRead = {
-  totals: TokenTotals | null;
-  status: HermesMeteringStatus;
-  model: string | null;
-  provider: string | null;
-  apiCalls: number | null;
-  toolCalls: number | null;
+/** How many runs ever shared this session for this agent (all time). */
+async function sessionRunCount(agentId: string, sessionId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(heartbeatRuns)
+    .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.sessionIdAfter, sessionId)));
+  return Number(row?.n ?? 0);
+}
+
+type SessionAttribution = {
+  /** Per-run keyed by run id — present only for runs this function decided. */
+  byRun: Map<string, RunAttribution>;
 };
 
-/** Read a session's ledger totals, trying each profile candidate in order. */
-function readLedgerForSession(
-  sessionId: string,
-  profiles: (string | null)[],
-  adapterConfig: Record<string, unknown> | null,
-): LedgerRead {
-  let sawNoSession = false;
-  for (const profile of profiles) {
-    const read = readHermesSessionUsageDetailed(sessionId, { profile, adapterConfig });
-    if (read.status === "metered" && read.usage) {
-      return {
-        totals: {
-          inputTokens: read.usage.usage.inputTokens,
-          cachedInputTokens: read.usage.usage.cachedInputTokens ?? 0,
-          outputTokens: read.usage.usage.outputTokens,
+type RunAttribution =
+  | { kind: "metered"; tokens: TokenTotals; apiCalls: number; model: string | null; provider: string | null }
+  | { kind: "ambiguous" }
+  | { kind: "empty" };
+
+/**
+ * Split a session's ledger rows across the runs that shared it.
+ *
+ * Single-run session: every row is that run's, timestamps or not.
+ * Multi-run session: a row is a run's only when its recorded span sits inside
+ * the run's window; a token-carrying row that straddles a boundary, or has no
+ * timestamps, makes the whole session's per-run attribution unknowable —
+ * every in-window run is marked ambiguous rather than handed a guessed share.
+ * Each row is attributed at most once, so overlapping run windows can never
+ * double-count.
+ */
+function attributeSessionRows(
+  rows: HermesSessionUsageRowDetail[],
+  sessionRuns: RunRow[],
+  singleRunSession: boolean,
+): SessionAttribution {
+  const byRun = new Map<string, RunAttribution>();
+  if (singleRunSession) {
+    const run = sessionRuns[0];
+    if (run) {
+      byRun.set(run.id, {
+        kind: "metered",
+        tokens: {
+          inputTokens: rows.reduce((n, r) => n + r.inputTokens, 0),
+          cachedInputTokens: rows.reduce((n, r) => n + r.cachedInputTokens, 0),
+          outputTokens: rows.reduce((n, r) => n + r.outputTokens, 0),
         },
-        status: "metered",
-        model: read.usage.model,
-        provider: read.usage.provider,
-        apiCalls: read.usage.apiCalls,
-        toolCalls: read.usage.toolCalls,
-      };
+        apiCalls: rows.reduce((n, r) => n + r.apiCalls, 0),
+        model: dominantRow(rows)?.model ?? null,
+        provider: dominantRow(rows)?.provider ?? null,
+      });
     }
-    if (read.status === "unmetered_no_session") sawNoSession = true;
+    return { byRun };
   }
-  return {
-    totals: null,
-    status: sawNoSession ? "unmetered_no_session" : "unmetered_no_ledger",
-    model: null,
-    provider: null,
-    apiCalls: null,
-    toolCalls: null,
-  };
+
+  // An untimed token row cannot be placed in any run's window, so no run's
+  // share of this session is provable.
+  if (rows.some((row) => rowHasTokens(row) && (!row.firstSeenAt || !row.lastSeenAt))) {
+    for (const run of sessionRuns) byRun.set(run.id, { kind: "ambiguous" });
+    return { byRun };
+  }
+
+  const consumed = new Set<number>();
+  for (const run of sessionRuns) {
+    const start = (run.startedAt ?? run.createdAt).getTime() - ROW_ATTRIBUTION_SLACK_MS;
+    const end = (run.finishedAt ?? new Date()).getTime() + ROW_ATTRIBUTION_SLACK_MS;
+    const contained: number[] = [];
+    let ambiguous = false;
+    rows.forEach((row, index) => {
+      const first = row.firstSeenAt!.getTime();
+      const last = row.lastSeenAt!.getTime();
+      if (last < start || first > end) return; // clearly another run's work
+      if (first >= start && last <= end) {
+        if (!consumed.has(index)) contained.push(index);
+        return;
+      }
+      // Straddles a boundary — the row's tokens cannot be split honestly.
+      if (rowHasTokens(row)) ambiguous = true;
+    });
+    if (ambiguous) {
+      byRun.set(run.id, { kind: "ambiguous" });
+      continue;
+    }
+    contained.forEach((index) => consumed.add(index));
+    const containedRows = contained.map((index) => rows[index]!);
+    byRun.set(
+      run.id,
+      containedRows.length === 0
+        ? { kind: "empty" }
+        : {
+            kind: "metered",
+            tokens: {
+              inputTokens: containedRows.reduce((n, r) => n + r.inputTokens, 0),
+              cachedInputTokens: containedRows.reduce((n, r) => n + r.cachedInputTokens, 0),
+              outputTokens: containedRows.reduce((n, r) => n + r.outputTokens, 0),
+            },
+            apiCalls: containedRows.reduce((n, r) => n + r.apiCalls, 0),
+            model: dominantRow(containedRows)?.model ?? null,
+            provider: dominantRow(containedRows)?.provider ?? null,
+          },
+    );
+  }
+  return { byRun };
 }
 
-/** Latest pre-window run in the same session carrying raw totals — the delta baseline. */
-async function preWindowBaseline(agentId: string, sessionId: string): Promise<TokenTotals | null> {
-  const rows = await db
-    .select({ usageJson: heartbeatRuns.usageJson })
-    .from(heartbeatRuns)
-    .where(
-      and(
-        eq(heartbeatRuns.agentId, agentId),
-        eq(heartbeatRuns.sessionIdAfter, sessionId),
-        lt(heartbeatRuns.createdAt, since),
-        isNotNull(heartbeatRuns.usageJson),
-      ),
-    )
-    .orderBy(desc(heartbeatRuns.createdAt))
-    .limit(50);
+function dominantRow(rows: readonly HermesSessionUsageRowDetail[]) {
+  let best: HermesSessionUsageRowDetail | null = null;
   for (const row of rows) {
-    const totals = rawTotals(row.usageJson);
-    if (totals) return totals;
+    if (!best || row.inputTokens + row.outputTokens > best.inputTokens + best.outputTokens) {
+      best = row;
+    }
   }
-  return null;
+  return best;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,11 +298,17 @@ type DayBucket = {
 };
 
 const perDay = new Map<string, DayBucket>();
-const ledgerCache = new Map<string, LedgerRead>();
-const preWindowCache = new Map<string, TokenTotals | null>();
+const sessionRowsCache = new Map<string, HermesSessionRowsRead>();
+const sessionRunCountCache = new Map<string, number>();
 let updated = 0;
 let skipped = 0;
 let examined = 0;
+
+const agentWhere = flags.agent
+  ? eq(agents.id, flags.agent)
+  : flags.company
+    ? eq(agents.companyId, flags.company)
+    : undefined;
 
 const agentRows = await db
   .select({
@@ -270,11 +319,10 @@ const agentRows = await db
     runtimeConfig: agents.runtimeConfig,
   })
   .from(agents)
-  .where(flags.agent ? eq(agents.id, flags.agent) : undefined);
+  .where(agentWhere);
 
 for (const agent of agentRows) {
   const isHermes = agent.adapterType === "hermes_local";
-  const profiles = isHermes ? hermesProfilesFor(agent) : [];
   const configuredModel =
     typeof asObject(agent.adapterConfig).model === "string"
       ? (asObject(agent.adapterConfig).model as string)
@@ -301,9 +349,39 @@ for (const agent of agentRows) {
     .where(and(eq(heartbeatRuns.agentId, agent.id), gte(heartbeatRuns.createdAt, since)))
     .orderBy(asc(heartbeatRuns.createdAt))) as RunRow[];
 
-  // Cumulative counters already attributed to earlier in-window runs of a
-  // session, so the session's ledger total is spread first-run-then-delta.
-  const sessionSeenTotals = new Map<string, TokenTotals>();
+  // The runs that share a session, in order — attribution needs the whole
+  // session cohort, including runs that already carry runFacts (skipping them
+  // must not re-attribute their rows to a later run).
+  const sessionCohorts = new Map<string, RunRow[]>();
+  for (const run of runs) {
+    if (!run.sessionIdAfter) continue;
+    const cohort = sessionCohorts.get(run.sessionIdAfter) ?? [];
+    cohort.push(run);
+    sessionCohorts.set(run.sessionIdAfter, cohort);
+  }
+  const sessionAttributions = new Map<string, SessionAttribution>();
+  if (isHermes) {
+    for (const [sessionId, cohort] of sessionCohorts) {
+      const cacheKey = `${agent.id}:${sessionId}`;
+      let read = sessionRowsCache.get(cacheKey);
+      if (!read) {
+        read = readSessionLedgerRows(sessionId, agent.id, asObject(agent.adapterConfig));
+        sessionRowsCache.set(cacheKey, read);
+      }
+      let totalRuns = sessionRunCountCache.get(cacheKey);
+      if (totalRuns === undefined) {
+        totalRuns = await sessionRunCount(agent.id, sessionId);
+        sessionRunCountCache.set(cacheKey, totalRuns);
+      }
+      if (read.status !== "metered") continue;
+      // A session whose only run ever is this one is whole-session
+      // attributable; anything else goes through per-row windows.
+      sessionAttributions.set(sessionId, attributeSessionRows(read.rows, cohort, totalRuns === 1));
+    }
+  }
+
+  // Cumulative counter deltas for non-hermes adapters whose usage_json says
+  // the totals were session-cumulative (`usageSource: "session_delta"`).
   const sessionSeenCounters = new Map<string, { turns: number | null; toolCalls: number | null }>();
 
   for (const run of runs) {
@@ -318,38 +396,58 @@ for (const agent of agentRows) {
     let tokens: TokenTotals | null;
     let servedModel: string | null = null;
     let servedProvider: string | null = null;
+    let ledgerSource: string | null = null;
+    let ledgerCertainty: "certain" | "uncertain" | null = null;
     let cumulativeTurns = nonNegInt(resultJson.num_turns ?? resultJson.numTurns);
     let cumulativeToolCalls = nonNegInt(resultJson.num_tool_calls);
+    let turns: number | null = cumulativeTurns;
+    let toolCalls: number | null = cumulativeToolCalls;
 
     if (isHermes) {
       const sessionId = run.sessionIdAfter;
       if (!sessionId) {
         meteringStatus = "unmetered_no_session";
         tokens = null;
+        turns = null;
+        toolCalls = null;
       } else {
         const cacheKey = `${agent.id}:${sessionId}`;
-        let ledger = ledgerCache.get(cacheKey);
-        if (!ledger) {
-          ledger = readLedgerForSession(sessionId, profiles, asObject(agent.adapterConfig));
-          ledgerCache.set(cacheKey, ledger);
-        }
-        meteringStatus = ledger.status;
-        if (ledger.totals) {
-          let previous = sessionSeenTotals.get(sessionId) ?? null;
-          if (!previous && !preWindowCache.has(cacheKey)) {
-            preWindowCache.set(cacheKey, await preWindowBaseline(agent.id, sessionId));
-          }
-          previous = previous ?? preWindowCache.get(cacheKey) ?? null;
-          tokens = usageDelta(ledger.totals, previous);
-          sessionSeenTotals.set(sessionId, ledger.totals);
-          // The ledger saw which model/provider actually served the session —
-          // pre-OBS-1 usage_json rows rarely recorded either.
-          servedModel = ledger.model;
-          servedProvider = ledger.provider;
-          cumulativeTurns = ledger.apiCalls ?? cumulativeTurns;
-          cumulativeToolCalls = ledger.toolCalls ?? cumulativeToolCalls;
-        } else {
+        const read = sessionRowsCache.get(cacheKey)!;
+        const totalRuns = sessionRunCountCache.get(cacheKey) ?? 0;
+        ledgerSource = read.ledger?.source ?? null;
+        ledgerCertainty = read.ledger?.certainty ?? null;
+        // The run's own `num_turns`/`num_tool_calls` are cumulative for the
+        // session — they equal this run's share only when no other run ever
+        // used the session.
+        turns = totalRuns === 1 ? cumulativeTurns : null;
+        toolCalls = totalRuns === 1 ? cumulativeToolCalls : null;
+        if (read.status !== "metered") {
+          meteringStatus = read.status;
           tokens = null;
+        } else {
+          const attribution = sessionAttributions.get(sessionId)?.byRun.get(run.id);
+          if (!attribution || attribution.kind === "empty") {
+            // The session exists but no ledger row lands in this run's window —
+            // it provably consumed nothing.
+            meteringStatus = "metered";
+            tokens = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+            turns = 0;
+            toolCalls = null;
+          } else if (attribution.kind === "ambiguous") {
+            meteringStatus = "unmetered_backfill_ambiguous";
+            tokens = null;
+            turns = null;
+            toolCalls = null;
+          } else {
+            meteringStatus = "metered";
+            tokens = attribution.tokens;
+            turns = attribution.apiCalls;
+            servedModel = attribution.model;
+            servedProvider = attribution.provider;
+            // sessions.tool_call_count is cumulative for the whole session —
+            // attributable only when this run is the session's only run.
+            toolCalls = totalRuns === 1 ? read.sessionToolCalls : null;
+          }
         }
       }
       // Whatever the run recorded about itself still applies for labels.
@@ -363,23 +461,23 @@ for (const agent of agentRows) {
       const uj = asObject(run.usageJson);
       servedModel = typeof uj.model === "string" ? uj.model : null;
       servedProvider = typeof uj.provider === "string" ? uj.provider : null;
-    }
 
-    // Counter deltas: hermes counters are always cumulative per session; other
-    // adapters only when the run's own usage_json says the totals were
-    // session-cumulative (`usageSource: "session_delta"`).
-    const sessionKey = run.sessionIdAfter ? `${agent.id}:${run.sessionIdAfter}` : null;
-    let turns = cumulativeTurns;
-    let toolCalls = cumulativeToolCalls;
-    if (sessionKey && (isHermes || asObject(run.usageJson).usageSource === "session_delta")) {
-      const seen = sessionSeenCounters.get(sessionKey);
-      turns = counterDelta(cumulativeTurns, seen?.turns ?? null);
-      toolCalls = counterDelta(cumulativeToolCalls, seen?.toolCalls ?? null);
-      sessionSeenCounters.set(sessionKey, { turns: cumulativeTurns, toolCalls: cumulativeToolCalls });
+      const sessionKey = run.sessionIdAfter ? `${agent.id}:${run.sessionIdAfter}` : null;
+      if (sessionKey && asObject(run.usageJson).usageSource === "session_delta") {
+        const seen = sessionSeenCounters.get(sessionKey);
+        turns = counterDelta(cumulativeTurns, seen?.turns ?? null);
+        toolCalls = counterDelta(cumulativeToolCalls, seen?.toolCalls ?? null);
+        sessionSeenCounters.set(sessionKey, {
+          turns: cumulativeTurns,
+          toolCalls: cumulativeToolCalls,
+        });
+      }
     }
 
     const runFacts = buildRunFacts({
       meteringStatus,
+      ledgerSource,
+      ledgerCertainty,
       servedModel,
       servedProvider,
       configuredModel,
