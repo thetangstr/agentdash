@@ -104,7 +104,14 @@ export async function startServer(): Promise<StartedServer> {
   assertHostedBoxConfig(config);
   // AgentDash (#735): pin the default Hermes command to an absolute path from
   // the server's own PATH, before any agent can run.
-  initializeDefaultAdapterCommands();
+  {
+    const hermes = initializeDefaultAdapterCommands();
+    if (hermes.resolved) {
+      logger.info(hermes, "Resolved the default Hermes command to an absolute path");
+    } else {
+      logger.warn(hermes, "Default Hermes command not found on the server PATH at boot; it will be spawned by name");
+    }
+  }
   initTelemetry({ enabled: config.telemetryEnabled });
   if (process.env.PAPERCLIP_SECRETS_PROVIDER === undefined) {
     process.env.PAPERCLIP_SECRETS_PROVIDER = config.secretsProvider;

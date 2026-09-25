@@ -8,9 +8,11 @@
 // with, pins the binary: later env cannot redirect it. When the command
 // cannot be found at boot (not installed yet, or a test), the bare name stays
 // and the spawn behaves as before.
+//
+// Deliberately dependency-free (node builtins only): hermes-profile.ts imports
+// it, and the hosted image's Hermes smoke test loads that module on its own.
 import fs from "node:fs";
 import path from "node:path";
-import { logger } from "../middleware/logger.js";
 
 export const DEFAULT_HERMES_COMMAND = "hermes";
 
@@ -55,21 +57,16 @@ export function configuredDefaultHermesCommand(env: NodeJS.ProcessEnv = process.
 
 /**
  * Call once at boot. Resolves the default Hermes command against the server's
- * PATH and remembers the absolute path.
+ * PATH and remembers the absolute path. Returns what it resolved (`to` is
+ * null when the command was not found) so the caller can log it.
  */
-export function initializeDefaultAdapterCommands(env: NodeJS.ProcessEnv = process.env): void {
+export function initializeDefaultAdapterCommands(
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; resolved: string | null } {
   const from = configuredDefaultHermesCommand(env);
   const to = resolveCommandOnPath(from, env.PATH);
-  if (to) {
-    resolvedDefaultHermes = { from, to };
-    logger.info({ command: from, resolved: to }, "Resolved the default Hermes command to an absolute path");
-  } else {
-    resolvedDefaultHermes = null;
-    logger.warn(
-      { command: from },
-      "Default Hermes command not found on the server PATH at boot; it will be spawned by name",
-    );
-  }
+  resolvedDefaultHermes = to ? { from, to } : null;
+  return { command: from, resolved: to };
 }
 
 /**
