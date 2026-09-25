@@ -33,6 +33,26 @@ import { appendWithCap } from "../adapters/utils.js";
 
 const WORKSPACE_CONTROL_OUTPUT_MAX_CHARS = 256 * 1024;
 
+// AgentDash (security): fields that locate or own the workspace on disk. Only
+// the runtime (heartbeat realization) writes these, via the service layer.
+const RUNTIME_OWNED_EXECUTION_WORKSPACE_FIELDS = ["cwd", "providerRef", "branchName"] as const;
+const RUNTIME_OWNED_METADATA_KEYS = ["createdByRuntime", "source"] as const;
+
+export function preserveRuntimeOwnedMetadata(
+  requested: Record<string, unknown> | null,
+  existing: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const next: Record<string, unknown> = { ...(requested ?? {}) };
+  for (const key of RUNTIME_OWNED_METADATA_KEYS) {
+    delete next[key];
+    if (existing && Object.prototype.hasOwnProperty.call(existing, key)) {
+      next[key] = existing[key];
+    }
+  }
+  if (requested === null && Object.keys(next).length === 0) return null;
+  return next;
+}
+
 export function executionWorkspaceRoutes(db: Db) {
   const router = Router();
   const svc = executionWorkspaceService(db);
@@ -446,6 +466,21 @@ export function executionWorkspaceRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    // AgentDash (security): the on-disk location and ownership of an execution
+    // workspace are server-controlled. `cwd`, `providerRef` and `branchName`
+    // feed archive cleanup (recursive delete, worktree removal, branch delete),
+    // so a caller may only echo the current value back, never change it.
+    const lockedFieldChanges = RUNTIME_OWNED_EXECUTION_WORKSPACE_FIELDS.filter((field) => {
+      const requested = req.body[field];
+      if (requested === undefined) return false;
+      return (requested ?? null) !== (existing[field] ?? null);
+    });
+    if (lockedFieldChanges.length > 0) {
+      res.status(403).json({
+        error: `Execution workspace ${lockedFieldChanges.join(", ")} ${lockedFieldChanges.length === 1 ? "is" : "are"} managed by the runtime and cannot be changed.`,
+      });
+      return;
+    }
     await assertHostWorkspaceCommandAuthority(
       db,
       req,
@@ -457,11 +492,8 @@ export function executionWorkspaceRoutes(db: Db) {
     );
     const patch: Record<string, unknown> = {
       ...(req.body.name === undefined ? {} : { name: req.body.name }),
-      ...(req.body.cwd === undefined ? {} : { cwd: req.body.cwd }),
       ...(req.body.repoUrl === undefined ? {} : { repoUrl: req.body.repoUrl }),
       ...(req.body.baseRef === undefined ? {} : { baseRef: req.body.baseRef }),
-      ...(req.body.branchName === undefined ? {} : { branchName: req.body.branchName }),
-      ...(req.body.providerRef === undefined ? {} : { providerRef: req.body.providerRef }),
       ...(req.body.status === undefined ? {} : { status: req.body.status }),
       ...(req.body.cleanupReason === undefined ? {} : { cleanupReason: req.body.cleanupReason }),
       ...(req.body.cleanupEligibleAt !== undefined
@@ -472,9 +504,16 @@ export function executionWorkspaceRoutes(db: Db) {
       const requestedMetadata = req.body.metadata === undefined
         ? (existing.metadata as Record<string, unknown> | null)
         : (req.body.metadata as Record<string, unknown> | null);
-      patch.metadata = req.body.config === undefined
+      const mergedMetadata = req.body.config === undefined
         ? requestedMetadata
         : mergeExecutionWorkspaceConfig(requestedMetadata, req.body.config ?? null);
+      // AgentDash (security): runtime ownership markers (`createdByRuntime`,
+      // `source`) decide whether archive may delete the directory. Callers
+      // cannot set, change or drop them; always carry the stored values over.
+      patch.metadata = preserveRuntimeOwnedMetadata(
+        mergedMetadata,
+        existing.metadata as Record<string, unknown> | null,
+      );
     }
     let workspace = existing;
     let cleanupWarnings: string[] = [];
