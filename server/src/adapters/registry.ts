@@ -125,12 +125,17 @@ import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 import {
+  agentProfileName,
   ensureAgentProfileCommand,
   hermesManagedProfilesEnabled,
   hermesProfilesFailClosed,
   HermesProfileProvisionError,
   provisionAgentProfile,
 } from "../services/hermes-profile.js";
+import {
+  hermesManagedProfilesActive,
+  stripForeignHermesProfileArgs,
+} from "../services/adapter-host-execution-policy.js";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 import { withHermesSpawnWatch } from "./hermes-spawn-watch.js";
 
@@ -901,6 +906,23 @@ const hermesLocalAdapter: ServerAdapterModule = {
         if (!(error instanceof HermesProfileProvisionError)) throw error;
         await taskPatchedCtx.onLog("stderr", `[hermes] ${error.message}\n`);
         return hermesProfileProvisionFailedResult(error);
+      }
+    }
+
+    // AgentDash (security, #737): with managed profiles on, the run uses the
+    // agent's own profile; a `-p <other>` in extraArgs would borrow another
+    // profile's provider credentials (for example an operator's `ccworker`).
+    if (hermesManagedProfilesActive() && taskPatchedCtx.agent?.id) {
+      const stripped = stripForeignHermesProfileArgs(
+        patchedConfig.extraArgs,
+        agentProfileName(taskPatchedCtx.agent.id),
+      );
+      if (stripped.dropped.length > 0) {
+        patchedConfig.extraArgs = stripped.extraArgs;
+        await taskPatchedCtx.onLog(
+          "stderr",
+          `[hermes] Ignored -p/--profile ${stripped.dropped.join(", ")}: managed runs use the agent's own profile.\n`,
+        );
       }
     }
 

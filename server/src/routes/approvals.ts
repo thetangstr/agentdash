@@ -2,6 +2,7 @@ import {
   assertHostExecutionConfigAllowed,
   runtimeConfigHostExecutionInputs,
 } from "../services/adapter-host-execution-policy.js";
+import { hostExecutionContextForCompany } from "../services/host-execution-context.js";
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
@@ -307,7 +308,11 @@ export function approvalRoutes(
       // AgentDash (security, #719): approving creates the agent with this
       // adapterConfig, so the requester needs the same authority a direct
       // create needs to set the binary, argv, env or cwd.
-      assertHostExecutionConfigAllowed(req.actor, hirePayloadHostExecutionInputs(approvalInput.payload));
+      assertHostExecutionConfigAllowed(
+        req.actor,
+        hirePayloadHostExecutionInputs(approvalInput.payload),
+        await hostExecutionContextForCompany(db, companyId),
+      );
     }
     const normalizedPayload =
       approvalInput.type === "hire_agent"
@@ -585,6 +590,7 @@ export function approvalRoutes(
       assertHostExecutionConfigAllowed(
         req.actor,
         hirePayloadHostExecutionInputs(req.body.payload, existing.payload),
+        await hostExecutionContextForCompany(db, existing.companyId),
       );
     }
     const normalizedPayload = req.body.payload

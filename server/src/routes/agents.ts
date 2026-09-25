@@ -66,6 +66,11 @@ import {
   assertHostExecutionConfigAllowed,
   runtimeConfigHostExecutionInputs,
 } from "../services/adapter-host-execution-policy.js";
+import { hostExecutionContextForCompany } from "../services/host-execution-context.js";
+import {
+  checkCompanyInstructionsPath,
+  findProtectedHostDirectoryOverlap,
+} from "../services/instructions-root-confinement.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
@@ -1540,6 +1545,20 @@ export function agentRoutes(
       );
     }
     const authority = await requireAgentConfigurationAuthority(req, targetAgent);
+    // AgentDash (security, #737): a bundle root outside this company's
+    // instructions directory is a host directory an instance admin chose
+    // (often a checkout, where a written file can run on the next agent run).
+    // Only an instance admin writes into it; everyone else edits bundles that
+    // live in the managed or company-shared directory.
+    if (authority !== "steward" && !actorMaySetHostExecutionConfig(req.actor)) {
+      const bundle = await instructions.getBundle(targetAgent as never);
+      if (bundle.rootPath && !checkCompanyInstructionsPath(targetAgent.companyId, bundle.rootPath).ok) {
+        throw forbidden(
+          "Instance admin access required to edit an instructions bundle whose root is outside this " +
+            "company's instructions directory",
+        );
+      }
+    }
     if (authority !== "steward") return;
 
     // A steward may only write inside the SERVER-MANAGED bundle root. An
@@ -1837,7 +1856,7 @@ export function agentRoutes(
         adapterType: type,
         adapterConfig: req.body?.adapterConfig,
         stored: storedTestConfig,
-      });
+      }, await hostExecutionContextForCompany(db, companyId));
 
       // Closes #315: e2e bypass — when AGENTDASH_ADAPTER_ENV_BYPASS=true
       // is set, short-circuit the adapter probe and return a synthetic
@@ -2336,7 +2355,7 @@ export function agentRoutes(
         assertHostExecutionConfigAllowed(req.actor, [
           { adapterType: snapshotAdapterType, adapterConfig: snapshot.adapterConfig, stored: existing.adapterConfig },
           ...runtimeConfigHostExecutionInputs(snapshotAdapterType, snapshot.runtimeConfig, existing.runtimeConfig),
-        ]);
+        ], await hostExecutionContextForCompany(db, existing.companyId));
       }
     }
 
@@ -2520,7 +2539,7 @@ export function agentRoutes(
     assertHostExecutionConfigAllowed(req.actor, [
       { adapterType: hireInput.adapterType, adapterConfig: rawHireAdapterConfig },
       ...runtimeConfigHostExecutionInputs(hireInput.adapterType, hireInput.runtimeConfig),
-    ]);
+    ], await hostExecutionContextForCompany(db, companyId));
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       rawHireAdapterConfig,
@@ -2749,7 +2768,7 @@ export function agentRoutes(
     assertHostExecutionConfigAllowed(req.actor, [
       { adapterType: createInput.adapterType, adapterConfig: rawCreateAdapterConfig },
       ...runtimeConfigHostExecutionInputs(createInput.adapterType, createInput.runtimeConfig),
-    ]);
+    ], await hostExecutionContextForCompany(db, companyId));
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       rawCreateAdapterConfig,
@@ -3095,7 +3114,26 @@ export function agentRoutes(
     if (req.body.path === null) {
       delete nextAdapterConfig[adapterConfigKey];
     } else {
-      nextAdapterConfig[adapterConfigKey] = resolveInstructionsFilePath(req.body.path, existingAdapterConfig);
+      const resolvedInstructionsPath = resolveInstructionsFilePath(req.body.path, existingAdapterConfig);
+      const protectedDir = findProtectedHostDirectoryOverlap(path.dirname(resolvedInstructionsPath));
+      if (protectedDir) {
+        throw unprocessable(
+          `Instructions path overlaps a protected host directory (${protectedDir}); choose another location.`,
+        );
+      }
+      // AgentDash (security, #737): the server reads this file into the
+      // agent's prompt and treats its directory as the bundle root, so a path
+      // outside this company's instructions directory is instance-admin only.
+      if (!actorMaySetHostExecutionConfig(req.actor)) {
+        const check = checkCompanyInstructionsPath(existing.companyId, resolvedInstructionsPath);
+        if (!check.ok) {
+          throw forbidden(
+            `Instance admin access required for an instructions path outside this company's ` +
+              `instructions directory: ${check.reason}.`,
+          );
+        }
+      }
+      nextAdapterConfig[adapterConfigKey] = resolvedInstructionsPath;
     }
 
     const syncedAdapterConfig = syncInstructionsBundleConfigFromFilePath(existing, nextAdapterConfig);
@@ -3169,7 +3207,11 @@ export function agentRoutes(
     await assertCanManageInstructionsLocation(req, existing);
 
     const actor = getActorInfo(req);
-    const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
+    // AgentDash (security, #737): an external root outside this company's
+    // instructions directory is instance-admin only.
+    const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body, {
+      allowUnconfinedExternalRoot: actorMaySetHostExecutionConfig(req.actor),
+    });
     const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
       existing.companyId,
       adapterConfig,
@@ -3494,7 +3536,7 @@ export function agentRoutes(
           }]
         : []),
       ...runtimeConfigHostExecutionInputs(requestedAdapterType, requestedRuntimeConfig, existing.runtimeConfig),
-    ]);
+    ], await hostExecutionContextForCompany(db, existing.companyId));
     const touchesAdapterConfiguration =
       hasOwn(patchData, "adapterType") ||
       hasOwn(patchData, "adapterConfig");
