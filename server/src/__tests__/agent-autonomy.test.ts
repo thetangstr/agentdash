@@ -397,8 +397,8 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
         request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
           name: "Personal",
           role: "engineer",
-          adapterType: "process",
-          adapterConfig: { command: "echo" },
+          adapterType: "hermes_local",
+          adapterConfig: {},
         }),
       );
       expect(response.status).toBe(201);
@@ -425,8 +425,8 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
         request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
           name: "Sweeper",
           role: "engineer",
-          adapterType: "process",
-          adapterConfig: { command: "echo" },
+          adapterType: "hermes_local",
+          adapterConfig: {},
           autonomy: "autonomous",
         }),
       );
@@ -452,8 +452,8 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
           request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
             name,
             role: "engineer",
-            adapterType: "process",
-            adapterConfig: { command: "echo" },
+            adapterType: "hermes_local",
+            adapterConfig: {},
             autonomy: "autonomous",
           }),
         );
@@ -474,8 +474,8 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
         request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
           name: "Confused",
           role: "engineer",
-          adapterType: "process",
-          adapterConfig: { command: "echo" },
+          adapterType: "hermes_local",
+          adapterConfig: {},
           accountableUserId: other,
         }),
       );
@@ -492,8 +492,8 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
         request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
           name: "Orphan",
           role: "engineer",
-          adapterType: "process",
-          adapterConfig: { command: "echo" },
+          adapterType: "hermes_local",
+          adapterConfig: {},
           autonomy: "autonomous",
           accountableUserId: randomUUID(),
         }),
