@@ -1,4 +1,4 @@
-import { and, count, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, count, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { CompanyProductProfile } from "@paperclipai/shared";
 import {
@@ -49,6 +49,10 @@ import {
   issueExecutionDecisions,
   issueThreadInteractions,
   assistantConversations,
+  assistantAccessTokens,
+  assistantAuthRequests,
+  assistantGrants,
+  assistantRefreshTokens,
   agentConnectCodes,
   trialSessions,
   mandates,
@@ -535,6 +539,29 @@ export function companyService(db: Db) {
         await tx.delete(issueExecutionDecisions).where(eq(issueExecutionDecisions.companyId, id));
         await tx.delete(issueThreadInteractions).where(eq(issueThreadInteractions.companyId, id));
         await tx.delete(assistantConversations).where(eq(assistantConversations.companyId, id));
+        // AgentDash (GH #677): the assistant OAuth tables (migration 0129) hold
+        // NO ACTION foreign keys: grants and auth requests to companies, and
+        // tokens and auth requests to grants. Once an assistant had connected,
+        // DELETE /companies/:id failed on assistant_grants_company_id_companies_id_fk.
+        // FK-safe order: tokens, then auth requests, then the grants themselves.
+        // Auth requests are matched by company and by grant, because an
+        // approved request carries both and a request can reference a grant
+        // of this company even if its own company_id was never set.
+        const companyGrantIds = tx
+          .select({ id: assistantGrants.id })
+          .from(assistantGrants)
+          .where(eq(assistantGrants.companyId, id));
+        await tx.delete(assistantAccessTokens).where(inArray(assistantAccessTokens.grantId, companyGrantIds));
+        await tx.delete(assistantRefreshTokens).where(inArray(assistantRefreshTokens.grantId, companyGrantIds));
+        await tx
+          .delete(assistantAuthRequests)
+          .where(
+            or(
+              eq(assistantAuthRequests.companyId, id),
+              inArray(assistantAuthRequests.grantId, companyGrantIds),
+            ),
+          );
+        await tx.delete(assistantGrants).where(eq(assistantGrants.companyId, id));
         await tx.delete(agentConnectCodes).where(eq(agentConnectCodes.companyId, id));
         await tx.delete(trialSessions).where(eq(trialSessions.companyId, id));
         await tx.delete(mandates).where(eq(mandates.companyId, id));

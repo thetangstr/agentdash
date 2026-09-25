@@ -94,7 +94,7 @@ Also run the cloud preflight against the box's variables from its state director
 - `AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE=true` makes `POST /api/auth/sign-up/*` refuse any request without a code in `AGENTDASH_INVITE_CODES` (`server/src/middleware/invite-code-signup-guard.ts`). With no codes configured, every code is refused.
 - MCP sign-up (`POST /api/onboarding/mcp-signup`, `doc/MCP-LAUNCH.md`) validates its code against `AGENTDASH_INVITE_VALIDATION_URL`, which the script points at **the box's own** `/api/invites/validate`, so the box never trusts www.agentdash.cloud's code list and an unreachable validator refuses sign-up.
 - No social sign-in provider is configured, and `AGENTDASH_LEGACY_AUTH_AUTOBOOTSTRAP` is off, so nothing else creates users.
-- `AGENTDASH_SELF_SERVE_BOOTSTRAP=true` makes the creator of the **first** company on a box with no instance admin its instance admin (`server/src/routes/companies.ts`).
+- `AGENTDASH_SELF_SERVE_BOOTSTRAP=true` makes the creator of the **first** company on a box with no instance admin its instance admin, whether the company is created at `/company-create` or by the `/cos` onboarding bootstrap (`accessService.promoteSelfServeBootstrapAdmin` in `server/src/services/access.ts`).
 
 **Steps, done by the founder:**
 

@@ -9,6 +9,7 @@ const mockAccess = {
   setPrincipalPermission: vi.fn(),
   listUserCompanyAccess: vi.fn(),
   listActiveUserMemberships: vi.fn(),
+  promoteSelfServeBootstrapAdmin: vi.fn(),
 };
 const mockCompanies = { create: vi.fn(), getById: vi.fn(), findByEmailDomain: vi.fn(), hasActiveCompany: vi.fn(), list: vi.fn() };
 const mockAgents = { create: vi.fn(), createApiKey: vi.fn(), list: vi.fn(), listKeys: vi.fn() };
