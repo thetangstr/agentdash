@@ -351,6 +351,7 @@ export type {
   AgentResolvedRuntime,
   AgentHeartbeatRuntimeConfig,
   AgentTokenCeilingStatus,
+  AgentRunHealth,
   AssetImage,
   Project,
   ProjectCodebase,

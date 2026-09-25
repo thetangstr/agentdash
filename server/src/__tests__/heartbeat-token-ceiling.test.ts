@@ -14,7 +14,11 @@ import {
 } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_DAILY_TOKENS } from "@paperclipai/shared";
 import { heartbeatService } from "../services/heartbeat.js";
-import { TOKEN_CEILING_SKIP_REASON } from "../services/token-ceiling.js";
+import {
+  TOKEN_CEILING_SKIP_REASON,
+  UNMETERED_RUNAWAY_GUARD_LIMIT,
+  UNMETERED_RUNAWAY_GUARD_REASON,
+} from "../services/token-ceiling.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
 import {
   getEmbeddedPostgresTestSupport,
@@ -80,6 +84,22 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     return { companyId, agentId };
   }
 
+  /**
+   * The scheduler's real timer wake, verbatim from runDueAgents: the reason is
+   * "heartbeat_timer", which enrichWakeContextSnapshot stamps into
+   * contextSnapshot.wakeReason — the field normalizeWakeReason reads. A
+   * synthetic `{source: "timer"}` wake would not prove the production path is
+   * classified as pausable; this is the shape that was actually never paused.
+   */
+  const SCHEDULER_TIMER_WAKE = {
+    source: "timer",
+    triggerDetail: "system",
+    reason: "heartbeat_timer",
+    requestedByActorType: "system",
+    requestedByActorId: "heartbeat_scheduler",
+    contextSnapshot: { source: "scheduler", reason: "interval_elapsed" },
+  } as const;
+
   /** A finished, metered run — the shape OBS-1's finalization writes. */
   async function seedMeteredRun(
     companyId: string,
@@ -87,6 +107,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     tokens: number,
     createdAt = new Date(),
     meteringStatus = "metered",
+    wakeReason = "timer",
   ) {
     await db.insert(heartbeatRuns).values({
       id: randomUUID(),
@@ -102,7 +123,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
           cachedInputTokens: null,
           outputTokens: meteringStatus.startsWith("unmetered") ? null : 0,
           outcome: "no_op",
-          wakeReason: "timer",
+          wakeReason,
         },
       },
       createdAt,
@@ -111,7 +132,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     });
   }
 
-  async function skippedRequestsToday(agentId: string) {
+  async function skippedRequestsToday(agentId: string, reason: string = TOKEN_CEILING_SKIP_REASON) {
     return db
       .select()
       .from(agentWakeupRequests)
@@ -119,7 +140,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
         and(
           eq(agentWakeupRequests.agentId, agentId),
           eq(agentWakeupRequests.status, "skipped"),
-          eq(agentWakeupRequests.reason, TOKEN_CEILING_SKIP_REASON),
+          eq(agentWakeupRequests.reason, reason),
         ),
       );
   }
@@ -130,7 +151,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       await seedMeteredRun(companyId, agentId, 250_000);
     }
 
-    const run = await heartbeat.wakeup(agentId, { source: "timer" });
+    const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
     expect(run).toBeNull();
 
     const skips = await skippedRequestsToday(agentId);
@@ -142,7 +163,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     const { companyId, agentId } = await seedAgent();
     await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
 
-    const run = await heartbeat.wakeup(agentId, { source: "timer" });
+    const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
     expect(run).toBeNull();
     const skips = await skippedRequestsToday(agentId);
     expect(skips).toHaveLength(1);
@@ -208,7 +229,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       await seedMeteredRun(companyId, agentId, 0, new Date(), "unmetered_no_ledger");
     }
 
-    const run = await heartbeat.wakeup(agentId, { source: "timer" });
+    const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
     expect(run).not.toBeNull();
   });
 
@@ -218,7 +239,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     });
     await seedMeteredRun(companyId, agentId, 6_000_000);
 
-    const run = await heartbeat.wakeup(agentId, { source: "timer" });
+    const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
     expect(run).not.toBeNull();
   });
 
@@ -226,7 +247,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     const { companyId, agentId } = await seedAgent({ maxDailyTokens: 0 });
     await seedMeteredRun(companyId, agentId, 6_000_000);
 
-    const run = await heartbeat.wakeup(agentId, { source: "timer" });
+    const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
     expect(run).not.toBeNull();
   });
 
@@ -240,7 +261,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       new Date(Date.now() - 26 * 60 * 60 * 1000),
     );
 
-    const run = await heartbeat.wakeup(agentId, { source: "timer" });
+    const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
     expect(run).not.toBeNull();
   });
 
@@ -252,7 +273,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
 
     // Three over-ceiling timer wakes in the same UTC day.
     for (let i = 0; i < 3; i += 1) {
-      expect(await heartbeat.wakeup(agentId, { source: "timer" })).toBeNull();
+      expect(await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE)).toBeNull();
     }
     expect(await skippedRequestsToday(agentId)).toHaveLength(3);
 
@@ -290,7 +311,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
     await seedMeteredRun(companyId, agentId, 0, new Date(), "unmetered_no_session");
 
-    expect(await heartbeat.wakeup(agentId, { source: "timer" })).toBeNull();
+    expect(await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE)).toBeNull();
 
     const inbox = await db
       .select()
@@ -300,5 +321,131 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     const payload = inbox[0]!.payload as Record<string, unknown>;
     expect(payload.unmeteredRuns).toBe(1);
     expect(String(payload.message)).toContain("Metering is off");
+  });
+
+  describe("unmetered runaway guard", () => {
+    async function seedUnmeteredRuns(
+      companyId: string,
+      agentId: string,
+      count: number,
+      wakeReason = "timer",
+      createdAt = new Date(),
+    ) {
+      for (let i = 0; i < count; i += 1) {
+        await seedMeteredRun(companyId, agentId, 0, createdAt, "unmetered_no_ledger", wakeReason);
+      }
+    }
+
+    it(`allows ${UNMETERED_RUNAWAY_GUARD_LIMIT} unmetered timer runs — the guard trips above the count`, async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedUnmeteredRuns(companyId, agentId, UNMETERED_RUNAWAY_GUARD_LIMIT);
+
+      const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
+      expect(run).not.toBeNull();
+      expect(await skippedRequestsToday(agentId, UNMETERED_RUNAWAY_GUARD_REASON)).toHaveLength(0);
+    });
+
+    it("skips the next real scheduler wake past the threshold with reason 'unmetered runaway guard'", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedUnmeteredRuns(companyId, agentId, UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+
+      const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
+      expect(run).toBeNull();
+
+      const skips = await skippedRequestsToday(agentId, UNMETERED_RUNAWAY_GUARD_REASON);
+      expect(skips).toHaveLength(1);
+      expect(skips[0]!.reason).toBe("unmetered runaway guard");
+      expect(skips[0]!.source).toBe("timer");
+    });
+
+    it("counts unmetered comment runs toward the guard — comments are unattended spend too", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedUnmeteredRuns(companyId, agentId, UNMETERED_RUNAWAY_GUARD_LIMIT + 1, "comment");
+
+      const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
+      expect(run).toBeNull();
+      expect(await skippedRequestsToday(agentId, UNMETERED_RUNAWAY_GUARD_REASON)).toHaveLength(1);
+    });
+
+    it("does not count metered or deliberately-aimed unmetered runs", async () => {
+      const { companyId, agentId } = await seedAgent();
+      // The guard counts only unmetered timer/comment runs: a metered run and
+      // unmetered runs a person aimed at the agent must not feed it — more of
+      // these than the limit would otherwise look like a runaway.
+      for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
+        await seedMeteredRun(companyId, agentId, 1_000);
+        await seedMeteredRun(companyId, agentId, 0, new Date(), "unmetered_no_ledger", "assignment");
+      }
+      await seedMeteredRun(companyId, agentId, 0, new Date(), "unmetered_no_ledger", "manual");
+      await seedMeteredRun(companyId, agentId, 0, new Date(), "unmetered_no_ledger", "mention");
+
+      const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
+      expect(run).not.toBeNull();
+    });
+
+    it("lets assigned and manual wakes run even when the guard has tripped", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedUnmeteredRuns(companyId, agentId, UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+      const issueId = randomUUID();
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Assigned task",
+        status: "todo",
+        assigneeAgentId: agentId,
+      });
+
+      const assigned = await heartbeat.wakeup(agentId, {
+        source: "assignment",
+        reason: "issue_assigned",
+        contextSnapshot: { wakeReason: "issue_assigned", issueId },
+      });
+      expect(assigned).not.toBeNull();
+
+      const manual = await heartbeat.wakeup(agentId, {
+        source: "on_demand",
+        triggerDetail: "manual",
+      });
+      expect(manual).not.toBeNull();
+    });
+
+    it("resets at the UTC day boundary", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedUnmeteredRuns(
+        companyId,
+        agentId,
+        UNMETERED_RUNAWAY_GUARD_LIMIT + 1,
+        "timer",
+        new Date(Date.now() - 26 * 60 * 60 * 1000),
+      );
+
+      const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
+      expect(run).not.toBeNull();
+    });
+
+    it("announces the runaway pause once per agent per day with the guard reason", async () => {
+      const { companyId, agentId } = await seedAgent({ productProfile: "agentdash_mk" });
+      await db
+        .insert(agentStewardships)
+        .values({ companyId, agentId, userId: "user-steward-guard" });
+      await seedUnmeteredRuns(companyId, agentId, UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+
+      for (let i = 0; i < 3; i += 1) {
+        expect(await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE)).toBeNull();
+      }
+      expect(
+        await skippedRequestsToday(agentId, UNMETERED_RUNAWAY_GUARD_REASON),
+      ).toHaveLength(3);
+
+      const inbox = await db
+        .select()
+        .from(stewardInboxEvents)
+        .where(eq(stewardInboxEvents.kind, "agent.token_ceiling"));
+      expect(inbox).toHaveLength(1);
+      const payload = inbox[0]!.payload as Record<string, unknown>;
+      expect(payload.pauseReason).toBe("unmetered runaway guard");
+      expect(payload.unmeteredPausableRuns).toBe(UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+      expect(String(payload.message)).toContain("unmetered runaway guard");
+    });
   });
 });

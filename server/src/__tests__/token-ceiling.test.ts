@@ -6,6 +6,7 @@ import { AGENT_DEFAULT_MAX_DAILY_TOKENS } from "@paperclipai/shared";
 import {
   resolveMaxDailyTokens,
   tokenCeilingService,
+  UNMETERED_RUNAWAY_GUARD_LIMIT,
   utcDayWindow,
 } from "../services/token-ceiling.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
@@ -251,6 +252,60 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     });
     expect(status.tokensToday).toBe(0);
     expect(status.paused).toBe(false);
+  });
+
+  it("trips the runaway guard on unmetered timer/comment runs and names the reason", async () => {
+    const { companyId, agentId } = await seedAgent();
+    for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
+      await seedMeteredRun(companyId, agentId, {
+        meteringStatus: "unmetered_no_session",
+        inputTokens: null,
+        outputTokens: null,
+        wakeReason: "timer",
+      });
+    }
+    // Deliberately-aimed unmetered runs don't feed the guard.
+    await seedMeteredRun(companyId, agentId, {
+      meteringStatus: "unmetered_no_ledger",
+      inputTokens: null,
+      outputTokens: null,
+      wakeReason: "assignment",
+    });
+
+    const status = await tokenCeilingService(db).evaluate({
+      id: agentId,
+      companyId,
+      runtimeConfig: {},
+    });
+    expect(status.paused).toBe(true);
+    expect(status.pauseReason).toBe("unmetered runaway guard");
+    expect(status.unmeteredPausableRuns).toBe(UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+    expect(status.unmeteredRuns).toBe(UNMETERED_RUNAWAY_GUARD_LIMIT + 2);
+    // The token ceiling did not trip — tokens stay unknown, never zero.
+    expect(status.tokensToday).toBe(0);
+  });
+
+  it("runaway guard applies even with the ceiling explicitly off", async () => {
+    const { companyId, agentId } = await seedAgent({
+      heartbeat: { maxDailyTokens: 0 },
+    });
+    for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
+      await seedMeteredRun(companyId, agentId, {
+        meteringStatus: "unmetered_no_ledger",
+        inputTokens: null,
+        outputTokens: null,
+        wakeReason: "comment",
+      });
+    }
+
+    const status = await tokenCeilingService(db).evaluate({
+      id: agentId,
+      companyId,
+      runtimeConfig: { heartbeat: { maxDailyTokens: 0 } },
+    });
+    expect(status.ceiling).toBeNull();
+    expect(status.paused).toBe(true);
+    expect(status.pauseReason).toBe("unmetered runaway guard");
   });
 
   it("scopes the sum to the agent — a colleague's spend does not count", async () => {

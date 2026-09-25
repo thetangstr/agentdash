@@ -28,7 +28,9 @@ function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentT
     tokensToday: 1_250_000,
     meteredRuns: 12,
     unmeteredRuns: 0,
+    unmeteredPausableRuns: 0,
     paused: false,
+    pauseReason: null,
     liftsAt: "2026-09-22T00:00:00.000Z",
     ...overrides,
   };
@@ -76,6 +78,21 @@ describe("TokenCeilingStatusLine", () => {
     expect(text).toContain("assigned work and manual wakes still run");
     // The paused affordance is the recovery path, not a bare Edit.
     expect(text).toContain("Raise or clear");
+  });
+
+  it("names the unmetered runaway guard when it caused the pause", () => {
+    render(
+      statusFixture({
+        paused: true,
+        pauseReason: "unmetered runaway guard",
+        unmeteredPausableRuns: 49,
+        unmeteredRuns: 49,
+      }),
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("unmetered runaway guard");
+    expect(text).toContain("49 unmetered unattended runs");
+    expect(text).toContain("assigned work and manual wakes still run");
   });
 
   it("says off when the ceiling is disabled", () => {

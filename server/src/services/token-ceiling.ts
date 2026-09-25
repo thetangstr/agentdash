@@ -18,6 +18,22 @@ import { parseObject } from "../adapters/utils.js";
 /** The wakeup-request skip reason persisted when the ceiling refuses a wake. */
 export const TOKEN_CEILING_SKIP_REASON = "token_ceiling";
 
+/**
+ * The skip reason persisted when the unmetered-run fallback guard refuses a
+ * wake — spend that cannot be metered cannot be bounded, so a runaway of
+ * unmetered unattended wakes pauses the agent the same way the ceiling does.
+ */
+export const UNMETERED_RUNAWAY_GUARD_REASON = "unmetered runaway guard";
+
+/**
+ * How many unmetered timer/comment runs in one UTC day trip the fallback
+ * guard. Unmetered runs can never trip the token ceiling — their spend is
+ * unknown, not zero — so the guard bounds the COUNT instead: 48 unattended
+ * wakes is roughly one full day of a 30-minute heartbeat, which is also the
+ * incident shape this whole feature exists to stop.
+ */
+export const UNMETERED_RUNAWAY_GUARD_LIMIT = 48;
+
 /** The steward-inbox kind emitted once per agent per UTC day on first pause. */
 export const TOKEN_CEILING_INBOX_KIND = "agent.token_ceiling";
 
@@ -71,6 +87,8 @@ export interface AgentDailyTokenUsage {
   noOpTokens: number;
   meteredRuns: number;
   unmeteredRuns: number;
+  /** Unmetered timer/comment runs — the runaway guard's input. */
+  unmeteredPausableRuns: number;
 }
 
 export function tokenCeilingService(db: Db) {
@@ -82,6 +100,7 @@ export function tokenCeilingService(db: Db) {
     const window = utcDayWindow(now);
     const runFacts = sql`coalesce(${heartbeatRuns.resultJson} -> 'runFacts', '{}'::jsonb)`;
     const metered = sql`${runFacts} ->> 'meteringStatus' in ('metered', 'adapter_reported')`;
+    const unmetered = sql`${runFacts} ->> 'meteringStatus' in ('unmetered_no_ledger', 'unmetered_no_session', 'unmetered_backfill_ambiguous')`;
     const tokens = sql`(
       coalesce((${runFacts} ->> 'inputTokens')::numeric, 0)
       + coalesce((${runFacts} ->> 'cachedInputTokens')::numeric, 0)
@@ -93,7 +112,8 @@ export function tokenCeilingService(db: Db) {
         totalTokens: sql<number>`coalesce(sum(${tokens}) filter (where ${metered}), 0)::bigint`,
         noOpTokens: sql<number>`coalesce(sum(${tokens}) filter (where ${metered} and ${runFacts} ->> 'outcome' = 'no_op'), 0)::bigint`,
         meteredRuns: sql<number>`count(*) filter (where ${metered})::int`,
-        unmeteredRuns: sql<number>`count(*) filter (where ${runFacts} ->> 'meteringStatus' in ('unmetered_no_ledger', 'unmetered_no_session'))::int`,
+        unmeteredRuns: sql<number>`count(*) filter (where ${unmetered})::int`,
+        unmeteredPausableRuns: sql<number>`count(*) filter (where ${unmetered} and ${runFacts} ->> 'wakeReason' in ('timer', 'comment'))::int`,
       })
       .from(heartbeatRuns)
       .where(
@@ -112,13 +132,17 @@ export function tokenCeilingService(db: Db) {
       noOpTokens: Number(row?.noOpTokens ?? 0),
       meteredRuns: Number(row?.meteredRuns ?? 0),
       unmeteredRuns: Number(row?.unmeteredRuns ?? 0),
+      unmeteredPausableRuns: Number(row?.unmeteredPausableRuns ?? 0),
     };
   }
 
   /**
    * Where the agent stands against its ceiling today. `paused` is a property
    * of the sum, not a stored flag — so it lifts by itself at the day boundary
-   * and the moment a steward raises the ceiling.
+   * and the moment a steward raises the ceiling. Two distinct pauses share it:
+   * the metered total hitting the ceiling, and the unmetered runaway guard —
+   * spend that cannot be metered cannot be bounded, so an unmetered flood of
+   * unattended wakes pauses the agent too. `pauseReason` says which.
    */
   async function evaluate(
     agent: { id: string; companyId: string; runtimeConfig: unknown },
@@ -126,13 +150,21 @@ export function tokenCeilingService(db: Db) {
   ): Promise<AgentTokenCeilingStatus> {
     const { ceiling, isDefault } = resolveMaxDailyTokens(agent.runtimeConfig);
     const usage = await dailyUsage(agent.companyId, agent.id, now);
+    const overCeiling = ceiling !== null && usage.totalTokens >= ceiling;
+    const runaway = usage.unmeteredPausableRuns > UNMETERED_RUNAWAY_GUARD_LIMIT;
     return {
       ceiling,
       isDefault,
       tokensToday: usage.totalTokens,
       meteredRuns: usage.meteredRuns,
       unmeteredRuns: usage.unmeteredRuns,
-      paused: ceiling !== null && usage.totalTokens >= ceiling,
+      unmeteredPausableRuns: usage.unmeteredPausableRuns,
+      paused: overCeiling || runaway,
+      pauseReason: overCeiling
+        ? TOKEN_CEILING_SKIP_REASON
+        : runaway
+          ? UNMETERED_RUNAWAY_GUARD_REASON
+          : null,
       liftsAt: usage.liftsAt.toISOString(),
     };
   }

@@ -55,7 +55,15 @@ export interface AgentTokenCeilingStatus {
   tokensToday: number;
   meteredRuns: number;
   unmeteredRuns: number;
+  /** Unmetered timer/comment runs today — the runaway guard's input. */
+  unmeteredPausableRuns: number;
   paused: boolean;
+  /**
+   * Which guard paused the agent: "token_ceiling" when the metered sum hit
+   * the ceiling, "unmetered runaway guard" when unmetered unattended runs
+   * outran what can be verified. Null when not paused.
+   */
+  pauseReason: "token_ceiling" | "unmetered runaway guard" | null;
   /** Next UTC midnight — when the window resets and paused wakes resume. */
   liftsAt: string;
 }
@@ -133,6 +141,16 @@ export interface AgentRunHealth {
   failed: number;
   succeededWithoutEvidence: number;
   neverRan: boolean;
+  /**
+   * OBS-2: non-null while a token-ceiling pause (or the unmetered runaway
+   * guard) is skipping this agent's unattended wakes. Carries no figures, so
+   * the restricted detail view can show it — "this agent is paused" is health,
+   * not configuration.
+   */
+  tokenCeilingPause: {
+    reason: "token_ceiling" | "unmetered runaway guard";
+    liftsAt: string;
+  } | null;
   last: {
     status: string;
     error: string | null;

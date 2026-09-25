@@ -81,6 +81,7 @@ export type {
   AgentRuntimeConfig,
   AgentHeartbeatRuntimeConfig,
   AgentTokenCeilingStatus,
+  AgentRunHealth,
   AgentInstructionsBundleMode,
   AgentInstructionsFileSummary,
   AgentInstructionsFileDetail,

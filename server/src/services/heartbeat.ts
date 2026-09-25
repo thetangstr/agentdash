@@ -103,6 +103,7 @@ import {
 import {
   TOKEN_CEILING_INBOX_KIND,
   TOKEN_CEILING_SKIP_REASON,
+  UNMETERED_RUNAWAY_GUARD_REASON,
   tokenCeilingDedupeKey,
   tokenCeilingService,
 } from "./token-ceiling.js";
@@ -7579,6 +7580,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     ceiling: Awaited<ReturnType<typeof tokenCeiling.evaluate>>,
   ) {
     const window = await tokenCeiling.dailyUsage(agent.companyId, agent.id, new Date());
+    const runawayPause = ceiling.pauseReason === UNMETERED_RUNAWAY_GUARD_REASON;
     const tokensMillions = (ceiling.tokensToday / 1_000_000).toFixed(1);
     const noOpPercent =
       ceiling.tokensToday > 0
@@ -7588,10 +7590,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       ceiling.unmeteredRuns > 0
         ? ` Metering is off for ${ceiling.unmeteredRuns} of today's runs — those never count toward the ceiling.`
         : "";
-    const message =
-      `${agent.name} paused: ${tokensMillions}M tokens today` +
-      `, ${noOpPercent}% on runs that produced nothing.` +
-      ` Assigned work still runs.${meteringNote}`;
+    const message = runawayPause
+      ? `${agent.name} paused: unmetered runaway guard — ${ceiling.unmeteredPausableRuns} ` +
+        `unmetered timer/comment runs today, so spend can't be verified. Assigned work still runs.`
+      : `${agent.name} paused: ${tokensMillions}M tokens today` +
+        `, ${noOpPercent}% on runs that produced nothing.` +
+        ` Assigned work still runs.${meteringNote}`;
 
     const [skipCountRow] = await db
       .select({ n: sql<number>`count(*)::int` })
@@ -7600,7 +7604,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         and(
           eq(agentWakeupRequests.agentId, agent.id),
           eq(agentWakeupRequests.status, "skipped"),
-          eq(agentWakeupRequests.reason, TOKEN_CEILING_SKIP_REASON),
+          inArray(agentWakeupRequests.reason, [
+            TOKEN_CEILING_SKIP_REASON,
+            UNMETERED_RUNAWAY_GUARD_REASON,
+          ]),
           gte(agentWakeupRequests.requestedAt, window.windowStart),
         ),
       );
@@ -7617,10 +7624,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         entityId: agent.id,
         details: {
           ceiling: ceiling.ceiling,
+          pauseReason: ceiling.pauseReason,
           tokensToday: ceiling.tokensToday,
           noOpTokens: window.noOpTokens,
           meteredRuns: ceiling.meteredRuns,
           unmeteredRuns: ceiling.unmeteredRuns,
+          unmeteredPausableRuns: ceiling.unmeteredPausableRuns,
           liftsAt: ceiling.liftsAt,
         },
       });
@@ -7640,11 +7649,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         agentName: agent.name,
         message,
         ceiling: ceiling.ceiling,
+        pauseReason: ceiling.pauseReason,
         isDefault: ceiling.isDefault,
         tokensToday: ceiling.tokensToday,
         noOpTokens: window.noOpTokens,
         meteredRuns: ceiling.meteredRuns,
         unmeteredRuns: ceiling.unmeteredRuns,
+        unmeteredPausableRuns: ceiling.unmeteredPausableRuns,
         liftsAt: ceiling.liftsAt,
       },
     });
@@ -7761,7 +7772,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      * mention, approval, manual) still runs, as do retries and automation:
      * the ceiling exists to stop unattended spend, not to take a working
      * agent off its queue. Unmetered runs never count toward the sum, so a
-     * ledger outage cannot trip the ceiling.
+     * ledger outage cannot trip the ceiling — but a flood of unmetered
+     * unattended runs trips the runaway guard instead: spend that cannot be
+     * metered cannot be bounded.
      */
     const ceilingWakeClass = normalizeWakeReason({
       invocationSource: source,
@@ -7771,7 +7784,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (ceilingWakeClass === "timer" || ceilingWakeClass === "comment") {
       const ceiling = await tokenCeiling.evaluate(agent);
       if (ceiling.paused) {
-        await writeSkippedRequest(TOKEN_CEILING_SKIP_REASON);
+        // The skipped request records which guard fired — "token_ceiling" or
+        // "unmetered runaway guard" — so the wake log stays honest about why.
+        await writeSkippedRequest(ceiling.pauseReason ?? TOKEN_CEILING_SKIP_REASON);
         await announceTokenCeilingPause(agent, ceiling).catch((err) => {
           // The notification is best-effort — the pause itself is already
           // recorded on the skipped wakeup request and never depends on it.

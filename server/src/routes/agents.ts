@@ -15,6 +15,7 @@ import {
   isUuidLike,
   resetAgentSessionSchema,
   testAdapterEnvironmentSchema,
+  type AgentRunHealth,
   type AgentSkillSnapshot,
   type InstanceSchedulerHeartbeatAgent,
   upsertAgentInstructionsFileSchema,
@@ -106,7 +107,7 @@ import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { tokenCeilingService } from "../services/token-ceiling.js";
+import { resolveMaxDailyTokens, tokenCeilingService } from "../services/token-ceiling.js";
 import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
 import {
   DEFAULT_ACPX_LOCAL_AGENT,
@@ -630,7 +631,10 @@ export function agentRoutes(
    * placeholder `process` agent whose command does not exist sits here for
    * ever, looking exactly like a working agent nobody has assigned work to.
    */
-  async function buildAgentRunHealth(agentId: string) {
+  async function buildAgentRunHealth(
+    agentId: string,
+    tokenCeilingPause: AgentRunHealth["tokenCeilingPause"] = null,
+  ) {
     const [tally] = await db
       .select({
         total: count(),
@@ -661,6 +665,7 @@ export function agentRoutes(
       failed: Number(tally?.failed ?? 0),
       succeededWithoutEvidence: Number(tally?.withoutEvidence ?? 0),
       neverRan: total === 0,
+      tokenCeilingPause,
       last: last
         ? {
             status: last.status,
@@ -677,12 +682,23 @@ export function agentRoutes(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime, tokenCeilingStatus] = await Promise.all([
+    // OBS-2: the ceiling's figures are configuration — the restricted view
+    // gets an explicit null rather than the spend. But the pause itself is
+    // run health, not configuration: it reaches restricted viewers through
+    // `runHealth.tokenCeilingPause` — reason and liftsAt only, no numbers.
+    const tokenCeilingStatus = await tokenCeiling.evaluate(agent);
+    const tokenCeilingPause = tokenCeilingStatus.paused
+      ? {
+          reason: tokenCeilingStatus.pauseReason ?? "token_ceiling",
+          liftsAt: tokenCeilingStatus.liftsAt,
+        }
+      : null;
+    const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
       accountability.resolveForAgent(agent.companyId, agent.id),
-      buildAgentRunHealth(agent.id),
+      buildAgentRunHealth(agent.id, tokenCeilingPause),
       // AgentDash (AGE-1): state the model/provider that will serve the next
       // run, resolved the same way heartbeat resolves it, or an explicit
       // unknown — never the instance-level adapter preset. Present and null
@@ -700,10 +716,6 @@ export function agentRoutes(
             ? agent.runtimeConfig as Record<string, unknown>
             : {},
       }),
-      // OBS-2: the restricted view gets an explicit null — a reader that may
-      // not see configuration should not read the configured ceiling either.
-      // The pause state itself still reaches them through runHealth.
-      options?.restricted ? Promise.resolve(null) : tokenCeiling.evaluate(agent),
     ]);
 
     return {
@@ -730,8 +742,9 @@ export function agentRoutes(
       resolvedRuntime,
       // OBS-2: today's token sum vs the ceiling — the "paused: token ceiling"
       // line on the agent page reads this, and null means the reader was not
-      // shown configuration at all.
-      tokenCeiling: tokenCeilingStatus,
+      // shown configuration at all. Restricted readers still see the pause
+      // through runHealth.tokenCeilingPause.
+      tokenCeiling: options?.restricted ? null : tokenCeilingStatus,
     };
   }
 
@@ -2339,10 +2352,14 @@ export function agentRoutes(
     const rollbackAuthority = await assertCanUpdateAgent(req, existing, new Set(), new Set());
     // A rollback restores a whole prior configuration — including fields no
     // ceiling dimension covers (role, adapterConfig) and values captured before
-    // the current ceiling existed. Stewardship alone is not sufficient.
-    if (rollbackAuthority === "steward") {
+    // the current ceiling existed. Stewardship alone is not sufficient, and an
+    // agent authority even less so: PATCH already refuses agents the self
+    // fields a snapshot restores (budget, reportsTo, adapter config, and the
+    // daily token ceiling), so letting an agent roll back would re-open every
+    // one of them through a door the PATCH checks never see.
+    if (rollbackAuthority !== "admin") {
       throw forbidden(
-        "Stewardship does not permit configuration rollback; an administrator with agents:create must perform it",
+        "Configuration rollback requires an administrator with agents:create — the restored snapshot can carry fields the caller may not change directly",
       );
     }
     // AgentDash (security): a rollback restores role, reportsTo, budget and
@@ -3597,6 +3614,25 @@ export function agentRoutes(
       if (!runtimeConfig) {
         res.status(422).json({ error: "runtimeConfig must be an object" });
         return;
+      }
+      // OBS-2: the daily token ceiling is a safety bound with the same
+      // authority as the dedicated /token-ceiling route — a human with
+      // agent-configuration authority (or the mk steward). An agent key must
+      // not move it, including by omission: this PATCH replaces runtimeConfig
+      // wholesale, so dropping `heartbeat.maxDailyTokens` here would reset a
+      // steward-set ceiling to the default. Compared on the resolved value so
+      // an unchanged ceiling (or an equivalent spelling of it) still passes.
+      if (updateAuthority === "agent") {
+        const before = resolveMaxDailyTokens(existing.runtimeConfig).ceiling;
+        const after = resolveMaxDailyTokens(runtimeConfig).ceiling;
+        if (before !== after) {
+          res.status(403).json({
+            error:
+              "Only a human with agent-configuration authority may change runtimeConfig.heartbeat.maxDailyTokens; " +
+              "ask an owner, admin or operator — or use PATCH /api/agents/:id/token-ceiling",
+          });
+          return;
+        }
       }
       await assertNoAgentRuntimeConfigAdapterConfigMutation(req, existing.companyId, runtimeConfig);
       requestedRuntimeConfig = runtimeConfig;

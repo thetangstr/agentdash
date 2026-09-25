@@ -1185,6 +1185,19 @@ export function AgentDetail() {
                   {agent.runHealth.last.error ? `: ${agent.runHealth.last.error}` : ""}
                 </p>
               ) : null}
+              {/* The pause itself is health, not configuration — restricted
+                  readers get tokenCeiling: null but still need to see why the
+                  agent went quiet. */}
+              {agent.runHealth.tokenCeilingPause ? (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" role="status">
+                  Timer and comment wakes are paused until{" "}
+                  {formatDate(agent.runHealth.tokenCeilingPause.liftsAt)} UTC
+                  {agent.runHealth.tokenCeilingPause.reason === "unmetered runaway guard"
+                    ? " — unmetered runaway guard (spend cannot be verified)"
+                    : " — daily token ceiling"}
+                  . Assigned work and manual wakes still run.
+                </p>
+              ) : null}
             </>
           )}
         </div>
@@ -1657,6 +1670,9 @@ export function TokenCeilingStatusLine({
           {" "}
           Timer and comment wakes are paused until {formatDate(status.liftsAt)} UTC — assigned
           work and manual wakes still run.
+          {status.pauseReason === "unmetered runaway guard"
+            ? ` Paused by the unmetered runaway guard: ${status.unmeteredPausableRuns} unmetered unattended runs today, so spend cannot be verified.`
+            : ""}
         </span>
       ) : null}
     </>

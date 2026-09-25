@@ -933,6 +933,151 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
       expect(res.status).toBe(403);
     });
 
+    // OBS-2 (GH #695): runtimeConfig.heartbeat.maxDailyTokens is a safety
+    // bound with the same authority as the dedicated /token-ceiling route.
+    // The generic PATCH replaces runtimeConfig wholesale, so an agent could
+    // otherwise move its own ceiling — or silently reset a steward-set one by
+    // leaving the key out.
+    it("refuses an agent raising its own token ceiling through the generic PATCH", async () => {
+      const { company, agent } = await seed();
+      const app = await createAgentApp({ type: "agent", companyId: company.id, agentId: agent.id });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}`)
+          .send({ runtimeConfig: { heartbeat: { maxDailyTokens: 50_000_000 } } }),
+      );
+
+      expect(res.status).toBe(403);
+      const unchanged = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .then((rows) => rows[0]!);
+      expect(unchanged.runtimeConfig ?? {}).not.toMatchObject({
+        heartbeat: { maxDailyTokens: 50_000_000 },
+      });
+    });
+
+    it("refuses an agent resetting a steward-set ceiling by omitting the key", async () => {
+      const { company, agent } = await seed();
+      await db
+        .update(agents)
+        .set({ runtimeConfig: { heartbeat: { enabled: true, maxDailyTokens: 1_000_000 } } })
+        .where(eq(agents.id, agent.id));
+      const app = await createAgentApp({ type: "agent", companyId: company.id, agentId: agent.id });
+
+      // runtimeConfig replaces wholesale — dropping the key here would put the
+      // ceiling back on the 5M default.
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}`)
+          .send({ runtimeConfig: { heartbeat: { enabled: true } } }),
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    it("lets an agent PATCH runtimeConfig when the ceiling is unchanged", async () => {
+      const { company, agent } = await seed();
+      await db
+        .update(agents)
+        .set({ runtimeConfig: { heartbeat: { enabled: true, maxDailyTokens: 1_000_000 } } })
+        .where(eq(agents.id, agent.id));
+      const app = await createAgentApp({ type: "agent", companyId: company.id, agentId: agent.id });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}`)
+          .send({
+            runtimeConfig: {
+              heartbeat: { enabled: true, maxDailyTokens: 1_000_000, intervalSec: 600 },
+            },
+          }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.runtimeConfig).toMatchObject({
+        heartbeat: { maxDailyTokens: 1_000_000, intervalSec: 600 },
+      });
+    });
+
+    it("refuses a CEO agent changing another agent's token ceiling", async () => {
+      const { company, agent } = await seed();
+      const ceo = await db
+        .insert(agents)
+        .values({
+          companyId: company.id,
+          name: `CEO ${randomUUID()}`,
+          role: "ceo",
+          status: "idle",
+          adapterType: "process",
+        })
+        .returning()
+        .then((rows) => rows[0]!);
+      const app = await createAgentApp({ type: "agent", companyId: company.id, agentId: ceo.id });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}`)
+          .send({ runtimeConfig: { heartbeat: { maxDailyTokens: 0 } } }),
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    it("refuses an agent holding agents:create changing a token ceiling", async () => {
+      const { company, owner, agent } = await seed();
+      const creator = await createAgent(db, company.id, "Recruiter");
+      await db.insert(principalPermissionGrants).values({
+        companyId: company.id,
+        principalType: "agent",
+        principalId: creator.id,
+        permissionKey: "agents:create",
+        grantedByUserId: owner.principalId,
+      });
+      const app = await createAgentApp({ type: "agent", companyId: company.id, agentId: creator.id });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}`)
+          .send({ runtimeConfig: { heartbeat: { maxDailyTokens: 0 } } }),
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    it("lets a board admin move the ceiling through the generic PATCH", async () => {
+      const { company, owner, agent } = await seed();
+      const app = await createAgentApp(makeBoardActor(company.id, owner.principalId, "owner"));
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}`)
+          .send({ runtimeConfig: { heartbeat: { enabled: true, maxDailyTokens: 9_000_000 } } }),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.runtimeConfig).toMatchObject({
+        heartbeat: { maxDailyTokens: 9_000_000 },
+      });
+    });
+
+    it("refuses agent-initiated configuration rollback — a restored snapshot carries the ceiling", async () => {
+      const { company, agent } = await seed();
+      // Rollback restores a whole prior runtimeConfig; an agent calling it
+      // could undo a lowered ceiling the PATCH guard would never let it touch.
+      const app = await createAgentApp({ type: "agent", companyId: company.id, agentId: agent.id });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .post(`/api/agents/${agent.id}/config-revisions/${randomUUID()}/rollback`)
+          .send({}),
+      );
+
+      expect(res.status).toBe(403);
+    });
+
     it("validates the permissions that will actually be written, not just the request body", async () => {
       const { company, owner, agent } = await seed();
       const svc = agentGovernanceService(db);
