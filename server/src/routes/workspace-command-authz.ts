@@ -1,7 +1,10 @@
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
-import { actorMaySetHostWorkspaceCommand } from "../services/adapter-host-execution-policy.js";
+import {
+  actorMaySetHostWorkspaceCommand,
+  findRestrictedHostExecutionFields,
+} from "../services/adapter-host-execution-policy.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -38,12 +41,32 @@ function collectCommandKeys(raw: unknown, stored: unknown, prefix: string, keys:
   return paths;
 }
 
+/**
+ * AgentDash (security, #735 review): a `workspaceRuntime` block defines
+ * runtime services whose `command` runs through `sh -c`, with their own `cwd`
+ * and `env`. It is checked with the host-execution policy's walker, so every
+ * `command`, `args`, `env`, `cwd` or `*Command`/`*Env`/... key at any depth
+ * counts when it is set to something other than the stored value.
+ */
+function collectWorkspaceRuntimeCommandPaths(raw: unknown, stored: unknown, prefix: string): string[] {
+  if (!isRecord(raw)) return [];
+  return findRestrictedHostExecutionFields({
+    adapterType: null,
+    adapterConfig: raw,
+    stored: isRecord(stored) ? stored : undefined,
+    prefix,
+  });
+}
+
 function collectWorkspaceStrategyCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
   return collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand"]);
 }
 
 function collectExecutionWorkspaceConfigCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
-  return collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand", "cleanupCommand"]);
+  return [
+    ...collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand", "cleanupCommand"]),
+    ...collectWorkspaceRuntimeCommandPaths(sub(raw, "workspaceRuntime"), sub(stored, "workspaceRuntime"), prefixPath(prefix, "workspaceRuntime")),
+  ];
 }
 
 export function assertNoAgentHostWorkspaceCommandMutation(req: Request, paths: string[]) {
@@ -103,11 +126,18 @@ export function collectAgentAdapterWorkspaceCommandPaths(
 
 export function collectProjectExecutionWorkspaceCommandPaths(policy: unknown, storedPolicy?: unknown): string[] {
   if (!isRecord(policy)) return [];
-  return collectWorkspaceStrategyCommandPaths(
-    policy.workspaceStrategy,
-    "executionWorkspacePolicy.workspaceStrategy",
-    sub(storedPolicy, "workspaceStrategy"),
-  );
+  return [
+    ...collectWorkspaceStrategyCommandPaths(
+      policy.workspaceStrategy,
+      "executionWorkspacePolicy.workspaceStrategy",
+      sub(storedPolicy, "workspaceStrategy"),
+    ),
+    ...collectWorkspaceRuntimeCommandPaths(
+      policy.workspaceRuntime,
+      sub(storedPolicy, "workspaceRuntime"),
+      "executionWorkspacePolicy.workspaceRuntime",
+    ),
+  ];
 }
 
 export function collectProjectWorkspaceCommandPaths(
@@ -115,7 +145,21 @@ export function collectProjectWorkspaceCommandPaths(
   prefix = "",
   storedWorkspace?: unknown,
 ): string[] {
-  return collectCommandKeys(workspacePatch, storedWorkspace, prefix, ["cleanupCommand"]);
+  return [
+    ...collectCommandKeys(workspacePatch, storedWorkspace, prefix, ["cleanupCommand"]),
+    ...collectWorkspaceRuntimeCommandPaths(
+      sub(sub(workspacePatch, "runtimeConfig"), "workspaceRuntime"),
+      sub(sub(storedWorkspace, "runtimeConfig"), "workspaceRuntime"),
+      prefixPath(prefix, "runtimeConfig.workspaceRuntime"),
+    ),
+    // The runtime config is stored at metadata.runtimeConfig, and a metadata
+    // patch without runtimeConfig is written as-is, so it is a second way in.
+    ...collectWorkspaceRuntimeCommandPaths(
+      sub(sub(sub(workspacePatch, "metadata"), "runtimeConfig"), "workspaceRuntime"),
+      sub(sub(sub(storedWorkspace, "metadata"), "runtimeConfig"), "workspaceRuntime"),
+      prefixPath(prefix, "metadata.runtimeConfig.workspaceRuntime"),
+    ),
+  ];
 }
 
 export function collectIssueWorkspaceCommandPaths(
@@ -135,6 +179,13 @@ export function collectIssueWorkspaceCommandPaths(
         input.executionWorkspaceSettings.workspaceStrategy,
         "executionWorkspaceSettings.workspaceStrategy",
         sub(stored.executionWorkspaceSettings, "workspaceStrategy"),
+      ),
+    );
+    paths.push(
+      ...collectWorkspaceRuntimeCommandPaths(
+        input.executionWorkspaceSettings.workspaceRuntime,
+        sub(stored.executionWorkspaceSettings, "workspaceRuntime"),
+        "executionWorkspaceSettings.workspaceRuntime",
       ),
     );
   }

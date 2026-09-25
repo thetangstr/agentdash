@@ -1,6 +1,7 @@
 import {
   assertHostExecutionConfigAllowed,
-  findExecutionAffectingEnvKeys,
+  findRefusedProjectEnvKeys,
+  findRestrictedHostExecutionFields,
   runtimeConfigHostExecutionInputs,
 } from "./adapter-host-execution-policy.js";
 import { hostExecutionContextForCompany } from "./host-execution-context.js";
@@ -2787,6 +2788,12 @@ function nonEmptyCommand(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** Runtime services in a `workspaceRuntime` block run their `command` through `sh -c`. */
+function workspaceRuntimeCommandPaths(runtime: unknown, prefix: string): string[] {
+  if (!isPlainRecord(runtime)) return [];
+  return findRestrictedHostExecutionFields({ adapterType: null, adapterConfig: runtime, prefix });
+}
+
 function workspaceStrategyCommandPaths(strategy: unknown, prefix: string): string[] {
   if (!isPlainRecord(strategy)) return [];
   return ["provisionCommand", "teardownCommand"]
@@ -2808,10 +2815,10 @@ function assertImportedHostWorkspaceCommandsAllowed(
       if (options?.actorIsAgent && isPlainRecord(project.env) && Object.keys(project.env).length > 0) {
         throw forbidden(`Agent keys cannot set a project's env (projects.${project.slug}.env).`);
       }
-      const denied = findExecutionAffectingEnvKeys(project.env);
+      const denied = findRefusedProjectEnvKeys(project.env);
       if (denied.length > 0) {
         throw unprocessable(
-          `Project env cannot set execution-affecting variables (projects.${project.slug}.env: ${denied.join(", ")}).`,
+          `Project env cannot set these variables (projects.${project.slug}.env: ${denied.join(", ")}): invalid names or execution-affecting keys.`,
         );
       }
     }
@@ -2827,10 +2834,25 @@ function assertImportedHostWorkspaceCommandsAllowed(
           `projects.${project.slug}.executionWorkspacePolicy.workspaceStrategy`,
         ),
       );
+      paths.push(
+        ...workspaceRuntimeCommandPaths(
+          policy?.workspaceRuntime,
+          `projects.${project.slug}.executionWorkspacePolicy.workspaceRuntime`,
+        ),
+      );
       for (const workspace of project.workspaces ?? []) {
         if (nonEmptyCommand(workspace.cleanupCommand)) {
           paths.push(`projects.${project.slug}.workspaces.${workspace.key}.cleanupCommand`);
         }
+        const workspaceMetadata = isPlainRecord(workspace.metadata) ? workspace.metadata : null;
+        const workspaceRuntimeConfig =
+          workspaceMetadata && isPlainRecord(workspaceMetadata.runtimeConfig) ? workspaceMetadata.runtimeConfig : null;
+        paths.push(
+          ...workspaceRuntimeCommandPaths(
+            workspaceRuntimeConfig?.workspaceRuntime,
+            `projects.${project.slug}.workspaces.${workspace.key}.metadata.runtimeConfig.workspaceRuntime`,
+          ),
+        );
       }
     }
   }
@@ -2841,6 +2863,12 @@ function assertImportedHostWorkspaceCommandsAllowed(
         ...workspaceStrategyCommandPaths(
           settings?.workspaceStrategy,
           `issues.${issue.slug}.executionWorkspaceSettings.workspaceStrategy`,
+        ),
+      );
+      paths.push(
+        ...workspaceRuntimeCommandPaths(
+          settings?.workspaceRuntime,
+          `issues.${issue.slug}.executionWorkspaceSettings.workspaceRuntime`,
         ),
       );
       const overrides = isPlainRecord(issue.assigneeAdapterOverrides) ? issue.assigneeAdapterOverrides : null;

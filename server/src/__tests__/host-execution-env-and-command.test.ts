@@ -6,8 +6,10 @@ import {
   actorMaySetHostWorkspaceCommand,
   assertProjectEnvAllowed,
   defaultAdapterCommands,
-  findExecutionAffectingEnvKeys,
+  findRefusedProjectEnvKeys,
+  filterExecutionAffectingEnv,
   isExecutionAffectingEnvKey,
+  isValidProjectEnvKeyName,
 } from "../services/adapter-host-execution-policy.js";
 import {
   defaultHermesCommand,
@@ -70,20 +72,89 @@ describe("execution-affecting env denylist", () => {
     "PAPERCLIP_API_URL",
     "PAPERCLIP_API_KEY",
     "AGENTDASH_HERMES_COMMAND",
+    // Review round (#742).
+    "SHELLOPTS",
+    "PS4",
+    "GCONV_PATH",
+    "OPENSSL_CONF",
+    "OPENSSL_MODULES",
+    "LESSOPEN",
+    "LESSCLOSE",
+    "BROWSER",
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+    "RUSTC_WRAPPER",
+    "RUSTC",
+    "CARGO_HOME",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "GOFLAGS",
+    "GOPROXY",
+    "GONOSUMDB",
+    "GOPRIVATE",
+    "PIP_INDEX_URL",
+    "UV_INDEX_URL",
+    "SSLKEYLOGFILE",
+    "DOTNET_STARTUP_HOOKS",
+    "CORECLR_PROFILER",
+    "COMPlus_EnableDiagnostics",
+    "GITHUB_API_URL",
+    "STRIPE_BASE_URL",
+    "SENTRY_ENDPOINT",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "OPENAI_ORG_ID",
+    "ZAI_API_KEY",
+    "GLM_API_KEY",
+    "OPENROUTER_API_KEY",
+    "PAPERCLIP_HOME",
+    "CLAUDE_HOME",
+    "GNUPGHOME",
+    "XDG_DATA_HOME",
   ])("refuses %s", (key) => {
     expect(isExecutionAffectingEnvKey(key)).toBe(true);
   });
 
-  it.each(["STRIPE_SECRET_KEY", "DATABASE_URL", "OPENAI_API_KEY", "APP_ENV", "FEATURE_FLAG", "LOG_LEVEL"])(
+  it.each([
+    "STRIPE_SECRET_KEY",
+    "DATABASE_URL",
+    "APP_ENV",
+    "FEATURE_FLAG",
+    "LOG_LEVEL",
+    // Only the dangerous homes are refused (#742 review).
+    "JAVA_HOME",
+    "ANDROID_HOME",
+    "MAVEN_HOME",
+    "GRADLE_USER_HOME",
+  ])(
     "keeps %s",
     (key) => {
       expect(isExecutionAffectingEnvKey(key)).toBe(false);
     },
   );
 
+  it.each(["BASH_FUNC_x%%", "npm_config_script_shell", "path", "My_Var", "1ABC", "_UNDERSCORE", "A-B", "A.B", `A${"B".repeat(64)}`])(
+    "refuses the key name %s",
+    (key) => {
+      expect(isValidProjectEnvKeyName(key)).toBe(false);
+      expect(findRefusedProjectEnvKeys({ [key]: "x" })).toEqual([key]);
+    },
+  );
+
+  it.each(["A", "API_TOKEN", "STRIPE_SECRET_KEY_2", `A${"B".repeat(63)}`])("accepts the key name %s", (key) => {
+    expect(isValidProjectEnvKeyName(key)).toBe(true);
+  });
+
+  it("drops refused keys at run time and reports their names only", () => {
+    expect(
+      filterExecutionAffectingEnv({ JAVA_HOME: "/opt/jdk", PATH: "/tmp/evil", "BASH_FUNC_ls%%": "() { id; }", API_TOKEN: "t" }),
+    ).toEqual({ env: { JAVA_HOME: "/opt/jdk", API_TOKEN: "t" }, dropped: ["BASH_FUNC_ls%%", "PATH"] });
+  });
+
   it("lists the refused keys of an env record, envelopes included", () => {
     expect(
-      findExecutionAffectingEnvKeys({
+      findRefusedProjectEnvKeys({
         PATH: { type: "plain", value: "/tmp/evil" },
         API_TOKEN: { type: "secret_ref", secretId: "s1" },
         NODE_OPTIONS: "--require /tmp/x.js",
@@ -99,8 +170,14 @@ describe("assertProjectEnvAllowed", () => {
     }
   });
 
+  it("refuses an invalid key name with 422", () => {
+    expect(() => assertProjectEnvAllowed(INSTANCE_ADMIN, { "BASH_FUNC_x%%": "() { id; }" })).toThrow(/key names must be upper-case/);
+    expect(() => assertProjectEnvAllowed(OWNER, { lower_case: "x" })).toThrow(/key names must be upper-case/);
+  });
+
   it("lets board members set ordinary project env", () => {
     expect(() => assertProjectEnvAllowed(OWNER, { STRIPE_SECRET_KEY: "sk_test" })).not.toThrow();
+    expect(() => assertProjectEnvAllowed(OWNER, { JAVA_HOME: "/opt/jdk" })).not.toThrow();
     expect(() => assertProjectEnvAllowed(OWNER, undefined)).not.toThrow();
   });
 
@@ -193,5 +270,41 @@ describe("default Hermes command pinned at boot", () => {
     expect(defaultHermesCommand()).toBe(path.join(evilBin, "hermes"));
     process.env.AGENTDASH_HERMES_COMMAND = "hermes-next";
     expect(defaultHermesCommand()).toBe("hermes-next");
+  });
+});
+
+describe("workspace runtime service collectors (#742 review)", () => {
+  const service = (command: string) => ({ services: [{ name: "web", command }] });
+
+  it("flags execution workspace config and metadata.config runtime services, unless unchanged", async () => {
+    const { collectExecutionWorkspaceCommandPaths } = await import("../routes/workspace-command-authz.js");
+    expect(
+      collectExecutionWorkspaceCommandPaths({
+        config: { workspaceRuntime: service("sh evil") },
+        metadata: { config: { workspaceRuntime: service("sh evil") } },
+      }),
+    ).toEqual([
+      "config.workspaceRuntime.services.0.command",
+      "metadata.config.workspaceRuntime.services.0.command",
+    ]);
+    expect(
+      collectExecutionWorkspaceCommandPaths(
+        { config: { workspaceRuntime: service("pnpm dev") } },
+        { config: { workspaceRuntime: service("pnpm dev") } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("flags project workspace runtimeConfig and metadata.runtimeConfig services", async () => {
+    const { collectProjectWorkspaceCommandPaths } = await import("../routes/workspace-command-authz.js");
+    expect(
+      collectProjectWorkspaceCommandPaths({
+        runtimeConfig: { workspaceRuntime: service("sh evil") },
+        metadata: { runtimeConfig: { workspaceRuntime: service("sh evil") } },
+      }),
+    ).toEqual([
+      "runtimeConfig.workspaceRuntime.services.0.command",
+      "metadata.runtimeConfig.workspaceRuntime.services.0.command",
+    ]);
   });
 });

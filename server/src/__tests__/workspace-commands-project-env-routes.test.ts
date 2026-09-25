@@ -14,6 +14,7 @@ import {
   issues,
   joinRequests,
   projects,
+  projectWorkspaces,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -257,6 +258,151 @@ describeEmbeddedPostgres("workspace commands and project env (#735)", () => {
     });
   });
 
+  describe("workspace runtime services (#742 review)", () => {
+    const runtime = (command: string) => ({
+      services: [{ name: "web", command, cwd: ".", port: 3000 }],
+    });
+
+    async function createWorkspace(companyId: string, userId: string, projectId: string, body: Record<string, unknown> = {}) {
+      const res = await send(instanceAdmin(companyId, userId), (r) =>
+        r.post(`/api/projects/${projectId}/workspaces`).send({
+          name: "main",
+          sourceType: "local_path",
+          cwd: "/tmp/agentdash-runtime-authz",
+          ...body,
+        }));
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      return res.body as { id: string };
+    }
+
+    async function readWorkspace(id: string) {
+      return db.select().from(projectWorkspaces).where(eq(projectWorkspaces.id, id)).then((rows) => rows[0]!);
+    }
+
+    it("refuses a company owner setting a runtime service command on a project workspace", async () => {
+      const { company, ownerUserId, project } = await seed();
+      const workspace = await createWorkspace(company.id, ownerUserId, project.id);
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}/workspaces/${workspace.id}`).send({
+          runtimeConfig: { workspaceRuntime: runtime(EVIL) },
+        }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("runtimeConfig.workspaceRuntime.services.0.command");
+      expect((await readWorkspace(workspace.id)).metadata ?? null).toBeNull();
+    });
+
+    it("refuses a company owner creating a project workspace with a runtime service", async () => {
+      const { company, ownerUserId, project } = await seed();
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.post(`/api/projects/${project.id}/workspaces`).send({
+          name: "svc",
+          sourceType: "local_path",
+          cwd: "/tmp/agentdash-runtime-authz",
+          runtimeConfig: { workspaceRuntime: runtime(EVIL) },
+        }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      const rows = await db.select().from(projectWorkspaces).where(eq(projectWorkspaces.projectId, project.id));
+      expect(rows).toEqual([]);
+    });
+
+    it("refuses the same service smuggled in through workspace metadata", async () => {
+      const { company, ownerUserId, project } = await seed();
+      const workspace = await createWorkspace(company.id, ownerUserId, project.id);
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}/workspaces/${workspace.id}`).send({
+          metadata: { runtimeConfig: { workspaceRuntime: runtime(EVIL) } },
+        }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("metadata.runtimeConfig.workspaceRuntime.services.0.command");
+      expect((await readWorkspace(workspace.id)).metadata ?? null).toBeNull();
+    });
+
+    it("refuses a runtime service env or cwd change as well as its command", async () => {
+      const { company, ownerUserId, project } = await seed();
+      const workspace = await createWorkspace(company.id, ownerUserId, project.id, {
+        runtimeConfig: { workspaceRuntime: runtime("pnpm dev") },
+      });
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}/workspaces/${workspace.id}`).send({
+          runtimeConfig: {
+            workspaceRuntime: { services: [{ name: "web", command: "pnpm dev", cwd: ".", port: 3000, env: { NODE_OPTIONS: "--require /tmp/x.js" } }] },
+          },
+        }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("services.0.env");
+    });
+
+    it("refuses a company owner on a project policy's workspaceRuntime", async () => {
+      const { company, ownerUserId, project } = await seed();
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}`).send({
+          executionWorkspacePolicy: { enabled: true, workspaceRuntime: runtime(EVIL) },
+        }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("executionWorkspacePolicy.workspaceRuntime.services.0.command");
+      expect((await readProject(project.id)).executionWorkspacePolicy).toBeNull();
+    });
+
+    it("refuses a company owner on an issue's executionWorkspaceSettings.workspaceRuntime", async () => {
+      const { company, ownerUserId, project } = await seed();
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.post(`/api/companies/${company.id}/issues`).send({
+          title: "Serve me",
+          projectId: project.id,
+          executionWorkspaceSettings: { workspaceRuntime: runtime(EVIL) },
+        }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toEqual([]);
+    });
+
+    it("refuses an agent key a runtime service, even a CEO's", async () => {
+      const { company, ownerUserId, ceo, project } = await seed();
+      const workspace = await createWorkspace(company.id, ownerUserId, project.id);
+
+      const res = await send(agentKey(company.id, ceo.id), (r) =>
+        r.patch(`/api/projects/${project.id}/workspaces/${workspace.id}`).send({
+          runtimeConfig: { workspaceRuntime: runtime(EVIL) },
+        }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+    });
+
+    it("lets an instance admin set a service, and a company owner resend it or edit other fields", async () => {
+      const { company, ownerUserId, project } = await seed();
+      const workspace = await createWorkspace(company.id, ownerUserId, project.id, {
+        runtimeConfig: { workspaceRuntime: runtime("pnpm dev") },
+      });
+      const stored = await readWorkspace(workspace.id);
+      expect(JSON.stringify(stored.metadata)).toContain("pnpm dev");
+
+      const resend = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}/workspaces/${workspace.id}`).send({
+          name: "renamed",
+          runtimeConfig: { workspaceRuntime: runtime("pnpm dev"), desiredState: "manual" },
+        }));
+      expect(resend.status, JSON.stringify(resend.body)).toBe(200);
+      expect((await readWorkspace(workspace.id)).name).toBe("renamed");
+
+      const policy = await send(instanceAdmin(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}`).send({
+          executionWorkspacePolicy: { enabled: true, workspaceRuntime: runtime("pnpm dev") },
+        }));
+      expect(policy.status, JSON.stringify(policy.body)).toBe(200);
+    });
+  });
+
   describe("project env", () => {
     it.each([
       ["PATH", "/tmp/evil-bin:/usr/bin"],
@@ -273,6 +419,31 @@ describeEmbeddedPostgres("workspace commands and project env (#735)", () => {
       expect(res.status, JSON.stringify(res.body)).toBe(422);
       expect(res.body.error).toContain(key);
       expect((await readProject(project.id)).env).toBeNull();
+    });
+
+    it.each([
+      ["ANTHROPIC_API_KEY", "sk-ant-attacker"],
+      ["OPENAI_BASE_URL", "https://attacker.example"],
+      ["GLM_API_KEY", "attacker"],
+      ["BASH_FUNC_ls%%", "() { id; }"],
+      ["lower_case", "x"],
+    ])("refuses %s (credential override or invalid name)", async (key, value) => {
+      const { company, ownerUserId, project } = await seed();
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}`).send({ env: { [key]: { type: "plain", value } } }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect((await readProject(project.id)).env).toBeNull();
+    });
+
+    it("keeps JAVA_HOME and similar tool homes open", async () => {
+      const { company, ownerUserId, project } = await seed();
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/projects/${project.id}`).send({ env: { JAVA_HOME: { type: "plain", value: "/opt/jdk" } } }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
     });
 
     it("refuses an execution-affecting key when a project is created", async () => {
@@ -361,6 +532,28 @@ describeEmbeddedPostgres("workspace commands and project env (#735)", () => {
 
       expect(res.status, JSON.stringify(res.body)).toBe(403);
       expect(res.body.error).toContain("projects.tools.executionWorkspacePolicy.workspaceStrategy.provisionCommand");
+      expect(await projectNames(company.id)).toEqual(["App"]);
+    });
+
+    it("refuses a company owner importing a project policy with a runtime service", async () => {
+      const { company, ownerUserId } = await seed();
+      const yaml = [
+        "projects:",
+        "  tools:",
+        "    executionWorkspacePolicy:",
+        "      enabled: true",
+        "      workspaceRuntime:",
+        "        services:",
+        "          - name: web",
+        `            command: "${EVIL}"`,
+        "",
+      ].join("\n");
+
+      const res = await send(owner(company.id, ownerUserId), (r) =>
+        r.post(`/api/companies/${company.id}/imports/apply`).send(importBody(company.id, bundle(yaml))));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("projects.tools.executionWorkspacePolicy.workspaceRuntime.services.0.command");
       expect(await projectNames(company.id)).toEqual(["App"]);
     });
 
