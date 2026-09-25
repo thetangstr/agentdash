@@ -61,6 +61,17 @@ vi.mock("../auth/email.js", () => ({
   sanitizeDisplayName: (s: string | null) => s,
 }));
 
+// AgentDash (#725): the hermes-provider handler has its own route test; here
+// only the delegation from setup-adapter is checked.
+const mockHermesProviderHandler = vi.hoisted(() =>
+  vi.fn(async (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+    res.status(201).json({ delegated: true });
+  }),
+);
+vi.mock("../routes/hermes-provider-setup.js", () => ({
+  createHermesProviderSetupHandler: () => mockHermesProviderHandler,
+}));
+
 const mockDispatchLLM = vi.fn();
 vi.mock("../services/dispatch-llm.js", () => ({
   dispatchLLM: (...args: unknown[]) => mockDispatchLLM(...args),
@@ -1042,6 +1053,46 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
     const app = buildApp(INSTANCE_ADMIN);
     const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "openai" });
     expect(res.status).toBe(400);
+  });
+
+  // AgentDash (#725)
+  it("hands the hermes preset with a provider to the Hermes provider handler", async () => {
+    mockHermesProviderHandler.mockClear();
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "hermes", provider: "zai", apiKey: "k", companyId: "c1" });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ delegated: true });
+    expect(mockHermesProviderHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the plain hermes preset (no provider) on the old path", async () => {
+    mockHermesProviderHandler.mockClear();
+    const app = buildApp({ type: "board", userId: "u1", isInstanceAdmin: true });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "hermes" });
+    expect(res.status).toBe(201);
+    expect(res.body.applied).toEqual(["AGENTDASH_DEFAULT_ADAPTER"]);
+    expect(mockHermesProviderHandler).not.toHaveBeenCalled();
+  });
+
+  it("reports the Hermes provider step in adapter-status, required only on a hosted box", async () => {
+    const app = buildApp({ type: "board", userId: "u1", isInstanceAdmin: true });
+    const onPrem = await request(app).get("/api/onboarding/adapter-status");
+    expect(onPrem.body.hermesProvider).toMatchObject({ required: false, canConfigure: true });
+    expect(onPrem.body.hermesProvider.options.map((o: { provider: string }) => o.provider)).toEqual([
+      "zai",
+      "openrouter",
+      "anthropic",
+      "openai",
+    ]);
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    try {
+      const hosted = await request(buildApp({ type: "board", userId: "u2" })).get("/api/onboarding/adapter-status");
+      expect(hosted.body.hermesProvider).toMatchObject({ required: true, canConfigure: false });
+    } finally {
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    }
   });
 
   it("400s on an unknown preset", async () => {

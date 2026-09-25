@@ -7,6 +7,8 @@ import { mandatesService } from "./mandates.js";
 import { mandatedActionService } from "./mandated-action.js";
 import { approvalService } from "./approvals.js";
 import { handshakeAgentRunner, type HandshakeAgentRunner } from "./handshake-agent-runner.js";
+import { SingleCompanyInstallationError } from "./companies.js";
+import { isHostedBox } from "./license.js";
 
 // Turnkey two-company Agent Trust Handshake demo (scripted-real).
 // One "Go" steps the real flow: discover → approve (payer human) → publish
@@ -88,6 +90,8 @@ export function handshakeDemoService(
   async function ensureCompany(name: string, issuePrefix: string) {
     const existing = await findCompany(name);
     if (existing) return existing;
+    // AgentDash (#725): a hosted box holds exactly one company.
+    if (isHostedBox()) throw new SingleCompanyInstallationError(null);
     const [row] = await db.insert(companies).values({ name, issuePrefix }).returning();
     return row;
   }

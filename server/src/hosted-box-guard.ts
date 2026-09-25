@@ -100,6 +100,16 @@ export function hostedBoxConfigErrors(
     );
   }
 
+  // AgentDash (#725): the anonymous Test Drive creates a company, and a hosted
+  // box holds exactly one. The trial routes are off on a hosted box regardless;
+  // an explicit "true" is a misconfiguration worth refusing, not ignoring.
+  if ((env.AGENTDASH_TRIAL_ANONYMOUS ?? "").trim().toLowerCase() === "true") {
+    errors.push(
+      "AGENTDASH_TRIAL_ANONYMOUS=true on a hosted box; the anonymous trial creates a company and a hosted box "
+        + "holds exactly one. Set AGENTDASH_TRIAL_ANONYMOUS=false (the trial is off on hosted boxes either way).",
+    );
+  }
+
   const inviteGateOn = signupInviteCodeRequired(env);
   const inviteCodes = acceptedSignupInviteCodes(env);
   const signUpGated = config.authDisableSignUp || (inviteGateOn && inviteCodes.length > 0);

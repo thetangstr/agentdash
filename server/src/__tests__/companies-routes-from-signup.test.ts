@@ -146,3 +146,16 @@ describe("POST /api/companies?fromSignup=1 — Phase E invite-flow guard", () =>
     expect(createMock).toHaveBeenCalled();
   });
 });
+
+// AgentDash (#725): a hosted box holds exactly one company; the service refuses
+// the second and the route answers 409, not 500.
+describe("POST /api/companies on a hosted box that already has a company", () => {
+  it("returns 409 single_company_installation", async () => {
+    const { SingleCompanyInstallationError } = await import("../services/companies.js");
+    createMock = vi.fn().mockRejectedValue(new SingleCompanyInstallationError("company-existing"));
+    const app = buildApp({ userId: "user-1", companyIds: [], isInstanceAdmin: true });
+    const res = await request(app).post("/api/companies").send({ name: "Second" });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: "single_company_installation", existingCompanyId: "company-existing" });
+  });
+});

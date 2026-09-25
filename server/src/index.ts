@@ -44,6 +44,7 @@ import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runt
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
+import { startHermesProviderReconcile } from "./services/hermes-provider-reconcile.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
@@ -789,6 +790,9 @@ export async function startServer(): Promise<StartedServer> {
     deploymentMode: config.deploymentMode,
     resolveSessionFromHeaders,
   });
+
+  // AgentDash (#725): the Hermes provider key follows the company secret.
+  startHermesProviderReconcile(db as any);
 
   void reconcilePersistedRuntimeServicesOnStartup(db as any)
     .then((result) => {

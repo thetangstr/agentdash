@@ -198,6 +198,8 @@ say "public URL ${PUBLIC_URL}"
 # PAPERCLIP_PUBLIC_URL, AGENTDASH_HERMES_MANAGED_PROFILES=true, and gated
 # sign-up (AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE=true + AGENTDASH_INVITE_CODES).
 # Everything below satisfies it. See doc/deploy/railway.md from #729.
+# AGENTDASH_TRIAL_ANONYMOUS=false: the anonymous Test Drive creates a company,
+# and a hosted box holds exactly one (#725); the guard refuses "true".
 # A failed read must never look like "no variables": that would regenerate
 # the live secrets over the real ones.
 EXISTING="$(variable_names "$PROJECT_ID" "$ENV_ID" "$WEB_ID")" \
@@ -237,6 +239,7 @@ jq -n \
     AGENTDASH_FREE_AGENT_CAP: "2",
     AGENTDASH_DEPLOYMENT_KIND: "hosted",
     AGENTDASH_HERMES_MANAGED_PROFILES: "true",
+    AGENTDASH_TRIAL_ANONYMOUS: "false",
     AGENTDASH_RELEASE_TAG: $release,
     AGENTDASH_BOX_SLUG: $slug
   }' >"$VARS_FILE"

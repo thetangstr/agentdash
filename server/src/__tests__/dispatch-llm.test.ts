@@ -127,6 +127,28 @@ describe("dispatchLLM", () => {
     );
   });
 
+  // AgentDash (#725): a hosted box's root Hermes profile holds no key; CoS chat
+  // runs on the managed template profile the founder configured in onboarding.
+  it("runs hosted CoS chat on the managed template profile", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    try {
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+      const args = spawnMock.mock.calls[0][1] as string[];
+      expect(args.slice(0, 3)).toEqual(["-p", "agentdash", "chat"]);
+    } finally {
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    }
+  });
+
+  it("keeps Hermes' own default profile for on-prem CoS chat", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[0]).toBe("chat");
+    expect(args).not.toContain("-p");
+  });
+
   /**
    * Least privilege for a process that reads untrusted agent output.
    *
