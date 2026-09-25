@@ -16,6 +16,11 @@ import type {
   WorkspaceRuntimeService,
 } from "@paperclipai/shared";
 import { parseProjectExecutionWorkspacePolicy } from "./execution-workspace-policy.js";
+// AgentDash (security): keep the close preview consistent with deletion confinement.
+import {
+  isLexicallyInsideManagedRoots,
+  resolveRuntimeManagedWorkspaceRoots,
+} from "./workspace-cleanup-confinement.js";
 import {
   listCurrentRuntimeServicesForExecutionWorkspaces,
   listCurrentRuntimeServicesForProjectWorkspaces,
@@ -693,6 +698,15 @@ export function executionWorkspaceService(db: Db) {
           : false;
         if (containsProjectWorkspace) {
           warnings.push(`Paperclip will archive this workspace but keep "${workspacePath}" because it contains the project workspace.`);
+        } else if (
+          // AgentDash (security): mirror the deletion-time confinement so the
+          // close preview never promises to delete a path outside managed roots.
+          !isLexicallyInsideManagedRoots(
+            workspacePath,
+            resolveRuntimeManagedWorkspaceRoots({ companyId: executionWorkspace.companyId }),
+          )
+        ) {
+          warnings.push(`Paperclip will archive this workspace but keep "${workspacePath}" because it is outside the runtime-managed workspace roots.`);
         } else {
           plannedActions.push({
             kind: "remove_local_directory",
