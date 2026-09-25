@@ -7579,7 +7579,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     agent: typeof agents.$inferSelect,
     ceiling: Awaited<ReturnType<typeof tokenCeiling.evaluate>>,
   ) {
-    const window = await tokenCeiling.dailyUsage(agent.companyId, agent.id, new Date());
+    const window = await tokenCeiling.dailyUsage(agent, new Date());
     const runawayPause = ceiling.pauseReason === UNMETERED_RUNAWAY_GUARD_REASON;
     const tokensMillions = (ceiling.tokensToday / 1_000_000).toFixed(1);
     const noOpPercent =
@@ -7592,7 +7592,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         : "";
     const message = runawayPause
       ? `${agent.name} paused: unmetered runaway guard — ${ceiling.unmeteredPausableRuns} ` +
-        `unmetered timer/comment runs today, so spend can't be verified. Assigned work still runs.`
+        `unmetered timer/comment runs today that should have metered, so spend can't be verified. ` +
+        `Assigned work still runs.`
       : `${agent.name} paused: ${tokensMillions}M tokens today` +
         `, ${noOpPercent}% on runs that produced nothing.` +
         ` Assigned work still runs.${meteringNote}`;
@@ -7774,7 +7775,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      * agent off its queue. Unmetered runs never count toward the sum, so a
      * ledger outage cannot trip the ceiling — but a flood of unmetered
      * unattended runs trips the runaway guard instead: spend that cannot be
-     * metered cannot be bounded.
+     * metered cannot be bounded. The guard only counts runs where metering
+     * was expected (a certain ledger, or an adapter that reports usage), and
+     * an explicit ceiling of 0/null turns the whole feature off — an
+     * operator's "off" must mean off.
      */
     const ceilingWakeClass = normalizeWakeReason({
       invocationSource: source,

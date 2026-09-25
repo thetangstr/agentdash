@@ -408,7 +408,8 @@ describeEmbeddedPostgres("agent steward visibility", () => {
     const reader = await createAgent(db, company.id, "Reader");
 
     // Trip the unmetered runaway guard: enough unmetered timer runs that spend
-    // can no longer be verified.
+    // can no longer be verified. A certain ledger with no session counts even
+    // though the seeded agent's adapter never meters on its own.
     for (let i = 0; i < 49; i += 1) {
       await db.insert(heartbeatRuns).values({
         companyId: company.id,
@@ -418,7 +419,8 @@ describeEmbeddedPostgres("agent steward visibility", () => {
         status: "succeeded",
         resultJson: {
           runFacts: {
-            meteringStatus: "unmetered_no_ledger",
+            meteringStatus: "unmetered_no_session",
+            ledgerCertainty: "certain",
             inputTokens: null,
             outputTokens: null,
             outcome: "no_op",

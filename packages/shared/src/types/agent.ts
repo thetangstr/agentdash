@@ -55,7 +55,11 @@ export interface AgentTokenCeilingStatus {
   tokensToday: number;
   meteredRuns: number;
   unmeteredRuns: number;
-  /** Unmetered timer/comment runs today — the runaway guard's input. */
+  /**
+   * Unmetered timer/comment runs today where metering was expected (a
+   * certain ledger, or an adapter that normally reports usage) — the
+   * runaway guard's input.
+   */
   unmeteredPausableRuns: number;
   paused: boolean;
   /**

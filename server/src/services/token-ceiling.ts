@@ -34,6 +34,29 @@ export const UNMETERED_RUNAWAY_GUARD_REASON = "unmetered runaway guard";
  */
 export const UNMETERED_RUNAWAY_GUARD_LIMIT = 48;
 
+/**
+ * Adapter types whose runs are expected to carry metering — they report
+ * usage natively (`adapter_reported`) or write the metering ledger
+ * (hermes_local). An unmetered run from one of these is a real anomaly the
+ * runaway guard should count; an unmetered run from `process`, `http`,
+ * `acpx_local`, or a plugin adapter is normal operation — nothing to meter
+ * was ever promised — so it must never feed the guard.
+ */
+export const USAGE_REPORTING_ADAPTER_TYPES: ReadonlySet<string> = new Set([
+  "claude_local",
+  "codex_local",
+  "cursor",
+  "gemini_local",
+  "hermes_local",
+  "openclaw_gateway",
+  "opencode_local",
+  "pi_local",
+]);
+
+export function adapterExpectsMetering(adapterType: string | null | undefined): boolean {
+  return adapterType != null && USAGE_REPORTING_ADAPTER_TYPES.has(adapterType);
+}
+
 /** The steward-inbox kind emitted once per agent per UTC day on first pause. */
 export const TOKEN_CEILING_INBOX_KIND = "agent.token_ceiling";
 
@@ -87,20 +110,34 @@ export interface AgentDailyTokenUsage {
   noOpTokens: number;
   meteredRuns: number;
   unmeteredRuns: number;
-  /** Unmetered timer/comment runs — the runaway guard's input. */
+  /**
+   * Unmetered timer/comment runs where metering was expected — the runaway
+   * guard's input. See `meteringExpected` in `dailyUsage`.
+   */
   unmeteredPausableRuns: number;
 }
 
 export function tokenCeilingService(db: Db) {
   async function dailyUsage(
-    companyId: string,
-    agentId: string,
+    agent: { id: string; companyId: string; adapterType?: string | null },
     now: Date,
   ): Promise<AgentDailyTokenUsage> {
     const window = utcDayWindow(now);
     const runFacts = sql`coalesce(${heartbeatRuns.resultJson} -> 'runFacts', '{}'::jsonb)`;
     const metered = sql`${runFacts} ->> 'meteringStatus' in ('metered', 'adapter_reported')`;
     const unmetered = sql`${runFacts} ->> 'meteringStatus' in ('unmetered_no_ledger', 'unmetered_no_session', 'unmetered_backfill_ambiguous')`;
+    /**
+     * The runaway guard counts only unmetered runs where metering was
+     * expected: a certain ledger with no session (the ledger was found and
+     * still carried nothing), or an adapter that normally reports usage
+     * (USAGE_REPORTING_ADAPTER_TYPES). Unmetered runs from adapters that
+     * never meter are normal operation — a `process` heartbeat every 15
+     * minutes must not read as a runaway.
+     */
+    const meteringExpected = sql`(
+      ${runFacts} ->> 'ledgerCertainty' = 'certain'
+      or ${adapterExpectsMetering(agent.adapterType)}
+    )`;
     const tokens = sql`(
       coalesce((${runFacts} ->> 'inputTokens')::numeric, 0)
       + coalesce((${runFacts} ->> 'cachedInputTokens')::numeric, 0)
@@ -113,13 +150,13 @@ export function tokenCeilingService(db: Db) {
         noOpTokens: sql<number>`coalesce(sum(${tokens}) filter (where ${metered} and ${runFacts} ->> 'outcome' = 'no_op'), 0)::bigint`,
         meteredRuns: sql<number>`count(*) filter (where ${metered})::int`,
         unmeteredRuns: sql<number>`count(*) filter (where ${unmetered})::int`,
-        unmeteredPausableRuns: sql<number>`count(*) filter (where ${unmetered} and ${runFacts} ->> 'wakeReason' in ('timer', 'comment'))::int`,
+        unmeteredPausableRuns: sql<number>`count(*) filter (where ${unmetered} and ${runFacts} ->> 'wakeReason' in ('timer', 'comment') and ${meteringExpected})::int`,
       })
       .from(heartbeatRuns)
       .where(
         and(
-          eq(heartbeatRuns.companyId, companyId),
-          eq(heartbeatRuns.agentId, agentId),
+          eq(heartbeatRuns.companyId, agent.companyId),
+          eq(heartbeatRuns.agentId, agent.id),
           gte(heartbeatRuns.createdAt, window.start),
         ),
       );
@@ -143,15 +180,22 @@ export function tokenCeilingService(db: Db) {
    * the metered total hitting the ceiling, and the unmetered runaway guard —
    * spend that cannot be metered cannot be bounded, so an unmetered flood of
    * unattended wakes pauses the agent too. `pauseReason` says which.
+   * An explicit `0`/`null` ceiling disables both pauses — "off" means off,
+   * so an operator who wants an unmetered agent unbound has a real switch.
    */
   async function evaluate(
-    agent: { id: string; companyId: string; runtimeConfig: unknown },
+    agent: {
+      id: string;
+      companyId: string;
+      runtimeConfig: unknown;
+      adapterType: string | null;
+    },
     now: Date = new Date(),
   ): Promise<AgentTokenCeilingStatus> {
     const { ceiling, isDefault } = resolveMaxDailyTokens(agent.runtimeConfig);
-    const usage = await dailyUsage(agent.companyId, agent.id, now);
+    const usage = await dailyUsage(agent, now);
     const overCeiling = ceiling !== null && usage.totalTokens >= ceiling;
-    const runaway = usage.unmeteredPausableRuns > UNMETERED_RUNAWAY_GUARD_LIMIT;
+    const runaway = ceiling !== null && usage.unmeteredPausableRuns > UNMETERED_RUNAWAY_GUARD_LIMIT;
     return {
       ceiling,
       isDefault,

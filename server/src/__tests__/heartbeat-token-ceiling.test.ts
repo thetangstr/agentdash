@@ -59,6 +59,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
   async function seedAgent(input?: {
     maxDailyTokens?: number | null;
     productProfile?: string;
+    adapterType?: string;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -76,7 +77,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       name: "Spendy",
       role: "engineer",
       status: "active",
-      adapterType: "process",
+      adapterType: input?.adapterType ?? "process",
       adapterConfig: { command: "echo" },
       runtimeConfig: { heartbeat },
       permissions: {},
@@ -108,6 +109,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     createdAt = new Date(),
     meteringStatus = "metered",
     wakeReason = "timer",
+    ledgerCertainty: string | null = null,
   ) {
     await db.insert(heartbeatRuns).values({
       id: randomUUID(),
@@ -119,6 +121,7 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       resultJson: {
         runFacts: {
           meteringStatus,
+          ledgerCertainty,
           inputTokens: meteringStatus.startsWith("unmetered") ? null : tokens,
           cachedInputTokens: null,
           outputTokens: meteringStatus.startsWith("unmetered") ? null : 0,
@@ -225,7 +228,9 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
 
   it("does not trip on unmetered runs — a ledger outage cannot pause an agent", async () => {
     const { companyId, agentId } = await seedAgent();
-    for (let i = 0; i < 40; i += 1) {
+    // Past the guard limit on a never-metering adapter with no ledger
+    // verdict: none of these are metering-expected, so the guard stays off.
+    for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
       await seedMeteredRun(companyId, agentId, 0, new Date(), "unmetered_no_ledger");
     }
 
@@ -324,6 +329,11 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
   });
 
   describe("unmetered runaway guard", () => {
+    /**
+     * Unmetered runs where metering was expected — a certain ledger that
+     * resolved to no session — so they feed the guard even on this file's
+     * default `process` adapter (which never meters on its own).
+     */
     async function seedUnmeteredRuns(
       companyId: string,
       agentId: string,
@@ -332,7 +342,15 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       createdAt = new Date(),
     ) {
       for (let i = 0; i < count; i += 1) {
-        await seedMeteredRun(companyId, agentId, 0, createdAt, "unmetered_no_ledger", wakeReason);
+        await seedMeteredRun(
+          companyId,
+          agentId,
+          0,
+          createdAt,
+          "unmetered_no_session",
+          wakeReason,
+          "certain",
+        );
       }
     }
 
@@ -446,6 +464,32 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       expect(payload.pauseReason).toBe("unmetered runaway guard");
       expect(payload.unmeteredPausableRuns).toBe(UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
       expect(String(payload.message)).toContain("unmetered runaway guard");
+    });
+
+    it("counts unmetered runs on a usage-reporting adapter even without a ledger verdict", async () => {
+      const { companyId, agentId } = await seedAgent({ adapterType: "codex_local" });
+      // No ledgerCertainty — the adapter type alone means metering was
+      // expected, so an unmetered flood still reads as a runaway.
+      for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
+        await seedMeteredRun(companyId, agentId, 0, new Date(), "unmetered_no_ledger");
+      }
+
+      const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
+      expect(run).toBeNull();
+      expect(
+        await skippedRequestsToday(agentId, UNMETERED_RUNAWAY_GUARD_REASON),
+      ).toHaveLength(1);
+    });
+
+    it("an explicit ceiling of 0 disables the guard too — off means off", async () => {
+      const { companyId, agentId } = await seedAgent({ maxDailyTokens: 0 });
+      await seedUnmeteredRuns(companyId, agentId, UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+
+      const run = await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE);
+      expect(run).not.toBeNull();
+      expect(
+        await skippedRequestsToday(agentId, UNMETERED_RUNAWAY_GUARD_REASON),
+      ).toHaveLength(0);
     });
   });
 });

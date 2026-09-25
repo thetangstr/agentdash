@@ -1671,7 +1671,7 @@ export function TokenCeilingStatusLine({
           Timer and comment wakes are paused until {formatDate(status.liftsAt)} UTC — assigned
           work and manual wakes still run.
           {status.pauseReason === "unmetered runaway guard"
-            ? ` Paused by the unmetered runaway guard: ${status.unmeteredPausableRuns} unmetered unattended runs today, so spend cannot be verified.`
+            ? ` Paused by the unmetered runaway guard: ${status.unmeteredPausableRuns} unmetered unattended runs today that should have metered, so spend cannot be verified.`
             : ""}
         </span>
       ) : null}

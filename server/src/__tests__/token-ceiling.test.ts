@@ -2,11 +2,15 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
-import { AGENT_DEFAULT_MAX_DAILY_TOKENS } from "@paperclipai/shared";
+import {
+  AGENT_ADAPTER_TYPES,
+  AGENT_DEFAULT_MAX_DAILY_TOKENS,
+} from "@paperclipai/shared";
 import {
   resolveMaxDailyTokens,
   tokenCeilingService,
   UNMETERED_RUNAWAY_GUARD_LIMIT,
+  USAGE_REPORTING_ADAPTER_TYPES,
   utcDayWindow,
 } from "../services/token-ceiling.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
@@ -65,6 +69,14 @@ describe("resolveMaxDailyTokens", () => {
   });
 });
 
+describe("USAGE_REPORTING_ADAPTER_TYPES", () => {
+  it("names only real adapter types — a typo would silently exempt an adapter from the guard", () => {
+    for (const adapterType of USAGE_REPORTING_ADAPTER_TYPES) {
+      expect(AGENT_ADAPTER_TYPES).toContain(adapterType);
+    }
+  });
+});
+
 describe("utcDayWindow", () => {
   it("frames the UTC calendar day", () => {
     const w = utcDayWindow(new Date("2026-09-20T23:59:59Z"));
@@ -94,7 +106,10 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     await tempDb?.cleanup();
   });
 
-  async function seedAgent(runtimeConfig: Record<string, unknown> = {}) {
+  async function seedAgent(
+    runtimeConfig: Record<string, unknown> = {},
+    adapterType = "codex_local",
+  ) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     await db.insert(companies).values({
@@ -108,12 +123,12 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
       name: "Capped",
       role: "engineer",
       status: "idle",
-      adapterType: "codex_local",
+      adapterType,
       adapterConfig: {},
       runtimeConfig,
       permissions: {},
     });
-    return { companyId, agentId };
+    return { companyId, agentId, adapterType };
   }
 
   async function seedMeteredRun(
@@ -137,7 +152,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
   }
 
   it("sums input + cached input + output across today's metered runs", async () => {
-    const { companyId, agentId } = await seedAgent();
+    const { companyId, agentId, adapterType } = await seedAgent();
     await seedMeteredRun(companyId, agentId, {
       meteringStatus: "metered",
       inputTokens: 100,
@@ -152,7 +167,10 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
       outcome: "no_op",
     });
 
-    const usage = await tokenCeilingService(db).dailyUsage(companyId, agentId, new Date());
+    const usage = await tokenCeilingService(db).dailyUsage(
+      { id: agentId, companyId, adapterType },
+      new Date(),
+    );
     expect(usage.totalTokens).toBe(370);
     expect(usage.meteredRuns).toBe(2);
     // The no_op run's 220 tokens are the wasted share.
@@ -161,7 +179,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
   });
 
   it("never counts unmetered runs — missing metering is unknown spend, not zero", async () => {
-    const { companyId, agentId } = await seedAgent({
+    const { companyId, agentId, adapterType } = await seedAgent({
       heartbeat: { maxDailyTokens: 100 },
     });
     for (const status of ["unmetered_no_ledger", "unmetered_no_session"]) {
@@ -183,6 +201,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     const status = await tokenCeilingService(db).evaluate({
       id: agentId,
       companyId,
+      adapterType,
       runtimeConfig: { heartbeat: { maxDailyTokens: 100 } },
     });
     expect(status.tokensToday).toBe(60);
@@ -191,7 +210,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
   });
 
   it("pauses at the ceiling, not just past it", async () => {
-    const { companyId, agentId } = await seedAgent();
+    const { companyId, agentId, adapterType } = await seedAgent();
     await seedMeteredRun(companyId, agentId, {
       meteringStatus: "metered",
       inputTokens: 4_990_000,
@@ -199,7 +218,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     });
 
     const status = await tokenCeilingService(db).evaluate(
-      { id: agentId, companyId, runtimeConfig: {} },
+      { id: agentId, companyId, adapterType, runtimeConfig: {} },
       new Date(),
     );
     expect(status.ceiling).toBe(AGENT_DEFAULT_MAX_DAILY_TOKENS);
@@ -210,7 +229,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
   });
 
   it("respects a per-agent override and an explicit off", async () => {
-    const { companyId, agentId } = await seedAgent();
+    const { companyId, agentId, adapterType } = await seedAgent();
     await seedMeteredRun(companyId, agentId, {
       meteringStatus: "metered",
       inputTokens: 600,
@@ -221,6 +240,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     const overridden = await svc.evaluate({
       id: agentId,
       companyId,
+      adapterType,
       runtimeConfig: { heartbeat: { maxDailyTokens: 500 } },
     });
     expect(overridden.paused).toBe(true);
@@ -229,6 +249,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     const off = await svc.evaluate({
       id: agentId,
       companyId,
+      adapterType,
       runtimeConfig: { heartbeat: { maxDailyTokens: 0 } },
     });
     expect(off.ceiling).toBeNull();
@@ -236,7 +257,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
   });
 
   it("counts only the current UTC day — yesterday's spend does not pause today", async () => {
-    const { companyId, agentId } = await seedAgent();
+    const { companyId, agentId, adapterType } = await seedAgent();
     const yesterday = new Date(Date.now() - 26 * 60 * 60 * 1000);
     await seedMeteredRun(
       companyId,
@@ -248,6 +269,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     const status = await tokenCeilingService(db).evaluate({
       id: agentId,
       companyId,
+      adapterType,
       runtimeConfig: {},
     });
     expect(status.tokensToday).toBe(0);
@@ -255,7 +277,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
   });
 
   it("trips the runaway guard on unmetered timer/comment runs and names the reason", async () => {
-    const { companyId, agentId } = await seedAgent();
+    const { companyId, agentId, adapterType } = await seedAgent();
     for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
       await seedMeteredRun(companyId, agentId, {
         meteringStatus: "unmetered_no_session",
@@ -275,6 +297,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     const status = await tokenCeilingService(db).evaluate({
       id: agentId,
       companyId,
+      adapterType,
       runtimeConfig: {},
     });
     expect(status.paused).toBe(true);
@@ -285,10 +308,14 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     expect(status.tokensToday).toBe(0);
   });
 
-  it("runaway guard applies even with the ceiling explicitly off", async () => {
-    const { companyId, agentId } = await seedAgent({
+  it("an explicit ceiling of 0 disables the runaway guard too — off means off", async () => {
+    const { companyId, agentId, adapterType } = await seedAgent({
       heartbeat: { maxDailyTokens: 0 },
     });
+    // These would trip a live guard — a metering-expected adapter, past the
+    // limit — but an explicit off switches the whole feature off, guard
+    // included, so an operator who wants an unmetered agent unbound has a
+    // real switch.
     for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
       await seedMeteredRun(companyId, agentId, {
         meteringStatus: "unmetered_no_ledger",
@@ -301,15 +328,65 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     const status = await tokenCeilingService(db).evaluate({
       id: agentId,
       companyId,
+      adapterType,
       runtimeConfig: { heartbeat: { maxDailyTokens: 0 } },
     });
     expect(status.ceiling).toBeNull();
+    expect(status.paused).toBe(false);
+    expect(status.pauseReason).toBeNull();
+    // The runs are still counted and reported — the guard just doesn't act.
+    expect(status.unmeteredPausableRuns).toBe(UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+  });
+
+  it("counts an unmetered run only where metering was expected — a never-reporting adapter is normal operation", async () => {
+    const { companyId, agentId, adapterType } = await seedAgent({}, "process");
+    for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
+      await seedMeteredRun(companyId, agentId, {
+        meteringStatus: "unmetered_no_ledger",
+        inputTokens: null,
+        outputTokens: null,
+        wakeReason: "timer",
+      });
+    }
+
+    const status = await tokenCeilingService(db).evaluate({
+      id: agentId,
+      companyId,
+      adapterType,
+      runtimeConfig: {},
+    });
+    // A `process` heartbeat every 15 minutes never promised metering —
+    // none of its unmetered runs feed the guard.
+    expect(status.paused).toBe(false);
+    expect(status.unmeteredRuns).toBe(UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
+    expect(status.unmeteredPausableRuns).toBe(0);
+  });
+
+  it("counts a certain ledger with no session even on a never-reporting adapter", async () => {
+    const { companyId, agentId, adapterType } = await seedAgent({}, "process");
+    for (let i = 0; i < UNMETERED_RUNAWAY_GUARD_LIMIT + 1; i += 1) {
+      await seedMeteredRun(companyId, agentId, {
+        meteringStatus: "unmetered_no_session",
+        ledgerCertainty: "certain",
+        inputTokens: null,
+        outputTokens: null,
+        wakeReason: "timer",
+      });
+    }
+
+    const status = await tokenCeilingService(db).evaluate({
+      id: agentId,
+      companyId,
+      adapterType,
+      runtimeConfig: {},
+    });
     expect(status.paused).toBe(true);
     expect(status.pauseReason).toBe("unmetered runaway guard");
+    expect(status.unmeteredPausableRuns).toBe(UNMETERED_RUNAWAY_GUARD_LIMIT + 1);
   });
 
   it("scopes the sum to the agent — a colleague's spend does not count", async () => {
-    const { companyId, agentId } = await seedAgent();
+    const { companyId, agentId, adapterType } = await seedAgent();
     const otherAgentId = randomUUID();
     await db.insert(agents).values({
       id: otherAgentId,
@@ -331,6 +408,7 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     const status = await tokenCeilingService(db).evaluate({
       id: agentId,
       companyId,
+      adapterType,
       runtimeConfig: {},
     });
     expect(status.tokensToday).toBe(0);
