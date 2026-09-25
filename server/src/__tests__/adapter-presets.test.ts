@@ -285,6 +285,8 @@ describe("adapter-presets env-file injection", () => {
     } finally {
       rmSync(join(path, ".."), { recursive: true, force: true });
     }
+  });
+});
 
 // AgentDash (#725): a hosted box's Hermes has no provider until the founder adds
 // a key in onboarding, so "the binary exists" is not "ready" there.

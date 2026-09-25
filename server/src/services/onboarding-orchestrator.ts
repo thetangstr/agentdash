@@ -2,6 +2,7 @@ import { logger } from "../middleware/logger.js";
 import { deriveCompanyEmailDomain } from "@paperclipai/shared";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 import { SingleCompanyInstallationError } from "./companies.js";
+import { isHostedBox } from "./license.js";
 import {
   exceededFreeTierCapacityAction,
   freeTierCapExceededPayload,
@@ -13,6 +14,8 @@ import {
 // AgentDash (#102): true when the single-company-installation constraint should
 // be bypassed. Mirrors the same check in server/src/routes/companies.ts.
 function isSingleCompanyOverrideActive() {
+  // AgentDash (#725): a hosted box holds exactly one company; no override.
+  if (isHostedBox()) return false;
   if (process.env.AGENTDASH_ALLOW_MULTI_COMPANY === "true") return true;
   if (process.env.AGENTDASH_DEV_MODE === "true") return true;
   return false;

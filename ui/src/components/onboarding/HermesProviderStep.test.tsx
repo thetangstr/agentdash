@@ -77,7 +77,6 @@ describe("HermesProviderStep", () => {
     mockSetup.mockResolvedValue({
       hermesProvider: { configured: true, provider: "anthropic", label: "Anthropic", model: "claude-sonnet-5" },
       profilesUpdated: 0,
-      profilesFailed: [],
     });
     const { onConfigured } = render();
     act(() => {

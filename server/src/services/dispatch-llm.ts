@@ -7,7 +7,7 @@ import { minimaxLLM } from "./minimax-llm.js";
 import { openaiCompatLLMDetailed, type OpenAICompatUsage } from "./openai-compat-llm.js";
 import { costService } from "./costs.js";
 import { logger } from "../middleware/logger.js";
-import { isHostedDeployment } from "./hosted-deployment.js";
+import { isHostedBox } from "./license.js";
 import { readFallbackChain } from "../lib/adapter-fallback-chain.js";
 import { HttpError } from "../errors.js";
 import type { Db } from "@paperclipai/db";
@@ -592,7 +592,7 @@ export async function dispatchLLM(
       // AgentDash (#725): on a hosted box CoS chat runs on the managed template
       // profile, which holds the founder's provider key. The root profile has
       // none there. On-prem keeps Hermes' own default profile.
-      if (isHostedDeployment()) {
+      if (isHostedBox()) {
         hermesArgs.unshift("-p", (process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE ?? "").trim() || "agentdash");
       }
       // Fallback-chain hops carry a model so "hermes with k3" and "hermes

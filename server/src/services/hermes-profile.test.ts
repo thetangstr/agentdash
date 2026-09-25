@@ -9,6 +9,7 @@ import {
   HermesProfileProvisionError,
   hermesProfilesFailClosed,
   provisionAgentProfile,
+  setAgentProfileProvisionedHook,
   type HermesProfileDeps,
 } from "./hermes-profile.js";
 
@@ -238,5 +239,39 @@ describe("hosted-box profile policy", () => {
     expect(runs).toHaveLength(0);
     expect(wrappers).toHaveLength(1);
     expect(wrappers[0].content).toContain("exec hermes -p agentdash-agent9");
+  });
+});
+
+// AgentDash (#725): the provider-key service re-materialises the company's key
+// into a new profile before its wrapper exists.
+describe("provisioned hook", () => {
+  it("runs before the wrapper is written, with the agent and profile", async () => {
+    const { deps, wrappers } = harness({});
+    const seen: Array<[string, string, number]> = [];
+    setAgentProfileProvisionedHook(async (agentId, profileName) => {
+      seen.push([agentId, profileName, wrappers.length]);
+    });
+    try {
+      await provisionAgentProfile("agent-7", {}, deps);
+    } finally {
+      setAgentProfileProvisionedHook(null);
+    }
+    expect(seen).toEqual([["agent-7", "agentdash-agent7", 0]]);
+    expect(wrappers).toHaveLength(1);
+  });
+
+  it("a failing hook leaves no wrapper, so a hosted run fails closed", async () => {
+    const { deps, wrappers } = harness({});
+    setAgentProfileProvisionedHook(async () => {
+      throw new Error("could not write the provider key into agentdash-agent7");
+    });
+    try {
+      await expect(ensureAgentProfileCommand("agent-7", deps, { failClosed: true })).rejects.toThrow(
+        /could not write the provider key/,
+      );
+    } finally {
+      setAgentProfileProvisionedHook(null);
+    }
+    expect(wrappers).toHaveLength(0);
   });
 });

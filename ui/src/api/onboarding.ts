@@ -83,7 +83,6 @@ export interface AdapterStatusResponse {
 export interface SetupHermesProviderResponse {
   hermesProvider: { configured: true; provider: HermesProviderId; label: string; model: string };
   profilesUpdated: number;
-  profilesFailed: string[];
 }
 
 export const onboardingApi = {

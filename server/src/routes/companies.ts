@@ -29,7 +29,7 @@ import {
   feedbackService,
   logActivity,
 } from "../services/index.js";
-import { DomainAlreadyClaimedError } from "../services/companies.js";
+import { DomainAlreadyClaimedError, SingleCompanyInstallationError } from "../services/companies.js";
 import type { StorageService } from "../storage/types.js";
 import {
   assertBoard,
@@ -566,6 +566,15 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         },
       );
     } catch (err) {
+      // AgentDash (#725): a hosted box holds exactly one company.
+      if (err instanceof SingleCompanyInstallationError) {
+        res.status(409).json({
+          code: err.code,
+          existingCompanyId: err.existingCompanyId,
+          error: "This hosted box already has a workspace. A hosted box holds one workspace.",
+        });
+        return;
+      }
       if (err instanceof DomainAlreadyClaimedError) {
         res.status(409).json({
           code: "domain_already_claimed",

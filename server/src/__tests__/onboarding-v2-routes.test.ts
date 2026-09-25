@@ -1069,7 +1069,7 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
 
   it("keeps the plain hermes preset (no provider) on the old path", async () => {
     mockHermesProviderHandler.mockClear();
-    const app = buildApp({ type: "board", userId: "u1" });
+    const app = buildApp({ type: "board", userId: "u1", isInstanceAdmin: true });
     const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "hermes" });
     expect(res.status).toBe(201);
     expect(res.body.applied).toEqual(["AGENTDASH_DEFAULT_ADAPTER"]);

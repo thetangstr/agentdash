@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { logger } from "../middleware/logger.js";
 import { badRequest } from "../errors.js";
 import { hermesProviderConfiguredSync } from "./hermes-provider-setup.js";
-import { isHostedDeployment } from "./hosted-deployment.js";
+import { isHostedBox } from "./license.js";
 
 // ---------------------------------------------------------------------------
 // Presets
@@ -171,7 +171,7 @@ export function readAdapterStatus(): AdapterStatus {
       }
       // AgentDash (#725): a hosted box's Hermes has no provider until the
       // founder adds a key in onboarding. On-prem Hermes holds its own.
-      if (isHostedDeployment() && !hermesProviderConfiguredSync()) {
+      if (isHostedBox() && !hermesProviderConfiguredSync()) {
         return { adapter, ready: false, preset: "hermes", reason: "Hermes provider key not configured" };
       }
       return { adapter, ready: true, preset: "hermes", reason: null };

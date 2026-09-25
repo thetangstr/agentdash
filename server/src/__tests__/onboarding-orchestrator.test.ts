@@ -319,4 +319,27 @@ describe("onboardingOrchestrator.bootstrap", () => {
     );
     expect(mockCompanies.create).not.toHaveBeenCalled();
   });
+
+  // AgentDash (#725): a hosted box holds exactly one company; the multi-company
+  // override does not apply there.
+  it("refuses a second company on a hosted box even with AGENTDASH_ALLOW_MULTI_COMPANY", async () => {
+    const saved = { kind: process.env.AGENTDASH_DEPLOYMENT_KIND, multi: process.env.AGENTDASH_ALLOW_MULTI_COMPANY };
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    process.env.AGENTDASH_ALLOW_MULTI_COMPANY = "true";
+    try {
+      mockUsers.getById.mockResolvedValue({ id: "user-new", email: "new@other.com" });
+      mockAccess.listUserCompanyAccess.mockResolvedValue([]);
+      mockCompanies.hasActiveCompany.mockResolvedValue(true);
+      mockCompanies.list.mockResolvedValue([{ id: "existing-company", name: "Existing Workspace" }]);
+      await expect(onboardingOrchestrator(deps as any).bootstrap("user-new")).rejects.toThrow(
+        "Installation already has a workspace",
+      );
+      expect(mockCompanies.create).not.toHaveBeenCalled();
+    } finally {
+      for (const [key, value] of [["AGENTDASH_DEPLOYMENT_KIND", saved.kind], ["AGENTDASH_ALLOW_MULTI_COMPANY", saved.multi]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
 });

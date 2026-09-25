@@ -7,7 +7,7 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { errorHandler } from "../middleware/error-handler.js";
@@ -50,18 +50,19 @@ describe("POST /api/onboarding/setup-adapter (hermes provider)", () => {
         runHermes: async (args) => {
           hermesCalls.push(args);
           if (args[0] === "profile" && args[1] === "create") await mkdir(join(profilesDir, args[2]!), { recursive: true });
-          if (args[0] === "-p" && args[4]?.endsWith("_API_KEY")) {
-            await writeFile(join(profilesDir, args[1]!, ".env"), `${args[4]}=${args[5]}\n`);
-          }
           return { stdout: "", stderr: "" };
         },
         secrets: {
           put: async (...args: unknown[]) => {
             secretPuts.push(args);
+            return { restore: async () => undefined };
           },
+          get: async () => null,
         },
+        lock: (_key, fn) => fn(),
       },
       logActivity: activity as never,
+      listAgentIds: async () => [],
     });
     app.post("/api/onboarding/setup-adapter", handler);
     app.use(errorHandler);
@@ -125,10 +126,14 @@ describe("POST /api/onboarding/setup-adapter (hermes provider)", () => {
       expect.objectContaining({
         companyId: "company-1",
         action: "hermes_provider.configured",
-        details: { provider: "openrouter", model: "z-ai/glm-5.2", profilesUpdated: 0, profilesFailed: 0 },
+        details: { provider: "openrouter", model: "z-ai/glm-5.2", profilesUpdated: 0 },
       }),
     );
-    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBe("hermes_local");
+    // No process-wide settings change at runtime.
+    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBe(savedEnv.AGENTDASH_DEFAULT_ADAPTER);
+    expect(process.env.PAPERCLIP_E2E_SKIP_LLM).toBe(savedEnv.PAPERCLIP_E2E_SKIP_LLM);
+    // The key reached no Hermes command line.
+    expect(JSON.stringify(hermesCalls)).not.toContain(KEY);
     expect(observable(res)).not.toContain(KEY);
   });
 

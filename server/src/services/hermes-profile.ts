@@ -95,6 +95,15 @@ export class HermesProfileProvisionError extends Error {
   }
 }
 
+/** Called after a profile is created or found, before its wrapper is written. */
+export type AgentProfileProvisionedHook = (agentId: string, profileName: string) => Promise<void>;
+let provisionedHook: AgentProfileProvisionedHook | null = null;
+
+/** AgentDash (#725): registered at boot by hermes-provider-reconcile.ts. */
+export function setAgentProfileProvisionedHook(hook: AgentProfileProvisionedHook | null): void {
+  provisionedHook = hook;
+}
+
 /** Deterministic, Hermes-safe profile name (lowercase alphanumeric, one hyphen). */
 export function agentProfileName(agentId: string): string {
   return `agentdash-${String(agentId).toLowerCase().replace(/[^a-z0-9]/g, "")}`;
@@ -163,6 +172,11 @@ export async function provisionAgentProfile(
   } else {
     providerSource = "template";
   }
+
+  // AgentDash (#725): let the provider-key service re-materialise the company's
+  // key into the new profile from its secret before the wrapper exists, so a
+  // failure here leaves no usable wrapper (and fails closed on a hosted box).
+  if (provisionedHook) await provisionedHook(agentId, profileName);
 
   // Write the per-run alias wrapper directly with an absolute-resolving hermes
   // path. `hermes profile alias` emits `exec hermes -p ...` (bare), which fails

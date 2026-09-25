@@ -50,7 +50,7 @@ import {
   hermesProviderOptions,
   readHermesProviderStatus,
 } from "../services/hermes-provider-setup.js";
-import { isHostedDeployment } from "../services/hosted-deployment.js";
+import { isHostedBox } from "../services/license.js";
 import { sendEmail, inviteEmailTemplate } from "../auth/email.js";
 import {
   FIXED_QUESTIONS,
@@ -1109,7 +1109,7 @@ No greetings. No markdown headings outside the JSON block.`;
       // hosted box, where Hermes is the only runtime and holds no key until the
       // founder adds one. Key material is never part of this.
       hermesProvider: {
-        required: isHostedDeployment(),
+        required: isHostedBox(),
         ...(await readHermesProviderStatus()),
         // Only the instance admin may set it (the setup route enforces this).
         canConfigure: req.actor.source === "local_implicit" || req.actor.isInstanceAdmin === true,

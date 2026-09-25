@@ -6,29 +6,30 @@
 // hermes-profile.ts), so the customer's key has to land in the template through
 // Hermes' own configuration command, `hermes -p <profile> config set`.
 //
-// Order of operations, so a wrong key changes nothing:
+// Order of operations, so a wrong key changes nothing and a partial write is
+// undone:
 //   1. validate the input (provider, key shape, model);
 //   2. one small model call straight to the provider with that key and model;
-//   3. write provider, model and key into the template profile with Hermes'
-//      CLI, restoring the template's previous files if any step fails;
-//   4. write the same three settings into every existing agent profile, so
-//      agents hired before the key was set use it too;
-//   5. record the key as a company secret (encrypted, company-scoped) and a
-//      key-free marker next to the template.
+//   3. under a box-wide lock (the template is shared), refuse if the template
+//      already belongs to another company;
+//   4. write the key to the company's encrypted secret (the source of truth);
+//   5. write the key into the template's `.env` and into the `.env` of each of
+//      the calling company's own agent profiles, and set provider and model
+//      with `hermes config set`; if any profile fails, every profile file and
+//      the secret are rolled back and the call fails;
+//   6. record a key-free marker (company, provider, model) next to the template.
+// `reconcileHermesProviderFromSecret` re-materialises profiles from the secret;
+// it runs at boot and whenever an agent profile is provisioned.
 //
-// Where things live: Hermes keeps the key in the template's and each agent
-// profile's `.env` under HERMES_PROFILES_DIR, which the image puts on the
-// Railway Volume (/paperclip/.hermes/profiles), so it survives a redeploy
-// without re-entry. The company secret is the encrypted system of record.
-//
-// The key is never logged, returned, or put in an activity entry. It does
-// appear on the `hermes config set` command line for the length of that call,
-// inside the box's own container; every error message built from a Hermes or
-// provider failure is scrubbed of it.
+// The key never appears on a command line: it is written to each profile's
+// `.env` directly (temp file, then rename, mode 0600), which is the file
+// Hermes reads it from. It is never logged, returned, or put in an activity
+// entry, and every error message is scrubbed of it.
 
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -125,6 +126,7 @@ export type HermesProviderErrorCode =
   | "provider_model_unavailable"
   | "provider_unreachable"
   | "provider_error"
+  | "provider_owned_by_other_company"
   | "hermes_config_failed";
 
 export class HermesProviderSetupError extends HttpError {
@@ -147,18 +149,47 @@ export function redactKey(text: string, apiKey: string): string {
 // ---------------------------------------------------------------------------
 
 export interface HermesProviderSecretStore {
-  /** Create or rotate the company's secret; returns nothing about the value. */
-  put(companyId: string, name: string, value: string, description: string, actorUserId: string | null): Promise<void>;
+  /**
+   * Create or rotate the company's secret. Returns an undo that puts the
+   * previous value back (or deletes a secret this call created).
+   */
+  put(
+    companyId: string,
+    name: string,
+    value: string,
+    description: string,
+    actorUserId: string | null,
+  ): Promise<{ restore: () => Promise<void> }>;
+  /** The current value, or null when the company has none. */
+  get(companyId: string, name: string): Promise<string | null>;
 }
 
 export interface HermesProviderSetupDeps {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
-  /** Run a hermes subcommand (argv after the binary). */
+  /** Run a hermes subcommand (argv after the binary). Never given a key. */
   runHermes?: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
   profilesDir?: string;
   secrets?: HermesProviderSecretStore;
+  /**
+   * Serialise setups. The default is an in-process queue; the route wraps it
+   * in a Postgres advisory lock so two server processes cannot interleave.
+   */
+  lock?: <T>(key: string, fn: () => Promise<T>) => Promise<T>;
   now?: () => Date;
+}
+
+// In-process serialisation, keyed. The route adds a Postgres advisory lock.
+const localQueues = new Map<string, Promise<unknown>>();
+export function withLocalLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prior = localQueues.get(key) ?? Promise.resolve();
+  const next = prior.catch(() => undefined).then(fn);
+  const settled = next.catch(() => undefined);
+  localQueues.set(key, settled);
+  void settled.then(() => {
+    if (localQueues.get(key) === settled) localQueues.delete(key);
+  });
+  return next;
 }
 
 function resolveDeps(deps: HermesProviderSetupDeps) {
@@ -175,6 +206,7 @@ function resolveDeps(deps: HermesProviderSetupDeps) {
     template: (env.AGENTDASH_HERMES_PROFILE_TEMPLATE ?? "").trim() || "agentdash",
     now: deps.now ?? (() => new Date()),
     secrets: deps.secrets,
+    lock: deps.lock ?? withLocalLock,
   };
 }
 
@@ -305,45 +337,86 @@ export async function verifyProviderKey(
   );
 }
 
+
 // ---------------------------------------------------------------------------
-// 3–4. Hermes profiles
+// Hermes profiles
 // ---------------------------------------------------------------------------
 
-const TEMPLATE_FILES = [".env", "config.yaml", "auth.json"] as const;
+/** Files a provider setup may change in a profile; backed up before and restored on failure. */
+const PROFILE_FILES = [".env", "config.yaml", "auth.json"] as const;
 
-function configArgs(profile: string, input: HermesProviderInput): string[][] {
-  const spec = HERMES_PROVIDER_SPECS[input.provider];
-  return [
-    ["-p", profile, "config", "set", spec.envVar, input.apiKey],
-    ["-p", profile, "config", "set", "model.provider", spec.hermesProvider],
-    ["-p", profile, "config", "set", "model.default", input.model],
-  ];
+/**
+ * Set one variable in a profile's `.env` without the value ever reaching a
+ * command line: read, replace the line, write a temp file with mode 0600 in the
+ * same directory, rename it over `.env`, chmod 0600.
+ */
+export async function writeProfileEnvValue(profileDir: string, envVar: string, value: string): Promise<void> {
+  const target = join(profileDir, ".env");
+  const prior = existsSync(target) ? await readFile(target, "utf8") : "";
+  const kept = prior.split(/\r?\n/).filter((line) => line.length > 0 && !line.startsWith(`${envVar}=`));
+  const tmp = join(profileDir, `.env.agentdash-${randomBytes(6).toString("hex")}.tmp`);
+  try {
+    await writeFile(tmp, [...kept, `${envVar}=${value}`].join("\n") + "\n", { mode: 0o600 });
+    await chmod(tmp, 0o600);
+    await rename(tmp, target);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  await chmod(target, 0o600);
 }
 
-async function runRedacted(
-  run: (args: string[]) => Promise<unknown>,
-  args: string[],
-  apiKey: string,
-): Promise<void> {
+async function runChecked(run: (args: string[]) => Promise<unknown>, args: string[], apiKey: string): Promise<void> {
   try {
     await run(args);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    // The failing argv contains the key; the message is rebuilt without it.
     throw new Error(redactKey(detail, apiKey).replace(/\s+/g, " ").slice(0, 300));
   }
 }
 
-/** Agent profiles AgentDash provisioned (`agentdash-<id>`), never the template itself. */
-async function listAgentProfiles(profilesDir: string, template: string): Promise<string[]> {
-  let entries: string[] = [];
+/**
+ * Put the provider into one profile: the key straight into `.env`, provider
+ * and model through Hermes' own `config set` (no secret on the command line),
+ * then `auth list` so Hermes refreshes its credential pool from `.env`.
+ */
+async function applyToProfile(
+  r: ReturnType<typeof resolveDeps>,
+  profile: string,
+  input: HermesProviderInput,
+): Promise<void> {
+  const spec = HERMES_PROVIDER_SPECS[input.provider];
+  await writeProfileEnvValue(join(r.profilesDir, profile), spec.envVar, input.apiKey);
+  await runChecked(r.runHermes, ["-p", profile, "config", "set", "model.provider", spec.hermesProvider], input.apiKey);
+  await runChecked(r.runHermes, ["-p", profile, "config", "set", "model.default", input.model], input.apiKey);
+  await runChecked(r.runHermes, ["-p", profile, "auth", "list"], input.apiKey);
+}
+
+/** The calling company's agent profiles that exist on disk. Never other companies'. */
+function companyAgentProfiles(r: ReturnType<typeof resolveDeps>, agentIds: readonly string[]): string[] {
+  const names = [...new Set(agentIds.map((id) => agentProfileName(id)))];
+  return names.filter((name) => name !== r.template && existsSync(join(r.profilesDir, name))).sort();
+}
+
+interface ProviderMarker {
+  companyId: string | null;
+  provider: HermesProviderId | null;
+  model: string | null;
+  configuredAt: string | null;
+}
+
+async function readMarker(r: ReturnType<typeof resolveDeps>): Promise<ProviderMarker | null> {
   try {
-    entries = await readdir(profilesDir);
+    const raw = JSON.parse(await readFile(join(r.profilesDir, r.template, HERMES_PROVIDER_MARKER), "utf8"));
+    return {
+      companyId: typeof raw?.companyId === "string" ? raw.companyId : null,
+      provider: (HERMES_PROVIDERS as readonly string[]).includes(raw?.provider) ? raw.provider : null,
+      model: typeof raw?.model === "string" ? raw.model : null,
+      configuredAt: typeof raw?.configuredAt === "string" ? raw.configuredAt : null,
+    };
   } catch {
-    return [];
+    return null;
   }
-  const prefix = agentProfileName("").replace(/-$/, "") + "-";
-  return entries.filter((name) => name.startsWith(prefix) && name !== template && name.length > prefix.length).sort();
 }
 
 export interface HermesProviderStatus {
@@ -354,19 +427,13 @@ export interface HermesProviderStatus {
 }
 
 export async function readHermesProviderStatus(deps: HermesProviderSetupDeps = {}): Promise<HermesProviderStatus> {
-  const r = resolveDeps(deps);
-  try {
-    const raw = JSON.parse(await readFile(join(r.profilesDir, r.template, HERMES_PROVIDER_MARKER), "utf8"));
-    const provider = (HERMES_PROVIDERS as readonly string[]).includes(raw?.provider) ? raw.provider : null;
-    return {
-      configured: provider !== null,
-      provider,
-      model: typeof raw?.model === "string" ? raw.model : null,
-      configuredAt: typeof raw?.configuredAt === "string" ? raw.configuredAt : null,
-    };
-  } catch {
-    return { configured: false, provider: null, model: null, configuredAt: null };
-  }
+  const marker = await readMarker(resolveDeps(deps));
+  return {
+    configured: Boolean(marker?.provider),
+    provider: marker?.provider ?? null,
+    model: marker?.model ?? null,
+    configuredAt: marker?.configuredAt ?? null,
+  };
 }
 
 /** Synchronous twin of readHermesProviderStatus().configured, for readAdapterStatus(). */
@@ -380,108 +447,203 @@ export function hermesProviderConfiguredSync(env: NodeJS.ProcessEnv = process.en
   }
 }
 
+/** The company whose key the template holds, or null. */
+export async function hermesProviderOwner(deps: HermesProviderSetupDeps = {}): Promise<string | null> {
+  return (await readMarker(resolveDeps(deps)))?.companyId ?? null;
+}
+
 export interface ConfigureHermesProviderResult {
   provider: HermesProviderId;
   model: string;
   template: string;
-  /** Agent profiles now on the new provider/key. */
+  /** The company's agent profiles now on the new provider and key. */
   profilesUpdated: number;
-  /** Agent profiles that could not be updated (names only). */
-  profilesFailed: string[];
+}
+
+/** Lock key: the template is shared by the box, so setups are serialised per template. */
+export function hermesProviderLockKey(template = "agentdash"): string {
+  return `agentdash:hermes-provider:${template}`;
 }
 
 /**
- * Validate, verify, and write the provider into Hermes. Throws
- * HermesProviderSetupError (HTTP-shaped, key-free) on any failure; a failure
- * before or during the template write leaves the template as it was.
+ * Validate, verify, and write the provider into Hermes and the company's
+ * secret. All or nothing: any failure after the key is verified restores
+ * every profile file this call touched and the secret, then throws a
+ * key-free HermesProviderSetupError.
  */
 export async function configureHermesProvider(
   companyId: string,
   input: HermesProviderInput,
   actorUserId: string | null,
+  opts: { agentIds: readonly string[] },
   deps: HermesProviderSetupDeps = {},
 ): Promise<ConfigureHermesProviderResult> {
   const r = resolveDeps(deps);
+  if (!r.secrets) throw new Error("configureHermesProvider needs a secret store");
+  const secrets = r.secrets;
 
   await verifyProviderKey(input, deps);
 
-  // Template: snapshot, create if missing, configure, restore on failure.
-  const templateDir = join(r.profilesDir, r.template);
-  const templateExisted = existsSync(templateDir);
-  const backupDir = join(r.profilesDir, `.${r.template}.agentdash-backup`);
-  const backedUp: string[] = [];
-  try {
-    if (templateExisted) {
-      await rm(backupDir, { recursive: true, force: true });
-      await mkdir(backupDir, { recursive: true, mode: 0o700 });
-      for (const file of TEMPLATE_FILES) {
-        if (existsSync(join(templateDir, file))) {
-          await copyFile(join(templateDir, file), join(backupDir, file));
+  return r.lock(hermesProviderLockKey(r.template), async () => {
+    const owner = (await readMarker(r))?.companyId ?? null;
+    if (owner && owner !== companyId) {
+      throw new HermesProviderSetupError(
+        409,
+        "provider_owned_by_other_company",
+        "This box's Hermes provider belongs to another workspace. A hosted box holds one workspace.",
+      );
+    }
+
+    await mkdir(r.profilesDir, { recursive: true });
+    const backupRoot = await mkdtemp(join(r.profilesDir, ".agentdash-provider-backup-"));
+    const templateDir = join(r.profilesDir, r.template);
+    const templateExisted = existsSync(templateDir);
+    const touched: Array<{ profile: string; backedUp: string[] }> = [];
+    let secretRestore: (() => Promise<void>) | null = null;
+
+    const backup = async (profile: string) => {
+      const dir = join(backupRoot, profile);
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const backedUp: string[] = [];
+      for (const file of PROFILE_FILES) {
+        const source = join(r.profilesDir, profile, file);
+        if (existsSync(source)) {
+          await copyFile(source, join(dir, file));
           backedUp.push(file);
         }
       }
-    } else {
-      await runRedacted(
-        r.runHermes,
-        ["profile", "create", r.template, "--no-alias", "--description", "AgentDash managed template"],
+      touched.push({ profile, backedUp });
+    };
+
+    try {
+      // 4. The secret first: it is the source of truth.
+      const put = await secrets.put(
+        companyId,
+        HERMES_PROVIDER_SECRET_NAME,
         input.apiKey,
+        `Hermes provider key (${HERMES_PROVIDER_SPECS[input.provider].label})`,
+        actorUserId,
       );
-    }
-    for (const args of configArgs(r.template, input)) {
-      await runRedacted(r.runHermes, args, input.apiKey);
-    }
-  } catch (error) {
-    if (templateExisted) {
-      for (const file of TEMPLATE_FILES) {
-        if (backedUp.includes(file)) {
-          await copyFile(join(backupDir, file), join(templateDir, file)).catch(() => undefined);
-        } else {
-          await rm(join(templateDir, file), { force: true }).catch(() => undefined);
+      secretRestore = put.restore;
+
+      // 5. Template, then the company's own agent profiles.
+      if (!templateExisted) {
+        await runChecked(
+          r.runHermes,
+          ["profile", "create", r.template, "--no-alias", "--description", "AgentDash managed template"],
+          input.apiKey,
+        );
+      } else {
+        await backup(r.template);
+      }
+      await applyToProfile(r, r.template, input);
+
+      const profiles = companyAgentProfiles(r, opts.agentIds);
+      for (const profile of profiles) {
+        await backup(profile);
+        try {
+          await applyToProfile(r, profile, input);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(`agent profile ${profile}: ${reason}`);
         }
       }
-    } else {
-      await r.runHermes(["profile", "delete", r.template, "-y"]).catch(() => undefined);
-      await rm(templateDir, { recursive: true, force: true }).catch(() => undefined);
-    }
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new HermesProviderSetupError(
-      500,
-      "hermes_config_failed",
-      `The key works, but Hermes could not save the provider settings: ${redactKey(reason, input.apiKey)}. Nothing was changed.`,
-    );
-  } finally {
-    await rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
-  }
 
-  // Agent profiles cloned before the key was set.
-  let profilesUpdated = 0;
-  const profilesFailed: string[] = [];
-  for (const profile of await listAgentProfiles(r.profilesDir, r.template)) {
-    try {
-      for (const args of configArgs(profile, input)) {
-        await runRedacted(r.runHermes, args, input.apiKey);
+      // 6. Key-free marker.
+      await writeFile(
+        join(templateDir, HERMES_PROVIDER_MARKER),
+        JSON.stringify(
+          { companyId, provider: input.provider, model: input.model, configuredAt: r.now().toISOString() },
+          null,
+          2,
+        ) + "\n",
+        { mode: 0o600 },
+      );
+
+      return { provider: input.provider, model: input.model, template: r.template, profilesUpdated: profiles.length };
+    } catch (error) {
+      for (const { profile, backedUp } of touched) {
+        for (const file of PROFILE_FILES) {
+          const target = join(r.profilesDir, profile, file);
+          if (backedUp.includes(file)) {
+            await copyFile(join(backupRoot, profile, file), target).catch(() => undefined);
+          } else {
+            await rm(target, { force: true }).catch(() => undefined);
+          }
+        }
       }
-      profilesUpdated += 1;
-    } catch {
-      profilesFailed.push(profile);
+      if (!templateExisted) {
+        await r.runHermes(["profile", "delete", r.template, "-y"]).catch(() => undefined);
+        await rm(templateDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      if (secretRestore) await secretRestore().catch(() => undefined);
+      if (error instanceof HermesProviderSetupError) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new HermesProviderSetupError(
+        500,
+        "hermes_config_failed",
+        `The key works, but Hermes could not save the provider settings (${redactKey(reason, input.apiKey)}). Nothing was changed.`,
+      );
+    } finally {
+      await rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Reconcile: the secret is the source of truth
+// ---------------------------------------------------------------------------
+
+export interface ReconcileResult {
+  status: "not_configured" | "no_secret" | "ok";
+  /** Profiles whose key, provider or model had to be rewritten. */
+  updated: string[];
+  failed: string[];
+}
+
+async function profileHasKey(r: ReturnType<typeof resolveDeps>, profile: string, envVar: string, value: string) {
+  try {
+    const env = await readFile(join(r.profilesDir, profile, ".env"), "utf8");
+    return env.split(/\r?\n/).includes(`${envVar}=${value}`);
+  } catch {
+    return false;
   }
+}
 
-  if (r.secrets) {
-    await r.secrets.put(
-      companyId,
-      HERMES_PROVIDER_SECRET_NAME,
-      input.apiKey,
-      `Hermes provider key (${HERMES_PROVIDER_SPECS[input.provider].label})`,
-      actorUserId,
-    );
+/**
+ * Re-materialise the company's key from its secret into the template and the
+ * given agent profiles. Does nothing unless the template's marker names this
+ * company. Profiles that already hold the key are left alone.
+ */
+export async function reconcileHermesProviderFromSecret(
+  companyId: string,
+  opts: { agentIds: readonly string[] },
+  deps: HermesProviderSetupDeps = {},
+): Promise<ReconcileResult> {
+  const r = resolveDeps(deps);
+  const marker = await readMarker(r);
+  if (!marker?.provider || !marker.model || marker.companyId !== companyId) {
+    return { status: "not_configured", updated: [], failed: [] };
   }
+  if (!r.secrets) return { status: "no_secret", updated: [], failed: [] };
+  const apiKey = await r.secrets.get(companyId, HERMES_PROVIDER_SECRET_NAME);
+  if (!apiKey) return { status: "no_secret", updated: [], failed: [] };
+  const input: HermesProviderInput = { provider: marker.provider, apiKey, model: marker.model };
+  const envVar = HERMES_PROVIDER_SPECS[marker.provider].envVar;
 
-  await writeFile(
-    join(templateDir, HERMES_PROVIDER_MARKER),
-    JSON.stringify({ provider: input.provider, model: input.model, configuredAt: r.now().toISOString() }, null, 2) + "\n",
-    { mode: 0o600 },
-  );
-
-  return { provider: input.provider, model: input.model, template: r.template, profilesUpdated, profilesFailed };
+  return r.lock(hermesProviderLockKey(r.template), async () => {
+    const updated: string[] = [];
+    const failed: string[] = [];
+    for (const profile of [r.template, ...companyAgentProfiles(r, opts.agentIds)]) {
+      if (!existsSync(join(r.profilesDir, profile))) continue;
+      if (await profileHasKey(r, profile, envVar, apiKey)) continue;
+      try {
+        await applyToProfile(r, profile, input);
+        updated.push(profile);
+      } catch {
+        failed.push(profile);
+      }
+    }
+    return { status: "ok", updated, failed };
+  });
 }

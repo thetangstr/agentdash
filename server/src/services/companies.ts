@@ -65,6 +65,7 @@ import {
 import { notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { environmentService } from "./environments.js";
+import { isHostedBox } from "./license.js";
 
 // AgentDash (AGE-55): typed conflict surfaced when a creator tries to claim
 // a domain another company already owns. Routes catch this and turn it into
@@ -245,6 +246,18 @@ export function companyService(db: Db) {
     creatorMembership?: CompanyCreatorMembership,
   ) {
     return db.transaction(async (tx) => {
+      // AgentDash (#725, orchestrator decision for 1.0): a hosted box holds
+      // exactly one company. Every create path lands here; the advisory lock
+      // makes the check-then-insert safe against two concurrent creates.
+      if (isHostedBox()) {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext('agentdash:hosted-single-company'))`);
+        const existing = await tx
+          .select({ id: companies.id })
+          .from(companies)
+          .where(sql`${companies.status} <> 'archived'`)
+          .limit(1);
+        if (existing.length > 0) throw new SingleCompanyInstallationError(existing[0]!.id);
+      }
       const rows = await tx.insert(companies).values(values).returning();
       const company = rows[0];
       if (creatorMembership) {
