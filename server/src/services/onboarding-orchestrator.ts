@@ -304,6 +304,14 @@ export function onboardingOrchestrator(deps: Deps) {
             emailDomain,
             budgetMonthlyCents: 0,
           });
+          // AgentDash: self-serve-bootstrap. A founder who opens /cos before
+          // /company-create gets the box's first company HERE, so this path
+          // must make them instance admin exactly as POST /companies does.
+          // The shared rule no-ops for the local-board actor, when the flag
+          // is off, and unless this is the box's first company.
+          if (process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP === "true") {
+            await deps.access.promoteSelfServeBootstrapAdmin(user.id, company.id);
+          }
         }
       }
 

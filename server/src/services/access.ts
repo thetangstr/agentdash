@@ -3,6 +3,7 @@ import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
+  companies,
   companyMemberships,
   instanceUserRoles,
   issues,
@@ -11,6 +12,15 @@ import {
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict } from "../errors.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
+import { logActivity } from "./activity-log.js";
+
+// AgentDash: self-serve-bootstrap. The synthetic local_trusted actor never
+// becomes an instance admin through this path; it has no auth_users row.
+const LOCAL_BOARD_USER_ID = "local-board";
+
+export function selfServeBootstrapEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENTDASH_SELF_SERVE_BOOTSTRAP === "true";
+}
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -499,6 +509,56 @@ export function accessService(db: Db) {
     });
   }
 
+  // AgentDash: self-serve-bootstrap. The ONE place a company creator becomes
+  // the box's first instance admin. Called right after a company is created,
+  // from every path that can create the first company: POST /companies and
+  // the /cos onboarding bootstrap (a founder who opens /cos before
+  // /company-create used to get a company but no instance admin, so nobody
+  // could run instance-admin actions on a fresh hosted box).
+  //
+  // Promotes only when AGENTDASH_SELF_SERVE_BOOTSTRAP=true, the user is a real
+  // user (not the synthetic local-board actor), the box has no instance admin,
+  // and `companyId` is the only non-archived company, i.e. the box had no
+  // company before this create. Runs under the same advisory lock as
+  // promoteFirstInstanceAdmin, so concurrent first-creates promote at most
+  // one user. Returns true only when this call performed the promotion.
+  async function promoteSelfServeBootstrapAdmin(
+    userId: string | null | undefined,
+    companyId: string,
+  ): Promise<boolean> {
+    if (!selfServeBootstrapEnabled()) return false;
+    if (!userId || userId === LOCAL_BOARD_USER_ID) return false;
+    const promoted = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(4017)`);
+      const adminCount = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(instanceUserRoles)
+        .where(eq(instanceUserRoles.role, "instance_admin"))
+        .then((rows) => Number(rows[0]?.count ?? 0));
+      if (adminCount > 0) return false;
+      const otherCompanies = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(companies)
+        .where(and(ne(companies.id, companyId), sql`${companies.status} <> 'archived'`))
+        .then((rows) => Number(rows[0]?.count ?? 0));
+      if (otherCompanies > 0) return false;
+      await tx.insert(instanceUserRoles).values({ userId, role: "instance_admin" });
+      return true;
+    });
+    if (promoted) {
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: userId,
+        action: "instance.admin_self_serve_bootstrap",
+        entityType: "instance",
+        entityId: userId,
+        details: { companyId },
+      });
+    }
+    return promoted;
+  }
+
   async function demoteInstanceAdmin(userId: string) {
     return db
       .delete(instanceUserRoles)
@@ -863,6 +923,7 @@ export function accessService(db: Db) {
     updateMemberAndPermissions,
     promoteInstanceAdmin,
     promoteFirstInstanceAdmin,
+    promoteSelfServeBootstrapAdmin,
     demoteInstanceAdmin,
     listUserCompanyAccess,
     setUserCompanyAccess,

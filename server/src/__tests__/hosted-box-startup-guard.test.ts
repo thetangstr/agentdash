@@ -171,6 +171,16 @@ describe("hosted-box boot guard (#726)", () => {
       expect(errors).toEqual([expect.stringContaining("template placeholders")]);
     });
 
+    it("sets AGENTDASH_SELF_SERVE_BOOTSTRAP in the Railway template exactly as provision-box.sh does", async () => {
+      const { readFileSync } = await import("node:fs");
+      const template = readFileSync(new URL("../../../.env.railway.example", import.meta.url), "utf8");
+      const provision = readFileSync(new URL("../../../scripts/hosted/provision-box.sh", import.meta.url), "utf8");
+      const templateValue = /^AGENTDASH_SELF_SERVE_BOOTSTRAP=(\S+)/m.exec(template)?.[1];
+      const provisionValue = /^\s*AGENTDASH_SELF_SERVE_BOOTSTRAP:\s*"([^"]+)"/m.exec(provision)?.[1];
+      expect(provisionValue).toBe("true");
+      expect(templateValue).toBe(provisionValue);
+    });
+
     it("refuses MCP invite validation off while self-serve bootstrap is on", () => {
       const errors = hostedBoxConfigErrors(
         authenticated,
