@@ -379,7 +379,10 @@ export function getActorInfo(req: Request) {
  * other credential, so the spread is free outside the assistant surface.
  */
 export function assistantGrantAttribution(req: Request): { via?: string } {
-  return req.actor.source === "assistant_grant"
-    ? { via: `assistant_grant ${req.actor.assistantClientName ?? "unknown client"}` }
-    : {};
+  if (req.actor.source !== "assistant_grant") return {};
+  // GH #745 review: name the grant itself, not just the client — two grants
+  // from the same client otherwise read identically in the activity log.
+  const grant = req.actor.assistantGrantId ?? "unknown grant";
+  const client = req.actor.assistantClientName ?? "unknown client";
+  return { via: `assistant_grant ${grant} (${client})` };
 }

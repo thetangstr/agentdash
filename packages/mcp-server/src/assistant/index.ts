@@ -1,5 +1,6 @@
 import type { PaperclipApiClient } from "../client.js";
 import type { ToolDefinition } from "../tools.js";
+import { ASSISTANT_SCOPE_WORK } from "@paperclipai/shared";
 import { AssistantContext } from "./context.js";
 import { assistantTools } from "./tools.js";
 import { assistantWorkTools } from "./work.js";
@@ -8,16 +9,24 @@ import { assistantWorkTools } from "./work.js";
  * AgentDash assistant MCP (M1 reads GH #676, M3 work tools GH #678): the
  * person-facing toolset over the control-plane API — nine read tools plus
  * five work tools. Selected by `toolset: "assistant"` (stdio:
- * AGENTDASH_TOOLSET=assistant). A grant without `agentdash:work` still sees
- * the work tools; the write fails politely at the loopback gate so the
- * assistant can explain the missing scope.
+ * AGENTDASH_TOOLSET=assistant).
+ *
+ * GH #745 review: a grant WITHOUT `agentdash:work` does not see the work
+ * tools at all — advertising writes it cannot take invites the model to
+ * attempt them, and the read-only surface is the honest contract. When
+ * `assistantScopes` is undefined (stdio against an operator key, not a
+ * grant) the full surface is served.
  */
 export function createAssistantToolDefinitions(
   client: PaperclipApiClient,
-  config: { companyId: string | null },
+  config: { companyId: string | null; assistantScopes?: readonly string[] },
 ): ToolDefinition[] {
   const ctx = new AssistantContext(client, config.companyId);
-  return [...assistantTools(client, ctx), ...assistantWorkTools(client, ctx)];
+  const readTools = assistantTools(client, ctx);
+  if (config.assistantScopes && !config.assistantScopes.includes(ASSISTANT_SCOPE_WORK)) {
+    return readTools;
+  }
+  return [...readTools, ...assistantWorkTools(client, ctx)];
 }
 
 export { AssistantContext } from "./context.js";

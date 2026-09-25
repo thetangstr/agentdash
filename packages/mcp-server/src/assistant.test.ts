@@ -252,12 +252,29 @@ describe("assistant toolset surface", () => {
     expect(setup).toContain("agentdash_setup_status");
     expect(setup).toContain("agentdash_pause_agent");
     expect(setup).toHaveLength(17);
-    // M1's nine reads plus M3's five work tools (GH #678).
+    // M1's nine reads plus M3's five work tools (GH #678) — no grant scopes
+    // supplied means the stdio/operator context and the full surface.
     expect(assistant).toHaveLength(14);
     expect(assistant).not.toContain("agentdash_setup_status");
     // The agent surface is the union it always was.
     expect(agent).toEqual(expect.arrayContaining(setup));
     expect(agent.length).toBeGreaterThan(setup.length + 9);
+  });
+
+  it("a grant without agentdash:work is served only the nine read tools", () => {
+    const client = new RealClient(CONFIG);
+    // GH #745 review: the write surface is hidden, not merely gated.
+    const readOnly = buildToolSurface(client, { ...CONFIG, assistantScopes: ["agentdash:read"] }, "assistant");
+    expect(readOnly.map((t) => t.name)).toHaveLength(9);
+    for (const tool of readOnly) {
+      expect(tool.annotations).toMatchObject({ readOnlyHint: true });
+    }
+    const workScoped = buildToolSurface(
+      client,
+      { ...CONFIG, assistantScopes: ["agentdash:read", "agentdash:work"] },
+      "assistant",
+    );
+    expect(workScoped.map((t) => t.name)).toHaveLength(14);
   });
 
   it("AGENTDASH_TOOLSET parses, defaults to agent, and rejects nonsense", () => {

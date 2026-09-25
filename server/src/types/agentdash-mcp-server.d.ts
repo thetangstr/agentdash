@@ -19,6 +19,8 @@ declare module "@agentdash/mcp-server" {
     companyId: string | null;
     agentId: string | null;
     runId: string | null;
+    /** GH #745 review: the assistant grant's OAuth scopes; filters the tool surface. */
+    assistantScopes?: readonly string[];
   }
 
   export type AgentDashToolset = "setup" | "agent" | "assistant";

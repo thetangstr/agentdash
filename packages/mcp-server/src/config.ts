@@ -4,6 +4,12 @@ export interface PaperclipMcpConfig {
   companyId: string | null;
   agentId: string | null;
   runId: string | null;
+  /**
+   * AgentDash (GH #745 review): the assistant grant's OAuth scopes, supplied
+   * by the /api/mcp/assistant endpoint from the resolved grant. Undefined =
+   * non-grant context (stdio against an operator key) → full tool surface.
+   */
+  assistantScopes?: readonly string[];
 }
 
 function nonEmpty(value: string | undefined): string | null {

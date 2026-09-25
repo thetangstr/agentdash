@@ -205,19 +205,17 @@ export function makeAssistantTool<TSchema extends z.ZodRawShape>(
         // The assistant surface never echoes an upstream error body — an API
         // error's `body` is whatever the server happened to return and can
         // carry internals a person-facing transcript must not record. The
-        // known refusal codes get a relayable sentence; everything else is
-        // status+method+path only.
+        // known refusal codes get a relayable sentence; everything else is a
+        // fixed generic refusal (GH #745 review): no method, path, id, or
+        // raw Error.message, because any of those can carry a route, a UUID
+        // or a stack fragment into the transcript.
         const refusal =
           error instanceof PaperclipApiError ? refusalMessage(error) : null;
-        const message =
-          refusal ??
-          (error instanceof PaperclipApiError
-            ? `AgentDash answered ${error.status} for ${error.method} ${error.path}.`
-            : error instanceof Error
-              ? error.message
-              : String(error));
-        const safe = redactAssistantValue(message) as string;
-        const summary = clip(refusal ? safe : `Something went wrong reaching AgentDash: ${safe}`, SUMMARY_LIMIT);
+        const summary = refusal
+          ? clip(redactAssistantValue(refusal) as string, SUMMARY_LIMIT)
+          : error instanceof z.ZodError
+            ? "That request wasn't formed correctly — a required field was missing or invalid. Nothing was changed."
+            : "Something went wrong reaching AgentDash — the change may not have gone through; check the item before retrying.";
         return {
           content: [{ type: "text" as const, text: summary }],
           structuredContent: {

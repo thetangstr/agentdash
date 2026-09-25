@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import type { Db } from "@paperclipai/db";
-import { projectAccess } from "@paperclipai/db";
-import { eq } from "drizzle-orm";
+import { issues, projectAccess } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
 import {
   createProjectSchema,
   createProjectWorkspaceSchema,
@@ -12,6 +12,8 @@ import {
   updateProjectSchema,
   updateProjectWorkspaceSchema,
   workspaceRuntimeControlTargetSchema,
+  ASSISTANT_WORK_ORIGIN_KIND,
+  assistantKickoffRequestId,
 } from "@paperclipai/shared";
 import type { WorkspaceRuntimeDesiredState, WorkspaceRuntimeServiceStateMap } from "@paperclipai/shared";
 import { trackProjectCreated } from "@paperclipai/shared/telemetry";
@@ -22,6 +24,7 @@ import { accessService, projectService, logActivity, workspaceOperationService }
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { badRequest, conflict, forbidden } from "../errors.js";
+import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { assertProjectVisible, projectVisibilityCondition } from "./visibility.js";
 import {
   assertCanEditOwnedResource,
@@ -58,6 +61,27 @@ export function projectRoutes(db: Db) {
   const router = Router();
   const svc = projectService(db);
   const access = accessService(db);
+
+  /**
+   * AgentDash (GH #745 review): whether a replayed project still lacks the
+   * kickoff task its start_project call was supposed to file. Reported on
+   * the replayed-project response so a retry knows there is work to finish.
+   */
+  const assistantKickoffPending = async (companyId: string, projectId: string): Promise<boolean> => {
+    const found = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          eq(issues.originKind, ASSISTANT_WORK_ORIGIN_KIND),
+          eq(issues.originId, assistantKickoffRequestId(projectId)),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return found === null;
+  };
   const secretsSvc = secretService(db);
   const workspaceOperations = workspaceOperationService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
@@ -187,6 +211,38 @@ export function projectRoutes(db: Db) {
     // adding a suffix.
     const { confirmSimilarName, ...cleanProjectData } =
       projectData as CreateProjectPayload & { confirmSimilarName?: boolean };
+    // AgentDash (GH #745 review): an assistant-grant create is idempotent on
+    // the live-name domain — start_project retried after a partial failure
+    // must return the project it already made so the tool can finish a
+    // pending kickoff, not 409 on the name it chose a minute ago. The
+    // advisory similar-name check and the confirmSimilarName override below
+    // stay exactly as they are for every other caller.
+    const isAssistantGrant = req.actor.source === "assistant_grant";
+    const findLiveProjectByName = async () => {
+      if (typeof cleanProjectData.name !== "string") return null;
+      const lowered = cleanProjectData.name.toLowerCase();
+      let visible: Awaited<ReturnType<typeof svc.list>> = [];
+      try {
+        const scanned = await svc.list(companyId, projectVisibilityCondition(req, companyId));
+        if (Array.isArray(scanned)) visible = scanned;
+      } catch {
+        // same posture as the advisory scan below: the unique index guards
+      }
+      return (
+        visible.find((p) => !p.archivedAt && p.name.toLowerCase() === lowered) ?? null
+      );
+    };
+    if (isAssistantGrant) {
+      const existing = await findLiveProjectByName();
+      if (existing) {
+        res.status(200).json({
+          ...existing,
+          replayed: true,
+          kickoffPending: await assistantKickoffPending(companyId, existing.id),
+        });
+        return;
+      }
+    }
     if (confirmSimilarName !== true && typeof cleanProjectData.name === "string") {
       const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
       const candidate = squash(cleanProjectData.name);
@@ -239,10 +295,31 @@ export function projectRoutes(db: Db) {
     // Ownership comes from the ACTOR, never the body — a payload that could
     // name its own creator could gift the project to someone else's quota of
     // authority. Agents cannot reach this line (refused above).
-    const project = await svc.create(companyId, {
-      ...cleanProjectData,
-      createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
-    });
+    let project;
+    try {
+      project = await svc.create(companyId, {
+        ...cleanProjectData,
+        createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+      });
+    } catch (err) {
+      // Concurrent assistant retry won the name index: replay its row.
+      if (
+        isAssistantGrant &&
+        isUniqueViolation(err) &&
+        pgConstraintName(err) === "projects_company_name_unique_idx"
+      ) {
+        const existing = await findLiveProjectByName();
+        if (existing) {
+          res.status(200).json({
+            ...existing,
+            replayed: true,
+            kickoffPending: await assistantKickoffPending(companyId, existing.id),
+          });
+          return;
+        }
+      }
+      throw err;
+    }
     let createdWorkspaceId: string | null = null;
     if (workspace) {
       const createdWorkspace = await svc.createWorkspace(project.id, workspace);

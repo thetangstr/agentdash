@@ -215,7 +215,9 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       metadata: asMetadata as never,
       clientInformation: clientInfo,
       redirectUrl: "http://127.0.0.1:54321/callback",
-      scope: "agentdash:read",
+      // GH #745 review: work tools are scope-filtered now — request both so
+      // the consent step can grant the full surface.
+      scope: "agentdash:read agentdash:work",
       resource: new URL(resourceUri),
     });
     expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
@@ -244,7 +246,9 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       body: JSON.stringify({
         approved: true,
         companyId: await companyId(),
-        scopes: ["agentdash:read"],
+        // read+work so the full 14-tool surface is exercised below; the
+        // read-only-grant filtered list is covered in assistant-work-tools.
+        scopes: ["agentdash:read", "agentdash:work"],
       }),
     });
     expect(decision.status).toBe(200);

@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "issues_assistant_work_request_uq" ON "issues" USING btree ("company_id","origin_kind","origin_id") WHERE "issues"."origin_kind" = 'assistant_work'
+          and "issues"."origin_id" is not null;

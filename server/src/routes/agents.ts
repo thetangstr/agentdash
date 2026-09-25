@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agentConnectCodes, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
 import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
@@ -3991,6 +3991,46 @@ export function agentRoutes(
     }
 
     assertAgentHarnessPreflightReadyForLaunch(agent);
+
+    // AgentDash (GH #745 review): an assistant nudge is a PAID run — the
+    // tool sends a deterministic idempotencyKey, and a retry inside the
+    // same bucket must replay the wake that already landed rather than
+    // spend a second one. Scoped to assistant-grant writes so the field's
+    // record-only semantics are unchanged for every other caller; mirrors
+    // the run-liveness continuation dedup (queued/deferred/completed).
+    const wakeupIdempotencyKey =
+      typeof req.body.idempotencyKey === "string" && req.body.idempotencyKey.trim().length > 0
+        ? req.body.idempotencyKey.trim()
+        : null;
+    if (req.actor.source === "assistant_grant" && wakeupIdempotencyKey) {
+      const existingWake = await db
+        .select({
+          id: agentWakeupRequests.id,
+          status: agentWakeupRequests.status,
+          runId: agentWakeupRequests.runId,
+        })
+        .from(agentWakeupRequests)
+        .where(
+          and(
+            eq(agentWakeupRequests.companyId, agent.companyId),
+            eq(agentWakeupRequests.agentId, agent.id),
+            eq(agentWakeupRequests.idempotencyKey, wakeupIdempotencyKey),
+            inArray(agentWakeupRequests.status, ["queued", "deferred_issue_execution", "completed", "skipped"]),
+          ),
+        )
+        .orderBy(desc(agentWakeupRequests.requestedAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (existingWake) {
+        res.status(200).json({
+          replayed: true,
+          status: existingWake.status,
+          runId: existingWake.runId,
+          wakeupRequestId: existingWake.id,
+        });
+        return;
+      }
+    }
 
     const run = await heartbeat.wakeup(id, {
       source: req.body.source,

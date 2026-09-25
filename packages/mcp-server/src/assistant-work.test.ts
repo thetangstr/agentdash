@@ -159,9 +159,40 @@ describe("start_project", () => {
     const projectPost = posts.find((c) => c.path === "/companies/company-1/projects")!;
     expect(projectPost.body).toMatchObject({ name: "Billing revamp", description: "Make invoicing not suck", leadAgentId: COS.id });
     const issuePost = posts.find((c) => c.path === "/companies/company-1/issues")!;
-    expect(issuePost.body).toMatchObject({ projectId: "project-new", assigneeAgentId: COS.id, status: "todo" });
+    expect(issuePost.body).toMatchObject({
+      projectId: "project-new",
+      assigneeAgentId: COS.id,
+      status: "todo",
+      // GH #745 review: the deterministic dedup key makes the kickoff
+      // retry-safe — same project, same requestId, server returns the row.
+      requestId: "start_project:project-new",
+    });
     expect((issuePost.body as { title: string }).title).toContain("Billing revamp");
     expect(result.data?.wakeQueued).toBe(true);
+  });
+
+  it("reuses a replayed project and its kickoff instead of duplicating", async () => {
+    const { client, calls } = seededClient((call) => {
+      if (call.method === "POST" && call.path === "/companies/company-1/projects") {
+        return { id: "project-old", companyId: "company-1", name: "Billing revamp", status: "active", replayed: true, kickoffPending: true };
+      }
+      if (call.method === "POST" && call.path === "/companies/company-1/issues") {
+        const body = call.body as { requestId?: string };
+        // The retry must carry the kickoff key for the PROJECT it adopted —
+        // here the original project's id, not a new one.
+        expect(body.requestId).toBe("start_project:project-old");
+        return { id: "issue-old", companyId: "company-1", identifier: "ACME-9", title: "Kick off Billing revamp", status: "todo", priority: "medium", replayed: true };
+      }
+      return undefined;
+    });
+    const { call } = makeTools(client);
+    const result = structured(await call("start_project", { name: "Billing revamp" }));
+    expect(result.status).toBe("ok");
+    expect(result.summary).toContain("already exists");
+    expect(result.data?.projectReused).toBe(true);
+    expect(result.data?.kickoffReplayed).toBe(true);
+    // One project POST, one issue POST — the retry finishes, never doubles.
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(2);
   });
 
   it("returns needs_clarification on an ambiguous lead and writes nothing", async () => {
@@ -260,6 +291,9 @@ describe("assign_work", () => {
     expect(result.status).toBe("ok");
     const wake = calls.find((c) => c.path === "/agents/agent-1/wakeup")!;
     expect(wake.method).toBe("POST");
+    // GH #745 review: the paid wake carries an idempotencyKey scoped to the
+    // task inside an hourly bucket — a retry replays, it cannot double-wake.
+    expect((wake.body as { idempotencyKey?: string }).idempotencyKey).toMatch(/^assistant_nudge:issue-1:\d+$/);
     expect(calls.some((c) => c.method === "PATCH")).toBe(false);
     expect(result.data?.wakeQueued).toBe(true);
   });
@@ -353,5 +387,27 @@ describe("upstream refusals map to the refused envelope", () => {
     const result = structured(await call("create_work_item", { title: "Anything" }));
     expect(result.status).toBe("refused");
     expect(result.summary).toContain("hourly write limit");
+  });
+
+  it("an unmapped error answers with a generic refusal — no method, path or id", async () => {
+    const { client } = seededClient((call) => {
+      if (call.method === "POST") {
+        return new PaperclipApiError({
+          status: 500,
+          method: "POST",
+          path: "/companies/company-1/issues/550e8400-e29b-41d4-a716-446655440000",
+          body: { error: "relation `secret_table` does not exist" },
+          message: "POST failed with 500",
+        });
+      }
+      return undefined;
+    });
+    const { call } = makeTools(client);
+    const result = structured(await call("create_work_item", { title: "Anything" }));
+    expect(result.status).toBe("refused");
+    expect(result.summary).not.toContain("550e8400");
+    expect(result.summary).not.toContain("secret_table");
+    expect(result.summary).not.toContain("POST");
+    expect(result.summary).not.toContain("/companies/");
   });
 });

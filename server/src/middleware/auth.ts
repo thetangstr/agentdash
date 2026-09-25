@@ -259,6 +259,21 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           res.status(403).json({ error: ASSISTANT_INSUFFICIENT_SCOPE, required_scope: ASSISTANT_SCOPE_WORK });
           return;
         }
+        // GH #745 review: the body is allowlisted too, not just the route.
+        // The wrapped routes accept wider payloads (adapter overrides,
+        // workspace settings, env) an assistant write must never set.
+        const body = req.body;
+        const forbiddenFields =
+          body && typeof body === "object" && !Array.isArray(body)
+            ? Object.keys(body).filter((key) => !writeRoute.bodyFields.includes(key))
+            : [];
+        if (forbiddenFields.length > 0 || (body !== undefined && body !== null && (typeof body !== "object" || Array.isArray(body)))) {
+          res.status(403).json({
+            error: "assistant_write_field_forbidden",
+            fields: forbiddenFields.length > 0 ? forbiddenFields : ["<non-object body>"],
+          });
+          return;
+        }
         const allowance = consumeAssistantWriteAllowance(resolved.grantId, {
           taskCreate: writeRoute.taskCreate === true,
         });

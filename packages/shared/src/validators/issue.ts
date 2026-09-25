@@ -147,6 +147,15 @@ export const createIssueSchema = z.object({
   assigneeAgentId: z.string().uuid().optional().nullable(),
   assigneeUserId: z.string().optional().nullable(),
   requestDepth: issueRequestDepthInputSchema.optional().default(0),
+  /**
+   * AgentDash (GH #678 review): caller-supplied idempotency key. Honoured
+   * ONLY for assistant-grant writes (`assistant_grant` actor) — it is stamped
+   * as `originKind: "assistant_work"` + `originId`, where a partial unique
+   * index makes a retried create return the original issue instead of
+   * filing a duplicate. Any other credential sending it is refused: silently
+   * dropping a dedup field is worse than rejecting it.
+   */
+  requestId: z.string().trim().min(1).max(200).optional(),
   billingCode: z.string().optional().nullable(),
   definitionOfDone: definitionOfDoneSchema.optional().nullable(),
   assigneeAdapterOverrides: issueAssigneeAdapterOverridesSchema.optional().nullable(),
@@ -199,6 +208,14 @@ export const updateIssueSchema = createIssueSchema.omit({ definitionOfDone: true
     .refine((value) => value === undefined, {
       message:
         "definitionOfDone cannot be set here. Use PUT /companies/:companyId/issues/:issueId/dod instead.",
+    }),
+  // Idempotency keys are a create-time concept; on a PATCH one would be
+  // silently meaningless, so it is refused rather than dropped.
+  requestId: z
+    .unknown()
+    .optional()
+    .refine((value) => value === undefined, {
+      message: "requestId is only accepted on issue creation.",
     }),
   requestDepth: issueRequestDepthInputSchema.optional(),
   assigneeAgentId: z.string().trim().min(1).optional().nullable(),

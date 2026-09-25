@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assistantKickoffRequestId } from "@paperclipai/shared";
 import type { PaperclipApiClient } from "../client.js";
 import type { AssistantContext } from "./context.js";
 import type { ToolDefinition } from "../tools.js";
@@ -92,6 +93,17 @@ async function resolveAssignee(
 
 interface CreatedIssueResponse extends IssueRow {
   identifier?: string | null;
+  /** Server idempotency replay — the row already existed, nothing re-created. */
+  replayed?: boolean;
+}
+
+/**
+ * The nudge wakeup's dedup key (GH #745 review): one paid wake per task
+ * per hour. A retry inside the bucket replays the recorded wakeup row;
+ * a genuine second nudge an hour later still goes through.
+ */
+function nudgeIdempotencyKey(issueId: string): string {
+  return `assistant_nudge:${issueId}:${Math.floor(Date.now() / 3600000)}`;
 }
 
 export function assistantWorkTools(client: PaperclipApiClient, ctx: AssistantContext): ToolDefinition[] {
@@ -124,16 +136,29 @@ export function assistantWorkTools(client: PaperclipApiClient, ctx: AssistantCon
         }
       }
 
-      const project = await client.requestJson<ProjectRow>("POST", `/companies/${companyId()}/projects`, {
-        body: {
-          name,
-          description: goal ?? null,
-          targetDate: dueDate ?? null,
-          leadAgentId: leadAgent?.id ?? null,
+      // The server replays a live same-name project for assistant writes
+      // (`replayed: true`), so a retry after a failed kickoff lands here
+      // with the ORIGINAL project and finishes the pending kickoff instead
+      // of orphaning a second one.
+      const project = await client.requestJson<ProjectRow & { replayed?: boolean; kickoffPending?: boolean }>(
+        "POST",
+        `/companies/${companyId()}/projects`,
+        {
+          body: {
+            name,
+            description: goal ?? null,
+            targetDate: dueDate ?? null,
+            leadAgentId: leadAgent?.id ?? null,
+          },
         },
-      });
+      );
+      const projectReplayed = project.replayed === true;
+      // Reported by the server on a replayed project — true when this retry
+      // still has to file the kickoff task.
+      const kickoffWasPending = project.kickoffPending === true;
 
       let kickoffCard = null;
+      let kickoffReplayed = false;
       let wakeQueued = false;
       if (leadAgent) {
         const kickoff = await client.requestJson<CreatedIssueResponse>(
@@ -146,9 +171,12 @@ export function assistantWorkTools(client: PaperclipApiClient, ctx: AssistantCon
               description: `Plan and staff the ${name} project.${goal ? `\n\nGoal: ${goal}` : ""}`,
               assigneeAgentId: leadAgent.id,
               status: "todo",
+              // Deterministic per project — the retry creates it once, ever.
+              requestId: assistantKickoffRequestId(project.id),
             },
           },
         );
+        kickoffReplayed = kickoff.replayed === true;
         kickoffCard = await cardFor(client, ctx, kickoff);
         // Assigned + non-backlog ⇒ the route's issue_assigned wakeup is queued.
         wakeQueued = true;
@@ -156,11 +184,17 @@ export function assistantWorkTools(client: PaperclipApiClient, ctx: AssistantCon
 
       const projectLink = await ctx.projectLink(project.id);
       const leadName = leadAgent?.name ?? null;
+      const summary = projectReplayed
+        ? `${project.name} already exists — reusing it${leadName ? kickoffReplayed ? `, and ${leadName}'s kickoff task was already there` : `, and ${leadName} now has the kickoff task` : ""}. ${projectLink}`
+        : `${project.name} is created${leadName ? `, and ${leadName} has a kickoff task to plan and staff it` : ""}. ${projectLink}`;
       return ok({
-        summary: `${project.name} is created${leadName ? `, and ${leadName} has a kickoff task to plan and staff it` : ""}. ${projectLink}`,
+        summary,
         data: redactAssistantValue({
           project: { id: project.id, name: project.name, link: projectLink },
+          projectReused: projectReplayed,
           kickoffItem: kickoffCard,
+          kickoffReplayed,
+          kickoffWasPending,
           lead: leadAgent ? { name: leadAgent.name, link: await ctx.agentLink(leadAgent.id) } : null,
           wakeQueued,
         }),
@@ -177,7 +211,7 @@ export function assistantWorkTools(client: PaperclipApiClient, ctx: AssistantCon
       title: z.string().min(1).max(500).describe("The task title, as the person said it"),
       description: z.string().max(4000).optional().describe("Details the assignee needs"),
       project: refInput("A project").optional().describe("The project it belongs to"),
-      assignee: refInput("A person or agent").optional().describe("Who should do it — a name, or \"best fit\" for the Chief of Staff"),
+      assignee: refInput("An agent").optional().describe("Which agent should do it — a name, or \"best fit\" for the Chief of Staff"),
       priority: z.enum(["critical", "high", "medium", "low"]).optional().describe("Task priority"),
     }),
     async ({ title, description, project, assignee, priority }) => {
@@ -284,7 +318,7 @@ export function assistantWorkTools(client: PaperclipApiClient, ctx: AssistantCon
         const owner = await client
           .requestJson<AgentRow>("GET", `/agents/${found.assigneeAgentId}`)
           .catch(() => null);
-        const run = await client.requestJson<{ status?: string; reason?: string }>(
+        const run = await client.requestJson<{ status?: string; reason?: string; replayed?: boolean }>(
           "POST",
           `/agents/${found.assigneeAgentId}/wakeup`,
           {
@@ -293,6 +327,8 @@ export function assistantWorkTools(client: PaperclipApiClient, ctx: AssistantCon
               triggerDetail: "manual",
               reason: `Nudge on ${found.identifier ?? found.id}`,
               payload: { issueId: found.id },
+              // A paid wake dedupes on this key for an hour (route-side).
+              idempotencyKey: nudgeIdempotencyKey(found.id),
             },
           },
         );
