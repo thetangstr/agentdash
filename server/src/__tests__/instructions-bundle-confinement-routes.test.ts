@@ -384,18 +384,25 @@ describeEmbeddedPostgres("instructions bundle confinement (#737)", () => {
       expect(await fs.readFile(path.join(adminRoot, "AGENTS.md"), "utf8")).toBe("# Admin\n");
     });
 
-    it("lets a company owner pick a profile provisioned for this company (managed profiles)", async () => {
+    it("lets a company owner pick the agent's own profile, and only that (managed profiles)", async () => {
       process.env.AGENTDASH_HERMES_MANAGED_PROFILES = "true";
       const { company, ownerUserId, agent } = await seed();
       const teammate = await createAgent(company.id, "Teammate");
 
-      for (const profile of [agentProfileName(agent.id), agentProfileName(teammate.id)]) {
-        const res = await send(owner(company.id, ownerUserId), (r) =>
-          r.patch(`/api/agents/${agent.id}`).send({
-            adapterConfig: { extraArgs: ["-p", profile, "--reasoning-effort", "high"] },
-          }));
-        expect(res.status, `${profile}: ${JSON.stringify(res.body)}`).toBe(200);
-      }
+      const own = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/agents/${agent.id}`).send({
+          adapterConfig: { extraArgs: ["-p", agentProfileName(agent.id), "--reasoning-effort", "high"] },
+        }));
+      expect(own.status, JSON.stringify(own.body)).toBe(200);
+
+      // A teammate's profile is in the same company, but the run keeps only the
+      // agent's own profile (registry.ts), so the write-time gate refuses it
+      // rather than store a flag every run would drop.
+      const sibling = await send(owner(company.id, ownerUserId), (r) =>
+        r.patch(`/api/agents/${agent.id}`).send({
+          adapterConfig: { extraArgs: ["-p", agentProfileName(teammate.id), "--reasoning-effort", "high"] },
+        }));
+      expect(sibling.status, JSON.stringify(sibling.body)).toBe(403);
     });
 
     it("keeps any valid -p profile open when managed profiles are off (local dev, self-hosted)", async () => {

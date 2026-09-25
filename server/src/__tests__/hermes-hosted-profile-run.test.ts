@@ -172,6 +172,41 @@ describe("hosted hermes_local run (managed profile on the Volume)", () => {
     expect(result.usage).toMatchObject({ inputTokens: 1200, outputTokens: 340 });
   });
 
+  it("strips a foreign -p from args as well as extraArgs, so the run and its ledger agree (#737)", async () => {
+    // The ledger resolver reads a profile from `args` too. Before the strip
+    // covered the same keys, a stored `args: ["-p", "ccworker"]` survived it
+    // and metered this run against ccworker's ledger.
+    const agentId = "0a4c9d2e-51b3-4f6a-8e0d-7c1b2a3f4e5d";
+    const profile = agentProfileName(agentId);
+    await mkdir(join(profilesDir, "ccworker"), { recursive: true });
+    const decoy = new DatabaseSync(join(profilesDir, "ccworker", "state.db"));
+    decoy.exec(USAGE_TABLE);
+    decoy
+      .prepare("INSERT INTO session_model_usage VALUES (?, 'ccworker-model', 'zai', 1, 7, 7, 0, 0, 0)")
+      .run("hosted-session-1");
+    decoy.close();
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    const logs: string[] = [];
+    const ctx = buildCtx(agentId);
+    const foreign = { args: ["-p", "ccworker"], command: "hermes --profile=ccworker" };
+    const run = {
+      ...ctx,
+      agent: { ...ctx.agent, adapterConfig: { ...ctx.agent.adapterConfig, ...foreign } },
+      config: { ...foreign },
+      onLog: async (_stream: string, chunk: string) => {
+        logs.push(chunk);
+      },
+    };
+
+    const result = await getServerAdapter("hermes_local").execute(run as never);
+
+    expect(result.errorCode ?? null).toBeNull();
+    expect(logs.join("")).toContain("Ignored -p/--profile ccworker");
+    const resultJson = result.resultJson as Record<string, unknown>;
+    expect(resultJson.meteringLedger).toMatchObject({ path: join(profilesDir, profile, "state.db"), profile });
+    expect(result.usage).toMatchObject({ inputTokens: 1200, outputTokens: 340 });
+  });
+
   it("fails the run with a named error when the profile cannot be provisioned, without spawning Hermes", async () => {
     process.env.HERMES_FAKE_FAIL_CREATE = "1";
     const agentId = "0c9d8e7f-6a5b-4c3d-2e1f-0a9b8c7d6e5f";

@@ -30,6 +30,13 @@ import {
   resolveHermesStateDbResolution,
   type HermesStateDbResolution,
 } from "../adapters/hermes-usage.js";
+import { stripForeignHermesProfileConfig } from "../adapters/hermes-profile-args.js";
+import {
+  agentProfileCommand,
+  agentProfileName,
+  hermesManagedProfilesEnabled,
+  hermesProfilesFailClosed,
+} from "./hermes-profile.js";
 
 export const DEFAULT_FIRST_OUTPUT_DEADLINE_MS = 10 * 60 * 1000;
 export const NO_FIRST_OUTPUT_ERROR_CODE = "no_first_output";
@@ -61,6 +68,8 @@ export type HermesLedgerResolution = HermesStateDbResolution;
 
 export interface RunForLivenessProbe {
   id: string;
+  /** Used to resolve a managed agent's own profile ledger when `agent.id` is absent. */
+  agentId?: string | null;
   sessionIdBefore?: string | null;
   processPid?: number | null;
   processGroupId?: number | null;
@@ -201,19 +210,39 @@ export function isSameProcess(
 }
 
 /**
- * Which Hermes ledger a run writes to, and how sure we are — the shared
- * resolver's single best answer. Certain: `AGENTDASH_HERMES_STATE_DB`; a
- * `HERMES_HOME` the run's own `adapterConfig.env` sets; the server's
- * `HERMES_HOME`; an explicit `-p/--profile` (args or config) naming an
- * existing profile; a wrapper script whose text names the profile or
- * `HERMES_HOME`. Uncertain: the sticky `active_profile` (Hermes' own default
- * when no `-p` is given, but it can change under a running agent), and the
- * root ledger.
+ * Which Hermes ledger a run writes to, and how sure we are: the shared
+ * resolver's single best answer (adapters/hermes-usage.ts), fed the config
+ * the run actually executes.
+ *
+ * AgentDash (#703): the stored adapterConfig is not that config for a managed
+ * agent. The per-agent wrapper (`hermes -p agentdash-<agentId>`) is injected
+ * only at run time (registry.ts), and foreign `-p` flags are stripped there.
+ * Resolving from the stored config pointed the first-output deadline and the
+ * stale-run scan at the root ledger on every hosted box, where no managed run
+ * ever writes. So with managed profiles on and a known agent, this resolves
+ * through `agentProfileName(agentId)` and the wrapper, exactly as the run does.
+ * When the profile was never provisioned (on-prem fallback: no wrapper, and
+ * not fail-closed) the run fell back to the stored command, and so does this.
  */
 export function resolveHermesLedgerForRun(
   adapterConfig: Record<string, unknown> | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  agentId?: string | null,
 ): HermesLedgerResolution {
+  if (agentId && hermesManagedProfilesEnabled(env)) {
+    const ownProfile = agentProfileName(agentId);
+    const wrapper = agentProfileCommand(agentId, { env });
+    const provisioned = hermesProfilesFailClosed(env) || existsSync(wrapper);
+    const runConfig = stripForeignHermesProfileConfig(
+      { ...(adapterConfig ?? {}), ...(provisioned ? { hermesCommand: wrapper } : {}) },
+      ownProfile,
+    ).config;
+    return resolveHermesStateDbResolution({
+      adapterConfig: runConfig,
+      env,
+      ...(provisioned ? { profile: ownProfile } : {}),
+    });
+  }
   return resolveHermesStateDbResolution({ adapterConfig, env });
 }
 
@@ -319,7 +348,7 @@ function runStartedAt(run: RunForLivenessProbe): Date | null {
 /** Gather the liveness evidence for one running run. */
 export function probeRunLiveness(
   run: RunForLivenessProbe,
-  agent: { adapterType: string; adapterConfig: unknown },
+  agent: { id?: string | null; adapterType: string; adapterConfig: unknown },
   opts: RunLivenessProbeOptions = {},
 ): RunLivenessEvidence {
   const processState = probeRunProcessAlive(run, opts);
@@ -339,7 +368,8 @@ export function probeRunLiveness(
   };
   if (!isLedgerProbedAdapter(agent.adapterType)) return base;
 
-  const resolution = opts.ledger ?? resolveHermesLedgerForRun(readRecord(agent.adapterConfig), opts.env);
+  const resolution =
+    opts.ledger ?? resolveHermesLedgerForRun(readRecord(agent.adapterConfig), opts.env, agent.id ?? run.agentId ?? null);
   const withLedger = {
     ...base,
     probe: "hermes_ledger" as const,

@@ -311,7 +311,7 @@ export function approvalRoutes(
       assertHostExecutionConfigAllowed(
         req.actor,
         hirePayloadHostExecutionInputs(approvalInput.payload),
-        await hostExecutionContextForCompany(db, companyId),
+        hostExecutionContextForCompany(companyId),
       );
     }
     const normalizedPayload =
@@ -590,7 +590,7 @@ export function approvalRoutes(
       assertHostExecutionConfigAllowed(
         req.actor,
         hirePayloadHostExecutionInputs(req.body.payload, existing.payload),
-        await hostExecutionContextForCompany(db, existing.companyId),
+        hostExecutionContextForCompany(existing.companyId),
       );
     }
     const normalizedPayload = req.body.payload

@@ -13,6 +13,8 @@ import {
   resolveHermesStateDbResolution,
   summarizeHermesUsageRows,
 } from "./hermes-usage.js";
+import { resolveHermesProfileDir } from "./hermes-usage.js";
+import { stripForeignHermesProfileConfig } from "./hermes-profile-args.js";
 
 /**
  * Rows copied from `session_model_usage` on the MKThink Mini: two rows for one
@@ -290,6 +292,142 @@ describe("resolveHermesStateDbResolution", () => {
   });
 });
 
+describe("HERMES_HOME vs -p precedence, as Hermes resolves it (pinned v2026.9.11)", () => {
+  // hermes_cli/main.py `_apply_profile_override` + profiles.py
+  // `resolve_profile_env`: an explicit -p always selects the profile, and
+  // HERMES_HOME only decides which root the profile lives under.
+
+  it("an explicit -p wins over a server-level HERMES_HOME, under that HERMES_HOME's root", () => {
+    const home = tempHermesRoot({ profiles: ["agentdash-aaa"] });
+    const resolution = resolveHermesStateDbResolution({
+      env: { AGENTDASH_HERMES_ROOT: tempHermesRoot(), HERMES_HOME: home },
+      adapterConfig: { extraArgs: ["-p", "agentdash-aaa"] },
+    });
+    expect(resolution).toMatchObject({
+      path: path.join(home, "profiles", "agentdash-aaa", "state.db"),
+      certainty: "certain",
+      source: "profile_arg",
+      profile: "agentdash-aaa",
+    });
+  });
+
+  it("the managed profile wins over a server-level HERMES_HOME", () => {
+    const home = tempHermesRoot();
+    const resolution = resolveHermesStateDbResolution({
+      env: { AGENTDASH_HERMES_ROOT: tempHermesRoot(), HERMES_HOME: home },
+      profile: "agentdash-bbb",
+    });
+    expect(resolution).toMatchObject({
+      path: path.join(home, "profiles", "agentdash-bbb", "state.db"),
+      certainty: "certain",
+      source: "profile_hint",
+    });
+  });
+
+  it("a profile-shaped HERMES_HOME moves -p to its grandparent root", () => {
+    const root = tempHermesRoot({ profiles: ["other", "agentdash-ccc"] });
+    const env = { AGENTDASH_HERMES_ROOT: tempHermesRoot(), HERMES_HOME: path.join(root, "profiles", "other") };
+    expect(
+      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["--profile=agentdash-ccc"] } }).path,
+    ).toBe(path.join(root, "profiles", "agentdash-ccc", "state.db"));
+    // With no -p, the profile-shaped HERMES_HOME is used as is.
+    expect(resolveHermesStateDbResolution({ env })).toMatchObject({
+      path: path.join(root, "profiles", "other", "state.db"),
+      certainty: "certain",
+      source: "env_hermes_home",
+    });
+  });
+
+  it("the run's own adapterConfig.env HERMES_HOME sets the root an explicit -p resolves under", () => {
+    const serverHome = tempHermesRoot({ profiles: ["agentdash-ddd"] });
+    const agentHome = tempHermesRoot({ profiles: ["agentdash-ddd"] });
+    expect(
+      resolveHermesStateDbResolution({
+        env: { AGENTDASH_HERMES_ROOT: tempHermesRoot(), HERMES_HOME: serverHome },
+        adapterConfig: { env: { HERMES_HOME: agentHome }, extraArgs: ["-p", "agentdash-ddd"] },
+      }).path,
+    ).toBe(path.join(agentHome, "profiles", "agentdash-ddd", "state.db"));
+  });
+
+  it("-p default is the root itself", () => {
+    const home = tempHermesRoot();
+    expect(resolveHermesProfileDir("default", { env: {}, hermesHome: home })).toBe(home);
+    expect(resolveHermesProfileDir("default", { env: { AGENTDASH_HERMES_ROOT: home } })).toBe(home);
+  });
+
+  it("with no -p, a root-shaped HERMES_HOME still honours its sticky active_profile, uncertainly", () => {
+    const home = tempHermesRoot({ profiles: ["sticky"], active: "sticky" });
+    expect(
+      resolveHermesStateDbResolution({ env: { AGENTDASH_HERMES_ROOT: tempHermesRoot(), HERMES_HOME: home } }),
+    ).toMatchObject({
+      path: path.join(home, "profiles", "sticky", "state.db"),
+      certainty: "uncertain",
+      source: "active_profile",
+    });
+  });
+
+  it("uses the first profile flag, as Hermes' pre-parse does", () => {
+    const root = tempHermesRoot({ profiles: ["first", "second"] });
+    const env = { AGENTDASH_HERMES_ROOT: root };
+    expect(
+      resolveHermesStateDbResolution({
+        env,
+        adapterConfig: { hermesCommand: "hermes -p first", extraArgs: ["-p", "second"] },
+      }).profile,
+    ).toBe("first");
+    expect(
+      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["-p", "first"], args: ["-p", "second"] } })
+        .profile,
+    ).toBe("first");
+    // `-p` followed by a value Hermes will not take as a profile id ends the scan.
+    expect(
+      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["-p", "First", "-p", "second"] } }).source,
+    ).toBe("root_fallback");
+  });
+
+  it("a wrapper's -p beats extraArgs, because the wrapper's flag precedes \"$@\"", () => {
+    const root = tempHermesRoot({ profiles: ["agentdash-own", "ccworker"] });
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-bin-"));
+    cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+    const wrapper = path.join(binDir, "agentdash-own");
+    fs.writeFileSync(wrapper, '#!/bin/sh\nexec hermes -p agentdash-own "$@"\n', { mode: 0o755 });
+    expect(
+      resolveHermesStateDbResolution({
+        env: { AGENTDASH_HERMES_ROOT: root },
+        adapterConfig: { hermesCommand: wrapper, extraArgs: ["-p", "ccworker"] },
+      }),
+    ).toMatchObject({ source: "wrapper_script", profile: "agentdash-own" });
+  });
+});
+
+describe("-p strip parity with the resolver (#737)", () => {
+  // The resolver reads a profile from hermesCommand/command, extraArgs and
+  // args; the managed run path must strip a foreign profile from all of them,
+  // or the stripped run and its ledger name different profiles.
+  it.each([
+    ["args", { args: ["-p", "ccworker"] }],
+    ["extraArgs", { extraArgs: ["--profile", "ccworker"] }],
+    ["the command string", { hermesCommand: "hermes -p ccworker" }],
+    ["the legacy command key", { command: "hermes --profile=ccworker" }],
+  ])("a foreign -p in %s steers the resolver until it is stripped", (_label, config) => {
+    const root = tempHermesRoot({ profiles: ["ccworker"] });
+    const env = { AGENTDASH_HERMES_ROOT: root };
+    expect(resolveHermesStateDbResolution({ env, adapterConfig: config }).profile).toBe("ccworker");
+    const stripped = stripForeignHermesProfileConfig(config as Record<string, unknown>, "agentdash-own");
+    expect(stripped.dropped).toEqual(["ccworker"]);
+    expect(resolveHermesStateDbResolution({ env, adapterConfig: stripped.config }).profile).toBeNull();
+  });
+
+  it("keeps the agent's own profile everywhere", () => {
+    const config = {
+      hermesCommand: "hermes -p agentdash-own",
+      extraArgs: ["-p", "agentdash-own", "--verbose"],
+      args: ["--profile=agentdash-own"],
+    };
+    expect(stripForeignHermesProfileConfig(config, "agentdash-own")).toEqual({ config, dropped: [] });
+  });
+});
+
 describe("resolveHermesStateDbCandidates", () => {
   it("puts the managed profile database first, then the home database", () => {
     // OBS-1: a `hermes -p <profile>` run writes to
@@ -337,8 +475,12 @@ describe("resolveHermesStateDbCandidates", () => {
 });
 
 describe("readHermesSessionUsageDetailed", () => {
+  // Hermes keeps profiles under the root of the HERMES_HOME it runs with
+  // (`resolve_profile_env`), so with HERMES_HOME set the profile ledger lives
+  // at <HERMES_HOME>/profiles/<name>/state.db. HERMES_PROFILES_DIR names the
+  // same directory for the no-HERMES_HOME layout.
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-root-"));
-  const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-profiles-"));
+  const profilesDir = path.join(rootDir, "profiles");
   const profile = "agentdash-feedface";
   const profileDir = path.join(profilesDir, profile);
   fs.mkdirSync(profileDir, { recursive: true });
@@ -368,13 +510,11 @@ describe("readHermesSessionUsageDetailed", () => {
   makeLedger(rootDb, "root-session", 0);
 
   const env = {
-    HERMES_PROFILES_DIR: profilesDir,
     HERMES_HOME: rootDir,
   } as NodeJS.ProcessEnv;
 
   afterAll(() => {
     fs.rmSync(rootDir, { recursive: true, force: true });
-    fs.rmSync(profilesDir, { recursive: true, force: true });
   });
 
   it("meters a managed-profile session against the profile database", () => {

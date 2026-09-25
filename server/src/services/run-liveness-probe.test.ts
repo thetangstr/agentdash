@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHermesLedgerFixture } from "../__tests__/helpers/hermes-ledger-fixture.js";
 import { inferHeartbeatRunStopReason } from "./heartbeat-stop-metadata.js";
+import { agentProfileName } from "./hermes-profile.js";
 import {
   DEFAULT_FIRST_OUTPUT_DEADLINE_MS,
   classifyFirstOutput,
@@ -58,6 +59,88 @@ function hermesRoot(opts: { profiles: string[]; active?: string }) {
   if (opts.active) fs.writeFileSync(path.join(root, "active_profile"), `${opts.active}\n`);
   return root;
 }
+
+describe("managed-profile liveness (#703): resolve through the agent's own profile", () => {
+  // The stored adapterConfig of a managed agent names no profile: the
+  // per-agent wrapper is injected only at run time (registry.ts). Resolving
+  // from the stored config pointed both the first-output deadline and the
+  // stale-run scan at the root ledger, where no managed run ever writes.
+  const agentId = "5b0c7a1e-0000-4000-8000-00000000abcd";
+  const ownProfile = agentProfileName(agentId);
+
+  function managedEnv(extra: Record<string, string> = {}) {
+    const root = hermesRoot({ profiles: [] });
+    const bin = tempDir("hermes-bin-");
+    return {
+      root,
+      bin,
+      env: {
+        AGENTDASH_HERMES_ROOT: root,
+        HERMES_PROFILES_DIR: path.join(root, "profiles"),
+        AGENTDASH_HERMES_BIN_DIR: bin,
+        AGENTDASH_HERMES_MANAGED_PROFILES: "true",
+        ...extra,
+      } as NodeJS.ProcessEnv,
+    };
+  }
+
+  it("on a hosted box, resolves the profile ledger, certain, from a stored config with no -p", () => {
+    const { root, env } = managedEnv({ AGENTDASH_DEPLOYMENT_KIND: "hosted" });
+    expect(resolveHermesLedgerForRun({}, env, agentId)).toMatchObject({
+      path: path.join(root, "profiles", ownProfile, "state.db"),
+      certainty: "certain",
+      source: "profile_hint",
+      profile: ownProfile,
+    });
+  });
+
+  it("with managed profiles on and the wrapper provisioned, ignores a foreign -p the run strips", () => {
+    const { root, bin, env } = managedEnv();
+    fs.mkdirSync(path.join(root, "profiles", "ccworker"), { recursive: true });
+    fs.writeFileSync(path.join(root, "profiles", "ccworker", "state.db"), "");
+    fs.writeFileSync(path.join(bin, ownProfile), `#!/bin/sh\nexec hermes -p ${ownProfile} "$@"\n`, { mode: 0o755 });
+    expect(resolveHermesLedgerForRun({ args: ["-p", "ccworker"] }, env, agentId)).toMatchObject({
+      path: path.join(root, "profiles", ownProfile, "state.db"),
+      source: "profile_hint",
+    });
+  });
+
+  it("on-prem with no wrapper (provisioning fell back), resolves like the stored command the run used", () => {
+    const { root, env } = managedEnv();
+    expect(resolveHermesLedgerForRun({}, env, agentId)).toMatchObject({
+      path: path.join(root, "state.db"),
+      source: "root_fallback",
+    });
+  });
+
+  it("probeRunLiveness reads the managed agent's profile ledger, keyed by the run's agentId", () => {
+    const { root, env } = managedEnv({ AGENTDASH_DEPLOYMENT_KIND: "hosted" });
+    const profileDir = path.join(root, "profiles", ownProfile);
+    fs.mkdirSync(profileDir, { recursive: true });
+    ledger(
+      [{ id: "s1", startedAt: minutesAgo(20), usage: [{ firstSeen: minutesAgo(19), lastSeen: minutesAgo(2) }] }],
+      profileDir,
+    );
+    const run = { id: "run-m", agentId, processPid: 4242, processStartedAt: minutesAgo(20), startedAt: minutesAgo(20) };
+    const evidence = probeRunLiveness(run, { adapterType: "hermes_local", adapterConfig: {} }, { ...alive, env });
+    expect(evidence).toMatchObject({
+      probe: "hermes_ledger",
+      ledgerPath: path.join(profileDir, "state.db"),
+      ledgerCertainty: "certain",
+      ledgerSource: "profile_hint",
+      ledgerStatus: "read",
+      sessionIds: ["s1"],
+    });
+  });
+
+  it("without managed profiles, the stored config still decides", () => {
+    const root = hermesRoot({ profiles: [] });
+    expect(resolveHermesLedgerForRun({}, { AGENTDASH_HERMES_ROOT: root }, agentId)).toMatchObject({
+      path: path.join(root, "state.db"),
+      source: "root_fallback",
+    });
+  });
+});
 
 describe("resolveHermesLedgerForRun", () => {
   it("is certain for an explicit state DB, an adapter env HERMES_HOME, or the server's HERMES_HOME", () => {
