@@ -1,3 +1,4 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -39,6 +40,32 @@ export interface HermesSessionUsage {
   /** Only set when Hermes itself recorded a non-zero cost. */
   costUsd: number | null;
   apiCalls: number;
+  /** Cumulative `sessions.tool_call_count`, when the ledger recorded it. */
+  toolCalls: number | null;
+}
+
+export type HermesMeteringStatus =
+  | "metered"
+  | "unmetered_no_ledger"
+  | "unmetered_no_session";
+
+/**
+ * The result of trying to read the ledger, with the failure mode kept. A run
+ * whose metering failed must be able to say *why* — "unmetered" is a fact about
+ * the record, not a zero.
+ */
+export interface HermesSessionUsageRead {
+  usage: HermesSessionUsage | null;
+  status: HermesMeteringStatus;
+  /** Which candidate file answered (or was tried last), for diagnostics. */
+  dbPath: string | null;
+  /**
+   * The resolution that produced `dbPath` — for a metered read, the candidate
+   * that answered; otherwise the single best answer (resolutions[0]), so a
+   * failed read still records where the run would have written. Null when the
+   * caller pinned `dbPath` directly or no candidates existed.
+   */
+  ledger: HermesStateDbResolution | null;
 }
 
 /** One `session_model_usage` row, as far as this module cares. */
@@ -61,19 +88,232 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+// ── Ledger location ──────────────────────────────────────────────────────
+//
+// One resolver answers "which state.db does this Hermes run write" for both
+// readers: metering below, which tries every candidate in order, and the
+// liveness probe (`services/run-liveness-probe.ts`), which needs the single
+// best answer plus how sure it is — a `certain` resolution is what licenses
+// the probe's first-output deadline to act. OBS-5's probe kept its own copy
+// of this logic; OBS-1 folded the two together so the answer can never drift
+// between "where we meter" and "where we look for signs of life".
+
+/** `certain`: the run provably writes this ledger. `uncertain`: a best guess (sticky active profile, root fallback). */
+export type HermesStateDbCertainty = "certain" | "uncertain";
+
+/** How the path was found, for evidence and logs. */
+export type HermesStateDbSource =
+  | "profile_hint"
+  | "env_state_db"
+  | "adapter_env_hermes_home"
+  | "env_hermes_home"
+  | "profile_arg"
+  | "profile_config"
+  | "wrapper_script"
+  | "active_profile"
+  | "root_fallback";
+
+export interface HermesStateDbResolution {
+  path: string;
+  certainty: HermesStateDbCertainty;
+  source: HermesStateDbSource;
+  profile: string | null;
+}
+
+export interface HermesStateDbResolveOptions {
+  env?: NodeJS.ProcessEnv;
+  /** The run's adapter config — `env`, `extraArgs`/`args`, `hermesProfile`, `hermesCommand`. */
+  adapterConfig?: Record<string, unknown> | null;
+  /**
+   * The profile this run provably used — e.g. derived from the command the
+   * adapter actually invoked. Asserted evidence rather than inference, so it
+   * ranks first and is not gated on the ledger file existing yet.
+   */
+  profile?: string | null;
+}
+
+const WRAPPER_MAX_BYTES = 64 * 1024;
+const PROFILE_NAME = /^[A-Za-z0-9_.-]+$/;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** adapterConfig.env values are plain strings or `{ type: "plain", value }` envelopes. */
+function readEnvValue(env: Record<string, unknown> | null, key: string): string | null {
+  const raw = env?.[key];
+  if (typeof raw === "string") return readString(raw);
+  const record = readRecord(raw);
+  if (record?.type === "plain") return readString(record.value);
+  return null;
+}
+
+function hermesProfileFromArgs(args: unknown): string | null {
+  if (!Array.isArray(args)) return null;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (typeof arg !== "string") continue;
+    if ((arg === "-p" || arg === "--profile") && typeof args[index + 1] === "string") {
+      return readString(args[index + 1]);
+    }
+    if (arg.startsWith("--profile=")) return readString(arg.slice("--profile=".length));
+  }
+  return null;
+}
+
+/** A `-p`/`--profile` inside the command string itself — `hermes -p foo`. */
+function hermesProfileFromCommand(command: string): string | null {
+  const match = /(?:^|\s)(?:-p|--profile)(?:\s+|=)["']?([A-Za-z0-9_.-]+)/.exec(command);
+  return match?.[1] ?? null;
+}
+
+function findOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
+  if (command.includes("/") || command.includes(path.sep)) return existsSync(command) ? command : null;
+  for (const dir of (env.PATH ?? process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, command);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 /**
- * Where Hermes keeps its state.
- *
- * Managed profiles select a config within one Hermes home rather than giving
- * each agent its own, so a single database holds them all; the override exists
- * for an operator who has moved it.
+ * What a wrapper script says about its profile. Returns null when the command
+ * is not a small text script or names no profile; a wrapper we cannot read
+ * is treated as unknown, never guessed from its file name.
  */
-export function resolveHermesStateDbPath(env: NodeJS.ProcessEnv = process.env): string {
+function readWrapperProfile(
+  commandPath: string,
+): { profile: string | null; hermesHome: string | null } | null {
+  try {
+    const stat = statSync(commandPath);
+    if (!stat.isFile() || stat.size > WRAPPER_MAX_BYTES) return null;
+    const text = readFileSync(commandPath, "utf8");
+    if (text.includes("\u0000")) return null;
+    // Only a `-p`/`--profile` on a line that invokes hermes counts (not `mkdir -p`).
+    const profile = /hermes\S*["']?\s(?:[^\n]*\s)?(?:-p|--profile)(?:\s+|=)["']?([A-Za-z0-9_.-]+)/.exec(text)?.[1] ?? null;
+    const hermesHome = /HERMES_HOME=["']?([^"'\s;]+)/.exec(text)?.[1] ?? null;
+    if (!profile && !hermesHome) return null;
+    return { profile, hermesHome };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where Hermes keeps its state, strongest evidence first.
+ *
+ * Certain sources, in order: the caller-asserted profile (the run provably
+ * used it — a `hermes -p` run writes `<profilesDir>/<name>/state.db` wherever
+ * the unmanaged database lives); `AGENTDASH_HERMES_STATE_DB`, the operator
+ * override for a relocated unmanaged database; a `HERMES_HOME` the run's own
+ * `adapterConfig.env` sets; the server's `HERMES_HOME`; an explicit
+ * `-p/--profile` (extraArgs/args arrays, the command string itself, or a
+ * config `hermesProfile`) or a wrapper script whose text names the profile or
+ * `HERMES_HOME` — gated on the profile ledger existing, because a `-p` naming
+ * a profile Hermes never created says nothing about where this run writes.
+ *
+ * Uncertain sources, in order: the sticky `active_profile` (Hermes' own
+ * default when no `-p` is given, but it can change under a running agent) and
+ * the root ledger. `HERMES_PROFILES_DIR` is resolved exactly like
+ * `hermes-profile.ts` does; `AGENTDASH_HERMES_ROOT` overrides the Hermes root
+ * (tests, relocated installs).
+ */
+export function resolveHermesStateDbResolutions(
+  opts: HermesStateDbResolveOptions = {},
+): HermesStateDbResolution[] {
+  const env = opts.env ?? process.env;
+  const config = readRecord(opts.adapterConfig) ?? {};
+  const resolutions: HermesStateDbResolution[] = [];
+  const push = (
+    dbPath: string,
+    source: HermesStateDbSource,
+    certainty: HermesStateDbCertainty,
+    profile: string | null,
+  ) => {
+    if (!resolutions.some((r) => r.path === dbPath)) {
+      resolutions.push({ path: dbPath, source, certainty, profile });
+    }
+  };
+
+  const hermesRoot = readString(env.AGENTDASH_HERMES_ROOT) ?? path.join(os.homedir(), ".hermes");
+  const profilesDir = readString(env.HERMES_PROFILES_DIR) ?? path.join(hermesRoot, "profiles");
+  const existingProfileDb = (profile: string | null) =>
+    profile && PROFILE_NAME.test(profile) && existsSync(path.join(profilesDir, profile, "state.db"))
+      ? path.join(profilesDir, profile, "state.db")
+      : null;
+
+  const hinted = readString(opts.profile);
+  if (hinted && PROFILE_NAME.test(hinted)) {
+    push(path.join(profilesDir, hinted, "state.db"), "profile_hint", "certain", hinted);
+  }
+
   const explicit = readString(env.AGENTDASH_HERMES_STATE_DB);
-  if (explicit) return path.resolve(explicit);
-  const hermesHome = readString(env.HERMES_HOME);
-  if (hermesHome) return path.resolve(hermesHome, "state.db");
-  return path.join(os.homedir(), ".hermes", "state.db");
+  if (explicit) push(path.resolve(explicit), "env_state_db", "certain", null);
+
+  const adapterEnvHome = readEnvValue(readRecord(config.env), "HERMES_HOME");
+  if (adapterEnvHome) {
+    push(path.resolve(adapterEnvHome, "state.db"), "adapter_env_hermes_home", "certain", null);
+  }
+  const serverHome = readString(env.HERMES_HOME);
+  if (serverHome) push(path.resolve(serverHome, "state.db"), "env_hermes_home", "certain", null);
+
+  const command = readString(config.hermesCommand) ?? readString(config.command);
+
+  const argProfile =
+    hermesProfileFromArgs(config.extraArgs)
+    ?? hermesProfileFromArgs(config.args)
+    ?? (command ? hermesProfileFromCommand(command) : null);
+  const argDb = existingProfileDb(argProfile);
+  if (argDb) push(argDb, "profile_arg", "certain", argProfile);
+
+  const configProfile = readString(config.hermesProfile) ?? readString(config.profile);
+  const configDb = existingProfileDb(configProfile);
+  if (configDb) push(configDb, "profile_config", "certain", configProfile);
+
+  const commandPath = command ? findOnPath(command.split(/\s+/)[0] ?? "", env) : null;
+  const wrapper = commandPath ? readWrapperProfile(commandPath) : null;
+  if (wrapper?.hermesHome) {
+    push(path.resolve(wrapper.hermesHome, "state.db"), "wrapper_script", "certain", null);
+  }
+  const wrapperDb = existingProfileDb(wrapper?.profile ?? null);
+  if (wrapperDb) push(wrapperDb, "wrapper_script", "certain", wrapper!.profile);
+
+  let active: string | null = null;
+  try {
+    active = readString(readFileSync(path.join(hermesRoot, "active_profile"), "utf8"));
+  } catch {
+    active = null;
+  }
+  const activeDb = active && active !== "default" ? existingProfileDb(active) : null;
+  if (activeDb) push(activeDb, "active_profile", "uncertain", active);
+
+  push(path.join(hermesRoot, "state.db"), "root_fallback", "uncertain", null);
+  return resolutions;
+}
+
+/** The single best answer — the probe's certainty-gated resolution. */
+export function resolveHermesStateDbResolution(
+  opts: HermesStateDbResolveOptions = {},
+): HermesStateDbResolution {
+  return resolveHermesStateDbResolutions(opts)[0]!;
+}
+
+/** Every candidate in precedence order — metering tries each until one answers. */
+export function resolveHermesStateDbCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: Omit<HermesStateDbResolveOptions, "env"> = {},
+): string[] {
+  return resolveHermesStateDbResolutions({ ...opts, env }).map((r) => r.path);
+}
+
+export function resolveHermesStateDbPath(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: Omit<HermesStateDbResolveOptions, "env"> = {},
+): string {
+  return resolveHermesStateDbResolution({ ...opts, env }).path;
 }
 
 /**
@@ -131,45 +371,246 @@ export function summarizeHermesUsageRows(rows: readonly HermesUsageRow[]): Herme
     provider: dominant?.provider ?? null,
     costUsd: costUsd > 0 ? costUsd : null,
     apiCalls,
+    toolCalls: null,
   };
 }
 
 /**
- * Read one session's usage out of Hermes' state database.
+ * Read one session's usage out of Hermes' state database, trying each
+ * candidate file in order (managed profile first, then the home database).
  *
- * Read-only, and every failure returns null: metering is a by-product of the
- * run, and a database that is missing, locked, or newer than this query must
- * never turn a completed run into a failed one.
+ * Read-only, and every failure is recorded rather than thrown: metering is a
+ * by-product of the run, and a database that is missing, locked, or newer than
+ * this query must never turn a completed run into a failed one — but the run
+ * record must say `unmetered_*` instead of silently reading as zero.
  */
-export function readHermesSessionUsage(
+export function readHermesSessionUsageDetailed(
   sessionId: string | null | undefined,
-  opts: { dbPath?: string; env?: NodeJS.ProcessEnv } = {},
-): HermesSessionUsage | null {
+  opts: {
+    dbPath?: string;
+    profile?: string | null;
+    adapterConfig?: Record<string, unknown> | null;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): HermesSessionUsageRead {
   const session = readString(sessionId);
-  if (!session) return null;
-  const dbPath = opts.dbPath ?? resolveHermesStateDbPath(opts.env);
+  if (!session) {
+    return { usage: null, status: "unmetered_no_session", dbPath: null, ledger: null };
+  }
+  const resolutions = opts.dbPath
+    ? null
+    : resolveHermesStateDbResolutions({
+        env: opts.env,
+        profile: opts.profile,
+        adapterConfig: opts.adapterConfig,
+      });
+  const candidates = opts.dbPath ? [opts.dbPath] : (resolutions ?? []).map((r) => r.path);
+  const resolutionFor = (dbPath: string | null) =>
+    dbPath ? (resolutions?.find((r) => r.path === dbPath) ?? null) : null;
 
-  let db: DatabaseSync | null = null;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db
-      .prepare(
-        `SELECT model, billing_provider, api_call_count, input_tokens, output_tokens,
-                cache_read_tokens, estimated_cost_usd, actual_cost_usd
-           FROM session_model_usage
-          WHERE session_id = ?`,
-      )
-      .all(session) as HermesUsageRow[];
-    return summarizeHermesUsageRows(rows);
-  } catch {
-    return null;
-  } finally {
+  let sawReadableDb = false;
+  let lastTried: string | null = null;
+  for (const dbPath of candidates) {
+    lastTried = dbPath;
+    let db: DatabaseSync | null = null;
     try {
-      db?.close();
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      sawReadableDb = true;
+      const rows = db
+        .prepare(
+          `SELECT model, billing_provider, api_call_count, input_tokens, output_tokens,
+                  cache_read_tokens, estimated_cost_usd, actual_cost_usd
+             FROM session_model_usage
+            WHERE session_id = ?`,
+        )
+        .all(session) as HermesUsageRow[];
+      const usage = summarizeHermesUsageRows(rows);
+      if (usage) {
+        usage.toolCalls = readHermesSessionToolCalls(db, session);
+        return { usage, status: "metered", dbPath, ledger: resolutionFor(dbPath) };
+      }
+      // A readable database without this session keeps looking — a run can be
+      // misattributed to a profile it never used, and the home database may
+      // still hold it.
     } catch {
-      // Nothing useful to do with a close failure on a read-only handle.
+      // Unreadable candidate — try the next one.
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        // Nothing useful to do with a close failure on a read-only handle.
+      }
     }
   }
+  return {
+    usage: null,
+    status: sawReadableDb ? "unmetered_no_session" : "unmetered_no_ledger",
+    dbPath: lastTried,
+    // Nothing answered — record the single best answer so a failed read still
+    // says where the run would have written.
+    ledger: resolutions?.[0] ?? null,
+  };
+}
+
+/**
+ * One `session_model_usage` row with its recorded activity span. The backfill
+ * attributes rows to runs by `[firstSeenAt, lastSeenAt]` containment — a row
+ * is cumulative over its own lifetime, so a row that straddles a run boundary
+ * cannot be split honestly and the run must be marked ambiguous instead.
+ */
+export interface HermesSessionUsageRowDetail {
+  model: string | null;
+  provider: string | null;
+  apiCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  costUsd: number | null;
+  firstSeenAt: Date | null;
+  lastSeenAt: Date | null;
+}
+
+export interface HermesSessionRowsRead {
+  rows: HermesSessionUsageRowDetail[];
+  /** Cumulative `sessions.tool_call_count` for the session, when recorded. */
+  sessionToolCalls: number | null;
+  status: HermesMeteringStatus;
+  dbPath: string | null;
+  ledger: HermesStateDbResolution | null;
+}
+
+/**
+ * The session's usage rows individually, not summed — the OBS-1 backfill
+ * attributes per-run spend from row timestamps, which the cumulative summary
+ * cannot express. Same resolution/failure semantics as
+ * `readHermesSessionUsageDetailed`.
+ */
+export function readHermesSessionUsageRowsDetailed(
+  sessionId: string | null | undefined,
+  opts: {
+    dbPath?: string;
+    profile?: string | null;
+    adapterConfig?: Record<string, unknown> | null;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): HermesSessionRowsRead {
+  const session = readString(sessionId);
+  if (!session) {
+    return {
+      rows: [],
+      sessionToolCalls: null,
+      status: "unmetered_no_session",
+      dbPath: null,
+      ledger: null,
+    };
+  }
+  const resolutions = opts.dbPath
+    ? null
+    : resolveHermesStateDbResolutions({
+        env: opts.env,
+        profile: opts.profile,
+        adapterConfig: opts.adapterConfig,
+      });
+  const candidates = opts.dbPath ? [opts.dbPath] : (resolutions ?? []).map((r) => r.path);
+  const resolutionFor = (dbPath: string | null) =>
+    dbPath ? (resolutions?.find((r) => r.path === dbPath) ?? null) : null;
+  const toDate = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? new Date(value * 1000)
+      : null;
+
+  let sawReadableDb = false;
+  let lastTried: string | null = null;
+  for (const dbPath of candidates) {
+    lastTried = dbPath;
+    let db: DatabaseSync | null = null;
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      sawReadableDb = true;
+      // Ledgers that predate the timestamp columns still read — their rows
+      // come back untimed, which the backfill marks ambiguous rather than
+      // unmetered.
+      const columns = new Set(
+        (db.prepare(`PRAGMA table_info(session_model_usage)`).all() as Array<{ name?: unknown }>)
+          .map((col) => col.name),
+      );
+      const hasSpan = columns.has("first_seen") && columns.has("last_seen");
+      const rows = db
+        .prepare(
+          `SELECT model, billing_provider, api_call_count, input_tokens, output_tokens,
+                  cache_read_tokens, estimated_cost_usd, actual_cost_usd
+                  ${hasSpan ? ", first_seen, last_seen" : ""}
+             FROM session_model_usage
+            WHERE session_id = ?`,
+        )
+        .all(session) as Array<HermesUsageRow & { first_seen?: unknown; last_seen?: unknown }>;
+      if (rows.length > 0) {
+        return {
+          rows: rows.map((row) => ({
+            model: readString(row.model),
+            provider: readString(row.billing_provider),
+            apiCalls: readNumber(row.api_call_count),
+            inputTokens: readNumber(row.input_tokens),
+            outputTokens: readNumber(row.output_tokens),
+            cachedInputTokens: readNumber(row.cache_read_tokens),
+            costUsd:
+              readNumber(row.actual_cost_usd) || readNumber(row.estimated_cost_usd) || null,
+            firstSeenAt: toDate(row.first_seen),
+            lastSeenAt: toDate(row.last_seen),
+          })),
+          sessionToolCalls: readHermesSessionToolCalls(db, session),
+          status: "metered",
+          dbPath,
+          ledger: resolutionFor(dbPath),
+        };
+      }
+      // Readable but no rows for this session — keep looking, same as the
+      // summary read: a misattributed profile is not the last word.
+    } catch {
+      // Unreadable candidate — try the next one.
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        // Nothing useful to do with a close failure on a read-only handle.
+      }
+    }
+  }
+  return {
+    rows: [],
+    sessionToolCalls: null,
+    status: sawReadableDb ? "unmetered_no_session" : "unmetered_no_ledger",
+    dbPath: lastTried,
+    ledger: resolutions?.[0] ?? null,
+  };
+}
+
+/** `sessions.tool_call_count` — cumulative for the session, null when absent. */
+function readHermesSessionToolCalls(db: DatabaseSync, sessionId: string): number | null {
+  try {
+    const row = db
+      .prepare(`SELECT tool_call_count FROM sessions WHERE id = ?`)
+      .get(sessionId) as { tool_call_count?: unknown } | undefined;
+    const count = row?.tool_call_count;
+    return typeof count === "number" && Number.isFinite(count) && count >= 0
+      ? Math.floor(count)
+      : null;
+  } catch {
+    // Older ledgers may lack the table or column — tools stay unrecorded.
+    return null;
+  }
+}
+
+export function readHermesSessionUsage(
+  sessionId: string | null | undefined,
+  opts: {
+    dbPath?: string;
+    profile?: string | null;
+    adapterConfig?: Record<string, unknown> | null;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): HermesSessionUsage | null {
+  return readHermesSessionUsageDetailed(sessionId, opts).usage;
 }
 
 /** Find the Hermes session a result belongs to, wherever the adapter put it. */
@@ -239,11 +680,19 @@ export function applyHermesSessionUsage(
   const existingTurns = readNumber(
     existingResultJson.num_turns ?? existingResultJson.numTurns,
   );
+  const existingToolCalls = readNumber(existingResultJson.num_tool_calls);
+  const mergedResultJson = {
+    ...existingResultJson,
+    ...(existingTurns > 0 || usage.apiCalls <= 0 ? {} : { num_turns: usage.apiCalls }),
+    ...(existingToolCalls > 0 || usage.toolCalls == null
+      ? {}
+      : { num_tool_calls: usage.toolCalls }),
+  };
   return {
     ...result,
-    ...(existingTurns > 0 || usage.apiCalls <= 0
-      ? {}
-      : { resultJson: { ...existingResultJson, num_turns: usage.apiCalls } }),
+    ...(Object.keys(mergedResultJson).length > Object.keys(existingResultJson).length
+      ? { resultJson: mergedResultJson }
+      : {}),
     usage: result.usage ?? usage.usage,
     ...(isInformative(result.model) ? {} : usage.model ? { model: usage.model } : {}),
     ...(isInformative(result.provider) ? {} : usage.provider ? { provider: usage.provider } : {}),

@@ -7,7 +7,10 @@ import {
   applyHermesSessionUsage,
   readHermesSessionId,
   readHermesSessionUsage,
+  readHermesSessionUsageDetailed,
+  resolveHermesStateDbCandidates,
   resolveHermesStateDbPath,
+  resolveHermesStateDbResolution,
   summarizeHermesUsageRows,
 } from "./hermes-usage.js";
 
@@ -133,6 +136,23 @@ describe("readHermesSessionUsage", () => {
   });
 });
 
+/** An isolated Hermes root, so the real ~/.hermes can't leak into a test. */
+function tempHermesRoot(opts: { profiles?: string[]; active?: string } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-root-"));
+  for (const profile of opts.profiles ?? []) {
+    fs.mkdirSync(path.join(root, "profiles", profile), { recursive: true });
+    fs.writeFileSync(path.join(root, "profiles", profile, "state.db"), "");
+  }
+  if (opts.active) fs.writeFileSync(path.join(root, "active_profile"), `${opts.active}\n`);
+  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+
+const cleanups: Array<() => void> = [];
+afterAll(() => {
+  while (cleanups.length > 0) cleanups.pop()!();
+});
+
 describe("resolveHermesStateDbPath", () => {
   it("prefers the explicit override", () => {
     expect(resolveHermesStateDbPath({ AGENTDASH_HERMES_STATE_DB: "/srv/hermes/state.db" })).toBe(
@@ -142,7 +162,299 @@ describe("resolveHermesStateDbPath", () => {
 
   it("falls back to the Hermes home, then to the default", () => {
     expect(resolveHermesStateDbPath({ HERMES_HOME: "/srv/hermes" })).toBe("/srv/hermes/state.db");
-    expect(resolveHermesStateDbPath({})).toBe(path.join(os.homedir(), ".hermes", "state.db"));
+    // With nothing configured the answer lives under the Hermes root — the
+    // root ledger, or the sticky active profile's when one exists.
+    expect(resolveHermesStateDbPath({}).startsWith(path.join(os.homedir(), ".hermes"))).toBe(true);
+    const root = tempHermesRoot();
+    expect(resolveHermesStateDbPath({ AGENTDASH_HERMES_ROOT: root })).toBe(
+      path.join(root, "state.db"),
+    );
+  });
+});
+
+describe("resolveHermesStateDbResolution", () => {
+  it("marks the adapter's own HERMES_HOME certain", () => {
+    const root = tempHermesRoot();
+    const env = { AGENTDASH_HERMES_ROOT: root, HERMES_HOME: "/server" };
+    expect(
+      resolveHermesStateDbResolution({
+        env,
+        adapterConfig: { env: { HERMES_HOME: { type: "plain", value: "/agent/home" } } },
+      }),
+    ).toMatchObject({
+      path: path.resolve("/agent/home", "state.db"),
+      certainty: "certain",
+      source: "adapter_env_hermes_home",
+    });
+  });
+
+  it("marks a -p arg naming an existing profile certain, and guesses uncertain", () => {
+    const root = tempHermesRoot({ profiles: ["agentdash"], active: "agentdash" });
+    const env = { AGENTDASH_HERMES_ROOT: root };
+    expect(
+      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["-p", "agentdash"] } }),
+    ).toMatchObject({
+      path: path.join(root, "profiles", "agentdash", "state.db"),
+      certainty: "certain",
+      source: "profile_arg",
+    });
+    expect(resolveHermesStateDbResolution({ env })).toMatchObject({
+      path: path.join(root, "profiles", "agentdash", "state.db"),
+      certainty: "uncertain",
+      source: "active_profile",
+    });
+    expect(resolveHermesStateDbResolution({ env: { AGENTDASH_HERMES_ROOT: tempHermesRoot() } })).toMatchObject({
+      certainty: "uncertain",
+      source: "root_fallback",
+    });
+  });
+
+  it("reads a -p/--profile embedded in the command string itself", () => {
+    const root = tempHermesRoot({ profiles: ["agentdash-x"] });
+    const env = { AGENTDASH_HERMES_ROOT: root };
+    for (const command of [
+      "hermes -p agentdash-x",
+      "hermes --profile agentdash-x",
+      "hermes --profile=agentdash-x --verbose",
+      "/usr/local/bin/hermes -p agentdash-x",
+    ]) {
+      expect(
+        resolveHermesStateDbResolution({ env, adapterConfig: { hermesCommand: command } }),
+      ).toMatchObject({
+        path: path.join(root, "profiles", "agentdash-x", "state.db"),
+        certainty: "certain",
+        source: "profile_arg",
+        profile: "agentdash-x",
+      });
+    }
+  });
+
+  it("resolves the profile a wrapper script execs", () => {
+    const root = tempHermesRoot({ profiles: ["agentdash-wrap"] });
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-bin-"));
+    cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+    const wrapper = path.join(binDir, "agentdash-wrap");
+    fs.writeFileSync(wrapper, '#!/bin/sh\nexec hermes -p agentdash-wrap "$@"\n', { mode: 0o755 });
+    expect(
+      resolveHermesStateDbResolution({
+        env: { AGENTDASH_HERMES_ROOT: root },
+        adapterConfig: { hermesCommand: wrapper },
+      }),
+    ).toMatchObject({
+      path: path.join(root, "profiles", "agentdash-wrap", "state.db"),
+      certainty: "certain",
+      source: "wrapper_script",
+      profile: "agentdash-wrap",
+    });
+    // A wrapper naming a profile that was never created says nothing — the
+    // next evidence (here just the root) wins instead.
+    const empty = path.join(binDir, "ghost");
+    fs.writeFileSync(empty, '#!/bin/sh\nexec hermes -p never-made "$@"\n', { mode: 0o755 });
+    expect(
+      resolveHermesStateDbResolution({
+        env: { AGENTDASH_HERMES_ROOT: root },
+        adapterConfig: { hermesCommand: empty },
+      }),
+    ).toMatchObject({ source: "root_fallback", certainty: "uncertain" });
+  });
+
+  it("honours a wrapper's HERMES_HOME even without a profile", () => {
+    const root = tempHermesRoot();
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-bin-"));
+    cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+    const wrapper = path.join(binDir, "homed");
+    fs.writeFileSync(wrapper, '#!/bin/sh\nHERMES_HOME=/srv/hermes-home exec hermes\n', { mode: 0o755 });
+    expect(
+      resolveHermesStateDbResolution({
+        env: { AGENTDASH_HERMES_ROOT: root },
+        adapterConfig: { hermesCommand: wrapper },
+      }),
+    ).toMatchObject({
+      path: "/srv/hermes-home/state.db",
+      certainty: "certain",
+      source: "wrapper_script",
+    });
+  });
+
+  it("never guesses a profile from the command's file name alone", () => {
+    // A basename matching a profiles dir is suggestive but unverifiable — an
+    // opaque wrapper stays unknown rather than asserting a profile it may
+    // not run.
+    const root = tempHermesRoot({ profiles: ["agentdash-ghost"] });
+    expect(
+      resolveHermesStateDbResolution({
+        env: { AGENTDASH_HERMES_ROOT: root },
+        adapterConfig: { hermesCommand: "/gone/bin/agentdash-ghost" },
+      }),
+    ).toMatchObject({ source: "root_fallback", certainty: "uncertain" });
+  });
+});
+
+describe("resolveHermesStateDbCandidates", () => {
+  it("puts the managed profile database first, then the home database", () => {
+    // OBS-1: a `hermes -p <profile>` run writes to
+    // <HERMES_PROFILES_DIR>/<profile>/state.db, NOT the root state.db — the
+    // original incident was metering 467 runs against the wrong file.
+    const root = tempHermesRoot();
+    const candidates = resolveHermesStateDbCandidates(
+      { HERMES_PROFILES_DIR: "/srv/hermes/profiles", AGENTDASH_HERMES_ROOT: root },
+      { profile: "agentdash-abc" },
+    );
+    expect(candidates[0]).toBe("/srv/hermes/profiles/agentdash-abc/state.db");
+    expect(candidates[candidates.length - 1]).toBe(path.join(root, "state.db"));
+  });
+
+  it("defaults HERMES_PROFILES_DIR exactly like hermes-profile.ts", () => {
+    const root = tempHermesRoot();
+    const candidates = resolveHermesStateDbCandidates(
+      { AGENTDASH_HERMES_ROOT: root },
+      { profile: "p1" },
+    );
+    expect(candidates[0]).toBe(path.join(root, "profiles", "p1", "state.db"));
+  });
+
+  it("keeps the env override ahead of the home fallback but behind the profile", () => {
+    const root = tempHermesRoot();
+    const candidates = resolveHermesStateDbCandidates(
+      { HERMES_PROFILES_DIR: "/srv/p", AGENTDASH_HERMES_STATE_DB: "/srv/custom.db", AGENTDASH_HERMES_ROOT: root },
+      { profile: "p1" },
+    );
+    expect(candidates).toEqual([
+      "/srv/p/p1/state.db",
+      "/srv/custom.db",
+      path.join(root, "state.db"),
+    ]);
+  });
+
+  it("dedupes when the override points at the same file", () => {
+    const root = tempHermesRoot();
+    const candidates = resolveHermesStateDbCandidates({
+      AGENTDASH_HERMES_ROOT: root,
+      AGENTDASH_HERMES_STATE_DB: path.join(root, "state.db"),
+    });
+    expect(candidates).toEqual([path.join(root, "state.db")]);
+  });
+});
+
+describe("readHermesSessionUsageDetailed", () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-root-"));
+  const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-profiles-"));
+  const profile = "agentdash-feedface";
+  const profileDir = path.join(profilesDir, profile);
+  fs.mkdirSync(profileDir, { recursive: true });
+
+  function makeLedger(dbPath: string, sessionId: string, toolCalls: number | null) {
+    const db = new DatabaseSync(dbPath);
+    db.exec(`CREATE TABLE session_model_usage (
+      session_id TEXT, model TEXT, billing_provider TEXT, task TEXT,
+      api_call_count INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+      cache_read_tokens INTEGER, estimated_cost_usd REAL, actual_cost_usd REAL)`);
+    db.prepare(
+      `INSERT INTO session_model_usage
+         (session_id, model, billing_provider, api_call_count, input_tokens, output_tokens,
+          cache_read_tokens, estimated_cost_usd, actual_cost_usd)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(sessionId, "glm-5.3-flash", "zai", 3, 1000, 200, 400, 0, 0);
+    if (toolCalls !== null) {
+      db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, tool_call_count INTEGER)`);
+      db.prepare(`INSERT INTO sessions (id, tool_call_count) VALUES (?, ?)`).run(sessionId, toolCalls);
+    }
+    db.close();
+  }
+
+  const profileDb = path.join(profileDir, "state.db");
+  const rootDb = path.join(rootDir, "state.db");
+  makeLedger(profileDb, "profiled-session", 7);
+  makeLedger(rootDb, "root-session", 0);
+
+  const env = {
+    HERMES_PROFILES_DIR: profilesDir,
+    HERMES_HOME: rootDir,
+  } as NodeJS.ProcessEnv;
+
+  afterAll(() => {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+    fs.rmSync(profilesDir, { recursive: true, force: true });
+  });
+
+  it("meters a managed-profile session against the profile database", () => {
+    const read = readHermesSessionUsageDetailed("profiled-session", { profile, env });
+    expect(read.status).toBe("metered");
+    expect(read.dbPath).toBe(profileDb);
+    expect(read.ledger).toMatchObject({
+      path: profileDb,
+      source: "profile_hint",
+      certainty: "certain",
+      profile,
+    });
+    expect(read.usage?.usage).toEqual({
+      inputTokens: 1000,
+      outputTokens: 200,
+      cachedInputTokens: 400,
+    });
+    expect(read.usage?.model).toBe("glm-5.3-flash");
+  });
+
+  it("meters through a wrapper command with no profile hint — the managed-agent shape", () => {
+    // This is how a real managed agent resolves: adapterConfig.hermesCommand
+    // is the wrapper path, nothing else names the profile.
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-bin-"));
+    cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+    const wrapper = path.join(binDir, profile);
+    fs.writeFileSync(wrapper, `#!/bin/sh\nexec hermes -p ${profile} "$@"\n`, { mode: 0o755 });
+    const read = readHermesSessionUsageDetailed("profiled-session", {
+      env: { HERMES_PROFILES_DIR: profilesDir, AGENTDASH_HERMES_ROOT: rootDir },
+      adapterConfig: { hermesCommand: wrapper },
+    });
+    expect(read.status).toBe("metered");
+    expect(read.dbPath).toBe(profileDb);
+    expect(read.ledger).toMatchObject({ source: "wrapper_script", certainty: "certain", profile });
+  });
+
+  it("reads tool_call_count from the sessions table", () => {
+    expect(readHermesSessionUsageDetailed("profiled-session", { profile, env }).usage?.toolCalls).toBe(7);
+    // Zero is a real reading, not a missing one.
+    expect(readHermesSessionUsageDetailed("root-session", { env }).usage?.toolCalls).toBe(0);
+  });
+
+  it("falls through to the root database for unmanaged sessions", () => {
+    const read = readHermesSessionUsageDetailed("root-session", { profile, env });
+    expect(read.status).toBe("metered");
+    expect(read.dbPath).toBe(rootDb);
+  });
+
+  it("reports unmetered_no_session when every readable ledger lacks the session", () => {
+    const read = readHermesSessionUsageDetailed("never-seen", { profile, env });
+    expect(read.status).toBe("unmetered_no_session");
+    expect(read.usage).toBeNull();
+    // A failed read still records the best answer for where the run wrote.
+    expect(read.ledger).toMatchObject({ path: profileDb, source: "profile_hint" });
+  });
+
+  it("reports unmetered_no_session when no session id was produced", () => {
+    expect(readHermesSessionUsageDetailed(null, { profile, env }).status).toBe(
+      "unmetered_no_session",
+    );
+  });
+
+  it("reports unmetered_no_ledger when no candidate file can be opened", () => {
+    // `dbPath` pins the candidate list to one missing file — deterministic
+    // regardless of whether the dev machine has a real ~/.hermes/state.db.
+    const read = readHermesSessionUsageDetailed("anything", {
+      dbPath: "/nonexistent/dir/state.db",
+    });
+    expect(read.status).toBe("unmetered_no_ledger");
+    expect(read.usage).toBeNull();
+  });
+
+  it("tolerates a ledger without the sessions table", () => {
+    const noSessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-old-"));
+    const dbPath = path.join(noSessionsDir, "state.db");
+    makeLedger(dbPath, "old-session", null);
+    const read = readHermesSessionUsageDetailed("old-session", { dbPath });
+    expect(read.status).toBe("metered");
+    expect(read.usage?.toolCalls).toBeNull();
+    fs.rmSync(noSessionsDir, { recursive: true, force: true });
   });
 });
 
@@ -227,5 +539,16 @@ describe("applyHermesSessionUsage", () => {
       summarizeHermesUsageRows([{ model: "m", api_call_count: 0, input_tokens: 1, output_tokens: 1 }]),
     );
     expect(merged.resultJson?.num_turns).toBeUndefined();
+  });
+
+  it("carries the session tool_call_count through as num_tool_calls", () => {
+    const usageWithTools = { ...usage!, toolCalls: 9 };
+    const merged = applyHermesSessionUsage({ ...base }, usageWithTools);
+    expect(merged.resultJson).toMatchObject({ num_turns: 2, num_tool_calls: 9 });
+  });
+
+  it("records a tool_call_count of zero rather than dropping it", () => {
+    const merged = applyHermesSessionUsage({ ...base }, { ...usage!, toolCalls: 0 });
+    expect(merged.resultJson).toMatchObject({ num_tool_calls: 0 });
   });
 });

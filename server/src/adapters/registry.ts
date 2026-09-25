@@ -704,7 +704,7 @@ const piLocalAdapter: ServerAdapterModule = {
 import {
   applyHermesSessionUsage,
   readHermesSessionId,
-  readHermesSessionUsage,
+  readHermesSessionUsageDetailed,
 } from "./hermes-usage.js";
 
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
@@ -720,15 +720,67 @@ const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["exec
  * Wrapped so metering can never fail a run: a missing or unreadable ledger
  * leaves the result exactly as the adapter returned it.
  */
+/**
+ * The adapterConfig the run used — effective config over the stored agent
+ * config, with the command actually invoked folded in so the ledger resolver
+ * sees it (env `AGENTDASH_HERMES_COMMAND` and every `hermesCommand` source).
+ * Profile/ledger resolution — `-p` in args or the command string,
+ * `env.HERMES_HOME`, wrapper scripts, the sticky active profile — all lives in
+ * `resolveHermesStateDbResolutions` (adapters/hermes-usage.ts); this function
+ * deliberately does no derivation of its own.
+ */
+function hermesRunAdapterConfig(ctx: { config?: unknown; agent?: unknown }): Record<string, unknown> {
+  const asRecord = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  const agent = asRecord(ctx.agent);
+  const agentConfig = asRecord(agent?.adapterConfig);
+  const config = asRecord(ctx.config);
+  const command = getHermesCommandFromContext(ctx).trim();
+  return {
+    ...(agentConfig ?? {}),
+    ...(config ?? {}),
+    ...(command ? { hermesCommand: command } : {}),
+  };
+}
+
 async function withHermesSessionUsage(
   result: AdapterExecutionResult,
+  ctx: { config?: unknown; agent?: unknown },
 ): Promise<AdapterExecutionResult> {
+  let read: ReturnType<typeof readHermesSessionUsageDetailed>;
   try {
     const sessionId = readHermesSessionId(result);
-    return applyHermesSessionUsage(result, readHermesSessionUsage(sessionId));
+    read = readHermesSessionUsageDetailed(sessionId, {
+      adapterConfig: hermesRunAdapterConfig(ctx),
+    });
   } catch {
     return result;
   }
+  // Stamp the metering outcome where the heartbeat's runFacts builder can see
+  // it — a silent zero-token run was the original incident. The resolution is
+  // stamped alongside so runFacts records how sure the attribution is.
+  const resultJson =
+    result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
+      ? result.resultJson
+      : {};
+  const stamped: AdapterExecutionResult = {
+    ...result,
+    resultJson: {
+      ...resultJson,
+      meteringStatus: read.status,
+      meteringLedger: read.ledger
+        ? {
+            path: read.ledger.path,
+            source: read.ledger.source,
+            certainty: read.ledger.certainty,
+            profile: read.ledger.profile,
+          }
+        : null,
+    },
+  };
+  return applyHermesSessionUsage(stamped, read.usage);
 }
 
 /**
@@ -743,6 +795,7 @@ async function executeHermesFailClosed(
   const guard = createHermesHumanQuestionGuard(ctx.onLog);
   const result = await withHermesSessionUsage(
     sanitizeHermesExecutionResult(await executeHermesLocal({ ...ctx, onLog: guard.onLog })),
+    ctx,
   );
   return guard.failClosed(result);
 }
@@ -771,7 +824,10 @@ const hermesLocalAdapter: ServerAdapterModule = {
       // The unauthenticated pass-through hands Hermes the original context
       // untouched (adapter-registry.test.ts pins that); heartbeat always mints
       // an authToken, so every AgentDash run takes the guarded path below.
-      return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)));
+      return withHermesSessionUsage(
+        sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)),
+        taskPatchedCtx,
+      );
     }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;

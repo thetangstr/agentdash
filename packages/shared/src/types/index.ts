@@ -328,6 +328,17 @@ export type {
   AgentWakeupRequest,
   InstanceSchedulerHeartbeatAgent,
 } from "./heartbeat.js";
+export {
+  RUN_FACT_OUTCOMES,
+  RUN_FACT_WAKE_REASONS,
+  RUN_METERING_STATUSES,
+} from "./run-facts.js";
+export type {
+  RunFactOutcome,
+  RunFacts,
+  RunFactWakeReason,
+  RunMeteringStatus,
+} from "./run-facts.js";
 export type { LiveEvent } from "./live.js";
 export type {
   DashboardHarnessAdapterHealth,
