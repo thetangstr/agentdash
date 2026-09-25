@@ -3,7 +3,7 @@ import { WebClient } from "@slack/web-api";
 import type { Db } from "@paperclipai/db";
 import { connectorService } from "./connectors.js";
 import { logActivity } from "./activity-log.js";
-import { badRequest, notFound } from "../errors.js";
+import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import crypto from "node:crypto";
 
@@ -288,21 +288,33 @@ export function slackConnectorService(db: Db) {
       agentId: string;
     },
   ) {
-    const token = await connectors.getDecryptedToken(connectionId);
-    if (!token) throw notFound("Connection not found or revoked");
-
+    // AgentDash (security): authorize first, bound to the supplied connection,
+    // and only ever decrypt the connection authorization returned. Previously
+    // the caller-supplied connectionId was decrypted unconditionally and used
+    // to send, while authorization was decided about a different connection —
+    // so a member of company A could send with company B's token or with a
+    // colleague's private one.
     const resolution = await connectors.resolveActingAs(
       input.companyId,
       input.agentId,
       "send",
       SLACK_PROVIDER,
+      { connectionId },
     );
 
     if (!resolution.ok) {
+      if (resolution.blocked.reason === "not_authorized") {
+        throw forbidden(resolution.blocked.message);
+      }
       return {
         posted: false,
         blocked: resolution.blocked,
       };
+    }
+
+    const authorizedConnectionId = resolution.resolution.connectionId;
+    if (authorizedConnectionId !== connectionId) {
+      throw forbidden("Connection is not authorized for this agent");
     }
 
     const { effectiveAutonomy } = resolution.resolution;
@@ -317,7 +329,7 @@ export function slackConnectorService(db: Db) {
     if (effectiveAutonomy === "draft_only") {
       await connectors.logConnectorAction(
         input.companyId,
-        connectionId,
+        authorizedConnectionId,
         "connection.draft",
         "agent",
         input.agentId,
@@ -331,6 +343,8 @@ export function slackConnectorService(db: Db) {
     }
 
     // For "full" autonomy, post the message
+    const token = await connectors.getDecryptedToken(authorizedConnectionId);
+    if (!token) throw notFound("Connection not found or revoked");
     const client = new WebClient(token.accessToken);
     const result = await client.chat.postMessage(messagePayload);
 

@@ -288,11 +288,17 @@ export function gmailRoutes(db: Db) {
 
       // Resolve the effective autonomy and send identity
       const effectiveAgentId = agentId ?? actor.actorId;
+      // AgentDash (security): bind authorization to the connection named in the
+      // path. Without `connectionId` here the resolver authorized whichever
+      // google connection it picked first, while the send below used the
+      // path's connection — so a colleague's private mailbox could be sent
+      // from on the strength of a workspace connection's authorization.
       const resolution = await connSvc.resolveActingAs(
         companyId,
         effectiveAgentId,
         "send",
         "google",
+        { connectionId },
       );
 
       if (!resolution.ok) {
@@ -303,8 +309,17 @@ export function gmailRoutes(db: Db) {
         return;
       }
 
+      if (resolution.resolution.connectionId !== connectionId) {
+        res.status(403).json({
+          error: "Connection is not authorized for this agent",
+          code: "not_authorized",
+        });
+        return;
+      }
+
+      // AgentDash (security): only the authorized connection is ever decrypted.
       const result = await gmailSvc.sendEmail(
-        connectionId,
+        resolution.resolution.connectionId,
         companyId,
         { to, subject, body, cc, bcc, threadId, inReplyTo, references, agentName },
         {
