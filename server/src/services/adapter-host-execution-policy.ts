@@ -20,6 +20,7 @@
 
 import { forbidden } from "../errors.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
+import { checkCompanyInstructionsPath } from "./instructions-root-confinement.js";
 
 /** The subset of `req.actor` this policy reads. */
 export interface HostExecutionActor {
@@ -34,8 +35,14 @@ export interface HostExecutionActor {
  * (`command`, `hermesCommand`, `agentCommand`, ...), its argv (`args`,
  * `extraArgs`), its environment (`env`), its working directory (`cwd`) and the
  * CLI state/home directories the CLI loads config — and hooks — from.
+ *
+ * `*Path` keys (#737): `instructionsFilePath`, `instructionsRootPath`,
+ * `agentsMdPath` and friends name host files the server reads into the prompt
+ * and host directories it writes bundle files into. A non-admin may only point
+ * them inside this company's instructions area under the instance home (see
+ * instructions-root-confinement.ts).
  */
-const HOST_EXECUTION_CONFIG_KEY = /^(command|args|env|cwd)$|(Command|Args|Env|Cwd|Dir|Home)$/;
+const HOST_EXECUTION_CONFIG_KEY = /^(command|args|env|cwd)$|(Command|Args|Env|Cwd|Dir|Home|Path)$/;
 
 /**
  * Subtrees with their own, separately decided gate.
@@ -130,6 +137,22 @@ function commandKeysFor(adapterType: string | null | undefined): string[] {
 }
 
 export const HERMES_REASONING_EFFORTS = ["low", "medium", "high"] as const;
+
+/**
+ * AgentDash (#737): managed per-agent Hermes profiles are on — always on a
+ * hosted box (`AGENTDASH_DEPLOYMENT_KIND=hosted`), opt-in elsewhere with
+ * `AGENTDASH_HERMES_MANAGED_PROFILES=true`. Each agent then has its own profile
+ * (`agentdash-<agentId>`) holding its provider credentials, and a `-p <profile>`
+ * a non-admin chooses must name a profile provisioned for this company, so an
+ * agent cannot borrow the credentials of the root, template or operator
+ * profiles on the box (for example `ccworker`).
+ */
+export function hermesManagedProfilesActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    env.AGENTDASH_HERMES_MANAGED_PROFILES === "true" ||
+    (env.AGENTDASH_DEPLOYMENT_KIND ?? "").trim().toLowerCase() === "hosted"
+  );
+}
 const HERMES_PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const POSITIVE_INT = /^[1-9][0-9]{0,5}$/;
 
@@ -137,6 +160,7 @@ const POSITIVE_INT = /^[1-9][0-9]{0,5}$/;
  * Hermes CLI flags a non-admin may pass through `extraArgs`. Each entry maps
  * the flag spelling to a value validator, or `null` for a bare switch.
  */
+const HERMES_PROFILE_FLAGS = new Set(["-p", "--profile"]);
 const HERMES_SAFE_FLAGS: Record<string, ((value: string) => boolean) | null> = {
   "-p": (v) => HERMES_PROFILE_NAME.test(v),
   "--profile": (v) => HERMES_PROFILE_NAME.test(v),
@@ -153,8 +177,18 @@ const HERMES_SAFE_FLAGS: Record<string, ((value: string) => boolean) | null> = {
  * dropping, and an empty or whitespace-bearing token is refused, because it
  * would reach the CLI as a stray argument. A string is not accepted — the
  * adapter reads `extraArgs` as an array.
+ *
+ * With managed profiles on (#737), a profile value must also be in
+ * `options.allowedProfiles` — the profiles provisioned for this company. When
+ * the caller supplies no set, every profile flag is refused.
  */
-export function isSafeHermesExtraArgs(value: unknown): boolean {
+export function isSafeHermesExtraArgs(
+  value: unknown,
+  options: { allowedProfiles?: ReadonlySet<string> | null; env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  const restrictProfiles = hermesManagedProfilesActive(options.env);
+  const profileAllowed = (flag: string, profile: string) =>
+    !HERMES_PROFILE_FLAGS.has(flag) || !restrictProfiles || (options.allowedProfiles?.has(profile) ?? false);
   if (!Array.isArray(value) || value.length === 0) return false;
   if (!value.every((t) => typeof t === "string" && t.length > 0 && !/\s/.test(t))) return false;
   const tokens = value as string[];
@@ -162,8 +196,10 @@ export function isSafeHermesExtraArgs(value: unknown): boolean {
     const token = tokens[i]!;
     const eq = token.indexOf("=");
     if (token.startsWith("--") && eq > 0) {
-      const validator = HERMES_SAFE_FLAGS[token.slice(0, eq)];
+      const flag = token.slice(0, eq);
+      const validator = HERMES_SAFE_FLAGS[flag];
       if (!validator || !validator(token.slice(eq + 1))) return false;
+      if (!profileAllowed(flag, token.slice(eq + 1))) return false;
       continue;
     }
     if (!Object.prototype.hasOwnProperty.call(HERMES_SAFE_FLAGS, token)) return false;
@@ -171,17 +207,77 @@ export function isSafeHermesExtraArgs(value: unknown): boolean {
     if (validator === null) continue;
     const next = tokens[i + 1];
     if (next === undefined || !validator!(next)) return false;
+    if (!profileAllowed(token, next)) return false;
     i += 1;
   }
   return true;
 }
 
-function isCuratedTopLevelValue(adapterType: string | null | undefined, key: string, value: unknown): boolean {
+/**
+ * AgentDash (#737): run-time half of the profile rule. With managed profiles
+ * on, the agent's wrapper already runs `hermes -p <its own profile>`, so a
+ * `-p`/`--profile` in `extraArgs` can only redirect the run to another
+ * profile's credentials. Drop every profile flag that does not name the
+ * agent's own profile, whoever stored it. The run path has no database, so it
+ * keeps the agent's own profile only; the write-time gate above applies the
+ * company rule and answers with a 403.
+ */
+export function stripForeignHermesProfileArgs(
+  extraArgs: unknown,
+  ownProfile: string,
+): { extraArgs: unknown; dropped: string[] } {
+  if (!Array.isArray(extraArgs)) return { extraArgs, dropped: [] };
+  const kept: unknown[] = [];
+  const dropped: string[] = [];
+  // Hermes parses its argv with argparse, which also accepts `-pNAME` and
+  // unambiguous abbreviations of `--profile` (`--prof NAME`, `--prof=NAME`).
+  const profileFlagOf = (token: string): { flag: string; inlineValue: string | null } | null => {
+    if (token.startsWith("--")) {
+      const eq = token.indexOf("=");
+      const name = eq > 0 ? token.slice(0, eq) : token;
+      if (name.length >= 4 && "--profile".startsWith(name)) {
+        return { flag: name, inlineValue: eq > 0 ? token.slice(eq + 1) : null };
+      }
+      return null;
+    }
+    if (token === "-p") return { flag: "-p", inlineValue: null };
+    if (token.startsWith("-p")) return { flag: "-p", inlineValue: token.slice(2) };
+    return null;
+  };
+  for (let i = 0; i < extraArgs.length; i += 1) {
+    const token = extraArgs[i];
+    const parsed = typeof token === "string" ? profileFlagOf(token) : null;
+    if (!parsed) {
+      kept.push(token);
+      continue;
+    }
+    if (parsed.inlineValue !== null) {
+      if (parsed.inlineValue === ownProfile) kept.push(token);
+      else dropped.push(parsed.inlineValue);
+      continue;
+    }
+    const next = extraArgs[i + 1];
+    if (typeof next === "string" && next === ownProfile) kept.push(token, next);
+    else dropped.push(typeof next === "string" ? next : "");
+    i += 1;
+  }
+  return { extraArgs: kept, dropped };
+}
+
+function isCuratedTopLevelValue(
+  adapterType: string | null | undefined,
+  key: string,
+  value: unknown,
+  context: HostExecutionContext,
+): boolean {
   if (commandKeysFor(adapterType).includes(key)) {
     return typeof value === "string" && defaultAdapterCommands(adapterType).includes(value.trim());
   }
   if (adapterType === "hermes_local" && key === "extraArgs") {
-    return isSafeHermesExtraArgs(value);
+    return isSafeHermesExtraArgs(value, { allowedProfiles: context.hermesProfiles });
+  }
+  if (key.endsWith("Path") && context.companyId) {
+    return checkCompanyInstructionsPath(context.companyId, value).ok;
   }
   return false;
 }
@@ -204,7 +300,18 @@ function storedTopLevelAliases(
 // Classifier
 // ---------------------------------------------------------------------------
 
-export interface HostExecutionCheckInput {
+/**
+ * What the policy needs to know about the company the configuration belongs to.
+ * Build it with `hostExecutionContextForCompany` (host-execution-context.ts).
+ */
+export interface HostExecutionContext {
+  /** Lets a `*Path` value inside this company's instructions area through. */
+  companyId?: string | null;
+  /** Hermes profiles provisioned for this company (managed profiles only). */
+  hermesProfiles?: ReadonlySet<string> | null;
+}
+
+export interface HostExecutionCheckInput extends HostExecutionContext {
   adapterType: string | null | undefined;
   /** The adapterConfig (or adapterConfig patch) the caller sent. */
   adapterConfig: unknown;
@@ -220,11 +327,13 @@ export interface HostExecutionCheckInput {
  * different from the stored value at the same path.
  */
 export function findRestrictedHostExecutionFields(input: HostExecutionCheckInput): string[] {
-  return walk(input.adapterType, input.adapterConfig, isRecord(input.stored) ? input.stored : null, input.prefix ?? "adapterConfig", 0);
+  const context: HostExecutionContext = { companyId: input.companyId, hermesProfiles: input.hermesProfiles };
+  return walk(input.adapterType, context, input.adapterConfig, isRecord(input.stored) ? input.stored : null, input.prefix ?? "adapterConfig", 0);
 }
 
 function walk(
   adapterType: string | null | undefined,
+  context: HostExecutionContext,
   value: unknown,
   stored: unknown,
   prefix: string,
@@ -234,7 +343,7 @@ function walk(
   if (Array.isArray(value)) {
     const storedArray = Array.isArray(stored) ? stored : [];
     value.forEach((item, index) => {
-      found.push(...walk(adapterType, item, storedArray[index], `${prefix}.${index}`, depth + 1));
+      found.push(...walk(adapterType, context, item, storedArray[index], `${prefix}.${index}`, depth + 1));
     });
     return found;
   }
@@ -244,14 +353,14 @@ function walk(
     if (depth === 0 && SEPARATELY_GATED_SUBTREES.has(key)) continue;
     const path = `${prefix}.${key}`;
     if (!isHostExecutionConfigKey(key)) {
-      found.push(...walk(adapterType, child, storedRecord?.[key], path, depth + 1));
+      found.push(...walk(adapterType, context, child, storedRecord?.[key], path, depth + 1));
       continue;
     }
     if (isEmptyConfigValue(child)) continue;
     const storedCandidates =
       depth === 0 ? storedTopLevelAliases(adapterType, key, storedRecord) : storedRecord ? [storedRecord[key]] : [];
     if (storedCandidates.some((candidate) => sameValue(child, candidate))) continue;
-    if (depth === 0 && isCuratedTopLevelValue(adapterType, key, child)) continue;
+    if (depth === 0 && isCuratedTopLevelValue(adapterType, key, child, context)) continue;
     found.push(path);
   }
   return found;
@@ -272,8 +381,8 @@ export function actorMaySetHostExecutionConfig(actor: HostExecutionActor | null 
 
 export function hostExecutionForbiddenMessage(paths: string[]): string {
   return (
-    "Instance admin access required to set a custom command, arguments, environment or working " +
-    `directory for an agent adapter (${paths.join(", ")}). Leave these fields empty to use the ` +
+    "Instance admin access required to set a custom command, arguments, environment, working " +
+    `directory or host path for an agent adapter (${paths.join(", ")}). Leave these fields empty to use the ` +
     "server default, or ask the instance admin to set them."
   );
 }
@@ -281,15 +390,23 @@ export function hostExecutionForbiddenMessage(paths: string[]): string {
 /**
  * Throw 403 when a non-instance-admin sets a restricted host-execution field.
  * Pass every adapterConfig the request writes or probes; pass `stored` so an
- * unchanged value is accepted.
+ * unchanged value is accepted. `context` (company id, provisioned Hermes
+ * profiles) applies to every input that does not carry its own.
  */
 export function assertHostExecutionConfigAllowed(
   actor: HostExecutionActor | null | undefined,
   inputs: HostExecutionCheckInput | HostExecutionCheckInput[],
+  context: HostExecutionContext = {},
 ): void {
   if (actorMaySetHostExecutionConfig(actor)) return;
   const list = Array.isArray(inputs) ? inputs : [inputs];
-  const paths = list.flatMap((input) => findRestrictedHostExecutionFields(input));
+  const paths = list.flatMap((input) =>
+    findRestrictedHostExecutionFields({
+      ...input,
+      companyId: input.companyId ?? context.companyId,
+      hermesProfiles: input.hermesProfiles ?? context.hermesProfiles,
+    }),
+  );
   if (paths.length > 0) throw forbidden(hostExecutionForbiddenMessage(paths));
 }
 

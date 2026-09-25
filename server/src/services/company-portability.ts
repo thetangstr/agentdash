@@ -2,6 +2,7 @@ import {
   assertHostExecutionConfigAllowed,
   runtimeConfigHostExecutionInputs,
 } from "./adapter-host-execution-policy.js";
+import { hostExecutionContextForCompany } from "./host-execution-context.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
@@ -4324,10 +4325,18 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
                 ? await agents.getById(planAgent.existingAgentId)
                 : null;
             const importAdapterType = adapterOverride?.adapterType ?? manifestAgent.adapterType;
+            // prepareImportedAgentAdapter drops the instructions location keys
+            // (the bundle is materialized under the managed root), so they are
+            // not checked here (#737).
+            const {
+              instructionsFilePath: _droppedFilePath,
+              instructionsRootPath: _droppedRootPath,
+              ...checkedAdapterConfig
+            } = baseAdapterConfig;
             assertHostExecutionConfigAllowed(null, [
               {
                 adapterType: importAdapterType,
-                adapterConfig: baseAdapterConfig,
+                adapterConfig: checkedAdapterConfig,
                 stored: existingForHostExec?.adapterConfig,
                 prefix: `agents.${planAgent.slug}.adapterConfig`,
               },
@@ -4336,7 +4345,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
                 manifestAgent.runtimeConfig,
                 existingForHostExec?.runtimeConfig,
               ),
-            ]);
+            ], await hostExecutionContextForCompany(db, targetCompany.id));
           }
 
           const desiredSkills = (manifestAgent.skills ?? []).map((skillRef) => desiredSkillRefMap.get(skillRef) ?? skillRef);

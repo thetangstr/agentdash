@@ -110,11 +110,12 @@ describe("agent instructions service", () => {
       instructionsFilePath: path.join(managedRoot, "AGENTS.md"),
     });
 
+    // An instance admin may choose any external root (#737).
     const result = await svc.updateBundle(agent, {
       mode: "external",
       rootPath: externalRoot,
       entryFile: "docs/AGENTS.md",
-    });
+    }, { allowUnconfinedExternalRoot: true });
 
     expect(result.bundle.mode).toBe("external");
     expect(result.bundle.rootPath).toBe(externalRoot);

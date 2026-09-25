@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { notFound, unprocessable } from "../errors.js";
+import { forbidden, notFound, unprocessable } from "../errors.js";
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
+import {
+  checkCompanyInstructionsPath,
+  findProtectedHostDirectoryOverlap,
+  resolveConfinedBundleFilePath,
+} from "./instructions-root-confinement.js";
 
 const ENTRY_FILE_DEFAULT = "AGENTS.md";
 const MODE_KEY = "instructionsBundleMode";
@@ -130,6 +135,15 @@ function resolvePathWithinRoot(rootPath: string, relativePath: string): string {
   return absolutePath;
 }
 
+/**
+ * AgentDash (#737): the lexical check above plus a symbolic-link check below
+ * the root. Use this for every filesystem read, write and delete.
+ */
+async function resolveConfinedPathWithinRoot(rootPath: string, relativePath: string): Promise<string> {
+  const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
+  return resolveConfinedBundleFilePath(rootPath, path.relative(path.resolve(rootPath), absolutePath));
+}
+
 function resolveManagedInstructionsRoot(agent: AgentLike): string {
   return path.resolve(
     resolvePaperclipInstanceRoot(),
@@ -215,7 +229,7 @@ async function listFilesRecursive(rootPath: string): Promise<string[]> {
 }
 
 async function readFileSummary(rootPath: string, relativePath: string, entryFile: string): Promise<AgentInstructionsFileSummary> {
-  const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
+  const absolutePath = await resolveConfinedPathWithinRoot(rootPath, relativePath);
   const stat = await fs.stat(absolutePath);
   return {
     path: relativePath,
@@ -441,7 +455,7 @@ async function writeBundleFiles(
 ) {
   for (const [relativePath, content] of Object.entries(files)) {
     const normalizedPath = normalizeRelativeFilePath(relativePath);
-    const absolutePath = resolvePathWithinRoot(rootPath, normalizedPath);
+    const absolutePath = await resolveConfinedPathWithinRoot(rootPath, normalizedPath);
     const existingStat = await statIfExists(absolutePath);
     if (existingStat?.isFile() && !options?.overwriteExisting) continue;
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -505,7 +519,7 @@ export function agentInstructionsService() {
       };
     }
     if (!state.rootPath) throw notFound("Agent instructions bundle is not configured");
-    const absolutePath = resolvePathWithinRoot(state.rootPath, relativePath);
+    const absolutePath = await resolveConfinedPathWithinRoot(state.rootPath, relativePath);
     const [content, stat] = await Promise.all([
       fs.readFile(absolutePath, "utf8").catch(() => null),
       fs.stat(absolutePath).catch(() => null),
@@ -549,7 +563,7 @@ export function agentInstructionsService() {
     });
     await fs.mkdir(managedRoot, { recursive: true });
 
-    const entryPath = resolvePathWithinRoot(managedRoot, entryFile);
+    const entryPath = await resolveConfinedPathWithinRoot(managedRoot, entryFile);
     const entryStat = await statIfExists(entryPath);
     if (!entryStat?.isFile()) {
       const legacyInstructions = await readLegacyInstructions(agent, current.config);
@@ -573,6 +587,14 @@ export function agentInstructionsService() {
       entryFile?: string;
       clearLegacyPromptTemplate?: boolean;
     },
+    options?: {
+      /**
+       * AgentDash (#737): true only for an instance admin (or the local_trusted
+       * board). Everyone else may point an external bundle only at this
+       * company's instructions area under the instance home.
+       */
+      allowUnconfinedExternalRoot?: boolean;
+    },
   ): Promise<{ bundle: AgentInstructionsBundle; adapterConfig: Record<string, unknown> }> {
     const state = await recoverManagedBundleState(agent, deriveBundleState(agent));
     const nextMode = input.mode ?? state.mode ?? "managed";
@@ -589,6 +611,23 @@ export function agentInstructionsService() {
       const resolvedRoot = resolveHomeAwarePath(rootPath);
       if (!path.isAbsolute(resolvedRoot)) {
         throw unprocessable("External instructions bundles require an absolute rootPath");
+      }
+      // No actor may root a bundle over the Hermes profiles, the per-agent
+      // wrappers, ~/.ssh or the AgentDash config directory (#737).
+      const protectedDir = findProtectedHostDirectoryOverlap(resolvedRoot);
+      if (protectedDir) {
+        throw unprocessable(
+          `External instructions root overlaps a protected host directory (${protectedDir}); choose another directory.`,
+        );
+      }
+      if (!options?.allowUnconfinedExternalRoot) {
+        const check = checkCompanyInstructionsPath(agent.companyId, resolvedRoot);
+        if (!check.ok) {
+          throw forbidden(
+            `Instance admin access required for an external instructions root outside this company's ` +
+              `instructions directory: ${check.reason}.`,
+          );
+        }
       }
       nextRootPath = resolvedRoot;
     }
@@ -641,7 +680,7 @@ export function agentInstructionsService() {
     }
 
     const prepared = await ensureWritableBundle(agent, options);
-    const absolutePath = resolvePathWithinRoot(prepared.state.rootPath!, relativePath);
+    const absolutePath = await resolveConfinedPathWithinRoot(prepared.state.rootPath!, relativePath);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, content, "utf8");
     const nextAgent = { ...agent, adapterConfig: prepared.adapterConfig };
@@ -666,7 +705,7 @@ export function agentInstructionsService() {
     if (normalizedPath === state.entryFile) {
       throw unprocessable("Cannot delete the bundle entry file");
     }
-    const absolutePath = resolvePathWithinRoot(state.rootPath, normalizedPath);
+    const absolutePath = await resolveConfinedPathWithinRoot(state.rootPath, normalizedPath);
     await fs.rm(absolutePath, { force: true });
     const adapterConfig = buildPersistedBundleConfig(derived, state);
     const bundle = await getBundle({ ...agent, adapterConfig });
@@ -684,7 +723,7 @@ export function agentInstructionsService() {
       if (stat?.isDirectory()) {
         const relativePaths = await listFilesRecursive(state.rootPath);
         const files = Object.fromEntries(await Promise.all(relativePaths.map(async (relativePath) => {
-          const absolutePath = resolvePathWithinRoot(state.rootPath!, relativePath);
+          const absolutePath = await resolveConfinedPathWithinRoot(state.rootPath!, relativePath);
           const content = await fs.readFile(absolutePath, "utf8");
           return [relativePath, content] as const;
         })));
@@ -730,13 +769,13 @@ export function agentInstructionsService() {
       content,
     ] as const);
     for (const [relativePath, content] of normalizedEntries) {
-      const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
+      const absolutePath = await resolveConfinedPathWithinRoot(rootPath, relativePath);
       if (options?.skipExisting && (await statIfExists(absolutePath))?.isFile()) continue;
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, content, "utf8");
     }
     if (!normalizedEntries.some(([relativePath]) => relativePath === entryFile)) {
-      const entryPath = resolvePathWithinRoot(rootPath, entryFile);
+      const entryPath = await resolveConfinedPathWithinRoot(rootPath, entryFile);
       if (!(options?.skipExisting && (await statIfExists(entryPath))?.isFile())) {
         await fs.writeFile(entryPath, "", "utf8");
       }

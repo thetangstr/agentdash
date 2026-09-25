@@ -115,7 +115,7 @@ curl -sS -X POST "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/agent-h
   }'
 ```
 
-Leave host-execution fields out of `adapterConfig`: `command`, `args`, `extraArgs`, `env`, `cwd`, and any `*Command`, `*Args`, `*Env`, `*Cwd`, `*Dir` or `*Home` key. Only an instance admin may set them, so an agent request that includes one is refused with 403. The server default command and project workspaces cover the normal case. For Hermes, `extraArgs` may carry `-p <profile>` and `--reasoning-effort <low|medium|high>`. If a hire really needs a custom binary, environment or working directory, ask a human instance admin to set it after the hire.
+Leave host-execution fields out of `adapterConfig`: `command`, `args`, `extraArgs`, `env`, `cwd`, and any `*Command`, `*Args`, `*Env`, `*Cwd`, `*Dir`, `*Home` or `*Path` key (such as `instructionsFilePath`). Only an instance admin may set them, so an agent request that includes one is refused with 403. The server default command and project workspaces cover the normal case. For Hermes, `extraArgs` may carry `-p <profile>` and `--reasoning-effort <low|medium|high>`; on a hosted box (managed Hermes profiles) `-p` must name a profile provisioned for an agent of your company, so it is usually best left out, since each agent already runs in its own profile. If a hire really needs a custom binary, environment or working directory, ask a human instance admin to set it after the hire.
 
 ### 9. Handle governance state
 

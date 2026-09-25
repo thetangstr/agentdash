@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   actorMayApplyAdapterPreset,
   actorMaySetHostExecutionConfig,
@@ -6,6 +9,7 @@ import {
   findRestrictedHostExecutionFields,
   isSafeHermesExtraArgs,
   runtimeConfigHostExecutionInputs,
+  stripForeignHermesProfileArgs,
 } from "../services/adapter-host-execution-policy.js";
 
 // AgentDash (security, #719): one classifier for host-execution fields, shared
@@ -214,5 +218,141 @@ describe("host-execution authority", () => {
     expect(actorMayApplyAdapterPreset(MEMBER, "hermes")).toBe(false);
     expect(actorMayApplyAdapterPreset(INSTANCE_ADMIN, "claude")).toBe(true);
     expect(actorMayApplyAdapterPreset(AGENT, "hermes")).toBe(false);
+  });
+});
+
+// AgentDash (security, #737): `*Path` keys and managed Hermes profiles.
+describe("instructions *Path keys (#737)", () => {
+  const saved = { home: process.env.PAPERCLIP_HOME, instance: process.env.PAPERCLIP_INSTANCE_ID };
+  let scratch = "";
+  let instanceRoot = "";
+  beforeEach(() => {
+    scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "host-exec-path-")));
+    process.env.PAPERCLIP_HOME = scratch;
+    process.env.PAPERCLIP_INSTANCE_ID = "policy";
+    instanceRoot = path.join(scratch, "instances", "policy");
+  });
+  afterEach(() => {
+    if (saved.home === undefined) delete process.env.PAPERCLIP_HOME;
+    else process.env.PAPERCLIP_HOME = saved.home;
+    if (saved.instance === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
+    else process.env.PAPERCLIP_INSTANCE_ID = saved.instance;
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it.each(["instructionsFilePath", "instructionsRootPath", "agentsMdPath"])("flags %s outside the company area", (key) => {
+    expect(
+      findRestrictedHostExecutionFields({
+        adapterType: "hermes_local",
+        adapterConfig: { [key]: "/home/founder/.ssh/authorized_keys" },
+        companyId: "c1",
+      }),
+    ).toEqual([`adapterConfig.${key}`]);
+  });
+
+  it("lets a path inside the company's managed or shared instructions directory through", () => {
+    const managed = path.join(instanceRoot, "companies", "c1", "agents", "a1", "instructions", "AGENTS.md");
+    const shared = path.join(instanceRoot, "companies", "c1", "shared-instructions", "team");
+    expect(
+      findRestrictedHostExecutionFields({
+        adapterType: "hermes_local",
+        adapterConfig: { instructionsFilePath: managed, instructionsRootPath: shared },
+        companyId: "c1",
+      }),
+    ).toEqual([]);
+  });
+
+  it("refuses another company's directory, a sibling of the instructions dir, and a path without a company", () => {
+    const otherCompany = path.join(instanceRoot, "companies", "c2", "shared-instructions", "AGENTS.md");
+    const agentHome = path.join(instanceRoot, "companies", "c1", "agents", "a1", "codex-home", "config.toml");
+    for (const value of [otherCompany, agentHome]) {
+      expect(
+        findRestrictedHostExecutionFields({ adapterType: "hermes_local", adapterConfig: { instructionsFilePath: value }, companyId: "c1" }),
+      ).toEqual(["adapterConfig.instructionsFilePath"]);
+    }
+    const managed = path.join(instanceRoot, "companies", "c1", "agents", "a1", "instructions", "AGENTS.md");
+    expect(
+      findRestrictedHostExecutionFields({ adapterType: "hermes_local", adapterConfig: { instructionsFilePath: managed } }),
+    ).toEqual(["adapterConfig.instructionsFilePath"]);
+  });
+
+  it("refuses a path through a symlink planted in the company area", () => {
+    const shared = path.join(instanceRoot, "companies", "c1", "shared-instructions");
+    fs.mkdirSync(shared, { recursive: true });
+    fs.symlinkSync(os.tmpdir(), path.join(shared, "out"));
+    expect(
+      findRestrictedHostExecutionFields({
+        adapterType: "hermes_local",
+        adapterConfig: { instructionsRootPath: path.join(shared, "out") },
+        companyId: "c1",
+      }),
+    ).toEqual(["adapterConfig.instructionsRootPath"]);
+  });
+
+  it("accepts an unchanged stored path", () => {
+    expect(
+      findRestrictedHostExecutionFields({
+        adapterType: "hermes_local",
+        adapterConfig: { instructionsFilePath: "/srv/checkout/AGENTS.md" },
+        stored: { instructionsFilePath: "/srv/checkout/AGENTS.md" },
+        companyId: "c1",
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("Hermes -p with managed profiles (#737)", () => {
+  const saved = {
+    managed: process.env.AGENTDASH_HERMES_MANAGED_PROFILES,
+    kind: process.env.AGENTDASH_DEPLOYMENT_KIND,
+  };
+  afterEach(() => {
+    if (saved.managed === undefined) delete process.env.AGENTDASH_HERMES_MANAGED_PROFILES;
+    else process.env.AGENTDASH_HERMES_MANAGED_PROFILES = saved.managed;
+    if (saved.kind === undefined) delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    else process.env.AGENTDASH_DEPLOYMENT_KIND = saved.kind;
+  });
+
+  const company = new Set(["agentdash-aaaa"]);
+
+  it("allows any valid profile name when managed profiles are off", () => {
+    delete process.env.AGENTDASH_HERMES_MANAGED_PROFILES;
+    delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    expect(isSafeHermesExtraArgs(["-p", "ccworker"])).toBe(true);
+  });
+
+  it.each([
+    ["AGENTDASH_HERMES_MANAGED_PROFILES", "true"],
+    ["AGENTDASH_DEPLOYMENT_KIND", "hosted"],
+  ])("with %s=%s allows only this company's profiles", (key, value) => {
+    process.env[key] = value;
+    expect(isSafeHermesExtraArgs(["-p", "agentdash-aaaa"], { allowedProfiles: company })).toBe(true);
+    expect(isSafeHermesExtraArgs(["--profile=agentdash-aaaa"], { allowedProfiles: company })).toBe(true);
+    expect(isSafeHermesExtraArgs(["-p", "ccworker"], { allowedProfiles: company })).toBe(false);
+    expect(isSafeHermesExtraArgs(["--profile=ccworker"], { allowedProfiles: company })).toBe(false);
+    expect(isSafeHermesExtraArgs(["-p", "agentdash-aaaa"])).toBe(false);
+    expect(isSafeHermesExtraArgs(["--reasoning-effort", "low"])).toBe(true);
+    expect(
+      findRestrictedHostExecutionFields({
+        adapterType: "hermes_local",
+        adapterConfig: { extraArgs: ["-p", "ccworker"] },
+        hermesProfiles: company,
+      }),
+    ).toEqual(["adapterConfig.extraArgs"]);
+  });
+
+  it("strips every profile flag but the agent's own at run time", () => {
+    const own = "agentdash-aaaa";
+    expect(stripForeignHermesProfileArgs(["-p", own, "--reasoning-effort", "low"], own)).toEqual({
+      extraArgs: ["-p", own, "--reasoning-effort", "low"],
+      dropped: [],
+    });
+    expect(
+      stripForeignHermesProfileArgs(
+        ["-p", "ccworker", "--profile=root", "-pother", "--prof", "x", "--prof=y", "--verbose"],
+        own,
+      ),
+    ).toEqual({ extraArgs: ["--verbose"], dropped: ["ccworker", "root", "other", "x", "y"] });
+    expect(stripForeignHermesProfileArgs(undefined, own)).toEqual({ extraArgs: undefined, dropped: [] });
   });
 });
