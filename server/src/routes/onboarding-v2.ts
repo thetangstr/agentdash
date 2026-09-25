@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { authUsers, assistantConversations, assistantMessages, deepInterviewStates } from "@paperclipai/db";
+import { authUsers, assistantConversations, assistantMessages, companies as companiesTable, deepInterviewStates } from "@paperclipai/db";
 import { and, desc, eq } from "drizzle-orm";
 import {
   onboardingOrchestrator,
@@ -22,7 +22,7 @@ import {
   MEMBER_ONBOARDING_STEPS,
   type MemberOnboardingStep,
 } from "../services/member-onboarding.js";
-import { unauthorized, badRequest, notFound } from "../errors.js";
+import { unauthorized, badRequest, forbidden, notFound } from "../errors.js";
 import { assertCompanyAccess } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import {
@@ -137,6 +137,17 @@ export function onboardingV2Routes(db: Db) {
   const companies = companyService(db);
   const tierServices = tierCapacityServices(db);
   const memberOnboarding = memberOnboardingService(db);
+
+  // AgentDash (security): a body-supplied cosAgentId becomes the author of a
+  // CoS message, so it must be this company's Chief of Staff. Otherwise a
+  // member could post as any agent id, including another company's.
+  async function assertCompanyCos(companyId: string, cosAgentId: string) {
+    const companyAgents = await agents.list(companyId);
+    const isCos = companyAgents.some(
+      (a: { id: string; role: string }) => a.id === cosAgentId && a.role === "chief_of_staff",
+    );
+    if (!isCos) throw forbidden("cosAgentId is not this company's Chief of Staff");
+  }
 
   const users = {
     getById: async (id: string) => {
@@ -376,6 +387,7 @@ export function onboardingV2Routes(db: Db) {
     const convo = convoRows[0];
     if (!convo) throw notFound("Conversation not found");
     assertCompanyAccess(req, convo.companyId);
+    if (cosAgentId) await assertCompanyCos(convo.companyId, cosAgentId);
     // 1. Append user message.
     await conversations.postMessage({
       conversationId,
@@ -522,6 +534,7 @@ export function onboardingV2Routes(db: Db) {
       const convo = convoRows[0];
       if (!convo) throw notFound("Conversation not found");
       assertCompanyAccess(req, convo.companyId);
+      await assertCompanyCos(convo.companyId, cosAgentId);
     }
     // Append a user message capturing the rejection reason.
     await conversations.postMessage({
@@ -709,14 +722,25 @@ ${kpis || "- (none captured)"}
     if (!state || state.scope !== "cos_onboarding") {
       throw notFound("Interview state not found");
     }
+    // scopeRefId is a conversation id for chat-started interviews, but the
+    // assess deep-interview path (routes/assess.ts) sets it to the companyId.
+    // Resolve the owning company either way before authorizing.
     const stateConvoRows = await db
       .select({ companyId: assistantConversations.companyId })
       .from(assistantConversations)
       .where(eq(assistantConversations.id, state.scopeRefId));
-    if (!stateConvoRows[0]) {
+    let stateCompanyId = stateConvoRows[0]?.companyId ?? null;
+    if (!stateCompanyId) {
+      const companyRows = await db
+        .select({ id: companiesTable.id })
+        .from(companiesTable)
+        .where(eq(companiesTable.id, state.scopeRefId));
+      stateCompanyId = companyRows[0]?.id ?? null;
+    }
+    if (!stateCompanyId) {
       throw notFound("Interview state not found");
     }
-    assertCompanyAccess(req, stateConvoRows[0].companyId);
+    assertCompanyAccess(req, stateCompanyId);
     const finalize = crystallizeAndAdvanceCos({ db });
     const { specId, conversationId } = await finalize(stateId);
     res.json({ specId, conversationId, redirectUrl: "/cos" });

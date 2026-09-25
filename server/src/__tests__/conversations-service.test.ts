@@ -114,6 +114,58 @@ describeEmbeddedPostgres("conversationService", () => {
     expect(participants[0]?.lastReadMessageId).toBe(msg.id);
   });
 
+  it("setReadPointer refuses a message from a foreign conversation", async () => {
+    await insertTestUser(db);
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const conversation = await service.create({ companyId, userId: TEST_USER_ID });
+    const other = await service.create({ companyId, userId: TEST_USER_ID });
+    await service.addParticipant(conversation.id, TEST_USER_ID, "owner");
+    const own = await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "user",
+      authorId: TEST_USER_ID,
+      body: "mine",
+    });
+    await service.setReadPointer(conversation.id, TEST_USER_ID, own.id);
+    const foreign = await service.postMessage({
+      conversationId: other.id,
+      authorKind: "user",
+      authorId: TEST_USER_ID,
+      body: "elsewhere",
+    });
+
+    const ok = await service.setReadPointer(conversation.id, TEST_USER_ID, foreign.id);
+
+    expect(ok).toBe(false);
+    const participants = await service.listParticipants(conversation.id);
+    expect(participants[0]?.lastReadMessageId).toBe(own.id);
+  });
+
+  it("paginate ignores a cursor from another conversation", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const conversation = await service.create({ companyId, userId: TEST_USER_ID });
+    const other = await service.create({ companyId, userId: TEST_USER_ID });
+    const foreignCursor = await service.postMessage({ conversationId: other.id, authorKind: "user", authorId: "u1", body: "early foreign" });
+    await new Promise((r) => setTimeout(r, 5));
+    await service.postMessage({ conversationId: conversation.id, authorKind: "user", authorId: "u1", body: "a" });
+    await new Promise((r) => setTimeout(r, 5));
+    await service.postMessage({ conversationId: conversation.id, authorKind: "user", authorId: "u1", body: "b" });
+
+    // An in-conversation cursor pages normally.
+    const page = await service.paginate(conversation.id, { limit: 10 });
+    const older = await service.paginate(conversation.id, { limit: 10, before: page[0]!.id });
+    expect(older.map((m) => m.content)).toEqual(["a"]);
+
+    // A foreign message id is not resolved as a cursor: it neither leaks the
+    // foreign row nor steers the page window (the foreign row is older than
+    // every row here, so honoring it would return nothing).
+    const scoped = await service.paginate(conversation.id, { limit: 10, before: foreignCursor.id });
+    expect(scoped.map((m) => m.content)).toEqual(["b", "a"]);
+    expect(scoped.every((m) => m.conversationId === conversation.id)).toBe(true);
+  });
+
   it("postMessage persists card_kind and card_payload when provided", async () => {
     const companyId = randomUUID();
     await db.insert(companies).values({ id: companyId, name: "Test Co" });
@@ -159,8 +211,16 @@ describe("conversationService WS bus emission", () => {
     createdAt: new Date(),
   };
 
-  function buildFakeDb(messageRow = fakeMessageRow) {
+  function buildFakeDb(messageRow = fakeMessageRow, ownedMessageRows: Array<{ id: string }> = [{ id: messageRow.id }]) {
     return {
+      // setReadPointer first checks the message belongs to the conversation.
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => ownedMessageRows,
+          }),
+        }),
+      }),
       insert: () => ({
         values: () => ({
           returning: async () => [messageRow],
@@ -225,5 +285,14 @@ describe("conversationService WS bus emission", () => {
         companyId: "company-1",
       }),
     );
+  });
+
+  it("setReadPointer returns false and does not emit when the message is not in the conversation", async () => {
+    mockEmitMessageRead.mockClear();
+    const { conversationService } = await import("../services/conversations.js");
+    const svc = conversationService(buildFakeDb(fakeMessageRow, []));
+    const ok = await svc.setReadPointer("conv-1", "user-1", "msg-foreign", "company-1");
+    expect(ok).toBe(false);
+    expect(mockEmitMessageRead).not.toHaveBeenCalled();
   });
 });
