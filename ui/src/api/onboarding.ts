@@ -57,7 +57,44 @@ export interface MemberOnboardingSession {
   updatedAt: string;
 }
 
+// AgentDash (#725): the Hermes provider step on a hosted box.
+export type HermesProviderId = "zai" | "openrouter" | "anthropic" | "openai";
+
+export interface HermesProviderOption {
+  provider: HermesProviderId;
+  label: string;
+  defaultModel: string;
+  keyHint: string;
+}
+
+export interface AdapterStatusResponse {
+  status: { adapter: string; ready: boolean; preset: string; reason: string | null };
+  hermesProvider?: {
+    required: boolean;
+    configured: boolean;
+    provider: HermesProviderId | null;
+    model: string | null;
+    configuredAt: string | null;
+    canConfigure: boolean;
+    options: HermesProviderOption[];
+  };
+}
+
+export interface SetupHermesProviderResponse {
+  hermesProvider: { configured: true; provider: HermesProviderId; label: string; model: string };
+  profilesUpdated: number;
+  profilesFailed: string[];
+}
+
 export const onboardingApi = {
+  adapterStatus: () => api.get<AdapterStatusResponse>("/onboarding/adapter-status"),
+  setupHermesProvider: (input: {
+    companyId: string;
+    provider: HermesProviderId;
+    apiKey: string;
+    model?: string;
+  }) =>
+    api.post<SetupHermesProviderResponse>("/onboarding/setup-adapter", { preset: "hermes", ...input }),
   listMemberSessions: () =>
     api.get<MemberOnboardingSession[]>("/onboarding/member-sessions"),
   advanceMemberSession: (

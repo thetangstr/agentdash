@@ -17,6 +17,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { logger } from "../middleware/logger.js";
 import { badRequest } from "../errors.js";
+import { hermesProviderConfiguredSync } from "./hermes-provider-setup.js";
+import { isHostedDeployment } from "./hosted-deployment.js";
 
 // ---------------------------------------------------------------------------
 // Presets
@@ -56,7 +58,9 @@ const PRESET_ENV: Record<AdapterPreset, Array<{ key: string; value: string }>> =
     { key: "MINIMAX_MODEL", value: "MiniMax-M3" },
   ],
   // Hermes holds its own provider credentials under ~/.hermes, so there is no
-  // key to collect here — readiness is whether the binary exists.
+  // key to collect here — readiness is whether the binary exists. On a hosted
+  // box the key comes in through the provider step instead (#725,
+  // routes/hermes-provider-setup.ts): same preset, plus `provider`.
   hermes: [{ key: "AGENTDASH_DEFAULT_ADAPTER", value: "hermes_local" }],
   stub: [{ key: "PAPERCLIP_E2E_SKIP_LLM", value: "true" }],
 };
@@ -162,9 +166,15 @@ export function readAdapterStatus(): AdapterStatus {
         ? { adapter, ready: true, preset: "minimax", reason: null }
         : { adapter, ready: false, preset: "minimax", reason: "MINIMAX_API_KEY not set" };
     case "hermes_local":
-      return hasBinary(process.env.AGENTDASH_HERMES_COMMAND || "hermes")
-        ? { adapter, ready: true, preset: "hermes", reason: null }
-        : { adapter, ready: false, preset: "hermes", reason: "hermes binary not found on PATH" };
+      if (!hasBinary(process.env.AGENTDASH_HERMES_COMMAND || "hermes")) {
+        return { adapter, ready: false, preset: "hermes", reason: "hermes binary not found on PATH" };
+      }
+      // AgentDash (#725): a hosted box's Hermes has no provider until the
+      // founder adds a key in onboarding. On-prem Hermes holds its own.
+      if (isHostedDeployment() && !hermesProviderConfiguredSync()) {
+        return { adapter, ready: false, preset: "hermes", reason: "Hermes provider key not configured" };
+      }
+      return { adapter, ready: true, preset: "hermes", reason: null };
     case "claude_local":
       return hasBinary("claude")
         ? { adapter, ready: true, preset: "custom", reason: null }

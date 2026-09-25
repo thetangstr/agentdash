@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "node:os";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ADAPTER_PRESETS,
@@ -285,5 +285,45 @@ describe("adapter-presets env-file injection", () => {
     } finally {
       rmSync(join(path, ".."), { recursive: true, force: true });
     }
+
+// AgentDash (#725): a hosted box's Hermes has no provider until the founder adds
+// a key in onboarding, so "the binary exists" is not "ready" there.
+describe("readAdapterStatus for hermes_local on a hosted box", () => {
+  const HOSTED_KEYS = ["AGENTDASH_DEPLOYMENT_KIND", "HERMES_PROFILES_DIR", "AGENTDASH_HERMES_PROFILE_TEMPLATE"];
+  const hostedSaved: Record<string, string | undefined> = {};
+  let profilesDir: string;
+
+  beforeEach(() => {
+    for (const k of HOSTED_KEYS) hostedSaved[k] = process.env[k];
+    profilesDir = mkdtempSync(join(tmpdir(), "adapter-presets-hosted-"));
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    process.env.AGENTDASH_HERMES_COMMAND = "/bin/sh";
+    process.env.HERMES_PROFILES_DIR = profilesDir;
+    delete process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE;
+  });
+
+  afterEach(() => {
+    rmSync(profilesDir, { recursive: true, force: true });
+    for (const k of HOSTED_KEYS) {
+      if (hostedSaved[k] === undefined) delete process.env[k];
+      else process.env[k] = hostedSaved[k];
+    }
+  });
+
+  it("is not ready until the provider is configured", () => {
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    expect(readAdapterStatus()).toMatchObject({ ready: false, reason: "Hermes provider key not configured" });
+
+    mkdirSync(join(profilesDir, "agentdash"), { recursive: true });
+    writeFileSync(
+      join(profilesDir, "agentdash", "agentdash-provider.json"),
+      JSON.stringify({ provider: "zai", model: "glm-5.3-flash", configuredAt: "2026-09-25T00:00:00.000Z" }),
+    );
+    expect(readAdapterStatus()).toMatchObject({ ready: true, preset: "hermes", reason: null });
+  });
+
+  it("is unchanged on-prem: the binary alone is ready", () => {
+    delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    expect(readAdapterStatus()).toMatchObject({ ready: true, reason: null });
   });
 });

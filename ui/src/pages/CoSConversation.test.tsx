@@ -11,6 +11,7 @@ const mockConfirmAgent = vi.hoisted(() => vi.fn());
 const mockSendInvites = vi.hoisted(() => vi.fn());
 const mockUseMessages = vi.hoisted(() => vi.fn());
 const mockChatPanelProps = vi.hoisted(() => vi.fn());
+const mockAdapterStatus = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/onboarding", () => ({
   onboardingApi: {
@@ -19,6 +20,8 @@ vi.mock("../api/onboarding", () => ({
     confirmAgent: mockConfirmAgent,
     sendInvites: mockSendInvites,
     rejectAgent: mockRejectAgent,
+    adapterStatus: mockAdapterStatus,
+    setupHermesProvider: vi.fn(),
   },
 }));
 
@@ -52,6 +55,7 @@ vi.mock("../realtime/useMessages", () => ({
 // the smoke test only cares that the chat panel renders post-bootstrap, not
 // that mention resolution works.
 vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
   useQuery: ({ queryFn, enabled }: { queryFn: () => unknown; enabled?: boolean }) => {
     if (enabled === false) {
       return { data: undefined, isLoading: false, error: null };
@@ -98,6 +102,9 @@ describe("CoSConversation", () => {
     mockBootstrap.mockReset();
     mockSendInvites.mockReset();
     mockChatPanelProps.mockClear();
+    // On-prem default: no Hermes provider step.
+    mockAdapterStatus.mockReset();
+    mockAdapterStatus.mockReturnValue({ status: { adapter: "minimax", ready: true, preset: "minimax", reason: null } });
   });
 
   afterEach(() => {
@@ -132,6 +139,62 @@ describe("CoSConversation", () => {
     });
 
     // Flush the bootstrap promise
+    await act(async () => {});
+
+    expect(container.querySelector(".chat-panel")).toBeTruthy();
+  });
+
+  // AgentDash (#725): a hosted box asks for the Hermes provider key before the CoS chat.
+  it("asks for a Hermes provider key first on a hosted box that has none", async () => {
+    mockBootstrap.mockResolvedValue({ companyId: "c1", cosAgentId: "a1", conversationId: "conv1" });
+    mockAdapterStatus.mockReturnValue({
+      status: { adapter: "hermes_local", ready: false, preset: "hermes", reason: "Hermes provider key not configured" },
+      hermesProvider: {
+        required: true,
+        configured: false,
+        provider: null,
+        model: null,
+        configuredAt: null,
+        canConfigure: true,
+        options: [
+          { provider: "zai", label: "Z.AI (GLM)", defaultModel: "glm-5.3-flash", keyHint: "API key from z.ai" },
+          { provider: "openrouter", label: "OpenRouter", defaultModel: "z-ai/glm-5.2", keyHint: "sk-or-…" },
+          { provider: "anthropic", label: "Anthropic", defaultModel: "claude-sonnet-5", keyHint: "sk-ant-…" },
+          { provider: "openai", label: "OpenAI", defaultModel: "gpt-5.4-mini", keyHint: "sk-…" },
+        ],
+      },
+    });
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<CoSConversation />);
+    });
+    await act(async () => {});
+
+    expect(container.querySelector(".chat-panel")).toBeNull();
+    expect(container.textContent).toContain("Connect a model provider");
+    expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(4);
+  });
+
+  it("goes straight to the chat once the hosted box has a provider", async () => {
+    mockBootstrap.mockResolvedValue({ companyId: "c1", cosAgentId: "a1", conversationId: "conv1" });
+    mockAdapterStatus.mockReturnValue({
+      status: { adapter: "hermes_local", ready: true, preset: "hermes", reason: null },
+      hermesProvider: {
+        required: true,
+        configured: true,
+        provider: "zai",
+        model: "glm-5.3-flash",
+        configuredAt: "2026-09-25T00:00:00.000Z",
+        canConfigure: true,
+        options: [],
+      },
+    });
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<CoSConversation />);
+    });
     await act(async () => {});
 
     expect(container.querySelector(".chat-panel")).toBeTruthy();

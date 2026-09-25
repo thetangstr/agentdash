@@ -45,6 +45,12 @@ import {
   type AdapterPreset,
 } from "../services/adapter-presets.js";
 import { logger } from "../middleware/logger.js";
+import { createHermesProviderSetupHandler } from "./hermes-provider-setup.js";
+import {
+  hermesProviderOptions,
+  readHermesProviderStatus,
+} from "../services/hermes-provider-setup.js";
+import { isHostedDeployment } from "../services/hosted-deployment.js";
 import { sendEmail, inviteEmailTemplate } from "../auth/email.js";
 import {
   FIXED_QUESTIONS,
@@ -129,6 +135,8 @@ function initialAssessmentGoals(input: Record<string, unknown>, markdown: string
 }
 
 export function onboardingV2Routes(db: Db) {
+  // AgentDash (#725)
+  const hermesProviderSetup = createHermesProviderSetupHandler(db);
   const router = Router();
   const conversations = conversationService(db);
   const agents = agentService(db);
@@ -1097,6 +1105,16 @@ No greetings. No markdown headings outside the JSON block.`;
     res.json({
       status: readAdapterStatus(),
       options: adapterPresetOptions(),
+      // AgentDash (#725): the Hermes provider step. `required` is true on a
+      // hosted box, where Hermes is the only runtime and holds no key until the
+      // founder adds one. Key material is never part of this.
+      hermesProvider: {
+        required: isHostedDeployment(),
+        ...(await readHermesProviderStatus()),
+        // Only the instance admin may set it (the setup route enforces this).
+        canConfigure: req.actor.source === "local_implicit" || req.actor.isInstanceAdmin === true,
+        options: hermesProviderOptions(),
+      },
     });
   });
 
@@ -1107,6 +1125,12 @@ No greetings. No markdown headings outside the JSON block.`;
   router.post("/setup-adapter", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
+    }
+    // AgentDash (#725): the hermes preset with a provider takes the customer's
+    // provider key and writes it into Hermes (instance admin, company-scoped).
+    if (req.body?.preset === "hermes" && req.body?.provider !== undefined) {
+      await hermesProviderSetup(req, res);
+      return;
     }
     const { preset, apiKey } = req.body as { preset?: string; apiKey?: string };
     if (!preset || typeof preset !== "string") {

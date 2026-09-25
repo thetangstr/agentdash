@@ -1,12 +1,13 @@
 // AgentDash: CoSConversation — onboarding v2 entry point
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
 import { agentsApi } from "../api/agents";
 import { conversationsApi } from "../api/conversations";
 import { useCompany } from "../context/CompanyContext";
 import type { CardContext } from "../components/cards";
+import { HermesProviderStep } from "../components/onboarding/HermesProviderStep";
 
 interface BootstrapState {
   companyId: string;
@@ -179,6 +180,29 @@ function CoSConversationView({
     name: a.name,
     role: a.role,
   }));
+
+  // AgentDash (#725): a hosted box's Hermes has no model provider until the
+  // founder adds a key, so the CoS cannot reply yet. Ask for it first.
+  const queryClient = useQueryClient();
+  const adapterStatusKey = ["onboarding-adapter-status"];
+  const { data: adapterStatus } = useQuery({
+    queryKey: adapterStatusKey,
+    queryFn: () => onboardingApi.adapterStatus(),
+    retry: false,
+  });
+  const hermesProvider = adapterStatus?.hermesProvider;
+  if (hermesProvider?.required && !hermesProvider.configured) {
+    return (
+      <HermesProviderStep
+        companyId={bootstrapped.companyId}
+        options={hermesProvider.options}
+        canConfigure={hermesProvider.canConfigure}
+        onConfigured={() => {
+          void queryClient.invalidateQueries({ queryKey: adapterStatusKey });
+        }}
+      />
+    );
+  }
 
   return (
     <div className="fixed inset-0 flex flex-col">
