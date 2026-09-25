@@ -2352,14 +2352,10 @@ export function agentRoutes(
     const rollbackAuthority = await assertCanUpdateAgent(req, existing, new Set(), new Set());
     // A rollback restores a whole prior configuration — including fields no
     // ceiling dimension covers (role, adapterConfig) and values captured before
-    // the current ceiling existed. Stewardship alone is not sufficient, and an
-    // agent authority even less so: PATCH already refuses agents the self
-    // fields a snapshot restores (budget, reportsTo, adapter config, and the
-    // daily token ceiling), so letting an agent roll back would re-open every
-    // one of them through a door the PATCH checks never see.
-    if (rollbackAuthority !== "admin") {
+    // the current ceiling existed. Stewardship alone is not sufficient.
+    if (rollbackAuthority === "steward") {
       throw forbidden(
-        "Configuration rollback requires an administrator with agents:create — the restored snapshot can carry fields the caller may not change directly",
+        "Stewardship does not permit configuration rollback; an administrator with agents:create must perform it",
       );
     }
     // AgentDash (security): a rollback restores role, reportsTo, budget and
@@ -3622,6 +3618,10 @@ export function agentRoutes(
       // wholesale, so dropping `heartbeat.maxDailyTokens` here would reset a
       // steward-set ceiling to the default. Compared on the resolved value so
       // an unchanged ceiling (or an equivalent spelling of it) still passes.
+      // Self-edits of runtimeConfig are already refused by the
+      // AGENT_SELF_PATCHABLE_FIELDS allowlist above; this guard is what stops
+      // an agent authority (CEO, agents:create holder) moving another agent's
+      // ceiling.
       if (updateAuthority === "agent") {
         const before = resolveMaxDailyTokens(existing.runtimeConfig).ceiling;
         const after = resolveMaxDailyTokens(runtimeConfig).ceiling;

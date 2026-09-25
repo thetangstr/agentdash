@@ -978,7 +978,10 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
       expect(res.status).toBe(403);
     });
 
-    it("lets an agent PATCH runtimeConfig when the ceiling is unchanged", async () => {
+    // AGE-113/#716 made self-edits an allowlist: runtimeConfig is not on it,
+    // so the self-PATCH is refused before the ceiling comparison below ever
+    // runs — even when the submitted ceiling matches the stored one.
+    it("refuses an agent self-PATCH of runtimeConfig even when the ceiling is unchanged", async () => {
       const { company, agent } = await seed();
       await db
         .update(agents)
@@ -996,9 +999,14 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
           }),
       );
 
-      expect(res.status, JSON.stringify(res.body)).toBe(200);
-      expect(res.body.runtimeConfig).toMatchObject({
-        heartbeat: { maxDailyTokens: 1_000_000, intervalSec: 600 },
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      const unchanged = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .then((rows) => rows[0]!);
+      expect(unchanged.runtimeConfig ?? {}).not.toMatchObject({
+        heartbeat: { intervalSec: 600 },
       });
     });
 
