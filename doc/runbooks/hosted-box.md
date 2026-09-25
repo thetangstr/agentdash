@@ -198,6 +198,7 @@ Boxes do not auto-deploy. `.github/workflows/deploy.yml` targets only the old `a
 | `AGENTDASH_FREE_AGENT_CAP` | `2` | 1.0 plan: the CoS does not use up the only Free agent |
 | `AGENTDASH_DEPLOYMENT_KIND` | `hosted` | Hosted-box boot guard (#726, PR #729); the four variables it requires are all set here |
 | `AGENTDASH_HERMES_MANAGED_PROFILES` | `true` | Per-agent Hermes profiles (#721, pending) |
+| `AGENTDASH_TRIAL_ANONYMOUS` | `false` | The anonymous Test Drive creates a company, and a hosted box holds exactly one (#725). The trial routes, including `/api/trial/share/:shareToken`, answer 503 `trial_disabled` on a hosted box whatever this says, and the boot guard refuses `true` |
 | `AGENTDASH_RELEASE_TAG`, `AGENTDASH_BOX_SLUG` | tag, slug | Operator bookkeeping |
 | `BETTER_AUTH_SECRET` | generated, 32 bytes hex | Session signing |
 | `PAPERCLIP_SECRETS_MASTER_KEY` | generated, 32 bytes base64 | Encrypts company secrets; escrow it |

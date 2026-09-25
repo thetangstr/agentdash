@@ -62,7 +62,7 @@ import {
   evaluationScorecards,
   evaluationIngestState,
 } from "@paperclipai/db";
-import { notFound, unprocessable } from "../errors.js";
+import { HttpError, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { environmentService } from "./environments.js";
 import { isHostedBox } from "./license.js";
@@ -86,15 +86,20 @@ export class DomainAlreadyClaimedError extends Error {
 
 // AgentDash (#102): surfaced when a bootstrap attempt tries to create a new
 // company but the installation already has one (and multi-company is not allowed).
-export class SingleCompanyInstallationError extends Error {
-  readonly code = "single_company_installation" as const;
+// AgentDash (#725): an HttpError (409), so every create path that does not
+// catch it itself (trial, portability import, …) still answers 409, not 500.
+export class SingleCompanyInstallationError extends HttpError {
+  declare readonly code: "single_company_installation";
   readonly existingCompanyId: string | null;
 
   constructor(existingCompanyId: string | null) {
     super(
+      409,
       existingCompanyId
         ? `Installation already has a workspace (${existingCompanyId})`
         : "Installation already has a workspace",
+      { code: "single_company_installation", existingCompanyId },
+      "single_company_installation",
     );
     this.name = "SingleCompanyInstallationError";
     this.existingCompanyId = existingCompanyId;

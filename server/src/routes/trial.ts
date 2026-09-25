@@ -19,6 +19,7 @@ import type { Db } from "@paperclipai/db";
 import { trialService } from "../services/trial.js";
 import { assertBoard } from "./authz.js";
 import { badRequest } from "../errors.js";
+import { isHostedBox } from "../services/license.js";
 
 /**
  * Hash the client IP for abuse metering. We never store the raw IP. A static
@@ -45,8 +46,11 @@ export function trialRoutes(db: Db) {
   // no code redeploy — the instant lever to pull when under attack. Default is
   // "true" (enabled). The shared-public /share/:shareToken read is still gated
   // here too: disabling the trial disables the whole surface.
+  // AgentDash (#725): a hosted box holds exactly one company, and a trial
+  // session creates one, so the whole trial surface is off there whatever
+  // AGENTDASH_TRIAL_ANONYMOUS says (the boot guard also refuses it set true).
   router.use((_req, res, next) => {
-    if ((process.env.AGENTDASH_TRIAL_ANONYMOUS ?? "true").toLowerCase() === "false") {
+    if (isHostedBox() || (process.env.AGENTDASH_TRIAL_ANONYMOUS ?? "true").toLowerCase() === "false") {
       res.status(503).json({ error: "trial_disabled" });
       return;
     }

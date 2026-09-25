@@ -1,6 +1,8 @@
 // AgentDash (#725, orchestrator decision for 1.0): a hosted box holds exactly
 // one company. Every create path goes through companyService.create, which
 // refuses a second active company under an advisory lock.
+import express from "express";
+import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { companies, createDb } from "@paperclipai/db";
 import {
@@ -8,6 +10,8 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { companyService, SingleCompanyInstallationError } from "../services/companies.js";
+import { errorHandler } from "../middleware/error-handler.js";
+import { trialRoutes } from "../routes/trial.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -45,6 +49,44 @@ describeEmbeddedPostgres("hosted box: one company", () => {
     expect(rejected[0]!.reason).toBeInstanceOf(SingleCompanyInstallationError);
     await expect(svc.create({ name: "Third" })).rejects.toBeInstanceOf(SingleCompanyInstallationError);
     expect(await db.select().from(companies)).toHaveLength(1);
+  });
+
+  // The anonymous Test Drive creates a company. Were it reachable, a stranger
+  // could take the box's only company before the founder.
+  it("refuses the whole trial surface on a hosted box, and the founder's first company then succeeds", async () => {
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    const savedTrial = process.env.AGENTDASH_TRIAL_ANONYMOUS;
+    process.env.AGENTDASH_TRIAL_ANONYMOUS = "true";
+    try {
+      const app = express();
+      app.use(express.json());
+      app.use("/api/trial", trialRoutes(db));
+      app.use(errorHandler);
+
+      const session = await request(app).post("/api/trial/session").send({});
+      expect(session.status).toBe(503);
+      expect(session.body).toEqual({ error: "trial_disabled" });
+      expect((await request(app).get("/api/trial/share/some-token")).status).toBe(503);
+      expect(await db.select().from(companies)).toHaveLength(0);
+
+      const founder = await companyService(db).create({ name: "Founder Co" });
+      expect(founder.name).toBe("Founder Co");
+      expect(await db.select().from(companies)).toHaveLength(1);
+    } finally {
+      if (savedTrial === undefined) delete process.env.AGENTDASH_TRIAL_ANONYMOUS;
+      else process.env.AGENTDASH_TRIAL_ANONYMOUS = savedTrial;
+    }
+  });
+
+  it("answers 409, not 500, when a create path does not catch the one-company error", async () => {
+    const app = express();
+    app.post("/create", () => {
+      throw new SingleCompanyInstallationError("company-existing");
+    });
+    app.use(errorHandler);
+    const res = await request(app).post("/create");
+    expect(res.status).toBe(409);
+    expect(res.body.details).toMatchObject({ code: "single_company_installation", existingCompanyId: "company-existing" });
   });
 
   it("allows several companies off a hosted box", async () => {

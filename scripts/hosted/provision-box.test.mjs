@@ -138,6 +138,8 @@ test("an existing box's secrets are never regenerated", () => {
     const sent = JSON.parse(read(ctx, "upsert.json")).i.variables;
     for (const k of Object.keys(SECRETS)) assert.equal(sent[k], undefined, `${k} must not be rewritten`);
     assert.equal(sent.AGENTDASH_DEPLOYMENT_KIND, "hosted");
+    // The anonymous Test Drive creates a company; a hosted box holds one (#725).
+    assert.equal(sent.AGENTDASH_TRIAL_ANONYMOUS, "false");
     assert.equal(sent.DATABASE_URL, "${{Database.DATABASE_URL}}", "Postgres is found by image, not by name");
   } finally { rmSync(ctx.root, { recursive: true, force: true }); }
 });

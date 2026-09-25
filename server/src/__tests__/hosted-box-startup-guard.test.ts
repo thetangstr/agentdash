@@ -256,4 +256,21 @@ describe("hosted-box boot guard (#726)", () => {
       expect(createDbMock).not.toHaveBeenCalled();
     });
   });
+
+  // AgentDash (#725): the anonymous trial creates a company; a hosted box holds one.
+  describe("anonymous trial", () => {
+    it("refuses AGENTDASH_TRIAL_ANONYMOUS=true on a hosted box", () => {
+      const errors = hostedBoxConfigErrors(authenticated, safeHostedEnv({ AGENTDASH_TRIAL_ANONYMOUS: "true" }));
+      expect(errors.some((line) => line.includes("AGENTDASH_TRIAL_ANONYMOUS"))).toBe(true);
+    });
+
+    it("accepts it false or unset (the routes are off on hosted either way)", () => {
+      expect(hostedBoxConfigErrors(authenticated, safeHostedEnv({ AGENTDASH_TRIAL_ANONYMOUS: "false" }))).toEqual([]);
+      expect(hostedBoxConfigErrors(authenticated, safeHostedEnv())).toEqual([]);
+    });
+
+    it("ignores it off hosted boxes", () => {
+      expect(hostedBoxConfigErrors(authenticated, { AGENTDASH_TRIAL_ANONYMOUS: "true" })).toEqual([]);
+    });
+  });
 });
