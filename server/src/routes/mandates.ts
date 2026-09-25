@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { createMandateSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { mandatesService } from "../services/mandates.js";
+import { mandateTenancy } from "../services/mandate-tenancy.js";
 import { assertCanSetCompanyDirection, assertCompanyAccess } from "./authz.js";
 
 const publishMandateSchema = z.object({
@@ -13,6 +14,7 @@ const publishMandateSchema = z.object({
 export function mandateRoutes(db: Db) {
   const router = Router();
   const svc = mandatesService(db);
+  const tenancy = mandateTenancy(db);
 
   router.get("/companies/:companyId/mandates", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -25,6 +27,10 @@ export function mandateRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCanSetCompanyDirection(req, companyId);
     const b = req.body as import("@paperclipai/shared").CreateMandateRequest;
+    // AgentDash (security): a mandate may only name agents of its own company.
+    // Otherwise company A could mint a mandate whose grantee is company B's
+    // agent and later drive enforcement (pause) against it.
+    await tenancy.assertAgentsInCompany(companyId, [b.grantorAgentId, b.granteeAgentId]);
     const mandate = await svc.createMandate({
       companyId,
       grantorAgentId: b.grantorAgentId,

@@ -1,12 +1,13 @@
 import { and, desc, eq } from "drizzle-orm";
 import { emitSignal } from "../observability/signals.js";
 import type { Db } from "@paperclipai/db";
-import { mandates as mandatesTable, mandateAttestations } from "@paperclipai/db";
+import { mandateAttestations } from "@paperclipai/db";
 import { clockchainService } from "./clockchain.js";
 import { agentIdentityService } from "./agent-identity.js";
 import { mandatesService } from "./mandates.js";
 import { approvalService } from "./approvals.js";
 import { agentService } from "./agents.js";
+import { mandateTenancy } from "./mandate-tenancy.js";
 import {
   zkPermissionService,
   proveMandatePermission,
@@ -49,6 +50,7 @@ export function mandatedActionService(
   approvals = approvalService(db),
   agents = agentService(db),
   zk = zkPermissionService(db),
+  tenancy = mandateTenancy(db),
 ) {
   async function performMandatedAction(input: MandatedActionInput, now: Date = new Date()): Promise<MandatedActionResult> {
     // 1. Mandate — fail-closed.
@@ -192,6 +194,11 @@ export function mandatedActionService(
     input: MandatedActionInput,
     now: Date = new Date(),
   ): Promise<MandatedActionResult & { escalated: boolean; approvalId?: string }> {
+    // AgentDash (security): before any evaluation or side effect (approval,
+    // pause, attest), bind the mandate, its grantor/grantee, and the
+    // caller-supplied grantee to input.companyId. Throws 404 otherwise, so a
+    // foreign mandate or a foreign agent id can never reach agents.pause().
+    await tenancy.loadMandateInCompany(input.companyId, input.mandateId, [input.granteeAgentId]);
     const result = await performMandatedAction(input, now);
     if (!result.authorized && result.reason && BOUNCE_BACK_REASONS.has(result.reason)) {
       const approval = await approvals.create(input.companyId, {
@@ -214,8 +221,9 @@ export function mandatedActionService(
   // Mints + anchors a fresh counterparty identity so KYA (valid-at-T) passes — the demo
   // counterpart is "Billie (Trellis Freight)". The action must be in the mandate's scope.
   async function runDemoAttestation(input: { companyId: string; mandateId: string; action: string }) {
-    const [mandate] = await db.select().from(mandatesTable).where(eq(mandatesTable.id, input.mandateId));
-    if (!mandate) throw new Error("mandate_not_found");
+    // AgentDash (security): load the mandate scoped to the route's company, with
+    // its grantor/grantee bound to that company too — never by id alone.
+    const mandate = await tenancy.loadMandateInCompany(input.companyId, input.mandateId);
 
     const suffix = Math.random().toString(36).slice(2, 8);
     const counterpartyDid = `did:clockchain:agentdash:billie-${suffix}`;

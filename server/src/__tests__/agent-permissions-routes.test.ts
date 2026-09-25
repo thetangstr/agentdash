@@ -549,15 +549,20 @@ describe.sequential("agent permission routes", () => {
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
-  it("blocks agent-authenticated self-updates that set cheap-profile host-executed workspace commands", async () => {
-    mockAgentService.getById.mockResolvedValue({
-      ...baseAgent,
-      adapterType: "codex_local",
-    });
+  it("blocks agent-authenticated updates that set cheap-profile host-executed workspace commands", async () => {
+    // AgentDash (security): runtimeConfig is no longer self-editable at all, so
+    // the workspace-command gate is exercised by a CEO agent editing another
+    // agent — the path that still reaches it.
+    const ceoAgentId = "44444444-4444-4444-8444-444444444444";
+    mockAgentService.getById.mockImplementation(async (id: string) => (
+      id === ceoAgentId
+        ? { ...baseAgent, id: ceoAgentId, name: "CEO", urlKey: "ceo", role: "ceo" }
+        : { ...baseAgent, adapterType: "codex_local" }
+    ));
 
     const app = await createApp({
       type: "agent",
-      agentId,
+      agentId: ceoAgentId,
       companyId,
       source: "agent_key",
       runId: "run-1",
@@ -1545,5 +1550,116 @@ describe.sequential("agent permission routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+  });
+
+  // AgentDash (security): agent self-edits are an allowlist. An ordinary agent
+  // used to be able to PATCH itself to role "ceo" because the old denylist
+  // omitted `role`, and CEO status then authorized modifying other agents.
+  describe("agent self-edit allowlist", () => {
+    const agentActor = {
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    };
+
+    it("refuses an agent promoting itself to CEO", async () => {
+      const app = await createApp(agentActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ role: "ceo" }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("An agent cannot change its own role");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    const refusedSelfFields: Array<[string, Record<string, unknown>]> = [
+      ["budgetMonthlyCents", { budgetMonthlyCents: 99_999_999 }],
+      ["reportsTo", { reportsTo: null }],
+      ["adapterType", { adapterType: "process" }],
+      ["adapterConfig", { adapterConfig: { command: "echo hi" } }],
+      ["status", { status: "idle" }],
+      ["spentMonthlyCents", { spentMonthlyCents: 0 }],
+      ["runtimeConfig", { runtimeConfig: { heartbeat: { enabled: true } } }],
+      ["metadata", { metadata: { harnessPreflight: { ok: true } } }],
+      ["autonomy", { autonomy: "autonomous" }],
+      ["defaultEnvironmentId", { defaultEnvironmentId: null }],
+    ];
+
+    for (const [field, body] of refusedSelfFields) {
+      it(`refuses an agent changing its own ${field}`, async () => {
+        const app = await createApp(agentActor);
+
+        const res = await requestApp(app, (baseUrl) => request(baseUrl)
+          .patch(`/api/agents/${agentId}`)
+          .send(body));
+
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+        expect(res.body.error).toContain(`An agent cannot change its own ${field}`);
+        expect(mockAgentService.update).not.toHaveBeenCalled();
+      });
+    }
+
+    it("refuses the whole request when an allowed field rides along with a refused one", async () => {
+      const app = await createApp(agentActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ title: "Chief Executive", role: "ceo" }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("An agent cannot change its own role");
+      expect(mockAgentService.update).not.toHaveBeenCalled();
+    });
+
+    it("still lets an agent change its own presentation fields", async () => {
+      const app = await createApp(agentActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ title: "Senior Builder", capabilities: "Ships server routes" }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(mockAgentService.update).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({ title: "Senior Builder", capabilities: "Ships server routes" }),
+        expect.anything(),
+      );
+    });
+
+    it("refuses an agent rolling back its own configuration", async () => {
+      const app = await createApp(agentActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/agents/${agentId}/config-revisions/33333333-3333-4333-8333-333333333333/rollback`)
+        .send({}));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("An agent cannot roll back agent configuration");
+    });
+
+    it("lets a board admin change an agent's role", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      });
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ role: "ceo" }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(mockAgentService.update).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({ role: "ceo" }),
+        expect.anything(),
+      );
+    });
   });
 });

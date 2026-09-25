@@ -142,18 +142,17 @@ function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: Worksp
   const configPatch: Record<string, unknown> = {};
 
   const maybeAssign = (
-    key: keyof Pick<WorkspaceFormState, "name" | "cwd" | "repoUrl" | "baseRef" | "branchName" | "providerRef">,
+    // AgentDash (security): cwd, providerRef and branchName are runtime-owned and
+    // rejected by the server if changed, so they are shown read-only and never sent.
+    key: keyof Pick<WorkspaceFormState, "name" | "repoUrl" | "baseRef">,
   ) => {
     if (initialState[key] === nextState[key]) return;
     patch[key] = key === "name" ? (normalizeText(nextState[key]) ?? initialState.name) : normalizeText(nextState[key]);
   };
 
   maybeAssign("name");
-  maybeAssign("cwd");
   maybeAssign("repoUrl");
   maybeAssign("baseRef");
-  maybeAssign("branchName");
-  maybeAssign("providerRef");
 
   const maybeAssignConfigText = (key: keyof Pick<WorkspaceFormState, "provisionCommand" | "teardownCommand" | "cleanupCommand">) => {
     if (initialState[key] === nextState[key]) return;
@@ -820,11 +819,11 @@ export function ExecutionWorkspaceDetail() {
                 <div className="space-y-4">
                   <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Source control</div>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Branch name" hint="Useful for isolated worktrees">
+                    <Field label="Branch name" hint="Managed by the runtime">
                       <Input
                         className="font-mono"
                         value={form.branchName}
-                        onChange={(event) => setForm((current) => current ? { ...current, branchName: event.target.value } : current)}
+                        readOnly
                         placeholder="PAP-946-workspace"
                       />
                     </Field>
@@ -856,7 +855,7 @@ export function ExecutionWorkspaceDetail() {
                     <Input
                       className="font-mono"
                       value={form.cwd}
-                      onChange={(event) => setForm((current) => current ? { ...current, cwd: event.target.value } : current)}
+                      readOnly
                       placeholder="/absolute/path/to/workspace"
                     />
                   </Field>
@@ -865,7 +864,7 @@ export function ExecutionWorkspaceDetail() {
                     <Input
                       className="font-mono"
                       value={form.providerRef}
-                      onChange={(event) => setForm((current) => current ? { ...current, providerRef: event.target.value } : current)}
+                      readOnly
                       placeholder="/path/to/worktree or provider ref"
                     />
                   </Field>

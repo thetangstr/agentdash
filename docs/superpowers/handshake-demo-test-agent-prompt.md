@@ -107,7 +107,7 @@ This is the human-in-the-loop path.
 
 ### TC-9 — The turnkey "Go" orchestrator (the headline)
 This is the one-button demo. It is **idempotent and resumable**: each `go` advances to the next gate and pauses at the two human approvals.
-- **Where:** `POST /api/handshake-demo/go` (board-only; works as the implicit board actor).
+- **Where:** `POST /api/handshake-demo/go` (instance-admin only; works as the implicit board actor). Requires `AGENTDASH_HANDSHAKE_DEMO_ENABLED=true` on the server — the route 404s when unset.
 - **Do (Go #1):** `POST /api/handshake-demo/go`.
   - **Expect (PASS):** `done:false`; `steps[]` shows `seed` = done, `discover` = done, and pauses at `onboard` = **waiting_approval** with an `approvalId`.
   - **Must NOT see:** `discover` blocked (means the gateway/flag is off); an unhandled 500.
