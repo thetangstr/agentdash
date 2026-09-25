@@ -149,7 +149,7 @@ It restores `db.dump` into a throwaway local Postgres container of the same majo
 
 **Real restore (box lost or corrupted):**
 
-1. Provision a replacement: `provision-box.sh --slug <slug>-restore --release <same tag> --no-deploy`. New box slugs are capped at 24 characters so `<slug>-restore` always fits the 32-character limit.
+1. Provision a replacement: `provision-box.sh --slug <slug>-restore --release <same tag> --no-deploy`. New box slugs are capped at 16 characters so `<slug>-restore` (at most 24) can always be created; the script accepts a `-restore` slug up to 24.
 2. Set its `PAPERCLIP_SECRETS_MASTER_KEY` and `BETTER_AUTH_SECRET` to the escrowed values of the old box (so secrets decrypt and sessions survive).
 3. Restore the dump into its Postgres through a temporary TCP proxy (as `backup-box.sh` opens one): `pg_restore --clean --if-exists --no-owner --no-privileges db.dump` from a `postgres:<major>` container with the `PG*` variables in an env file, then delete the proxy.
 4. Restore the Volume: deploy once, then `railway ssh --service web` and extract `volume.tgz` into `/paperclip` (or restore a Railway snapshot onto the volume).

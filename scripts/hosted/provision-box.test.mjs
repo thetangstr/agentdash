@@ -193,3 +193,20 @@ test("refuses to run under bash -x", () => {
     assert.equal(read(ctx, "requests.log"), "", "no API call before the refusal");
   } finally { rmSync(ctx.root, { recursive: true, force: true }); }
 });
+
+test("box slugs are capped at 16 so every box can be restored", () => {
+  const ctx = setup({ deployed: false, vars: {} });
+  try {
+    const long = run(ctx, ["--slug", "acme-corporation-eu", "--release", "v2026.924.0", "--no-deploy"]);
+    assert.notEqual(long.status, 0);
+    assert.match(long.stderr, /new box slugs are at most 16 chars/);
+    assert.ok(!read(ctx, "requests.log").includes("projectCreate"), "no project is created for a too-long slug");
+    // The longest allowed box slug, and its restore slug, both pass validation
+    // and reach project creation (the fake API does not implement it).
+    for (const slug of ["acme-corporation", "acme-corporation-restore"]) {
+      const r = run(ctx, ["--slug", slug, "--release", "v2026.924.0", "--no-deploy"]);
+      assert.doesNotMatch(r.stderr, /slugs are/, slug);
+    }
+    assert.equal(read(ctx, "requests.log").split("projectCreate").length - 1, 2, "both reached projectCreate");
+  } finally { rmSync(ctx.root, { recursive: true, force: true }); }
+});

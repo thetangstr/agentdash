@@ -112,14 +112,19 @@ assert_box_project_name() {
   esac
 }
 
-# Slugs are capped at 24 so a restore slug "<slug>-restore" still fits 32.
+# Box slugs are capped at 16 at creation so the restore project
+# "<slug>-restore" (up to 24) is itself a valid new slug.
 validate_slug() {
   [[ "$1" =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]] && [ "${#1}" -le 32 ] \
     || die "slug must be 3-32 chars of a-z, 0-9 and '-', starting with a letter"
 }
+BOX_SLUG_MAX=16
 validate_new_slug() {
   validate_slug "$1"
-  [ "${#1}" -le 24 ] || die "new box slugs are at most 24 chars (so '<slug>-restore' fits the 32-char limit)"
+  case "$1" in
+    *-restore) [ "${#1}" -le $((BOX_SLUG_MAX + 8)) ] || die "restore slugs are '<box slug>-restore' with a box slug of at most ${BOX_SLUG_MAX} chars" ;;
+    *) [ "${#1}" -le "$BOX_SLUG_MAX" ] || die "new box slugs are at most ${BOX_SLUG_MAX} chars (so '<slug>-restore' can always be created)" ;;
+  esac
 }
 
 # find_project <name> -> the project JSON {id,name,environments,services} or nothing.

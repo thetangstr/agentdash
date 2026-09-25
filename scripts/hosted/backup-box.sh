@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SLUG" ] || die "--slug is required"
 validate_slug "$SLUG"
-require_tools railway jq curl docker base64
+require_tools railway jq curl docker base64 openssl
 
 PROJECT_NAME="${BOX_PROJECT_PREFIX}${SLUG}"
 assert_box_project_name "$PROJECT_NAME"
