@@ -386,7 +386,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     // they earn a tool of their own.
     makeTool(
       "update_agent",
-      "Rename or retitle an agent: update its name, role, title, icon, reporting line, or capabilities. Only the fields you pass are changed.",
+      "Rename or retitle an agent: update its name, role, title, icon, reporting line, or capabilities. Only the fields you pass are changed. Role and reporting line need a board (human) key; an agent key may change only name, title, icon and capabilities, and only on agents it is allowed to manage.",
       // A plain object, not a `.refine()`: `makeTool` needs a ZodObject so the
       // server can read `.shape` when it advertises this tool's JSON schema.
       // A ZodEffects type-checks as a validator and then hides the shape, so

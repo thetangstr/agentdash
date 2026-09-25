@@ -550,9 +550,10 @@ describe.sequential("agent permission routes", () => {
   });
 
   it("blocks agent-authenticated updates that set cheap-profile host-executed workspace commands", async () => {
-    // AgentDash (security): runtimeConfig is no longer self-editable at all, so
-    // the workspace-command gate is exercised by a CEO agent editing another
-    // agent — the path that still reaches it.
+    // AgentDash (security): runtimeConfig is no longer self-editable at all
+    // (#716), and since #727 a CEO agent cannot change another agent's
+    // runtimeConfig either. The peer allowlist refuses it before the
+    // workspace-command gate, which stays as defence in depth.
     const ceoAgentId = "44444444-4444-4444-8444-444444444444";
     mockAgentService.getById.mockImplementation(async (id: string) => (
       id === ceoAgentId
@@ -586,10 +587,8 @@ describe.sequential("agent permission routes", () => {
       }));
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("host-executed workspace commands");
-    expect(res.body.error).toContain(
-      "runtimeConfig.modelProfiles.cheap.adapterConfig.workspaceStrategy.provisionCommand",
-    );
+    expect(res.body.error).toContain("An agent cannot change another agent's runtimeConfig");
+    expect(mockAgentService.update).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 

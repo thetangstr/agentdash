@@ -953,10 +953,30 @@ export function agentRoutes(
     "capabilities",
   ]);
 
+  // AgentDash (security, #727): the fields a CEO agent or an `agents:create`
+  // holder may change on ANOTHER agent through `PATCH /agents/:id`. Same
+  // allowlist shape as the self-edit list above. Before this, the peer path
+  // returned "agent" with no field check, so a CEO agent could PATCH another
+  // agent's `role` (to ceo), `status` (un-pausing an agent the board paused,
+  // around the board-only `POST /agents/:id/pause` and `/resume`),
+  // `spentMonthlyCents` (reset its spend), `reportsTo` and `runtimeConfig`.
+  // Authority-bearing fields — role, status, spend, budget, reporting line,
+  // runtime and adapter configuration, autonomy, environment, metadata — need
+  // a board actor. What an agent may change on a peer is presentation plus the
+  // skill assignment that `POST /agents/:id/skills/sync` already allows.
+  const AGENT_PEER_PATCHABLE_FIELDS: ReadonlySet<string> = new Set([
+    "name",
+    "title",
+    "icon",
+    "capabilities",
+    "desiredSkills",
+  ]);
+
   async function assertCanUpdateAgent(
     req: Request,
     targetAgent: { id: string; companyId: string },
     selfEditableFields: ReadonlySet<string>,
+    peerEditableFields: ReadonlySet<string>,
   ): Promise<"admin" | "steward" | "agent"> {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
@@ -988,15 +1008,30 @@ export function agentRoutes(
       }
       return "agent";
     }
-    if (actorAgent.role === "ceo") return "agent";
-    const allowedByGrant = await access.hasPermission(
-      targetAgent.companyId,
-      "agent",
-      actorAgent.id,
-      "agents:create",
-    );
-    if (allowedByGrant || canCreateAgents(actorAgent)) return "agent";
-    throw forbidden("Only CEO or agent creators can modify other agents");
+    const allowedToModifyPeers =
+      actorAgent.role === "ceo"
+      || canCreateAgents(actorAgent)
+      || (await access.hasPermission(
+        targetAgent.companyId,
+        "agent",
+        actorAgent.id,
+        "agents:create",
+      ));
+    if (!allowedToModifyPeers) {
+      throw forbidden("Only CEO or agent creators can modify other agents");
+    }
+    // AgentDash (security, #727): a CEO or agent creator may change another
+    // agent only through the calling route's peer allowlist.
+    const peerBody = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+    const refusedForPeer = Object.keys(peerBody)
+      .filter((field) => !peerEditableFields.has(field))
+      .sort();
+    if (refusedForPeer.length > 0) {
+      throw forbidden(
+        `An agent cannot change another agent's ${refusedForPeer.join(", ")}. Ask an owner, admin or operator.`,
+      );
+    }
+    return "agent";
   }
 
   async function assertCanReadAgent(req: Request, targetAgent: { companyId: string }) {
@@ -1889,7 +1924,7 @@ export function agentRoutes(
         return;
       }
       // Self skill sync stays allowed: it is documented agent behaviour.
-      await assertCanUpdateAgent(req, agent, new Set(["desiredSkills"]));
+      await assertCanUpdateAgent(req, agent, new Set(["desiredSkills"]), new Set(["desiredSkills"]));
 
       const requestedSkills = Array.from(
         new Set(
@@ -2240,7 +2275,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    const rollbackAuthority = await assertCanUpdateAgent(req, existing, new Set());
+    const rollbackAuthority = await assertCanUpdateAgent(req, existing, new Set(), new Set());
     // A rollback restores a whole prior configuration — including fields no
     // ceiling dimension covers (role, adapterConfig) and values captured before
     // the current ceiling existed. Stewardship alone is not sufficient.
@@ -3251,7 +3286,12 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    const updateAuthority = await assertCanUpdateAgent(req, existing, AGENT_SELF_PATCHABLE_FIELDS);
+    const updateAuthority = await assertCanUpdateAgent(
+      req,
+      existing,
+      AGENT_SELF_PATCHABLE_FIELDS,
+      AGENT_PEER_PATCHABLE_FIELDS,
+    );
     assertStewardPatchScope(updateAuthority, req.body as Record<string, unknown>);
 
     if (hasOwn(req.body as object, "permissions")) {
