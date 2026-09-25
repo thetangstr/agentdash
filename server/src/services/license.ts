@@ -12,11 +12,30 @@ import crypto from "node:crypto";
 
 export type DeploymentKind = "cloud" | "on_prem";
 
-/** Which SKU this process is running as. Defaults to "cloud". */
+/**
+ * Which SKU this process is running as. Defaults to "cloud".
+ *
+ * AgentDash (#726): `AGENTDASH_DEPLOYMENT_KIND=hosted` marks a hosted
+ * agentdash.cloud box. It is a variant of the cloud SKU, so it still reports
+ * "cloud" here (markup, license gate and company routes are unchanged); what
+ * it adds is the boot guard in `hosted-box-guard.ts`, read via `isHostedBox()`.
+ */
 export function deploymentKind(): DeploymentKind {
   return (process.env.AGENTDASH_DEPLOYMENT_KIND ?? "cloud").trim() === "on_prem"
     ? "on_prem"
     : "cloud";
+}
+
+/** The `AGENTDASH_DEPLOYMENT_KIND` value that marks a hosted agentdash.cloud box. */
+export const HOSTED_DEPLOYMENT_KIND = "hosted";
+
+/**
+ * AgentDash (#726): true when this process is a hosted agentdash.cloud box.
+ * The one hosted flag: the boot guard, `/api/health` and the Hermes fail-closed
+ * mode (#721) all read it here rather than parsing the variable themselves.
+ */
+export function isHostedBox(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.AGENTDASH_DEPLOYMENT_KIND ?? "").trim().toLowerCase() === HOSTED_DEPLOYMENT_KIND;
 }
 
 /**

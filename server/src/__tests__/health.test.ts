@@ -204,4 +204,38 @@ describe("GET /health", () => {
       },
     });
   });
+
+  // AgentDash (#726): the runbook and launch run assert the hosted flag
+  // without signing in, so it appears on the public response too.
+  describe("hostedBox", () => {
+    const ORIGINAL_KIND = process.env.AGENTDASH_DEPLOYMENT_KIND;
+    afterEach(() => {
+      if (ORIGINAL_KIND === undefined) delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      else process.env.AGENTDASH_DEPLOYMENT_KIND = ORIGINAL_KIND;
+    });
+
+    it("reports false when the hosted flag is unset", async () => {
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      const res = await request(createApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body.hostedBox).toBe(false);
+    });
+
+    it("reports true on a hosted box, to an unauthenticated caller", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const app = express();
+      app.use(
+        "/health",
+        healthRoutes(undefined, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "ok", deploymentMode: "authenticated", hostedBox: true });
+    });
+  });
 });
