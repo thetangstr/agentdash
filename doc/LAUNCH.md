@@ -196,6 +196,8 @@ Mount a persistent Volume at `/paperclip`, or every profile, key and ledger is l
 
 Set `AGENTDASH_DEPLOYMENT_KIND=hosted` on a hosted box. It turns managed profiles on regardless of the flag above and makes profile provisioning fail closed: a run whose profile cannot be provisioned fails with `hermes_profile_provision_failed` instead of running on the shared root profile. Without it (self-hosted, on-prem) a failed provision still falls back to the default command.
 
+**The provider key (hosted onboarding).** On a hosted box the founder's first CoS screen asks for a model provider (Z.AI, OpenRouter, Anthropic or OpenAI), an API key and optionally a model. The server checks the key with one small model call, then writes it into the managed template profile (`AGENTDASH_HERMES_PROFILE_TEMPLATE`, default `agentdash`) with `hermes -p <template> config set`, updates every existing agent profile, and stores it as the company's encrypted secret `hermes-provider-api-key`. The key lives in the profiles' `.env` files on the Volume, so it survives a redeploy without re-entry; it is never returned, logged or written to the activity log. CoS chat on a hosted box runs on the template profile. Only the instance admin can set it (`POST /api/onboarding/setup-adapter` with `preset: "hermes"`, `provider`, `apiKey`, `companyId`).
+
 Smoke-test an image with `scripts/docker/hermes-smoke.sh <image>`. To upgrade Hermes, change `HERMES_REF` and `HERMES_COMMIT` (`git rev-list -n1 <tag>`), rebuild, and rerun the smoke test.
 
 ---
