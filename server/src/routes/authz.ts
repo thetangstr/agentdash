@@ -371,3 +371,18 @@ export function getActorInfo(req: Request) {
     runId: req.actor.runId ?? null,
   };
 }
+
+/**
+ * AgentDash (GH #678): activity provenance for writes that arrived through an
+ * assistant grant — the person stays the actor, and the grant's OAuth client
+ * is named so the log can answer "who actually sent this". Empty for every
+ * other credential, so the spread is free outside the assistant surface.
+ */
+export function assistantGrantAttribution(req: Request): { via?: string } {
+  if (req.actor.source !== "assistant_grant") return {};
+  // GH #745 review: name the grant itself, not just the client — two grants
+  // from the same client otherwise read identically in the activity log.
+  const grant = req.actor.assistantGrantId ?? "unknown grant";
+  const client = req.actor.assistantClientName ?? "unknown client";
+  return { via: `assistant_grant ${grant} (${client})` };
+}

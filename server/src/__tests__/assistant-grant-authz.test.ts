@@ -320,16 +320,18 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
   });
 
   // GH #688: the internal loopback credential the MCP endpoint mints for its
-  // tool calls. In-memory only, read-only, dies on revoke — and an unknown
-  // pcin_ resolves to nothing rather than falling through to other lookups.
+  // tool calls. In-memory only, dies on revoke — and an unknown pcin_
+  // resolves to nothing rather than falling through to other lookups.
+  // GH #678: writes pass only through the five-route allowlist, and only
+  // when the grant carries `agentdash:work`.
   describe("assistant loopback credential (pcin_)", () => {
-    function mintLoopback(companyId: string, grantId = randomUUID()) {
+    function mintLoopback(companyId: string, grantId = randomUUID(), scopes = ["agentdash:read"]) {
       return mintAssistantLoopbackToken({
         userId: USER_ID,
         companyId,
         membershipRole: "owner",
         grantId,
-        scopes: ["agentdash:read"],
+        scopes,
       });
     }
 
@@ -347,22 +349,34 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
       expect(res.body.actor.source).toBe("assistant_grant");
     });
 
-    it("refuses writes — the loopback credential is read-only", async () => {
+    it("refuses writes on a read-only grant, and non-allowlisted writes even with agentdash:work", async () => {
       const { company } = await seed();
-      const token = mintLoopback(company.id);
+      const readToken = mintLoopback(company.id);
+      // GH #678: allowlisted write routes on a grant without agentdash:work —
+      // insufficient_scope, before the rate limiter or the route.
       for (const [method, path] of [
-        ["post", `/api/companies/${company.id}/agents`],
         ["post", `/api/companies/${company.id}/issues`],
         ["patch", `/api/issues/${randomUUID()}`],
       ] as const) {
         const res = await request(app)
           [method](path)
-          .set("authorization", `Bearer ${token}`)
-          .send({ adapterType: "process", name: "x" });
+          .set("authorization", `Bearer ${readToken}`)
+          .send({ title: "x" });
         expect(res.status).toBe(403);
-        expect(res.body.error).toMatch(/read-only/);
+        expect(res.body.error).toBe("insufficient_scope");
+        expect(res.body.required_scope).toBe("agentdash:work");
         expect(res.body.reached).toBeUndefined();
       }
+      // A route outside the M3 allowlist is refused even when the grant has
+      // the work scope — the allowlist is the hard wall.
+      const workToken = mintLoopback(company.id, randomUUID(), ["agentdash:read", "agentdash:work"]);
+      const res = await request(app)
+        .post(`/api/companies/${company.id}/agents`)
+        .set("authorization", `Bearer ${workToken}`)
+        .send({ adapterType: "process", name: "x" });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/cannot write/);
+      expect(res.body.reached).toBeUndefined();
     });
 
     it("an unknown pcin_ token resolves to no actor — no fall-through", async () => {

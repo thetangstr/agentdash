@@ -215,7 +215,9 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       metadata: asMetadata as never,
       clientInformation: clientInfo,
       redirectUrl: "http://127.0.0.1:54321/callback",
-      scope: "agentdash:read",
+      // GH #745 review: work tools are scope-filtered now — request both so
+      // the consent step can grant the full surface.
+      scope: "agentdash:read agentdash:work",
       resource: new URL(resourceUri),
     });
     expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
@@ -244,7 +246,9 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       body: JSON.stringify({
         approved: true,
         companyId: await companyId(),
-        scopes: ["agentdash:read"],
+        // read+work so the full 14-tool surface is exercised below; the
+        // read-only-grant filtered list is covered in assistant-work-tools.
+        scopes: ["agentdash:read", "agentdash:work"],
       }),
     });
     expect(decision.status).toBe(200);
@@ -273,7 +277,11 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
     await client.connect(transport);
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
+    // M1's nine reads plus M3's five work tools (GH #678).
     expect(names).toEqual([
+      "assign_work",
+      "comment_on_work",
+      "create_work_item",
       "explain_blocker",
       "find_work",
       "get_project",
@@ -281,11 +289,20 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       "list_pending_decisions",
       "list_projects",
       "list_team",
+      "start_project",
+      "update_work_item",
       "whats_new",
       "whoami",
     ]);
+    const WORK_TOOLS = new Set([
+      "assign_work",
+      "comment_on_work",
+      "create_work_item",
+      "start_project",
+      "update_work_item",
+    ]);
     for (const tool of tools) {
-      expect(tool.annotations?.readOnlyHint).toBe(true);
+      expect(tool.annotations?.readOnlyHint).toBe(!WORK_TOOLS.has(tool.name));
     }
     await client.close();
 

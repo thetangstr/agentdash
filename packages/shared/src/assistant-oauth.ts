@@ -49,6 +49,17 @@ export const ASSISTANT_AUTH_REQUEST_TTL_MS = 10 * 60 * 1000;
 /** The OAuth error code sent when a route's scope is not on the grant. */
 export const ASSISTANT_INSUFFICIENT_SCOPE = "insufficient_scope";
 
+/** The error code the loopback write gate returns when a per-grant hourly budget is spent. */
+export const ASSISTANT_WRITE_RATE_LIMITED = "assistant_write_rate_limited";
+
+/**
+ * GH #678 (spec §7.1): the per-grant write budget the work tools live under —
+ * at most this many writes (and newly created tasks) per rolling hour, since
+ * every write can queue a paid agent run.
+ */
+export const ASSISTANT_WRITE_LIMIT_PER_HOUR = 30;
+export const ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR = 10;
+
 /**
  * The ONLY routes an `assistant_grant` credential may reach, and the scope
  * each requires.
@@ -93,6 +104,98 @@ export function assistantRouteScope(method: string, path: string): AssistantScop
   const clean = path.split("?")[0]!.replace(/\/+$/, "");
   for (const route of ASSISTANT_ROUTE_SCOPES) {
     if (route.method === m && route.pattern.test(clean)) return route.scope;
+  }
+  return null;
+}
+
+/**
+ * GH #678 (M3): the `origin_kind` stamped on issues an assistant write
+ * creates. It doubles as the idempotency domain: `origin_id` carries the
+ * caller's request key and a partial unique index
+ * (`issues_assistant_work_request_uq`) makes the create replay-safe, the way
+ * `routine_execution` rows dedupe routine dispatches.
+ */
+export const ASSISTANT_WORK_ORIGIN_KIND = "assistant_work";
+
+/**
+ * The deterministic requestId of a start_project kickoff task. Both halves
+ * of the idempotent retry need the same key — the tool sends it on the
+ * issue create, the project route reads it back to report kickoffPending.
+ */
+export function assistantKickoffRequestId(projectId: string): string {
+  return `start_project:${projectId}`;
+}
+
+/**
+ * GH #678 (M3): the ONLY writes the assistant MCP endpoint's `pcin_` loopback
+ * credential may make — one entry per route the work toolset wraps (spec
+ * §4.2, tools 10–14). Everything a work tool can do flows through this list:
+ * a route missing from it is refused before the request reaches a handler,
+ * whatever bug or prompt-injection produced the call.
+ *
+ * The list lives beside ASSISTANT_ROUTE_SCOPES for the same reason that table
+ * does: the allowlist must sit where the credential is resolved, or the next
+ * route added to a tool quietly acquires write power nobody reviewed. Every
+ * entry requires `agentdash:work`; the loopback gate also enforces the
+ * per-grant write and task-create limits (spec §7.1) before the route runs.
+ *
+ * `bodyFields` (review, GH #745): the EXACT top-level body keys the work
+ * tools send. The wrapped routes accept much wider payloads —
+ * `assigneeAdapterOverrides`, `executionWorkspaceSettings`, `env`,
+ * `definitionOfDone`, reopen/resume flags — none of which an assistant write
+ * was ever meant to set. A `pcin_` body carrying anything outside the list is
+ * refused in middleware, so a new field on a wrapped route cannot be reached
+ * through the assistant surface without deliberately widening this list.
+ */
+export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
+  method: string;
+  pattern: RegExp;
+  /** Counts against the tighter per-grant "new tasks per hour" limit too. */
+  taskCreate?: boolean;
+  /** The only top-level request-body keys the toolset sends. */
+  bodyFields: readonly string[];
+}> = [
+  // start_project — POST /companies/:id/projects
+  {
+    method: "POST",
+    pattern: /^\/api\/companies\/[^/]+\/projects$/,
+    bodyFields: ["name", "description", "targetDate", "leadAgentId"],
+  },
+  // create_work_item, start_project's kickoff — POST /companies/:id/issues
+  {
+    method: "POST",
+    pattern: /^\/api\/companies\/[^/]+\/issues$/,
+    taskCreate: true,
+    bodyFields: ["projectId", "title", "description", "assigneeAgentId", "status", "priority", "requestId"],
+  },
+  // assign_work, update_work_item — PATCH /issues/:id
+  {
+    method: "PATCH",
+    pattern: /^\/api\/issues\/[^/]+$/,
+    bodyFields: ["assigneeAgentId", "assigneeUserId", "status", "priority", "title", "projectId"],
+  },
+  // assign_work's nudge — POST /agents/:id/wakeup
+  {
+    method: "POST",
+    pattern: /^\/api\/agents\/[^/]+\/wakeup$/,
+    bodyFields: ["source", "triggerDetail", "reason", "payload", "idempotencyKey"],
+  },
+  // comment_on_work — POST /issues/:id/comments
+  { method: "POST", pattern: /^\/api\/issues\/[^/]+\/comments$/, bodyFields: ["body"] },
+];
+
+/**
+ * The write route a `pcin_` (method, path) is allowed to reach, or null.
+ * Same normalization contract as `assistantRouteScope`.
+ */
+export function assistantLoopbackWriteRoute(
+  method: string,
+  path: string,
+): (typeof ASSISTANT_LOOPBACK_WRITE_ROUTES)[number] | null {
+  const m = method.toUpperCase();
+  const clean = path.split("?")[0]!.replace(/\/+$/, "");
+  for (const route of ASSISTANT_LOOPBACK_WRITE_ROUTES) {
+    if (route.method === m && route.pattern.test(clean)) return route;
   }
   return null;
 }

@@ -133,5 +133,19 @@ export const issues = pgTable(
           and ${table.hiddenAt} is null
           and ${table.status} not in ('done', 'cancelled')`,
       ),
+    /**
+     * AgentDash (GH #678 review): assistant-grant issue creates carry a
+     * caller-supplied request key in `originId`. Unlike the status-scoped
+     * indexes above this one is unconditional — a requestId may produce
+     * exactly one issue, ever, so a retried assistant write returns the
+     * original row instead of filing a duplicate even after the first
+     * finishes or is hidden.
+     */
+    assistantWorkRequestIdx: uniqueIndex("issues_assistant_work_request_uq")
+      .on(table.companyId, table.originKind, table.originId)
+      .where(
+        sql`${table.originKind} = 'assistant_work'
+          and ${table.originId} is not null`,
+      ),
   }),
 );

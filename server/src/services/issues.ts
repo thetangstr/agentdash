@@ -2724,6 +2724,30 @@ export function issueService(db: Db) {
       return getIssueByIdentifier(identifier);
     },
 
+    /**
+     * AgentDash (GH #745 review): lookup an issue by its deduplication origin
+     * tuple. Deliberately ignores hiddenAt/status so a replayed assistant
+     * write returns the original row even after it is done or hidden —
+     * matching the unconditional issues_assistant_work_request_uq index.
+     */
+    getByOrigin: async (companyId: string, originKind: string, originId: string) => {
+      const row = await db
+        .select()
+        .from(issues)
+        .where(
+          and(
+            eq(issues.companyId, companyId),
+            eq(issues.originKind, originKind),
+            eq(issues.originId, originId),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (!row) return null;
+      const [enriched] = await withIssueLabels(db, [row]);
+      return enriched;
+    },
+
     getRelationSummaries: async (issueId: string) => {
       const issue = await db
         .select({ id: issues.id, companyId: issues.companyId })

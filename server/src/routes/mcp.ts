@@ -191,6 +191,7 @@ export function mcpRoutes() {
       membershipRole: req.actor.memberships?.[0]?.membershipRole ?? null,
       grantId: req.actor.assistantGrantId,
       scopes: req.actor.assistantScopes ?? [],
+      clientName: req.actor.assistantClientName ?? "assistant",
     });
 
     const server = createAgentDashServer(
@@ -200,6 +201,9 @@ export function mcpRoutes() {
         companyId: req.actor.companyId,
         agentId: null,
         runId: null,
+        // GH #745 review: the grant's scopes filter the advertised surface —
+        // a read-only grant is not shown the work tools at all.
+        assistantScopes: req.actor.assistantScopes ?? [],
       },
       { toolset: "assistant" },
     );

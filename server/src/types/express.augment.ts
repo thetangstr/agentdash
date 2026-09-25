@@ -28,6 +28,8 @@ declare global {
         assistantGrantId?: string;
         /** AgentDash (GH #677): OAuth scopes on the assistant grant's token. */
         assistantScopes?: string[];
+        /** AgentDash (GH #678): the grant's OAuth client display name — activity provenance. */
+        assistantClientName?: string;
         /** AgentDash (GH #677 security): actor resolved from the MCP endpoint's ephemeral pcin_ loopback credential. */
         assistantLoopback?: boolean;
         runId?: string;

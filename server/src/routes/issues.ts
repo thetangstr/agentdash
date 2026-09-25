@@ -1,6 +1,6 @@
 import { assertHostExecutionConfigAllowed } from "../services/adapter-host-execution-policy.js";
 import fs from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -34,6 +34,7 @@ import {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
   type ExecutionWorkspace,
+  ASSISTANT_WORK_ORIGIN_KIND,
 } from "@paperclipai/shared";
 // AgentDash: goals-eval-hitl
 import { definitionOfDoneSchema } from "@paperclipai/shared";
@@ -71,7 +72,8 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
-import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo, reportAuthzRefusal } from "./authz.js";
+import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
+import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, reportAuthzRefusal } from "./authz.js";
 import {
   WorkspaceFileError,
   contentTypeForWorkspaceFile,
@@ -106,6 +108,34 @@ const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
   interrupt: z.boolean().optional(),
 });
+
+/**
+ * AgentDash (GH #745 review): server-side dedup key for assistant-grant
+ * issue creates that arrive without an explicit requestId. Scoped to the
+ * grant + normalized title/description + parent/project/assignee inside a
+ * 10-minute bucket, matching the reviewer's suggestion — a network retry
+ * inside the window replays the original issue instead of filing a
+ * duplicate, while two genuinely distinct tasks never collide.
+ */
+const ASSISTANT_REQUEST_ID_WINDOW_MS = 10 * 60 * 1000;
+function deriveAssistantIssueRequestId(input: {
+  grantId: string;
+  title: string;
+  parentId: string | null;
+  projectId: string | null;
+  assigneeAgentId: string | null;
+  description: string | null;
+}): string {
+  const normalizedTitle = input.title.trim().toLowerCase().replace(/\s+/g, " ");
+  const normalizedDescription = (input.description ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const window = Math.floor(Date.now() / ASSISTANT_REQUEST_ID_WINDOW_MS);
+  return createHash("sha256")
+    .update(
+      `${input.grantId}\n${normalizedTitle}\n${normalizedDescription}\n${input.parentId ?? ""}\n${input.projectId ?? ""}\n${input.assigneeAgentId ?? ""}\n${window}`,
+    )
+    .digest("hex")
+    .slice(0, 32);
+}
 
 type ParsedExecutionState = NonNullable<ReturnType<typeof parseIssueExecutionState>>;
 type NormalizedExecutionPolicy = NonNullable<ReturnType<typeof normalizeIssueExecutionPolicy>>;
@@ -1926,13 +1956,62 @@ export function issueRoutes(
     await assertIssueEnvironmentSelection(companyId, req.body.executionWorkspaceSettings?.environmentId);
 
     const actor = getActorInfo(req);
+    // AgentDash (GH #745 review): `requestId` is the assistant-grant dedup
+    // key, recorded as (originKind='assistant_work', originId=requestId)
+    // under issues_assistant_work_request_uq. Only assistant-grant writes
+    // may send it — every other caller gets 400 so the dedup domain can't
+    // be squatted. When an assistant write omits it we derive a stable
+    // windowed key so a transport retry still cannot double-create.
+    const isAssistantGrant = req.actor.source === "assistant_grant";
+    const rawRequestId: unknown = req.body.requestId;
+    if (rawRequestId !== undefined && !isAssistantGrant) {
+      res.status(400).json({ error: "requestId is only accepted on assistant-grant writes" });
+      return;
+    }
+    const requestId =
+      typeof rawRequestId === "string" && rawRequestId.trim().length > 0 ? rawRequestId.trim() : null;
+    const originId = isAssistantGrant
+      ? requestId ??
+        deriveAssistantIssueRequestId({
+          grantId: req.actor.assistantGrantId ?? "unknown",
+          title: typeof req.body.title === "string" ? req.body.title : "",
+          parentId: typeof req.body.parentId === "string" ? req.body.parentId : null,
+          projectId: typeof req.body.projectId === "string" ? req.body.projectId : null,
+          assigneeAgentId: typeof req.body.assigneeAgentId === "string" ? req.body.assigneeAgentId : null,
+          description: typeof req.body.description === "string" ? req.body.description : null,
+        })
+      : null;
+    if (originId) {
+      const existing = await svc.getByOrigin(companyId, ASSISTANT_WORK_ORIGIN_KIND, originId);
+      if (existing) {
+        res.status(200).json({ ...existing, replayed: true });
+        return;
+      }
+    }
+
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
-    const issue = await svc.create(companyId, {
-      ...req.body,
-      executionPolicy,
-      createdByAgentId: actor.agentId,
-      createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-    });
+    const { requestId: _requestId, ...issueInput } = req.body;
+    let issue;
+    try {
+      issue = await svc.create(companyId, {
+        ...issueInput,
+        executionPolicy,
+        ...(originId ? { originKind: ASSISTANT_WORK_ORIGIN_KIND, originId } : {}),
+        createdByAgentId: actor.agentId,
+        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+      });
+    } catch (err) {
+      // Concurrent assistant retry won the unique index: return the row it
+      // created rather than surfacing a 500 to the caller.
+      if (originId && isUniqueViolation(err) && pgConstraintName(err) === "issues_assistant_work_request_uq") {
+        const existing = await svc.getByOrigin(companyId, ASSISTANT_WORK_ORIGIN_KIND, originId);
+        if (existing) {
+          res.status(200).json({ ...existing, replayed: true });
+          return;
+        }
+      }
+      throw err;
+    }
     await issueReferencesSvc.syncIssue(issue.id);
     const referenceSummary = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
     const referenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
@@ -1952,6 +2031,8 @@ export function issueRoutes(
       details: {
         title: issue.title,
         identifier: issue.identifier,
+        // AgentDash (GH #678): provenance when the write came via an assistant grant.
+        ...assistantGrantAttribution(req),
         ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
         ...summarizeIssueReferenceActivityDetails({
           addedReferencedIssues: referenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
@@ -1999,6 +2080,15 @@ export function issueRoutes(
       await assertCanAssignTasks(req, parent.companyId);
     }
     await assertIssueEnvironmentSelection(parent.companyId, req.body.executionWorkspaceSettings?.environmentId);
+
+    // AgentDash (GH #745 review): createChildIssueSchema inherits the
+    // assistant `requestId` field, but this route is not reachable by an
+    // assistant credential — refuse it instead of letting a meaningless
+    // dedup key flow into the insert payload.
+    if (req.body.requestId !== undefined) {
+      res.status(400).json({ error: "requestId is only accepted on assistant-grant writes" });
+      return;
+    }
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
@@ -2490,6 +2580,8 @@ export function issueRoutes(
       details: {
         ...updateFields,
         identifier: issue.identifier,
+        // AgentDash (GH #678): provenance when the write came via an assistant grant.
+        ...assistantGrantAttribution(req),
         ...(commentBody ? { source: "comment" } : {}),
         ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
@@ -2635,6 +2727,8 @@ export function issueRoutes(
           bodySnippet: comment.body.slice(0, 120),
           identifier: issue.identifier,
           issueTitle: issue.title,
+          // AgentDash (GH #678): provenance when the write came via an assistant grant.
+          ...assistantGrantAttribution(req),
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
@@ -3680,6 +3774,8 @@ export function issueRoutes(
           reopened: true,
           reopenedFrom: reopenFromStatus,
           source: "comment",
+          // AgentDash (GH #678): provenance when the write came via an assistant grant.
+          ...assistantGrantAttribution(req),
           ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
           identifier: currentIssue.identifier,
         },
@@ -3743,6 +3839,8 @@ export function issueRoutes(
         bodySnippet: comment.body.slice(0, 120),
         identifier: currentIssue.identifier,
         issueTitle: currentIssue.title,
+        // AgentDash (GH #678): provenance when the write came via an assistant grant.
+        ...assistantGrantAttribution(req),
         ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
