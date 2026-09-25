@@ -1,3 +1,4 @@
+import { actorMaySetHostExecutionConfig } from "../services/adapter-host-execution-policy.js";
 import { Router, type Request } from "express";
 import { count, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -272,7 +273,9 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     assertBoard(req);
     assertImportTargetAccess(req, req.body.target);
     const actor = getActorInfo(req);
-    const result = await portability.importBundle(req.body, req.actor.type === "board" ? req.actor.userId : null);
+    const result = await portability.importBundle(req.body, req.actor.type === "board" ? req.actor.userId : null, {
+      allowHostExecutionConfig: actorMaySetHostExecutionConfig(req.actor),
+    });
     await logActivity(db, {
       companyId: result.company.id,
       actorType: actor.actorType,
@@ -335,6 +338,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     const result = await portability.importBundle(req.body, req.actor.type === "board" ? req.actor.userId : null, {
       mode: "agent_safe",
       sourceCompanyId: companyId,
+      allowHostExecutionConfig: actorMaySetHostExecutionConfig(req.actor),
     });
     await logActivity(db, {
       companyId: result.company.id,

@@ -272,4 +272,26 @@ describe("issue workspace command authorization", () => {
     expect(res.body.error).toContain("host-executed workspace commands");
     expect(mockIssueService.update).not.toHaveBeenCalled();
   });
+
+  // AgentDash (security, #719): assignee adapter overrides merge into the run
+  // config, so a board member cannot set the binary or env through them either.
+  it("rejects a board member who sets a command through assignee adapter overrides", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue());
+    const app = await createApp({
+      type: "board",
+      userId: "user-member",
+      companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", status: "active", membershipRole: "owner" }],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const res = await request(app)
+      .patch("/api/issues/issue-1")
+      .send({ assigneeAdapterOverrides: { adapterConfig: { command: "/bin/sh", env: { A: "b" } } } });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Instance admin access required/);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
 });

@@ -108,12 +108,14 @@ curl -sS -X POST "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/agent-h
     "capabilities": "Owns technical roadmap, architecture, staffing, execution",
     "desiredSkills": ["vercel-labs/agent-browser/agent-browser"],
     "adapterType": "codex_local",
-    "adapterConfig": {"cwd": "/abs/path/to/repo", "model": "o4-mini"},
+    "adapterConfig": {"model": "o4-mini"},
     "instructionsBundle": {"files": {"AGENTS.md": "You are the CTO..."}},
     "runtimeConfig": {"heartbeat": {"enabled": false, "wakeOnDemand": true}},
     "sourceIssueId": "<issue-id>"
   }'
 ```
+
+Leave host-execution fields out of `adapterConfig`: `command`, `args`, `extraArgs`, `env`, `cwd`, and any `*Command`, `*Args`, `*Env`, `*Cwd`, `*Dir` or `*Home` key. Only an instance admin may set them, so an agent request that includes one is refused with 403. The server default command and project workspaces cover the normal case. For Hermes, `extraArgs` may carry `-p <profile>` and `--reasoning-effort <low|medium|high>`. If a hire really needs a custom binary, environment or working directory, ask a human instance admin to set it after the hire.
 
 ### 9. Handle governance state
 

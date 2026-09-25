@@ -61,6 +61,11 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import {
+  actorMaySetHostExecutionConfig,
+  assertHostExecutionConfigAllowed,
+  runtimeConfigHostExecutionInputs,
+} from "../services/adapter-host-execution-policy.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
@@ -1809,6 +1814,31 @@ export function agentRoutes(
       const type = assertKnownAdapterType(req.params.type as string);
       await assertCanReadConfigurations(req, companyId);
 
+      // AgentDash (security): the environment probe spawns the adapter CLI on
+      // the host — some adapters (opencode/pi model discovery) with the full
+      // server env and NEVER_SANDBOX — and resolves company secret refs into
+      // its env first. Choosing the binary, its args, its env or its working
+      // directory is therefore instance-admin only (local_implicit counts, so
+      // local_trusted dev is unaffected). Everyone else can probe the default
+      // binary, the curated Hermes flags, and — when the edit form names the
+      // agent it is testing — the values already stored on that agent.
+      const testedAgentId = typeof req.body?.agentId === "string" ? req.body.agentId : null;
+      let storedTestConfig: Record<string, unknown> | undefined;
+      if (testedAgentId && !actorMaySetHostExecutionConfig(req.actor)) {
+        const testedAgent = await svc.getById(testedAgentId);
+        if (!testedAgent || testedAgent.companyId !== companyId) {
+          throw notFound("Agent not found");
+        }
+        if (testedAgent.adapterType === type) {
+          storedTestConfig = asRecord(testedAgent.adapterConfig) ?? undefined;
+        }
+      }
+      assertHostExecutionConfigAllowed(req.actor, {
+        adapterType: type,
+        adapterConfig: req.body?.adapterConfig,
+        stored: storedTestConfig,
+      });
+
       // Closes #315: e2e bypass — when AGENTDASH_ADAPTER_ENV_BYPASS=true
       // is set, short-circuit the adapter probe and return a synthetic
       // "pass" result. Lets the OnboardingWizard flow advance past step 2
@@ -2294,6 +2324,22 @@ export function agentRoutes(
       );
     }
 
+    // AgentDash (security, #719): a rollback can restore a command, env or cwd
+    // an instance admin has since removed. Values equal to what is stored now
+    // pass; restoring different host-execution values needs instance admin.
+    if (!actorMaySetHostExecutionConfig(req.actor)) {
+      const revision = await svc.getConfigRevision(id, revisionId);
+      const snapshot = asRecord(revision?.afterConfig);
+      if (snapshot) {
+        const snapshotAdapterType =
+          typeof snapshot.adapterType === "string" ? snapshot.adapterType : existing.adapterType;
+        assertHostExecutionConfigAllowed(req.actor, [
+          { adapterType: snapshotAdapterType, adapterConfig: snapshot.adapterConfig, stored: existing.adapterConfig },
+          ...runtimeConfigHostExecutionInputs(snapshotAdapterType, snapshot.runtimeConfig, existing.runtimeConfig),
+        ]);
+      }
+    }
+
     const actor = getActorInfo(req);
     const updated = await svc.rollbackConfigRevision(id, revisionId, {
       agentId: actor.agentId,
@@ -2469,6 +2515,12 @@ export function agentRoutes(
     );
     await assertNoAgentAdapterConfigMutation(req, companyId, rawHireAdapterConfig);
     await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, hireInput.runtimeConfig);
+    // AgentDash (security, #719): the binary, argv, env and cwd an agent runs
+    // with are instance-admin only; see services/adapter-host-execution-policy.ts.
+    assertHostExecutionConfigAllowed(req.actor, [
+      { adapterType: hireInput.adapterType, adapterConfig: rawHireAdapterConfig },
+      ...runtimeConfigHostExecutionInputs(hireInput.adapterType, hireInput.runtimeConfig),
+    ]);
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       rawHireAdapterConfig,
@@ -2692,6 +2744,12 @@ export function agentRoutes(
     );
     await assertNoAgentAdapterConfigMutation(req, companyId, rawCreateAdapterConfig);
     await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, createInput.runtimeConfig);
+    // AgentDash (security, #719): the binary, argv, env and cwd an agent runs
+    // with are instance-admin only; see services/adapter-host-execution-policy.ts.
+    assertHostExecutionConfigAllowed(req.actor, [
+      { adapterType: createInput.adapterType, adapterConfig: rawCreateAdapterConfig },
+      ...runtimeConfigHostExecutionInputs(createInput.adapterType, createInput.runtimeConfig),
+    ]);
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       rawCreateAdapterConfig,
@@ -3424,6 +3482,19 @@ export function agentRoutes(
       await assertNoAgentRuntimeConfigAdapterConfigMutation(req, existing.companyId, runtimeConfig);
       requestedRuntimeConfig = runtimeConfig;
     }
+    // AgentDash (security, #719): changing the binary, argv, env or cwd is
+    // instance-admin only. Compared against the STORED row, so an edit form
+    // that resends unchanged values (or the curated Hermes preset) passes.
+    assertHostExecutionConfigAllowed(req.actor, [
+      ...(hasOwn(patchData, "adapterConfig")
+        ? [{
+            adapterType: requestedAdapterType,
+            adapterConfig: patchData.adapterConfig,
+            stored: existing.adapterConfig,
+          }]
+        : []),
+      ...runtimeConfigHostExecutionInputs(requestedAdapterType, requestedRuntimeConfig, existing.runtimeConfig),
+    ]);
     const touchesAdapterConfiguration =
       hasOwn(patchData, "adapterType") ||
       hasOwn(patchData, "adapterConfig");

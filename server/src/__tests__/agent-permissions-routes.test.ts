@@ -812,6 +812,23 @@ describe.sequential("agent permission routes", () => {
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
+  it("refuses a process-agent command from a non-instance-admin with agent create permission", async () => {
+    mockAccessService.canUser.mockResolvedValue(true);
+    const app = await createApp({
+      type: "board",
+      userId: "agent-admin-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+    });
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/companies/${companyId}/agents`)
+      .send({ name: "Builder", role: "engineer", adapterType: "process", adapterConfig: { command: "/usr/bin/true" } }));
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toMatch(/Instance admin access required/);
+    expect(mockAgentService.create).not.toHaveBeenCalled();
+  });
+
   it("allows direct agent creation for authenticated board users with agent create permission when approval is not required", async () => {
     mockAccessService.canUser.mockResolvedValue(true);
 
@@ -828,10 +845,11 @@ describe.sequential("agent permission routes", () => {
       .send({
         name: "Builder",
         role: "engineer",
-        adapterType: "process",
-        // A process agent needs a command to be creatable at all; these cases are
-        // about authorization, so any runnable no-op keeps them on topic.
-        adapterConfig: { command: "/usr/bin/true" },
+        // AgentDash (security, #719): a process agent's command is a host
+        // command, which needs instance admin; this caller is not one. The
+        // Hermes default keeps the case about agents:create authorization.
+        adapterType: "hermes_local",
+        adapterConfig: { hermesCommand: "hermes" },
       }));
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);

@@ -1,3 +1,4 @@
+import { assertHostExecutionConfigAllowed } from "../services/adapter-host-execution-policy.js";
 import {
   generateKeyPairSync,
   randomBytes,
@@ -4013,6 +4014,17 @@ export function accessRoutes(
       if (!existing) throw notFound("Join request not found");
       if (existing.status !== "pending_approval")
         throw conflict("Join request is not pending");
+      // AgentDash (security, #719): approving an agent join request creates
+      // the agent with the requester's agentDefaultsPayload as its
+      // adapterConfig. A command, env or cwd in it runs on this host, so the
+      // approver needs the same authority a direct agent create needs.
+      if (existing.requestType === "agent") {
+        assertHostExecutionConfigAllowed(req.actor, {
+          adapterType: existing.adapterType,
+          adapterConfig: existing.agentDefaultsPayload,
+          prefix: "agentDefaultsPayload",
+        });
+      }
 
       const invite = await db
         .select()

@@ -41,7 +41,6 @@ Request body matches agent create shape:
   "desiredSkills": ["vercel-labs/agent-browser/agent-browser"],
   "adapterType": "claude_local",
   "adapterConfig": {
-    "cwd": "/absolute/path",
     "model": "claude-sonnet-4-5-20250929"
   },
   "instructionsBundle": {

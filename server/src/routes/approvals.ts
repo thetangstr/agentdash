@@ -1,3 +1,7 @@
+import {
+  assertHostExecutionConfigAllowed,
+  runtimeConfigHostExecutionInputs,
+} from "../services/adapter-host-execution-policy.js";
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
@@ -157,6 +161,20 @@ export function approvalRoutes(
    * Host-executed workspace commands must never enter the system through an
    * unvalidated hire payload; creating them directly is administrator-only.
    */
+  /** AgentDash (security, #719): the adapter configs a hire payload would persist. */
+  function hirePayloadHostExecutionInputs(payload: unknown, storedPayload?: unknown) {
+    const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+    const stored =
+      typeof storedPayload === "object" && storedPayload !== null
+        ? (storedPayload as Record<string, unknown>)
+        : {};
+    const adapterType = typeof record.adapterType === "string" ? record.adapterType : null;
+    return [
+      { adapterType, adapterConfig: record.adapterConfig, stored: stored.adapterConfig },
+      ...runtimeConfigHostExecutionInputs(adapterType, record.runtimeConfig, stored.runtimeConfig),
+    ];
+  }
+
   function assertHirePayloadHasNoHostCommands(payload: unknown) {
     const adapterConfig =
       typeof payload === "object" && payload !== null
@@ -286,6 +304,10 @@ export function approvalRoutes(
     if (approvalInput.type === "hire_agent") {
       assertHirePayloadHasNoHostCommands(approvalInput.payload);
       assertHirePayloadOmitsInternalFlags(approvalInput.payload);
+      // AgentDash (security, #719): approving creates the agent with this
+      // adapterConfig, so the requester needs the same authority a direct
+      // create needs to set the binary, argv, env or cwd.
+      assertHostExecutionConfigAllowed(req.actor, hirePayloadHostExecutionInputs(approvalInput.payload));
     }
     const normalizedPayload =
       approvalInput.type === "hire_agent"
@@ -560,6 +582,10 @@ export function approvalRoutes(
     if (existing.type === "hire_agent" && req.body.payload) {
       assertHirePayloadHasNoHostCommands(req.body.payload);
       assertHirePayloadOmitsInternalFlags(req.body.payload);
+      assertHostExecutionConfigAllowed(
+        req.actor,
+        hirePayloadHostExecutionInputs(req.body.payload, existing.payload),
+      );
     }
     const normalizedPayload = req.body.payload
       ? existing.type === "hire_agent"

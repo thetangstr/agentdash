@@ -221,6 +221,8 @@ export const agentsApi = {
     data: {
       adapterConfig: Record<string, unknown>;
       environmentId?: string | null;
+      /** The agent being edited; lets the server compare against its stored config. */
+      agentId?: string | null;
     },
   ) =>
     api.post<AdapterEnvironmentTestResult>(

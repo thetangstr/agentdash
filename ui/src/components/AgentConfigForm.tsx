@@ -9,6 +9,7 @@ import type {
 } from "@paperclipai/shared";
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, supportedEnvironmentDriversForAdapter } from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
+import { buildTestEnvironmentRequest } from "../lib/adapter-test-environment-request";
 import { agentsApi } from "../api/agents";
 import { environmentsApi } from "../api/environments";
 import { instanceSettingsApi } from "../api/instanceSettings";
@@ -436,13 +437,18 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       const selectedEnvironmentId = isCreate
         ? val!.defaultEnvironmentId ?? null
         : eff("identity", "defaultEnvironmentId", props.agent.defaultEnvironmentId ?? null);
-      return agentsApi.testEnvironment(selectedCompanyId, adapterType, {
-        adapterConfig: buildAdapterConfigForTest(),
-        environmentId:
-          typeof selectedEnvironmentId === "string" && selectedEnvironmentId.length > 0
-            ? selectedEnvironmentId
-            : null,
-      });
+      // AgentDash (security): edit mode names the agent so the server accepts
+      // unchanged stored command/env/cwd values for a non-instance-admin.
+      return agentsApi.testEnvironment(
+        selectedCompanyId,
+        adapterType,
+        buildTestEnvironmentRequest({
+          isCreate,
+          agentId: isCreate ? null : props.agent.id,
+          adapterConfig: buildAdapterConfigForTest(),
+          environmentId: typeof selectedEnvironmentId === "string" ? selectedEnvironmentId : null,
+        }),
+      );
     },
   });
   const testEnvironmentDisabled = testEnvironment.isPending || !selectedCompanyId;

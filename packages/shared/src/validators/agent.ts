@@ -242,6 +242,13 @@ export const testAdapterEnvironmentSchema = z.object({
    * inside that environment so the result reflects real agent execution.
    */
   environmentId: z.string().uuid().optional().nullable(),
+  /**
+   * AgentDash (security): the agent being edited, when the test runs from an
+   * edit form. The server compares host-execution fields (command, args, env,
+   * cwd) against that agent's STORED config, so resending unchanged values does
+   * not require instance admin.
+   */
+  agentId: z.string().uuid().optional().nullable(),
 });
 
 export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema>;

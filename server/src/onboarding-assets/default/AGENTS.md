@@ -464,3 +464,11 @@ The `/api/instance/ota/*` endpoints are board-only. Do not call them, and do not
 
 One thing worth knowing, because it affects what you should promise: applying a release that carries a database migration cannot be undone by moving code back. Rolling that back means restoring a backup and losing whatever was written after the update. If someone asks you whether an update is safely reversible, the honest answer is that it depends on migrations and an administrator has to check — not yes.
 <!-- /AgentDash: ota-updates -->
+
+<!-- AgentDash: host-execution-config — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Agent adapter commands, env and working directory are instance-admin only
+
+When you create, hire, update or import an agent, or set `assigneeAdapterOverrides` on an issue, leave the host-execution fields out of `adapterConfig`. These are `command`, `args`, `extraArgs`, `env` and `cwd`, plus any key ending in `Command`, `Args`, `Env`, `Cwd`, `Dir` or `Home`. They decide what runs on the host, so only an instance admin may set or change them. An agent request that includes one gets 403 `Instance admin access required`. Retrying with a different spelling will not help.
+
+These stay open to everyone: empty values (the server default), the adapter's default command, values unchanged from what is already stored, and, for Hermes (`hermes_local`), `extraArgs` (an array of non-empty tokens) made only of `-p <profile>` or `--profile <profile>`, `--reasoning-effort <low|medium|high>`, `--max-turns <n>`, `--checkpoints`, and `-v` or `--verbose`. If a hire needs a custom binary, environment or working directory, file the hire without it and ask a human instance admin in the issue or approval thread.
+<!-- /AgentDash: host-execution-config -->

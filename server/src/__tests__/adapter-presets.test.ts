@@ -6,6 +6,7 @@ import {
   ADAPTER_PRESETS,
   adapterPresetOptions,
   applyAdapterPreset,
+  mergeEnvFile,
   readAdapterStatus,
 } from "../services/adapter-presets.js";
 
@@ -227,5 +228,62 @@ describe("readAdapterStatus for local-binary adapters", () => {
 
     expect(readAdapterStatus().ready).toBe(false);
     expect(existsSync("/tmp/agentdash-pwned"), "the value reached a shell").toBe(false);
+  });
+});
+
+// AgentDash (security): the env file is sourced as shell by the launchd
+// wrapper, so a key must never be able to break out of its assignment.
+describe("adapter-presets env-file injection", () => {
+  const hostile = [
+    "sk-ant'; touch /tmp/pwn; '",
+    "sk-ant-$(touch /tmp/pwn)",
+    "sk-ant-`touch /tmp/pwn`",
+    "sk-ant-x\nPWN=1",
+    "sk-ant-x\rPWN=1",
+    "sk-ant x",
+    "sk-ant-x&&id",
+    "sk-ant-x|id",
+    'sk-ant-"x"',
+    "~/sk",
+    "sk#x",
+  ];
+
+  it.each(hostile)("rejects %j before touching process.env or the env file", (apiKey) => {
+    const path = useTempEnvFile();
+    try {
+      expect(() => applyAdapterPreset({ preset: "claude", apiKey })).toThrow(/not allowed/);
+      expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBeUndefined();
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(join(path, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a non-string apiKey", () => {
+    expect(() => applyAdapterPreset({ preset: "claude", apiKey: 123 as unknown as string })).toThrow();
+  });
+
+  it("still accepts realistic provider keys and writes them verbatim", () => {
+    const path = useTempEnvFile();
+    try {
+      const key = "sk-ant-api03-AbC_dEf-123.xyz+/=";
+      const result = applyAdapterPreset({ preset: "claude", apiKey: key });
+      expect(result.persisted).toBe(true);
+      expect(readFileSync(path, "utf8")).toContain(`ANTHROPIC_API_KEY=${key}`);
+    } finally {
+      rmSync(join(path, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("mergeEnvFile refuses unsafe values even when called directly", () => {
+    const path = useTempEnvFile();
+    try {
+      expect(() => mergeEnvFile(path, [{ key: "X", value: "a$(id)" }])).toThrow(/not allowed/);
+      expect(() => mergeEnvFile(path, [{ key: "bad key", value: "a" }])).toThrow(/Invalid env key/);
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(join(path, ".."), { recursive: true, force: true });
+    }
   });
 });

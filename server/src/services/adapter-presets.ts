@@ -213,8 +213,31 @@ function envFilePath(): string {
   return process.env.AGENTDASH_ENV_FILE ?? join(homedir(), ".config", "agentdash", "agentdash.env");
 }
 
+// AgentDash (security): the env file is SOURCED AS SHELL by the launchd
+// wrapper (`set -a; . $ENV_FILE`) and also read by docker compose and
+// `grep | cut`, so values are written unquoted and must therefore contain no
+// shell metacharacter at all. API keys and preset URLs fit this charset
+// (no quotes, `$`, backticks, `;`, `&`, `|`, whitespace/newlines, `~`, `#`).
+const SAFE_ENV_FILE_VALUE = /^[A-Za-z0-9._+/=:@-]*$/;
+const MAX_API_KEY_LENGTH = 1024;
+
+export function assertSafeEnvFileValue(key: string, value: string): void {
+  if (!SAFE_ENV_FILE_VALUE.test(value)) {
+    throw badRequest(
+      `Value for ${key} contains characters that are not allowed ` +
+        "(letters, digits and . _ + / = : @ - only).",
+    );
+  }
+}
+
 /** Merge assignments into a KEY=VALUE env file, replacing existing keys. */
-function mergeEnvFile(path: string, assignments: Array<{ key: string; value: string }>): void {
+export function mergeEnvFile(path: string, assignments: Array<{ key: string; value: string }>): void {
+  // AgentDash (security): defense in depth — refuse to write anything that
+  // would be interpreted by the shell when the file is sourced.
+  for (const a of assignments) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(a.key)) throw badRequest(`Invalid env key: ${a.key}`);
+    assertSafeEnvFileValue(a.key, a.value);
+  }
   let lines: string[] = [];
   if (existsSync(path)) {
     lines = readFileSync(path, "utf8").split(/\r?\n/);
@@ -249,10 +272,19 @@ export function applyAdapterPreset(input: ApplyAdapterPresetInput): ApplyAdapter
     throw badRequest(`Unknown adapter preset: ${preset}`);
   }
   const requiresKey = adapterPresetOptions().find((o) => o.preset === preset)!.requiresKey;
+  if (input.apiKey !== undefined && input.apiKey !== null && typeof input.apiKey !== "string") {
+    throw badRequest("apiKey must be a string");
+  }
   const apiKey = (input.apiKey ?? "").trim();
   if (requiresKey && !apiKey) {
     throw badRequest(`Preset '${preset}' requires an API key`);
   }
+  // AgentDash (security): validate BEFORE hot-setting process.env or writing
+  // the env file, so a rejected key changes nothing.
+  if (apiKey.length > MAX_API_KEY_LENGTH) {
+    throw badRequest("API key is too long");
+  }
+  assertSafeEnvFileValue("apiKey", apiKey);
 
   // Resolve the {KEY} placeholder + clear stub mode when moving to a real model.
   const assignments = template.map((a) => ({ key: a.key, value: a.value.replace("{KEY}", apiKey) }));
