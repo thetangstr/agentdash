@@ -399,3 +399,73 @@ describe("POST /api/onboarding/mcp-signup — invite-code gate", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// AgentDash (#726): MCP sign-up passes the same instance sign-up gate as
+// browser sign-up. Before this it only asked the remote funnel, so with
+// AGENTDASH_INVITE_VALIDATION=off a box that gated browser sign-up let anyone
+// claim it through MCP.
+describe("POST /api/onboarding/mcp-signup — instance sign-up gate (#726)", () => {
+  const CODE = "acme-7f3a9c21e4b8";
+  const saved: Record<string, string | undefined> = {};
+  const KEYS = ["AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE", "AGENTDASH_INVITE_CODES", "AGENTDASH_MK_INVITE_CODES"];
+
+  beforeEach(() => {
+    for (const key of KEYS) saved[key] = process.env[key];
+    process.env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE = "true";
+    process.env.AGENTDASH_INVITE_CODES = CODE;
+    delete process.env.AGENTDASH_MK_INVITE_CODES;
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it("refuses sign-up with no code even when remote validation is off", async () => {
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    const { app } = buildApp({ createUser });
+
+    const res = await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("invite_code_required");
+    expect(createUser).not.toHaveBeenCalled();
+    expect(promoteMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a wrong code", async () => {
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    const { app } = buildApp({ createUser });
+
+    const res = await request(app)
+      .post("/api/onboarding/mcp-signup")
+      .send({ ...VALID_BODY, inviteCode: "acme-000000000000" });
+
+    expect(res.status).toBe(403);
+    expect(createUser).not.toHaveBeenCalled();
+  });
+
+  it("accepts the instance's own code, as browser sign-up does", async () => {
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    const { app } = buildApp({ createUser });
+
+    const res = await request(app)
+      .post("/api/onboarding/mcp-signup")
+      .send({ ...VALID_BODY, inviteCode: ` ${CODE} ` });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(createUser).toHaveBeenCalled();
+  });
+
+  it("leaves MCP sign-up unchanged when the instance gate is off", async () => {
+    delete process.env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE;
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    const { app } = buildApp({ createUser });
+
+    const res = await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
+
+    expect(res.status).toBe(201);
+  });
+});

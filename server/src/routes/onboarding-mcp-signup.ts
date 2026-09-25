@@ -25,6 +25,11 @@
 // serializes under an advisory lock and re-checks the admin count, so at
 // most one caller ever wins even under a race.
 
+import {
+  isAcceptedSignupInviteCode,
+  mcpInviteValidationEnabled,
+  signupInviteCodeRequired,
+} from "../lib/signup-gate.js";
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { count, eq } from "drizzle-orm";
@@ -82,7 +87,9 @@ const mcpSignupBodySchema = z.object({
 const DEFAULT_INVITE_VALIDATION_URL = "https://www.agentdash.cloud/api/invites/validate";
 
 function isInviteValidationEnabled(): boolean {
-  return process.env.AGENTDASH_INVITE_VALIDATION !== "off";
+  // AgentDash (#726): shared parser, so " OFF " means off here and in the
+  // hosted-box boot guard alike.
+  return mcpInviteValidationEnabled();
 }
 
 function inviteValidationUrl(): string {
@@ -140,6 +147,24 @@ function isSelfServeBootstrapEnabled(): boolean {
   return process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP === "true";
 }
 
+/**
+ * AgentDash (#726): the instance's own sign-up gate, the same one browser
+ * sign-up passes through (`AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE` with
+ * `AGENTDASH_INVITE_CODES`). Before this, MCP sign-up only checked the remote
+ * funnel, so a box that gated browser sign-up left this door on a different
+ * key, or on none when remote validation was off.
+ */
+function checkLocalSignupGate(inviteCode: string | undefined): InviteCheck {
+  if (!signupInviteCodeRequired()) return { ok: true };
+  if (isAcceptedSignupInviteCode(inviteCode)) return { ok: true };
+  return {
+    ok: false,
+    status: 403,
+    code: "invite_code_required",
+    error: "Signup on this instance requires an invite code. Retry with { inviteCode }.",
+  };
+}
+
 export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) {
   const router = Router();
   const access = accessService(db);
@@ -189,6 +214,11 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
 
       // Invite-code funnel gate BEFORE any user creation. Fail-closed on
       // transport errors; AGENTDASH_INVITE_VALIDATION=off disables entirely.
+      const localGate = checkLocalSignupGate(inviteCode);
+      if (!localGate.ok) {
+        res.status(localGate.status).json({ code: localGate.code, error: localGate.error });
+        return;
+      }
       const invite = await checkInviteCode(inviteCode);
       if (!invite.ok) {
         res.status(invite.status).json({ code: invite.code, error: invite.error });

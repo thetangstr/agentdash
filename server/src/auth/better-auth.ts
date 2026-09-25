@@ -13,7 +13,7 @@ import {
 import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
 import { sendEmail, resetPasswordEmailTemplate, welcomeEmailTemplate } from "./email.js";
-import { buildSocialProviders } from "./social-providers.js";
+import { buildSocialProviders, ssoAccountCreationAllowed } from "./social-providers.js";
 import { logger } from "../middleware/logger.js";
 
 export type BetterAuthSessionUser = {
@@ -329,6 +329,9 @@ export function createBetterAuthInstance(
     databaseHooks: {
       user: {
         create: {
+          // AgentDash (#726): on a hosted box, the only way to create a user is
+          // gated email sign-up. See `refuseUngatedUserCreation`.
+          before: async (_user: unknown, context: unknown) => refuseUngatedUserCreation(context),
           after: async (user: { id: string; email: string; name: string | null }) => {
             // Two independent best-effort steps. Either failing must NOT
             // abort the user-create transaction — the account is already
@@ -378,6 +381,31 @@ export function createBetterAuthInstance(
   }
 
   return betterAuth(authConfig);
+}
+
+/** The Better Auth endpoint whose sign-ups pass the invite-code gate. */
+const GATED_SIGN_UP_PATH = "/sign-up/email";
+
+/**
+ * AgentDash (#726): a `user.create.before` hook. Throws (Better Auth then
+ * creates nothing and answers with an error) when SSO account creation is off (hosted boxes) and the
+ * user is being created by any endpoint other than email sign-up, which
+ * `inviteCodeSignupGuard` and `disableSignUp` gate. This covers the OAuth
+ * callback and the id-token sign-in path, which ignores the provider's
+ * `disableSignUp` in Better Auth 1.6.x. Sign-in of an existing user never
+ * creates a user row, so it is unaffected. Calls with no endpoint context
+ * (server-internal adapter use) pass.
+ */
+export function refuseUngatedUserCreation(context: unknown): undefined {
+  if (ssoAccountCreationAllowed()) return undefined;
+  const path = context && typeof context === "object" ? (context as { path?: unknown }).path : undefined;
+  if (typeof path !== "string") return undefined;
+  if (path === GATED_SIGN_UP_PATH) return undefined;
+  logger.warn({ path }, "[auth] refused to create a user outside gated email sign-up on a hosted box");
+  throw new Error(
+    "Account creation through single sign-on is disabled on this instance. "
+      + "Sign up by email with an invite code, then sign in with SSO.",
+  );
 }
 
 /**

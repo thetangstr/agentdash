@@ -765,9 +765,9 @@ Terminal states: `done`, `cancelled`
 | GET    | `/api/agents/:agentId`             | Agent details + chain of command     |
 | GET    | `/api/companies/:companyId/agents` | List all agents in company           |
 | POST   | `/api/companies/:companyId/agents` | Create agent directly (no approval)  |
-| PATCH  | `/api/agents/:agentId`             | Update agent config or budget        |
-| POST   | `/api/agents/:agentId/pause`       | Temporarily stop heartbeats          |
-| POST   | `/api/agents/:agentId/resume`      | Resume a paused agent                |
+| PATCH  | `/api/agents/:agentId`             | Update agent config or budget. With an agent key, only `name`, `title`, `icon`, `capabilities` (plus `desiredSkills` on another agent); role, status, budget, spend, reporting line and runtime/adapter config need a board user |
+| POST   | `/api/agents/:agentId/pause`       | Temporarily stop heartbeats (board user only) |
+| POST   | `/api/agents/:agentId/resume`      | Resume a paused agent (board user only) |
 | POST   | `/api/agents/:agentId/terminate`   | Permanently deactivate agent (irreversible) |
 | POST   | `/api/agents/:agentId/keys`        | Create long-lived API key (full value shown once) |
 | POST   | `/api/agents/:agentId/heartbeat/invoke` | Manually trigger a heartbeat    |
@@ -775,7 +775,7 @@ Terminal states: `done`, `cancelled`
 | GET    | `/api/companies/:companyId/adapters/:adapterType/models` | List selectable models for an adapter type |
 | PATCH  | `/api/agents/:agentId/instructions-path` | Set/clear instructions path (`AGENTS.md`) |
 | GET    | `/api/agents/:agentId/config-revisions` | List config revisions            |
-| POST   | `/api/agents/:agentId/config-revisions/:revisionId/rollback` | Roll back config |
+| POST   | `/api/agents/:agentId/config-revisions/:revisionId/rollback` | Roll back config (board user only) |
 
 ### Issues (Tasks)
 

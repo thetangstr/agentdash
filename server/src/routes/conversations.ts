@@ -1,9 +1,9 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { eq } from "drizzle-orm";
 import { type Db, deepInterviewSpecs as deepInterviewSpecsTable } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
-import { unauthorized, badRequest } from "../errors.js";
-import { assertCompanyAccess } from "./authz.js";
+import { unauthorized, badRequest, notFound } from "../errors.js";
+import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
   conversationService,
   conversationDispatch,
@@ -64,6 +64,22 @@ export function conversationRoutes(db: Db) {
     cosResolver,
   });
 
+  // AgentDash (security): every `/:id` route resolves the conversation first
+  // and authorizes against the conversation's own company. The company is
+  // never taken from the request body — a caller-supplied companyId used to
+  // pick which company's live-event stream a message was broadcast on.
+  async function loadAuthorizedConversation(req: Request) {
+    // Authenticate before the lookup, so an anonymous caller cannot tell an
+    // existing conversation id (401) from a missing one (404).
+    assertAuthenticated(req);
+    const conversation = await svc.getById(req.params.id as string);
+    if (!conversation) {
+      throw notFound("Conversation not found");
+    }
+    assertCompanyAccess(req, conversation.companyId);
+    return conversation;
+  }
+
   // GET /api/conversations/companies/:companyId/inbox
   router.get("/companies/:companyId/inbox", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
@@ -89,27 +105,24 @@ export function conversationRoutes(db: Db) {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { body, companyId } = req.body as { body: string; companyId?: string };
+    const { body } = req.body as { body: string };
     if (typeof body !== "string" || !body.trim()) {
       throw badRequest("Message body required");
     }
-    const resolvedCompanyId: string =
-      companyId ??
-      req.actor.companyId ??
-      req.actor.companyIds?.[0] ??
-      "";
+    const conversation = await loadAuthorizedConversation(req);
+    const companyId = conversation.companyId;
     const msg = await svc.postMessage({
-      conversationId: req.params.id,
+      conversationId: conversation.id,
       authorKind: "user",
       authorId: req.actor.userId,
       body,
-      companyId: resolvedCompanyId || undefined,
+      companyId,
     });
     void dispatcher
       .onMessage({
         messageId: msg.id,
-        conversationId: req.params.id,
-        companyId: resolvedCompanyId,
+        conversationId: conversation.id,
+        companyId,
         authorUserId: req.actor.userId,
         body,
       })
@@ -121,13 +134,14 @@ export function conversationRoutes(db: Db) {
 
   // GET /api/conversations/:id/messages?before=<ts>&limit=50
   router.get("/:id/messages", async (req, res) => {
+    const conversation = await loadAuthorizedConversation(req);
     const before =
       typeof req.query.before === "string" ? req.query.before : undefined;
     const limit = Math.min(
       parseInt(String(req.query.limit ?? "50"), 10) || 50,
       200,
     );
-    const messages = await svc.paginate(req.params.id, { before, limit });
+    const messages = await svc.paginate(conversation.id, { before, limit });
     res.json(messages);
   });
 
@@ -136,30 +150,27 @@ export function conversationRoutes(db: Db) {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { lastReadMessageId, companyId } = req.body as {
-      lastReadMessageId: string;
-      companyId?: string;
-    };
+    const { lastReadMessageId } = req.body as { lastReadMessageId: string };
     if (!lastReadMessageId) {
       throw badRequest("lastReadMessageId required");
     }
-    const resolvedCompanyId: string =
-      companyId ??
-      req.actor.companyId ??
-      req.actor.companyIds?.[0] ??
-      "";
-    await svc.setReadPointer(
-      req.params.id,
+    const conversation = await loadAuthorizedConversation(req);
+    const updated = await svc.setReadPointer(
+      conversation.id,
       req.actor.userId,
       lastReadMessageId,
-      resolvedCompanyId || undefined,
+      conversation.companyId,
     );
+    if (!updated) {
+      throw badRequest("lastReadMessageId is not a message in this conversation");
+    }
     res.status(204).end();
   });
 
   // GET /api/conversations/:id/participants
   router.get("/:id/participants", async (req, res) => {
-    const ps = await svc.listParticipants(req.params.id);
+    const conversation = await loadAuthorizedConversation(req);
+    const ps = await svc.listParticipants(conversation.id);
     res.json(ps);
   });
 

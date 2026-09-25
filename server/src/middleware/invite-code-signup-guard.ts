@@ -16,35 +16,16 @@
 // Better Auth never sees a field it does not model.
 
 import type { RequestHandler } from "express";
-import { timingSafeEqual } from "node:crypto";
-import { configuredMkInviteCodes } from "../lib/mk-invite-codes.js";
+// AgentDash (#726): the code list and the match live in lib/signup-gate.ts so
+// the MCP sign-up route and the hosted-box boot guard read them the same way.
+// Either list (general or MK) opens the door: a design partner holds an MK
+// code and should not also need a general one.
+import { isAcceptedSignupInviteCode } from "../lib/signup-gate.js";
 
 const SIGNUP_PATH_PREFIX = "/sign-up";
 
 export interface InviteCodeSignupGuardOptions {
   enabled: boolean;
-}
-
-function generalInviteCodes(): string[] {
-  return (process.env.AGENTDASH_INVITE_CODES ?? "")
-    .split(",")
-    .map((code) => code.trim())
-    .filter((code) => code.length > 0);
-}
-
-/**
- * Either list opens the door.
- *
- * A design partner holds an MK code and should not also need a general one —
- * requiring both would mean handing every partner two secrets and explaining
- * which is which.
- */
-function isAcceptedSignupCode(candidate: string): boolean {
-  const supplied = Buffer.from(candidate);
-  return [...generalInviteCodes(), ...configuredMkInviteCodes()].some((configured) => {
-    const expected = Buffer.from(configured);
-    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-  });
 }
 
 function readInviteCode(body: unknown): string | null {
@@ -67,7 +48,7 @@ export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): Re
       delete (req.body as Record<string, unknown>).inviteCode;
     }
 
-    if (!code || !isAcceptedSignupCode(code)) {
+    if (!code || !isAcceptedSignupInviteCode(code)) {
       // One message for missing and wrong alike: distinguishing them tells a
       // guesser whether they are close.
       res.status(403).json({
