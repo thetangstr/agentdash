@@ -101,12 +101,15 @@ describe("redactQueryObject", () => {
 
 /**
  * reqBody regression: the body list (SENSITIVE_KEYS) is unchanged by AGE-83.
- * A body key named `code` is NOT newly redacted; `password` still is.
+ * GH #688 later added `code` to the body list — an OAuth authorization code
+ * in a failed-exchange log line is a live credential until it is burned, so
+ * the carve-out is gone. A non-sensitive field literally named `code` (e.g.
+ * an invite code) is redacted too; that is the accepted cost.
  */
 describe("reqBody regression — body list unchanged", () => {
-  it("body key `code` is NOT redacted; password still is", () => {
+  it("body key `code` IS redacted (GH #688); password still is", () => {
     const out = redactSensitive({ code: "RAW_BODY_CODE", password: "hunter2", name: "kai" }) as Record<string, unknown>;
-    expect(out.code).toBe("RAW_BODY_CODE");
+    expect(out.code).toBe("[REDACTED]");
     expect(out.password).toBe("[REDACTED]");
     expect(out.name).toBe("kai");
   });

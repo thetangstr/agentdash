@@ -32,6 +32,13 @@ function stripTrailingSlash(value: string): string {
  * nothing else.
  */
 const API_CREDENTIAL_PREFIX = "pcp_";
+// AgentDash (GH #677): opaque assistant-grant access tokens are `pcpa_…` —
+// which does NOT start with `pcp_` (the third character differs), so the
+// prefix check alone would misroute them to the bridge toolset. Same for
+// `pcin_…`, the endpoint's ephemeral internal loopback credential — it is a
+// control-plane credential for toolset-selection purposes (the server side
+// holds it read-only; see server/src/services/assistant-loopback.ts).
+const ASSISTANT_TOKEN_PREFIXES = ["pcpa_", "pcin_"];
 
 /**
  * Whether this credential can reach the control plane.
@@ -47,7 +54,10 @@ const API_CREDENTIAL_PREFIX = "pcp_";
 export function isControlPlaneCredential(apiKey: string): boolean {
   const trimmed = apiKey.trim();
   if (trimmed.length === 0) return true;
-  return trimmed.startsWith(API_CREDENTIAL_PREFIX);
+  return (
+    trimmed.startsWith(API_CREDENTIAL_PREFIX)
+    || ASSISTANT_TOKEN_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+  );
 }
 
 export function normalizeApiUrl(apiUrl: string): string {

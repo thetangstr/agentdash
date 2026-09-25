@@ -147,7 +147,10 @@ describe("AGE-83 logger integration", () => {
     });
   });
 
-  it("reqBody regression at the middleware level: a body key named `code` is NOT newly redacted", () => {
+  // GH #688 reversed the `code` carve-out: an OAuth authorization code in a
+  // failed-exchange log line is a live credential until it is burned, so body
+  // `code` is redacted like every other credential-bearing key.
+  it("reqBody regression at the middleware level: a body key named `code` IS redacted (GH #688)", () => {
     const req = makeReq("/api/thing", "POST", {
       body: { code: "RAW_BODY_CODE", password: "hunter2" },
     });
@@ -155,7 +158,7 @@ describe("AGE-83 logger integration", () => {
 
     const line = emitLine(req, res);
 
-    expect(line.reqBody?.code).toBe("RAW_BODY_CODE");
+    expect(line.reqBody?.code).toBe("[REDACTED]");
     // password is censored — by pino's redact path (`[Redacted]`, pino's
     // default censor) and/or redactSensitive (`[REDACTED]`); either way it
     // must not appear in the clear.

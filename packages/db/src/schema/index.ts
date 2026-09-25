@@ -155,6 +155,16 @@ export {
 // confirmation. Same single-use, endpoint-bound shape as a decision handle.
 export { stewardInboxActionHandles } from "./steward_inbox_actions.js";
 export { stewardWebhooks } from "./steward_webhooks.js";
+// AgentDash (GH #677): OAuth 2.1 authorization-server state for the assistant
+// MCP surface — grants, registered clients, pending auth requests, and the
+// hashed access/refresh token tables.
+export {
+  assistantGrants,
+  assistantOauthClients,
+  assistantAuthRequests,
+  assistantAccessTokens,
+  assistantRefreshTokens,
+} from "./assistant_grants.js";
 // AgentDash: Company Evaluator (Stage 1 shadow) — append-only ledger, stored projections, ingest cursors
 export { evaluationEvents } from "./evaluation_events.js";
 export { evaluationScorecards } from "./evaluation_scorecards.js";

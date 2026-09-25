@@ -92,6 +92,7 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import MyAgent from "./pages/MyAgent";
+import { OAuthConsent } from "./pages/OAuthConsent";
 import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
@@ -337,6 +338,12 @@ export function App() {
           <Route path="trial/claim" element={<TrialClaimPage />} />
           {/* AgentDash: CoS onboarding v2 conversation */}
           <Route path="cos" element={<CoSConversation />} />
+          {/* AgentDash (GH #677): OAuth consent for assistant MCP clients.
+              Inside the gate so CloudAccessGate handles sign-in and returns
+              here via ?next= — this is a person-facing approval, not a public
+              page, and it is company-agnostic so it lives outside
+              :companyPrefix. */}
+          <Route path="oauth/consent" element={<OAuthConsent />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />
           <Route path="member-onboarding" element={<MemberOnboardingPage />} />
           <Route path="instance" element={<Navigate to="/instance/settings/general" replace />} />

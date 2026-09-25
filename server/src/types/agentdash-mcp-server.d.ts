@@ -21,5 +21,10 @@ declare module "@agentdash/mcp-server" {
     runId: string | null;
   }
 
-  export function createAgentDashServer(config: PaperclipMcpConfig): Server;
+  export type AgentDashToolset = "setup" | "agent" | "assistant";
+
+  export function createAgentDashServer(
+    config: PaperclipMcpConfig,
+    options?: { toolset?: AgentDashToolset },
+  ): Server;
 }

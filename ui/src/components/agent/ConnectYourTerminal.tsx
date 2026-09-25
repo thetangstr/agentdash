@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi } from "../../api/agents";
 import { authApi } from "../../api/auth";
 import { bridgeApi } from "../../api/bridge";
+import { AssistantConnections } from "./AssistantConnections";
 import { stewardWebhooksApi } from "../../api/steward-webhooks";
 import { healthApi } from "../../api/health";
 import { timeAgo } from "../../lib/timeAgo";
@@ -317,6 +318,12 @@ export function ConnectYourTerminal({
           </p>
         </section>
       ) : null}
+
+      {/* GH #677: OAuth grants to assistant clients — the same "something
+          outside AgentDash can reach your workspace" list, for the MCP
+          surface rather than the bridge. Renders nothing until a grant
+          exists. */}
+      <AssistantConnections companyId={companyId} />
 
       {/* Connecting means you can ask. This means you get told. It carries the
           same weight as the section above because it is the half people miss. */}

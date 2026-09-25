@@ -5,10 +5,18 @@ import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import { EVALUATOR_AGENT_ROLE, EVALUATOR_READ_ONLY_REASON, isEvaluatorWriteAllowed, isUuidLike, type DeploymentMode } from "@paperclipai/shared";
+import {
+  ASSISTANT_ACCESS_TOKEN_PREFIX,
+  ASSISTANT_INSUFFICIENT_SCOPE,
+  ASSISTANT_LOOPBACK_TOKEN_PREFIX,
+  assistantRouteScope,
+} from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { bridgeService } from "../services/bridge.js";
+import { assistantOAuthService, assistantResourceUri } from "../services/assistant-oauth.js";
+import { resolveAssistantLoopbackToken } from "../services/assistant-loopback.js";
 import { logActivity } from "../services/activity-log.js";
 
 function hashToken(token: string) {
@@ -69,6 +77,7 @@ interface ActorMiddlewareOptions {
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
   const bridge = bridgeService(db);
+  const assistantOAuth = assistantOAuthService(db);
   return async (req, res, next) => {
     req.actor =
       opts.deploymentMode === "local_trusted"
@@ -150,6 +159,110 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
 
     const token = authHeader.slice("bearer ".length).trim();
     if (!token) {
+      next();
+      return;
+    }
+
+    // AgentDash (GH #677): an assistant OAuth access token. Resolved on prefix
+    // before any other credential lookup — a `pcpa_` token can never be a
+    // board or agent key, and skipping those lookups means an invalid
+    // assistant token reaches zero credential tables.
+    //
+    // When resolution succeeds the actor is board-shaped but constrained on
+    // three axes at once: ONE company (the grant's), a static route allowlist
+    // (ASSISTANT_ROUTE_SCOPES — anything else is 403 even with a live token),
+    // and a per-route scope (a grant without `agentdash:work` gets 403
+    // `insufficient_scope` on work routes). Failure to resolve is not a fall-
+    // through: the request stays unauthenticated and the route's own 401
+    // (with WWW-Authenticate on the MCP endpoint) answers.
+    if (token.startsWith(ASSISTANT_ACCESS_TOKEN_PREFIX)) {
+      // Audience check: the token's bound resource must be THIS instance's
+      // canonical assistant URI. A token minted elsewhere (or for another
+      // resource) resolves to nothing and falls into the route's 401.
+      const resolved = await assistantOAuth.resolveAccessToken(
+        token,
+        assistantResourceUri(req),
+      );
+      if (!resolved) {
+        next();
+        return;
+      }
+      const requiredScope = assistantRouteScope(req.method, normalizedPath(req));
+      if (!requiredScope) {
+        res.status(403).json({ error: "Assistant credentials cannot reach this route" });
+        return;
+      }
+      if (!resolved.scopes.includes(requiredScope)) {
+        if (normalizedPath(req) === "/api/mcp/assistant") {
+          res.set(
+            "WWW-Authenticate",
+            `Bearer error="${ASSISTANT_INSUFFICIENT_SCOPE}", error_description="The grant does not include the ${requiredScope} scope"`,
+          );
+        }
+        res.status(403).json({ error: ASSISTANT_INSUFFICIENT_SCOPE, required_scope: requiredScope });
+        return;
+      }
+      req.actor = {
+        type: "board",
+        userId: resolved.userId,
+        companyId: resolved.companyId,
+        companyIds: [resolved.companyId],
+        memberships: [
+          {
+            companyId: resolved.companyId,
+            membershipRole: resolved.membershipRole,
+            status: "active",
+          },
+        ],
+        isInstanceAdmin: false,
+        assistantGrantId: resolved.grantId,
+        assistantScopes: resolved.scopes,
+        runId: runIdHeader || undefined,
+        source: "assistant_grant",
+      };
+      next();
+      return;
+    }
+
+    // AgentDash (GH #677 security round): the assistant MCP endpoint's own
+    // loopback credential. A `pcin_` token is minted in-process per MCP
+    // request (see assistant-loopback.ts) so the toolset can call real REST
+    // routes without a `pcpa_` bearer ever being valid there — the grant's
+    // scopes already gated which TOOLS exist, and the toolset's §5 redaction
+    // runs before anything leaves the envelope.
+    //
+    // Two hard constraints beyond the pcpa_ actor: the credential is
+    // read-only (the M1 toolset is GET-only — a write is a bug, not a
+    // feature), and resolution is in-memory only — a token that survives a
+    // restart is dead, and one that never existed was never minted.
+    if (token.startsWith(ASSISTANT_LOOPBACK_TOKEN_PREFIX)) {
+      const resolved = resolveAssistantLoopbackToken(token);
+      if (!resolved) {
+        next();
+        return;
+      }
+      if (!["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase())) {
+        res.status(403).json({ error: "Assistant loopback credentials are read-only" });
+        return;
+      }
+      req.actor = {
+        type: "board",
+        userId: resolved.userId,
+        companyId: resolved.companyId,
+        companyIds: [resolved.companyId],
+        memberships: [
+          {
+            companyId: resolved.companyId,
+            membershipRole: resolved.membershipRole,
+            status: "active",
+          },
+        ],
+        isInstanceAdmin: false,
+        assistantGrantId: resolved.grantId,
+        assistantScopes: resolved.scopes,
+        assistantLoopback: true,
+        source: "assistant_grant",
+      };
       next();
       return;
     }

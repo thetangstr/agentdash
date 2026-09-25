@@ -32,6 +32,35 @@ describe("redactSensitive", () => {
     }
   });
 
+  it("redacts the OAuth token-endpoint credential fields (GH #688)", () => {
+    // A failed /oauth/token exchange logs the request body on the 4xx line.
+    // These fields are live credentials (or were, until the burn-on-failure
+    // change) — they must never reach disk.
+    const out = redactSensitive({
+      grant_type: "authorization_code",
+      code: "pcpc_livecode",
+      code_verifier: "verifier",
+      refresh_token: "pcpr_x",
+      client_secret: "secret",
+      client_assertion: "jwt",
+      assertion: "jwt",
+      redirect_uri: "https://client.example/cb",
+    }) as Record<string, string>;
+
+    expect(out.grant_type).toBe("authorization_code");
+    expect(out.redirect_uri).toBe("https://client.example/cb");
+    for (const key of [
+      "code",
+      "code_verifier",
+      "refresh_token",
+      "client_secret",
+      "client_assertion",
+      "assertion",
+    ]) {
+      expect(out[key]).toBe("[REDACTED]");
+    }
+  });
+
   it("does not redact a bare `token` field — pagination cursors and CSRF tokens are not credentials", () => {
     const out = redactSensitive({ token: "next-page-cursor", limit: 20 }) as Record<string, unknown>;
 
