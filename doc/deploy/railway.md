@@ -50,6 +50,16 @@ Copy [`.env.railway.example`](../../.env.railway.example) into the service's
 - `PAPERCLIP_DEPLOYMENT_EXPOSURE=public` — required for an internet-facing deploy
   (the preflight warns if it's missing).
 
+- **Hosted-box boot guard (#726):** `AGENTDASH_DEPLOYMENT_KIND=hosted` marks a
+  hosted agentdash.cloud box. With it set, the server refuses to start unless
+  `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, `PAPERCLIP_PUBLIC_URL` is an
+  `https://` URL, `AGENTDASH_HERMES_MANAGED_PROFILES=true`, and sign-up is gated
+  (`AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE=true` with `AGENTDASH_INVITE_CODES`, or
+  `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true`). The boot log names each missing
+  setting. Check it took with `curl -s https://your-app.up.railway.app/api/health`
+  and look for `"hostedBox": true`. `local_trusted` stays the right mode for a
+  founder's own machine; the flag is only for hosted boxes.
+
 Leave `PAPERCLIP_AUTH_PUBLIC_BASE_URL` / `BILLING_PUBLIC_BASE_URL` as the
 placeholder for the first deploy — you fix them in step 4 once the domain exists.
 

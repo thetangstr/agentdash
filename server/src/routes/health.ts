@@ -13,6 +13,7 @@ import { serverVersion } from "../version.js";
 import { computeHealthChecks, type HealthChecks } from "../observability/health-checks.js";
 import { alerterStatus } from "../observability/alerter.js";
 import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
+import { isHostedBox } from "../services/license.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
 // creation + instance-admin promotion behind an env flag so existing
@@ -65,11 +66,15 @@ export function healthRoutes(
     const exposeDevServerDetails =
       exposeFullDetails || hasDevServerStatusToken(req.get("x-paperclip-dev-server-status-token"));
 
+    // AgentDash (#726): whether this is a hosted box, on every response shape,
+    // so the runbook and the launch run can assert it without signing in.
+    const hostedBox = isHostedBox();
+
     if (!db) {
       res.json(
         exposeFullDetails
-          ? { status: "ok", version: serverVersion }
-          : { status: "ok", deploymentMode: opts.deploymentMode },
+          ? { status: "ok", version: serverVersion, hostedBox }
+          : { status: "ok", deploymentMode: opts.deploymentMode, hostedBox },
       );
       return;
     }
@@ -155,6 +160,7 @@ export function healthRoutes(
       res.json({
         status: checks.status,
         deploymentMode: opts.deploymentMode,
+        hostedBox,
         bootstrapStatus,
         bootstrapInviteActive,
         selfServeBootstrap,
@@ -177,6 +183,7 @@ export function healthRoutes(
       version: serverVersion,
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
+      hostedBox,
       authReady: opts.authReady,
       bootstrapStatus,
       bootstrapInviteActive,
