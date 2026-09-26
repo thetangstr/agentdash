@@ -10,12 +10,21 @@ import { Sparkles, Building2 } from "lucide-react";
 
 // AgentDash (Phase E): standalone /company-create page for the post-signup
 // redirect chain. Lifted out of OnboardingWizard.tsx step 1 so the wizard's
-// later steps (agent + task + launch) stay available for returning users
-// while fresh signups go through this page → /assess → /cos.
+// later steps (agent + task + launch) stay available for returning users.
+//
+// AgentDash (GH #785, UX-4): fresh signups go straight from this page to setup
+// (/cos, where the model-key step comes first). The five-question readiness
+// assessment is optional: it stays at /assess, linked from Settings. An
+// agentdash_mk workspace keeps its old chain (this page → /assess → /cos).
 //
 // On submit we POST /api/companies. If the user already has a membership the
 // server returns 409 (companies.ts guard); we treat that as "go straight to
 // CoS" so an invitee who navigates back from /cos doesn't double-create.
+/** Where a new workspace goes next. The assessment is no longer a step on the default profile. */
+export function postCreateDestination(company: { productProfile?: string | null }): string {
+  return company.productProfile === "agentdash_mk" ? "/assess?onboarding=1" : "/cos";
+}
+
 export function CompanyCreatePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -36,7 +45,7 @@ export function CompanyCreatePage() {
     onSuccess: async (company) => {
       setSelectedCompanyId(company.id);
       await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-      navigate("/assess?onboarding=1", { replace: true });
+      navigate(postCreateDestination(company), { replace: true });
     },
     onError: (err) => {
       // 409 means the user already has a workspace (invite path or duplicate

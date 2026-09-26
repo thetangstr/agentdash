@@ -85,7 +85,38 @@ describe("CompanyCreatePage", () => {
     el.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  it("submits to companiesApi.create with fromSignup and navigates to /assess?onboarding=1", async () => {
+  async function submitName(name: string) {
+    render();
+    const input = container.querySelector("input#company-name") as HTMLInputElement;
+    const button = container.querySelector("button[type='submit']") as HTMLButtonElement;
+    await act(async () => {
+      setNativeValue(input, name);
+    });
+    await flushReact();
+    await act(async () => {
+      button.click();
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+  }
+
+  it("GH #785: a new default-profile workspace goes straight to setup (/cos), never /assess", async () => {
+    mockCreate.mockResolvedValue({ id: "company-1", name: "Acme", productProfile: "default" });
+    await submitName("Acme");
+    expect(mockCreate).toHaveBeenCalledWith({ name: "Acme" }, { fromSignup: true });
+    expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
+    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("/assess"), expect.anything());
+  });
+
+  it("GH #785: an agentdash_mk workspace keeps the assessment step, unchanged", async () => {
+    mockCreate.mockResolvedValue({ id: "company-2", name: "MK", productProfile: "agentdash_mk" });
+    await submitName("MK");
+    expect(mockNavigate).toHaveBeenCalledWith("/assess?onboarding=1", { replace: true });
+  });
+
+  it("submits to companiesApi.create with fromSignup and navigates to setup when the profile is absent", async () => {
     mockCreate.mockResolvedValue({ id: "company-1", name: "Acme" });
 
     render();
@@ -106,7 +137,7 @@ describe("CompanyCreatePage", () => {
 
     expect(mockCreate).toHaveBeenCalledWith({ name: "Acme" }, { fromSignup: true });
     expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
-    expect(mockNavigate).toHaveBeenCalledWith("/assess?onboarding=1", { replace: true });
+    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
   });
 
   it("redirects to /cos when the server returns 409 already_member (invite-flow safety)", async () => {
