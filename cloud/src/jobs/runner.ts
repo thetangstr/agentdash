@@ -6,7 +6,12 @@
 //     the global max_concurrent_jobs check and the claim atomic.
 //   - Lease: 5 minutes in locked_until, renewed by a heartbeat. Every write a
 //     worker makes is conditioned on `locked_by = me AND state = 'running'`,
-//     so a worker that lost its lease can never clobber the new owner.
+//     so a worker that lost its lease can never clobber the new owner. The
+//     worker also tracks, on its own clock, when it last renewed: once that is
+//     older than the lease (less a margin) because renewals FAILED or hung,
+//     it aborts the job itself, so it never keeps calling Railway (e.g.
+//     projectCreate, which allows duplicate names) while another worker that
+//     reclaimed the expired lease does the same (GH #799 review).
 //   - Steps: a handler is an ordered list of idempotent steps. `jobs.step` is
 //     written before each step runs, so a resumed job starts at that step.
 //   - Failure: per-step timeouts; retries at 15 s, 1 min, 4 min, 10 min (5
@@ -70,6 +75,8 @@ export interface JobRunnerOptions {
   leaseMs?: number;
   heartbeatMs?: number;
   pollMs?: number;
+  /** Monotonic milliseconds, for the local lease check; injectable for tests. */
+  clock?: () => number;
 }
 
 export const DEFAULT_LEASE_MS = 5 * 60_000;
@@ -96,10 +103,13 @@ export class JobRunner {
   readonly #leaseMs: number;
   readonly #heartbeatMs: number;
   readonly #pollMs: number;
+  readonly #clock: () => number;
+  readonly #leaseMarginMs: number;
   readonly #active = new Map<string, { controller: AbortController; done: Promise<void> }>();
   #timer: NodeJS.Timeout | null = null;
   #stopping = false;
   #ticking = false;
+  #tickDone: Promise<void> = Promise.resolve();
 
   constructor(opts: JobRunnerOptions) {
     this.#db = opts.db;
@@ -110,6 +120,8 @@ export class JobRunner {
     this.#leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
     this.#heartbeatMs = opts.heartbeatMs ?? Math.min(60_000, Math.floor(this.#leaseMs / 3));
     this.#pollMs = opts.pollMs ?? 2_000;
+    this.#clock = opts.clock ?? (() => performance.now());
+    this.#leaseMarginMs = Math.min(this.#heartbeatMs, Math.floor(this.#leaseMs / 5));
   }
 
   get activeCount(): number {
@@ -119,7 +131,9 @@ export class JobRunner {
   start(): void {
     if (this.#timer) return;
     this.#stopping = false;
-    this.#timer = setInterval(() => void this.#tick(), this.#pollMs);
+    this.#timer = setInterval(() => {
+      if (!this.#ticking) this.#tickDone = this.#tick();
+    }, this.#pollMs);
     this.#timer.unref();
     this.#log.info("job runner started", { workerId: this.workerId, kinds: [...this.#handlers.keys()] });
   }
@@ -132,6 +146,9 @@ export class JobRunner {
     this.#stopping = true;
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = null;
+    // A claim may be in flight: let it finish, so the job it takes is launched
+    // (and aborted below) rather than left running past shutdown.
+    await this.#tickDone.catch(() => {});
     for (const { controller } of this.#active.values()) controller.abort(new ShutdownError());
     await Promise.allSettled([...this.#active.values()].map((a) => a.done));
   }
@@ -141,9 +158,10 @@ export class JobRunner {
     this.#ticking = true;
     try {
       for (;;) {
+        const claimedAt = this.#clock();
         const id = await this.claim();
         if (!id) break;
-        this.#launch(id);
+        this.#launch(id, claimedAt);
       }
     } catch (err) {
       this.#log.error("job claim failed", { err });
@@ -154,15 +172,17 @@ export class JobRunner {
 
   /** Claim one job and run it to the end of this attempt. Returns its id, or null if none was claimable. */
   async runOnce(): Promise<string | null> {
+    const claimedAt = this.#clock();
     const id = await this.claim();
     if (!id) return null;
-    await this.#launch(id);
+    await this.#launch(id, claimedAt);
     return id;
   }
 
-  #launch(id: string): Promise<void> {
+  #launch(id: string, claimedAt: number): Promise<void> {
     const controller = new AbortController();
-    const done = this.#run(id, controller).finally(() => this.#active.delete(id));
+    if (this.#stopping) controller.abort(new ShutdownError());
+    const done = this.#run(id, controller, claimedAt).finally(() => this.#active.delete(id));
     this.#active.set(id, { controller, done });
     return done;
   }
@@ -211,7 +231,7 @@ export class JobRunner {
     return rows.length > 0;
   }
 
-  async #run(id: string, controller: AbortController): Promise<void> {
+  async #run(id: string, controller: AbortController, claimedAt: number): Promise<void> {
     const [job] = await this.#db.select().from(jobs).where(eq(jobs.id, id));
     if (!job) return;
     const handler = this.#handlers.get(job.kind);
@@ -226,20 +246,38 @@ export class JobRunner {
         return b;
       },
     };
+    // Local view of the lease: the time the last renewal was SENT (or the
+    // claim), which is never later than the database's own lease start.
+    let renewedAt = claimedAt;
+    const lapsed = () => this.#clock() - renewedAt >= this.#leaseMs - this.#leaseMarginMs;
+    const loseLocally = () => {
+      if (!controller.signal.aborted) {
+        log.warn("lease lapsed locally (renewals failing); aborting the job so no other worker overlaps it");
+        controller.abort(new LeaseLostError(id));
+      }
+    };
     const heartbeat = setInterval(() => {
+      if (lapsed()) return loseLocally();
+      const sentAt = this.#clock();
       void this.#owned(sql`
         update jobs set locked_until = now() + ${this.#leaseMs} * interval '1 millisecond', heartbeat_at = now()
          where id = ${id} and locked_by = ${this.workerId} and state = 'running' returning id`)
         .then((ok) => {
           if (!ok) controller.abort(new LeaseLostError(id));
+          else renewedAt = Math.max(renewedAt, sentAt);
         })
-        .catch((err: unknown) => log.warn("heartbeat failed", { err }));
+        .catch((err: unknown) => {
+          log.warn("heartbeat failed", { err });
+          if (lapsed()) loseLocally();
+        });
     }, this.#heartbeatMs);
     heartbeat.unref();
     try {
       if (!handler) throw new FatalJobError(`no handler for job kind ${job.kind}`);
       log.info("job attempt started", { step: job.step });
-      await this.#execute(job, handler, controller.signal, ctxBase);
+      await this.#execute(job, handler, controller.signal, ctxBase, () => {
+        if (lapsed()) loseLocally();
+      });
       const ok = await this.#owned(sql`
         update jobs set state = 'succeeded', finished_at = now(), locked_by = null, locked_until = null, last_error = null, updated_at = now()
          where id = ${id} and locked_by = ${this.workerId} and state = 'running' returning id`);
@@ -254,7 +292,13 @@ export class JobRunner {
     }
   }
 
-  async #execute(job: JobRow, handler: JobHandler, signal: AbortSignal, ctxBase: Omit<JobContext, "signal">): Promise<void> {
+  async #execute(
+    job: JobRow,
+    handler: JobHandler,
+    signal: AbortSignal,
+    ctxBase: Omit<JobContext, "signal">,
+    checkLease: () => void,
+  ): Promise<void> {
     let start = job.step ? handler.steps.findIndex((s) => s.name === job.step) : 0;
     if (start < 0) {
       ctxBase.log.warn("recorded step is not in the handler; starting from the first step", { step: job.step });
@@ -262,6 +306,7 @@ export class JobRunner {
     }
     for (let i = start; i < handler.steps.length; i++) {
       const step = handler.steps[i]!;
+      checkLease();
       if (signal.aborted) throw signal.reason;
       if (handler.maxDurationMs) {
         const rows = (await this.#db.execute(

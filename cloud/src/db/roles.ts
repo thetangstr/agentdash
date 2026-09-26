@@ -5,11 +5,15 @@
 //                the drizzle schema. Migrations run as this role (the
 //                migrator connects as a superuser or CREATEROLE role and
 //                does SET ROLE cloud_owner), so nobody logs in as it.
-//   cloud_app    LOGIN. What the running service connects as. SELECT, INSERT,
-//                UPDATE, DELETE on ordinary tables; only SELECT and INSERT on
-//                the audit tables (operator_audit, box_events); no TRUNCATE,
-//                TRIGGER or REFERENCES anywhere; owns nothing, so it cannot
-//                ALTER, DROP, DISABLE TRIGGER or replace a trigger function.
+//   cloud_app    LOGIN. What the running service connects as. SELECT, INSERT
+//                and UPDATE on ordinary tables, never DELETE (removal is a
+//                state: boxes.state 'deleted', accounts.status 'deleted');
+//                only SELECT and INSERT on the audit tables (operator_audit,
+//                box_events); no TRUNCATE, TRIGGER or REFERENCES anywhere;
+//                owns nothing and belongs to NO role (GH #799 review: a
+//                membership in cloud_owner would let it SET ROLE and DROP),
+//                so it cannot ALTER, DROP, DISABLE TRIGGER or replace a
+//                trigger function.
 //
 // Why: the append-only triggers from #779 stop an application bug, not a
 // compromised connection. An owner can drop the trigger or the table. With
@@ -142,11 +146,19 @@ export async function applyRuntimeGrants(sql: Sql, opts: RoleNames = {}): Promis
   await sql.unsafe(`revoke all on schema public from ${runtime}`);
   await sql.unsafe(`grant usage on schema public to ${runtime}`);
   await sql.unsafe(`revoke all on all tables in schema public from ${runtime}`);
-  await sql.unsafe(`grant select, insert, update, delete on all tables in schema public to ${runtime}`);
+  await sql.unsafe(`grant select, insert, update on all tables in schema public to ${runtime}`);
   await sql.unsafe(`revoke update, delete, truncate, trigger, references on ${audit} from ${runtime}`);
   await sql.unsafe(`revoke all on all sequences in schema public from ${runtime}`);
   await sql.unsafe(`grant usage, select on all sequences in schema public to ${runtime}`);
   await sql.unsafe(`revoke all on all functions in schema public from ${runtime}`);
+  // The runtime role belongs to no role at all: a membership (even with
+  // NOINHERIT) lets it SET ROLE to that role, e.g. the owner, and DROP.
+  const memberships = await sql.unsafe<{ role: string }[]>(
+    `select r.rolname as role from pg_auth_members m join pg_roles r on r.oid = m.roleid
+      where m.member = (select oid from pg_roles where rolname = $1)`,
+    [opts.runtime ?? RUNTIME_ROLE],
+  );
+  for (const m of memberships) await sql.unsafe(`revoke ${ident(m.role)} from ${runtime}`);
   const drizzle = await sql`select 1 from pg_namespace where nspname = 'drizzle'`;
   if (drizzle.length) {
     await sql.unsafe(`revoke all on schema drizzle from ${runtime}`);
@@ -173,7 +185,7 @@ export async function runtimeRoleProblems(sql: Sql): Promise<string[]> {
   if (role.rolbypassrls) problems.push(`${role.name} bypasses row-level security`);
   for (const t of AUDIT_TABLES) {
     const [r] = await sql<{ owns: boolean; upd: boolean; del: boolean; trunc: boolean; trig: boolean; ins: boolean; sel: boolean }[]>`
-      select pg_has_role(current_user, c.relowner, 'USAGE') as owns,
+      select pg_has_role(current_user, c.relowner, 'MEMBER') as owns,
              has_table_privilege(current_user, c.oid, 'UPDATE') as upd,
              has_table_privilege(current_user, c.oid, 'DELETE') as del,
              has_table_privilege(current_user, c.oid, 'TRUNCATE') as trunc,
@@ -192,6 +204,16 @@ export async function runtimeRoleProblems(sql: Sql): Promise<string[]> {
     }
     if (!r.ins || !r.sel) problems.push(`${role.name} lacks INSERT or SELECT on ${t}`);
   }
+  // GH #799 review: 'USAGE' misses a NOINHERIT membership, which still allows
+  // SET ROLE. The runtime role must be a member of no role whatsoever.
+  const member = await sql<{ role: string }[]>`
+    select r.rolname as role from pg_auth_members m join pg_roles r on r.oid = m.roleid
+     where m.member = (select oid from pg_roles where rolname = current_user)`;
+  for (const m of member) problems.push(`${role.name} is a member of role ${m.role} (it could SET ROLE to it)`);
+  const [del] = await sql<{ n: number }[]>`
+    select count(*)::int as n from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r' and has_table_privilege(current_user, c.oid, 'DELETE')`;
+  if ((del?.n ?? 0) > 0) problems.push(`${role.name} can DELETE from ${del!.n} table(s); removal is a state change`);
   const [schema] = await sql<{ create: boolean }[]>`select has_schema_privilege(current_user, 'public', 'CREATE') as create`;
   if (schema?.create) problems.push(`${role.name} can CREATE in schema public`);
   return problems;

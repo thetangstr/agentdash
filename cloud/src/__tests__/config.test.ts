@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { checkAdminTokenStrength, ConfigError, DEFAULT_PRIVATE_NETWORK_CIDRS, loadConfig, parseAllowList } from "../config.js";
-import { createCipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { checkControlUrl, runAdmin } from "../admin/run.js";
 import { constantTimeEqual, DataKeyring, dataKeyId, decryptField, encryptField, needsReencrypt, parseDataKey, parseKeyring } from "../crypto.js";
 import { createLogger } from "../logger.js";
@@ -83,10 +83,16 @@ describe("admin token strength", () => {
     expect(checkAdminTokenStrength(base.CLOUD_ADMIN_TOKEN)).toBeNull();
     expect(checkAdminTokenStrength("q3Zk8Xw1+Lm9/Tp2Rs5Vb7Nc0Hj4Yd6Fg8Ae1Uo3Ki=")).toBeNull();
     expect(checkAdminTokenStrength("q3Zk8Xw1-Lm9_Tp2Rs5Vb7Nc0Hj4Yd6Fg8Ae1Uo3Ki")).toBeNull();
-    for (let i = 0; i < 200; i++) {
-      expect(checkAdminTokenStrength(randomBytes(32).toString("hex"))).toBeNull();
-      expect(checkAdminTokenStrength(randomBytes(32).toString("base64url"))).toBeNull();
+    // Deterministic CSPRNG-shaped tokens (a SHA-256 chain), so the test cannot flake.
+    let seed = Buffer.from("cloud-control-token-strength");
+    for (let i = 0; i < 400; i++) {
+      seed = createHash("sha256").update(seed).digest();
+      expect(checkAdminTokenStrength(seed.toString("hex"))).toBeNull();
+      expect(checkAdminTokenStrength(seed.toString("base64url"))).toBeNull();
     }
+    // A long run inside otherwise random output is still accepted up to 8 in a row.
+    expect(checkAdminTokenStrength("9f2c4e7a1b3d5f60" + "a".repeat(8) + "718293a4b5c6d7e8")).toBeNull();
+    expect(checkAdminTokenStrength("9f2c4e7a1b3d5f60" + "a".repeat(9) + "718293a4b5c6d7e8")).toMatch(/repeats/);
   });
 
   it("refuses short, padded, repetitive, passphrase-like and low-alphabet values", () => {

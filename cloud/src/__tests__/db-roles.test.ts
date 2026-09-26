@@ -111,9 +111,45 @@ describe("role split", () => {
     const [box] = await rt`insert into boxes (account_id, slug) values (${acct!.id}, 'rtbox') returning id`;
     await rt`update boxes set state = 'provisioning' where id = ${box!.id}`;
     await rt`insert into settings (key, value) values ('daily_cap', '5'::jsonb)`;
-    await rt`delete from settings where key = 'daily_cap'`;
+    await rt`update settings set value = 'null'::jsonb where key = 'daily_cap'`;
     const [job] = await rt`insert into jobs (box_id, kind) values (${box!.id}, 'provision') returning id`;
     expect(job!.id).toBeTruthy();
+  });
+
+  it("the runtime role cannot DELETE from any table; removal is a state change (GH #799)", async () => {
+    for (const t of ["boxes", "accounts", "jobs", "settings", "waitlist", "email_tokens", "invite_codes", "railway_workspaces"]) {
+      expect(await denied(rt.unsafe(`delete from ${t}`)), t).toBe("42501");
+    }
+  });
+
+  it("a membership in cloud_owner (even NOINHERIT) fails the boot check and is revoked by the next migrate (GH #799)", async () => {
+    await su.unsafe('grant "cloud_owner" to "cloud_app"');
+    // What the reviewer showed: with membership, SET ROLE and DROP work.
+    const probe = postgres(runtimeUrl, { max: 1, onnotice: () => {} });
+    try {
+      await probe.unsafe('set role "cloud_owner"');
+      await probe.unsafe("create table owner_probe (id int)");
+      await probe.unsafe("drop table owner_probe");
+    } finally {
+      await probe.end({ timeout: 5 });
+    }
+    const problems = await verifyRuntimeDb(runtimeUrl);
+    expect(problems.join("\n")).toMatch(/member of role cloud_owner/);
+    await migrateWithRoles(tdb.url);
+    expect(await verifyRuntimeDb(runtimeUrl)).toEqual([]);
+    const again = postgres(runtimeUrl, { max: 1, onnotice: () => {} });
+    try {
+      expect(await denied(again.unsafe('set role "cloud_owner"'))).toBe("42501");
+    } finally {
+      await again.end({ timeout: 5 });
+    }
+  });
+
+  it("a DELETE grant fails the boot check", async () => {
+    await su.unsafe('grant delete on boxes to "cloud_app"');
+    expect((await verifyRuntimeDb(runtimeUrl)).join("\n")).toMatch(/can DELETE/);
+    await migrateWithRoles(tdb.url);
+    expect(await verifyRuntimeDb(runtimeUrl)).toEqual([]);
   });
 
   it("is idempotent without the password once the roles exist", async () => {

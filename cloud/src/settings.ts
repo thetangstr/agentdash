@@ -1,6 +1,6 @@
 // AgentDash: operator settings (spec §3.2, §5.1). A missing row means the
 // launch default. Values are validated per key on write.
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { CloudDb } from "./db/client.js";
 import { operatorAudit, settings } from "./db/schema.js";
 
@@ -89,15 +89,12 @@ export function settingsService(db: CloudDb) {
       await db.transaction(async (tx) => {
         const [prev] = await tx.select().from(settings).where(eq(settings.key, key)).for("update");
         const oldValue = prev ? prev.value : SETTING_DEFAULTS[key];
-        if (value === null) {
-          // JSON null is stored as "no row": the default for nullable keys is null.
-          await tx.delete(settings).where(eq(settings.key, key));
-        } else {
-          await tx
-            .insert(settings)
-            .values({ key, value, updatedBy: actor })
-            .onConflictDoUpdate({ target: settings.key, set: { value, updatedBy: actor, updatedAt: new Date() } });
-        }
+        // JSON null is stored as a jsonb null (no DELETE: the runtime role has none, GH #799).
+        const stored = value === null ? sql`'null'::jsonb` : value;
+        await tx
+          .insert(settings)
+          .values({ key, value: stored, updatedBy: actor })
+          .onConflictDoUpdate({ target: settings.key, set: { value: stored, updatedBy: actor, updatedAt: new Date() } });
         await tx.insert(operatorAudit).values({
           kind: "setting_changed",
           actor,

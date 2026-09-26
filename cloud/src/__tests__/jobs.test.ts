@@ -212,6 +212,35 @@ describe("runner", () => {
     expect((await jobRow(jobId)).state).toBe("succeeded");
   });
 
+  it("aborts the job itself once its lease lapses locally because renewals keep failing (fake clock, GH #799)", async () => {
+    const { jobId } = await queuedProvision();
+    // The runner gets its own connection, which we cut mid-step so every heartbeat write fails.
+    const own = createCloudDb(pg.url, { max: 2 });
+    let now = 1_000_000;
+    let reason: unknown = null;
+    const handler: JobHandler = {
+      kind: "provision",
+      steps: [{ name: "create_project", timeoutMs: 60_000, run: (ctx) => new Promise<void>((resolve) => {
+        ctx.signal.addEventListener("abort", () => { reason = ctx.signal.reason; resolve(); });
+      }) }],
+    };
+    const runner = new JobRunner({ db: own.db, log, handlers: [handler], leaseMs: 60_000, heartbeatMs: 20, clock: () => now });
+    const done = runner.runOnce();
+    for (let i = 0; i < 100 && (await jobRow(jobId)).step !== "create_project"; i++) await sleep(20);
+    // Renewals succeed while the connection is up: the clock can pass one lease without an abort.
+    now += 45_000;
+    await sleep(80);
+    now += 45_000;
+    await sleep(80);
+    expect(reason).toBeNull();
+    await own.close();
+    now += 61_000;
+    await done;
+    expect((reason as Error | null)?.name).toBe("LeaseLostError");
+    // The job is left for another worker: still running, reclaimable once the DB lease expires.
+    expect((await jobRow(jobId)).state).toBe("running");
+  });
+
   it("two workers with SKIP LOCKED run every job exactly once and respect max_concurrent_jobs", async () => {
     await setSetting("max_concurrent_jobs", 2);
     const ids = await Promise.all(Array.from({ length: 6 }, () => queuedProvision().then((q) => q.jobId)));

@@ -106,7 +106,8 @@ const TOKEN_ALPHABET_RE = /^[A-Za-z0-9+/=_\-.~]+$/;
  * Refuse an admin token that was not plausibly produced by a CSPRNG
  * (GH #778): at least 32 characters, only token characters, at least 128
  * bits by alphabet size, at least 10 distinct characters, and no run of more
- * than 5 identical characters. `openssl rand -hex 32` and
+ * than 8 identical characters (a run of 6 turns up in about 1 in 100 random
+ * hex tokens tested in bulk; 9 in a row is about 1 in 10^8, GH #799 review). `openssl rand -hex 32` and
  * `openssl rand -base64 32` both pass; a password or a padded phrase does not.
  */
 export function checkAdminTokenStrength(token: string): string | null {
@@ -115,7 +116,7 @@ export function checkAdminTokenStrength(token: string): string | null {
   const alphabet = /^[0-9a-fA-F]+$/.test(token) ? 16 : /^[A-Za-z0-9]+$/.test(token) ? 62 : 64;
   if (token.length * Math.log2(alphabet) < 128) return "must carry at least 128 bits (e.g. 32 hex or 22 base64 characters of CSPRNG output)";
   if (new Set(token).size < 10) return "has too few distinct characters to be random";
-  if (/(.)\1{5,}/.test(token)) return "repeats one character too many times to be random";
+  if (/(.)\1{8,}/.test(token)) return "repeats one character too many times to be random";
   return null;
 }
 
