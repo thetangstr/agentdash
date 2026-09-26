@@ -229,7 +229,7 @@ Consequences for the web app:
 2. **Sidebar:** the six items (Home, Ask, Work, Decisions, Shipped, Team), everything else under Advanced, **for the default profile and hosted boxes only.** The MK profile keeps its current layout.
 3. **First run:** claim → model key → connect GitHub → first issue → Home. The CoS interview and the 5-question assessment become optional; "Plan with your Chief of Staff" is available from Home.
 4. **Naming:** keep **"issues"** in the UI. "Request" is not adopted; the Work page lists issues and Ask's composer says "New issue".
-5. The top-15 punch list and the GitHub App are filed as GitHub issues (labels `ui`, `ux-sharpening`, `mvl-1.0` except the App), with owners and dependencies in each issue.
+5. The top-15 punch list and the GitHub App are filed as GitHub issues (labels `ui`, `ux-sharpening`, `mvl-1.0` except the App), with owners and dependencies in each issue. Punch-list items 1 to 15 are #782 to #796 in rank order (owner:orchestrator: #782, #783, #784, #786; owner:devin: the rest); the GitHub App is #797.
 
 ## Screenshots
 
