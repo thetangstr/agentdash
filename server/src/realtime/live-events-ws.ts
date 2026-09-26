@@ -9,6 +9,7 @@ import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
 import { subscribeCompanyLiveEvents } from "../services/live-events.js";
+import { edgeUpgradeAllowed } from "../middleware/edge-gate.js";
 
 interface WsSocket {
   readyState: number;
@@ -255,6 +256,11 @@ export function setupLiveEventsWebSocketServer(
   });
 
   server.on("upgrade", (req, socket, head) => {
+    // AgentDash (#766, SC-5): behind the edge router, an upgrade must carry the edge secret.
+    if (!edgeUpgradeAllowed(req)) {
+      rejectUpgrade(socket, "403 Forbidden", "edge required");
+      return;
+    }
     const onRawSocketError = (err: Error) => {
       logger.warn({ err, path: req.url }, "live websocket upgrade socket error");
     };

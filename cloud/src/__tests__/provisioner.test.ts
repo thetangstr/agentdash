@@ -178,6 +178,7 @@ describe("a fresh box, from nothing to awaiting_claim", () => {
       AGENTDASH_TRIAL_ANONYMOUS: "false",
       AGENTDASH_RELEASE_TAG: TAG,
       AGENTDASH_BOX_SLUG: slug,
+      AGENTDASH_EDGE_DOMAIN: "agentdash.cloud",
       AGENTDASH_CLAIM_EMAIL: `founder-${slug}@example.test`,
     });
     expect(v.AGENTDASH_INVITE_CODES).toMatch(/^AGD-[0-9A-F]{26}$/);

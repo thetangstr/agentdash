@@ -7,6 +7,7 @@ import type { Db } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
+import { configuredEdgeSecret, edgeGate } from "./middleware/edge-gate.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { requireLicense } from "./middleware/require-license.js";
@@ -285,6 +286,11 @@ export async function createApp(
   if (internetFacing) {
     app.set("trust proxy", 1);
   }
+
+  // AgentDash (#766, SC-5): behind the edge router, only the router may reach
+  // the box (health excepted), and the client IP comes from the router. Runs
+  // before logging and every rate limiter. No-op without AGENTDASH_EDGE_SECRET.
+  app.use(edgeGate({ secret: configuredEdgeSecret() }));
 
   // AgentDash: capture the raw request body so downstream webhook/connector
   // routes (Stripe, Slack) can verify HMAC signatures. Shared by both the JSON

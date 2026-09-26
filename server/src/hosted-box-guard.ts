@@ -26,6 +26,7 @@ import {
   signupInviteCodeRequired,
 } from "./lib/signup-gate.js";
 import { isHostedBox } from "./services/license.js";
+import { MIN_EDGE_SECRET_LENGTH } from "./middleware/edge-gate.js";
 
 export interface HostedBoxGuardConfig {
   deploymentMode: DeploymentMode;
@@ -136,6 +137,33 @@ export function hostedBoxConfigErrors(
       "AGENTDASH_INVITE_VALIDATION=off with AGENTDASH_SELF_SERVE_BOOTSTRAP=true lets anyone claim the box "
         + "through MCP sign-up; unset AGENTDASH_INVITE_VALIDATION or turn self-serve bootstrap off.",
     );
+  }
+
+  // AgentDash (#766, SC-5): behind the edge router. The secret is what makes
+  // X-AgentDash-Client-IP trustworthy and keeps the Railway host closed.
+  const edgeSecret = (env.AGENTDASH_EDGE_SECRET ?? "").trim();
+  if (edgeSecret.length > 0) {
+    if (edgeSecret.length < MIN_EDGE_SECRET_LENGTH) {
+      errors.push(
+        `AGENTDASH_EDGE_SECRET is shorter than ${MIN_EDGE_SECRET_LENGTH} characters; use a random value `
+          + "(the control plane generates 64 hex characters).",
+      );
+    }
+    if (!publicUrl.startsWith("https://")) {
+      errors.push("AGENTDASH_EDGE_SECRET is set but PAPERCLIP_PUBLIC_URL is not https://; behind the edge router the public URL is https://<slug>.agentdash.cloud.");
+    }
+    const edgeDomain = (env.AGENTDASH_EDGE_DOMAIN ?? "").trim().toLowerCase();
+    if (edgeDomain && publicUrl.startsWith("https://")) {
+      let host = "";
+      try {
+        host = new URL(publicUrl).hostname.toLowerCase();
+      } catch {
+        host = "";
+      }
+      if (!host.endsWith(`.${edgeDomain}`)) {
+        errors.push(`PAPERCLIP_PUBLIC_URL is not under the edge domain ${edgeDomain} (AGENTDASH_EDGE_DOMAIN); the router serves <slug>.${edgeDomain}.`);
+      }
+    }
   }
 
   if (getConfiguredSocialProviders(env).microsoft) {

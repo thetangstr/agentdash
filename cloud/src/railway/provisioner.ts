@@ -176,6 +176,8 @@ export function boxVariables(input: {
     AGENTDASH_TRIAL_ANONYMOUS: "false",
     AGENTDASH_RELEASE_TAG: input.releaseTag,
     AGENTDASH_BOX_SLUG: input.slug,
+    // AgentDash (#766, SC-5): the box's boot guard checks the public URL is under it when the edge secret is set.
+    AGENTDASH_EDGE_DOMAIN: input.edgeDomain,
     AGENTDASH_CLAIM_EMAIL: input.claimEmail,
   };
 }
