@@ -23,6 +23,8 @@ export interface FakeVolume {
   serviceId: string;
   mountPath: string;
   backups: string[];
+  /** Project reads that still do not list this volume (Railway's listing lag, seen live). */
+  hiddenReads: number;
 }
 
 export interface BoxFakeOptions {
@@ -36,6 +38,8 @@ export interface BoxFakeOptions {
   deployOutcome?: "SUCCESS" | "FAILED";
   /** What the box answers on /api/health once deployed. */
   health?: Record<string, unknown>;
+  /** A new volume stays out of the project listing for this many reads. */
+  volumeListLag?: number;
 }
 
 export class FakeRailwayBoxes extends FakeRailway {
@@ -66,7 +70,7 @@ export class FakeRailwayBoxes extends FakeRailway {
     });
     on(/volumeCreate\(/, "volumeCreate", (v) => {
       const i = v.i as { projectId: string; serviceId: string; mountPath: string };
-      const vol: FakeVolume = { id: this.nextId("vol"), instanceId: this.nextId("volinst"), projectId: i.projectId, serviceId: i.serviceId, mountPath: i.mountPath, backups: [] };
+      const vol: FakeVolume = { id: this.nextId("vol"), instanceId: this.nextId("volinst"), projectId: i.projectId, serviceId: i.serviceId, mountPath: i.mountPath, backups: [], hiddenReads: this.opts.volumeListLag ?? 0 };
       this.volumes.set(vol.id, vol);
       return { volumeCreate: { id: vol.id } };
     });
@@ -172,6 +176,7 @@ export class FakeRailwayBoxes extends FakeRailway {
       volumes: {
         edges: [...this.volumes.values()]
           .filter((v) => v.projectId === p.id)
+          .filter((v) => (v.hiddenReads > 0 ? (v.hiddenReads--, false) : true))
           .map((v) => ({ node: { id: v.id, volumeInstances: { edges: [{ node: { id: v.instanceId, volumeId: v.id, serviceId: v.serviceId, mountPath: v.mountPath, environmentId: env } }] } } })),
       },
     };

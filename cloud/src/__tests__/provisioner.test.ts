@@ -211,6 +211,29 @@ describe("a fresh box, from nothing to awaiting_claim", () => {
     expect(first).toEqual({ projects: 1, services: 2, volumes: 2, domains: 1, webDeploys: 1, pgDeploys: 1 });
   });
 
+  it("records the volume IDs when Railway lists a new volume late (seen live), without creating it twice", async () => {
+    const { fake, runner } = setup({ volumeListLag: 3 });
+    const { boxId, jobId } = await newBox();
+    await runner.runOnce();
+    expect((await jobRow(jobId)).state, (await jobRow(jobId)).lastError ?? "").toBe("succeeded");
+    const box = await boxRow(boxId);
+    expect(box.pgVolumeId).toBeTruthy();
+    expect(box.webVolumeId).toBeTruthy();
+    expect(fake.volumes.size).toBe(2);
+    for (const v of fake.volumes.values()) expect(v.backups).toEqual(["DAILY", "WEEKLY"]);
+  });
+
+  it("a job resumed at snapshots re-derives volume IDs it never recorded", async () => {
+    const { fake, handler } = setup();
+    const { boxId } = await newBox();
+    await runSteps(handler, boxId, ["reserve", "project", "postgres", "web"]);
+    await db.update(boxes).set({ pgVolumeId: null, webVolumeId: null }).where(eq(boxes.id, boxId));
+    await runSteps(handler, boxId, ["snapshots"]);
+    const box = await boxRow(boxId);
+    expect(box.pgVolumeId && box.webVolumeId).toBeTruthy();
+    for (const v of fake.volumes.values()) expect(v.backups).toEqual(["DAILY", "WEEKLY"]);
+  });
+
   it("resumes after a crash between steps without creating anything twice", async () => {
     const { fake, handler, runner } = setup();
     const { boxId } = await newBox();
