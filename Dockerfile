@@ -19,6 +19,8 @@ FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 COPY cli/package.json cli/
+# AgentDash: the cloud control plane (GH #762) is a workspace member; its image is cloud/Dockerfile.
+COPY cloud/package.json cloud/
 COPY server/package.json server/
 COPY ui/package.json ui/
 COPY packages/shared/package.json packages/shared/
