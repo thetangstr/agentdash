@@ -58,5 +58,6 @@ test("a new workspace goes from /company-create to setup without the assessment"
   await expect(advanced).toContainText("Readiness assessment");
   await advanced.getByRole("link", { name: "Run the assessment" }).click();
   await expect(page).toHaveURL(/\/assess$/);
-  await expect(page.getByText(/How would you like to assess/)).toBeVisible();
+  // A full page load of the marketing-shell page; give it room on a busy runner.
+  await expect(page.getByRole("heading", { name: /How would you like to assess/ })).toBeVisible({ timeout: 20_000 });
 });
