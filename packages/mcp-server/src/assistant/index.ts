@@ -1,20 +1,22 @@
 import type { PaperclipApiClient } from "../client.js";
 import type { ToolDefinition } from "../tools.js";
-import { ASSISTANT_SCOPE_WORK } from "@paperclipai/shared";
+import { ASSISTANT_SCOPE_DECIDE, ASSISTANT_SCOPE_WORK } from "@paperclipai/shared";
 import { AssistantContext } from "./context.js";
 import { assistantTools } from "./tools.js";
 import { assistantWorkTools } from "./work.js";
+import { assistantGatedTools } from "./gated.js";
 
 /**
- * AgentDash assistant MCP (M1 reads GH #676, M3 work tools GH #678): the
- * person-facing toolset over the control-plane API — nine read tools plus
- * five work tools. Selected by `toolset: "assistant"` (stdio:
- * AGENTDASH_TOOLSET=assistant).
+ * AgentDash assistant MCP (M1 reads GH #676, M3 work tools GH #678, M4 gated
+ * tools GH #679): the person-facing toolset over the control-plane API — nine
+ * read tools, five work tools, three gated-action tools. Selected by
+ * `toolset: "assistant"` (stdio: AGENTDASH_TOOLSET=assistant).
  *
  * GH #745 review: a grant WITHOUT `agentdash:work` does not see the work
  * tools at all — advertising writes it cannot take invites the model to
- * attempt them, and the read-only surface is the honest contract. When
- * `assistantScopes` is undefined (stdio against an operator key, not a
+ * attempt them, and the read-only surface is the honest contract. The same
+ * rule hides the gated tools without the opt-in `agentdash:decide` scope.
+ * When `assistantScopes` is undefined (stdio against an operator key, not a
  * grant) the full surface is served.
  */
 export function createAssistantToolDefinitions(
@@ -22,15 +24,19 @@ export function createAssistantToolDefinitions(
   config: { companyId: string | null; assistantScopes?: readonly string[] },
 ): ToolDefinition[] {
   const ctx = new AssistantContext(client, config.companyId);
-  const readTools = assistantTools(client, ctx);
-  if (config.assistantScopes && !config.assistantScopes.includes(ASSISTANT_SCOPE_WORK)) {
-    return readTools;
+  const tools = [...assistantTools(client, ctx)];
+  if (!config.assistantScopes || config.assistantScopes.includes(ASSISTANT_SCOPE_WORK)) {
+    tools.push(...assistantWorkTools(client, ctx));
   }
-  return [...readTools, ...assistantWorkTools(client, ctx)];
+  if (!config.assistantScopes || config.assistantScopes.includes(ASSISTANT_SCOPE_DECIDE)) {
+    tools.push(...assistantGatedTools(client, ctx));
+  }
+  return tools;
 }
 
 export { AssistantContext } from "./context.js";
 export { assistantTools } from "./tools.js";
+export { assistantGatedTools } from "./gated.js";
 export {
   assistantOutputSchema,
   clampLimit,

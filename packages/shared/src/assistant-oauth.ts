@@ -146,12 +146,31 @@ export function assistantKickoffRequestId(projectId: string): string {
  * was ever meant to set. A `pcin_` body carrying anything outside the list is
  * refused in middleware, so a new field on a wrapped route cannot be reached
  * through the assistant surface without deliberately widening this list.
+ *
+ * `scope` (GH #679, M4): the grant scope each route requires. The M3 routes
+ * take `agentdash:work`; the three gated-action routes take the opt-in
+ * `agentdash:decide`. Deliberately a per-entry field and never defaulted:
+ * the day a write forgets to name its scope is the day the right review
+ * question goes unasked. Note what is NOT here: the approval decision routes
+ * themselves (`/approvals/:id/approve` etc.) stay off the allowlist — a
+ * `pcin_` credential cannot decide anything without a consumed handle, which
+ * is the whole point of the two-step flow (spec §7.2).
  */
 export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
   method: string;
   pattern: RegExp;
+  /** The grant scope this write requires. */
+  scope: AssistantScope;
   /** Counts against the tighter per-grant "new tasks per hour" limit too. */
   taskCreate?: boolean;
+  /**
+   * Whether the write draws down the per-grant 30/hour work budget (spec
+   * §7.1). Default true. The gated-action routes opt out: that budget is
+   * defined for the work class, and a person confirming decisions should not
+   * starve their work tools — the gated class is bounded by handle TTL and
+   * the decide scope instead.
+   */
+  consumesWriteAllowance?: boolean;
   /** The only top-level request-body keys the toolset sends. */
   bodyFields: readonly string[];
 }> = [
@@ -159,12 +178,14 @@ export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
   {
     method: "POST",
     pattern: /^\/api\/companies\/[^/]+\/projects$/,
+    scope: ASSISTANT_SCOPE_WORK,
     bodyFields: ["name", "description", "targetDate", "leadAgentId"],
   },
   // create_work_item, start_project's kickoff — POST /companies/:id/issues
   {
     method: "POST",
     pattern: /^\/api\/companies\/[^/]+\/issues$/,
+    scope: ASSISTANT_SCOPE_WORK,
     taskCreate: true,
     bodyFields: ["projectId", "title", "description", "assigneeAgentId", "status", "priority", "requestId"],
   },
@@ -172,16 +193,47 @@ export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
   {
     method: "PATCH",
     pattern: /^\/api\/issues\/[^/]+$/,
+    scope: ASSISTANT_SCOPE_WORK,
     bodyFields: ["assigneeAgentId", "assigneeUserId", "status", "priority", "title", "projectId"],
   },
   // assign_work's nudge — POST /agents/:id/wakeup
   {
     method: "POST",
     pattern: /^\/api\/agents\/[^/]+\/wakeup$/,
+    scope: ASSISTANT_SCOPE_WORK,
     bodyFields: ["source", "triggerDetail", "reason", "payload", "idempotencyKey"],
   },
   // comment_on_work — POST /issues/:id/comments
-  { method: "POST", pattern: /^\/api\/issues\/[^/]+\/comments$/, bodyFields: ["body"] },
+  {
+    method: "POST",
+    pattern: /^\/api\/issues\/[^/]+\/comments$/,
+    scope: ASSISTANT_SCOPE_WORK,
+    bodyFields: ["body"],
+  },
+  // GH #679 (M4): prepare_decision — POST /companies/:id/assistant/actions/prepare-decision
+  {
+    method: "POST",
+    pattern: /^\/api\/companies\/[^/]+\/assistant\/actions\/prepare-decision$/,
+    scope: ASSISTANT_SCOPE_DECIDE,
+    consumesWriteAllowance: false,
+    bodyFields: ["approvalId", "decision", "note"],
+  },
+  // request_hire — POST /companies/:id/assistant/actions/prepare-hire
+  {
+    method: "POST",
+    pattern: /^\/api\/companies\/[^/]+\/assistant\/actions\/prepare-hire$/,
+    scope: ASSISTANT_SCOPE_DECIDE,
+    consumesWriteAllowance: false,
+    bodyFields: ["role", "reason", "name", "projectId"],
+  },
+  // confirm_action — POST /companies/:id/assistant/actions/confirm
+  {
+    method: "POST",
+    pattern: /^\/api\/companies\/[^/]+\/assistant\/actions\/confirm$/,
+    scope: ASSISTANT_SCOPE_DECIDE,
+    consumesWriteAllowance: false,
+    bodyFields: ["handle", "personSaid"],
+  },
 ];
 
 /**
