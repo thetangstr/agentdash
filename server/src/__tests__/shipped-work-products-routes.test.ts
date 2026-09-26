@@ -42,6 +42,7 @@ describeEmbeddedPostgres("GET /companies/:companyId/work-products (Shipped feed)
   const UNMETERED_ISSUE = randomUUID();
   const SECRET_ISSUE = randomUUID();
   const OTHER_ISSUE = randomUUID();
+  const HIDDEN_ISSUE = randomUUID();
   const RUN = randomUUID();
   const NOW = Date.now();
   const minutesAgo = (m: number) => new Date(NOW - m * 60_000);
@@ -105,6 +106,14 @@ describeEmbeddedPostgres("GET /companies/:companyId/work-products (Shipped feed)
         status: "done",
       },
       { id: OTHER_ISSUE, companyId: OTHER_COMPANY, title: "Not yours", identifier: "OTH-1", status: "done" },
+      {
+        id: HIDDEN_ISSUE,
+        companyId: COMPANY,
+        title: "Hidden work",
+        identifier: "SHP-4",
+        status: "done",
+        hiddenAt: new Date(),
+      },
     ]);
     await db.insert(heartbeatRuns).values({
       id: RUN,
@@ -149,6 +158,17 @@ describeEmbeddedPostgres("GET /companies/:companyId/work-products (Shipped feed)
         status: "ready_for_review",
         createdAt: minutesAgo(1),
         updatedAt: minutesAgo(1),
+      },
+      {
+        companyId: COMPANY,
+        issueId: HIDDEN_ISSUE,
+        type: "pull_request",
+        provider: "github",
+        title: "Hidden PR",
+        url: "https://github.com/acme/web/pull/99",
+        status: "merged",
+        createdAt: minutesAgo(2),
+        updatedAt: minutesAgo(2),
       },
       {
         companyId: OTHER_COMPANY,
@@ -318,6 +338,15 @@ describeEmbeddedPostgres("GET /companies/:companyId/work-products (Shipped feed)
       expect(res.body.monthTotal.pullRequests).toBe(2);
       expect(res.body.monthTotal.usage).toMatchObject({ metered: true, inputTokens: 2000, outputTokens: 100 });
     }
+  });
+
+  it("never lists a hidden issue's work products, nor counts them", async () => {
+    const app = appAs(asUser("owner", "owner"));
+    const res = await request(app).get(`/api/companies/${COMPANY}/work-products`);
+    expect(res.body.items.map((i: { title: string }) => i.title)).not.toContain("Hidden PR");
+    expect(res.body.total).toBe(3);
+    const byIssue = await request(app).get(`/api/companies/${COMPANY}/work-products?issueId=${HIDDEN_ISSUE}`);
+    expect(byIssue.body.items).toEqual([]);
   });
 
   it("rejects malformed filters and cursors with 400", async () => {

@@ -26,7 +26,7 @@ import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
 
 export const SHIPPED_PAGE_SIZE = 50;
 export const SHIPPED_EMPTY_TEXT =
-  "Pull requests and results land here with what they cost. Your first one usually takes 20 to 30 minutes.";
+  "Pull requests and results your agents produce land here, with what they cost.";
 const ALL = "__all__";
 
 function monthLabel(iso: string) {

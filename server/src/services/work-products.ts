@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { agents, costEvents, heartbeatRuns, issueWorkProducts, issues } from "@paperclipai/db";
@@ -90,7 +90,12 @@ export function workProductService(db: Db) {
   const producingAgentId = sql<string | null>`coalesce(${heartbeatRuns.agentId}, ${issues.assigneeAgentId})`;
 
   function shippedFilters(companyId: string, opts: ListShippedOptions): SQL[] {
-    const filters: SQL[] = [eq(issueWorkProducts.companyId, companyId), eq(issues.companyId, companyId)];
+    const filters: SQL[] = [
+      eq(issueWorkProducts.companyId, companyId),
+      eq(issues.companyId, companyId),
+      // Hidden issues are gone everywhere else (issue list, assistant digest).
+      isNull(issues.hiddenAt),
+    ];
     if (opts.visibleWhere) filters.push(opts.visibleWhere);
     if (opts.projectId) filters.push(eq(issues.projectId, opts.projectId));
     if (opts.issueId) filters.push(eq(issueWorkProducts.issueId, opts.issueId));
