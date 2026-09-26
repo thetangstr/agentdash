@@ -11,6 +11,8 @@
 // objects/arrays. Caps depth so a hostile or accidental cycle can't pin
 // the logger.
 
+import { redactGitHubTokens } from "../services/git-credential-helper.js";
+
 const SENSITIVE_KEYS = new Set<string>([
   "password",
   "currentpassword",
@@ -52,6 +54,11 @@ const SENSITIVE_KEYS = new Set<string>([
   // is spendable until claimed or expired.
   "invitetoken",
   "invite_token",
+  // GH #782: the GitHub connection form posts its fine-grained PAT as
+  // `githubToken`; a refused PUT logs its body on the 4xx line. (A bare
+  // `token` stays unredacted on purpose, see the test.)
+  "githubtoken",
+  "github_token",
 ]);
 
 const MAX_DEPTH = 6;
@@ -63,6 +70,8 @@ function isSensitiveKey(key: string): boolean {
 
 export function redactSensitive(value: unknown, depth = 0): unknown {
   if (depth > MAX_DEPTH) return undefined;
+  // GH #782: a GitHub token is redacted by its shape wherever it sits.
+  if (typeof value === "string") return redactGitHubTokens(value);
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) {
     if (depth + 1 > MAX_DEPTH) return undefined;

@@ -36,6 +36,8 @@ export { agentTaskSessions } from "./agent_task_sessions.js";
 export { agentWakeupRequests } from "./agent_wakeup_requests.js";
 export { projects } from "./projects.js";
 export { projectWorkspaces } from "./project_workspaces.js";
+// AgentDash (GH #782): GitHub repo connections (credential source per project workspace)
+export { githubRepoConnections } from "./github_repo_connections.js";
 export { executionWorkspaces } from "./execution_workspaces.js";
 export { environments } from "./environments.js";
 export { environmentLeases } from "./environment_leases.js";

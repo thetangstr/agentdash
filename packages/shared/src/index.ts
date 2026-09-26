@@ -611,6 +611,13 @@ export {
   RUN_FACT_WAKE_REASONS,
   RUN_METERING_STATUSES,
 } from "./types/index.js";
+// AgentDash (GH #782): GitHub repo connections
+export {
+  GITHUB_CREDENTIAL_SOURCES,
+  type GitHubCredentialSource,
+  type GitHubRepoConnection,
+  type GitHubConnectionsResponse,
+} from "./types/index.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,
   buildIssueReferenceHref,

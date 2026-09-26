@@ -67,6 +67,15 @@ import { agentDirectivesService } from "./agent-directives.js";
 import { agentMemoryService } from "./agent-memory.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
+// AgentDash (GH #782): connected GitHub repos
+import { githubConnectionService } from "./github-connection.js";
+import {
+  cloneCredentialEnv,
+  cloneCredentialGitArgs,
+  configureCheckoutCredentialHelper,
+  redactGitHubTokens,
+  redactGitHubTokensInValue,
+} from "./git-credential-helper.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import {
   buildHeartbeatRunIssueComment,
@@ -608,6 +617,10 @@ async function ensureManagedProjectWorkspace(input: {
   companyId: string;
   projectId: string;
   repoUrl: string | null;
+  // AgentDash (GH #782): the connected repo's credential. Handed to the clone
+  // in an env variable scoped to that one git process, and the checkout is
+  // pointed at the agent-time credential helper; never written into the URL.
+  githubCredential?: { token: string } | null;
 }): Promise<{ cwd: string; warning: string | null }> {
   const cwd = resolveManagedProjectWorkspaceDir({
     companyId: input.companyId,
@@ -629,6 +642,9 @@ async function ensureManagedProjectWorkspace(input: {
     .then((entry) => entry.isDirectory())
     .catch(() => false);
   if (gitDirExists) {
+    if (input.githubCredential) {
+      await configureCheckoutCredentialHelper(cwd).catch(() => undefined);
+    }
     return { cwd, warning: null };
   }
 
@@ -644,13 +660,22 @@ async function ensureManagedProjectWorkspace(input: {
   }
 
   try {
-    await execFile("git", ["clone", input.repoUrl, cwd], {
-      env: sanitizeRuntimeServiceBaseEnv(process.env),
-      timeout: MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS,
-    });
+    const credential = input.githubCredential ?? null;
+    await execFile(
+      "git",
+      [...(credential ? cloneCredentialGitArgs() : []), "clone", input.repoUrl, cwd],
+      {
+        env: {
+          ...sanitizeRuntimeServiceBaseEnv(process.env),
+          ...(credential ? cloneCredentialEnv(credential.token) : {}),
+        },
+        timeout: MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS,
+      },
+    );
+    if (credential) await configureCheckoutCredentialHelper(cwd);
     return { cwd, warning: null };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = redactGitHubTokens(error instanceof Error ? error.message : String(error));
     throw new Error(`Failed to prepare managed checkout for "${input.repoUrl}" at "${cwd}": ${reason}`);
   }
 }
@@ -2314,6 +2339,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
   const runLogStore = getRunLogStore();
   const secretsSvc = secretService(db);
+  // AgentDash (GH #782)
+  const githubConnections = githubConnectionService(db);
   const companySkills = companySkillService(db);
   const agentDirectivesSvc = agentDirectivesService(db);
   const agentMemorySvc = agentMemoryService(db);
@@ -2841,10 +2868,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         let managedWorkspaceWarning: string | null = null;
         if (!projectCwd || projectCwd === REPO_ONLY_CWD_SENTINEL) {
           try {
+            const workspaceRepoUrl = readNonEmptyString(workspace.repoUrl);
             const managedWorkspace = await ensureManagedProjectWorkspace({
               companyId: agent.companyId,
               projectId: workspaceProjectId ?? resolvedProjectId ?? workspace.projectId,
-              repoUrl: readNonEmptyString(workspace.repoUrl),
+              repoUrl: workspaceRepoUrl,
+              // AgentDash (GH #782): a connected GitHub repo.
+              githubCredential: workspaceRepoUrl
+                ? await githubConnections
+                    .cloneTokenForWorkspace(agent.companyId, workspace.id, workspaceRepoUrl)
+                    .catch(() => null)
+                : null,
             });
             projectCwd = managedWorkspace.cwd;
             managedWorkspaceWarning = managedWorkspace.warning;
@@ -3597,11 +3631,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     },
   ) {
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
+    // AgentDash (GH #782): GitHub tokens are scrubbed by shape from events too.
     const sanitizedMessage = event.message
-      ? redactCurrentUserText(event.message, currentUserRedactionOptions)
+      ? redactGitHubTokens(redactCurrentUserText(event.message, currentUserRedactionOptions))
       : event.message;
     const boundedPayload = event.payload
-      ? boundHeartbeatRunEventPayloadForStorage(event.payload)
+      ? redactGitHubTokensInValue(boundHeartbeatRunEventPayloadForStorage(event.payload))
       : event.payload;
     const secretSanitizedPayload = boundedPayload ? redactEventPayload(boundedPayload) : boundedPayload;
     const sanitizedPayload = secretSanitizedPayload
@@ -6393,8 +6428,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
       const onLog = async (stream: "stdout" | "stderr", chunk: string) => {
+        // AgentDash (GH #782): an agent can print a GitHub token from its
+        // shell; scrub anything token-shaped before it is stored or streamed.
         const sanitizedChunk = compactRunLogChunk(
-          redactCurrentUserText(chunk, currentUserRedactionOptions),
+          redactGitHubTokens(redactCurrentUserText(chunk, currentUserRedactionOptions)),
         );
         if (stream === "stdout") stdoutExcerpt = appendExcerpt(stdoutExcerpt, sanitizedChunk);
         if (stream === "stderr") stderrExcerpt = appendExcerpt(stderrExcerpt, sanitizedChunk);
@@ -6530,7 +6567,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
         );
       }
-      const adapterResult = await adapter.execute({
+      // AgentDash (GH #782): result text is persisted and shown; no GitHub token in it.
+      const adapterResult = redactGitHubTokensInValue(await adapter.execute({
         runId: run.id,
         agent,
         runtime: runtimeForAdapter,
@@ -6553,7 +6591,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           });
         },
         authToken: authToken ?? undefined,
-      });
+      }));
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
             db,

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Project } from "@paperclipai/shared";
@@ -38,6 +38,8 @@ interface ProjectPropertiesProps {
   getFieldSaveState?: (field: ProjectConfigFieldKey) => ProjectFieldSaveState;
   onArchive?: (archived: boolean) => void;
   archivePending?: boolean;
+  /** AgentDash (GH #782): extra settings rendered after Codebase, before the danger zone. */
+  extraSection?: ReactNode;
 }
 
 export type ProjectFieldSaveState = "idle" | "saving" | "saved" | "error";
@@ -221,7 +223,7 @@ function ArchiveDangerZone({
   );
 }
 
-export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSaveState, onArchive, archivePending }: ProjectPropertiesProps) {
+export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSaveState, onArchive, archivePending, extraSection }: ProjectPropertiesProps) {
   const { selectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
   const [goalOpen, setGoalOpen] = useState(false);
@@ -1162,6 +1164,14 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
         ) : null}
 
       </div>
+
+      {/* AgentDash (GH #782) */}
+      {extraSection ? (
+        <>
+          <Separator className="my-4" />
+          <div className="py-4">{extraSection}</div>
+        </>
+      ) : null}
 
       {onArchive && (
         <>
