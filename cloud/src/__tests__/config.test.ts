@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { checkAdminTokenStrength, ConfigError, DEFAULT_PRIVATE_NETWORK_CIDRS, loadConfig, parseAllowList } from "../config.js";
-import { createCipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { checkControlUrl, runAdmin } from "../admin/run.js";
 import { constantTimeEqual, DataKeyring, dataKeyId, decryptField, encryptField, needsReencrypt, parseDataKey, parseKeyring } from "../crypto.js";
 import { createLogger } from "../logger.js";
@@ -12,6 +12,7 @@ const base = {
   CLOUD_DATA_KEY: KEY_HEX,
   CLOUD_ADMIN_TOKEN: "9f2c4e7a1b3d5f60718293a4b5c6d7e8f9a0b1c2d3e4f5061728394a5b6c7d8e",
   RAILWAY_API_TOKEN: "railway-workspace-token-fake-123",
+  CLOUD_RAILWAY_WORKSPACE_ID: "ws-test",
 };
 
 describe("config", () => {
@@ -82,10 +83,16 @@ describe("admin token strength", () => {
     expect(checkAdminTokenStrength(base.CLOUD_ADMIN_TOKEN)).toBeNull();
     expect(checkAdminTokenStrength("q3Zk8Xw1+Lm9/Tp2Rs5Vb7Nc0Hj4Yd6Fg8Ae1Uo3Ki=")).toBeNull();
     expect(checkAdminTokenStrength("q3Zk8Xw1-Lm9_Tp2Rs5Vb7Nc0Hj4Yd6Fg8Ae1Uo3Ki")).toBeNull();
-    for (let i = 0; i < 200; i++) {
-      expect(checkAdminTokenStrength(randomBytes(32).toString("hex"))).toBeNull();
-      expect(checkAdminTokenStrength(randomBytes(32).toString("base64url"))).toBeNull();
+    // Deterministic CSPRNG-shaped tokens (a SHA-256 chain), so the test cannot flake.
+    let seed = Buffer.from("cloud-control-token-strength");
+    for (let i = 0; i < 400; i++) {
+      seed = createHash("sha256").update(seed).digest();
+      expect(checkAdminTokenStrength(seed.toString("hex"))).toBeNull();
+      expect(checkAdminTokenStrength(seed.toString("base64url"))).toBeNull();
     }
+    // A long run inside otherwise random output is still accepted up to 8 in a row.
+    expect(checkAdminTokenStrength("9f2c4e7a1b3d5f60" + "a".repeat(8) + "718293a4b5c6d7e8")).toBeNull();
+    expect(checkAdminTokenStrength("9f2c4e7a1b3d5f60" + "a".repeat(9) + "718293a4b5c6d7e8")).toMatch(/repeats/);
   });
 
   it("refuses short, padded, repetitive, passphrase-like and low-alphabet values", () => {
@@ -105,7 +112,12 @@ describe("private network and brute-force settings", () => {
     expect(DEFAULT_PRIVATE_NETWORK_CIDRS).toContain("fc00::/7");
     expect(d.privateNetwork?.check("fd12:3456::1", "ipv6")).toBe(true);
     expect(d.privateNetwork?.check("10.1.2.3", "ipv4")).toBe(true);
-    expect(d.privateNetwork?.check("100.64.0.9", "ipv4")).toBe(true);
+    // Measured on Railway (GH #763): siblings on the private network.
+    expect(d.privateNetwork?.check("10.204.184.232", "ipv4")).toBe(true);
+    expect(d.privateNetwork?.check("fd12:bc61:cdb6:1:2000:92:eecc:b8e8", "ipv6")).toBe(true);
+    // Railway's public edge connects from 100.64.0.0/10; it must not count as private.
+    expect(d.privateNetwork?.check("100.64.0.3", "ipv4")).toBe(false);
+    expect(d.privateNetwork?.check("100.64.0.9", "ipv4")).toBe(false);
     expect(d.privateNetwork?.check("203.0.113.7", "ipv4")).toBe(false);
     expect(d.privateNetwork?.check("127.0.0.1", "ipv4")).toBe(false);
     expect(d.adminMaxFailures).toBe(5);
@@ -206,5 +218,22 @@ describe("GCM tag length", () => {
     const parts = encryptField(key, "AGD-tag", "a").split(".");
     parts[3] = Buffer.from(parts[3]!, "base64url").subarray(0, 4).toString("base64url");
     expect(() => decryptField(key, parts.join("."), "a")).toThrow(/authentication tag/);
+  });
+});
+
+describe("SC-3 settings (GH #764)", () => {
+  it("requires the boxes workspace with a Railway token, and https for the alert webhook", () => {
+    expect(() => loadConfig({ ...base, CLOUD_RAILWAY_WORKSPACE_ID: undefined })).toThrow(/CLOUD_RAILWAY_WORKSPACE_ID/);
+    expect(loadConfig({ ...base, RAILWAY_API_TOKEN: undefined, CLOUD_RAILWAY_WORKSPACE_ID: undefined }).railwayWorkspaceId).toBeNull();
+    expect(() => loadConfig({ ...base, CLOUD_ALERT_WEBHOOK_URL: "http://hooks.example.test/x" })).toThrow(/https/);
+    const c = loadConfig({ ...base, CLOUD_ALERT_WEBHOOK_URL: "https://hooks.example.test/x", CLOUD_ALERT_EMAIL_TO: "ops@example.test, oncall@example.test", CLOUD_RESEND_API_KEY: "re_fake_key_123" });
+    expect(c.alertEmailTo).toEqual(["ops@example.test", "oncall@example.test"]);
+    expect(JSON.stringify(c)).not.toContain("re_fake_key_123");
+  });
+
+  it("defaults to split role mode and accepts single for local development", () => {
+    expect(loadConfig(base).dbRoleMode).toBe("split");
+    expect(loadConfig({ ...base, CLOUD_DB_ROLE_MODE: "single" }).dbRoleMode).toBe("single");
+    expect(() => loadConfig({ ...base, CLOUD_DB_ROLE_MODE: "both" })).toThrow(/CLOUD_DB_ROLE_MODE/);
   });
 });

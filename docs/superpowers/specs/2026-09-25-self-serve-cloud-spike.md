@@ -181,6 +181,33 @@ The design is still on its PR branch, so these are recorded here rather than edi
 5. **§4.5:** the router hop adds about 25 ms at p50 (measured), not 5 to 20 ms.
 6. **§6.1:** the platform's part of a Volume redeploy outage is 5 to 7 s; the rest is the box's boot.
 
+## 9. Measured in the boxes workspace (2026-09-26, GH #763)
+
+The dedicated Pro workspace "AgentDash Boxes" (#756) now exists, and the control plane is deployed in it as project `agentdash-cloud` (services `cloud-control`, `cloud-migrate`, `Postgres`). These answers were measured there, with its workspace token.
+
+### 9.1 Source addresses seen by cloud-control (precondition 2 of #763)
+
+`/internal/settings` was called once through the public domain (`cloud-control-production.up.railway.app`) from a workstation, and once over the private network from a throwaway sibling service (`alpine`, deleted afterwards) at `cloud-control.railway.internal:3200`, over IPv4 and IPv6. The service logged the socket address of each refusal:
+
+| Path | Socket address cloud-control saw | Range |
+|---|---|---|
+| Public domain (Railway's edge) | `100.64.0.3` | 100.64.0.0/10 (shared address space) |
+| Private network, IPv4 | `10.204.184.232`, later `10.175.69.246` (the sibling's `railnet0`, `/9`) | 10.128.0.0/9 |
+| Private network, IPv6 | `fd12:bc61:cdb6:1:2000:92:eecc:b8e8`, later `fd12:bc61:cdb6:1:5000:cf:a5af:45f6` | per-environment ULA under fc00::/7 |
+
+cloud-control's own private addresses were `10.150.213.57` and `fd12:bc61:cdb6:1:5000:c4:f296:d539` (from `getent ahosts cloud-control.railway.internal`).
+
+**Decision:** `CLOUD_PRIVATE_NETWORK_CIDRS` now defaults to `10.0.0.0/8,fc00::/7`. SC-1's default listed every non-public range, including 100.64.0.0/10, so with `CLOUD_CLIENT_IP_SOURCE=x-real-ip` it refused every operator request that came through the public domain as "from the private network" (measured: the first call was refused exactly that way). The new default is wider than the measured `/9` and `/48` so another region or environment cannot fall outside it, and it does not overlap the edge. After the change, the same public call is accepted (bearer and allow-list permitting) and a sibling's forged `X-Real-IP` is still refused, over IPv4 and IPv6.
+
+### 9.2 Two Railway behaviours that differ from §2.2
+
+1. **Setting a service's image did not start a deployment here.** In the Hobby spike, `serviceInstanceUpdate` with a `source` deployed by itself. In this workspace the Postgres service sat with no deployment for three minutes after its image was set, until `serviceInstanceDeployV2` was called. The SC-2 provisioner therefore sets the source and settings, waits briefly for a new deployment, and calls `serviceInstanceDeployV2` itself if none appears (never both at once: a second deploy cancels the first).
+2. **An uploaded `railway.json` is not applied to a newly created service.** Railway reports Config as Code as deprecated ("existing files keep working until 2026-12-01") and refuses `railwayConfigFile` on `serviceInstanceUpdate`. A new service built the repository's root `Dockerfile` although the uploaded root `railway.json` named `cloud/Dockerfile`. Every service setting (Dockerfile path, start command, health check, restart policy) is therefore set through `serviceInstanceUpdate`, and nothing relies on `cloud/railway.json`.
+
+### 9.3 Token
+
+The workspace token lists and creates projects in "AgentDash Boxes" only; `me` answers "Not Authorized". The Railway CLI 4.5 cannot use it (`railway link` needs a user session); CLI 5.x accepts a short-lived **project** token minted by the workspace token (`projectTokenCreate`, deleted after the upload), which is how a source upload reaches a service without a user login.
+
 ## Sources
 
 - Railway GraphQL schema, introspected anonymously from `https://backboard.railway.com/graphql/v2` on 2026-09-25

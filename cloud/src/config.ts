@@ -6,6 +6,13 @@ import { type DataKeyring, parseKeyring } from "./crypto.js";
 import { Secret } from "./secret.js";
 
 export type ClientIpSource = "socket" | "x-real-ip";
+/**
+ * split (default): the service connects as the runtime role, never migrates,
+ * and refuses to start as an owner or superuser or on an unmigrated schema
+ * (GH #763). single: local development only; the service migrates on boot
+ * as whatever role DATABASE_URL names.
+ */
+export type DbRoleMode = "split" | "single";
 
 export interface CloudConfig {
   port: number;
@@ -29,6 +36,14 @@ export interface CloudConfig {
   /** Workspace token for the dedicated boxes workspace. Unused until SC-2; optional here. */
   railwayToken: Secret | null;
   release: string | null;
+  dbRoleMode: DbRoleMode;
+  /** The dedicated boxes workspace (spec §3.6). Required with a Railway token. */
+  railwayWorkspaceId: string | null;
+  /** Ops alerts (GH #764): a webhook URL (https) and/or email through Resend. */
+  alertWebhookUrl: string | null;
+  alertEmailTo: string[];
+  alertEmailFrom: string | null;
+  resendApiKey: Secret | null;
 }
 
 export class ConfigError extends Error {}
@@ -69,14 +84,20 @@ export function parseAllowList(
 }
 
 /**
- * Railway's private network and the other non-public ranges a sibling service
- * could connect from. Railway does not publish its private ranges; legacy
- * environments are IPv6 ULA (fd00::/8) and new ones add an internal IPv4
- * address. A request whose SOCKET address is in this list did not come
+ * Railway's private network, as measured in the boxes workspace on
+ * 2026-09-26 (GH #763, spike doc §9): a sibling service connects from its
+ * railnet0 address, IPv4 in 10.128.0.0/9 (e.g. 10.204.184.232) or a
+ * per-environment IPv6 ULA (e.g. fd12:bc61:cdb6:1:…). Railway's PUBLIC edge
+ * connects from 100.64.0.0/10 (e.g. 100.64.0.3), so that range must NOT be
+ * listed: SC-1's "every non-public range" default included it and refused
+ * every operator request that came through the public domain. The default
+ * takes all of 10.0.0.0/8 and fc00::/7 rather than the measured /9 and /48,
+ * so another region or environment cannot fall outside it; neither overlaps
+ * the edge. A request whose SOCKET address is in this list did not come
  * through Railway's public edge, so its X-Real-IP is whatever the sender
  * wrote. Loopback is not listed: it is the local host, not the network.
  */
-export const DEFAULT_PRIVATE_NETWORK_CIDRS = "fc00::/7,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,fe80::/10";
+export const DEFAULT_PRIVATE_NETWORK_CIDRS = "10.0.0.0/8,fc00::/7";
 
 /** Characters a CSPRNG-generated token is written in (hex, base64, base64url). */
 const TOKEN_ALPHABET_RE = /^[A-Za-z0-9+/=_\-.~]+$/;
@@ -85,7 +106,8 @@ const TOKEN_ALPHABET_RE = /^[A-Za-z0-9+/=_\-.~]+$/;
  * Refuse an admin token that was not plausibly produced by a CSPRNG
  * (GH #778): at least 32 characters, only token characters, at least 128
  * bits by alphabet size, at least 10 distinct characters, and no run of more
- * than 5 identical characters. `openssl rand -hex 32` and
+ * than 8 identical characters (a run of 6 turns up in about 1 in 100 random
+ * hex tokens tested in bulk; 9 in a row is about 1 in 10^8, GH #799 review). `openssl rand -hex 32` and
  * `openssl rand -base64 32` both pass; a password or a padded phrase does not.
  */
 export function checkAdminTokenStrength(token: string): string | null {
@@ -94,7 +116,7 @@ export function checkAdminTokenStrength(token: string): string | null {
   const alphabet = /^[0-9a-fA-F]+$/.test(token) ? 16 : /^[A-Za-z0-9]+$/.test(token) ? 62 : 64;
   if (token.length * Math.log2(alphabet) < 128) return "must carry at least 128 bits (e.g. 32 hex or 22 base64 characters of CSPRNG output)";
   if (new Set(token).size < 10) return "has too few distinct characters to be random";
-  if (/(.)\1{5,}/.test(token)) return "repeats one character too many times to be random";
+  if (/(.)\1{8,}/.test(token)) return "repeats one character too many times to be random";
   return null;
 }
 
@@ -124,6 +146,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     if (!privateRaw) throw new ConfigError("CLOUD_PRIVATE_NETWORK_CIDRS must list CIDRs, or be 'none'");
     privateNetwork = parseAllowList(privateRaw, "CLOUD_PRIVATE_NETWORK_CIDRS").list;
   }
+  const roleMode = (env.CLOUD_DB_ROLE_MODE ?? "split").trim() as DbRoleMode;
+  if (roleMode !== "split" && roleMode !== "single") throw new ConfigError("CLOUD_DB_ROLE_MODE must be 'split' or 'single'");
   let dataKeys: DataKeyring;
   try {
     dataKeys = parseKeyring(required(env, "CLOUD_DATA_KEY"), env.CLOUD_DATA_KEYS_PREVIOUS);
@@ -131,6 +155,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     if (err instanceof ConfigError) throw err;
     throw new ConfigError(err instanceof Error ? err.message : String(err));
   }
+  const workspaceId = env.CLOUD_RAILWAY_WORKSPACE_ID?.trim() || null;
+  if (railway && !workspaceId) throw new ConfigError("CLOUD_RAILWAY_WORKSPACE_ID is required when RAILWAY_API_TOKEN is set");
+  const webhook = env.CLOUD_ALERT_WEBHOOK_URL?.trim() || null;
+  if (webhook) {
+    let u: URL;
+    try {
+      u = new URL(webhook);
+    } catch {
+      throw new ConfigError("CLOUD_ALERT_WEBHOOK_URL is not a valid URL");
+    }
+    if (u.protocol !== "https:") throw new ConfigError("CLOUD_ALERT_WEBHOOK_URL must be https");
+  }
+  const emailTo = (env.CLOUD_ALERT_EMAIL_TO ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const resend = env.CLOUD_RESEND_API_KEY?.trim();
   return {
     port,
     databaseUrl: new Secret(required(env, "DATABASE_URL")),
@@ -144,5 +182,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     adminLockoutMs: positiveInt(env, "CLOUD_ADMIN_LOCKOUT_SECONDS", 900) * 1000,
     railwayToken: railway ? new Secret(railway) : null,
     release: env.CLOUD_CONTROL_RELEASE?.trim() || env.RAILWAY_GIT_COMMIT_SHA?.trim() || null,
+    dbRoleMode: roleMode,
+    railwayWorkspaceId: workspaceId,
+    alertWebhookUrl: webhook,
+    alertEmailTo: emailTo,
+    alertEmailFrom: env.CLOUD_ALERT_EMAIL_FROM?.trim() || null,
+    resendApiKey: resend ? new Secret(resend) : null,
   };
 }

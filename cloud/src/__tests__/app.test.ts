@@ -7,7 +7,8 @@ import { runAdmin } from "../admin/run.js";
 import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
-import { waitlist } from "../db/schema.js";
+import { accounts, boxes, jobs, waitlist } from "../db/schema.js";
+import { eq } from "drizzle-orm";
 import { createLogger } from "../logger.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 
@@ -26,6 +27,7 @@ function config(extra: Record<string, string> = {}) {
     CLOUD_ADMIN_TOKEN: ADMIN,
     CLOUD_ADMIN_ALLOWED_IPS: "127.0.0.1,::1",
     RAILWAY_API_TOKEN: "railway-token-fake-for-tests-000",
+    CLOUD_RAILWAY_WORKSPACE_ID: "ws-test",
     CLOUD_CONTROL_RELEASE: "test-release",
     ...extra,
   });
@@ -108,6 +110,47 @@ describe("/internal (operator surface)", () => {
   });
 });
 
+describe("/internal jobs and failed-box actions (GH #764)", () => {
+  it("lists jobs, retries a failed box at its step, abandons it, and approval provisions a waitlisted box", async () => {
+    const app = createApp({ db, config: config(), log });
+    const auth = { authorization: `Bearer ${ADMIN}` };
+    const [acct] = await db.insert(accounts).values({ email: "failed-box@example.test" }).returning();
+    const [box] = await db.insert(boxes).values({ accountId: acct!.id, slug: "failedbox" }).returning();
+    for (const s of ["provisioning", "failed"] as const) await db.update(boxes).set({ state: s }).where(eq(boxes.id, box!.id));
+    const [job] = await db.insert(jobs).values({ boxId: box!.id, kind: "provision" }).returning();
+    for (const s of ["running", "failed"] as const) await db.update(jobs).set({ state: s, step: "deploy", attempt: 5 }).where(eq(jobs.id, job!.id));
+
+    const listed = await request(app).get("/internal/jobs?state=failed").set(auth);
+    expect(listed.body.jobs.map((j: { id: string }) => j.id)).toContain(job!.id);
+    expect((await request(app).get("/internal/jobs?state=nope").set(auth)).status).toBe(400);
+    expect((await request(app).post("/internal/boxes/Not_A_Slug/retry").set(auth)).status).toBe(400);
+    expect((await request(app).post("/internal/boxes/nosuchbox/retry").set(auth)).status).toBe(404);
+
+    const retried = await request(app).post("/internal/boxes/failedbox/retry").set(auth);
+    expect(retried.body).toEqual({ slug: "failedbox", jobId: job!.id, step: "deploy" });
+    expect((await request(app).post("/internal/boxes/failedbox/retry").set(auth)).status).toBe(409);
+
+    // Back to failed, then abandon.
+    await db.update(jobs).set({ state: "running" }).where(eq(jobs.id, job!.id));
+    await db.update(jobs).set({ state: "failed" }).where(eq(jobs.id, job!.id));
+    await db.update(boxes).set({ state: "failed" }).where(eq(boxes.id, box!.id));
+    const abandoned = await request(app).post("/internal/boxes/failedbox/abandon").set(auth);
+    expect(abandoned.status).toBe(200);
+    expect(abandoned.body.deleteJobId).toBeTruthy();
+
+    // Approval of a waitlisted box queues it when provisioning is on.
+    await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: true });
+    const [acct2] = await db.insert(accounts).values({ email: "waiting-box@example.test" }).returning();
+    const [box2] = await db.insert(boxes).values({ accountId: acct2!.id, slug: "waitingbox", state: "waitlisted" }).returning();
+    const [w] = await db.insert(waitlist).values({ accountId: acct2!.id, email: "waiting-box@example.test" }).returning();
+    const approved = await request(app).post(`/internal/waitlist/${w!.id}/approve`).set(auth);
+    expect(approved.body.provisioning).toEqual([{ slug: "waitingbox", outcome: "queued" }]);
+    const [b2] = await db.select().from(boxes).where(eq(boxes.id, box2!.id));
+    expect(b2!.state).toBe("provisioning");
+    await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: false });
+  });
+});
+
 describe("admin CLI", () => {
   let server: Server;
   let url: string;
@@ -168,6 +211,12 @@ describe("admin CLI", () => {
     expect(t.out.join("")).toContain(w!.id);
     t = io();
     expect(await runAdmin(["waitlist", "approve", w!.id], env, t.io)).toBe(0);
+    t = io();
+    expect(await runAdmin(["jobs", "list"], env, t.io)).toBe(0);
+    expect(JSON.parse(t.out.join(""))).toHaveProperty("jobs");
+    t = io();
+    expect(await runAdmin(["boxes", "retry", "nosuchbox"], env, t.io)).toBe(1);
+    expect(t.err.join("")).toMatch(/404/);
     t = io();
     expect(await runAdmin(["bogus"], env, t.io)).toBe(64);
   });

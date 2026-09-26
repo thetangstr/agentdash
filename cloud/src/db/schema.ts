@@ -211,9 +211,13 @@ export const boxes = pgTable(
 );
 
 /**
- * The provisioning job queue. Workers claim rows with
- * `FOR UPDATE SKIP LOCKED` on (state='queued', run_after <= now()) and hold a
- * lease in `locked_until` renewed by heartbeat (the runner is SC-3, #764).
+ * The provisioning job queue (SC-3, GH #764; runner in ../jobs/runner.ts).
+ * Workers claim rows with `FOR UPDATE SKIP LOCKED` on (state='queued',
+ * run_after <= now()) or an expired lease (state='running', locked_until <
+ * now(): a crashed worker), and hold a 5-minute lease in `locked_until`
+ * renewed by heartbeat. `step` is the step in progress, so a resumed job
+ * starts there; `attempt` counts claims; `started_at` is the first claim, for
+ * the per-kind cap (30 minutes for provision).
  */
 export const jobs = pgTable(
   "jobs",
@@ -229,13 +233,20 @@ export const jobs = pgTable(
     runAfter: timestamp("run_after", { withTimezone: true }).notNull().defaultNow(),
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
     lockedBy: text("locked_by"),
-    /** Always passed through the redacting logger's `redact()` before it is written. */
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    /** Non-secret job input (e.g. who requested it, the release tag). Never a credential. */
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    /** Always passed through the redacting logger's `redactString()` before it is written. */
     lastError: text("last_error"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     index("jobs_claim_idx").on(t.state, t.runAfter),
+    index("jobs_lease_idx").on(t.state, t.lockedUntil),
     index("jobs_box_idx").on(t.boxId),
     // At most one live job of a kind per box.
     uniqueIndex("jobs_one_live_per_box_kind_uq")
