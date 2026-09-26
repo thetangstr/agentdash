@@ -1,9 +1,8 @@
 // SC-3 (GH #764): the job queue and the box state machine, against embedded
 // Postgres and a fake Railway API.
 import { eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
-import { capabilities } from "../capabilities.js";
 import { accounts, boxEvents, boxes, jobs, settings, waitlist, type BoxState } from "../db/schema.js";
 import type { Alert, Alerter } from "../jobs/alerts.js";
 import { deleteHandler, sweepCleanup } from "../jobs/cleanup.js";
@@ -18,6 +17,10 @@ import { settingsService } from "../settings.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 import { FAKE_WORKSPACE, FakeRailway } from "./fake-railway.js";
 
+// The capabilities module is frozen in production; this suite swaps in a mutable stand-in.
+const caps = vi.hoisted(() => ({ claimTrackingReady: true }));
+vi.mock("../capabilities.js", () => ({ capabilities: caps }));
+
 let pg: TestDatabase;
 let db: CloudDb;
 let close: () => Promise<void>;
@@ -28,8 +31,6 @@ const alerter: Alerter = { send: async (a) => void alerts.push(a) };
 let seq = 0;
 
 beforeAll(async () => {
-  // These suites exercise provisioning; the gate itself is tested below.
-  capabilities.claimTrackingReady = true;
   pg = await startTestDatabase();
   await migrateCloudDb(pg.url);
   ({ db, close } = createCloudDb(pg.url));
@@ -565,7 +566,7 @@ describe("cleanup and the guarded delete", () => {
 
 describe("the claimTrackingReady gate (GH #800)", () => {
   it("refuses to turn provisioning on, and keeps it off, until claim tracking is ready", async () => {
-    capabilities.claimTrackingReady = false;
+    caps.claimTrackingReady = false;
     try {
       await expect(settingsService(db).set("provisioning_enabled", true, "op")).rejects.toThrow(/claimTrackingReady/);
       // Even a stored true (set before the gate existed) provisions nothing.
@@ -577,7 +578,7 @@ describe("the claimTrackingReady gate (GH #800)", () => {
       expect(await new JobRunner({ db, log, handlers: [recordingHandler("provision", [])] }).runOnce()).toBeNull();
       expect((await jobRow(jobId)).state).toBe("queued");
     } finally {
-      capabilities.claimTrackingReady = true;
+      caps.claimTrackingReady = true;
     }
   });
 });

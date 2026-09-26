@@ -5,8 +5,7 @@
 import { randomUUID } from "node:crypto";
 import sodium from "libsodium-wrappers";
 import { eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { capabilities } from "../capabilities.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { decryptField, parseKeyring, sha256Hex } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { boxEvents, boxes, jobs } from "../db/schema.js";
@@ -28,6 +27,10 @@ import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 import { FAKE_TOKEN, FAKE_WORKSPACE } from "./fake-railway.js";
 import { type BoxFakeOptions, FakeRailwayBoxes } from "./fake-railway-boxes.js";
 
+// The capabilities module is frozen in production; this suite swaps in a mutable stand-in.
+const caps = vi.hoisted(() => ({ claimTrackingReady: true }));
+vi.mock("../capabilities.js", () => ({ capabilities: caps }));
+
 const TAG = "v2026.930.0";
 const KEYS = parseKeyring("44".repeat(32));
 let pg: TestDatabase;
@@ -40,7 +43,6 @@ const alerts: Alert[] = [];
 let n = 0;
 
 beforeAll(async () => {
-  capabilities.claimTrackingReady = true;
   pg = await startTestDatabase();
   await migrateCloudDb(pg.url);
   ({ db, close } = createCloudDb(pg.url));
