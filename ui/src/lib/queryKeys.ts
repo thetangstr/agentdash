@@ -185,6 +185,11 @@ export const queryKeys = {
     providers: (companyId: string) => ["secret-providers", companyId] as const,
   },
   dashboard: (companyId: string) => ["dashboard", companyId] as const,
+  // AgentDash: UX-3 (#784)
+  home: {
+    waitingOnYou: (companyId: string) => ["home", companyId, "waiting-on-you"] as const,
+    workingNow: (companyId: string) => ["home", companyId, "working-now"] as const,
+  },
   evaluation: {
     overview: (companyId: string) => ["evaluation", companyId, "overview"] as const,
     latest: (companyId: string, kind: string, id: string, verify: boolean) => ["evaluation", companyId, "latest", kind, id, verify] as const,

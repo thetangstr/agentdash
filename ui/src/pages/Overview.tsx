@@ -52,13 +52,29 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-function useCountUp(target: number, delay: number, reduced: boolean): number {
-  const [value, setValue] = useState<number>(reduced ? target : 0);
+/**
+ * AgentDash: UX-3 (#784) — the count-up used to stall at 0. It drove every
+ * frame from requestAnimationFrame, which browsers pause in a background
+ * tab, and it restarted from 0 whenever the target changed (every dashboard
+ * refetch). A person returning to a background tab saw "Agents 0" beside a
+ * header reading "6 agents". Now: a hidden tab gets the final value at once,
+ * each restart animates from the value on screen (never back through 0), and
+ * a timer lands the final value even if no frame ever runs.
+ */
+export function useCountUp(target: number, delay: number, reduced: boolean): number {
+  const [value, setValue] = useState<number>(() =>
+    reduced || (typeof document !== "undefined" && document.hidden) ? target : 0,
+  );
+  const shown = useRef(value);
+  shown.current = value;
   useEffect(() => {
-    if (reduced) {
+    const hidden = typeof document !== "undefined" && document.hidden;
+    if (reduced || hidden) {
       setValue(target);
       return;
     }
+    const from = shown.current;
+    if (from === target) return;
     let raf = 0;
     let start = 0;
     let cancelled = false;
@@ -67,17 +83,33 @@ function useCountUp(target: number, delay: number, reduced: boolean): number {
       if (!start) start = ts;
       const p = Math.min(1, (ts - start) / 1000);
       const eased = 1 - Math.pow(1 - p, 3);
-      setValue(Math.round(target * eased));
+      setValue(Math.round(from + (target - from) * eased));
       if (p < 1) raf = requestAnimationFrame(tick);
       else setValue(target);
     };
     const timer = window.setTimeout(() => {
       raf = requestAnimationFrame(tick);
     }, delay);
+    // Frames never come in a hidden tab; this lands the real number anyway.
+    const settle = window.setTimeout(() => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      setValue(target);
+    }, delay + 1100);
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelled = true;
+        cancelAnimationFrame(raf);
+        setValue(target);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      window.clearTimeout(settle);
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [target, delay, reduced]);
   return value;

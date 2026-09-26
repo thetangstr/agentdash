@@ -5,7 +5,7 @@ import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
 import { FirstRunStart } from "./components/FirstRunStart";
 // Dashboard.tsx is left in place (unreferenced) — the dashboard route now renders Overview.
-import { Overview } from "./pages/Overview";
+import { DashboardHome } from "./pages/Home";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
@@ -109,7 +109,8 @@ function boardRoutes() {
   return (
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
-      <Route path="dashboard" element={<Overview />} />
+      {/* AgentDash: UX-3 (#784) — Home on the default profile, Overview on agentdash_mk. */}
+      <Route path="dashboard" element={<DashboardHome />} />
       <Route path="dashboard/live" element={<DashboardLive />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />

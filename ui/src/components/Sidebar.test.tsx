@@ -179,6 +179,9 @@ describe("Sidebar", () => {
     const root = await renderSidebar();
     const link = [...container.querySelectorAll("a")].find((anchor) => anchor.textContent === "Shipped");
     expect(link?.getAttribute("href")).toBe("/shipped");
+    // AgentDash: UX-3 (#784) — the dashboard is called Home on the default profile.
+    const home = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/dashboard");
+    expect(home?.textContent).toContain("Home");
     await act(async () => root.unmount());
   });
 
@@ -191,6 +194,8 @@ describe("Sidebar", () => {
     };
     const root = await renderSidebar();
     expect([...container.querySelectorAll("a")].some((a) => a.textContent === "Shipped")).toBe(false);
+    const dashboard = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/dashboard");
+    expect(dashboard?.textContent).toContain("Dashboard");
     await act(async () => root.unmount());
     mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });
