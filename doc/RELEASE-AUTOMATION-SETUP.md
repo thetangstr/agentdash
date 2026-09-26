@@ -40,6 +40,7 @@ checks, and code-owner review:
 - `scripts/release-package-map.mjs`
 - `scripts/build-release-control-assets.mjs`
 - `scripts/create-github-release.sh`
+- `scripts/release-image.mjs`
 
 ## 2. Configure `agentdash-connect` Trusted Publishing
 
@@ -105,7 +106,23 @@ inherited npm package.
 5. rerun with `dry_run: false` only after the preview is accepted;
 6. verify the tag points to the immutable source, while the asset manifest
    records both source and release-control SHAs;
-7. verify the GitHub Release, controller, checksum, and JSON manifest.
+7. verify the GitHub Release, controller, checksum, and JSON manifest;
+8. verify the stable image (#732): the `publish_stable_image` (amd64 and arm64),
+   `publish_stable_image_manifest` and `record_stable_image_digest` jobs pass;
+   `docker buildx imagetools inspect ghcr.io/thetangstr/agentdash:vYYYY.MDD.P`
+   lists both platforms; the `:YYYY.MDD.P` tag resolves to the same digest; and
+   the Release body's **Container image** section records that digest.
+
+The image jobs run only after `publish_stable` (so only after the `npm-stable`
+gate), build from the immutable source, push with `GITHUB_TOKEN` and
+`packages: write` on those jobs alone, and never overwrite an existing release
+tag. They do not move `latest`, which stays the tip of `main` from
+`docker.yml`; hosted boxes deploy an explicit tag or digest, so a floating
+stable tag is not needed. If a job fails after the tag push, rerun the failed
+jobs; if a release tag was already pushed to GHCR, fix forward with the next
+stable version rather than overwriting it. The GHCR package
+`thetangstr/agentdash` must keep this repository's Actions access set to
+write (Package settings, Manage Actions access).
 
 No application workflow step publishes npm packages.
 

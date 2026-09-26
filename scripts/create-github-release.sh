@@ -11,11 +11,14 @@ fi
 dry_run=false
 version=""
 assets=()
+image_digest=""
+image_repo=""
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/create-github-release.sh <version> [--asset <path>]... [--dry-run]
+  ./scripts/create-github-release.sh <version> [--asset <path>]...
+      [--image-digest <sha256:...> [--image-repo <registry/path>]] [--dry-run]
 
 Examples:
   ./scripts/create-github-release.sh 2026.318.0
@@ -28,6 +31,9 @@ Notes:
   - Resolves the git remote automatically.
   - In GitHub Actions, origin is used explicitly.
   - If the release already exists, this script updates its title and notes.
+  - --image-digest appends a "Container image" section (tag + digest of the
+    stable GHCR image, #732) to the notes. The repo defaults to
+    ghcr.io/thetangstr/agentdash; see scripts/release-image.mjs.
 EOF
 }
 
@@ -38,6 +44,16 @@ while [ $# -gt 0 ]; do
       shift
       [ $# -gt 0 ] || { echo "Error: --asset requires a path." >&2; exit 1; }
       assets+=("$1")
+      ;;
+    --image-digest)
+      shift
+      [ $# -gt 0 ] || { echo "Error: --image-digest requires a sha256 digest." >&2; exit 1; }
+      image_digest="$1"
+      ;;
+    --image-repo)
+      shift
+      [ $# -gt 0 ] || { echo "Error: --image-repo requires a registry path." >&2; exit 1; }
+      image_repo="$1"
       ;;
     -h|--help)
       usage
@@ -86,6 +102,25 @@ if [ ! -f "$notes_file" ]; then
   exit 1
 fi
 
+# AgentDash (#732): record the stable image's digest in the release body. The
+# committed notes file is never modified; the body is the notes plus a
+# generated section, written to a temp file.
+if [ -n "$image_repo" ] && [ -z "$image_digest" ]; then
+  echo "Error: --image-repo requires --image-digest." >&2
+  exit 1
+fi
+if [ -n "$image_digest" ]; then
+  image_args=(section "$version" "$image_digest")
+  if [ -n "$image_repo" ]; then
+    image_args+=(--repo "$image_repo")
+  fi
+  image_section="$(node "$SCRIPT_ROOT/scripts/release-image.mjs" "${image_args[@]}")"
+  body_file="$(mktemp "${TMPDIR:-/tmp}/agentdash-release-notes.XXXXXX")"
+  trap 'rm -f "$body_file"' EXIT
+  { cat "$notes_file"; printf '\n%s\n' "$image_section"; } > "$body_file"
+  notes_file="$body_file"
+fi
+
 # Assets are optional, and an empty array must stay expandable.
 #
 # `"${assets[@]}"` on an empty array is an unbound-variable error under `set -u`
@@ -110,6 +145,9 @@ if [ "$dry_run" = true ]; then
     done
   fi
   printf '\n'
+  if [ -n "$image_digest" ]; then
+    printf '[dry-run] release body ends with:\n%s\n' "$image_section"
+  fi
   exit 0
 fi
 

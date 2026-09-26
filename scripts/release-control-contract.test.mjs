@@ -311,3 +311,87 @@ test("application version resolution works with an empty npm package set", () =>
     rmSync(tempRemote, { recursive: true, force: true });
   }
 });
+
+// AgentDash (#732): one immutable GHCR image per stable tag.
+// One job's YAML with comment lines removed, so prose never satisfies or trips an assertion.
+function jobBlock(workflow, name) {
+  const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
+  const start = jobs.indexOf(`\n  ${name}:\n`);
+  assert.ok(start >= 0, `release.yml must define job ${name}`);
+  const rest = jobs.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [a-z_]+:\n/);
+  const block = next === -1 ? rest : rest.slice(0, next + 2);
+  return block.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+}
+
+test("stable image is published only after the gated stable release, from the immutable source", () => {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
+  const publish = jobBlock(workflow, "publish_stable");
+  const build = jobBlock(workflow, "publish_stable_image");
+  const manifest = jobBlock(workflow, "publish_stable_image_manifest");
+  const record = jobBlock(workflow, "record_stable_image_digest");
+  const preview = jobBlock(workflow, "preview_stable");
+
+  // The gate stays on publish_stable, and every image job hangs off it.
+  assert.match(publish, /environment:\s*npm-stable/);
+  assert.match(publish, /outputs:\s*\n\s*version: \$\{\{ steps\.stable_release\.outputs\.version \}\}\s*\n\s*tag: \$\{\{ steps\.stable_release\.outputs\.tag \}\}/);
+  assert.match(build, /needs:\s*publish_stable\n/);
+  assert.match(manifest, /needs:\s*\[publish_stable, publish_stable_image\]/);
+  assert.match(record, /needs:\s*\[publish_stable, publish_stable_image_manifest\]/);
+  for (const job of [build, manifest, record]) {
+    assert.match(job, /if: github\.event_name == 'workflow_dispatch' && !inputs\.dry_run/);
+  }
+
+  // Built from the release commit, and refuses if the tag moved.
+  assert.match(build, /ref: \$\{\{ inputs\.source_ref \}\}/);
+  assert.match(build, /context:\s*source/);
+  assert.match(build, /name:\s*Verify stable tag points at the immutable source/);
+  assert.match(build, /git rev-parse "\$TAG\^\{commit\}"/);
+
+  // Same platforms as docker.yml, built natively.
+  assert.match(build, /platform: linux\/amd64\s*\n\s*arch: amd64\s*\n\s*runner: ubuntu-latest/);
+  assert.match(build, /platform: linux\/arm64\s*\n\s*arch: arm64\s*\n\s*runner: ubuntu-24\.04-arm/);
+  assert.match(build, /push-by-digest=true/);
+
+  // Tags come from the shared helper; existing tags are never overwritten; latest is untouched.
+  assert.match(manifest, /release-image\.mjs tags "\$VERSION"/);
+  assert.match(manifest, /never overwritten/);
+  assert.match(manifest, /echo "digest=\$digest" >> "\$GITHUB_OUTPUT"/);
+  assert.doesNotMatch(workflow, /agentdash:latest|type=raw,value=latest/);
+
+  // The digest reaches the GitHub Release body.
+  assert.match(record, /create-github-release\.sh "\$VERSION" \\\s*\n\s*--image-digest "\$DIGEST"/);
+  assert.match(record, /DIGEST: \$\{\{ needs\.publish_stable_image_manifest\.outputs\.digest \}\}/);
+
+  // A dry run previews tags and pushes nothing.
+  assert.match(preview, /name:\s*Preview stable image tags/);
+  assert.doesNotMatch(preview, /packages:\s*write|docker\/login-action|build-push-action/);
+});
+
+test("stable image jobs use least privilege, pinned actions, and only GITHUB_TOKEN", () => {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
+  const imageJobs = ["publish_stable_image", "publish_stable_image_manifest"];
+  const jobsSection = workflow.slice(workflow.indexOf("\njobs:\n"));
+  const allJobs = [...jobsSection.matchAll(/\n  ([a-z_]+):\n/g)].map((m) => m[1]);
+  assert.ok(allJobs.includes("verify_canary") && !allJobs.includes("push"), "job list parsed from jobs:");
+
+  for (const name of allJobs) {
+    const job = jobBlock(workflow, name);
+    if (imageJobs.includes(name)) {
+      assert.match(job, /permissions:\s*\n\s*contents: read\s*\n\s*packages: write\n/, `${name} permissions`);
+      assert.doesNotMatch(job, /id-token:|contents: write/, `${name} must not get extra scopes`);
+    } else {
+      assert.doesNotMatch(job, /packages:\s*write/, `${name} must not get packages: write`);
+    }
+  }
+  assert.match(jobBlock(workflow, "record_stable_image_digest"), /permissions:\s*\n\s*contents: write\n\n/);
+
+  // Third-party actions in the image jobs are pinned to a full commit SHA.
+  const imageSection = workflow.slice(workflow.indexOf("\n  publish_stable_image:\n"));
+  const uses = [...imageSection.matchAll(/uses:\s*(\S+)/g)].map((m) => m[1]);
+  for (const ref of uses.filter((u) => !u.startsWith("actions/checkout@"))) {
+    assert.match(ref, /@[0-9a-f]{40}$/, `${ref} must be pinned to a commit SHA`);
+  }
+  assert.match(imageSection, /password: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+  assert.doesNotMatch(imageSection, /secrets\.(?!GITHUB_TOKEN\b)[A-Z_]+/, "no long-lived registry token");
+});

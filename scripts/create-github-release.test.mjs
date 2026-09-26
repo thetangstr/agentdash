@@ -100,3 +100,38 @@ test("still requires release notes to exist", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /release notes file not found/);
 });
+
+// AgentDash (#732): the stable image digest lands in the release body.
+const DIGEST = `sha256:${"ab".repeat(32)}`;
+
+test("--image-digest appends the container image section to the body", () => {
+  const result = run([VERSION, "--image-digest", DIGEST, "--dry-run"]);
+  assert.equal(result.status, 0, `expected success, got ${result.status}: ${result.stderr}`);
+  assert.match(result.stdout, /release body ends with:/);
+  assert.match(result.stdout, /## Container image/);
+  assert.match(result.stdout, /ghcr\.io\/thetangstr\/agentdash:v2026\.827\.2/);
+  assert.match(result.stdout, new RegExp(`ghcr\\.io/thetangstr/agentdash@${DIGEST}`));
+  assert.doesNotMatch(
+    result.stdout,
+    new RegExp(`--notes-file \\S*${NOTES.replace(/[.]/g, "\\.")}`),
+    "the committed notes file must not be edited in place; a generated body file is used",
+  );
+});
+
+test("--image-repo overrides the registry path", () => {
+  const result = run([VERSION, "--image-digest", DIGEST, "--image-repo", "ghcr.io/example/app", "--dry-run"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /ghcr\.io\/example\/app:v2026\.827\.2/);
+});
+
+test("a malformed digest is refused, not published", () => {
+  const result = run([VERSION, "--image-digest", "sha256:short", "--dry-run"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /image digest must be/);
+});
+
+test("--image-repo without --image-digest is refused", () => {
+  const result = run([VERSION, "--image-repo", "ghcr.io/example/app", "--dry-run"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--image-repo requires --image-digest/);
+});
