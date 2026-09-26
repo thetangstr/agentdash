@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import sodium from "libsodium-wrappers";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { capabilities } from "../capabilities.js";
 import { decryptField, parseKeyring, sha256Hex } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { boxEvents, boxes, jobs } from "../db/schema.js";
@@ -17,6 +18,11 @@ import { createLogger } from "../logger.js";
 import { VariablesUnreadable } from "../railway/api.js";
 import { assertBoxProjectName, projectTag, ProjectNameRefused } from "../railway/names.js";
 import { PG_IMAGE, provisionHandler, START_COMMAND, type ProvisionerDeps } from "../railway/provisioner.js";
+import { escrowBlobKeyId, escrowKeyId, openEscrow, sealToEscrow } from "../railway/secrets.js";
+import { runEscrow } from "../admin/escrow.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { settingsService } from "../settings.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 import { FAKE_TOKEN, FAKE_WORKSPACE } from "./fake-railway.js";
@@ -34,6 +40,7 @@ const alerts: Alert[] = [];
 let n = 0;
 
 beforeAll(async () => {
+  capabilities.claimTrackingReady = true;
   pg = await startTestDatabase();
   await migrateCloudDb(pg.url);
   ({ db, close } = createCloudDb(pg.url));
@@ -181,8 +188,8 @@ describe("a fresh box, from nothing to awaiting_claim", () => {
     expect(box.claimCodeHash).toBe(sha256Hex(v.AGENTDASH_INVITE_CODES!));
     expect(box.claimExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 6 * 86_400_000);
     expect(decryptField(KEYS, box.edgeSecretEnc!, "boxes.edge_secret_enc")).toBe(v.AGENTDASH_EDGE_SECRET);
-    const opened = sodium.crypto_box_seal_open(Buffer.from(box.masterKeyEscrow!, "base64"), escrow.publicKey, escrow.privateKey);
-    expect(sodium.to_string(opened)).toBe(v.PAPERCLIP_SECRETS_MASTER_KEY);
+    expect(escrowBlobKeyId(box.masterKeyEscrow!)).toBe(escrowKeyId(escrow.publicKey));
+    expect(await openEscrow(escrow.publicKey, escrow.privateKey, box.masterKeyEscrow!)).toBe(v.PAPERCLIP_SECRETS_MASTER_KEY);
     expect(box.lastHealth).toMatchObject({ status: "ok", deploymentMode: "authenticated", hostedBox: true });
     const events = (await db.select().from(boxEvents).where(eq(boxEvents.boxId, boxId))).map((e) => e.kind);
     expect(events).toEqual(expect.arrayContaining(["project_created", "variables_converged", "deployed", "box_ready"]));
@@ -221,6 +228,28 @@ describe("a fresh box, from nothing to awaiting_claim", () => {
     expect(box.webVolumeId).toBeTruthy();
     expect(fake.volumes.size).toBe(2);
     for (const v of fake.volumes.values()) expect(v.backups).toEqual(["DAILY", "WEEKLY"]);
+  });
+
+  it("a volume listed later than the step waits never gets created twice by the retry (GH #800)", async () => {
+    const { fake, handler } = setup({ volumeListLag: 40 });
+    const { boxId } = await newBox();
+    await runSteps(handler, boxId, ["reserve", "project"]);
+    await expect(runSteps(handler, boxId, ["postgres"])).rejects.toThrow(/not listed yet/);
+    expect((await boxRow(boxId)).pgVolumeCreatedId).toBeTruthy();
+    for (const v of fake.volumes.values()) v.hiddenReads = 0;
+    await runSteps(handler, boxId, ["postgres"]);
+    expect([...fake.volumes.values()].filter((v) => v.mountPath === "/var/lib/postgresql/data")).toHaveLength(1);
+    expect(fake.ops().filter((o) => o === "volumeCreate")).toHaveLength(1);
+  });
+
+  it("refuses to act on a recorded project that is no longer in the boxes workspace (GH #800)", async () => {
+    const { fake, handler } = setup();
+    const { boxId } = await newBox();
+    await runSteps(handler, boxId, ["reserve", "project"]);
+    fake.projects.get((await boxRow(boxId)).projectId!)!.workspaceId = "ws-someone-else";
+    await expect(runSteps(handler, boxId, ["project"])).rejects.toThrow(/not in the boxes workspace/);
+    await expect(runSteps(handler, boxId, ["postgres"])).rejects.toThrow(/not in the boxes workspace/);
+    expect(fake.services.size).toBe(0);
   });
 
   it("a job resumed at snapshots re-derives volume IDs it never recorded", async () => {
@@ -279,8 +308,7 @@ describe("secret safety (lib.sh rules)", () => {
     // Once the read works, the live key is escrowed, not a new one.
     fake.failVariablesRead = null;
     await runSteps(handler, boxId, ["variables"]);
-    const opened = sodium.crypto_box_seal_open(Buffer.from((await boxRow(boxId)).masterKeyEscrow!, "base64"), escrow.publicKey, escrow.privateKey);
-    expect(sodium.to_string(opened)).toBe(web.variables.PAPERCLIP_SECRETS_MASTER_KEY);
+    expect(await openEscrow(escrow.publicKey, escrow.privateKey, (await boxRow(boxId)).masterKeyEscrow!)).toBe(web.variables.PAPERCLIP_SECRETS_MASTER_KEY);
   });
 
   for (const missing of ["PAPERCLIP_SECRETS_MASTER_KEY", "BETTER_AUTH_SECRET", "AGENTDASH_INVITE_CODES"]) {
@@ -442,5 +470,31 @@ describe("deploy and health", () => {
     await runner.runOnce();
     expect((await jobRow(jobId)).state).toBe("dead");
     expect(fake.calls).toHaveLength(0);
+  });
+});
+
+describe("escrow key id and the offline tool (GH #800)", () => {
+  it("names the key in the blob, refuses the wrong key, and the tool opens a box's blob into a 0600 file", async () => {
+    const blob = await sealToEscrow(escrow.publicKey, "master-key-fake-value");
+    expect(blob).toMatch(/^e1\.[0-9a-f]{16}\.[A-Za-z0-9+/=]+$/);
+    const other = sodium.crypto_box_keypair();
+    await expect(openEscrow(other.publicKey, other.privateKey, blob)).rejects.toThrow(/sealed to escrow key/);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "escrow-"));
+    try {
+      const out: string[] = [];
+      const io = { out: (l: string) => out.push(l), err: (l: string) => out.push(l), stdin: async () => "" };
+      expect(await runEscrow(["keygen", "--out-dir", dir], io)).toBe(0);
+      expect(fs.statSync(path.join(dir, "escrow-secret-key")).mode & 0o777).toBe(0o600);
+      expect(await runEscrow(["keygen", "--out-dir", dir], io)).toBe(1);
+      const pub = new Uint8Array(Buffer.from(fs.readFileSync(path.join(dir, "escrow-public-key"), "utf8").trim(), "base64"));
+      const sealed = await sealToEscrow(pub, "the-master-key");
+      const target = path.join(dir, "recovered");
+      expect(await runEscrow(["open", "--key-dir", dir, "--out", target], { ...io, stdin: async () => sealed + "\n" })).toBe(0);
+      expect(fs.readFileSync(target, "utf8")).toBe("the-master-key");
+      expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+      expect(out.join("\n")).not.toContain("the-master-key");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

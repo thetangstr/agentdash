@@ -196,6 +196,13 @@ export const boxes = pgTable(
      * decrypt it; the plaintext key is never stored here.
      */
     masterKeyEscrow: text("master_key_escrow"),
+    /**
+     * The Railway volume IDs volumeCreate returned, recorded the moment they
+     * exist: Railway's project listing shows a new volume late, and a retry
+     * must wait for it rather than create a second one (GH #800 review).
+     */
+    pgVolumeCreatedId: text("pg_volume_created_id"),
+    webVolumeCreatedId: text("web_volume_created_id"),
     upstreamHost: text("upstream_host"),
     publicUrl: text("public_url"),
     releaseTag: text("release_tag"),

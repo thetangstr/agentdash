@@ -198,7 +198,14 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
     },
   });
 
-  const project = async (box: BoxRow, signal: AbortSignal) => getProject(client, need(box.projectId, "project_id"), { signal });
+  // Every read of the recorded project re-checks that it is still in the boxes workspace (GH #800 review).
+  const project = async (box: BoxRow, signal: AbortSignal) => {
+    const p = await getProject(client, need(box.projectId, "project_id"), { signal });
+    if (p.workspaceId !== deps.workspaceId) {
+      throw new FatalJobError(`recorded project ${p.id} is not in the boxes workspace (reported ${p.workspaceId ?? "no workspace"}); refusing to act on it`);
+    }
+    return p;
+  };
 
   return {
     kind: "provision",
@@ -261,7 +268,7 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
         const name = boxProjectName(box.slug);
         assertBoxProjectName(name);
         if (box.projectId) {
-          const p = await getProject(client, box.projectId, { signal: ctx.signal });
+          const p = await project(box, ctx.signal);
           if (p.name !== name || !(p.description ?? "").includes(projectTag(box.id))) {
             throw new FatalJobError(`recorded project ${box.projectId} is not ${name} with this box's tag`);
           }
@@ -306,8 +313,12 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
         let vol = volumeOn(p, pg.id, PG_MOUNT);
         const imageSet = p.services.find((s) => s.id === pg!.id)?.instances.find((i) => i.environmentId === E)?.image ?? null;
         const deployed = (await latestDeployment(client, P, E, pg.id, { signal: ctx.signal })) !== null;
-        if (!vol && !deployed) {
-          await createVolume(client, { projectId: P, environmentId: E, serviceId: pg.id, mountPath: PG_MOUNT }, { signal: ctx.signal });
+        if (!vol && (box.pgVolumeCreatedId || !deployed)) {
+          if (!box.pgVolumeCreatedId) {
+            const created = await createVolume(client, { projectId: P, environmentId: E, serviceId: pg.id, mountPath: PG_MOUNT }, { signal: ctx.signal });
+            await recordBox(ctx.db, box.id, { pgVolumeCreatedId: created });
+          }
+          // Created (now or by an earlier attempt) but maybe not listed yet: wait, never create again.
           vol = await awaitVolume(() => project(box, ctx.signal), pg.id, PG_MOUNT, ctx.signal, pollMs);
         }
         if (vol && box.pgVolumeId !== vol.id) await recordBox(ctx.db, box.id, { pgVolumeId: vol.id });
@@ -358,7 +369,10 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
         }
         let vol = volumeOn(p, webId, WEB_MOUNT);
         if (!vol) {
-          await createVolume(client, { projectId: P, environmentId: E, serviceId: webId, mountPath: WEB_MOUNT }, { signal: ctx.signal });
+          if (!box.webVolumeCreatedId) {
+            const created = await createVolume(client, { projectId: P, environmentId: E, serviceId: webId, mountPath: WEB_MOUNT }, { signal: ctx.signal });
+            await recordBox(ctx.db, box.id, { webVolumeCreatedId: created });
+          }
           vol = await awaitVolume(() => project(box, ctx.signal), webId, WEB_MOUNT, ctx.signal, pollMs);
         }
         if (box.webVolumeId !== vol.id) await recordBox(ctx.db, box.id, { webVolumeId: vol.id });

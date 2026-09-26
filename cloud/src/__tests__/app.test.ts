@@ -8,6 +8,7 @@ import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { accounts, boxes, jobs, waitlist } from "../db/schema.js";
+import { capabilities } from "../capabilities.js";
 import { eq } from "drizzle-orm";
 import { createLogger } from "../logger.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
@@ -138,7 +139,12 @@ describe("/internal jobs and failed-box actions (GH #764)", () => {
     expect(abandoned.status).toBe(200);
     expect(abandoned.body.deleteJobId).toBeTruthy();
 
+    // Turning provisioning on is refused until claim tracking is ready (GH #800).
+    const refused = await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: true });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toMatch(/claimTrackingReady/);
     // Approval of a waitlisted box queues it when provisioning is on.
+    capabilities.claimTrackingReady = true;
     await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: true });
     const [acct2] = await db.insert(accounts).values({ email: "waiting-box@example.test" }).returning();
     const [box2] = await db.insert(boxes).values({ accountId: acct2!.id, slug: "waitingbox", state: "waitlisted" }).returning();
@@ -148,6 +154,7 @@ describe("/internal jobs and failed-box actions (GH #764)", () => {
     const [b2] = await db.select().from(boxes).where(eq(boxes.id, box2!.id));
     expect(b2!.state).toBe("provisioning");
     await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: false });
+    capabilities.claimTrackingReady = false;
   });
 });
 

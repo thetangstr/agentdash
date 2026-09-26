@@ -164,10 +164,10 @@ describe("brute-force limit on /internal", () => {
 describe("setting changes through /internal", () => {
   it("are audited with the caller IP and the old and new value", async () => {
     const app = createApp({ db, config: config(), log });
-    const res = await request(app).put("/internal/settings/provisioning_enabled").set("authorization", `Bearer ${ADMIN}`).send({ value: true });
+    const res = await request(app).put("/internal/settings/rollout_paused").set("authorization", `Bearer ${ADMIN}`).send({ value: true });
     expect(res.status).toBe(200);
     const [row] = await db.select().from(operatorAudit).where(eq(operatorAudit.kind, "setting_changed")).orderBy(desc(operatorAudit.id)).limit(1);
-    expect(row).toMatchObject({ actor: "admin-cli", detail: { setting: "provisioning_enabled", from: false, to: true } });
+    expect(row).toMatchObject({ actor: "admin-cli", detail: { setting: "rollout_paused", from: false, to: true } });
     expect(["127.0.0.1", "::1"]).toContain(row!.ip);
   });
 

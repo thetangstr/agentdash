@@ -3,6 +3,7 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
+import { capabilities } from "../capabilities.js";
 import { accounts, boxEvents, boxes, jobs, settings, waitlist, type BoxState } from "../db/schema.js";
 import type { Alert, Alerter } from "../jobs/alerts.js";
 import { deleteHandler, sweepCleanup } from "../jobs/cleanup.js";
@@ -27,6 +28,8 @@ const alerter: Alerter = { send: async (a) => void alerts.push(a) };
 let seq = 0;
 
 beforeAll(async () => {
+  // These suites exercise provisioning; the gate itself is tested below.
+  capabilities.claimTrackingReady = true;
   pg = await startTestDatabase();
   await migrateCloudDb(pg.url);
   ({ db, close } = createCloudDb(pg.url));
@@ -92,6 +95,11 @@ async function makeRunnable(id: string) {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A fetch that answers every box's /api/health with `body`. */
+function health(body: Record<string, unknown>): typeof fetch {
+  return (async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+}
 
 function recordingHandler(kind: "provision" | "delete", calls: string[], overrides: Partial<Record<string, () => Promise<void>>> = {}): JobHandler {
   return {
@@ -483,11 +491,11 @@ describe("cleanup and the guarded delete", () => {
     expect((await boxRow(box.id)).state).toBe("deleted");
   });
 
-  it("the sweep moves boxes unclaimed for 7 days to cleanup and queues their delete", async () => {
-    const stale = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() - 60_000) });
-    const fresh = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() + 86_400_000) });
-    const claimed = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() - 60_000), claimedAt: new Date() });
-    const r = await sweepCleanup(db, log);
+  it("the sweep moves boxes past their claim window to cleanup only on positive evidence they are unclaimed", async () => {
+    const stale = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() - 60_000), upstreamHost: "stale.up.railway.app" });
+    const fresh = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() + 86_400_000), upstreamHost: "fresh.up.railway.app" });
+    const claimed = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() - 60_000), claimedAt: new Date(), upstreamHost: "claimed.up.railway.app" });
+    const r = await sweepCleanup(db, log, { fetch: health({ status: "ok", claimed: false, bootstrapStatus: "bootstrap_pending" }) });
     expect(r.expired).toBeGreaterThanOrEqual(1);
     expect((await boxRow(stale.id)).state).toBe("cleanup");
     expect((await boxRow(fresh.id)).state).toBe("awaiting_claim");
@@ -495,8 +503,82 @@ describe("cleanup and the guarded delete", () => {
     const del = await db.select().from(jobs).where(eq(jobs.boxId, stale.id));
     expect(del.map((j) => j.kind)).toEqual(["delete"]);
     // Idempotent: a second sweep adds nothing for that box.
-    await sweepCleanup(db, log);
+    await sweepCleanup(db, log, { fetch: health({ status: "ok", claimed: false }) });
     expect(await db.select().from(jobs).where(eq(jobs.boxId, stale.id))).toHaveLength(1);
+  });
+
+  // GH #800 security review, HIGH: nothing sets claimed_at yet, so the claim window alone must never delete a box.
+  it("an in-use box past its claim window is NEVER deleted when its claim state is unknown; an operator is flagged once", async () => {
+    const inUse = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() - 86_400_000), upstreamHost: "inuse.up.railway.app" });
+    // Today's release: health has no `claimed` field, and stays bootstrap_pending after the founder signed up.
+    const today = health({ status: "ok", deploymentMode: "authenticated", hostedBox: true, bootstrapStatus: "bootstrap_pending" });
+    for (let i = 0; i < 3; i++) await sweepCleanup(db, log, { fetch: today, alerter });
+    expect((await boxRow(inUse.id)).state).toBe("awaiting_claim");
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, inUse.id))).toHaveLength(0);
+    const flags = (await db.select().from(boxEvents).where(eq(boxEvents.boxId, inUse.id))).filter((e) => e.kind === "cleanup_needs_operator");
+    expect(flags).toHaveLength(1);
+    expect(alerts.filter((a) => a.kind === "cleanup_refused" && a.slug === inUse.slug)).toHaveLength(1);
+    // Unreachable is unknown too.
+    await sweepCleanup(db, log, { fetch: (async () => { throw new TypeError("fetch failed"); }) as typeof fetch });
+    expect((await boxRow(inUse.id)).state).toBe("awaiting_claim");
+  });
+
+  it("a box whose health reports a claim becomes active and is never cleaned up", async () => {
+    const box = await makeBox("awaiting_claim", { claimExpiresAt: new Date(Date.now() - 86_400_000), upstreamHost: "used.up.railway.app" });
+    await sweepCleanup(db, log, { fetch: health({ status: "ok", bootstrapStatus: "ready", instanceHasCompany: true }) });
+    const b = await boxRow(box.id);
+    expect(b.state).toBe("active");
+    expect(b.claimedAt).not.toBeNull();
+    await sweepCleanup(db, log, { fetch: health({ status: "ok", claimed: false }) });
+    expect((await boxRow(box.id)).state).toBe("active");
+  });
+
+  it("the delete job re-checks a handed-over box right before deleting and refuses if it is now in use", async () => {
+    const fake = new FakeRailway();
+    const box = await makeBox("cleanup", { upstreamHost: "late.up.railway.app" });
+    await db.insert(boxEvents).values({ boxId: box.id, kind: "box_ready", actor: "test" });
+    const p = fake.addProject({ name: `agentdash-box-${box.slug}`, description: projectTag(box.id) });
+    await db.update(boxes).set({ projectId: p.id }).where(eq(boxes.id, box.id));
+    const { id } = await enqueueJob(db, { boxId: box.id, kind: "delete" });
+    const runner = new JobRunner({ db, log, alerter, handlers: [deleteHandler({ client: fake.client({ log }), workspaceId: FAKE_WORKSPACE, fetch: health({ status: "ok", bootstrapStatus: "bootstrap_pending" }) })] });
+    await runner.runOnce();
+    expect((await jobRow(id)).state).toBe("dead");
+    expect((await jobRow(id)).lastError).toMatch(/positive evidence/);
+    expect(fake.ops()).not.toContain("projectDelete");
+    expect(fake.projects.has(p.id)).toBe(true);
+  });
+
+  it("refuses a project whose workspace is not reported (fail closed)", async () => {
+    const fake = new FakeRailway();
+    const box = await makeBox("cleanup");
+    const p = fake.addProject({ name: `agentdash-box-${box.slug}`, description: projectTag(box.id) });
+    (p as { workspaceId: string | null }).workspaceId = null;
+    fake.projectNode = (x) => ({ ...x });
+    // The workspace listing still returns it (as a Railway answer without the field would).
+    fake.resolvers.push({ match: /projects\(workspaceId/, op: "projects", resolve: () => ({ projects: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { ...p } }] } }) });
+    const { id } = await enqueueJob(db, { boxId: box.id, kind: "delete" });
+    await new JobRunner({ db, log, alerter, handlers: [deleteHandler({ client: fake.client({ log }), workspaceId: FAKE_WORKSPACE })] }).runOnce();
+    expect((await jobRow(id)).lastError).toMatch(/not in the boxes workspace/);
+    expect(fake.ops()).not.toContain("projectDelete");
+  });
+});
+
+describe("the claimTrackingReady gate (GH #800)", () => {
+  it("refuses to turn provisioning on, and keeps it off, until claim tracking is ready", async () => {
+    capabilities.claimTrackingReady = false;
+    try {
+      await expect(settingsService(db).set("provisioning_enabled", true, "op")).rejects.toThrow(/claimTrackingReady/);
+      // Even a stored true (set before the gate existed) provisions nothing.
+      await db.insert(settings).values({ key: "provisioning_enabled", value: true }).onConflictDoUpdate({ target: settings.key, set: { value: true } });
+      await db.insert(settings).values({ key: "waitlist_mode", value: false }).onConflictDoUpdate({ target: settings.key, set: { value: false } });
+      const box = await makeBox("requested");
+      expect(await requestProvision(db, box.id, { actor: "test" })).toEqual({ outcome: "waitlisted", reason: "kill_switch" });
+      const { jobId } = await queuedProvision();
+      expect(await new JobRunner({ db, log, handlers: [recordingHandler("provision", [])] }).runOnce()).toBeNull();
+      expect((await jobRow(jobId)).state).toBe("queued");
+    } finally {
+      capabilities.claimTrackingReady = true;
+    }
   });
 });
 

@@ -7,6 +7,7 @@ import { createCloudDb, migrateCloudDb, verifyRuntimeDb } from "./db/client.js";
 import { type Alerter, combineAlerters, logAlerter, resendEmailAlerter, webhookAlerter } from "./jobs/alerts.js";
 import { deleteHandler, sweepCleanup } from "./jobs/cleanup.js";
 import { JobRunner } from "./jobs/runner.js";
+import { capabilities } from "./capabilities.js";
 import { createLogger } from "./logger.js";
 import { RailwayClient } from "./railway/client.js";
 import { provisionHandler } from "./railway/provisioner.js";
@@ -57,9 +58,10 @@ async function main() {
       edgeLive: config.edgeLive,
     });
     if (!config.escrowPublicKey) log.warn("CLOUD_ESCROW_PUBLIC_KEY is not set: every provision job will refuse to start");
+    if (!capabilities.claimTrackingReady) log.warn("claim tracking is not ready (SC-5, SC-6): provisioning stays off whatever the setting says");
     runner = new JobRunner({ db, log, alerter, handlers: [provision, deleteHandler({ client, workspaceId: config.railwayWorkspaceId })] });
     runner.start();
-    const runSweep = () => void sweepCleanup(db, log).catch((err: unknown) => log.error("cleanup sweep failed", { err }));
+    const runSweep = () => void sweepCleanup(db, log, { alerter }).catch((err: unknown) => log.error("cleanup sweep failed", { err }));
     sweep = setInterval(runSweep, SWEEP_MS);
     sweep.unref();
     runSweep();

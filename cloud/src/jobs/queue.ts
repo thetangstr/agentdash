@@ -5,6 +5,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
 import { accounts, boxEvents, boxes, jobs, waitlist, type JobKind } from "../db/schema.js";
+import { capabilities } from "../capabilities.js";
 import { settingsService } from "../settings.js";
 
 const ENQUEUE_LOCK_KEY = 764_002;
@@ -75,7 +76,7 @@ export async function requestProvision(
     }
     const settings = await settingsService(tx as unknown as CloudDb).getAll();
     let reason: WaitlistReason | null = null;
-    if (!settings.provisioning_enabled) reason = "kill_switch";
+    if (!settings.provisioning_enabled || !capabilities.claimTrackingReady) reason = "kill_switch";
     else if (settings.waitlist_mode && !opts.approved) reason = "waitlist_mode";
     else if ((await provisionsToday(tx)) >= settings.daily_cap) reason = "daily_cap";
 

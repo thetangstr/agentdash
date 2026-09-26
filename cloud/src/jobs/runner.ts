@@ -27,6 +27,7 @@ import type { CloudDb } from "../db/client.js";
 import { boxEvents, boxes, jobs, type JobKind } from "../db/schema.js";
 import type { Logger } from "../logger.js";
 import { redactString } from "../logger.js";
+import { capabilities } from "../capabilities.js";
 import { settingsService, type Settings } from "../settings.js";
 import type { Alerter } from "./alerts.js";
 import {
@@ -188,7 +189,7 @@ export class JobRunner {
   }
 
   #kinds(settings: Settings): JobKind[] {
-    return [...this.#handlers.keys()].filter((k) => k !== "provision" || settings.provisioning_enabled);
+    return [...this.#handlers.keys()].filter((k) => k !== "provision" || (settings.provisioning_enabled && capabilities.claimTrackingReady));
   }
 
   /** The claim: returns the claimed job's id, or null. */

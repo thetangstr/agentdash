@@ -10,7 +10,8 @@
     "test": "vitest run",
     "start": "node dist/index.js",
     "admin": "tsx src/admin/cli.ts",
-    "generate": "drizzle-kit generate"
+    "generate": "drizzle-kit generate",
+    "escrow": "tsx src/admin/escrow.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

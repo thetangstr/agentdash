@@ -2,6 +2,7 @@
 // launch default. Values are validated per key on write.
 import { eq, sql } from "drizzle-orm";
 import type { CloudDb } from "./db/client.js";
+import { capabilities } from "./capabilities.js";
 import { operatorAudit, settings } from "./db/schema.js";
 
 export const SETTING_DEFAULTS = {
@@ -91,6 +92,11 @@ export function settingsService(db: CloudDb) {
       opts: { ip?: string | null } = {},
     ): Promise<Settings[SettingKey]> {
       const value = parseSettingValue(key, raw);
+      if (key === "provisioning_enabled" && value === true && !capabilities.claimTrackingReady) {
+        throw new SettingValidationError(
+          "provisioning cannot be turned on yet: boxes do not report their claim state (claimTrackingReady is false until SC-5 #766 and SC-6 #767 land), so unclaimed-box cleanup could not tell a box in use from an abandoned one",
+        );
+      }
       await db.transaction(async (tx) => {
         const [prev] = await tx.select().from(settings).where(eq(settings.key, key)).for("update");
         const oldValue = prev ? prev.value : SETTING_DEFAULTS[key];
