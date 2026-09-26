@@ -1,6 +1,6 @@
 # UX sharpening for 1.0: Ask, Watch, Approve, See results
 
-2026-09-26 · Status: **proposal, awaiting founder approval.** No issues filed yet. · Companion to `doc/plans/2026-09-24-mvl-1.0.md` and `docs/superpowers/specs/2026-09-23-assistant-mcp-design.md`.
+2026-09-26 · Status: **decided 2026-09-26** (section 8). Punch-list items filed as GitHub issues with the `ux-sharpening` label. · Companion to `doc/plans/2026-09-24-mvl-1.0.md` and `docs/superpowers/specs/2026-09-23-assistant-mcp-design.md`.
 
 **The founder's question:** "overall we need to make the app more sharp and easy to use. What does it actually unlock or accomplish for our users?"
 
@@ -20,9 +20,9 @@
 
 ### What it unlocks
 
-- **Engineering capacity without a hire.** A 2 to 15 person team gets agents that pick up requests and open pull requests in its own GitHub repo, on its own model key.
+- **Engineering capacity without a hire.** A 2 to 15 person team gets agents that pick up issues and open pull requests in its own GitHub repo, on its own model key.
 - **Delegation that doesn't need a manager.** You say what you want in one sentence, from your phone, through Muse or Grok. The agents plan, split and staff it themselves. You are asked only for decisions that are really yours: hires, spend, anything external.
-- **A straight answer to "what did I get for my money?"** Every request ends as a pull request or a written result, with its cost next to it.
+- **A straight answer to "what did I get for my money?"** Every issue ends as a pull request or a written result, with its cost next to it.
 
 ### Where it appears in the product
 
@@ -44,7 +44,7 @@
 - **Sidebar:** 15 static links (New Issue, Dashboard, Guides, Inbox, Issues, Routines, Goals, Org, Skills, Costs, Evaluation, Billing, Activity, Settings, plus Workspaces behind a flag and My Agent/Override on the MK profile), then every project and every agent listed by name, plus a left rail of company avatars (`ui/src/components/Sidebar.tsx:90-145`, `SidebarProjects.tsx`, `SidebarAgents.tsx`). Screenshot [01](ux-audit-2026-09-26/01-dashboard.jpg) shows 13 companies in the rail and 23 clickable items in the sidebar.
 - **Settings:** a separate sidebar with 5 company pages (General, Environments, Access, Invites, Health; `CompanySettingsSidebar.tsx:56-71`) and 9 instance pages (Profile, General, Access, Heartbeats, Experimental, Plugins, Adapters, About, Changelog; `InstanceSidebar.tsx:30-38`). Company General alone offers "Generate OpenClaw Invite Prompt", "Require board approval for new hires", attachment size limits and a danger zone ([11](ux-audit-2026-09-26/11-company-settings.jpg)).
 - **Routes:** 185 `<Route>` elements, 88 distinct page components (`ui/src/App.tsx`).
-- **Entity types a user can land on:** company, agent, issue, sub-issue, project, project workspace, execution workspace, goal, routine, approval, run, cost event, budget, skill, plugin, mandate, steward, evaluation milestone, invite, join request, guide. That is 21. The four verbs need five: request (issue), agent, decision (approval), result (PR / work product), cost.
+- **Entity types a user can land on:** company, agent, issue, sub-issue, project, project workspace, execution workspace, goal, routine, approval, run, cost event, budget, skill, plugin, mandate, steward, evaluation milestone, invite, join request, guide. That is 21. The four verbs need five: issue, agent, decision (approval), result (PR / work product), cost.
 
 ### Jargon a new user meets (user-visible)
 
@@ -59,12 +59,12 @@
 | routine | Top-level sidebar item | Advanced |
 | goal | Top-level sidebar item | Advanced (projects cover it) |
 | evaluator / evaluation | Sidebar item; page of "withheld, coverage 67%, synthetic human identities" cards ([17](ux-audit-2026-09-26/17-evaluation.jpg)) | Hide behind a flag: our dogfood tool |
-| run | Live runs grid ([02](ux-audit-2026-09-26/02-dashboard-live.jpg)), 275-run counters | Keep inside an agent/request, not as its own place |
+| run | Live runs grid ([02](ux-audit-2026-09-26/02-dashboard-live.jpg)), 275-run counters | Keep inside an agent or issue, not as its own place |
 | execution workspace, isolated checkouts | Project configuration (`ProjectProperties.tsx:916-994`) | Advanced |
 | board | "good afternoon, board" (`Overview.tsx:898`); "board approval" in settings | Use the person's first name; say "your approval" |
 | company | Every screen, for what the ICP calls a team or workspace | Say "workspace" in copy; keep the data model |
 | CEO vs Chief of Staff | "Ask your Chief of Staff (CoS)" and a button "Ask the CEO to create a new agent" in one dialog (`NewAgentDialog.tsx:168`) | One name: Chief of Staff |
-| Inference ledger, Finance ledger, Billers, debits/credits | Costs page ([08](ux-audit-2026-09-26/08-costs.jpg)) | One number per request; ledgers to Advanced |
+| Inference ledger, Finance ledger, Billers, debits/credits | Costs page ([08](ux-audit-2026-09-26/08-costs.jpg)) | One number per issue; ledgers to Advanced |
 
 ### Screen-level observations from the walk
 
@@ -72,7 +72,7 @@
 2. **Nothing shows what shipped.** The server stores pull requests and outputs as work products (`services/work-products.ts`, `GET /issues/:id/work-products`), the UI has the client (`ui/src/api/issues.ts:238`), and **no page calls it.** "See results" has no screen at all. The closest is Maya's agent page: "275 runs, 96 failed, 137 succeeded without leaving anything" and a latest run reading "Wake complete. Summary:" with nothing after it ([04](ux-audit-2026-09-26/04-agent-detail-maya.jpg)).
 3. **The inbox is noise.** "Mine" is 30+ rows of "Evaluator — immediate: E3 authority breach — AGE-112" ([09](ux-audit-2026-09-26/09-inbox.jpg), same in Issues [05](ux-audit-2026-09-26/05-issues.jpg)). Evaluator is off on hosted boxes, but the lesson holds: machine-generated items and real decisions share one list with no grouping.
 4. **Approvals is an empty page with no explanation** ([07](ux-audit-2026-09-26/07-approvals.jpg)): "No pending approvals." No word on what would appear there or why.
-5. **Live runs is mostly empty cards** ([02](ux-audit-2026-09-26/02-dashboard-live.jpg)): "Priya run c4f7ac0f succeeded", no request title, no result.
+5. **Live runs is mostly empty cards** ([02](ux-audit-2026-09-26/02-dashboard-live.jpg)): "Priya run c4f7ac0f succeeded", no issue title, no result.
 6. **Hiring is an engineer's form** ([23](ux-audit-2026-09-26/23-new-agent.jpg)): adapter type, command, model, cheap model, thinking effort, Enable Chrome, Skip permissions, max turns 1000, "Agent instructions file /absolute/path/to/AGENTS.md", extra args, environment variables.
 7. **Issue detail is strong for an engineer** ([06](ux-audit-2026-09-26/06-issue-detail.jpg)): sub-issue progress and "Next up" are exactly the Watch signal. But 26 related-task chips and a properties rail dominate, and there is no "result" block.
 8. **Costs answers an accountant's question** ([08](ux-audit-2026-09-26/08-costs.jpg)): $4,594.25 of "inference spend", "168 tokens across request-scoped events", then four $0.00 finance tiles. It never says what that money bought.
@@ -85,13 +85,15 @@
 
 ### Proposed sidebar (6 items, plus Settings)
 
+**Scope:** the default profile, which is every hosted box. Companies on the `agentdash_mk` profile keep the current sidebar unchanged. The on-screen word stays **issues**.
+
 | # | Item | Verb | What it holds | Replaces |
 |---|---|---|---|---|
-| 1 | **Home** | Watch | Three blocks, in this order: *Waiting on you* (decisions + tasks assigned to you, the same definition as the assistant's `list_pending_decisions`), *Working now* (each active request: title, agent, last step, time), *Shipped this week* (PRs and results with cost). Honest counts. | Dashboard, Live runs, Activity |
-| 2 | **Ask** | Ask | The Chief of Staff chat, with a "new request" composer on top. One place to say what you want. | New Issue button, `/cos`, Company Chat tab |
-| 3 | **Work** | Watch | Every request, grouped by status, filterable by project and agent. Opens issue detail. | Issues, Projects list, Goals |
-| 4 | **Decisions** | Approve | Pending approvals plus requests that need your answer, each with the agent's question, what happens on yes/no, and one button. Badge count. | Approvals, Inbox |
-| 5 | **Shipped** | See results | Work products newest first: PR link and status, the request it closes, agent, time, cost. Month total at the top. | Costs overview, nothing today for PRs |
+| 1 | **Home** | Watch | Three blocks, in this order: *Waiting on you* (decisions + tasks assigned to you, the same definition as the assistant's `list_pending_decisions`), *Working now* (each active issue: title, agent, last step, time), *Shipped this week* (PRs and results with cost). Honest counts. | Dashboard, Live runs, Activity |
+| 2 | **Ask** | Ask | The Chief of Staff chat, with a "New issue" composer on top, and "Plan with your Chief of Staff" for the longer planning chat. One place to say what you want. | New Issue button, `/cos`, Company Chat tab |
+| 3 | **Work** | Watch | Every issue, grouped by status, filterable by project and agent. Opens issue detail. | Issues, Projects list, Goals |
+| 4 | **Decisions** | Approve | Pending approvals plus issues that need your answer, each with the agent's question, what happens on yes/no, and one button. Badge count. | Approvals, Inbox |
+| 5 | **Shipped** | See results | Work products newest first: PR link and status, the issue it closes, agent, time, cost. Month total at the top. | Costs overview, nothing today for PRs |
 | 6 | **Team** | Watch | Agents as cards: doing what, last shipped, spend this month, one "Hire" button that asks the Chief of Staff. | Agents list, Org |
 | footer | **Settings** | | Workspace, Members and invites, Plan and billing, Connections (GitHub, assistant), Model key, **Advanced** | Company + instance settings, Billing |
 
@@ -105,7 +107,7 @@ The per-project and per-agent lists leave the sidebar (they belong in Work and T
 | Issues, Projects, sub-issues | **Keep**, under Work |
 | Approvals, Inbox (Mine/Recent/Unread) | **Keep**, as Decisions |
 | Agents, agent detail | **Keep**, under Team; agent detail leads with doing / shipped / cost, config tabs move under one "Settings" tab |
-| Costs | **Keep** the month total and per-request cost in Shipped; Budgets, Providers, Billers, Finance tabs → **Advanced** |
+| Costs | **Keep** the month total and per-issue cost in Shipped; Budgets, Providers, Billers, Finance tabs → **Advanced** |
 | Billing, Invites, Guides | **Keep**, in Settings footer / Help |
 | Routines, Goals, Org chart, Skills, Workspaces, Environments, Health, company import/export, Heartbeats, Plugins, Adapters, Experimental, Changelog | **Advanced** (Settings → Advanced, collapsed) |
 | Evaluation, My Agent, Override, stewards, steward badges, mandates in onboarding, OpenClaw invite prompt, `/agents/new/studio`, design guide | **Hide behind a flag** (dogfood or `agentdash_mk` only) |
@@ -137,22 +139,22 @@ The per-project and per-agent lists leave the sidebar (they belong in Work and T
 |---|---|---|
 | 1 | Claim link → account (email prefilled from the waitlist) | 1 |
 | 2 | "Your model": provider + key, one check request | 1.5 |
-| 3 | "Your repo": **Install the AgentDash GitHub App** on one repo (or paste a fine-grained token as fallback). Creates the first project with the repo attached | 1.5 |
-| 4 | "What should we build first?" One sentence, prefilled suggestions read from the repo ("Add a /health badge to the README"). The Chief of Staff staffs it with one engineer (Free cap 2) | 1 |
-| 5 | Home, *Working now* shows the request live; a card offers "Connect Muse so you can do this from your phone" | 0.5 |
+| 3 | "Your repo": paste a **fine-grained GitHub token** scoped to one repo (contents + pull requests read/write) and the repo URL; one check call. Creates the first project with the repo attached. The AgentDash GitHub App replaces the token before signup opens fully (~11-04) | 2 |
+| 4 | "What should we build first?" One sentence becomes the first issue, with suggestions ("Add a /health badge to the README"). The Chief of Staff assigns it to one engineer (Free cap 2) | 1 |
+| 5 | Home, *Working now* shows the issue live; a card offers "Connect Muse so you can do this from your phone" | 0.5 |
 
-**Target: 5 screens, under 6 minutes of user time to first run, and a first PR about 20 to 30 minutes after signup** (agent time). The long CoS interview becomes optional and later: the CoS proposes more hires once it has seen one request through. The assessment moves to Settings → Advanced.
+**Target: 5 screens, under 6 minutes of user time to first run, and a first PR about 20 to 30 minutes after signup** (agent time). The CoS interview and the 5-question assessment are optional: "Plan with your Chief of Staff" is offered from Home, and the assessment moves to Settings → Advanced.
 
 ### Empty states that say what to do next
 
 | Screen | Empty-state text | One action |
 |---|---|---|
 | Home, no repo | "Connect a repo so your agents have somewhere to work." | Connect GitHub |
-| Home, no requests | "Tell your team what to build. One sentence is enough." | Ask |
-| Work | "No requests yet. Everything you or your assistant asks for shows up here." | Ask |
+| Home, no issues | "Tell your team what to build. One sentence is enough." | Ask |
+| Work | "No issues yet. Everything you or your assistant asks for shows up here." | Ask |
 | Decisions | "Nothing needs you. Agents ask here before hiring, spending over your limit, or doing anything outside your repo." | none |
 | Shipped | "Pull requests and results land here with what they cost. Your first one usually takes 20 to 30 minutes." | See what's running |
-| Team | "Your Chief of Staff hires agents when a request needs them. You can also ask for one." | Ask for a hire |
+| Team | "Your Chief of Staff hires agents when an issue needs them. You can also ask for one." | Ask for a hire |
 | Ask, first visit | Header line from section 1 plus three suggestion chips | send |
 
 ---
@@ -163,21 +165,21 @@ Ranked by user impact against effort. S = up to 2 days, M = 3 to 7 days, L = ove
 
 | Rank | Screen | Problem | Fix | Size | Files |
 |---|---|---|---|---|---|
-| 1 | First run / project | No way to give agents repo access on a hosted box; the core promise cannot complete | GitHub connection: a GitHub App installation per company (fallback: fine-grained token stored as a company secret), injected into the Hermes run environment for that project's workspace; one "Connect GitHub" step | L | `ui/src/components/NewProjectDialog.tsx:283-327`, new `ui/src/pages/settings/Connections.tsx`, `server/src/services/secrets.ts`, Hermes env build in `server/src/adapters/registry.ts`, `server/src/routes/onboarding-v2.ts` |
-| 2 | Issue detail + new Shipped page | PRs and results are stored but never shown; "See results" has no screen | Render work products on issue detail (PR link, state, checks) and a company-wide Shipped feed with cost per request | M | `ui/src/api/issues.ts:238` (client exists), `ui/src/pages/IssueDetail.tsx`, new `ui/src/pages/Shipped.tsx`, `server/src/services/work-products.ts`, `server/src/routes/issues.ts` |
+| 1 | First run / project | No way to give agents repo access on a hosted box; the core promise cannot complete | GitHub connection: a fine-grained token stored as a company secret, injected into the Hermes run environment for that project's workspace; one "Connect GitHub" step. The GitHub App follows as its own issue before open signup (~11-04) | L | `ui/src/components/NewProjectDialog.tsx:283-327`, new `ui/src/pages/settings/Connections.tsx`, `server/src/services/secrets.ts`, Hermes env build in `server/src/adapters/registry.ts`, `server/src/routes/onboarding-v2.ts` |
+| 2 | Issue detail + new Shipped page | PRs and results are stored but never shown; "See results" has no screen | Render work products on issue detail (PR link, state, checks) and a company-wide Shipped feed with cost per issue | M | `ui/src/api/issues.ts:238` (client exists), `ui/src/pages/IssueDetail.tsx`, new `ui/src/pages/Shipped.tsx`, `server/src/services/work-products.ts`, `server/src/routes/issues.ts` |
 | 3 | Dashboard → Home | Tiles show 0 while the header shows 6 agents and 92 tasks (stalled count-up animation); "awaiting you 0" beside a full inbox; "board" greeting | Render final numbers without the animation; Waiting on you / Working now / Shipped this week; first-name greeting; *Waiting on you* uses the same query as `list_pending_decisions` | M | `ui/src/pages/Overview.tsx:746-801,898-990`, `server/src/services/dashboard.ts`, `packages/mcp-server/src/assistant/tools.ts` |
 | 4 | Sign-up chain | Mandatory 5-question assessment before the user sees anything | Route `/company-create` straight to setup; offer the assessment later under Advanced | S | `ui/src/pages/CompanyCreate.tsx:39`, `ui/src/pages/AssessPage.tsx:55-78`, `ui/src/lib/onboarding-route.ts` |
-| 5 | First run | After the CoS interview nothing says "connect a repo" or "give a first task" | Replace the interview-first flow with key → repo → first request (section 4); the CoS interview becomes an optional "plan my team" chat | M | `ui/src/pages/CoSConversation.tsx:35-205`, `ui/src/components/onboarding/HermesProviderStep.tsx`, `server/src/routes/onboarding-v2.ts:357-706` |
+| 5 | First run | After the CoS interview nothing says "connect a repo" or "give a first task" | Replace the interview-first flow with key → repo → first issue (section 4); the CoS interview becomes an optional "Plan with your Chief of Staff" chat on Home | M | `ui/src/pages/CoSConversation.tsx:35-205`, `ui/src/components/onboarding/HermesProviderStep.tsx`, `server/src/routes/onboarding-v2.ts:357-706` |
 | 6 | Sidebar | 23 items, 13-company rail, per-agent and per-project lists | Six items plus Settings (section 3); Advanced group collapsed; hide rail for single-company users | M | `ui/src/components/Sidebar.tsx:90-145`, `SidebarProjects.tsx`, `SidebarAgents.tsx`, `Layout.tsx:360-388`, `MobileBottomNav.tsx:45-55`, `ui/src/lib/company-routes.ts` |
 | 7 | Inbox + Approvals → Decisions | Two lists, neither complete; real decisions buried among machine-made items; empty page with no explanation | One Decisions page: approvals + tasks needing your answer, each with question, consequence, one button; group or mute agent-generated noise | M | `ui/src/pages/Approvals.tsx`, `ui/src/pages/Inbox.tsx`, `ui/src/pages/ApprovalDetail.tsx`, `ui/src/components/ApprovalPayload.tsx` |
 | 8 | Hire | 9 adapters and a CLI-flag form; "Ask the CEO" button in a CoS dialog | On hosted, hiring is "Ask your Chief of Staff" only; hide adapter grid and `/agents/new` behind Advanced; fix the CEO label | S | `ui/src/components/NewAgentDialog.tsx:73-177`, `ui/src/pages/NewAgent.tsx:61-435`, `ui/src/adapters/adapter-display-registry.ts` |
 | 9 | Cap walls | "Upgrade to Pro" appears as plain error toast text; raw "Plan: free" | Upgrade button in the invite, hire and run-quota walls; humanised plan name and a trial countdown | S | `ui/src/pages/CompanyInvites.tsx:129-135`, `ui/src/pages/BillingPage.tsx:135`, `server/src/services/tier-policy.ts:52-65` |
 | 10 | Everywhere | Operator jargon (section 2 table) | Copy pass: Wake now, Check setup, your approval, workspace, Chief of Staff; drop "v1" from sign-up; no steward link on the default profile | S | `AgentDetail.tsx:1030`, `AgentHarnessReadinessPanel.tsx:93`, `Auth.tsx:144`, `MemberOnboarding.tsx:69-74`, `CompanySettings.tsx` |
 | 11 | All list pages | Empty states say nothing or point at the wrong next step | The empty states in section 4, one action each | S | `Overview.tsx:1014-1024`, `Approvals.tsx`, `Issues.tsx`, `Agents.tsx`, new Shipped page |
-| 12 | Settings → Connections | Assistant connection is the product's main channel but has no obvious home or first-run nudge | Connections page with GitHub and "Connect Muse / Grok" (PR #688's card), a Home card after the first request, the value line on consent | S | `ui/src/pages/OAuthConsent.tsx`, the #688 Connections card, `Overview.tsx` |
+| 12 | Settings → Connections | Assistant connection is the product's main channel but has no obvious home or first-run nudge | Connections page with GitHub and "Connect Muse / Grok" (PR #688's card), a Home card after the first issue, the value line on consent | S | `ui/src/pages/OAuthConsent.tsx`, the #688 Connections card, `Overview.tsx` |
 | 13 | Model key | Non-admins hit a dead end ("ask the person who set up the workspace"); no place to rotate the key | Name the admin and notify them; Settings → Model key to view provider and rotate | S | `ui/src/components/onboarding/HermesProviderStep.tsx:38-47`, `server/src/routes/hermes-provider-setup.ts` |
 | 14 | Agent detail | Leads with run charts and 7 config tabs; "137 succeeded without leaving anything" is buried | Lead with doing now / last shipped / spend; one Settings tab for Instructions, Skills, Configuration, Budget, Mandates; surface "runs that leave nothing" as a health warning | M | `ui/src/pages/AgentDetail.tsx` |
-| 15 | Costs | Ledgers and $0.00 tiles; no link from money to outcome | Month total, per-agent and per-request cost, "cost per shipped PR"; Budgets/Providers/Billers/Finance tabs to Advanced | M | `ui/src/pages/Costs.tsx:660-941` |
+| 15 | Costs | Ledgers and $0.00 tiles; no link from money to outcome | Month total, per-agent and per-issue cost, "cost per shipped PR"; Budgets/Providers/Billers/Finance tabs to Advanced | M | `ui/src/pages/Costs.tsx:660-941` |
 
 Dependencies: 1 blocks the promise and the rest of first run (5). 2 feeds Home (3) and Costs (15). OBS-1 (#694 / PR #704) must land for any cost number on a Hermes box to be real; without it, items 2, 3 and 15 show $0.
 
@@ -221,13 +223,13 @@ Consequences for the web app:
 
 ---
 
-## 8. Decisions for the founder
+## 8. Decisions (founder, 2026-09-26)
 
-1. **Approve the six-item sidebar** (Home, Ask, Work, Decisions, Shipped, Team) and the Advanced group.
-2. **GitHub connection method:** a GitHub App (best UX, least-privilege, needs an app registration and a webhook path through the control plane) or a fine-grained token (fast, worse UX). Recommendation: token for the first 10 boxes, App before signup opens fully (~11-04).
-3. **Make the CoS interview optional** in first run, in favour of key → repo → first request.
-4. **Word for "issue" on screen:** "request" (recommended, matches Ask) or keep "issue".
-5. Once approved: file items 1 to 15 as GitHub issues with the `mvl-1.0` label and this document as the source.
+1. **GitHub:** a fine-grained token pasted in onboarding for the first ~10 waitlist boxes. The AgentDash GitHub App is built before signup opens fully (~11-04), as a separate issue that is not on the 10-28 critical path.
+2. **Sidebar:** the six items (Home, Ask, Work, Decisions, Shipped, Team), everything else under Advanced, **for the default profile and hosted boxes only.** The MK profile keeps its current layout.
+3. **First run:** claim → model key → connect GitHub → first issue → Home. The CoS interview and the 5-question assessment become optional; "Plan with your Chief of Staff" is available from Home.
+4. **Naming:** keep **"issues"** in the UI. "Request" is not adopted; the Work page lists issues and Ask's composer says "New issue".
+5. The top-15 punch list and the GitHub App are filed as GitHub issues (labels `ui`, `ux-sharpening`, `mvl-1.0` except the App), with owners and dependencies in each issue.
 
 ## Screenshots
 
