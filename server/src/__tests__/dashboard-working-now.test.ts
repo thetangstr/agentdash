@@ -36,6 +36,9 @@ describeEmbeddedPostgres("GET /companies/:companyId/dashboard/working-now", () =
   const ISSUE = randomUUID();
   const SECRET_ISSUE = randomUUID();
   const OTHER_ISSUE = randomUUID();
+  const HIDDEN_ISSUE = randomUUID();
+  const RUN_HIDDEN = randomUUID();
+  const MANY = Array.from({ length: 8 }, () => ({ issue: randomUUID(), run: randomUUID() }));
   const RUN_OLD = randomUUID();
   const RUN_NEW = randomUUID();
   const RUN_NO_ISSUE = randomUUID();
@@ -77,6 +80,7 @@ describeEmbeddedPostgres("GET /companies/:companyId/dashboard/working-now", () =
       { id: ISSUE, companyId: COMPANY, title: "Add rate limiting", identifier: "WRK-1", status: "in_progress" },
       { id: SECRET_ISSUE, companyId: COMPANY, projectId: SECRET_PROJECT, title: "Secret work", identifier: "WRK-2", status: "in_progress" },
       { id: OTHER_ISSUE, companyId: OTHER_COMPANY, title: "Not yours", identifier: "OTR-1", status: "in_progress" },
+      { id: HIDDEN_ISSUE, companyId: COMPANY, title: "Hidden work", identifier: "WRK-3", status: "in_progress", hiddenAt: new Date() },
     ]);
     await db.insert(heartbeatRuns).values([
       { id: RUN_OLD, companyId: COMPANY, agentId: MAYA, status: "running", startedAt: minutesAgo(30), createdAt: minutesAgo(30), contextSnapshot: { issueId: ISSUE } },
@@ -85,6 +89,7 @@ describeEmbeddedPostgres("GET /companies/:companyId/dashboard/working-now", () =
       { id: RUN_SECRET, companyId: COMPANY, agentId: PRIYA, status: "running", startedAt: minutesAgo(5), createdAt: minutesAgo(5), contextSnapshot: { issueId: SECRET_ISSUE }, nextAction: "Rewriting the secret module" },
       { id: RUN_FOREIGN_ISSUE, companyId: COMPANY, agentId: PRIYA, status: "running", startedAt: minutesAgo(4), createdAt: minutesAgo(4), contextSnapshot: { issueId: OTHER_ISSUE } },
       { id: RUN_DONE, companyId: COMPANY, agentId: MAYA, status: "succeeded", createdAt: minutesAgo(2), contextSnapshot: { issueId: ISSUE } },
+      { id: RUN_HIDDEN, companyId: COMPANY, agentId: MAYA, status: "running", startedAt: minutesAgo(3), createdAt: minutesAgo(3), contextSnapshot: { issueId: HIDDEN_ISSUE } },
       { id: RUN_OTHER_COMPANY, companyId: OTHER_COMPANY, agentId: STRANGER, status: "running", createdAt: minutesAgo(3), contextSnapshot: { issueId: OTHER_ISSUE } },
     ]);
     await db.insert(heartbeatRunEvents).values([
@@ -131,6 +136,8 @@ describeEmbeddedPostgres("GET /companies/:companyId/dashboard/working-now", () =
     expect(byRun.has(RUN_DONE)).toBe(false);
     expect(byRun.has(RUN_OTHER_COMPANY)).toBe(false);
     expect(byRun.has(RUN_FOREIGN_ISSUE)).toBe(false);
+    // A run on a hidden issue is gone, not shown as "outside an issue".
+    expect(byRun.has(RUN_HIDDEN)).toBe(false);
     expect(res.body.total).toBe(res.body.items.length);
     expect(res.body.total).toBe(3);
   });
@@ -142,6 +149,41 @@ describeEmbeddedPostgres("GET /companies/:companyId/dashboard/working-now", () =
     expect(runIds).not.toContain(RUN_SECRET);
     expect(runIds).toContain(RUN_NEW);
     expect(res.body.total).toBe(2);
+  });
+
+  it("returns at most six rows but counts every live issue", async () => {
+    const LATER = randomUUID();
+    await db.insert(companies).values({ id: LATER, name: "Busy Co", issuePrefix: "BSY" });
+    const agent = randomUUID();
+    await db.insert(agents).values({ id: agent, companyId: LATER, name: "Busy", role: "engineer" });
+    await db.insert(issues).values(
+      MANY.map((m, i) => ({ id: m.issue, companyId: LATER, title: `Busy ${i}`, identifier: `BSY-${i}`, status: "in_progress" })),
+    );
+    await db.insert(heartbeatRuns).values(
+      MANY.map((m, i) => ({
+        id: m.run,
+        companyId: LATER,
+        agentId: agent,
+        status: "running",
+        createdAt: minutesAgo(i + 1),
+        contextSnapshot: { issueId: m.issue },
+      })),
+    );
+    const app = express();
+    app.use((req, _res, next) => {
+      (req as any).actor = { type: "board", source: "session", userId: "owner", companyIds: [LATER], memberships: [{ companyId: LATER, membershipRole: "owner", status: "active" }] };
+      next();
+    });
+    app.use("/api", dashboardRoutes(db));
+    app.use(errorHandler);
+    const res = await request(app).get(`/api/companies/${LATER}/dashboard/working-now`);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(8);
+    expect(res.body.items).toHaveLength(6);
+    // Newest first.
+    expect(res.body.items.map((i: { issue: { title: string } }) => i.issue.title)).toEqual(
+      ["Busy 0", "Busy 1", "Busy 2", "Busy 3", "Busy 4", "Busy 5"],
+    );
   });
 
   it("refuses another company's caller", async () => {

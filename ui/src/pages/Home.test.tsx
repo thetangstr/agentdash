@@ -194,7 +194,9 @@ describe("Home", () => {
     mockDashboardApi.waitingOnYou.mockResolvedValue({ ...waiting, tasksAssignedToYouTotal: 9 });
     await render();
     expect(q("home-waiting-count")?.textContent).toBe("10");
-    expect(q("home-waiting")?.textContent).toContain("and 7 more issues");
+    expect(q("home-waiting")?.textContent).toContain("and 7 more issues assigned to you");
+    // The link opens the issue list filtered to the person (issue-filters "__me").
+    expect(q("home-waiting")?.querySelector('a[href="/issues?assignee=__me"]')).not.toBeNull();
   });
 
   it("shows issue titles in Working now, never run hashes", async () => {

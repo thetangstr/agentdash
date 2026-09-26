@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -75,7 +75,8 @@ function topCategory(categories: Map<string, number>) {
   return entries[0]?.[0] ?? null;
 }
 
-const WORKING_NOW_LIMIT = 20;
+/** Home shows six rows per block; the total says how many more. */
+const WORKING_NOW_LIMIT = 6;
 const LAST_STEP_MAX = 160;
 
 function clipStep(text: string | null | undefined): string | null {
@@ -98,47 +99,59 @@ export function dashboardService(db: Db) {
      */
     workingNow: async (companyId: string, opts: { visibleWhere?: SQL } = {}): Promise<WorkingNow> => {
       const runIssueId = sql<string | null>`coalesce(${heartbeatRuns.contextSnapshot} ->> 'issueId', ${heartbeatRuns.contextSnapshot} ->> 'taskId')`;
-      const rows = await db
-        .select({
-          runId: heartbeatRuns.id,
-          status: heartbeatRuns.status,
-          startedAt: heartbeatRuns.startedAt,
-          createdAt: heartbeatRuns.createdAt,
-          nextAction: heartbeatRuns.nextAction,
-          livenessReason: heartbeatRuns.livenessReason,
-          agentId: agents.id,
-          agentName: agents.name,
-          contextIssueId: runIssueId,
-          issueId: issues.id,
-          issueIdentifier: issues.identifier,
-          issueTitle: issues.title,
-          issueStatus: issues.status,
+      // Hidden issues join as absent, like deleted ones.
+      const issueJoin = and(
+        eq(issues.companyId, companyId),
+        isNull(issues.hiddenAt),
+        sql`${issues.id}::text = ${runIssueId}`,
+      );
+      const liveWhere = and(
+        eq(heartbeatRuns.companyId, companyId),
+        inArray(heartbeatRuns.status, ["queued", "running"]),
+        // A run whose context names an issue we could not join (deleted,
+        // hidden, another company's, or in a project this caller cannot see)
+        // is dropped rather than shown bare.
+        sql`(${issues.id} is not null or ${runIssueId} is null)`,
+        ...(opts.visibleWhere ? [sql`(${issues.id} is null or ${opts.visibleWhere})`] : []),
+      );
+      // One row per issue (runs outside an issue count on their own).
+      const groupKey = sql<string>`coalesce(${issues.id}::text, ${heartbeatRuns.id}::text)`;
+
+      // Newest run per issue, in SQL, then the newest WORKING_NOW_LIMIT of those.
+      const perIssue = db
+        .selectDistinctOn([groupKey], {
+          groupKey: groupKey.as("wn_group_key"),
+          runId: sql<string>`${heartbeatRuns.id}`.as("wn_run_id"),
+          status: sql<string>`${heartbeatRuns.status}`.as("wn_status"),
+          startedAt: sql<Date | null>`${heartbeatRuns.startedAt}`.as("wn_started_at"),
+          createdAt: sql<Date>`${heartbeatRuns.createdAt}`.as("wn_created_at"),
+          nextAction: sql<string | null>`${heartbeatRuns.nextAction}`.as("wn_next_action"),
+          livenessReason: sql<string | null>`${heartbeatRuns.livenessReason}`.as("wn_liveness_reason"),
+          agentId: sql<string>`${agents.id}`.as("wn_agent_id"),
+          agentName: sql<string>`${agents.name}`.as("wn_agent_name"),
+          issueId: sql<string | null>`${issues.id}`.as("wn_issue_id"),
+          issueIdentifier: sql<string | null>`${issues.identifier}`.as("wn_issue_identifier"),
+          issueTitle: sql<string | null>`${issues.title}`.as("wn_issue_title"),
+          issueStatus: sql<string | null>`${issues.status}`.as("wn_issue_status"),
         })
         .from(heartbeatRuns)
         .innerJoin(agents, eq(agents.id, heartbeatRuns.agentId))
-        .leftJoin(
-          issues,
-          and(eq(issues.companyId, companyId), sql`${issues.id}::text = ${runIssueId}`),
-        )
-        .where(
-          and(
-            eq(heartbeatRuns.companyId, companyId),
-            inArray(heartbeatRuns.status, ["queued", "running"]),
-            ...(opts.visibleWhere ? [sql`(${issues.id} is null or ${opts.visibleWhere})`] : []),
-          ),
-        )
-        .orderBy(desc(heartbeatRuns.createdAt));
-
-      // A run whose context names an issue we could not join (deleted, or in
-      // a project this caller cannot see) is dropped rather than shown bare.
-      const seenIssues = new Set<string>();
-      const live = rows.filter((row) => {
-        if (!row.issueId) return row.contextIssueId === null;
-        if (seenIssues.has(row.issueId)) return false;
-        seenIssues.add(row.issueId);
-        return true;
-      });
-      const page = live.slice(0, WORKING_NOW_LIMIT);
+        .leftJoin(issues, issueJoin)
+        .where(liveWhere)
+        .orderBy(groupKey, desc(heartbeatRuns.createdAt))
+        .as("working_now");
+      const page = await db
+        .select()
+        .from(perIssue)
+        .orderBy(desc(perIssue.createdAt))
+        .limit(WORKING_NOW_LIMIT);
+      const total = await db
+        .select({ count: sql<number>`count(distinct ${groupKey})::int` })
+        .from(heartbeatRuns)
+        .innerJoin(agents, eq(agents.id, heartbeatRuns.agentId))
+        .leftJoin(issues, issueJoin)
+        .where(liveWhere)
+        .then((r) => Number(r[0]?.count ?? 0));
 
       const runIds = page.map((row) => row.runId);
       const latestEvents = runIds.length
@@ -160,7 +173,7 @@ export function dashboardService(db: Db) {
       const eventByRun = new Map(latestEvents.map((e) => [e.runId, e.message]));
 
       return {
-        total: live.length,
+        total,
         items: page.map((row) => ({
           runId: row.runId,
           status: row.status,
@@ -174,7 +187,7 @@ export function dashboardService(db: Db) {
               }
             : null,
           lastStep: clipStep(row.nextAction) ?? clipStep(eventByRun.get(row.runId)) ?? clipStep(row.livenessReason),
-          startedAt: (row.startedAt ?? row.createdAt).toISOString(),
+          startedAt: new Date(row.startedAt ?? row.createdAt).toISOString(),
         })),
       };
     },

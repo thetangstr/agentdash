@@ -22,11 +22,9 @@ import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
 import { Overview } from "./Overview";
 
 export const HOME_LIST_LIMIT = 6;
-export const WAITING_EMPTY_TEXT =
-  "Nothing needs you. Agents ask here before hiring, spending over your limit, or doing anything outside your repo.";
+export const WAITING_EMPTY_TEXT = "Nothing needs you right now. Decisions and issues assigned to you show up here.";
 export const WORKING_EMPTY_TEXT = "No agent is working right now.";
-export const SHIPPED_WEEK_EMPTY_TEXT =
-  "Pull requests and results land here with what they cost. Your first one usually takes 20 to 30 minutes.";
+export const SHIPPED_WEEK_EMPTY_TEXT = "Nothing shipped this week yet. Pull requests and results land here, with what they cost.";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The first word of a person's name; null for the synthetic local operator. */
@@ -185,7 +183,11 @@ function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
           </li>
         ))}
       </ul>
-      <MoreLine count={moreTasks} to="/issues" noun={moreTasks === 1 ? "issue" : "issues"} />
+      <MoreLine
+        count={moreTasks}
+        to="/issues?assignee=__me"
+        noun={moreTasks === 1 ? "issue assigned to you" : "issues assigned to you"}
+      />
     </Block>
   );
 }
