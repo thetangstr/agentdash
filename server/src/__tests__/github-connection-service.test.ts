@@ -35,6 +35,8 @@ describe("parseGitHubRepo", () => {
     "https://github.com/acme/app/tree/main",
     "https://github.com/acme/app?x=1",
     "https://evil.com/github.com/acme/app",
+    "https://github.com:8443/acme/app",
+    "https://github.com.evil.com/acme/app",
     "acme/..",
     "",
     42,
@@ -58,9 +60,23 @@ describe("token checks", () => {
     expect(() => assertFineGrainedToken(`${TOKEN}\nX=1`)).toThrow(/fine-grained/);
   });
 
-  it("reads the API base from AGENTDASH_GITHUB_API_URL", () => {
+  it("reads the API base from AGENTDASH_GITHUB_API_URL, https or loopback http only", () => {
     expect(githubApiBaseUrl({})).toBe("https://api.github.com");
     expect(githubApiBaseUrl({ AGENTDASH_GITHUB_API_URL: "http://127.0.0.1:9/" })).toBe("http://127.0.0.1:9");
+    expect(githubApiBaseUrl({ AGENTDASH_GITHUB_API_URL: "https://ghe.example.com/api/v3" })).toBe("https://ghe.example.com/api/v3");
+    expect(githubApiBaseUrl({ AGENTDASH_GITHUB_API_URL: "http://evil.example.com" })).toBe("https://api.github.com");
+    expect(githubApiBaseUrl({ AGENTDASH_GITHUB_API_URL: "not a url" })).toBe("https://api.github.com");
+  });
+
+  it("never follows a redirect with the token", async () => {
+    let init: RequestInit | undefined;
+    const fetchImpl = (async (_url: string, i?: RequestInit) => {
+      init = i;
+      return new Response("", { status: 301, headers: { location: "https://evil.example.com/" } });
+    }) as never;
+    const error = await verifyGitHubToken(parseGitHubRepo("acme/app")!, TOKEN, { fetch: fetchImpl, env: {} }).catch((e) => e);
+    expect(init?.redirect).toBe("manual");
+    expect(error.message).toMatch(/moved or been renamed/);
   });
 
   const repo = parseGitHubRepo("acme/app")!;

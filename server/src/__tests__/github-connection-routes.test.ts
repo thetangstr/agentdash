@@ -338,7 +338,7 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
   });
 
   describe("POST /api/agent-git-credential", () => {
-    async function seedRun(opts: { status?: string; connectProject?: boolean } = {}) {
+    async function seedRun(opts: { status?: string; connectProject?: boolean; assigned?: boolean } = {}) {
       const seeded = await seedCompany();
       await request(buildApp(seeded.owner, fakeGitHub().fn))
         .put(`/api/companies/${seeded.company.id}/github-connections`)
@@ -355,24 +355,41 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
         .values({ companyId: seeded.company.id, name: `Eng ${randomUUID()}`, role: "engineer", status: "running", adapterType: "hermes_local" })
         .returning()
         .then((rows) => rows[0]!);
+      const issue = await db
+        .insert(issues)
+        .values({
+          companyId: seeded.company.id,
+          projectId: opts.connectProject === false ? other.id : project!.id,
+          title: "Add a health badge",
+          assigneeAgentId: opts.assigned === false ? null : agent.id,
+        })
+        .returning()
+        .then((rows) => rows[0]!);
       const run = await db
         .insert(heartbeatRuns)
         .values({
           companyId: seeded.company.id,
           agentId: agent.id,
           status: opts.status ?? "running",
-          contextSnapshot: { projectId: opts.connectProject === false ? other.id : project!.id },
+          contextSnapshot: { issueId: issue.id },
         })
         .returning()
         .then((rows) => rows[0]!);
-      const agentActor = (runId: string | null = run.id, agentId = agent.id) => ({
+      // The actor a run JWT produces: jwtRunId is signed; runId may come from a header.
+      const agentActor = (
+        jwtRunId: string | null = run.id,
+        agentId = agent.id,
+        extra: Record<string, unknown> = {},
+      ) => ({
         type: "agent",
         agentId,
         companyId: seeded.company.id,
-        runId: runId ?? undefined,
+        runId: jwtRunId ?? undefined,
+        jwtRunId: jwtRunId ?? undefined,
         source: "agent_jwt",
+        ...extra,
       });
-      return { ...seeded, project: project!, other, agent, run, agentActor };
+      return { ...seeded, project: project!, other, agent, run, issue, agentActor };
     }
 
     function post(actor: Record<string, unknown>, body = "protocol=https\nhost=github.com\npath=acme/app.git\n\n") {
@@ -409,7 +426,7 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
       expect((await post(agentActor(), "protocol=https\nhost=github.com\npath=evil/repo.git\n\n")).status).toBe(404);
       expect((await post(agentActor(), "protocol=https\nhost=gitlab.com\npath=acme/app.git\n\n")).status).toBe(404);
       expect((await post(agentActor(), "protocol=http\nhost=github.com\npath=acme/app.git\n\n")).status).toBe(404);
-      expect((await post(agentActor(null))).status).toBe(404);
+      expect((await post(agentActor(null))).status).toBe(403);
       expect((await post(agentActor(randomUUID()))).status).toBe(404);
       const intruder = await db
         .insert(agents)
@@ -433,19 +450,36 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
       expect((await post(agentActor())).status).toBe(404);
     });
 
-    it("resolves the project from the run's issue when the context has no projectId", async () => {
+    it("refuses when the agent is not the assignee of the run's issue", async () => {
+      const { agentActor } = await seedRun({ assigned: false });
+      expect((await post(agentActor())).status).toBe(404);
+    });
+
+    it("refuses a run whose context names a project but no issue (wakeup context is not trusted)", async () => {
       const seeded = await seedRun();
-      const issue = await db
-        .insert(issues)
-        .values({ companyId: seeded.company.id, projectId: seeded.project.id, title: "Add a health badge" })
-        .returning()
-        .then((rows) => rows[0]!);
       await db
         .update(heartbeatRuns)
-        .set({ contextSnapshot: { issueId: issue.id } })
+        .set({ contextSnapshot: { projectId: seeded.project.id } })
         .where(eq(heartbeatRuns.id, seeded.run.id));
-      const res = await post(seeded.agentActor());
-      expect(res.status).toBe(200);
+      expect((await post(seeded.agentActor())).status).toBe(404);
+    });
+
+    it("refuses a long-lived agent API key even with a valid running run id in the header", async () => {
+      const { agentActor, run } = await seedRun();
+      const res = await post(agentActor(null, undefined, { source: "agent_key", keyId: randomUUID(), runId: run.id }));
+      expect(res.status).toBe(403);
+      expect(res.text).not.toContain(CANARY);
+    });
+
+    it("refuses a run JWT presenting another run's id in the header", async () => {
+      const { agentActor, run } = await seedRun();
+      const res = await post(agentActor(randomUUID(), undefined, { runId: run.id }));
+      expect(res.status).toBe(403);
+    });
+
+    it("refuses an evaluator (read-only) principal", async () => {
+      const { agentActor } = await seedRun();
+      expect((await post(agentActor(undefined, undefined, { readOnly: true }))).status).toBe(403);
     });
   });
 });

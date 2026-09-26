@@ -17,6 +17,7 @@ import {
   cloneCredentialEnv,
   cloneCredentialGitArgs,
   configureCheckoutCredentialHelper,
+  createGitHubTokenStreamRedactor,
   formatGitCredentialResponse,
   parseGitCredentialRequest,
   redactGitHubTokens,
@@ -168,5 +169,33 @@ describe("GitHub token redaction", () => {
     const out = redactGitHubTokensInValue({ a: [CANARY, { b: `x ${CANARY}` }], n: 1, t: true });
     expect(JSON.stringify(out)).not.toContain(CANARY);
     expect(out).toMatchObject({ n: 1, t: true });
+  });
+});
+
+describe("streaming GitHub token redaction", () => {
+  function run(chunks: string[]) {
+    const redactor = createGitHubTokenStreamRedactor();
+    const out = chunks.map((chunk) => redactor.push(chunk)).join("") + redactor.flush();
+    return out;
+  }
+
+  it("catches a token split at every possible boundary", () => {
+    const text = `pushing with ${CANARY} now`;
+    for (let cut = 1; cut < text.length; cut += 1) {
+      const out = run([text.slice(0, cut), text.slice(cut)]);
+      expect(out, `cut at ${cut}`).not.toContain(CANARY);
+      expect(out).toContain("pushing with ");
+      expect(out).toContain(" now");
+    }
+  });
+
+  it("catches a token delivered one character at a time", () => {
+    const text = `token=${CANARY}\n`;
+    expect(run([...text])).not.toContain(CANARY.slice(11, 30));
+  });
+
+  it("passes ordinary text through unchanged, including words that start with g", () => {
+    const chunks = ["running git status\n", "on branch main; go", "t it, ghost"];
+    expect(run(chunks)).toBe(chunks.join(""));
   });
 });

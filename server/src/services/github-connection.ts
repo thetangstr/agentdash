@@ -78,7 +78,7 @@ export function parseGitHubRepo(input: unknown): GitHubRepoRef | null {
   } catch {
     return null;
   }
-  if (url.hostname.toLowerCase() !== GITHUB_HOST) return null;
+  if (url.hostname.toLowerCase() !== GITHUB_HOST || url.port) return null;
   if (!["https:", "http:", "ssh:"].includes(url.protocol)) return null;
   if (url.password || (url.username && url.username !== "git")) return null;
   if (url.search || url.hash) return null;
@@ -140,9 +140,23 @@ export interface GitHubConnectionDeps {
   env?: NodeJS.ProcessEnv;
 }
 
+/**
+ * GitHub's API, or AGENTDASH_GITHUB_API_URL for a test stub. The override must
+ * be https, or plain http to a loopback address; anything else is ignored so a
+ * mistyped variable cannot send tokens over the network in the clear.
+ */
 export function githubApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const fallback = "https://api.github.com";
   const configured = (env.AGENTDASH_GITHUB_API_URL ?? "").trim();
-  return (configured || "https://api.github.com").replace(/\/+$/, "");
+  if (!configured) return fallback;
+  try {
+    const url = new URL(configured);
+    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return fallback;
+  } catch {
+    return fallback;
+  }
+  return configured.replace(/\/+$/, "");
 }
 
 export interface VerifiedGitHubRepo {
@@ -164,6 +178,9 @@ async function githubGet(
   try {
     response = await doFetch(`${githubApiBaseUrl(deps.env)}${path}`, {
       method: "GET",
+      // Never follow a redirect with the token attached (GitHub answers a
+      // renamed repo with 301; that is reported, not followed).
+      redirect: "manual",
       headers: {
         accept: "application/vnd.github+json",
         authorization: `Bearer ${token}`,
@@ -177,6 +194,14 @@ async function githubGet(
       502,
       "github_unreachable",
       "Could not reach GitHub to check the token. Check the workspace's network and try again.",
+    );
+  }
+  if (response.status >= 300 && response.status < 400) {
+    await response.arrayBuffer().catch(() => undefined);
+    throw new GitHubConnectionError(
+      422,
+      "github_repo_not_accessible",
+      "GitHub says this repository has moved or been renamed. Paste its current URL.",
     );
   }
   const rateLimited = response.headers.get("x-ratelimit-remaining") === "0";
@@ -532,8 +557,10 @@ export function githubConnectionService(db: Db, deps: GitHubConnectionDeps = {})
         .where(and(eq(githubRepoConnections.id, connectionId), eq(githubRepoConnections.companyId, companyId)))
         .then((rows) => rows[0] ?? null);
       if (!row) throw notFound("GitHub connection not found");
+      // The token first: if it cannot be removed, keep the connection so the
+      // disconnect can be retried rather than orphaning an encrypted token.
+      if (row.secretId) await secrets.remove(row.secretId);
       await db.delete(githubRepoConnections).where(eq(githubRepoConnections.id, row.id));
-      if (row.secretId) await secrets.remove(row.secretId).catch(() => undefined);
       return { id: row.id, repo: `${row.repoOwner}/${row.repoName}`, projectId: row.projectId };
     },
 
@@ -582,22 +609,24 @@ export function githubConnectionService(db: Db, deps: GitHubConnectionDeps = {})
       if (!run || run.companyId !== input.companyId || run.agentId !== input.agentId || run.status !== "running") {
         return null;
       }
+      // The project comes from the run's issue, and the agent must be that
+      // issue's assignee: a context projectId alone is not trusted, since
+      // wakeup context can be supplied by callers.
       const context = (run.contextSnapshot ?? {}) as Record<string, unknown>;
-      let projectId = typeof context.projectId === "string" && context.projectId ? context.projectId : null;
       const issueId =
         typeof context.issueId === "string" && context.issueId
           ? context.issueId
           : typeof context.taskId === "string" && context.taskId
             ? context.taskId
             : null;
-      if (!projectId && issueId) {
-        const issue = await db
-          .select({ projectId: issues.projectId, companyId: issues.companyId })
-          .from(issues)
-          .where(eq(issues.id, issueId))
-          .then((rows) => rows[0] ?? null);
-        if (issue && issue.companyId === input.companyId) projectId = issue.projectId ?? null;
-      }
+      if (!issueId) return null;
+      const issue = await db
+        .select({ projectId: issues.projectId, companyId: issues.companyId, assigneeAgentId: issues.assigneeAgentId })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+      if (!issue || issue.companyId !== input.companyId || issue.assigneeAgentId !== input.agentId) return null;
+      const projectId = issue.projectId ?? null;
       if (!projectId) return null;
       const rows = await db
         .select()

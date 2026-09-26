@@ -73,6 +73,7 @@ import {
   cloneCredentialEnv,
   cloneCredentialGitArgs,
   configureCheckoutCredentialHelper,
+  createGitHubTokenStreamRedactor,
   redactGitHubTokens,
   redactGitHubTokensInValue,
 } from "./git-credential-helper.js";
@@ -2869,16 +2870,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (!projectCwd || projectCwd === REPO_ONLY_CWD_SENTINEL) {
           try {
             const workspaceRepoUrl = readNonEmptyString(workspace.repoUrl);
+            // AgentDash (GH #782): a connected GitHub repo is cloned from its
+            // canonical https URL with the connection's credential.
+            const githubClone = workspaceRepoUrl
+              ? await githubConnections
+                  .cloneTokenForWorkspace(agent.companyId, workspace.id, workspaceRepoUrl)
+                  .catch(() => null)
+              : null;
             const managedWorkspace = await ensureManagedProjectWorkspace({
               companyId: agent.companyId,
               projectId: workspaceProjectId ?? resolvedProjectId ?? workspace.projectId,
-              repoUrl: workspaceRepoUrl,
-              // AgentDash (GH #782): a connected GitHub repo.
-              githubCredential: workspaceRepoUrl
-                ? await githubConnections
-                    .cloneTokenForWorkspace(agent.companyId, workspace.id, workspaceRepoUrl)
-                    .catch(() => null)
-                : null,
+              repoUrl: githubClone?.repoUrl ?? workspaceRepoUrl,
+              githubCredential: githubClone ? { token: githubClone.token } : null,
             });
             projectCwd = managedWorkspace.cwd;
             managedWorkspaceWarning = managedWorkspace.warning;
@@ -6427,12 +6430,28 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .where(eq(heartbeatRuns.id, runId));
 
       const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
+      // AgentDash (GH #782): an agent can print a GitHub token from its shell;
+      // scrub anything token-shaped before it is stored or streamed. Stateful
+      // per stream, so a token split across two chunks is still caught.
+      const githubTokenRedactors = {
+        stdout: createGitHubTokenStreamRedactor(),
+        stderr: createGitHubTokenStreamRedactor(),
+      };
       const onLog = async (stream: "stdout" | "stderr", chunk: string) => {
-        // AgentDash (GH #782): an agent can print a GitHub token from its
-        // shell; scrub anything token-shaped before it is stored or streamed.
-        const sanitizedChunk = compactRunLogChunk(
-          redactGitHubTokens(redactCurrentUserText(chunk, currentUserRedactionOptions)),
+        const githubSafeChunk = githubTokenRedactors[stream].push(
+          redactCurrentUserText(chunk, currentUserRedactionOptions),
         );
+        if (githubSafeChunk.length === 0 && chunk.length > 0) return;
+        await appendRunLogChunk(stream, githubSafeChunk);
+      };
+      const flushGitHubTokenRedactors = async () => {
+        for (const stream of ["stdout", "stderr"] as const) {
+          const rest = githubTokenRedactors[stream].flush();
+          if (rest) await appendRunLogChunk(stream, rest);
+        }
+      };
+      const appendRunLogChunk = async (stream: "stdout" | "stderr", redactedChunk: string) => {
+        const sanitizedChunk = compactRunLogChunk(redactedChunk);
         if (stream === "stdout") stdoutExcerpt = appendExcerpt(stdoutExcerpt, sanitizedChunk);
         if (stream === "stderr") stderrExcerpt = appendExcerpt(stderrExcerpt, sanitizedChunk);
         const ts = new Date().toISOString();
@@ -6568,7 +6587,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         );
       }
       // AgentDash (GH #782): result text is persisted and shown; no GitHub token in it.
-      const adapterResult = redactGitHubTokensInValue(await adapter.execute({
+      let rawAdapterResult: Awaited<ReturnType<typeof adapter.execute>>;
+      try {
+        rawAdapterResult = await adapter.execute({
         runId: run.id,
         agent,
         runtime: runtimeForAdapter,
@@ -6591,7 +6612,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           });
         },
         authToken: authToken ?? undefined,
-      }));
+      });
+      } finally {
+        await flushGitHubTokenRedactors();
+      }
+      const adapterResult = redactGitHubTokensInValue(rawAdapterResult);
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
             db,

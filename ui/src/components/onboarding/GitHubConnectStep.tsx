@@ -149,9 +149,9 @@ export function GitHubConnectStep({
           is added for you). Set an expiry.
         </p>
         <p className="mt-2 text-muted-foreground">
-          Agents work in a shell, so they can read this token. Give it access to this one repository and nothing
-          else, and protect your default branch on GitHub so every change goes through a pull request. Classic
-          tokens are refused.
+          Agents work in a shell, so they can read this token, and anyone who can give them work could ask for it.
+          Give it access to this one repository and nothing else, and protect your default branch on GitHub so
+          every change goes through a pull request. Classic tokens are refused.
         </p>
       </div>
 

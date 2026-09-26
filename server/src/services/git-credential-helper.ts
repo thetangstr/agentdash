@@ -151,3 +151,35 @@ export function redactGitHubTokensInValue<T>(value: T, depth = 0): T {
   }
   return value;
 }
+
+/**
+ * Redact a stream delivered in chunks. A token (or its `github_pat_` / `ghX_`
+ * prefix) cut by a chunk boundary is held back and joined with the next
+ * chunk, so neither half is ever emitted in clear. Only a tail that starts a
+ * word and could still grow into a token is held; `flush()` releases it (as
+ * a redaction marker if it had grown past a prefix).
+ */
+export function createGitHubTokenStreamRedactor(maxHold = 512) {
+  // A word-initial tail that is a prefix of "github_pat_…" or "gh[pousr]_…".
+  const HOLD_RE =
+    /(?:^|[^A-Za-z0-9_])((?:github_pat_[A-Za-z0-9_]*|g(?:i(?:t(?:h(?:u(?:b(?:_(?:p(?:a(?:t)?)?)?)?)?)?)?)?)?|gh(?:[pousr](?:_[A-Za-z0-9]*)?)?))$/;
+  let held = "";
+  return {
+    push(chunk: string): string {
+      const text = held + chunk;
+      held = "";
+      const match = HOLD_RE.exec(text);
+      if (!match) return redactGitHubTokens(text);
+      const tail = match[1]!;
+      if (tail.length > maxHold) return redactGitHubTokens(text.slice(0, text.length - tail.length)) + REDACTED_GITHUB_TOKEN;
+      held = tail;
+      return redactGitHubTokens(text.slice(0, text.length - tail.length));
+    },
+    flush(): string {
+      const rest = held;
+      held = "";
+      if (!rest) return "";
+      return /^(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{4,}/.test(rest) ? REDACTED_GITHUB_TOKEN : rest;
+    },
+  };
+}

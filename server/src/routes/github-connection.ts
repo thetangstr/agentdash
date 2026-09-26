@@ -115,33 +115,46 @@ export function githubConnectionRoutes(db: Db, deps: GitHubConnectionRouteDeps =
       req.body = {};
       res.setHeader("Cache-Control", "no-store");
       res.type("text/plain");
-      if (req.actor.type !== "agent" || !req.actor.agentId || !req.actor.companyId || req.actor.readOnly) {
+      // Only the short-lived JWT the heartbeat mints for one run, never a
+      // long-lived agent API key: a member can create an agent and read its
+      // key, and would otherwise present any running run's id in a header.
+      // The run is the one signed into the JWT; a header naming another is refused.
+      const actor = req.actor;
+      if (
+        actor.type !== "agent" ||
+        actor.source !== "agent_jwt" ||
+        !actor.agentId ||
+        !actor.companyId ||
+        !actor.jwtRunId ||
+        actor.readOnly ||
+        (actor.runId && actor.runId !== actor.jwtRunId)
+      ) {
         res.status(403).send("");
         return;
       }
       const request = parseGitCredentialRequest(raw);
       const granted = await svc.credentialForRun({
-        companyId: req.actor.companyId,
-        agentId: req.actor.agentId,
-        runId: req.actor.runId,
+        companyId: actor.companyId,
+        agentId: actor.agentId,
+        runId: actor.jwtRunId,
         protocol: request.protocol,
         host: request.host,
         path: request.path,
       });
       if (!granted) {
         logger.info(
-          { companyId: req.actor.companyId, agentId: req.actor.agentId, runId: req.actor.runId, host: request.host },
+          { companyId: actor.companyId, agentId: actor.agentId, runId: actor.jwtRunId, host: request.host },
           "[github-connection] git credential refused",
         );
         res.status(404).send("");
         return;
       }
       await log(db, {
-        companyId: req.actor.companyId,
+        companyId: actor.companyId,
         actorType: "agent",
-        actorId: req.actor.agentId,
-        agentId: req.actor.agentId,
-        runId: req.actor.runId ?? null,
+        actorId: actor.agentId,
+        agentId: actor.agentId,
+        runId: actor.jwtRunId,
         action: "github_connection.credential_issued",
         entityType: "project",
         entityId: granted.projectId,
