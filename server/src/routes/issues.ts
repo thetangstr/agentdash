@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { issueExecutionDecisions, issues } from "@paperclipai/db";
 import { assertProjectIdVisible, projectScopedVisibilityCondition } from "./visibility.js";
+import { decodeShippedCursor } from "../services/work-products.js";
 import {
   addIssueCommentSchema,
   acceptIssueThreadInteractionSchema,
@@ -1336,6 +1337,54 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, issue.companyId);
     res.json(await svc.listChildContributions(issue.companyId, issue.id));
+  });
+
+  // AgentDash: UX-2 (#783) — the company-wide Shipped feed. Company-scoped,
+  // and restricted-project visibility applies exactly as on the issue list.
+  router.get("/companies/:companyId/work-products", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const readUuid = (key: string): string | undefined | null => {
+      const raw = req.query[key];
+      if (raw === undefined || raw === "") return undefined;
+      return typeof raw === "string" && UUID_RE.test(raw) ? raw : null;
+    };
+    const projectId = readUuid("projectId");
+    const agentId = readUuid("agentId");
+    const issueId = readUuid("issueId");
+    if (projectId === null || agentId === null || issueId === null) {
+      res.status(400).json({ error: "projectId, agentId and issueId must be UUIDs" });
+      return;
+    }
+    const rawLimit = req.query.limit as string | undefined;
+    const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      res.status(400).json({ error: "limit must be a positive integer" });
+      return;
+    }
+    const rawSince = typeof req.query.since === "string" && req.query.since ? req.query.since : null;
+    const since = rawSince ? new Date(rawSince) : undefined;
+    if (since && Number.isNaN(since.getTime())) {
+      res.status(400).json({ error: "since must be an ISO 8601 timestamp" });
+      return;
+    }
+    const before = typeof req.query.before === "string" && req.query.before ? req.query.before : null;
+    if (before && !decodeShippedCursor(before)) {
+      res.status(400).json({ error: "before is not a valid cursor" });
+      return;
+    }
+    res.json(
+      await workProductsSvc.listForCompany(companyId, {
+        visibleWhere: projectScopedVisibilityCondition(req, companyId, issues.projectId),
+        projectId,
+        agentId,
+        issueId,
+        since,
+        limit,
+        before,
+      }),
+    );
   });
 
   router.get("/issues/:id/work-products", async (req, res) => {

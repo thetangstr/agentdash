@@ -63,6 +63,7 @@ import { useProjectOrder } from "../hooks/useProjectOrder";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { InlineEditor } from "../components/InlineEditor";
+import { IssueResultBlock } from "../components/IssueResultBlock";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
@@ -3343,6 +3344,9 @@ export function IssueDetail() {
           as="h2"
           className="text-xl font-bold"
         />
+
+        {/* AgentDash: UX-2 (#783) — what this issue produced, above the fold. */}
+        <IssueResultBlock companyId={issue.companyId} issueId={issue.id} />
 
         <InlineEditor
           value={issue.description ?? ""}
