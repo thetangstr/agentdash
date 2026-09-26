@@ -1,0 +1,359 @@
+// AgentDash: UX-3 (#784) — an honest Home for the default profile.
+//
+// Three blocks, in this order: Waiting on you, Working now, Shipped this week.
+// Every number is rendered directly from the list it counts — no count-up
+// animation, so a tab that was in the background shows the real numbers the
+// moment it is looked at. The MK profile keeps the Overview dashboard.
+import { useEffect, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { CircleCheck, MessageSquare, PackageCheck, RadioTower, ShieldQuestion } from "lucide-react";
+import type { WaitingOnYou, WorkingNowItem } from "@paperclipai/shared";
+import { Link } from "@/lib/router";
+import { Button } from "@/components/ui/button";
+import { useCompany } from "../context/CompanyContext";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { dashboardApi } from "../api/dashboard";
+import { issuesApi } from "../api/issues";
+import { authApi } from "../api/auth";
+import { queryKeys } from "../lib/queryKeys";
+import { issueUrl } from "../lib/utils";
+import { timeAgo } from "../lib/timeAgo";
+import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
+import { Overview } from "./Overview";
+
+export const HOME_LIST_LIMIT = 6;
+export const WAITING_EMPTY_TEXT = "Nothing needs you right now. Decisions and issues assigned to you show up here.";
+export const WORKING_EMPTY_TEXT = "No agent is working right now.";
+export const SHIPPED_WEEK_EMPTY_TEXT = "Nothing shipped this week yet. Pull requests and results land here, with what they cost.";
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The first word of a person's name; null for the synthetic local operator. */
+export function firstNameFor(user: { id?: string | null; name?: string | null } | null | undefined): string | null {
+  if (!user) return null;
+  if (user.id === "local-board") return null;
+  const first = (user.name ?? "").trim().split(/\s+/)[0] ?? "";
+  if (!first || /^(board|local)$/i.test(first)) return null;
+  return first;
+}
+
+export function greetingFor(date: Date): string {
+  const h = date.getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/** "4m", "1h 12m", "2d" — how long a run has been going. */
+export function formatElapsed(fromIso: string, now: number = Date.now()): string {
+  const minutes = Math.max(0, Math.floor((now - new Date(fromIso).getTime()) / 60_000));
+  if (minutes < 1) return "just started";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/** Waiting on you = approvals waiting plus open issues assigned to you. */
+export function waitingCount(data: WaitingOnYou | undefined): number {
+  if (!data) return 0;
+  return (data.total ?? 0) + (data.tasksAssignedToYouTotal ?? 0);
+}
+
+/** Default profile gets Home; agentdash_mk keeps the Overview dashboard. */
+export function DashboardHome() {
+  const { selectedCompany } = useCompany();
+  if (selectedCompany?.productProfile === "agentdash_mk") return <Overview />;
+  return <Home />;
+}
+
+function Block({
+  title,
+  count,
+  action,
+  testId,
+  children,
+}: {
+  title: string;
+  count: number | null;
+  action?: ReactNode;
+  testId: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid={testId} aria-label={title}>
+      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold">{title}</h2>
+          {count !== null ? (
+            <span
+              data-testid={`${testId}-count`}
+              className="inline-flex min-w-6 items-center justify-center rounded-full bg-muted px-2 py-0.5 text-xs font-semibold tabular-nums"
+            >
+              {count}
+            </span>
+          ) : null}
+        </div>
+        {action}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+function EmptyLine({ icon: Icon, text, action }: { icon: typeof CircleCheck; text: string; action?: ReactNode }) {
+  return (
+    <div className="flex flex-col items-start gap-3 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:items-center">
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="flex-1">{text}</span>
+      {action}
+    </div>
+  );
+}
+
+function MoreLine({ count, to, noun }: { count: number; to: string; noun: string }) {
+  if (count <= 0) return null;
+  return (
+    <Link to={to} className="block px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:underline">
+      and {count} more {noun}
+    </Link>
+  );
+}
+
+function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
+  const decisions = data?.decisions ?? [];
+  const tasks = data?.tasksAssignedToYou ?? [];
+  const shownDecisions = decisions.slice(0, HOME_LIST_LIMIT);
+  const shownTasks = tasks.slice(0, HOME_LIST_LIMIT);
+  const moreDecisions = (data?.total ?? 0) - shownDecisions.length;
+  const moreTasks = (data?.tasksAssignedToYouTotal ?? 0) - shownTasks.length;
+  const count = waitingCount(data);
+  return (
+    <Block title="Waiting on you" count={data ? count : null} testId="home-waiting">
+      {data && count === 0 ? <EmptyLine icon={CircleCheck} text={WAITING_EMPTY_TEXT} /> : null}
+      <ul className="divide-y divide-border">
+        {shownDecisions.map((decision) => (
+          <li key={decision.approvalId} data-testid="home-waiting-row" className="flex items-start gap-3 px-4 py-2.5">
+            <ShieldQuestion className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="min-w-0 flex-1">
+              <Link to={`/approvals/${decision.approvalId}`} className="text-sm font-medium hover:underline">
+                {decision.summary}
+              </Link>
+              <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+                <span>Decision</span>
+                {decision.relatedItem ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>
+                      {decision.relatedItem.identifier ? `${decision.relatedItem.identifier} ` : ""}
+                      {decision.relatedItem.title ?? ""}
+                    </span>
+                  </>
+                ) : null}
+                {decision.waitingSince ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>waiting {timeAgo(decision.waitingSince)}</span>
+                  </>
+                ) : null}
+                {!decision.canDecide ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>someone else decides this</span>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <MoreLine count={moreDecisions} to="/approvals/pending" noun={moreDecisions === 1 ? "decision" : "decisions"} />
+      <ul className={shownDecisions.length > 0 ? "divide-y divide-border border-t border-border" : "divide-y divide-border"}>
+        {shownTasks.map((task) => (
+          <li key={task.issueId} data-testid="home-waiting-row" className="flex items-start gap-3 px-4 py-2.5">
+            <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
+            <div className="min-w-0 flex-1">
+              <Link to={issueUrl({ id: task.issueId, identifier: task.identifier })} className="text-sm font-medium hover:underline">
+                {task.identifier ? <span className="text-muted-foreground">{task.identifier} </span> : null}
+                {task.title}
+              </Link>
+              <div className="text-xs text-muted-foreground">
+                Issue assigned to you · {task.status.replace(/_/g, " ")} · updated {timeAgo(task.updatedAt)}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <MoreLine
+        count={moreTasks}
+        to="/issues?assignee=__me"
+        noun={moreTasks === 1 ? "issue assigned to you" : "issues assigned to you"}
+      />
+    </Block>
+  );
+}
+
+function WorkingRow({ item }: { item: WorkingNowItem }) {
+  return (
+    <li data-testid="home-working-row" className="flex items-start gap-3 px-4 py-2.5">
+      <span className="relative mt-1.5 flex h-2 w-2 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60 motion-reduce:animate-none" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+      </span>
+      <div className="min-w-0 flex-1">
+        {item.issue ? (
+          <Link to={issueUrl(item.issue)} className="text-sm font-medium hover:underline">
+            {item.issue.identifier ? <span className="text-muted-foreground">{item.issue.identifier} </span> : null}
+            {item.issue.title}
+          </Link>
+        ) : (
+          <span className="text-sm font-medium">Working outside an issue</span>
+        )}
+        <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+          <span>{item.agent.name}</span>
+          <span aria-hidden>·</span>
+          <span>{item.status === "queued" ? "queued" : formatElapsed(item.startedAt)}</span>
+          {item.lastStep ? (
+            <>
+              <span aria-hidden>·</span>
+              <span className="truncate">{item.lastStep}</span>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+export function Home() {
+  const { selectedCompany, selectedCompanyId } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Home" }]);
+  }, [setBreadcrumbs]);
+
+  const enabled = !!selectedCompanyId;
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+    retry: false,
+  });
+  const { data: summary } = useQuery({
+    queryKey: queryKeys.dashboard(selectedCompanyId ?? ""),
+    queryFn: () => dashboardApi.summary(selectedCompanyId!),
+    enabled,
+  });
+  const { data: waiting } = useQuery({
+    queryKey: queryKeys.home.waitingOnYou(selectedCompanyId ?? ""),
+    queryFn: () => dashboardApi.waitingOnYou(selectedCompanyId!),
+    enabled,
+    refetchInterval: 30_000,
+  });
+  const { data: working } = useQuery({
+    queryKey: queryKeys.home.workingNow(selectedCompanyId ?? ""),
+    queryFn: () => dashboardApi.workingNow(selectedCompanyId!),
+    enabled,
+    refetchInterval: 15_000,
+  });
+  // "This week" rounded down to the hour, so the query key is stable across renders.
+  const weekAgo = new Date(Math.floor((Date.now() - WEEK_MS) / 3_600_000) * 3_600_000).toISOString();
+  const { data: shipped } = useQuery({
+    queryKey: queryKeys.shipped(selectedCompanyId ?? "", { since: weekAgo }),
+    queryFn: () => issuesApi.listShipped(selectedCompanyId!, { since: weekAgo, limit: HOME_LIST_LIMIT }),
+    enabled,
+    refetchInterval: 60_000,
+  });
+
+  if (!selectedCompanyId) {
+    return <div className="py-16 text-center text-sm text-muted-foreground">Select a workspace to see its home.</div>;
+  }
+
+  const firstName = firstNameFor(session?.user);
+  const agentCount = summary
+    ? summary.agents.active + summary.agents.running + summary.agents.paused + summary.agents.error
+    : null;
+  const openIssues = summary?.tasks.open ?? null;
+  const workingItems = working?.items ?? [];
+  const shippedItems = shipped?.items ?? [];
+
+  return (
+    <div className="mx-auto w-full max-w-[1080px] space-y-6 px-1 py-6 sm:px-4" data-testid="home">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
+          </div>
+          <h1 className="mt-1 text-3xl font-bold tracking-tight" data-testid="home-greeting">
+            {greetingFor(new Date())}
+            {firstName ? `, ${firstName}` : ""}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground" data-testid="home-subline">
+            {selectedCompany?.name ?? "Your workspace"}
+            {agentCount !== null ? ` · ${agentCount} agent${agentCount === 1 ? "" : "s"}` : ""}
+            {openIssues !== null ? ` · ${openIssues} open issue${openIssues === 1 ? "" : "s"}` : ""}
+          </p>
+        </div>
+        <Button asChild variant="outline" size="sm" className="shrink-0">
+          <Link to="/cos" data-testid="home-plan-with-cos">
+            <MessageSquare className="mr-1.5 h-4 w-4" />
+            Plan with your Chief of Staff
+          </Link>
+        </Button>
+      </div>
+
+      <WaitingOnYouBlock data={waiting} />
+
+      <Block
+        title="Working now"
+        count={working ? working.total : null}
+        testId="home-working"
+        action={
+          <Link to="/dashboard/live" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+            All runs
+          </Link>
+        }
+      >
+        {working && working.total === 0 ? (
+          openIssues === 0 ? (
+            <EmptyLine
+              icon={RadioTower}
+              text="Tell your team what to build. One sentence is enough."
+              action={
+                <Button asChild size="sm" variant="outline">
+                  <Link to="/cos">Ask</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyLine icon={RadioTower} text={WORKING_EMPTY_TEXT} />
+          )
+        ) : null}
+        <ul className="divide-y divide-border">
+          {workingItems.map((item) => (
+            <WorkingRow key={item.runId} item={item} />
+          ))}
+        </ul>
+        <MoreLine count={(working?.total ?? 0) - workingItems.length} to="/dashboard/live" noun="running" />
+      </Block>
+
+      <Block
+        title="Shipped this week"
+        count={shipped ? shipped.total : null}
+        testId="home-shipped"
+        action={
+          <Link to="/shipped" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+            All shipped
+          </Link>
+        }
+      >
+        {shipped && shipped.total === 0 ? <EmptyLine icon={PackageCheck} text={SHIPPED_WEEK_EMPTY_TEXT} /> : null}
+        <div className="divide-y divide-border">
+          {shippedItems.map((product) => (
+            <ShippedWorkProductRow key={product.id} product={product} />
+          ))}
+        </div>
+        <MoreLine count={(shipped?.total ?? 0) - shippedItems.length} to="/shipped" noun="shipped" />
+      </Block>
+    </div>
+  );
+}

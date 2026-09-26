@@ -77,3 +77,56 @@ export interface DashboardSummary {
   harness: DashboardHarnessHealth;
   taskQuality: DashboardTaskOutcomeQuality;
 }
+
+// AgentDash: UX-3 (#784) — Home's "Working now": one row per issue an agent
+// is running on right now (queued or running heartbeat run), newest first.
+// Runs that carry no issue are listed with `issue: null` so the count is the
+// honest number of live runs, never a hash-only card.
+export interface WorkingNowItem {
+  runId: string;
+  status: string;
+  agent: { id: string; name: string };
+  issue: { id: string; identifier: string | null; title: string; status: string } | null;
+  /** The latest thing the run said it was doing, clipped; null if nothing yet. */
+  lastStep: string | null;
+  /** When the run started (or was queued). Elapsed is computed on the client. */
+  startedAt: string;
+}
+
+export interface WorkingNow {
+  items: WorkingNowItem[];
+  total: number;
+}
+
+// AgentDash: UX-3 (#784) — "Waiting on you", the payload of
+// GET /companies/:companyId/assistant/pending-decisions. The web Home and the
+// assistant's list_pending_decisions both read this one route, so they agree.
+export interface WaitingOnYouDecision {
+  approvalId: string;
+  kind: string;
+  revision?: number;
+  askedBy: string | null;
+  summary: string;
+  relatedItem: { id: string; identifier: string | null; title: string | null } | null;
+  waitingSince: string | null;
+  canDecide: boolean;
+  risk: { level: string; reason?: string } | null;
+}
+
+export interface WaitingOnYouTask {
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  status: string;
+  updatedAt: string;
+}
+
+export interface WaitingOnYou {
+  decisions: WaitingOnYouDecision[];
+  /** Every waiting approval, not only those in `decisions`. */
+  total: number;
+  shown: number;
+  tasksAssignedToYou: WaitingOnYouTask[];
+  /** Every open issue assigned to the person, not only those listed. */
+  tasksAssignedToYouTotal: number;
+}

@@ -1,12 +1,22 @@
-import { and, eq, gte, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvals, companies, costEvents, heartbeatRuns, issues, verdicts } from "@paperclipai/db";
+import {
+  agents,
+  approvals,
+  companies,
+  costEvents,
+  heartbeatRunEvents,
+  heartbeatRuns,
+  issues,
+  verdicts,
+} from "@paperclipai/db";
 import { notFound } from "../errors.js";
 import { budgetService } from "./budgets.js";
 import type {
   DashboardHarnessAdapterHealth,
   DashboardHarnessHealth,
   DashboardHarnessStatus,
+  WorkingNow,
 } from "@paperclipai/shared";
 import { definitionOfDoneSchema } from "@paperclipai/shared";
 
@@ -65,9 +75,123 @@ function topCategory(categories: Map<string, number>) {
   return entries[0]?.[0] ?? null;
 }
 
+/** Home shows six rows per block; the total says how many more. */
+const WORKING_NOW_LIMIT = 6;
+const LAST_STEP_MAX = 160;
+
+function clipStep(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (!oneLine) return null;
+  return oneLine.length > LAST_STEP_MAX ? `${oneLine.slice(0, LAST_STEP_MAX - 1)}…` : oneLine;
+}
+
 export function dashboardService(db: Db) {
   const budgets = budgetService(db);
   return {
+    /**
+     * AgentDash: UX-3 (#784) — Home's "Working now". Every queued or running
+     * heartbeat run, with the issue it is on (title, not a run hash), the
+     * agent, its last step and when it started. One row per issue: two runs
+     * on one issue show once, as the newest. `visibleWhere` is the caller's
+     * restricted-project visibility over issues.project_id; a run on an
+     * issue the caller cannot see is dropped, not shown untitled.
+     */
+    workingNow: async (companyId: string, opts: { visibleWhere?: SQL } = {}): Promise<WorkingNow> => {
+      const runIssueId = sql<string | null>`coalesce(${heartbeatRuns.contextSnapshot} ->> 'issueId', ${heartbeatRuns.contextSnapshot} ->> 'taskId')`;
+      // Hidden issues join as absent, like deleted ones.
+      const issueJoin = and(
+        eq(issues.companyId, companyId),
+        isNull(issues.hiddenAt),
+        sql`${issues.id}::text = ${runIssueId}`,
+      );
+      const liveWhere = and(
+        eq(heartbeatRuns.companyId, companyId),
+        inArray(heartbeatRuns.status, ["queued", "running"]),
+        // A run whose context names an issue we could not join (deleted,
+        // hidden, another company's, or in a project this caller cannot see)
+        // is dropped rather than shown bare.
+        sql`(${issues.id} is not null or ${runIssueId} is null)`,
+        ...(opts.visibleWhere ? [sql`(${issues.id} is null or ${opts.visibleWhere})`] : []),
+      );
+      // One row per issue (runs outside an issue count on their own).
+      const groupKey = sql<string>`coalesce(${issues.id}::text, ${heartbeatRuns.id}::text)`;
+
+      // Newest run per issue, in SQL, then the newest WORKING_NOW_LIMIT of those.
+      const perIssue = db
+        .selectDistinctOn([groupKey], {
+          groupKey: groupKey.as("wn_group_key"),
+          runId: sql<string>`${heartbeatRuns.id}`.as("wn_run_id"),
+          status: sql<string>`${heartbeatRuns.status}`.as("wn_status"),
+          startedAt: sql<Date | null>`${heartbeatRuns.startedAt}`.as("wn_started_at"),
+          createdAt: sql<Date>`${heartbeatRuns.createdAt}`.as("wn_created_at"),
+          nextAction: sql<string | null>`${heartbeatRuns.nextAction}`.as("wn_next_action"),
+          livenessReason: sql<string | null>`${heartbeatRuns.livenessReason}`.as("wn_liveness_reason"),
+          agentId: sql<string>`${agents.id}`.as("wn_agent_id"),
+          agentName: sql<string>`${agents.name}`.as("wn_agent_name"),
+          issueId: sql<string | null>`${issues.id}`.as("wn_issue_id"),
+          issueIdentifier: sql<string | null>`${issues.identifier}`.as("wn_issue_identifier"),
+          issueTitle: sql<string | null>`${issues.title}`.as("wn_issue_title"),
+          issueStatus: sql<string | null>`${issues.status}`.as("wn_issue_status"),
+        })
+        .from(heartbeatRuns)
+        .innerJoin(agents, eq(agents.id, heartbeatRuns.agentId))
+        .leftJoin(issues, issueJoin)
+        .where(liveWhere)
+        .orderBy(groupKey, desc(heartbeatRuns.createdAt))
+        .as("working_now");
+      const page = await db
+        .select()
+        .from(perIssue)
+        .orderBy(desc(perIssue.createdAt))
+        .limit(WORKING_NOW_LIMIT);
+      const total = await db
+        .select({ count: sql<number>`count(distinct ${groupKey})::int` })
+        .from(heartbeatRuns)
+        .innerJoin(agents, eq(agents.id, heartbeatRuns.agentId))
+        .leftJoin(issues, issueJoin)
+        .where(liveWhere)
+        .then((r) => Number(r[0]?.count ?? 0));
+
+      const runIds = page.map((row) => row.runId);
+      const latestEvents = runIds.length
+        ? await db
+            .selectDistinctOn([heartbeatRunEvents.runId], {
+              runId: heartbeatRunEvents.runId,
+              message: heartbeatRunEvents.message,
+            })
+            .from(heartbeatRunEvents)
+            .where(
+              and(
+                eq(heartbeatRunEvents.companyId, companyId),
+                inArray(heartbeatRunEvents.runId, runIds),
+                isNotNull(heartbeatRunEvents.message),
+              ),
+            )
+            .orderBy(heartbeatRunEvents.runId, desc(heartbeatRunEvents.seq))
+        : [];
+      const eventByRun = new Map(latestEvents.map((e) => [e.runId, e.message]));
+
+      return {
+        total,
+        items: page.map((row) => ({
+          runId: row.runId,
+          status: row.status,
+          agent: { id: row.agentId, name: row.agentName },
+          issue: row.issueId
+            ? {
+                id: row.issueId,
+                identifier: row.issueIdentifier ?? null,
+                title: row.issueTitle ?? "",
+                status: row.issueStatus ?? "",
+              }
+            : null,
+          lastStep: clipStep(row.nextAction) ?? clipStep(eventByRun.get(row.runId)) ?? clipStep(row.livenessReason),
+          startedAt: new Date(row.startedAt ?? row.createdAt).toISOString(),
+        })),
+      };
+    },
+
     summary: async (companyId: string) => {
       const company = await db
         .select()

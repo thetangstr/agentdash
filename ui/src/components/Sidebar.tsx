@@ -97,7 +97,13 @@ export function Sidebar() {
             <SquarePen className="h-4 w-4 shrink-0" />
             <span className="truncate">New Issue</span>
           </button>
-          <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
+          {/* AgentDash: UX-3 (#784) — the dashboard is Home on the default profile. */}
+          <SidebarNavItem
+            to="/dashboard"
+            label={showMyAgentLink ? "Dashboard" : "Home"}
+            icon={LayoutDashboard}
+            liveCount={liveRunCount}
+          />
           {showMyAgentLink ? (
             <SidebarNavItem to="/my-agent" label="My Agent" icon={Bot} />
           ) : null}

@@ -9,15 +9,17 @@ import { useCompany } from "../context/CompanyContext";
 const DASHBOARD_LIVE_RUN_LIMIT = 50;
 
 export function DashboardLive() {
-  const { selectedCompanyId, companies } = useCompany();
+  const { selectedCompanyId, selectedCompany, companies } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  // AgentDash: UX-3 (#784) — the live grid now sits behind Home's Working now.
+  const homeLabel = selectedCompany?.productProfile === "agentdash_mk" ? "Dashboard" : "Home";
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: "Dashboard", href: "/dashboard" },
+      { label: homeLabel, href: "/dashboard" },
       { label: "Live runs" },
     ]);
-  }, [setBreadcrumbs]);
+  }, [setBreadcrumbs, homeLabel]);
 
   if (!selectedCompanyId) {
     return (
@@ -37,7 +39,7 @@ export function DashboardLive() {
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Dashboard
+            {homeLabel}
           </Link>
           <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">Live agent runs</h1>
           <p className="mt-1 text-sm text-muted-foreground">

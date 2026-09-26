@@ -353,6 +353,11 @@ export type {
   DashboardHarnessStatus,
   DashboardRunActivityDay,
   DashboardSummary,
+  WaitingOnYou,
+  WaitingOnYouDecision,
+  WaitingOnYouTask,
+  WorkingNow,
+  WorkingNowItem,
   DashboardTaskOutcomeQuality,
 } from "./dashboard.js";
 export type { ActivityEvent } from "./activity.js";

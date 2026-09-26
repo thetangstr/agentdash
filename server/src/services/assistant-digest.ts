@@ -8,7 +8,7 @@ import {
   projects,
 } from "@paperclipai/db";
 import { agentAccountabilityService } from "./agent-accountability.js";
-import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
+import { WAITING_APPROVAL_STATUSES, scopeAndRankOpenApprovals } from "./waiting-on-you-rules.js";
 
 /**
  * AgentDash assistant MCP (M1, GH #676): "what changed since a time" for a
@@ -49,8 +49,6 @@ import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
 /** How many of each section the digest will list. Counts are never capped. */
 const DIGEST_LIMITS = { shipped: 10, blocked: 10, decisions: 10 } as const;
 
-/** Statuses where a human decision is still possible — mirrors steward-inbox. */
-const DECIDABLE_STATUSES = ["pending", "revision_requested"] as const;
 
 export interface AssistantDigestInput {
   companyId: string;
@@ -206,19 +204,12 @@ export function assistantDigestService(db: Db) {
             inArray(approvals.requestedByAgentId, agentIds),
             isNull(approvals.requestedByAgentId),
           ),
-          inArray(approvals.status, [...DECIDABLE_STATUSES]),
+          inArray(approvals.status, [...WAITING_APPROVAL_STATUSES]),
         ),
       );
-    const ranked = openApprovals
-      .map((approval) => ({
-        approval,
-        risk: summarizeApprovalRisk(approval.type, approval.payload),
-      }))
-      .sort((a, b) => {
-        const byRisk = APPROVAL_RISK_ORDER[a.risk.level] - APPROVAL_RISK_ORDER[b.risk.level];
-        if (byRisk !== 0) return byRisk;
-        return a.approval.createdAt.getTime() - b.approval.createdAt.getTime();
-      });
+    // AgentDash: UX-3 (#784) — scope and rank exactly as the pending-decisions
+    // list (and so the web Home) does; one definition of "waiting on you".
+    const ranked = scopeAndRankOpenApprovals(openApprovals, new Set(agentIds));
 
     // Work products ride along on shipped items — "what shipped" is the PR,
     // not the issue row. Projection only: type/provider/url/status/review
