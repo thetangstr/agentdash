@@ -252,9 +252,10 @@ describe("assistant toolset surface", () => {
     expect(setup).toContain("agentdash_setup_status");
     expect(setup).toContain("agentdash_pause_agent");
     expect(setup).toHaveLength(17);
-    // M1's nine reads plus M3's five work tools (GH #678) — no grant scopes
-    // supplied means the stdio/operator context and the full surface.
-    expect(assistant).toHaveLength(14);
+    // M1's nine reads plus M3's five work tools (GH #678) plus M4's three
+    // gated tools (GH #679) — no grant scopes supplied means the
+    // stdio/operator context and the full surface.
+    expect(assistant).toHaveLength(17);
     expect(assistant).not.toContain("agentdash_setup_status");
     // The agent surface is the union it always was.
     expect(agent).toEqual(expect.arrayContaining(setup));
@@ -275,6 +276,21 @@ describe("assistant toolset surface", () => {
       "assistant",
     );
     expect(workScoped.map((t) => t.name)).toHaveLength(14);
+    // GH #679: the gated tools are a third class — hidden unless the grant
+    // carries the opt-in decide scope.
+    for (const name of ["prepare_decision", "request_hire", "confirm_action"]) {
+      expect(workScoped.map((t) => t.name)).not.toContain(name);
+    }
+    const decideScoped = buildToolSurface(
+      client,
+      { ...CONFIG, assistantScopes: ["agentdash:read", "agentdash:decide"] },
+      "assistant",
+    );
+    const decideNames = decideScoped.map((t) => t.name);
+    expect(decideNames).toHaveLength(12);
+    expect(decideNames).toEqual(
+      expect.arrayContaining(["prepare_decision", "request_hire", "confirm_action"]),
+    );
   });
 
   it("AGENTDASH_TOOLSET parses, defaults to agent, and rejects nonsense", () => {

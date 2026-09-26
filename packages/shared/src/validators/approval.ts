@@ -13,13 +13,16 @@ export type CreateApproval = z.infer<typeof createApprovalSchema>;
 
 // `bridge_inbox` is a decision taken from a steward inbox on the person's own
 // machine. It is its own channel rather than "web" because the audit record
-// should not claim a laptop decision came from the board.
+// should not claim a laptop decision came from the board. `assistant` is the
+// same distinction for the assistant MCP surface (GH #679): a decision taken
+// through a person's assistant records itself as one, never as "web".
 export const APPROVAL_DECISION_CHANNELS = [
   "web",
   "telegram",
   "teams",
   "whatsapp",
   "bridge_inbox",
+  "assistant",
 ] as const;
 export type ApprovalDecisionChannel = (typeof APPROVAL_DECISION_CHANNELS)[number];
 

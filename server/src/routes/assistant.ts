@@ -1,11 +1,21 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
+import {
+  assistantConfirmActionSchema,
+  assistantPrepareDecisionSchema,
+  assistantPrepareHireSchema,
+  updateAssistantGrantSchema,
+} from "@paperclipai/shared";
 import { assistantDigestService } from "../services/assistant-digest.js";
 import { assistantOAuthService } from "../services/assistant-oauth.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalService, issueApprovalService } from "../services/index.js";
+import { assistantGatedActionsService } from "../services/assistant-gated-actions.js";
 import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "../services/approval-risk.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { validate } from "../middleware/validate.js";
+import { forbidden } from "../errors.js";
+import { actorHumanRole, assertBoard, assertCompanyAccess } from "./authz.js";
+import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 /**
  * AgentDash assistant MCP (M1, GH #676): the HTTP surface the assistant
@@ -46,12 +56,19 @@ const APPROVAL_KIND_PHRASES: Record<string, string> = {
   budget_override: "change a budget",
 };
 
-export function assistantRoutes(db: Db) {
+export function assistantRoutes(
+  db: Db,
+  options: { pluginWorkerManager?: PluginWorkerManager; autoDispatchQueuedRuns?: boolean } = {},
+) {
   const router = Router();
   const digest = assistantDigestService(db);
   const authority = approvalAuthorityService(db);
   const approvals = approvalService(db);
   const issueApprovals = issueApprovalService(db);
+  // Lazy: the gated service pulls in the decision-effects chain (heartbeat
+  // etc.), which tests that only exercise the read surface don't mock.
+  let gatedSvc: ReturnType<typeof assistantGatedActionsService> | null = null;
+  const gated = () => (gatedSvc ??= assistantGatedActionsService(db, options));
 
   router.get("/companies/:companyId/assistant/digest", async (req, res) => {
     assertBoard(req);
@@ -175,11 +192,39 @@ export function assistantRoutes(db: Db) {
         clientName: grant.clientName,
         redirectHost: grant.redirectHost,
         scopes: grant.scopes,
+        decisionsNeedTap: grant.decisionsNeedTap,
         createdAt: grant.createdAt?.toISOString?.() ?? null,
         lastUsedAt: grant.lastUsedAt?.toISOString?.() ?? null,
       })),
     });
   });
+
+  /**
+   * GH #679 (spec §7.2): "decisions need a tap". The person flips this on
+   * their own connection; the assistant never touches it — it is the control
+   * that makes `confirm_action` hand back the approval link instead of
+   * executing.
+   */
+  router.patch(
+    "/companies/:companyId/me/assistant-grants/:grantId",
+    validate(updateAssistantGrantSchema),
+    async (req, res) => {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const updated = await oauth.updateGrantPreferences(
+        req.params.grantId as string,
+        req.actor.userId!,
+        companyId,
+        { decisionsNeedTap: req.body.decisionsNeedTap },
+      );
+      if (!updated) {
+        res.status(404).json({ error: "Assistant connection not found" });
+        return;
+      }
+      res.json({ grantId: updated.id, decisionsNeedTap: updated.decisionsNeedTap });
+    },
+  );
 
   router.post("/companies/:companyId/me/assistant-grants/:grantId/revoke", async (req, res) => {
     assertBoard(req);
@@ -196,6 +241,70 @@ export function assistantRoutes(db: Db) {
     }
     res.json({ revoked: true, grantId: revoked.id });
   });
+
+  /**
+   * GH #679 (M4, spec §7): the gated actions — the only writes that exist to
+   * be confirmed, and the only routes a `pcin_` decide-scope credential can
+   * reach. A handle minted at prepare is spent once at confirm, 15 minutes
+   * dead; authority is re-resolved at confirm, never trusted from prepare.
+   *
+   * These routes exist for the assistant connection ONLY. A board actor
+   * calling them directly gets 403 — the board has the direct approval and
+   * hire routes; the two-step flow is the credential boundary, not a UX
+   * choice the caller gets to skip.
+   */
+  function requireAssistantGrantActor(req: Parameters<typeof assertBoard>[0], companyId: string) {
+    assertBoard(req);
+    if (req.actor.source !== "assistant_grant" || !req.actor.assistantGrantId || !req.actor.userId) {
+      throw forbidden("These routes are for assistant connections — use the approval and hire routes directly");
+    }
+    return {
+      userId: req.actor.userId,
+      grantId: req.actor.assistantGrantId,
+      clientName: req.actor.assistantClientName ?? "assistant",
+      // The board hire route keys on `actorHumanRole` — the normalized,
+      // active-membership-aware read of req.actor.memberships — and so do
+      // we: the pcpa_/pcin_ resolution already proved the membership is
+      // active, so this mirrors "any active member may hire" exactly.
+      membershipRole: actorHumanRole(req, companyId),
+    };
+  }
+
+  router.post(
+    "/companies/:companyId/assistant/actions/prepare-decision",
+    validate(assistantPrepareDecisionSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const actor = requireAssistantGrantActor(req, companyId);
+      assertCompanyAccess(req, companyId);
+      const result = await gated().prepareDecision(companyId, actor, req.body);
+      res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/assistant/actions/prepare-hire",
+    validate(assistantPrepareHireSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const actor = requireAssistantGrantActor(req, companyId);
+      assertCompanyAccess(req, companyId);
+      const result = await gated().prepareHire(companyId, actor, req.body);
+      res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/assistant/actions/confirm",
+    validate(assistantConfirmActionSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const actor = requireAssistantGrantActor(req, companyId);
+      assertCompanyAccess(req, companyId);
+      const result = await gated().confirm(companyId, actor, req.body);
+      res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
+    },
+  );
 
   return router;
 }

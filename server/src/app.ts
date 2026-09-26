@@ -457,7 +457,10 @@ export async function createApp(
   api.use(secretRoutes(db));
   api.use(costRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(activityRoutes(db));
-  api.use(assistantRoutes(db));
+  // GH #679 (M4): the assistant gated-action routes execute approvals
+  // through the shared decision-effects service, which needs the worker
+  // manager for its wake-up side effects — same wiring as approvalRoutes.
+  api.use(assistantRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(dashboardRoutes(db));
   api.use("/msp", mspRoutes(db));
   api.use(userProfileRoutes(db));

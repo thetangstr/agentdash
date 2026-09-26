@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 /**
@@ -28,6 +28,13 @@ export const assistantGrants = pgTable(
     /** Host of the redirect URI approved at consent — what the person checked. */
     redirectHost: text("redirect_host").notNull(),
     scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+    /**
+     * GH #679 (spec §7.2): "decisions need a tap". When set, `confirm_action`
+     * executes nothing — it returns the approval deep link and the person
+     * decides on the page. A per-grant choice, off by default, so a person who
+     * wants their assistant relaying but never deciding gets exactly that.
+     */
+    decisionsNeedTap: boolean("decisions_need_tap").notNull().default(false),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     lastWhatsNewAt: timestamp("last_whats_new_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),

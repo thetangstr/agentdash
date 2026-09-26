@@ -9,7 +9,6 @@ import {
   ASSISTANT_ACCESS_TOKEN_PREFIX,
   ASSISTANT_INSUFFICIENT_SCOPE,
   ASSISTANT_LOOPBACK_TOKEN_PREFIX,
-  ASSISTANT_SCOPE_WORK,
   ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR,
   ASSISTANT_WRITE_LIMIT_PER_HOUR,
   ASSISTANT_WRITE_RATE_LIMITED,
@@ -255,8 +254,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           res.status(403).json({ error: "Assistant loopback credentials cannot write to this route" });
           return;
         }
-        if (!resolved.scopes.includes(ASSISTANT_SCOPE_WORK)) {
-          res.status(403).json({ error: ASSISTANT_INSUFFICIENT_SCOPE, required_scope: ASSISTANT_SCOPE_WORK });
+        // Each allowlisted route names its required scope (M4, GH #679): the
+        // five work routes take `agentdash:work`; the three gated-action
+        // routes take the opt-in `agentdash:decide`.
+        if (!resolved.scopes.includes(writeRoute.scope)) {
+          res.status(403).json({ error: ASSISTANT_INSUFFICIENT_SCOPE, required_scope: writeRoute.scope });
           return;
         }
         // GH #745 review: the body is allowlisted too, not just the route.
@@ -274,9 +276,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           });
           return;
         }
-        const allowance = consumeAssistantWriteAllowance(resolved.grantId, {
-          taskCreate: writeRoute.taskCreate === true,
-        });
+        const allowance =
+          writeRoute.consumesWriteAllowance === false
+            ? { allowed: true as const }
+            : consumeAssistantWriteAllowance(resolved.grantId, {
+                taskCreate: writeRoute.taskCreate === true,
+              });
         if (!allowance.allowed) {
           res.set("Retry-After", String(allowance.retryAfterSeconds));
           res.status(429).json({
