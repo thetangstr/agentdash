@@ -165,7 +165,16 @@ function refusalMessage(error: PaperclipApiError): string | null {
       ? body.error
       : null;
   if (error.status === 403 && code === "insufficient_scope") {
-    return "This assistant connection does not have permission to change work — it needs the agentdash:work scope, granted when the person connects.";
+    const required =
+      body && typeof body === "object" && "required_scope" in body && typeof body.required_scope === "string"
+        ? body.required_scope
+        : "agentdash:work";
+    if (required === "agentdash:decide") {
+      // GH #679: decisions are opt-in at consent. The person can grant it by
+      // reconnecting — saying so is the honest answer, not retrying.
+      return "This assistant connection cannot take decisions — that needs the agentdash:decide scope, which the person grants when they connect.";
+    }
+    return `This assistant connection does not have permission to change work — it needs the ${required} scope, granted when the person connects.`;
   }
   if (error.status === 429 && code === "assistant_write_rate_limited") {
     const retry =

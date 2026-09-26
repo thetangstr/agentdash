@@ -165,6 +165,9 @@ export {
   assistantAccessTokens,
   assistantRefreshTokens,
 } from "./assistant_grants.js";
+// AgentDash (GH #679): a gated assistant action, read back to the person and
+// waiting on confirm_action — single-use, grant-bound, 15-minute handle.
+export { assistantActionHandles } from "./assistant_action_handles.js";
 // AgentDash: Company Evaluator (Stage 1 shadow) — append-only ledger, stored projections, ingest cursors
 export { evaluationEvents } from "./evaluation_events.js";
 export { evaluationScorecards } from "./evaluation_scorecards.js";

@@ -480,3 +480,15 @@ export {
   verifyHumanChannelBindingSchema,
   type VerifyHumanChannelBinding,
 } from "./human-channel.js";
+
+// AgentDash assistant MCP (M4, GH #679): the gated-action request bodies.
+export {
+  assistantPrepareDecisionSchema,
+  assistantPrepareHireSchema,
+  assistantConfirmActionSchema,
+  updateAssistantGrantSchema,
+  type AssistantPrepareDecision,
+  type AssistantPrepareHire,
+  type AssistantConfirmAction,
+  type UpdateAssistantGrant,
+} from "./assistant-actions.js";

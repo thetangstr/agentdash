@@ -1223,6 +1223,32 @@ export function assistantOAuthService(db: Db) {
       .orderBy(sql`${assistantGrants.createdAt} desc`);
   }
 
+  /**
+   * GH #679 (spec §7.2): the per-grant "decisions need a tap" preference.
+   * Person-facing only — the assistant never reaches this route; the owner
+   * updates their own connection in their own company.
+   */
+  async function updateGrantPreferences(
+    grantId: string,
+    userId: string,
+    companyId: string,
+    patch: { decisionsNeedTap: boolean },
+  ) {
+    return db
+      .update(assistantGrants)
+      .set({ decisionsNeedTap: patch.decisionsNeedTap, updatedAt: new Date() })
+      .where(
+        and(
+          eq(assistantGrants.id, grantId),
+          eq(assistantGrants.userId, userId),
+          eq(assistantGrants.companyId, companyId),
+          isNull(assistantGrants.revokedAt),
+        ),
+      )
+      .returning()
+      .then((rows) => rows[0] ?? null);
+  }
+
   /** Connections card: revoke — kills the grant and every token under it. */
   async function revokeGrant(grantId: string, userId: string, companyId: string) {
     const grant = await db
@@ -1268,6 +1294,7 @@ export function assistantOAuthService(db: Db) {
     revokeToken,
     resolveAccessToken,
     listGrantsForUser,
+    updateGrantPreferences,
     revokeGrant,
     findClientRow,
   };
