@@ -13,6 +13,10 @@ export const SETTING_DEFAULTS = {
   max_concurrent_jobs: 3,
   target_release: null as string | null,
   rollout_paused: false,
+  // SC-2 (GH #763): when the target release has no GHCR image, build the
+  // release tag's commit on Railway instead. Off by default: boxes are
+  // image-only unless an operator allows the slower fallback.
+  allow_source_fallback: false,
 };
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
@@ -46,6 +50,7 @@ export function parseSettingValue(key: SettingKey, raw: unknown): Settings[Setti
     case "provisioning_enabled":
     case "waitlist_mode":
     case "rollout_paused":
+    case "allow_source_fallback":
       return asBool(raw);
     case "daily_cap":
       return asInt(raw, 0, 1000);

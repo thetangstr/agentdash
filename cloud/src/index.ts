@@ -9,6 +9,7 @@ import { deleteHandler, sweepCleanup } from "./jobs/cleanup.js";
 import { JobRunner } from "./jobs/runner.js";
 import { createLogger } from "./logger.js";
 import { RailwayClient } from "./railway/client.js";
+import { provisionHandler } from "./railway/provisioner.js";
 
 const log = createLogger({ base: { service: "cloud-control" } });
 const SWEEP_MS = 10 * 60_000;
@@ -45,7 +46,18 @@ async function main() {
   let sweep: NodeJS.Timeout | null = null;
   if (config.railwayToken && config.railwayWorkspaceId) {
     const client = new RailwayClient({ token: config.railwayToken, log });
-    runner = new JobRunner({ db, log, alerter, handlers: [deleteHandler({ client, workspaceId: config.railwayWorkspaceId })] });
+    const provision = provisionHandler({
+      client,
+      workspaceId: config.railwayWorkspaceId,
+      dataKeys: config.dataKeys,
+      escrowPublicKey: config.escrowPublicKey,
+      edgeDomain: config.edgeDomain,
+      imageRepo: config.boxImageRepo,
+      sourceRepo: config.boxSourceRepo,
+      edgeLive: config.edgeLive,
+    });
+    if (!config.escrowPublicKey) log.warn("CLOUD_ESCROW_PUBLIC_KEY is not set: every provision job will refuse to start");
+    runner = new JobRunner({ db, log, alerter, handlers: [provision, deleteHandler({ client, workspaceId: config.railwayWorkspaceId })] });
     runner.start();
     const runSweep = () => void sweepCleanup(db, log).catch((err: unknown) => log.error("cleanup sweep failed", { err }));
     sweep = setInterval(runSweep, SWEEP_MS);

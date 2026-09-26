@@ -3,6 +3,7 @@
 // object (or any error that captured it) cannot print a credential.
 import { BlockList, isIP } from "node:net";
 import { type DataKeyring, parseKeyring } from "./crypto.js";
+import { parseEscrowPublicKey } from "./railway/secrets.js";
 import { Secret } from "./secret.js";
 
 export type ClientIpSource = "socket" | "x-real-ip";
@@ -44,6 +45,14 @@ export interface CloudConfig {
   alertEmailTo: string[];
   alertEmailFrom: string | null;
   resendApiKey: Secret | null;
+  /** SC-2 (GH #763): the offline escrow key the master key is sealed to (X25519, base64 or hex). */
+  escrowPublicKey: Uint8Array | null;
+  /** Boxes are served at https://<slug>.<edgeDomain>. */
+  edgeDomain: string;
+  boxImageRepo: string;
+  boxSourceRepo: string;
+  /** The edge router serves the slug hosts (SC-4 and DNS #758); until then health is checked on the Railway host only. */
+  edgeLive: boolean;
 }
 
 export class ConfigError extends Error {}
@@ -168,6 +177,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
   }
   const emailTo = (env.CLOUD_ALERT_EMAIL_TO ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   const resend = env.CLOUD_RESEND_API_KEY?.trim();
+  let escrowPublicKey: Uint8Array | null = null;
+  if (env.CLOUD_ESCROW_PUBLIC_KEY?.trim()) {
+    try {
+      escrowPublicKey = parseEscrowPublicKey(env.CLOUD_ESCROW_PUBLIC_KEY);
+    } catch (err) {
+      throw new ConfigError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  const edgeDomain = (env.CLOUD_EDGE_DOMAIN ?? "agentdash.cloud").trim().toLowerCase();
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(edgeDomain)) throw new ConfigError("CLOUD_EDGE_DOMAIN must be a domain name");
+  const imageRepo = (env.CLOUD_BOX_IMAGE_REPO ?? "ghcr.io/thetangstr/agentdash").trim();
+  if (!/^ghcr\.io\/[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(imageRepo)) throw new ConfigError("CLOUD_BOX_IMAGE_REPO must be ghcr.io/<owner>/<repo>");
+  const sourceRepo = (env.CLOUD_BOX_SOURCE_REPO ?? "thetangstr/agentdash").trim();
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(sourceRepo)) throw new ConfigError("CLOUD_BOX_SOURCE_REPO must be <owner>/<repo>");
   return {
     port,
     databaseUrl: new Secret(required(env, "DATABASE_URL")),
@@ -187,5 +210,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     alertEmailTo: emailTo,
     alertEmailFrom: env.CLOUD_ALERT_EMAIL_FROM?.trim() || null,
     resendApiKey: resend ? new Secret(resend) : null,
+    escrowPublicKey,
+    edgeDomain,
+    boxImageRepo: imageRepo,
+    boxSourceRepo: sourceRepo,
+    edgeLive: (env.CLOUD_EDGE_LIVE ?? "").trim().toLowerCase() === "true",
   };
 }

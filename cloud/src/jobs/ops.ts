@@ -2,11 +2,15 @@
 // the admin CLI through /internal:
 //   retry    resumes the failed job AT ITS FAILED STEP, with fresh attempts
 //            and a fresh time cap;
-//   abandon  gives up on the box and sends it through the guarded delete.
+//   abandon  gives up on a failed box, or an unclaimed box waiting for its
+//            claim, and sends it through the guarded delete;
+//   create   an operator-created box (the launch fallback of spec §9.3 and
+//            the SC-2 live test) through the same enqueue rules as a signup.
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
-import { boxEvents, boxes, jobs } from "../db/schema.js";
-import { enqueueJob } from "./queue.js";
+import { accounts, boxEvents, boxes, jobs } from "../db/schema.js";
+import { SlugRefused, validateNewSlug } from "../railway/slug.js";
+import { enqueueJob, type ProvisionRequestResult, requestProvision } from "./queue.js";
 
 export class BoxOpError extends Error {
   constructor(
@@ -49,7 +53,9 @@ export async function abandonBox(db: CloudDb, slug: string, actor: string): Prom
     const [box] = await tx.select().from(boxes).where(eq(boxes.slug, slug)).for("update");
     if (!box) throw new BoxOpError(`no box ${slug}`, 404);
     if (box.claimedAt) throw new BoxOpError(`box ${slug} was claimed; a claimed box is deleted only through the customer deletion flow`, 409);
-    if (box.state !== "failed") throw new BoxOpError(`box ${slug} is ${box.state}; only a failed box can be abandoned`, 409);
+    if (box.state !== "failed" && box.state !== "awaiting_claim") {
+      throw new BoxOpError(`box ${slug} is ${box.state}; only a failed or unclaimed box can be abandoned`, 409);
+    }
     await tx
       .update(jobs)
       .set({ state: "dead", finishedAt: new Date(), updatedAt: new Date() })
@@ -59,4 +65,39 @@ export async function abandonBox(db: CloudDb, slug: string, actor: string): Prom
     await tx.insert(boxEvents).values({ boxId: box.id, kind: "abandoned", actor, detail: { deleteJobId: id } });
     return { deleteJobId: id };
   });
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** An operator-created box for `email`: account (verified by the operator) plus box, then the usual enqueue rules. */
+export async function createBoxForOperator(
+  db: CloudDb,
+  input: { slug: string; email: string; releaseTag?: string | null },
+  actor: string,
+): Promise<{ boxId: string; provisioning: ProvisionRequestResult }> {
+  try {
+    validateNewSlug(input.slug);
+  } catch (err) {
+    if (err instanceof SlugRefused) throw new BoxOpError(err.message, 400);
+    throw err;
+  }
+  if (!EMAIL_RE.test(input.email)) throw new BoxOpError("email is not an email address", 400);
+  const boxId = await db.transaction(async (tx) => {
+    const [taken] = await tx.select({ id: boxes.id }).from(boxes).where(eq(boxes.slug, input.slug));
+    if (taken) throw new BoxOpError(`slug ${input.slug} is taken`, 409);
+    await tx.insert(accounts).values({ email: input.email }).onConflictDoNothing();
+    const [acct] = await tx.select().from(accounts).where(eq(accounts.email, input.email));
+    if (!acct) throw new Error("account insert failed");
+    if (acct.status === "pending_verification") {
+      await tx.update(accounts).set({ status: "active", emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(accounts.id, acct.id));
+    }
+    const [box] = await tx
+      .insert(boxes)
+      .values({ accountId: acct.id, slug: input.slug, ...(input.releaseTag ? { releaseTag: input.releaseTag } : {}) })
+      .returning({ id: boxes.id });
+    await tx.insert(boxEvents).values({ boxId: box!.id, kind: "box_created", actor, detail: { by: "operator" } });
+    return box!.id;
+  });
+  const provisioning = await requestProvision(db, boxId, { actor, approved: true });
+  return { boxId, provisioning };
 }

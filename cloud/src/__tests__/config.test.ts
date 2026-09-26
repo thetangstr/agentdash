@@ -231,3 +231,16 @@ describe("SC-3 settings (GH #764)", () => {
     expect(() => loadConfig({ ...base, CLOUD_DB_ROLE_MODE: "both" })).toThrow(/CLOUD_DB_ROLE_MODE/);
   });
 });
+
+describe("SC-2 settings (GH #763)", () => {
+  it("parses the escrow key, edge domain and repos, and rejects bad values", () => {
+    const d = loadConfig(base);
+    expect(d).toMatchObject({ escrowPublicKey: null, edgeDomain: "agentdash.cloud", boxImageRepo: "ghcr.io/thetangstr/agentdash", boxSourceRepo: "thetangstr/agentdash", edgeLive: false });
+    const key = Buffer.alloc(32, 7).toString("base64");
+    expect(loadConfig({ ...base, CLOUD_ESCROW_PUBLIC_KEY: key }).escrowPublicKey).toHaveLength(32);
+    expect(() => loadConfig({ ...base, CLOUD_ESCROW_PUBLIC_KEY: "short" })).toThrow(/CLOUD_ESCROW_PUBLIC_KEY/);
+    expect(() => loadConfig({ ...base, CLOUD_BOX_IMAGE_REPO: "docker.io/x/y" })).toThrow(/ghcr/);
+    expect(() => loadConfig({ ...base, CLOUD_EDGE_DOMAIN: "not a domain" })).toThrow(/CLOUD_EDGE_DOMAIN/);
+    expect(loadConfig({ ...base, CLOUD_EDGE_LIVE: "true" }).edgeLive).toBe(true);
+  });
+});
