@@ -65,7 +65,10 @@ export function assistantRoutes(
   const authority = approvalAuthorityService(db);
   const approvals = approvalService(db);
   const issueApprovals = issueApprovalService(db);
-  const gated = assistantGatedActionsService(db, options);
+  // Lazy: the gated service pulls in the decision-effects chain (heartbeat
+  // etc.), which tests that only exercise the read surface don't mock.
+  let gatedSvc: ReturnType<typeof assistantGatedActionsService> | null = null;
+  const gated = () => (gatedSvc ??= assistantGatedActionsService(db, options));
 
   router.get("/companies/:companyId/assistant/digest", async (req, res) => {
     assertBoard(req);
@@ -274,7 +277,7 @@ export function assistantRoutes(
       const companyId = req.params.companyId as string;
       const actor = requireAssistantGrantActor(req, companyId);
       assertCompanyAccess(req, companyId);
-      const result = await gated.prepareDecision(companyId, actor, req.body);
+      const result = await gated().prepareDecision(companyId, actor, req.body);
       res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
     },
   );
@@ -286,7 +289,7 @@ export function assistantRoutes(
       const companyId = req.params.companyId as string;
       const actor = requireAssistantGrantActor(req, companyId);
       assertCompanyAccess(req, companyId);
-      const result = await gated.prepareHire(companyId, actor, req.body);
+      const result = await gated().prepareHire(companyId, actor, req.body);
       res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
     },
   );
@@ -298,7 +301,7 @@ export function assistantRoutes(
       const companyId = req.params.companyId as string;
       const actor = requireAssistantGrantActor(req, companyId);
       assertCompanyAccess(req, companyId);
-      const result = await gated.confirm(companyId, actor, req.body);
+      const result = await gated().confirm(companyId, actor, req.body);
       res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
     },
   );
