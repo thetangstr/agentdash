@@ -142,4 +142,60 @@ describe("redacting logger", () => {
       );
     });
   });
+  // GH #763: the small misses found in the #779 review.
+  describe("#763 misses", () => {
+    const UUID = "7d3e5c1a-9b2f-4e8d-a6c4-0f1e2d3c4b5a";
+
+    it("redacts bearer:<uuid> and bearer=<token> with no space", () => {
+      for (const line of [`bearer:${UUID}`, `Bearer:${UUID}`, `auth header was bearer=${UUID}`, "Bearer=abc123def456ghi"]) {
+        const out = redactString(line);
+        expect(out).not.toContain(UUID);
+        expect(out).not.toContain("abc123def456ghi");
+        expect(out).toContain("[REDACTED]");
+      }
+    });
+
+    it("redacts a UUID more than 24 characters after a token word on the same line", () => {
+      const line = `token rotation for the boxes workspace completed; the new value is ${UUID}`;
+      expect(line.indexOf(UUID) - line.indexOf("token")).toBeGreaterThan(24);
+      expect(redactString(line)).not.toContain(UUID);
+      // A different line is a different context: a box id on the next line stays.
+      const box = "11111111-2222-4333-8444-555555555555";
+      expect(redactString(`token rotated\nbox ${box} ready`)).toContain(box);
+    });
+
+    it("redacts a lowercase agd- claim code", () => {
+      const out = redactString("claim agd-0123456789abcdef0123456789 refused");
+      expect(out).not.toContain("0123456789abcdef");
+      expect(out).toContain("[REDACTED]");
+    });
+
+    it("redacts token=abc123 and similar pairs in free text", () => {
+      const cases = [
+        "retrying with token=abc123",
+        "GET /hook?api_key=zzz999&x=1",
+        'body {"secret": "s3cr3t-value"}',
+        "invite code: KXQ-778",
+        "password=hunter2",
+      ];
+      for (const c of cases) {
+        const out = redactString(c);
+        for (const v of ["abc123", "zzz999", "s3cr3t-value", "KXQ-778", "hunter2"]) expect(out).not.toContain(v);
+        expect(out).toContain("[REDACTED]");
+      }
+      expect(redactString("GET /hook?api_key=zzz999&x=1")).toContain("&x=1");
+      // Ordinary pairs stay readable.
+      expect(redactString("state=provisioning step=deploy attempt=2")).toBe("state=provisioning step=deploy attempt=2");
+    });
+
+    it("hashes %40-encoded email addresses like the plain form", () => {
+      const out = redactString("find link for Founder%40Example.com sent");
+      expect(out).not.toMatch(/founder%40example\.com/i);
+      expect(out).toContain(hashEmail("founder@example.com"));
+    });
+
+    it("keeps the earlier Bearer/Basic output shape", () => {
+      expect(redactString("Authorization: Bearer abc.def")).toBe("Authorization: Bearer [REDACTED]");
+    });
+  });
 });

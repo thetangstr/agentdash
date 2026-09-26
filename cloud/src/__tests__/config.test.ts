@@ -105,7 +105,12 @@ describe("private network and brute-force settings", () => {
     expect(DEFAULT_PRIVATE_NETWORK_CIDRS).toContain("fc00::/7");
     expect(d.privateNetwork?.check("fd12:3456::1", "ipv6")).toBe(true);
     expect(d.privateNetwork?.check("10.1.2.3", "ipv4")).toBe(true);
-    expect(d.privateNetwork?.check("100.64.0.9", "ipv4")).toBe(true);
+    // Measured on Railway (GH #763): siblings on the private network.
+    expect(d.privateNetwork?.check("10.204.184.232", "ipv4")).toBe(true);
+    expect(d.privateNetwork?.check("fd12:bc61:cdb6:1:2000:92:eecc:b8e8", "ipv6")).toBe(true);
+    // Railway's public edge connects from 100.64.0.0/10; it must not count as private.
+    expect(d.privateNetwork?.check("100.64.0.3", "ipv4")).toBe(false);
+    expect(d.privateNetwork?.check("100.64.0.9", "ipv4")).toBe(false);
     expect(d.privateNetwork?.check("203.0.113.7", "ipv4")).toBe(false);
     expect(d.privateNetwork?.check("127.0.0.1", "ipv4")).toBe(false);
     expect(d.adminMaxFailures).toBe(5);

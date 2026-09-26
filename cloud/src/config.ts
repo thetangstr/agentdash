@@ -6,6 +6,13 @@ import { type DataKeyring, parseKeyring } from "./crypto.js";
 import { Secret } from "./secret.js";
 
 export type ClientIpSource = "socket" | "x-real-ip";
+/**
+ * split (default): the service connects as the runtime role, never migrates,
+ * and refuses to start as an owner or superuser or on an unmigrated schema
+ * (GH #763). single: local development only; the service migrates on boot
+ * as whatever role DATABASE_URL names.
+ */
+export type DbRoleMode = "split" | "single";
 
 export interface CloudConfig {
   port: number;
@@ -29,6 +36,7 @@ export interface CloudConfig {
   /** Workspace token for the dedicated boxes workspace. Unused until SC-2; optional here. */
   railwayToken: Secret | null;
   release: string | null;
+  dbRoleMode: DbRoleMode;
 }
 
 export class ConfigError extends Error {}
@@ -69,14 +77,20 @@ export function parseAllowList(
 }
 
 /**
- * Railway's private network and the other non-public ranges a sibling service
- * could connect from. Railway does not publish its private ranges; legacy
- * environments are IPv6 ULA (fd00::/8) and new ones add an internal IPv4
- * address. A request whose SOCKET address is in this list did not come
+ * Railway's private network, as measured in the boxes workspace on
+ * 2026-09-26 (GH #763, spike doc §9): a sibling service connects from its
+ * railnet0 address, IPv4 in 10.128.0.0/9 (e.g. 10.204.184.232) or a
+ * per-environment IPv6 ULA (e.g. fd12:bc61:cdb6:1:…). Railway's PUBLIC edge
+ * connects from 100.64.0.0/10 (e.g. 100.64.0.3), so that range must NOT be
+ * listed: SC-1's "every non-public range" default included it and refused
+ * every operator request that came through the public domain. The default
+ * takes all of 10.0.0.0/8 and fc00::/7 rather than the measured /9 and /48,
+ * so another region or environment cannot fall outside it; neither overlaps
+ * the edge. A request whose SOCKET address is in this list did not come
  * through Railway's public edge, so its X-Real-IP is whatever the sender
  * wrote. Loopback is not listed: it is the local host, not the network.
  */
-export const DEFAULT_PRIVATE_NETWORK_CIDRS = "fc00::/7,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,fe80::/10";
+export const DEFAULT_PRIVATE_NETWORK_CIDRS = "10.0.0.0/8,fc00::/7";
 
 /** Characters a CSPRNG-generated token is written in (hex, base64, base64url). */
 const TOKEN_ALPHABET_RE = /^[A-Za-z0-9+/=_\-.~]+$/;
@@ -124,6 +138,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     if (!privateRaw) throw new ConfigError("CLOUD_PRIVATE_NETWORK_CIDRS must list CIDRs, or be 'none'");
     privateNetwork = parseAllowList(privateRaw, "CLOUD_PRIVATE_NETWORK_CIDRS").list;
   }
+  const roleMode = (env.CLOUD_DB_ROLE_MODE ?? "split").trim() as DbRoleMode;
+  if (roleMode !== "split" && roleMode !== "single") throw new ConfigError("CLOUD_DB_ROLE_MODE must be 'split' or 'single'");
   let dataKeys: DataKeyring;
   try {
     dataKeys = parseKeyring(required(env, "CLOUD_DATA_KEY"), env.CLOUD_DATA_KEYS_PREVIOUS);
@@ -144,5 +160,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     adminLockoutMs: positiveInt(env, "CLOUD_ADMIN_LOCKOUT_SECONDS", 900) * 1000,
     railwayToken: railway ? new Secret(railway) : null,
     release: env.CLOUD_CONTROL_RELEASE?.trim() || env.RAILWAY_GIT_COMMIT_SHA?.trim() || null,
+    dbRoleMode: roleMode,
   };
 }
