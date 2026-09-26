@@ -208,6 +208,28 @@ cloud-control's own private addresses were `10.150.213.57` and `fd12:bc61:cdb6:1
 
 The workspace token lists and creates projects in "AgentDash Boxes" only; `me` answers "Not Authorized". The Railway CLI 4.5 cannot use it (`railway link` needs a user session); CLI 5.x accepts a short-lived **project** token minted by the workspace token (`projectTokenCreate`, deleted after the upload), which is how a source upload reaches a service without a user login.
 
+## 10. SC-2 live run (2026-09-26, GH #763)
+
+One test box, `agentdash-box-sc2test`, was provisioned by the deployed control plane's job runner from nothing to `awaiting_claim`, claimed, and deleted by the guarded delete. v2026.925.0 predates the GHCR images (#732, #774), so the box was built **from the tag's commit** (`9f4d418`) through the source fallback; provisioning and the fallback were switched on only for the run and back off after it.
+
+| Step | Time | Note |
+|---|---|---|
+| reserve, project | 0.6 s, 0.7 s | slug rules, workspace capacity, release, build source; project created with the control-plane tag |
+| postgres | 17.5 s | includes the 15 s wait for Railway to start a deploy by itself (it did not; the step deployed it) |
+| web, variables | 2.2 s, 1.2 s | service, Volume, domain; the full variable set and secrets before the first deploy |
+| snapshots, service_settings | 1.6 s, 1.1 s | daily and weekly schedules accepted on both volumes (Pro) |
+| deploy | 399.9 s | Railway build of the tag's commit plus boot, one deployment only |
+| health, publish | 0.15 s, 6 ms | `authenticated`, `hostedBox: true` on the Railway host |
+| **Active step time** | **7 min 5 s** | from source; an image deploy skips the build |
+| Wall time | 12 min 24 s | includes 5 min lost to the bug below and its backoff |
+| Teardown | about 9 s | `boxes abandon` to project deleted and box `deleted` |
+
+**Found live and fixed in the same PR:** Railway's project listing did not show a volume instance right after `volumeCreate`, so the first attempt moved on without recording the volume ID and the resumed job could not snapshot. The provisioner now waits for the new volume to be listed and the snapshots step re-derives both IDs.
+
+**Claim:** the box's own claim code signed up the claim email (HTTP 200), a wrong code was refused (403), and the new account signed in. Health: `{"status":"ok","deploymentMode":"authenticated","hostedBox":true,"bootstrapStatus":"bootstrap_pending","selfServeBootstrap":true,"publicBaseUrl":"https://sc2test.agentdash.cloud"}`. `AGENTDASH_CLAIM_EMAIL` and `AGENTDASH_EDGE_SECRET` were set but v2026.925.0 does not read them yet (SC-6 #767, SC-5 #766); the slug host does not resolve until the router and DNS exist (SC-4 #765, #758).
+
+**Not measured yet:** a box from a GHCR image (the acceptance target is under 3 minutes); the next stable cut publishes one (#774).
+
 ## Sources
 
 - Railway GraphQL schema, introspected anonymously from `https://backboard.railway.com/graphql/v2` on 2026-09-25
