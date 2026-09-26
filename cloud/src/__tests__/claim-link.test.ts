@@ -69,7 +69,7 @@ describe("close_signup after a claim is seen", () => {
     const p = fake.addProject({ name: "agentdash-box-closeme", description: "x" });
     const env = fake.nextId("env");
     fake.envs.set(p.id, env);
-    const web = { id: fake.nextId("svc"), projectId: p.id, name: "web", source: null, settings: {}, variables: { AGENTDASH_INVITE_CODES: CODE, AGENTDASH_CLAIM_EMAIL: "f@example.com" }, domains: ["web-closeme.up.railway.app"], deployments: [], triggers: [] };
+    const web = { id: fake.nextId("svc"), projectId: p.id, name: "web", source: null, settings: {}, variables: { AGENTDASH_INVITE_CODES: CODE, AGENTDASH_CLAIM_EMAIL: "f@example.com" } as Record<string, string>, domains: ["web-closeme.up.railway.app"], deployments: [], triggers: [] };
     fake.services.set(web.id, web);
     const [acct] = await db.insert(accounts).values({ email: `closeme-${Date.now()}@example.test` }).returning();
     const [box] = await db.insert(boxes).values({ accountId: acct!.id, slug: `closeme${Date.now() % 100000}` }).returning();
