@@ -35,6 +35,8 @@ const nonServerProjects = [
   "@paperclipai/plugin-fake-sandbox",
   "@paperclipai/ui",
   "paperclipai",
+  // AgentDash: the self-serve cloud control plane (GH #762), its own database.
+  "@agentdash/cloud-control",
 ];
 const routeTestPattern = /[^/]*(?:route|routes|authz)[^/]*\.test\.ts$/;
 const additionalSerializedServerTests = new Set([

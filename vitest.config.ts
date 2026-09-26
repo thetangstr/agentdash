@@ -28,6 +28,8 @@ export default defineConfig({
       "server",
       "ui",
       "cli",
+      // AgentDash: the self-serve cloud control plane (GH #762).
+      "cloud",
     ],
   },
 });
