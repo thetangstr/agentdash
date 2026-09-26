@@ -66,6 +66,47 @@ export type JobState = (typeof JOB_STATES)[number];
 export const WAITLIST_STATES = ["waiting", "approved", "rejected"] as const;
 export type WaitlistState = (typeof WAITLIST_STATES)[number];
 
+// ---- Allowed transitions (§3.4), enforced by DB triggers ----------------
+//
+// Migration 0001 installs BEFORE INSERT/UPDATE triggers that refuse any state
+// change not listed here, and any row inserted in a state other than the
+// initial ones. db.test.ts checks the database against these maps pair by
+// pair, so the two cannot drift. A same-state write is always allowed.
+
+export const BOX_INITIAL_STATES: readonly BoxState[] = ["requested", "waitlisted"];
+export const BOX_TRANSITIONS: Record<BoxState, readonly BoxState[]> = {
+  requested: ["waitlisted", "provisioning", "failed", "deleted"],
+  waitlisted: ["provisioning", "deleted"],
+  provisioning: ["awaiting_claim", "failed"],
+  awaiting_claim: ["active", "failed", "cleanup"],
+  active: ["suspended", "pending_delete"],
+  suspended: ["active", "pending_delete"],
+  pending_delete: ["deleted"],
+  failed: ["provisioning", "cleanup"],
+  cleanup: ["deleted", "failed"],
+  deleted: [],
+};
+
+export const JOB_INITIAL_STATES: readonly JobState[] = ["queued"];
+export const JOB_TRANSITIONS: Record<JobState, readonly JobState[]> = {
+  queued: ["running", "dead"],
+  running: ["queued", "succeeded", "failed", "dead"],
+  failed: ["queued", "dead"],
+  succeeded: [],
+  dead: [],
+};
+
+export const ACCOUNT_INITIAL_STATES: readonly AccountStatus[] = ["pending_verification"];
+export const ACCOUNT_TRANSITIONS: Record<AccountStatus, readonly AccountStatus[]> = {
+  pending_verification: ["active", "blocked", "deleted"],
+  active: ["blocked", "deleted"],
+  blocked: ["active", "deleted"],
+  deleted: [],
+};
+
+export const OPERATOR_AUDIT_KINDS = ["setting_changed", "admin_refused"] as const;
+export type OperatorAuditKind = (typeof OPERATOR_AUDIT_KINDS)[number];
+
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
 
@@ -205,7 +246,7 @@ export const jobs = pgTable(
   ],
 );
 
-/** Append-only audit trail. */
+/** Append-only audit trail (UPDATE, DELETE and TRUNCATE refused by trigger, migration 0001). */
 export const boxEvents = pgTable(
   "box_events",
   {
@@ -217,6 +258,27 @@ export const boxEvents = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("box_events_box_idx").on(t.boxId, t.createdAt)],
+);
+
+/**
+ * Append-only audit of the operator surface (GH #778): every setting change
+ * (old and new value) and every refused /internal request. UPDATE, DELETE and
+ * TRUNCATE are refused by trigger (migration 0001).
+ */
+export const operatorAudit = pgTable(
+  "operator_audit",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    kind: text("kind").$type<OperatorAuditKind>().notNull(),
+    actor: text("actor").notNull(),
+    ip: text("ip"),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("operator_audit_kind_idx").on(t.kind, t.createdAt),
+    check("operator_audit_kind_ck", inList("kind", OPERATOR_AUDIT_KINDS)),
+  ],
 );
 
 /** The self-hosted invite validator's codes (§7). Only hashes are stored. */

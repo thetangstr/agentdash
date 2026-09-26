@@ -15,7 +15,28 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   waitlist list [state]      list the waitlist (waiting by default; approved, rejected, all)
   waitlist approve <id>      approve a waiting entry
 
-env: CLOUD_CONTROL_URL (default http://localhost:3200), CLOUD_ADMIN_TOKEN (required)`;
+env: CLOUD_CONTROL_URL (default http://localhost:3200; https required for any non-local host),
+     CLOUD_ADMIN_TOKEN (required)`;
+
+/**
+ * The admin bearer must never cross a network in clear text (GH #778): plain
+ * http is allowed only to this machine (localhost, 127.0.0.0/8, ::1).
+ * Returns an error message, or null when the URL is acceptable.
+ */
+export function checkControlUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `CLOUD_CONTROL_URL is not a valid URL`;
+  }
+  if (url.username || url.password) return "CLOUD_CONTROL_URL must not carry credentials";
+  if (url.protocol === "https:") return null;
+  if (url.protocol !== "http:") return `CLOUD_CONTROL_URL must be https (got ${url.protocol})`;
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const local = host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+  return local ? null : "refusing to send the admin bearer over plain http to a non-local host; use https";
+}
 
 export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: AdminIo): Promise<number> {
   const token = env.CLOUD_ADMIN_TOKEN?.trim();
@@ -24,6 +45,11 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
     return 2;
   }
   const base = (env.CLOUD_CONTROL_URL?.trim() || "http://localhost:3200").replace(/\/+$/, "");
+  const bad = checkControlUrl(base);
+  if (bad) {
+    io.err(`refusing to run: ${bad}`);
+    return 2;
+  }
   const call = async (method: string, path: string, body?: unknown) => {
     const res = await io.fetch(`${base}/internal${path}`, {
       method,

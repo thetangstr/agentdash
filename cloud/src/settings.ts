@@ -2,7 +2,7 @@
 // launch default. Values are validated per key on write.
 import { eq } from "drizzle-orm";
 import type { CloudDb } from "./db/client.js";
-import { settings } from "./db/schema.js";
+import { operatorAudit, settings } from "./db/schema.js";
 
 export const SETTING_DEFAULTS = {
   // Kill switch. Off on a fresh deploy: nothing is provisioned until an
@@ -75,17 +75,36 @@ export function settingsService(db: CloudDb) {
       const [row] = await db.select().from(settings).where(eq(settings.key, key));
       return (row ? row.value : SETTING_DEFAULTS[key]) as Settings[K];
     },
-    async set(key: SettingKey, raw: unknown, actor: string): Promise<Settings[SettingKey]> {
+    /**
+     * Validate and store a setting. The change and its audit row (old and new
+     * value, actor, caller IP) commit together or not at all (GH #778).
+     */
+    async set(
+      key: SettingKey,
+      raw: unknown,
+      actor: string,
+      opts: { ip?: string | null } = {},
+    ): Promise<Settings[SettingKey]> {
       const value = parseSettingValue(key, raw);
-      if (value === null) {
-        // JSON null is stored as "no row": the default for nullable keys is null.
-        await db.delete(settings).where(eq(settings.key, key));
-        return value;
-      }
-      await db
-        .insert(settings)
-        .values({ key, value, updatedBy: actor })
-        .onConflictDoUpdate({ target: settings.key, set: { value, updatedBy: actor, updatedAt: new Date() } });
+      await db.transaction(async (tx) => {
+        const [prev] = await tx.select().from(settings).where(eq(settings.key, key)).for("update");
+        const oldValue = prev ? prev.value : SETTING_DEFAULTS[key];
+        if (value === null) {
+          // JSON null is stored as "no row": the default for nullable keys is null.
+          await tx.delete(settings).where(eq(settings.key, key));
+        } else {
+          await tx
+            .insert(settings)
+            .values({ key, value, updatedBy: actor })
+            .onConflictDoUpdate({ target: settings.key, set: { value, updatedBy: actor, updatedAt: new Date() } });
+        }
+        await tx.insert(operatorAudit).values({
+          kind: "setting_changed",
+          actor,
+          ip: opts.ip ?? null,
+          detail: { setting: key, from: oldValue, to: value },
+        });
+      });
       return value;
     },
   };

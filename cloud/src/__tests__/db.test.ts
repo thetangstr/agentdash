@@ -34,6 +34,7 @@ describe("migrations", () => {
       "email_tokens",
       "invite_codes",
       "jobs",
+      "operator_audit",
       "railway_workspaces",
       "settings",
       "waitlist",
@@ -67,6 +68,7 @@ describe("migrations", () => {
     const [first] = await db.insert(jobs).values({ boxId: box!.id, kind: "provision" }).returning();
     expect(first).toMatchObject({ state: "queued", attempt: 0 });
     await expect(db.insert(jobs).values({ boxId: box!.id, kind: "provision" })).rejects.toThrow();
+    await db.update(jobs).set({ state: "running" }).where(eq(jobs.id, first!.id));
     await db.update(jobs).set({ state: "succeeded" }).where(eq(jobs.id, first!.id));
     await expect(db.insert(jobs).values({ boxId: box!.id, kind: "provision" })).resolves.toBeDefined();
   });

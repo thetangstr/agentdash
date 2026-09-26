@@ -12,6 +12,9 @@ async function main() {
   if (config.adminAllowListSize === 0) {
     log.warn("CLOUD_ADMIN_ALLOWED_IPS is empty: the operator surface refuses every request");
   }
+  if (config.clientIpSource === "x-real-ip" && !config.privateNetwork) {
+    log.warn("CLOUD_PRIVATE_NETWORK_CIDRS=none: X-Real-IP is trusted from any socket, including the private network");
+  }
   await migrateCloudDb(config.databaseUrl.reveal());
   const { db, close } = createCloudDb(config.databaseUrl.reveal());
   const server = createApp({ db, config, log }).listen(config.port, () => {

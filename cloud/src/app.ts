@@ -4,11 +4,18 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { sql } from "drizzle-orm";
 import type { CloudConfig } from "./config.js";
 import type { CloudDb } from "./db/client.js";
-import { requireAdmin } from "./auth.js";
+import { type Refusal, requireAdmin, type RequireAdminOptions } from "./auth.js";
+import { operatorAudit } from "./db/schema.js";
 import type { Logger } from "./logger.js";
 import { internalRoutes } from "./routes/internal.js";
 
-export function createApp(opts: { db: CloudDb; config: CloudConfig; log: Logger }): Express {
+export function createApp(opts: {
+  db: CloudDb;
+  config: CloudConfig;
+  log: Logger;
+  /** Test hooks for the operator guard (limiter, audit cap, clock). */
+  admin?: Omit<RequireAdminOptions, "onRefused">;
+}): Express {
   const { db, config, log } = opts;
   const app = express();
   app.disable("x-powered-by");
@@ -24,7 +31,17 @@ export function createApp(opts: { db: CloudDb; config: CloudConfig; log: Logger 
     }
   });
 
-  app.use("/internal", requireAdmin(config, log), internalRoutes(db, log));
+  // Refused operator requests are audited (append-only table, GH #778). No
+  // credential is ever part of a Refusal.
+  const onRefused = async (r: Refusal) => {
+    await db.insert(operatorAudit).values({
+      kind: "admin_refused",
+      actor: "unauthenticated",
+      ip: r.ip,
+      detail: { reason: r.reason, socketIp: r.socketIp, method: r.method, path: r.path, failures: r.failures ?? null },
+    });
+  };
+  app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log));
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not found" });

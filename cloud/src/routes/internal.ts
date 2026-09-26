@@ -39,7 +39,8 @@ export function internalRoutes(db: CloudDb, log: Logger): ExpressRouter {
       return;
     }
     try {
-      const value = await svc.set(key, req.body.value, "admin-cli");
+      const ip = typeof res.locals.adminIp === "string" ? res.locals.adminIp : null;
+      const value = await svc.set(key, req.body.value, "admin-cli", { ip });
       log.info("setting changed", { setting: key, value });
       res.json({ key, value });
     } catch (err) {
