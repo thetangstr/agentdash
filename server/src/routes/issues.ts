@@ -37,7 +37,7 @@ import {
   ASSISTANT_WORK_ORIGIN_KIND,
 } from "@paperclipai/shared";
 // AgentDash: goals-eval-hitl
-import { definitionOfDoneSchema } from "@paperclipai/shared";
+import { definitionOfDoneSchema, isUuidLike } from "@paperclipai/shared";
 import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import type { StorageService } from "../storage/types.js";
@@ -1048,6 +1048,17 @@ export function issueRoutes(
     }
     if (reviewerAgentFilterRaw === "me" && (!reviewerAgentId || req.actor.type !== "agent")) {
       res.status(403).json({ error: "reviewerAgentId=me requires agent authentication" });
+      return;
+    }
+    // AgentDash: GH #701 — a literal reviewerAgentId that isn't a UUID used to
+    // reach the SQL filter as a raw string and surface as a 500 (invalid uuid
+    // cast). Reject non-UUID literals (except the "me" alias) with 400.
+    if (
+      reviewerAgentId !== undefined &&
+      reviewerAgentFilterRaw !== "me" &&
+      !isUuidLike(reviewerAgentId)
+    ) {
+      res.status(400).json({ error: "reviewerAgentId must be a UUID" });
       return;
     }
     if (rawLimit !== undefined && (parsedLimit === null || !Number.isInteger(parsedLimit) || parsedLimit <= 0)) {

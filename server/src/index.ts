@@ -1126,6 +1126,9 @@ export async function startServer(): Promise<StartedServer> {
     const floor = 15 * 1000;
     return Number.isFinite(parsed) && parsed >= floor ? parsed : 60 * 1000;
   })();
+  // GH #701: declared at startup scope so the shutdown handler below can
+  // clear the interval (mirrors the runHealerHandle pattern).
+  let reviewCycleHandle: ReturnType<typeof setInterval> | null = null;
   {
     const {
       companyService,
@@ -1140,12 +1143,23 @@ export async function startServer(): Promise<StartedServer> {
       autoHire: cosReviewerAutoHire(db as any),
     });
     logger.info({ intervalMs: reviewCycleIntervalMs }, "cos_review_cycle: schedule enabled");
-    const reviewCycleHandle = setInterval(() => {
+    // GH #701: one company's failed tick is caught per company below, so a
+    // single broken tenant no longer skips the rest of the sweep.
+    reviewCycleHandle = setInterval(() => {
       void reviewCycleCompanies
         .list()
         .then(async (companies) => {
           for (const company of companies) {
-            await reviewCycleOrchestrator.runReviewCycle(company.id);
+            try {
+              await reviewCycleOrchestrator.runReviewCycle(company.id);
+            } catch (err) {
+              // Per-company isolation: log and continue with the next
+              // company instead of aborting the whole sweep.
+              logger.error(
+                { err, companyId: company.id },
+                "cos_review_cycle: per-company tick failed",
+              );
+            }
           }
         })
         .catch((err) => logger.error({ err }, "cos_review_cycle: scheduled tick failed"));
@@ -1504,6 +1518,15 @@ export async function startServer(): Promise<StartedServer> {
           clearInterval(runHealerHandle);
         } catch (err) {
           logger.error({ err }, "failed to clear runHealer interval");
+        }
+      }
+
+      // AgentDash: GH #701 — stop the review-cycle sweep on shutdown.
+      if (reviewCycleHandle) {
+        try {
+          clearInterval(reviewCycleHandle);
+        } catch (err) {
+          logger.error({ err }, "failed to clear reviewCycle interval");
         }
       }
 

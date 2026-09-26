@@ -124,6 +124,11 @@ vi.mock("@paperclipai/db", () => ({
   companies: {},
   companyMemberships: {},
   instanceUserRoles: {},
+  // GH #701: the review-cycle sweep's orchestrator now resolves an
+  // accountable human (companyMemberships) and checks for open verdicts
+  // (verdicts, issues) at module import time; keep the partial mock whole.
+  verdicts: {},
+  issues: {},
 }));
 
 vi.mock("../app.js", () => ({

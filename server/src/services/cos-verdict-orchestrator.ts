@@ -1,10 +1,12 @@
 // AgentDash: goals-eval-hitl
-import { and, asc, eq, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   approvals,
+  companyMemberships,
   issueReviewQueueState,
   issues,
+  verdicts,
 } from "@paperclipai/db";
 import { COS_REVIEW_DEFAULTS } from "@paperclipai/shared";
 import { logActivity } from "./activity-log.js";
@@ -146,21 +148,20 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
    * Phase D / app bootstrap is responsible for invoking this on a timer.
    */
   async function runReviewCycle(companyId: string): Promise<void> {
-    // Hand unassigned items to runnable reviewers first — an item nobody owns
-    // can neither be judged (reviewers only take assigned work) nor escalated
-    // sensibly (escalateToHuman would kick another hire instead of using the
-    // reviewer already here).
+    // Hand unassigned items to runnable reviewers first — a reviewer who can
+    // take the work must see it before the SLA fires. What survives this with
+    // no reviewer is stranded (see escalateToHuman's unassigned branch).
     await assignUnassignedReviewItems(db, companyId);
 
+    // GH #701: no isNotNull(assignedReviewerAgentId) filter — items whose
+    // reviewer was unassigned (terminate/remove) or never assigned (hire
+    // rejected, tier cap) enter the cycle like any other row. Escalation for
+    // reviewerless items is handled below; escalateToHuman no longer bails
+    // on a null reviewer.
     const queueRows = await db
       .select()
       .from(issueReviewQueueState)
-      .where(
-        and(
-          eq(issueReviewQueueState.companyId, companyId),
-          isNotNull(issueReviewQueueState.assignedReviewerAgentId),
-        ),
-      )
+      .where(eq(issueReviewQueueState.companyId, companyId))
       .orderBy(asc(issueReviewQueueState.enqueuedAt));
 
     const now = new Date();
@@ -203,6 +204,51 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
       );
   }
 
+  /**
+   * The company human an unreviewable item escalates to: the oldest active
+   * owner/admin membership, so a named, decision-capable person always owns
+   * the escalation instead of an anonymous row.
+   */
+  async function accountableHumanFor(companyId: string): Promise<string | null> {
+    const rows = await db
+      .select({ principalId: companyMemberships.principalId })
+      .from(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.companyId, companyId),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.status, "active"),
+          inArray(companyMemberships.membershipRole, ["owner", "admin"]),
+        ),
+      )
+      .orderBy(asc(companyMemberships.createdAt))
+      .limit(1);
+    return rows[0]?.principalId ?? null;
+  }
+
+  /**
+   * True when an open (non-closing) verdict already exists for the issue —
+   * i.e. the review loop is already recorded as in a human's hands or a
+   * reviewer's. The closing-verdict idempotency check above only sees
+   * passed/failed; without this, every 60s sweep past the SLA would file a
+   * duplicate escalated_to_human verdict + approval for the same item.
+   */
+  async function hasOpenVerdict(companyId: string, issueId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: verdicts.id })
+      .from(verdicts)
+      .where(
+        and(
+          eq(verdicts.companyId, companyId),
+          eq(verdicts.entityType, "issue"),
+          eq(verdicts.issueId, issueId),
+        ),
+      )
+      .orderBy(desc(verdicts.createdAt))
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async function escalateToHuman(
     companyId: string,
     issueId: string,
@@ -215,13 +261,63 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
       return;
     }
 
-    // 2. Write the escalation verdict. The reviewer agent (if any) is the
-    //    actor; otherwise we fall back to the orchestrator's system actor by
-    //    routing the activity log via verdictsService — but the verdict row
-    //    itself requires a reviewerAgentId or reviewerUserId. If we have no
-    //    reviewer agent yet, kick auto-hire with neutrality_conflict reason
-    //    and bail this cycle.
+    // 1b. GH #701: an open verdict (escalated_to_human / revision_requested /
+    //     pending) also means the loop is already recorded — bail so the 60s
+    //     sweep cannot pile duplicate escalation verdicts onto one item.
+    if (await hasOpenVerdict(companyId, issueId)) {
+      return;
+    }
+
+    // 2. A reviewerless item can no longer stall silently: escalate directly
+    //    to the company's accountable human with the orchestrator as actor
+    //    (there is no reviewer to attribute), re-triggering auto-hire so the
+    //    reviewer pool grows. reviewerUserId is text, so any membership
+    //    principal id is acceptable; with no human member at all the item
+    //    still escalates (verdict + approval) and the auto-hire re-check runs.
     if (!reviewerAgentId) {
+      const accountableUserId = await accountableHumanFor(companyId);
+      const verdict = await deps.verdicts.create({
+        companyId,
+        entityType: "issue",
+        issueId,
+        reviewerUserId: accountableUserId ?? "unassigned",
+        outcome: "escalated_to_human",
+        justification: "SLA expired with no reviewer assigned",
+      });
+      const insertedApproval = await db
+        .insert(approvals)
+        .values({
+          companyId,
+          type: "verdict_escalation",
+          status: "pending",
+          payload: {
+            type: "verdict_escalation",
+            verdictId: verdict.id,
+            issueId,
+            justification: "SLA expired with no reviewer assigned",
+          } as Record<string, unknown>,
+        })
+        .returning();
+      const approval = insertedApproval[0]!;
+      await issueApprovalsSvc.link(issueId, approval.id, {
+        userId: accountableUserId,
+      });
+      await logActivity(db, {
+        companyId,
+        actorType: "system",
+        actorId: "cos_verdict_orchestrator",
+        action: "verdict_escalated",
+        entityType: "issue",
+        entityId: issueId,
+        details: {
+          verdictId: verdict.id,
+          approvalId: approval.id,
+          reason: "sla_expired_unassigned",
+          escalatedToUserId: accountableUserId,
+        },
+      });
+      // Auto-hire re-evaluation (GH #701): the queue has work nobody can
+      // review — grow the reviewer pool if the cap allows.
       await deps.autoHire.evaluateAndHireIfNeeded(companyId, "neutrality_conflict");
       return;
     }
