@@ -6,7 +6,7 @@ import { Router, type Router as ExpressRouter } from "express";
 import { and, desc, eq } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
 import { boxEvents, boxes, JOB_STATES, jobs, waitlist, type JobState } from "../db/schema.js";
-import { abandonBox, BoxOpError, retryBox } from "../jobs/ops.js";
+import { abandonBox, BoxOpError, createBoxForOperator, retryBox } from "../jobs/ops.js";
 import { requestProvision } from "../jobs/queue.js";
 import type { Logger } from "../logger.js";
 import { isSettingKey, SettingValidationError, settingsService } from "../settings.js";
@@ -169,6 +169,29 @@ export function internalRoutes(db: CloudDb, log: Logger): ExpressRouter {
         throw err;
       }
     };
+  // AgentDash (GH #763): an operator-created box, provisioned under the same kill switch and daily cap.
+  router.post("/boxes", async (req, res) => {
+    const { slug, email, releaseTag } = (req.body ?? {}) as { slug?: unknown; email?: unknown; releaseTag?: unknown };
+    if (typeof slug !== "string" || typeof email !== "string" || (releaseTag !== undefined && releaseTag !== null && typeof releaseTag !== "string")) {
+      res.status(400).json({ error: 'body must be {"slug": "...", "email": "...", "releaseTag"?: "vYYYY.MDD.N"}' });
+      return;
+    }
+    if (typeof releaseTag === "string" && !/^v\d{4}\.\d{3,4}\.\d+$/.test(releaseTag)) {
+      res.status(400).json({ error: "releaseTag must look like v2026.925.0" });
+      return;
+    }
+    try {
+      const r = await createBoxForOperator(db, { slug, email, releaseTag: (releaseTag as string | undefined) ?? null }, "admin-cli");
+      log.info("box created by operator", { slug, outcome: r.provisioning.outcome });
+      res.status(201).json({ slug, ...r });
+    } catch (err) {
+      if (err instanceof BoxOpError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
   router.post("/boxes/:slug/retry", boxOp(retryBox, "retry"));
   router.post("/boxes/:slug/abandon", boxOp(abandonBox, "abandon"));
 

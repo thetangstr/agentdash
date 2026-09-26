@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAdmin } from "../admin/run.js";
 import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
@@ -11,6 +11,10 @@ import { accounts, boxes, jobs, waitlist } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { createLogger } from "../logger.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
+
+// The capabilities module is frozen in production; this suite swaps in a mutable stand-in.
+const caps = vi.hoisted(() => ({ claimTrackingReady: false }));
+vi.mock("../capabilities.js", () => ({ capabilities: caps }));
 
 // A CSPRNG-shaped bearer (config refuses low-entropy values, GH #778).
 const ADMIN = randomBytes(32).toString("hex");
@@ -138,7 +142,12 @@ describe("/internal jobs and failed-box actions (GH #764)", () => {
     expect(abandoned.status).toBe(200);
     expect(abandoned.body.deleteJobId).toBeTruthy();
 
+    // Turning provisioning on is refused until claim tracking is ready (GH #800).
+    const refused = await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: true });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toMatch(/claimTrackingReady/);
     // Approval of a waitlisted box queues it when provisioning is on.
+    caps.claimTrackingReady = true;
     await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: true });
     const [acct2] = await db.insert(accounts).values({ email: "waiting-box@example.test" }).returning();
     const [box2] = await db.insert(boxes).values({ accountId: acct2!.id, slug: "waitingbox", state: "waitlisted" }).returning();
@@ -148,6 +157,22 @@ describe("/internal jobs and failed-box actions (GH #764)", () => {
     const [b2] = await db.select().from(boxes).where(eq(boxes.id, box2!.id));
     expect(b2!.state).toBe("provisioning");
     await request(app).put("/internal/settings/provisioning_enabled").set(auth).send({ value: false });
+    caps.claimTrackingReady = false;
+  });
+});
+
+describe("/internal/boxes create (GH #763)", () => {
+  it("creates an operator box under the kill switch, validates input, and refuses a taken slug", async () => {
+    const app = createApp({ db, config: config(), log });
+    const auth = { authorization: `Bearer ${ADMIN}` };
+    expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "x" })).status).toBe(400);
+    expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "admin", email: "o@example.test" })).status).toBe(400);
+    expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "opbox", email: "o@example.test", releaseTag: "latest" })).status).toBe(400);
+    const created = await request(app).post("/internal/boxes").set(auth).send({ slug: "opbox", email: "o@example.test", releaseTag: "v2026.925.0" });
+    expect(created.status).toBe(201);
+    // Provisioning is off by default: the box waits on the waitlist.
+    expect(created.body.provisioning).toEqual({ outcome: "waitlisted", reason: "kill_switch" });
+    expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "opbox", email: "p@example.test" })).status).toBe(409);
   });
 });
 

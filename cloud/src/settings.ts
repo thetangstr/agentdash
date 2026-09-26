@@ -2,6 +2,7 @@
 // launch default. Values are validated per key on write.
 import { eq, sql } from "drizzle-orm";
 import type { CloudDb } from "./db/client.js";
+import { capabilities } from "./capabilities.js";
 import { operatorAudit, settings } from "./db/schema.js";
 
 export const SETTING_DEFAULTS = {
@@ -13,6 +14,10 @@ export const SETTING_DEFAULTS = {
   max_concurrent_jobs: 3,
   target_release: null as string | null,
   rollout_paused: false,
+  // SC-2 (GH #763): when the target release has no GHCR image, build the
+  // release tag's commit on Railway instead. Off by default: boxes are
+  // image-only unless an operator allows the slower fallback.
+  allow_source_fallback: false,
 };
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
@@ -46,6 +51,7 @@ export function parseSettingValue(key: SettingKey, raw: unknown): Settings[Setti
     case "provisioning_enabled":
     case "waitlist_mode":
     case "rollout_paused":
+    case "allow_source_fallback":
       return asBool(raw);
     case "daily_cap":
       return asInt(raw, 0, 1000);
@@ -86,6 +92,11 @@ export function settingsService(db: CloudDb) {
       opts: { ip?: string | null } = {},
     ): Promise<Settings[SettingKey]> {
       const value = parseSettingValue(key, raw);
+      if (key === "provisioning_enabled" && value === true && !capabilities.claimTrackingReady) {
+        throw new SettingValidationError(
+          "provisioning cannot be turned on yet: boxes do not report their claim state (claimTrackingReady is false until SC-5 #766 and SC-6 #767 land), so unclaimed-box cleanup could not tell a box in use from an abandoned one",
+        );
+      }
       await db.transaction(async (tx) => {
         const [prev] = await tx.select().from(settings).where(eq(settings.key, key)).for("update");
         const oldValue = prev ? prev.value : SETTING_DEFAULTS[key];

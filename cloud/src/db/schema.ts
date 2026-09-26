@@ -182,6 +182,27 @@ export const boxes = pgTable(
     environmentId: text("environment_id"),
     webServiceId: text("web_service_id"),
     pgServiceId: text("pg_service_id"),
+    // AgentDash (SC-2, GH #763): the volumes' IDs, the Postgres image (major
+    // pinned), how the web service was built, and the escrowed master key.
+    webVolumeId: text("web_volume_id"),
+    pgVolumeId: text("pg_volume_id"),
+    pgImage: text("pg_image"),
+    /** "image" (GHCR, by digest) or "source" (the release tag's commit, the fallback). */
+    buildSource: text("build_source"),
+    sourceCommit: text("source_commit"),
+    /**
+     * PAPERCLIP_SECRETS_MASTER_KEY sealed (libsodium sealed box) to the offline
+     * escrow public key, base64. The control plane can write it but never
+     * decrypt it; the plaintext key is never stored here.
+     */
+    masterKeyEscrow: text("master_key_escrow"),
+    /**
+     * The Railway volume IDs volumeCreate returned, recorded the moment they
+     * exist: Railway's project listing shows a new volume late, and a retry
+     * must wait for it rather than create a second one (GH #800 review).
+     */
+    pgVolumeCreatedId: text("pg_volume_created_id"),
+    webVolumeCreatedId: text("web_volume_created_id"),
     upstreamHost: text("upstream_host"),
     publicUrl: text("public_url"),
     releaseTag: text("release_tag"),

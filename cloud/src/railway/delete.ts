@@ -4,7 +4,8 @@
 //   - the project is named agentdash-box-<slug> and is not protected;
 //   - the one project with that name in the boxes workspace has the ID
 //     recorded on the box row (when one is recorded);
-//   - the project lives in the boxes workspace;
+//   - the project lives in the boxes workspace (an unreported workspace is
+//     refused: fail closed, GH #800 review);
 //   - its description carries this box's control-plane tag.
 // Any mismatch throws DeleteRefused and nothing is deleted.
 import type { RailwayClient } from "./client.js";
@@ -88,8 +89,8 @@ export async function guardedDeleteBoxProject(
   }
   if (!project) return "absent";
   if (project.name !== name) throw new DeleteRefused(`project name mismatch: '${project.name}', expected ${name}`);
-  if (project.workspaceId && project.workspaceId !== opts.workspaceId) {
-    throw new DeleteRefused(`project ${project.id} is not in the boxes workspace`);
+  if (project.workspaceId !== opts.workspaceId) {
+    throw new DeleteRefused(`project ${project.id} is not in the boxes workspace (reported ${project.workspaceId ?? "no workspace"})`);
   }
   if (!(project.description ?? "").includes(projectTag(box.id))) {
     throw new DeleteRefused(`project ${project.id} does not carry this box's control-plane tag; it was not created for box ${box.id}`);

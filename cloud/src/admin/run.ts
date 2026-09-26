@@ -12,8 +12,10 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   settings get [key]         show all settings, or one
   settings set <key> <value> change a setting (true/false, integers, a release tag, or null)
   boxes list                 list boxes
+  boxes create <slug> <email> [release]
+                             create a box for <email> and request provisioning (kill switch and cap apply)
   boxes retry <slug>         resume a failed box's provision job at its failed step
-  boxes abandon <slug>       give up on a failed box: guarded delete of its Railway project
+  boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
   jobs list [state]          list jobs (all by default; queued, running, succeeded, failed, dead)
   waitlist list [state]      list the waitlist (waiting by default; approved, rejected, all)
   waitlist approve <id>      approve a waiting entry
@@ -88,6 +90,9 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
     return print(await call("PUT", `/settings/${encodeURIComponent(rest[0]!)}`, { value: rest[1] }));
   }
   if (group === "boxes" && action === "list") return print(await call("GET", "/boxes"));
+  if (group === "boxes" && action === "create" && (rest.length === 2 || rest.length === 3)) {
+    return print(await call("POST", "/boxes", { slug: rest[0], email: rest[1], ...(rest[2] ? { releaseTag: rest[2] } : {}) }));
+  }
   if (group === "boxes" && (action === "retry" || action === "abandon") && rest.length === 1) {
     return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));
   }
