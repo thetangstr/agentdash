@@ -1,4 +1,5 @@
 import type {
+  ShippedFeed,
   AskUserQuestionsAnswer,
   Approval,
   CreateIssueTreeHold,
@@ -236,6 +237,28 @@ export const issuesApi = {
   unlinkApproval: (id: string, approvalId: string) =>
     api.delete<{ ok: true }>(`/issues/${id}/approvals/${approvalId}`),
   listWorkProducts: (id: string) => api.get<IssueWorkProduct[]>(`/issues/${id}/work-products`),
+  // AgentDash: UX-2 (#783) — the company-wide Shipped feed.
+  listShipped: (
+    companyId: string,
+    filters?: {
+      projectId?: string;
+      agentId?: string;
+      issueId?: string;
+      since?: string;
+      limit?: number;
+      before?: string;
+    },
+  ) => {
+    const params = new URLSearchParams();
+    if (filters?.projectId) params.set("projectId", filters.projectId);
+    if (filters?.agentId) params.set("agentId", filters.agentId);
+    if (filters?.issueId) params.set("issueId", filters.issueId);
+    if (filters?.since) params.set("since", filters.since);
+    if (filters?.limit) params.set("limit", String(filters.limit));
+    if (filters?.before) params.set("before", filters.before);
+    const qs = params.toString();
+    return api.get<ShippedFeed>(`/companies/${companyId}/work-products${qs ? `?${qs}` : ""}`);
+  },
   createWorkProduct: (id: string, data: Record<string, unknown>) =>
     api.post<IssueWorkProduct>(`/issues/${id}/work-products`, data),
   updateWorkProduct: (id: string, data: Record<string, unknown>) =>

@@ -21,6 +21,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "u",
   "design-guide",
   "guides",
+  // AgentDash: UX-2 (#783) — the Shipped page.
+  "shipped",
   // Missing here meant the sidebar's own "My Agent" link was broken.
   //
   // A root that is not in this set is assumed to BE a company prefix, so

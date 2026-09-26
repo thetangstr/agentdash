@@ -44,6 +44,13 @@ describe("board route roots stay in step with the router", () => {
     expect(isBoardPathWithoutPrefix("/my-agent")).toBe(true);
   });
 
+  // AgentDash: UX-2 (#783) — the Shipped page is a board route.
+  it("treats /shipped as a board route, not a company code", () => {
+    expect(extractCompanyPrefixFromPath("/shipped")).toBeNull();
+    expect(applyCompanyPrefix("/shipped", "KESA")).toBe("/KESA/shipped");
+    expect(isBoardPathWithoutPrefix("/shipped")).toBe(true);
+  });
+
   /**
    * The guard that matters more than the case above: every path registered
    * under `boardRoutes()` must be recognised as a board root. Reading App.tsx

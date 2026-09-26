@@ -17,6 +17,7 @@ import {
   GitBranch,
   Settings,
   CreditCard,
+  PackageCheck,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -123,6 +124,10 @@ export function Sidebar() {
 
         <SidebarSection label="Work">
           <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+          {/* AgentDash: UX-2 (#783) — default profile only; MK keeps its sidebar. */}
+          {showMyAgentLink ? null : (
+            <SidebarNavItem to="/shipped" label="Shipped" icon={PackageCheck} />
+          )}
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
           {showWorkspacesLink ? (

@@ -28,6 +28,7 @@ import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
 import { Costs } from "./pages/Costs";
 import { Activity } from "./pages/Activity";
+import { Shipped } from "./pages/Shipped";
 import { Inbox } from "./pages/Inbox";
 import { CompanyInbox } from "./pages/CompanyInbox";
 import { CompanySettings } from "./pages/CompanySettings";
@@ -180,6 +181,8 @@ function boardRoutes() {
       <Route path="evaluation/:kind/:id" element={<EvaluationMilestone />} />
       <Route path="evaluation/:kind/:id/:tab" element={<EvaluationMilestone />} />
       <Route path="activity" element={<Activity />} />
+      {/* AgentDash: UX-2 (#783) */}
+      <Route path="shipped" element={<Shipped />} />
       <Route path="my-agent" element={<MyAgent />} />
       <Route path="guides" element={<Guides />} />
       <Route path="guides/:group/:slug" element={<Guide />} />
@@ -393,6 +396,7 @@ export function App() {
           <Route path="goals/*" element={<UnprefixedBoardRedirect />} />
           <Route path="activity" element={<UnprefixedBoardRedirect />} />
           <Route path="activity/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="shipped" element={<UnprefixedBoardRedirect />} />
           {/* Explicit, not a splat. React Router ranks a dynamic+static pair
               (":companyPrefix/settings") above a splat ("company/*"), so the
               wildcard lost and /company/settings was read as a company called

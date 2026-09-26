@@ -219,6 +219,10 @@ export type {
   IssueWorkProductProvider,
   IssueWorkProductStatus,
   IssueWorkProductReviewState,
+  ShippedFeed,
+  ShippedIssueUsage,
+  ShippedMonthTotal,
+  ShippedWorkProduct,
 } from "./work-product.js";
 export type {
   Issue,

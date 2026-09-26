@@ -40,10 +40,14 @@ vi.mock("../context/DialogContext", () => ({
   }),
 }));
 
+const mockCompany = vi.hoisted(() => ({
+  current: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" } as Record<string, unknown>,
+}));
+
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    selectedCompany: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" },
+    selectedCompany: mockCompany.current,
   }),
 }));
 
@@ -152,5 +156,42 @@ describe("Sidebar", () => {
     await act(async () => {
       root.unmount();
     });
+  });
+
+  // AgentDash: UX-2 (#783) — Shipped is a default-profile link; MK keeps its sidebar.
+  async function renderSidebar() {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({});
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Sidebar />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    return root;
+  }
+
+  it("shows the Shipped link on the default profile", async () => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    const root = await renderSidebar();
+    const link = [...container.querySelectorAll("a")].find((anchor) => anchor.textContent === "Shipped");
+    expect(link?.getAttribute("href")).toBe("/shipped");
+    await act(async () => root.unmount());
+  });
+
+  it("does not add the Shipped link on the agentdash_mk profile", async () => {
+    mockCompany.current = {
+      id: "company-1",
+      issuePrefix: "PAP",
+      name: "Paperclip",
+      productProfile: "agentdash_mk",
+    };
+    const root = await renderSidebar();
+    expect([...container.querySelectorAll("a")].some((a) => a.textContent === "Shipped")).toBe(false);
+    await act(async () => root.unmount());
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });
 });
