@@ -66,6 +66,19 @@ export const queryKeys = {
     activeRun: (issueId: string) => ["issues", "active-run", issueId] as const,
     workProducts: (issueId: string) => ["issues", "work-products", issueId] as const,
   },
+  // AgentDash: UX-2 (#783)
+  shipped: (
+    companyId: string,
+    filters?: { projectId?: string; agentId?: string; issueId?: string; since?: string },
+  ) =>
+    [
+      "shipped",
+      companyId,
+      filters?.projectId ?? "",
+      filters?.agentId ?? "",
+      filters?.issueId ?? "",
+      filters?.since ?? "",
+    ] as const,
   routines: {
     list: (companyId: string, filters?: { projectId?: string | null }) =>
       ["routines", companyId, filters?.projectId ?? "__all-projects__"] as const,
