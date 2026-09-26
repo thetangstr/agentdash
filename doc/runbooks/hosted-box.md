@@ -37,20 +37,26 @@ The customer's founder is the box's first instance admin. Our support uses a sep
 
 ## 3. Images
 
-`.github/workflows/docker.yml` pushes `ghcr.io/thetangstr/agentdash` (public) on every push to `main` with tags `latest` and `sha-<7>`, and would push `<version>` and `<major>.<minor>` for a `v*` tag push (for `v2026.924.0` that is `2026.924.0` and `2026.924`, **without** the `v`).
+Every stable release publishes an immutable multi-arch image (linux/amd64 and linux/arm64) from its tagged commit (#732). The `Release` workflow builds it only after `publish_stable` passes the `npm-stable` gate and pushes the tag, then:
 
-**Known gap:** release tags are pushed by `release.yml` with the workflow's own `GITHUB_TOKEN`, and GitHub does not start other workflows from such pushes, so no release tag has ever produced an image (only `latest`, `agentdash-main` and `sha-*` exist). The `main` build for a release commit is also often cancelled by the next merge (`cancel-in-progress`). Until release.yml builds the image itself:
+- tags it `ghcr.io/thetangstr/agentdash:vYYYY.MDD.P` (canonical, what `provision-box.sh` deploys by default) and `:YYYY.MDD.P` (no `v`, for older copies of these instructions);
+- refuses to overwrite a release tag that already exists;
+- appends a **Container image** section with the index digest to the GitHub Release body. Deploy by that digest (`--image ghcr.io/thetangstr/agentdash@sha256:...`) when you need a reference that can never move.
 
-- `provision-box.sh` checks GHCR for the tag before deploying and stops if it is missing.
-- `--from-source` uploads `git archive <tag>` and has Railway build the Dockerfile. This is how the launch box runs `v2026.924.0`. It is slower (about 10 to 15 minutes per build) but pins the exact tagged tree.
+`latest` is not touched by releases: `.github/workflows/docker.yml` owns it (tip of `main`, plus `sha-<7>`).
+
+`provision-box.sh` checks GHCR for the image before deploying and stops if it is missing. Fallbacks:
+
+- `--from-source` uploads `git archive <tag>` and has Railway build the Dockerfile. Use it for tags cut before #732 (everything up to `v2026.925.0`, including the launch box's `v2026.924.0`) or if GHCR is unavailable. It is slower (about 10 to 15 minutes per build) but pins the exact tagged tree.
 - `--image ghcr.io/thetangstr/agentdash:sha-<7>` pins a `main` build by commit when one exists.
 
 ## 4. Provision a box (target: 30 operator-minutes)
 
 ```sh
+# any stable tag cut after #732 (pulls ghcr.io/thetangstr/agentdash:<tag>):
+scripts/hosted/provision-box.sh --slug <slug> --release vYYYY.MDD.P
+# a tag cut before #732, e.g. the launch box's release:
 scripts/hosted/provision-box.sh --slug <slug> --release v2026.924.0 --from-source
-# or, once GHCR has the tag:
-scripts/hosted/provision-box.sh --slug <slug> --release v2026.924.0
 ```
 
 The script is idempotent; re-run it after any failure. In order it:

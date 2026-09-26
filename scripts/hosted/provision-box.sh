@@ -23,9 +23,11 @@
 # Options:
 #   --slug <slug>          box name; project becomes agentdash-box-<slug>
 #   --release <tag>        release tag, e.g. v2026.924.0
-#   --image <ref>          image to run (default ghcr.io/thetangstr/agentdash:<tag without v>)
+#   --image <ref>          image to run (default ghcr.io/thetangstr/agentdash:<release tag>,
+#                          e.g. :v2026.930.0; release.yml publishes one for every
+#                          stable tag cut after #732 merged)
 #   --from-source          build the release tag's Dockerfile on Railway instead of pulling
-#                          an image (use when GHCR has no image for the tag)
+#                          an image (fallback for tags cut before #732, or if GHCR is down)
 #   --custom-domain <host> attach <host> (e.g. acme.agentdash.cloud) and print the DNS
 #                          records to add; the public URL does not change yet
 #   --use-custom-domain    switch the public URL to the attached custom domain; refuses
@@ -76,7 +78,7 @@ while [ $# -gt 0 ]; do
     --no-deploy) DEPLOY=0; shift ;;
     --redeploy) REDEPLOY=1; shift ;;
     --force-redeploy-same-build) FORCE_REDEPLOY_SAME_BUILD=1; shift ;;
-    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,58p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -93,7 +95,9 @@ PROJECT_NAME="${BOX_PROJECT_PREFIX}${SLUG}"
 assert_box_project_name "$PROJECT_NAME"
 STATE_DIR="$(box_state_dir "$SLUG")"
 INVITE_FILE="${STATE_DIR}/founder-invite-code.txt"
-[ -n "$IMAGE" ] || IMAGE="ghcr.io/thetangstr/agentdash:${RELEASE#v}"
+# AgentDash (#732): the release workflow tags the image with the git tag itself
+# (v-prefixed) and also the no-v form; the v form is canonical.
+[ -n "$IMAGE" ] || IMAGE="ghcr.io/thetangstr/agentdash:${RELEASE}"
 
 say "Railway account: $(railway whoami 2>/dev/null | sed -n 's/.*Logged in as \([^ ]*\).*/\1/p')"
 
@@ -105,7 +109,7 @@ if [ "$FROM_SOURCE" = "0" ] && [ "$DEPLOY" = "1" ] && [ "$REDEPLOY" = "0" ]; the
     code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${pull_token}" \
       -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
       "https://ghcr.io/v2/${repo}/manifests/${tag}")"
-    [ "$code" = "200" ] || die "no image at ${IMAGE} (HTTP ${code}). Use --from-source, or build the tag's image first (runbook section 'Images')."
+    [ "$code" = "200" ] || die "no image at ${IMAGE} (HTTP ${code}). Stable tags from #732 on have one; for older tags use --from-source (runbook section 'Images')."
   fi
 fi
 

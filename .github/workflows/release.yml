@@ -277,6 +277,15 @@ jobs:
             --asset "$output_dir/agentdash-release-control-v${version}.json" \
             --dry-run
 
+      # AgentDash (#732): show the image tags a live run would push. Nothing is
+      # built or pushed on a dry run; the Docker workflow already builds the
+      # Dockerfile on every pull request.
+      - name: Preview stable image tags
+        run: |
+          version="${{ steps.release_control_assets.outputs.version }}"
+          echo "A live run pushes these tags (linux/amd64 + linux/arm64) after publish_stable:"
+          node release-control/scripts/release-image.mjs tags "$version"
+
   publish_stable:
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
     needs: verify_stable
@@ -286,6 +295,10 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    # AgentDash (#732): the stable image jobs below read the exact tag from here.
+    outputs:
+      version: ${{ steps.stable_release.outputs.version }}
+      tag: ${{ steps.stable_release.outputs.tag }}
 
     steps:
       - name: Checkout release control
@@ -399,3 +412,216 @@ jobs:
             --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs" \
             --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs.sha256" \
             --asset "$output_dir/agentdash-release-control-v${version}.json"
+
+  # AgentDash (#732): one immutable GHCR image per stable tag.
+  #
+  # Runs only after publish_stable, so only after the npm-stable environment
+  # gate and the tag push. Each platform builds natively (the emulated arm64
+  # build in docker.yml does not finish inside its 30-minute limit) and pushes
+  # by digest only; publish_stable_image_manifest then names the multi-arch
+  # index with the release tags, and record_stable_image_digest writes the
+  # index digest into the GitHub Release body. GITHUB_TOKEN only, and
+  # packages: write only on the two jobs that push to GHCR.
+  publish_stable_image:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    needs: publish_stable
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+          path: source
+
+      - name: Verify stable tag points at the immutable source
+        working-directory: source
+        env:
+          TAG: ${{ needs.publish_stable.outputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]{4}\.[0-9]{3,4}\.[0-9]+$ ]]; then
+            echo "Error: publish_stable did not provide a stable tag (got '$TAG')." >&2
+            exit 1
+          fi
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          tag_source="$(git rev-parse "$TAG^{commit}")"
+          current_source="$(git rev-parse HEAD)"
+          if [ "$tag_source" != "$current_source" ]; then
+            echo "Error: stable tag resolves to $tag_source, expected $current_source." >&2
+            exit 1
+          fi
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: source
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ inputs.source_ref }}
+            org.opencontainers.image.version=${{ needs.publish_stable.outputs.tag }}
+          cache-from: type=gha,scope=stable-image-${{ matrix.arch }}
+          cache-to: type=gha,scope=stable-image-${{ matrix.arch }},mode=max
+
+      - name: Export platform digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: build produced no digest (got '$DIGEST')." >&2
+            exit 1
+          fi
+          mkdir -p "${{ runner.temp }}/digests"
+          touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
+
+      - name: Upload platform digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stable-image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish_stable_image_manifest:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    needs: [publish_stable, publish_stable_image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
+
+    steps:
+      - name: Checkout release control
+        uses: actions/checkout@v4
+        with:
+          path: release-control
+
+      - name: Download platform digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: stable-image-digest-*
+          merge-multiple: true
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Create and verify the multi-arch release manifest
+        id: manifest
+        env:
+          VERSION: ${{ needs.publish_stable.outputs.version }}
+          REPO: ghcr.io/${{ github.repository }}
+        run: |
+          mapfile -t tags < <(node release-control/scripts/release-image.mjs tags "$VERSION" --repo "$REPO")
+          # Release tags are immutable: never repoint one that already exists.
+          for tag in "${tags[@]}"; do
+            if docker buildx imagetools inspect "$tag" >/dev/null 2>&1; then
+              echo "Error: $tag already exists in GHCR; stable image tags are never overwritten." >&2
+              exit 1
+            fi
+          done
+          sources=()
+          for file in "${{ runner.temp }}"/digests/*; do
+            sources+=("${REPO}@sha256:$(basename "$file")")
+          done
+          if [ "${#sources[@]}" -ne 2 ]; then
+            echo "Error: expected 2 platform digests, found ${#sources[@]}." >&2
+            exit 1
+          fi
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(-t "$tag")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: could not read the digest of ${tags[0]} (got '$digest')." >&2
+            exit 1
+          fi
+          for tag in "${tags[@]}"; do
+            tag_digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)"
+            if [ "$tag_digest" != "$digest" ]; then
+              echo "Error: $tag resolves to $tag_digest, expected $digest." >&2
+              exit 1
+            fi
+          done
+          docker buildx imagetools inspect "${REPO}@${digest}"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Stable image"
+            for tag in "${tags[@]}"; do echo "- \`$tag\`"; done
+            echo "- digest \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  record_stable_image_digest:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    needs: [publish_stable, publish_stable_image_manifest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release control
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: release-control
+
+      - name: Checkout immutable source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+          path: source
+
+      - name: Record image digest in the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_REMOTE: origin
+          REPO_ROOT: ${{ github.workspace }}/source
+          VERSION: ${{ needs.publish_stable.outputs.version }}
+          DIGEST: ${{ needs.publish_stable_image_manifest.outputs.digest }}
+          REPO: ghcr.io/${{ github.repository }}
+        run: |
+          export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${VERSION}.md"
+          release-control/scripts/create-github-release.sh "$VERSION" \
+            --image-digest "$DIGEST" \
+            --image-repo "$REPO"

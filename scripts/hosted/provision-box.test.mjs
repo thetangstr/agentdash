@@ -16,7 +16,10 @@
 //   - --redeploy paired with a --release that does not match the box's
 //     recorded AGENTDASH_RELEASE_TAG refuses (an upgrade attempt that would
 //     silently keep the old build), unless --force-redeploy-same-build is
-//     given or the release matches (config-only redeploy, e.g. --close-signup).
+//     given or the release matches (config-only redeploy, e.g. --close-signup);
+//   - the default image is ghcr.io/thetangstr/agentdash:<release tag>, the
+//     v-prefixed tag release.yml publishes (#732), and a missing image stops
+//     the run before any Railway write.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -39,6 +42,16 @@ const args = process.argv.slice(2);
 const dir = process.env.FAKE_DIR;
 fs.appendFileSync(dir + "/argv.log", "curl " + args.join(" ") + "\\n");
 const url = args[args.length - 1];
+// GHCR image preflight (#732): anonymous token, then a manifest HEAD-style probe
+// whose status code is the only output (-o /dev/null -w '%{http_code}').
+if (url.startsWith("https://ghcr.io/")) {
+  fs.appendFileSync(dir + "/ghcr.log", url + "\\n");
+  if (url.startsWith("https://ghcr.io/token")) { process.stdout.write('{"token":"fake-pull"}'); process.exit(0); }
+  const s = JSON.parse(fs.readFileSync(dir + "/scenario.json", "utf8"));
+  const tag = url.slice(url.lastIndexOf("/") + 1);
+  process.stdout.write((s.ghcrTags || []).includes(tag) ? "200" : "404");
+  process.exit(0);
+}
 if (!url.startsWith("http://fake.railway.invalid")) { process.stderr.write("unexpected curl " + url + "\\n"); process.exit(7); }
 if (args.includes("--config")) fs.appendFileSync(dir + "/config.log", fs.readFileSync(0, "utf8"));
 const dataArg = args[args.indexOf("--data-binary") + 1];
@@ -269,5 +282,25 @@ test("box slugs are capped at 16 so every box can be restored", () => {
       assert.doesNotMatch(r.stderr, /slugs are/, slug);
     }
     assert.equal(read(ctx, "requests.log").split("projectCreate").length - 1, 2, "both reached projectCreate");
+  } finally { rmSync(ctx.root, { recursive: true, force: true }); }
+});
+
+test("the default image is the v-prefixed release tag release.yml publishes (#732)", () => {
+  const ctx = setup({ deployed: false, vars: {}, ghcrTags: ["2026.924.0"] });
+  try {
+    const r = run(ctx, ["--slug", "test", "--release", "v2026.924.0"]);
+    assert.notEqual(r.status, 0, "only the no-v tag exists, so the default v tag must be missing");
+    assert.match(r.stderr, /no image at ghcr\.io\/thetangstr\/agentdash:v2026\.924\.0 \(HTTP 404\)/);
+    assert.match(r.stderr, /--from-source/, "the refusal names the fallback");
+    assert.match(read(ctx, "ghcr.log"), /\/v2\/thetangstr\/agentdash\/manifests\/v2026\.924\.0\n/);
+    assert.equal(read(ctx, "requests.log"), "", "no Railway call may happen before the image preflight passes");
+  } finally { rmSync(ctx.root, { recursive: true, force: true }); }
+});
+
+test("--from-source skips the GHCR preflight entirely", () => {
+  const ctx = setup({ deployed: false, vars: {}, ghcrTags: [] });
+  try {
+    run(ctx, ["--slug", "test", "--release", "v2026.924.0", "--from-source", "--no-deploy"]);
+    assert.equal(read(ctx, "ghcr.log"), "", "the source fallback must not depend on GHCR");
   } finally { rmSync(ctx.root, { recursive: true, force: true }); }
 });
