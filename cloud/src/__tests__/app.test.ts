@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import request from "supertest";
@@ -10,7 +11,8 @@ import { waitlist } from "../db/schema.js";
 import { createLogger } from "../logger.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 
-const ADMIN = "test-admin-bearer-".padEnd(48, "x");
+// A CSPRNG-shaped bearer (config refuses low-entropy values, GH #778).
+const ADMIN = randomBytes(32).toString("hex");
 let pg: TestDatabase;
 let db: CloudDb;
 let close: () => Promise<void>;
