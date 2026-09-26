@@ -108,7 +108,8 @@ Also run the cloud preflight against the box's variables from its state director
 2. Run `scripts/hosted/claim-box.sh https://<host> --code-file <file with the code>`. It asks for name, email and a password (hidden, passed to the request through a mode-600 temp file, never argv), and creates the account. The browser sign-up form cannot send a code yet (section 11), so this is a script.
 
 The code is **not single-use**: until the operator closes sign-up (section 7), anyone holding it can create another account on the box (tested).
-3. Open `https://<host>/auth`, sign in, and create the company. The founder is now instance admin and company owner; `/api/health` shows `bootstrapStatus: ready`.
+3. Open `https://<host>/auth`, sign in, and name the workspace at `/company-create`. The founder is now instance admin and company owner; `/api/health` shows `bootstrapStatus: ready`.
+4. The first run at `/setup` follows (GH #786): the model provider key, then "Your repo" (the fine-grained GitHub token, below), then "What should we build first?", whose one sentence becomes the first issue, assigned to an engineer agent (hired if none exists, within the Free agent cap). It ends on Home with the issue under "Working now". Progress is read from the server, so a founder who leaves resumes at the first incomplete step, from `/setup` or the "Finish setting up" card on Home. The Chief of Staff interview and the readiness assessment are optional: "Plan with your Chief of Staff" on Home, and Settings → Advanced. The onboarding wizard is not used on a hosted box.
 
 ## 7. After the claim
 

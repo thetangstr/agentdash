@@ -23,6 +23,7 @@ import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { queryKeys } from "../lib/queryKeys";
 import { ApiError } from "../api/client";
+import { FirstRunHomeCard } from "../components/FirstRunHomeCard";
 
 // AgentDash: "Porcelain" Overview — the agent control-plane home screen.
 // Live data version: fetches real company dashboard, agents, and approvals.
@@ -952,6 +953,11 @@ export function Overview() {
           </div>
         </div>
       </Reveal>
+
+      {/* AgentDash (GH #786): first-run landing card (default profile only) */}
+      {selectedCompany && selectedCompany.productProfile !== "agentdash_mk" ? (
+        <FirstRunHomeCard companyId={selectedCompany.id} issuePrefix={selectedCompany.issuePrefix} />
+      ) : null}
 
       {/* 2. STAT ROW */}
       <div className="grid grid-cols-2 md:grid-cols-4" style={{ gap: 12, marginTop: 28 }}>

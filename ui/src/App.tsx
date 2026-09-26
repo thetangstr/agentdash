@@ -1,4 +1,7 @@
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
+import { useQuery } from "@tanstack/react-query";
+import { healthApi } from "./api/health";
+import { queryKeys } from "./lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
@@ -66,6 +69,7 @@ import { AssessPage } from "./pages/AssessPage";
 import { AssessHistoryPage } from "./pages/AssessHistoryPage";
 import { AuthPage } from "./pages/Auth";
 import { CompanyCreatePage } from "./pages/CompanyCreate";
+import { FirstRunPage } from "./pages/FirstRun";
 import { ForgotPasswordPage } from "./pages/ForgotPassword";
 import { ResetPasswordPage } from "./pages/ResetPassword";
 import { BoardClaimPage } from "./pages/BoardClaim";
@@ -220,11 +224,18 @@ function LegacySettingsRedirect() {
 
 function OnboardingRoutePage() {
   const { companies } = useCompany();
+  // AgentDash (GH #786): the wizard is retired from the hosted path. A hosted
+  // box sends /onboarding to the first run (or to naming the workspace).
+  const { data: health } = useQuery({ queryKey: queryKeys.health, queryFn: () => healthApi.get(), retry: false });
   const { openOnboarding } = useDialogActions();
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const matchedCompany = companyPrefix
     ? companies.find((company) => company.issuePrefix.toUpperCase() === companyPrefix.toUpperCase()) ?? null
     : null;
+
+  if (health?.hostedBox) {
+    return <Navigate to={companies.length > 0 ? "/setup" : "/company-create"} replace />;
+  }
 
   const title = matchedCompany
     ? `Add another agent to ${matchedCompany.name}`
@@ -342,6 +353,8 @@ export function App() {
           <Route path="trial/claim" element={<TrialClaimPage />} />
           {/* AgentDash: CoS onboarding v2 conversation */}
           <Route path="cos" element={<CoSConversation />} />
+          {/* AgentDash (GH #786): hosted first run — model key, GitHub, first issue */}
+          <Route path="setup" element={<FirstRunPage />} />
           {/* AgentDash (GH #677): OAuth consent for assistant MCP clients.
               Inside the gate so CloudAccessGate handles sign-in and returns
               here via ?next= — this is a person-facing approval, not a public

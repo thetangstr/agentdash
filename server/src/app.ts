@@ -93,6 +93,8 @@ import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 // AgentDash (GH #782): GitHub repo connections + agent git credential helper endpoint
 import { githubConnectionRoutes } from "./routes/github-connection.js";
+// AgentDash (GH #786): hosted first run
+import { firstRunRoutes } from "./routes/first-run.js";
 // AgentDash: MCP-native signup — founding-user signup over the MCP journey,
 // no browser form. Unauthenticated but hard-gated (see the route file).
 import {
@@ -443,6 +445,8 @@ export async function createApp(
   api.use(projectRoutes(db));
   // AgentDash (GH #782)
   api.use(githubConnectionRoutes(db));
+  // AgentDash (GH #786)
+  api.use(firstRunRoutes(db));
   api.use(issueRoutes(db, opts.storageService, {
     feedbackExportService: opts.feedbackExportService,
     pluginWorkerManager: workerManager,

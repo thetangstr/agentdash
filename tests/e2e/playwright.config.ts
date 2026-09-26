@@ -18,6 +18,8 @@ export default defineConfig({
   testIgnore: ["multi-user.spec.ts", "multi-user-authenticated.spec.ts", "uat-*.spec.ts"],
   timeout: 60_000,
   retries: 0,
+  // GH #782/#786: stub of GitHub's REST API shared by github-connect and first-run specs.
+  globalSetup: "./github-stub.global-setup.ts",
   use: {
     baseURL: BASE_URL,
     headless: true,

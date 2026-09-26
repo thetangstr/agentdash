@@ -23,6 +23,8 @@ export type HealthStatus = {
   // AgentDash: self-serve-bootstrap — first-user self-serve company creation.
   selfServeBootstrap?: boolean;
   instanceHasCompany?: boolean;
+  /** AgentDash (#726): a hosted agentdash.cloud box. GH #786 routes its first run to /setup, not the wizard. */
+  hostedBox?: boolean;
   /**
    * The address the operator configured for this instance, when they set one.
    *

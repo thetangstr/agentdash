@@ -106,6 +106,8 @@ export const queryKeys = {
   githubConnections: {
     list: (companyId: string) => ["github-connections", companyId] as const,
   },
+  // AgentDash (GH #786)
+  firstRun: (companyId: string) => ["first-run", companyId] as const,
   goals: {
     list: (companyId: string) => ["goals", companyId] as const,
     detail: (id: string) => ["goals", "detail", id] as const,
