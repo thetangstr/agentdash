@@ -128,6 +128,20 @@ function volumeOn(p: ProjectDetail, serviceId: string, mountPath: string) {
   return p.volumes.find((v) => v.serviceId === serviceId && v.mountPath === mountPath) ?? null;
 }
 
+/**
+ * Railway's project listing shows a new volume instance only after a moment
+ * (seen live, GH #763): re-read until it appears. If it never does, the step
+ * fails and its retry finds (never re-creates) the volume.
+ */
+async function awaitVolume(read: () => Promise<ProjectDetail>, serviceId: string, mountPath: string, signal: AbortSignal, pollMs: number) {
+  for (let i = 0; i < 20; i++) {
+    const v = volumeOn(await read(), serviceId, mountPath);
+    if (v) return v;
+    await sleep(Math.min(pollMs, 1_000), signal);
+  }
+  throw new Error(`the volume at ${mountPath} was created but is not listed yet; the retry will record it`);
+}
+
 export function publicHost(slug: string, edgeDomain: string): string {
   return `${slug}.${edgeDomain}`;
 }
@@ -294,8 +308,7 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
         const deployed = (await latestDeployment(client, P, E, pg.id, { signal: ctx.signal })) !== null;
         if (!vol && !deployed) {
           await createVolume(client, { projectId: P, environmentId: E, serviceId: pg.id, mountPath: PG_MOUNT }, { signal: ctx.signal });
-          p = await project(box, ctx.signal);
-          vol = volumeOn(p, pg.id, PG_MOUNT);
+          vol = await awaitVolume(() => project(box, ctx.signal), pg.id, PG_MOUNT, ctx.signal, pollMs);
         }
         if (vol && box.pgVolumeId !== vol.id) await recordBox(ctx.db, box.id, { pgVolumeId: vol.id });
         const names = await variableNames(client, P, E, pg.id, { signal: ctx.signal });
@@ -333,23 +346,23 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
       step("web", 2 * 60_000, async (ctx, box) => {
         const P = need(box.projectId, "project_id");
         const E = need(box.environmentId, "environment_id");
-        let p = await project(box, ctx.signal);
-        let web = (box.webServiceId && p.services.find((s) => s.id === box.webServiceId)) || p.services.find((s) => s.name === "web") || null;
-        if (!web) {
-          const id = await createService(client, { projectId: P, environmentId: E, name: "web" }, { signal: ctx.signal });
-          await recordBox(ctx.db, box.id, { webServiceId: id });
-          p = await project(box, ctx.signal);
-          web = p.services.find((s) => s.id === id)!;
-        } else if (box.webServiceId !== web.id) {
-          await recordBox(ctx.db, box.id, { webServiceId: web.id });
+        const p = await project(box, ctx.signal);
+        const found = (box.webServiceId && p.services.find((s) => s.id === box.webServiceId)) || p.services.find((s) => s.name === "web") || null;
+        let webId: string;
+        if (!found) {
+          webId = await createService(client, { projectId: P, environmentId: E, name: "web" }, { signal: ctx.signal });
+          await recordBox(ctx.db, box.id, { webServiceId: webId });
+        } else {
+          webId = found.id;
+          if (box.webServiceId !== webId) await recordBox(ctx.db, box.id, { webServiceId: webId });
         }
-        let vol = volumeOn(p, web.id, WEB_MOUNT);
+        let vol = volumeOn(p, webId, WEB_MOUNT);
         if (!vol) {
-          await createVolume(client, { projectId: P, environmentId: E, serviceId: web.id, mountPath: WEB_MOUNT }, { signal: ctx.signal });
-          p = await project(box, ctx.signal);
-          vol = volumeOn(p, web.id, WEB_MOUNT);
+          await createVolume(client, { projectId: P, environmentId: E, serviceId: webId, mountPath: WEB_MOUNT }, { signal: ctx.signal });
+          vol = await awaitVolume(() => project(box, ctx.signal), webId, WEB_MOUNT, ctx.signal, pollMs);
         }
-        if (vol && box.webVolumeId !== vol.id) await recordBox(ctx.db, box.id, { webVolumeId: vol.id });
+        if (box.webVolumeId !== vol.id) await recordBox(ctx.db, box.id, { webVolumeId: vol.id });
+        const web = { id: webId };
         let host = (await serviceDomains(client, P, E, web.id, { signal: ctx.signal }))[0];
         if (!host) host = await createServiceDomain(client, E, web.id, WEB_PORT, { signal: ctx.signal });
         if (box.upstreamHost !== host) await recordBox(ctx.db, box.id, { upstreamHost: host });
@@ -434,7 +447,13 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
 
       // 7 (before the source is set, so a deploy the source triggers already has them). Daily and weekly snapshots, both volumes.
       step("snapshots", 60_000, async (ctx, box) => {
-        for (const v of [need(box.pgVolumeId, "pg_volume_id"), need(box.webVolumeId, "web_volume_id")]) {
+        // Re-derived from Railway (and re-recorded), so a job resumed here never depends on an earlier write.
+        const p = await project(box, ctx.signal);
+        const pgVol = volumeOn(p, need(box.pgServiceId, "pg_service_id"), PG_MOUNT);
+        const webVol = volumeOn(p, need(box.webServiceId, "web_service_id"), WEB_MOUNT);
+        if (!pgVol || !webVol) throw new Error("a box volume is not listed yet; retrying");
+        if (box.pgVolumeId !== pgVol.id || box.webVolumeId !== webVol.id) await recordBox(ctx.db, box.id, { pgVolumeId: pgVol.id, webVolumeId: webVol.id });
+        for (const v of [pgVol.id, webVol.id]) {
           await setBackupSchedule(client, v, ["DAILY", "WEEKLY"], { signal: ctx.signal });
         }
       }),
