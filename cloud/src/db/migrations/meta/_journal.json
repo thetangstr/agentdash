@@ -15,6 +15,13 @@
       "when": 1790399188613,
       "tag": "0001_harden",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790458226465,
+      "tag": "0002_job_runner",
+      "breakpoints": true
     }
   ]
 }

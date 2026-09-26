@@ -37,6 +37,13 @@ export interface CloudConfig {
   railwayToken: Secret | null;
   release: string | null;
   dbRoleMode: DbRoleMode;
+  /** The dedicated boxes workspace (spec §3.6). Required with a Railway token. */
+  railwayWorkspaceId: string | null;
+  /** Ops alerts (GH #764): a webhook URL (https) and/or email through Resend. */
+  alertWebhookUrl: string | null;
+  alertEmailTo: string[];
+  alertEmailFrom: string | null;
+  resendApiKey: Secret | null;
 }
 
 export class ConfigError extends Error {}
@@ -147,6 +154,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     if (err instanceof ConfigError) throw err;
     throw new ConfigError(err instanceof Error ? err.message : String(err));
   }
+  const workspaceId = env.CLOUD_RAILWAY_WORKSPACE_ID?.trim() || null;
+  if (railway && !workspaceId) throw new ConfigError("CLOUD_RAILWAY_WORKSPACE_ID is required when RAILWAY_API_TOKEN is set");
+  const webhook = env.CLOUD_ALERT_WEBHOOK_URL?.trim() || null;
+  if (webhook) {
+    let u: URL;
+    try {
+      u = new URL(webhook);
+    } catch {
+      throw new ConfigError("CLOUD_ALERT_WEBHOOK_URL is not a valid URL");
+    }
+    if (u.protocol !== "https:") throw new ConfigError("CLOUD_ALERT_WEBHOOK_URL must be https");
+  }
+  const emailTo = (env.CLOUD_ALERT_EMAIL_TO ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const resend = env.CLOUD_RESEND_API_KEY?.trim();
   return {
     port,
     databaseUrl: new Secret(required(env, "DATABASE_URL")),
@@ -161,5 +182,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     railwayToken: railway ? new Secret(railway) : null,
     release: env.CLOUD_CONTROL_RELEASE?.trim() || env.RAILWAY_GIT_COMMIT_SHA?.trim() || null,
     dbRoleMode: roleMode,
+    railwayWorkspaceId: workspaceId,
+    alertWebhookUrl: webhook,
+    alertEmailTo: emailTo,
+    alertEmailFrom: env.CLOUD_ALERT_EMAIL_FROM?.trim() || null,
+    resendApiKey: resend ? new Secret(resend) : null,
   };
 }

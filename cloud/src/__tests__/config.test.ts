@@ -12,6 +12,7 @@ const base = {
   CLOUD_DATA_KEY: KEY_HEX,
   CLOUD_ADMIN_TOKEN: "9f2c4e7a1b3d5f60718293a4b5c6d7e8f9a0b1c2d3e4f5061728394a5b6c7d8e",
   RAILWAY_API_TOKEN: "railway-workspace-token-fake-123",
+  CLOUD_RAILWAY_WORKSPACE_ID: "ws-test",
 };
 
 describe("config", () => {
@@ -211,5 +212,22 @@ describe("GCM tag length", () => {
     const parts = encryptField(key, "AGD-tag", "a").split(".");
     parts[3] = Buffer.from(parts[3]!, "base64url").subarray(0, 4).toString("base64url");
     expect(() => decryptField(key, parts.join("."), "a")).toThrow(/authentication tag/);
+  });
+});
+
+describe("SC-3 settings (GH #764)", () => {
+  it("requires the boxes workspace with a Railway token, and https for the alert webhook", () => {
+    expect(() => loadConfig({ ...base, CLOUD_RAILWAY_WORKSPACE_ID: undefined })).toThrow(/CLOUD_RAILWAY_WORKSPACE_ID/);
+    expect(loadConfig({ ...base, RAILWAY_API_TOKEN: undefined, CLOUD_RAILWAY_WORKSPACE_ID: undefined }).railwayWorkspaceId).toBeNull();
+    expect(() => loadConfig({ ...base, CLOUD_ALERT_WEBHOOK_URL: "http://hooks.example.test/x" })).toThrow(/https/);
+    const c = loadConfig({ ...base, CLOUD_ALERT_WEBHOOK_URL: "https://hooks.example.test/x", CLOUD_ALERT_EMAIL_TO: "ops@example.test, oncall@example.test", CLOUD_RESEND_API_KEY: "re_fake_key_123" });
+    expect(c.alertEmailTo).toEqual(["ops@example.test", "oncall@example.test"]);
+    expect(JSON.stringify(c)).not.toContain("re_fake_key_123");
+  });
+
+  it("defaults to split role mode and accepts single for local development", () => {
+    expect(loadConfig(base).dbRoleMode).toBe("split");
+    expect(loadConfig({ ...base, CLOUD_DB_ROLE_MODE: "single" }).dbRoleMode).toBe("single");
+    expect(() => loadConfig({ ...base, CLOUD_DB_ROLE_MODE: "both" })).toThrow(/CLOUD_DB_ROLE_MODE/);
   });
 });

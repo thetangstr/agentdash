@@ -1,7 +1,12 @@
 // AgentDash: the control plane's migrate command (GH #763 role split). Runs
-// as its own short-lived Railway service (`cloud-migrate`, config
-// cloud/railway.migrate.json) with a superuser DATABASE_URL, so the long-lived
-// cloud-control service never holds owner or superuser credentials.
+// as its own short-lived Railway service, `cloud-migrate`, with a superuser
+// DATABASE_URL, so the long-lived cloud-control service never holds owner or
+// superuser credentials. Service settings (set through the API; Railway does
+// not apply an uploaded railway.json to a service created after its
+// config-as-code deprecation): dockerfilePath cloud/Dockerfile, startCommand
+// `node dist/migrate.js`, restartPolicyType NEVER, no health check, no domain.
+// Deploy it before cloud-control on every release that adds a migration;
+// cloud-control refuses to start on an unmigrated schema.
 //
 //   DATABASE_URL                 the migrator: superuser or CREATEROLE
 //   CLOUD_RUNTIME_DB_PASSWORD    optional: create the roles if missing and
