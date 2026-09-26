@@ -45,6 +45,7 @@ import {
   createBoardApiToken,
   hashBearerToken,
 } from "../services/board-auth.js";
+import { claimEmailMatches, configuredClaimEmail } from "../lib/claim-code.js";
 
 /**
  * Server-side user creation, threaded in from server/src/index.ts where the
@@ -251,6 +252,16 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
       const invite = await checkInviteCode(inviteCode);
       if (!invite.ok) {
         res.status(invite.status).json({ code: invite.code, error: invite.error });
+        return;
+      }
+      // AgentDash (#767): on a box with a claim binding, MCP sign-up is bound
+      // to the claim email exactly like browser sign-up (the zero-user rule
+      // below already makes it single-use).
+      if (configuredClaimEmail() && !claimEmailMatches(email)) {
+        res.status(403).json({
+          code: "claim_email_mismatch",
+          error: "This workspace can only be claimed by the email it was created for.",
+        });
         return;
       }
 

@@ -51,6 +51,8 @@ export async function sweepCleanup(db: CloudDb, log: Logger, opts: SweepOptions 
         .returning({ id: boxes.id });
       if (moved.length) {
         await db.insert(boxEvents).values({ boxId: box.id, kind: "claim_seen", actor, detail: { reason: probe.reason } });
+        // AgentDash (#767): close sign-up on the box (variables ride the next deploy).
+        await enqueueJob(db, { boxId: box.id, kind: "close_signup", payload: { reason: "claim_seen" } });
         claimed += 1;
       }
       continue;

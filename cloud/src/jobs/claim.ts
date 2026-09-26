@@ -6,7 +6,28 @@
 //              `claimed` field. `bootstrap_pending` alone is NOT evidence:
 //              the live SC-2 run showed a box stays bootstrap_pending after its
 //              founder has signed up, until a company is created.
+//
+// Boxes on a release before SC-6 (#767) have no `claimed` field, so they are
+// always `unknown` here: never cleaned up, and provisioning stays gated
+// (capabilities.claimTrackingReady) until every box runs a release that has it.
+import { decryptField, type DataKeyring } from "../crypto.js";
+
 export type ClaimState = "claimed" | "unclaimed" | "unknown";
+
+/** The one-time claim link (spec §3.5 step 2): the code rides in the fragment, never sent to a server. */
+export function claimLink(input: { slug: string; edgeDomain: string; email: string; code: string }): string {
+  return `https://${input.slug}.${input.edgeDomain}/claim?email=${encodeURIComponent(input.email)}#code=${encodeURIComponent(input.code)}`;
+}
+
+/** The claim link for a box, from its encrypted claim code; null once the code is erased (after the claim). */
+export function claimLinkForBox(
+  box: { slug: string; claimCodeEnc: string | null },
+  input: { dataKeys: DataKeyring; edgeDomain: string; email: string },
+): string | null {
+  if (!box.claimCodeEnc) return null;
+  const code = decryptField(input.dataKeys, box.claimCodeEnc, "boxes.claim_code_enc");
+  return claimLink({ slug: box.slug, edgeDomain: input.edgeDomain, email: input.email, code });
+}
 
 export interface ClaimProbe {
   state: ClaimState;
