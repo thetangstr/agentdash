@@ -61,10 +61,15 @@ FOR EACH ROW EXECUTE FUNCTION "cloud_enforce_state_transition"(
 	'["pending_verification"]'
 );
 --> statement-breakpoint
--- AgentDash (GH #778): audit tables are append-only. Triggers rather than
--- REVOKE because the service connects as the table owner on Railway, and an
--- owner keeps its privileges; a trigger binds the owner too (only a
--- superuser disabling it can get past, and that is itself visible).
+-- AgentDash (GH #778): audit tables are append-only against APPLICATION
+-- CODE. These triggers (like the state-transition triggers above) stop a
+-- buggy or careless query issued by the service; they do NOT stop a
+-- compromised connection. The service connects as the role that owns these
+-- tables, and an owner (no superuser needed) can ALTER TABLE ... DISABLE
+-- TRIGGER, DROP TRIGGER, CREATE OR REPLACE the trigger functions, or DROP
+-- TABLE box_events outright. Real tamper resistance needs the owner/runtime
+-- role split (migrations as the owner, the service as a role with only
+-- INSERT/SELECT on the audit tables and no ownership), tracked for SC-2.
 CREATE FUNCTION "cloud_append_only"() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -85,4 +90,7 @@ FOR EACH ROW EXECUTE FUNCTION "cloud_append_only"();
 CREATE TRIGGER "operator_audit_no_truncate" BEFORE TRUNCATE ON "operator_audit"
 FOR EACH STATEMENT EXECUTE FUNCTION "cloud_append_only"();
 --> statement-breakpoint
+-- No effect today: PUBLIC never held these privileges, and the owner's are
+-- not affected by a REVOKE from PUBLIC. Kept only as a statement of intent;
+-- the runtime role in the SC-2 role split is where the grant is withheld.
 REVOKE UPDATE, DELETE, TRUNCATE ON "box_events", "operator_audit" FROM PUBLIC;
