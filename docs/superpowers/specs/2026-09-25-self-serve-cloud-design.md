@@ -1,6 +1,6 @@
 # Self-serve cloud: sign up at agentdash.cloud, get your own box automatically
 
-**Status:** design, for founder approval. No issues filed yet.
+**Status:** approved by the founder on 2026-09-25 (§10). Issues filed with the `self-serve-cloud` label.
 **Date:** 2026-09-25
 **Decision being implemented (founder, 2026-09-25):** launch in the cloud "like how Muse does it". A person signs up at agentdash.cloud and gets their own AgentDash box with no manual step. **Option A: one box per customer, provisioned automatically.** Option B (one shared app with sandboxed agent runs) is the post-launch direction, and nothing here may block it.
 **Launch:** 2026-10-28. **Budget:** about 1 to 2 weeks of build, alongside assistant MCP M4 and M5.
@@ -97,7 +97,7 @@ The UI stays on Vercel (`/start`, progress and `/find` are SPA routes in `ui/src
 2. **Project** `agentdash-box-<slug>`. The name guard and protected list (`agentdash`, `agentdash-demo`, `yarda-backend-v2`, `perceptive-integrity`) are ported verbatim; the dedicated workspace puts those projects out of the token's reach anyway.
 3. **Postgres.** The script uses a CLI template call (`railway add --database postgres`). The port creates the service from Railway's Postgres image (major version pinned) with its own volume and a password generated in memory. SC-0 confirms this or switches to the template mutation.
 4. **`web`, the Volume at `/paperclip`, a Railway domain on port 3100.**
-5. **Variables:** the runbook §12 set, except that `PAPERCLIP_PUBLIC_URL`, the auth and billing base URLs and the invite validation URL are `https://<slug>.agentdash.cloud` **from the first boot** (the router serves the name at once, so there is no switch-over); `PAPERCLIP_ALLOWED_HOSTNAMES` holds both hosts; plus the claim code as `AGENTDASH_INVITE_CODES`, `AGENTDASH_CLAIM_EMAIL`, `AGENTDASH_EDGE_SECRET`, and the per-box Stripe and Resend keys (§3.7).
+5. **Variables:** the runbook §12 set, except that `PAPERCLIP_PUBLIC_URL`, the auth and billing base URLs and the invite validation URL are `https://<slug>.agentdash.cloud` **from the first boot** (the router serves the name at once, so there is no switch-over); `PAPERCLIP_ALLOWED_HOSTNAMES` holds both hosts; plus the claim code as `AGENTDASH_INVITE_CODES`, `AGENTDASH_CLAIM_EMAIL`, `AGENTDASH_EDGE_SECRET`, the Stripe keys and a per-box Resend key (§3.7).
 6. **Service settings:** health check, restart policy, the Volume-ownership start command, and the image **by digest**, resolved from the target release tag.
 7. **Snapshots:** daily and weekly schedules on both volumes (Pro).
 8. **Deploy;** wait for SUCCESS (15 min cap), then healthy and `authenticated` on the Railway host (5 min), then through the router (2 min).
@@ -139,7 +139,7 @@ requested ─→ provisioning ─→ awaiting_claim ─(claim seen)→ active �
 
 ### 3.7 Stripe and Resend per box
 
-**Stripe allows 16 webhook endpoints per account,** so #722's endpoint per box breaks at box 17. Instead, one endpoint, `https://www.agentdash.cloud/api/cloud/stripe/webhook`, verifies Stripe's signature, finds the box from `metadata.box_slug` (SC-8 adds `AGENTDASH_BOX_SLUG`, already a box variable, beside `companyId` in `server/src/services/billing.ts`), and forwards the raw body to the box's `/api/billing/webhook` **re-signed in Stripe's format with that box's own webhook secret** (HMAC-SHA256 over `t.payload`, which `constructEvent` checks). Each box gets its own **restricted key** (`rk_…`, checkout, portal, subscriptions, customers), revocable one at a time. Accepted risk until Option B: a compromised box's key can read other customers' objects of those types (§10, decision 5). The control plane reads `customer.subscription.*` to keep `plan_tier`.
+**Stripe allows 16 webhook endpoints per account,** so #722's endpoint per box breaks at box 17. Instead, one endpoint, `https://www.agentdash.cloud/api/cloud/stripe/webhook`, verifies Stripe's signature, finds the box from `metadata.box_slug` (SC-8 adds `AGENTDASH_BOX_SLUG`, already a box variable, beside `companyId` in `server/src/services/billing.ts`), and forwards the raw body to the box's `/api/billing/webhook` **re-signed in Stripe's format with that box's own webhook secret** (HMAC-SHA256 over `t.payload`, which `constructEvent` checks). Stripe has **no public API to mint restricted keys**, so boxes share one **restricted key** (`rk_…`: checkout, portal, subscriptions, customers), created by hand; the control plane rotates it across the fleet in one command (a variables upsert per box). Accepted risk until Option B: a compromised box's key can read other customers' objects of those types, and revocation is fleet-wide, not per box (§10, decision 4). The control plane reads `customer.subscription.*` to keep `plan_tier`.
 
 **Resend:** one verified domain (`mail.agentdash.cloud`) for control-plane mail, and a sending-only **API key per box** for invites and resets, revoked at deletion.
 
@@ -258,7 +258,7 @@ No standing operator login on any box (runbook §1, D-S7). A customer who wants 
 
 ### 6.5 Deleting a customer
 
-On request (email at launch), by the idle policy, or by an operator: the box goes `pending_delete` and the router says so; an export (company portability) is offered; the Stripe subscription is cancelled and the box's Stripe and Resend keys revoked; a final snapshot is kept 30 days, then the project is deleted by a job from this flow only; the account's personal data is erased except what billing law requires, and the escrowed key ciphertext destroyed.
+On request (email at launch), by the idle policy, or by an operator: the box goes `pending_delete` and the router says so; an export (company portability) is offered; the Stripe subscription is cancelled and the box's Resend key revoked; a final snapshot is kept 30 days, then the project is deleted by a job from this flow only; the account's personal data is erased except what billing law requires, and the escrowed key ciphertext destroyed.
 
 ---
 
@@ -295,36 +295,36 @@ Sizes: S up to 2 days, M 3 to 5 days, L more than a week. Lanes: **Claude** (con
 
 | ID | Action | Needed by | Blocks |
 |---|---|---|---|
-| F1 | Create a **Railway Pro workspace** `agentdash-boxes` used only for customer boxes and the control plane; create a **workspace token** and hand it over through the password manager | 9/29 | SC-2 onward |
-| F2 | **Resend** account; verify `mail.agentdash.cloud` (SPF and DKIM TXT records at GoDaddy) | 10/1 | SC-7, SC-8 |
-| F3 | **GoDaddy:** the three records in §4.1, once the router exists and Railway prints them | 10/3 | SC-4 acceptance, everything after |
-| F4 | **Stripe:** live account, Pro price, permission to create restricted keys; **Cloudflare** account for a Turnstile site key (no DNS move) | 10/6 | SC-7, SC-8 |
-| F5 | Copy the old instance's invite codes into the control plane; approve retiring it after export | 10/10 | SC-9 |
+| F1 #756 | Create a **Railway Pro workspace** `agentdash-boxes` used only for customer boxes and the control plane; create a **workspace token** and hand it over through the password manager | 9/29 | SC-2 onward |
+| F2 #757 | **Resend** account; verify `mail.agentdash.cloud` (SPF and DKIM TXT records at GoDaddy) | 10/1 | SC-7, SC-8 |
+| F3 #758 | **GoDaddy:** the three records in §4.1, once the router exists and Railway prints them | 10/2 | SC-4 acceptance, everything after |
+| F4 #759 | **Stripe:** live account, Pro price, two restricted keys made by hand; **Cloudflare** account for a Turnstile site key (no DNS move) | 10/6 | SC-7, SC-8 |
+| F5 #760 | Copy the old instance's invite codes into the control plane; approve retiring it after export | 10/9 | SC-9 |
 
 ### 9.2 Code issues, in critical-path order
 
 | ID | Title | Size | Lane | Depends on | Acceptance and verification |
 |---|---|---|---|---|---|
-| SC-0 | **Spike:** Postgres by API, router behaviour through two Railway edges (`X-Forwarded-Host`, WebSocket, latency), Volume redeploy downtime | S (1 day) | Claude | F1 | Findings note; a throwaway box created and deleted by API only; latency and downtime measured |
-| #732 | GHCR image per stable tag, digest in the release body | S | Devin | none | The next stable cut publishes `ghcr.io/thetangstr/agentdash:vYYYY.MDD.P` and `provision-box.sh` deploys it |
-| SC-1 | **Control plane skeleton:** `cloud/` package, schema and migrations (§3.2), settings, admin CLI, redacting logger, deploy config | M | Claude | F1 | Embedded-PG schema tests; a log-redaction test; deployed, `/health` 200 |
-| SC-2 | **Railway provisioner:** §3.3 steps as idempotent TS, secret rules, name guards, escrow sealing | L (5 to 6 days) | Claude | SC-0, SC-1, #732 | Every `provision-box.test.mjs` scenario ported to a fake Railway API; no generated secret in captured logs; a real box healthy in under 3 minutes, then deleted |
-| SC-3 | **Job queue and state machine** (§3.4): locks, retries, timeouts, cleanup | M | Claude | SC-1 | A crash mid-step resumes there; 429 backs off; retries end in `failed`; cleanup refuses a claimed box or a name or ID mismatch |
-| SC-4 | **Edge router** (§4.3): routing, headers, WebSocket, streaming, 404, wake page, activity, 2 replicas | M | Devin | SC-1, F3 | Tests for header strip and inject, WebSocket upgrade, unknown and suspended slugs; live `https://<test>.agentdash.cloud/api/health` with a valid wildcard certificate |
-| SC-5 | **Box behind the edge** (§4.4): edge secret gate, client IP from the edge, boot-guard check | S | Devin | none | Embedded tests: no edge header refused except health; spoofed IP header ignored; rate limit keys on the edge IP |
-| SC-6 | **Claim** (§3.5): email-bound single-use code, `claimed` in health, `/claim` page to `/cos` | M | Devin | none | Wrong email refused; second use refused; company invites unaffected; MCP sign-up bound the same way; `/claim` UI test; a Playwright run on a real box |
-| SC-7 | **Front door:** `/start`, progress, `/find`; public API; §5.1 controls; waitlist; Resend mail | M | Devin (UI), Claude (API) | SC-1, SC-3, F2, F4 | Tests for rate limits, disposable refusal, kill switch, cap overflow to waitlist, single-use magic links; a real signup reaches "ready" |
-| SC-8 | **Stripe fan-out and per-box keys** (§3.7), the `box_slug` metadata line | M | Claude | SC-2, F4 | A forwarded event passes the box's unmodified `constructEvent`; unknown slug dropped and alerted; in test mode a trial start moves `planTier` to `pro_trial` |
-| SC-9 | **Old instance migration** (§7): validator, `vercel.json`, CTAs, claims test | S | Devin | SC-1, F5 | `POST https://www.agentdash.cloud/api/invites/validate` answers from the control plane; a self-hosted MCP sign-up with a code still works |
-| SC-10 | **Fleet health and idle policy** (§5.2, §6.3): poller, alerts, suspend and wake, spend alarm | M | Claude | SC-3, SC-4 | Tests for each idle transition; a real box suspended and woken through the router in about a minute |
-| SC-11 | **End-to-end and runbook:** Playwright journey on a staging control plane (signup to `/cos`, provider key, Muse OAuth metadata on the slug host), 10 concurrent signups, `doc/runbooks/cloud-control-plane.md` | M | Devin | SC-2 to SC-8 | Three passes in a row; 10 healthy boxes and no dead jobs; runbook covers kill switch, approve, retry, suspend, delete, token rotation |
-| SC-12 | **Fleet upgrade** (§6.1): canary, cohorts, snapshot, rollback, hold | M | Claude | SC-2, SC-10 | A failing box pauses the rollout and rolls back (fake Railway); two live boxes upgraded. **May land after launch;** until then an operator upgrades per box with the same module |
+| SC-0 #761 | **Spike:** Postgres by API, router behaviour through two Railway edges (`X-Forwarded-Host`, WebSocket, latency), Volume redeploy downtime | S (1 day) | Claude | F1 | Findings note; a throwaway box created and deleted by API only; latency and downtime measured |
+| #732 | GHCR image per stable tag, digest in the release body | S | Claude | none | The next stable cut publishes `ghcr.io/thetangstr/agentdash:vYYYY.MDD.P` and `provision-box.sh` deploys it |
+| SC-1 #762 | **Control plane skeleton:** `cloud/` package, schema and migrations (§3.2), settings, admin CLI, redacting logger, deploy config | M | Claude | F1 | Embedded-PG schema tests; a log-redaction test; deployed, `/health` 200 |
+| SC-2 #763 | **Railway provisioner:** §3.3 steps as idempotent TS, secret rules, name guards, escrow sealing | L (5 to 6 days) | Claude | SC-0, SC-1, #732 | Every `provision-box.test.mjs` scenario ported to a fake Railway API; no generated secret in captured logs; a real box healthy in under 3 minutes, then deleted |
+| SC-3 #764 | **Job queue and state machine** (§3.4): locks, retries, timeouts, cleanup | M | Claude | SC-1 | A crash mid-step resumes there; 429 backs off; retries end in `failed`; cleanup refuses a claimed box or a name or ID mismatch |
+| SC-4 #765 | **Edge router** (§4.3): routing, headers, WebSocket, streaming, 404, wake page, activity, 2 replicas | M | Devin | SC-1, F3 | Tests for header strip and inject, WebSocket upgrade, unknown and suspended slugs; live `https://<test>.agentdash.cloud/api/health` with a valid wildcard certificate |
+| SC-5 #766 | **Box behind the edge** (§4.4): edge secret gate, client IP from the edge, boot-guard check | S | Devin | none | Embedded tests: no edge header refused except health; spoofed IP header ignored; rate limit keys on the edge IP |
+| SC-6 #767 | **Claim** (§3.5): email-bound single-use code, `claimed` in health, `/claim` page to `/cos` | M | Devin | none | Wrong email refused; second use refused; company invites unaffected; MCP sign-up bound the same way; `/claim` UI test; a Playwright run on a real box |
+| SC-7 #768 | **Front door:** `/start`, progress, `/find`; public API; §5.1 controls; waitlist; Resend mail | M | Devin (UI), Claude (API) | SC-1, SC-3, F2, F4 | Tests for rate limits, disposable refusal, kill switch, cap overflow to waitlist, single-use magic links; a real signup reaches "ready" |
+| SC-8 #769 | **Stripe fan-out, shared restricted key rotation, per-box Resend keys** (§3.7), the `box_slug` metadata line | M | Claude | SC-2, F4 | A forwarded event passes the box's unmodified `constructEvent`; unknown slug dropped and alerted; in test mode a trial start moves `planTier` to `pro_trial` |
+| SC-9 #770 | **Old instance migration** (§7): validator, `vercel.json`, CTAs, claims test | S | Devin | SC-1, F5 | `POST https://www.agentdash.cloud/api/invites/validate` answers from the control plane; a self-hosted MCP sign-up with a code still works |
+| SC-10 #771 | **Fleet health and idle policy** (§5.2, §6.3): poller, alerts, suspend and wake, spend alarm | M | Claude | SC-3, SC-4 | Tests for each idle transition; a real box suspended and woken through the router in about a minute |
+| SC-11 #772 | **End-to-end and runbook:** Playwright journey on a staging control plane (signup to `/cos`, provider key, Muse OAuth metadata on the slug host), 10 concurrent signups, `doc/runbooks/cloud-control-plane.md` | M | Devin | SC-2 to SC-8 | Three passes in a row; 10 healthy boxes and no dead jobs; runbook covers kill switch, approve, retry, suspend, delete, token rotation |
+| SC-12 #773 | **Fleet upgrade** (§6.1): canary, cohorts, snapshot, rollback, hold | M | Claude | SC-2, SC-10 | A failing box pauses the rollout and rolls back (fake Railway); two live boxes upgraded. **May land after launch;** until then an operator upgrades per box with the same module |
 
 ### 9.3 Schedule and whether 2026-10-28 holds
 
 | Days (from 9/26) | Claude lane | Devin lane (alongside M4, M5, M6) | Founder |
 |---|---|---|---|
-| 1 to 2 | SC-0, SC-1 | #732, SC-5 | F1, F2 |
+| 1 to 2 | SC-0, SC-1, #732 | SC-5 | F1, F2 |
 | 3 to 7 | SC-2, SC-3 | SC-6, SC-4 | F3, F4 |
 | 8 to 10 | SC-8, SC-7 API | SC-7 UI, SC-9 | F5 |
 | 11 to 13 | SC-10 | SC-11 | |
@@ -332,18 +332,20 @@ Sizes: S up to 2 days, M 3 to 5 days, L more than a week. Lanes: **Claude** (con
 
 That is about 22 to 26 lane-days, finishing around **10/14** with two lanes, which leaves two weeks for a staging soak and fixes.
 
-**The honest answer:** 10-28 **holds for self-serve with waitlist mode on and a daily cap of 10** (automation provisions everything; an operator only clicks approve), provided a Claude lane owns SC-0 to SC-3, SC-8, SC-10 and SC-12, because Devin's queue is already full with M4 to M6 (MVL §5). On the Devin lane the control plane slips about two weeks. **Fully open signup on 10-28 does not hold responsibly:** open it about **11-04**, after a week of real signups. **Fallback:** if SC-2 slips, launch 10-28 with runbook-provisioned boxes behind the same waitlist page and switch automation on when it lands.
+**The honest answer:** 10-28 **holds for self-serve with waitlist mode on and a daily cap of 10** (automation provisions everything; an operator only clicks approve), provided a Claude lane owns SC-0 to SC-3, #732, SC-8, SC-10 and SC-12, because Devin's queue is already full with M4 to M6 (MVL §5). On the Devin lane the control plane slips about two weeks. **Fully open signup on 10-28 does not hold responsibly:** open it about **11-04**, after a week of real signups. **Fallback:** if SC-2 slips, launch 10-28 with runbook-provisioned boxes behind the same waitlist page and switch automation on when it lands.
 
 ---
 
-## 10. Founder decisions (six)
+## 10. Founder decisions (approved 2026-09-25)
 
-1. **Edge and DNS: keep DNS at GoDaddy and add three records for a Railway-hosted router (recommended), or move DNS to Cloudflare and use a Worker.** The Cloudflare move means copying every record, including Google Workspace mail, before switching nameservers.
-2. **Railway: a dedicated Pro workspace for customer boxes** (recommended; $20 a month plus usage), with approval to open a second workspace or talk to Railway about Enterprise at about 80 boxes.
-3. **Launch mode on 10-28: waitlist-and-approve with a daily cap of 10** (recommended), opening fully around 11-04; or fully open on 10-28.
-4. **Free box policy: one Free box per verified email; warn at 14 idle days, suspend at 21, delete at 60** (recommended), or a stricter clock.
-5. **Stripe: one account, a restricted key per box, and control-plane webhook fan-out** (recommended; accepts that a compromised box's key can read other customers' Stripe objects of the allowed types until Option B moves billing to the control plane), or hold billing inside the control plane now (adds about a week).
-6. **Support access: the customer invites `support@agentdash.cloud` into their company when they want help, and removes it after** (recommended; no new code), with a time-boxed in-app grant after launch.
+All six recommendations were approved as written:
+
+1. **DNS stays at GoDaddy** with the Railway edge router (three records, §4.1); no Cloudflare move.
+2. **A dedicated Railway Pro workspace** for boxes; a second workspace or Enterprise near about 80 boxes.
+3. **10-28 launches behind a waitlist** with operator approval and a cap of 10 a day; signup opens fully about 11-04.
+4. **One Stripe account**, restricted keys, and control-plane webhook forwarding (§3.7). The risk that a compromised box's key can read other customers' Stripe objects of the allowed types is accepted until Option B. *Correction found while filing:* Stripe cannot mint restricted keys by API, so the keys are one shared restricted key rotated fleet-wide, not one per box.
+5. **Free boxes:** one per verified email; warn at 14 idle days, suspend at 21, delete at 60 (§5.2).
+6. **Support access** only when the customer invites `support@agentdash.cloud` into their company (§6.4).
 
 ---
 
