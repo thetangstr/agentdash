@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Smartphone, X } from "lucide-react";
+import { assistantGrantsApi } from "@/api/assistant-grants";
 import { firstRunApi, type FirstRunStep } from "@/api/firstRun";
 import { Button } from "@/components/ui/button";
 import { Link } from "@/lib/router";
@@ -39,6 +40,15 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
   const { data } = useQuery({
     queryKey: queryKeys.firstRun(companyId),
     queryFn: () => firstRunApi.status(companyId),
+  });
+  // AgentDash (GH #793): once a grant exists the card has done its job — only
+  // ask while the person has no assistant connected. Queried lazily so a
+  // mid-setup company never calls it.
+  const grants = useQuery({
+    queryKey: ["assistant", "me", "grants", companyId],
+    queryFn: () => assistantGrantsApi.listMine(companyId),
+    enabled: data?.nextStep === "done" && data.applies && data.showHomeNudge,
+    retry: false,
   });
   if (!data || !data.applies || !data.showHomeNudge) return null;
 
@@ -69,7 +79,7 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
     );
   }
 
-  if (dismissed) return null;
+  if (dismissed || (grants.data?.grants.length ?? 0) > 0) return null;
   return (
     <section
       className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm"
