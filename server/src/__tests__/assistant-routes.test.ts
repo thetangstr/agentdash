@@ -6,6 +6,7 @@ const mockDigestService = vi.hoisted(() => ({
   digest: vi.fn(),
   audienceAgents: vi.fn(),
   tasksAssignedTo: vi.fn(),
+  visibleProjectIds: vi.fn(),
 }));
 
 const mockAuthorityService = vi.hoisted(() => ({
@@ -68,6 +69,7 @@ async function createApp(
 describe("GET /companies/:companyId/assistant/digest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDigestService.visibleProjectIds.mockResolvedValue(new Set(["project-9"]));
     mockDigestService.digest.mockResolvedValue({
       agentsAnsweredFor: 2,
       since: "2026-09-22T00:00:00.000Z",
@@ -133,6 +135,24 @@ describe("GET /companies/:companyId/assistant/digest", () => {
     expect(res.status).toBe(200);
     expect(mockDigestService.digest).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: "project-9" }),
+    );
+  });
+
+  // AgentDash consolidation PR-A (review H3): the route validates projectId.
+  it("returns 404 for a projectId the caller cannot see, before any digest work", async () => {
+    const app = await createApp();
+    const res = await request(app).get(
+      "/companies/company-1/assistant/digest?projectId=restricted-or-foreign",
+    );
+    expect(res.status).toBe(404);
+    expect(mockDigestService.digest).not.toHaveBeenCalled();
+  });
+
+  it("passes the caller's visible project set into the digest", async () => {
+    const app = await createApp();
+    await request(app).get("/companies/company-1/assistant/digest");
+    expect(mockDigestService.digest).toHaveBeenCalledWith(
+      expect.objectContaining({ visibleProjectIds: new Set(["project-9"]) }),
     );
   });
 

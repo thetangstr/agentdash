@@ -11,8 +11,9 @@ import { assistantOAuthService } from "../services/assistant-oauth.js";
 import { waitingOnYouService } from "../services/waiting-on-you.js";
 import { assistantGatedActionsService } from "../services/assistant-gated-actions.js";
 import { validate } from "../middleware/validate.js";
-import { forbidden } from "../errors.js";
+import { forbidden, notFound } from "../errors.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess } from "./authz.js";
+import { projectVisibilityCondition } from "./visibility.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 /**
@@ -67,12 +68,24 @@ export function assistantRoutes(
       return;
     }
     const projectId = (req.query.projectId as string | undefined) ?? null;
+    // AgentDash consolidation PR-A (review H3): the digest applies project
+    // visibility, and a projectId the caller cannot see (restricted, another
+    // company's, or unknown) is not_found, never a silent empty digest and
+    // never 403 — invisible means nonexistent (routes/visibility.ts).
+    const visibleProjectIds = await digest.visibleProjectIds(
+      companyId,
+      projectVisibilityCondition(req, companyId),
+    );
+    if (projectId !== null && !visibleProjectIds.has(projectId)) {
+      throw notFound("Project not found");
+    }
     res.json(
       await digest.digest({
         companyId,
         userId: req.actor.userId ?? null,
         since: parsed.since,
         projectId,
+        visibleProjectIds,
       }),
     );
   });

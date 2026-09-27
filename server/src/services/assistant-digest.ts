@@ -1,14 +1,32 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  activityLog,
   agents,
   approvals,
+  authUsers,
+  companies,
+  documents,
+  goals,
+  issueApprovals,
+  issueDocuments,
   issues,
   issueWorkProducts,
   projects,
 } from "@paperclipai/db";
 import { agentAccountabilityService } from "./agent-accountability.js";
 import { WAITING_APPROVAL_STATUSES, scopeAndRankOpenApprovals } from "./waiting-on-you-rules.js";
+// AgentDash: consolidation PR-A — provenance, attention and the briefing.
+import {
+  buildAttention,
+  buildBriefing,
+  kindForActivity,
+  normalizeActorType,
+  type AttentionItem,
+  type BriefingDecision,
+  type BriefingIssue,
+  type RowSource,
+} from "./assistant-provenance.js";
 
 /**
  * AgentDash assistant MCP (M1, GH #676): "what changed since a time" for a
@@ -47,7 +65,25 @@ import { WAITING_APPROVAL_STATUSES, scopeAndRankOpenApprovals } from "./waiting-
  */
 
 /** How many of each section the digest will list. Counts are never capped. */
-const DIGEST_LIMITS = { shipped: 10, blocked: 10, decisions: 10 } as const;
+const DIGEST_LIMITS = { shipped: 10, blocked: 10, decisions: 10, changed: 20 } as const;
+
+/**
+ * AgentDash consolidation PR-A (design Rev 3 §4.2, §4.4).
+ *
+ * - `CHANGED_SCAN_LIMIT` bounds how many activity rows one digest reads; the
+ *   response says when the scan hit it.
+ * - `QUIET_DAYS`: "quiet" means open tasks but no attributable activity in
+ *   this many days. The number is disclosed in the response.
+ * - `LEAD_REPORT_KEY`: a lead report is an issue document with this key,
+ *   last written by the project's lead agent.
+ * - Company-level activity (no project) is kept only for these entity/action
+ *   pairs; everything else must join to a visible project or is dropped.
+ */
+const CHANGED_SCAN_LIMIT = 500;
+export const QUIET_DAYS = 3;
+export const LEAD_REPORT_KEY = "lead-report";
+const COMPANY_LEVEL_AGENT_ACTIONS = new Set(["agent.created", "agent.hired", "agent.terminated"]);
+const LEAD_REPORT_EXCERPT = 280;
 
 
 export interface AssistantDigestInput {
@@ -62,6 +98,13 @@ export interface AssistantDigestInput {
   since: Date;
   /** Optional project scope for `whats_new(project: …)`. */
   projectId?: string | null;
+  /**
+   * AgentDash consolidation PR-A: the project ids this caller may see
+   * (`visibleProjectIds` below, computed from the one visibility rule in
+   * routes/visibility.ts). Omitted = every project in the company, which is
+   * only correct for callers that see everything; the route always passes it.
+   */
+  visibleProjectIds?: ReadonlySet<string>;
 }
 
 export function assistantDigestService(db: Db) {
@@ -125,13 +168,12 @@ export function assistantDigestService(db: Db) {
     };
   }
 
-  async function digest(input: AssistantDigestInput) {
-    const asOf = new Date();
+  async function agentScopedSections(input: AssistantDigestInput, asOf: Date) {
     const mine = await audienceAgents(input.companyId, input.userId);
     const nameById = new Map(mine.map((agent) => [agent.id, agent.name]));
     const agentIds = mine.map((agent) => agent.id);
     if (agentIds.length === 0) {
-      return emptyDigest(asOf);
+      return { result: emptyDigest(asOf), ranked: [] as RankedApproval[], nameById };
     }
 
     const issueConditions = [
@@ -139,6 +181,10 @@ export function assistantDigestService(db: Db) {
       isNull(issues.hiddenAt),
       inArray(issues.assigneeAgentId, agentIds),
       ...(input.projectId ? [eq(issues.projectId, input.projectId)] : []),
+      // AgentDash consolidation PR-A (review H3): the digest applies project
+      // visibility. A task in a restricted project the caller cannot see is
+      // not in their digest, whoever it is assigned to.
+      ...(input.visibleProjectIds ? [visibleIssueCondition(input.visibleProjectIds)] : []),
     ];
 
     // 1. Shipped: done inside the window. `completedAt` is the real completion
@@ -296,7 +342,7 @@ export function assistantDigestService(db: Db) {
       waitingSince: approval.createdAt.toISOString(),
     }));
 
-    return {
+    const result = {
       agentsAnsweredFor: mine.length,
       since: input.since.toISOString(),
       asOf: asOf.toISOString(),
@@ -310,9 +356,559 @@ export function assistantDigestService(db: Db) {
         newlyBlocked.length > newlyBlockedItems.length ||
         ranked.length > decisionItems.length,
     };
+    return { result, ranked: ranked as RankedApproval[], nameById };
   }
 
-  return { digest, audienceAgents, tasksAssignedTo };
+
+  /**
+   * The project ids this caller may see in the company, from the ONE
+   * visibility rule (`projectVisibilityCondition`, routes/visibility.ts).
+   * The route passes the condition; `undefined` means the caller sees
+   * everything.
+   */
+  async function visibleProjectIds(companyId: string, visibility: SQL | undefined) {
+    const rows = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(visibility ? and(eq(projects.companyId, companyId), visibility) : eq(projects.companyId, companyId));
+    return new Set(rows.map((row) => row.id));
+  }
+
+  async function namesFor(companyId: string, userIds: string[], agentIds: string[]) {
+    const [userRows, agentRows] = await Promise.all([
+      userIds.length
+        ? db.select({ id: authUsers.id, name: authUsers.name }).from(authUsers).where(inArray(authUsers.id, userIds))
+        : Promise.resolve([] as Array<{ id: string; name: string }>),
+      agentIds.length
+        ? db
+            .select({ id: agents.id, name: agents.name })
+            .from(agents)
+            .where(and(eq(agents.companyId, companyId), inArray(agents.id, agentIds)))
+        : Promise.resolve([] as Array<{ id: string; name: string }>),
+    ]);
+    return {
+      users: new Map(userRows.map((row) => [row.id, row.name])),
+      agents: new Map(agentRows.map((row) => [row.id, row.name])),
+    };
+  }
+
+  function actorName(
+    names: { users: Map<string, string>; agents: Map<string, string> },
+    actorType: string,
+    actorId: string,
+  ): string | null {
+    if (actorType === "user") return names.users.get(actorId) ?? "a board user";
+    if (actorType === "agent") return names.agents.get(actorId) ?? "an agent";
+    if (actorType === "system") return "AgentDash";
+    if (actorType === "plugin") return "a plugin";
+    return null;
+  }
+
+  async function digest(input: AssistantDigestInput) {
+    const asOf = new Date();
+    const { result: base, ranked, nameById } = await agentScopedSections(input, asOf);
+    const visible = input.visibleProjectIds ?? (await visibleProjectIds(input.companyId, undefined));
+
+    const [company] = await db
+      .select({ name: companies.name })
+      .from(companies)
+      .where(eq(companies.id, input.companyId));
+    const projectRow = input.projectId
+      ? await db
+          .select({
+            id: projects.id,
+            name: projects.name,
+            goalId: projects.goalId,
+            leadAgentId: projects.leadAgentId,
+          })
+          .from(projects)
+          .where(and(eq(projects.id, input.projectId), eq(projects.companyId, input.companyId)))
+          .then((rows) => rows[0] ?? null)
+      : null;
+    const scopeName = projectRow
+      ? `${company?.name ?? "this company"} / ${projectRow.name}`
+      : company?.name ?? "this company";
+
+    // ---- changed[] (§4.2): activity joined through its entity to a project.
+    const quietSince = new Date(asOf.getTime() - QUIET_DAYS * 24 * 3_600_000);
+    const scanFrom = input.since.getTime() < quietSince.getTime() ? input.since : quietSince;
+    const activityRows = await db
+      .select({
+        id: activityLog.id,
+        actorType: activityLog.actorType,
+        actorId: activityLog.actorId,
+        action: activityLog.action,
+        entityType: activityLog.entityType,
+        entityId: activityLog.entityId,
+        origin: activityLog.origin,
+        details: activityLog.details,
+        createdAt: activityLog.createdAt,
+      })
+      .from(activityLog)
+      .where(and(eq(activityLog.companyId, input.companyId), gte(activityLog.createdAt, scanFrom)))
+      .orderBy(desc(activityLog.createdAt))
+      .limit(CHANGED_SCAN_LIMIT);
+    const scanTruncated = activityRows.length >= CHANGED_SCAN_LIMIT;
+
+    const uuidLike = (value: string) => /^[0-9a-f-]{36}$/i.test(value);
+    const issueEntityIds = [...new Set(
+      activityRows.filter((row) => row.entityType === "issue" && uuidLike(row.entityId)).map((row) => row.entityId),
+    )];
+    const approvalEntityIds = [...new Set(
+      activityRows.filter((row) => row.entityType === "approval" && uuidLike(row.entityId)).map((row) => row.entityId),
+    )];
+    const projectEntityIds = [...new Set(
+      activityRows.filter((row) => row.entityType === "project" && uuidLike(row.entityId)).map((row) => row.entityId),
+    )];
+
+    // Approvals map to projects only through issue_approvals (§4.3).
+    const allApprovalIds = [...new Set([...approvalEntityIds, ...ranked.map((r) => r.approval.id)])];
+    const approvalLinks = allApprovalIds.length
+      ? await db
+          .select({ approvalId: issueApprovals.approvalId, issueId: issueApprovals.issueId })
+          .from(issueApprovals)
+          .where(and(eq(issueApprovals.companyId, input.companyId), inArray(issueApprovals.approvalId, allApprovalIds)))
+      : [];
+    const linkedIssueIds = [...new Set(approvalLinks.map((link) => link.issueId))];
+    const issueIdsToLoad = [...new Set([...issueEntityIds, ...linkedIssueIds])];
+    const issueRows = issueIdsToLoad.length
+      ? await db
+          .select({
+            id: issues.id,
+            identifier: issues.identifier,
+            title: issues.title,
+            status: issues.status,
+            projectId: issues.projectId,
+            hiddenAt: issues.hiddenAt,
+            assigneeAgentId: issues.assigneeAgentId,
+            assigneeUserId: issues.assigneeUserId,
+          })
+          .from(issues)
+          .where(and(eq(issues.companyId, input.companyId), inArray(issues.id, issueIdsToLoad)))
+      : [];
+    const issueById = new Map(issueRows.map((row) => [row.id, row]));
+    const projectEntityRows = projectEntityIds.length
+      ? await db
+          .select({ id: projects.id, name: projects.name })
+          .from(projects)
+          .where(and(eq(projects.companyId, input.companyId), inArray(projects.id, projectEntityIds)))
+      : [];
+    const allProjectNames = await db
+      .select({ id: projects.id, name: projects.name })
+      .from(projects)
+      .where(eq(projects.companyId, input.companyId));
+    const projectNameById = new Map(allProjectNames.map((row) => [row.id, row.name]));
+    const projectEntityIdSet = new Set(projectEntityRows.map((row) => row.id));
+    const linksByApproval = new Map<string, string[]>();
+    for (const link of approvalLinks) {
+      const list = linksByApproval.get(link.approvalId) ?? [];
+      list.push(link.issueId);
+      linksByApproval.set(link.approvalId, list);
+    }
+
+    /** A visible, un-hidden issue in scope, or null. */
+    const visibleIssue = (issueId: string) => {
+      const issue = issueById.get(issueId);
+      if (!issue || issue.hiddenAt) return null;
+      if (issue.projectId && !visible.has(issue.projectId)) return null;
+      return issue;
+    };
+
+    type Attribution = { projectId: string | null; issue: ReturnType<typeof visibleIssue>; companyLevel: boolean };
+    const attribute = (row: (typeof activityRows)[number]): Attribution | null => {
+      if (row.entityType === "issue") {
+        const issue = visibleIssue(row.entityId);
+        if (!issue) return null;
+        return { projectId: issue.projectId, issue, companyLevel: issue.projectId === null };
+      }
+      if (row.entityType === "project") {
+        if (!projectEntityIdSet.has(row.entityId) || !visible.has(row.entityId)) return null;
+        return { projectId: row.entityId, issue: null, companyLevel: false };
+      }
+      if (row.entityType === "approval") {
+        const linked = linksByApproval.get(row.entityId);
+        if (!linked || linked.length === 0) return { projectId: null, issue: null, companyLevel: true };
+        // Linked approvals are attributed through their first visible issue;
+        // one invisible link is enough to drop the row rather than guess.
+        const seen = linked.map((id) => visibleIssue(id));
+        if (seen.some((issue) => issue === null)) return null;
+        const issue = seen[0]!;
+        return { projectId: issue.projectId, issue, companyLevel: issue.projectId === null };
+      }
+      if (row.entityType === "agent" && COMPANY_LEVEL_AGENT_ACTIONS.has(row.action)) {
+        return { projectId: null, issue: null, companyLevel: true };
+      }
+      return null; // unattributable: dropped, never guessed
+    };
+
+    const kept = activityRows
+      .map((row) => ({ row, where: attribute(row) }))
+      .filter((entry): entry is { row: (typeof activityRows)[number]; where: Attribution } => {
+        if (!entry.where) return false;
+        if (input.projectId) return entry.where.projectId === input.projectId;
+        return true;
+      });
+
+    // Names for every actor we are about to show (activity + approvals).
+    const userIds = new Set<string>();
+    const agentIdsForNames = new Set<string>();
+    for (const { row } of kept) {
+      if (row.actorType === "user") userIds.add(row.actorId);
+      if (row.actorType === "agent" && uuidLike(row.actorId)) agentIdsForNames.add(row.actorId);
+    }
+    for (const { approval } of ranked) {
+      if (approval.requestedByUserId) userIds.add(approval.requestedByUserId);
+      if (approval.requestedByAgentId) agentIdsForNames.add(approval.requestedByAgentId);
+    }
+    for (const issue of issueRows) if (issue.assigneeAgentId) agentIdsForNames.add(issue.assigneeAgentId);
+
+    // Status provenance for shipped/blocked items: the latest server-side
+    // status-change row for each issue, used only if it set the CURRENT
+    // status. Anything else is "no recorded author" (agent_state).
+    const sectionIssueIds = [...new Set(
+      [...base.shipped.items, ...base.blockedNow.items, ...base.newlyBlocked.items]
+        .map((item) => (item as { issueId?: string }).issueId)
+        .filter((id): id is string => typeof id === "string"),
+    )];
+    const statusRows = sectionIssueIds.length
+      ? await db
+          .select({
+            entityId: activityLog.entityId,
+            actorType: activityLog.actorType,
+            actorId: activityLog.actorId,
+            origin: activityLog.origin,
+            details: activityLog.details,
+            createdAt: activityLog.createdAt,
+          })
+          .from(activityLog)
+          .where(
+            and(
+              eq(activityLog.companyId, input.companyId),
+              eq(activityLog.entityType, "issue"),
+              inArray(activityLog.entityId, sectionIssueIds),
+              sql`jsonb_exists(${activityLog.details}, 'status')`,
+            ),
+          )
+          .orderBy(desc(activityLog.createdAt))
+      : [];
+    const latestStatusRow = new Map<string, (typeof statusRows)[number]>();
+    for (const row of statusRows) if (!latestStatusRow.has(row.entityId)) latestStatusRow.set(row.entityId, row);
+    for (const row of latestStatusRow.values()) {
+      if (row.actorType === "user") userIds.add(row.actorId);
+      if (row.actorType === "agent" && uuidLike(row.actorId)) agentIdsForNames.add(row.actorId);
+    }
+    const names = await namesFor(input.companyId, [...userIds], [...agentIdsForNames]);
+
+    const activitySource = (row: {
+      actorType: string;
+      actorId: string;
+      origin: string | null;
+      details: Record<string, unknown> | null;
+      createdAt: Date;
+    }, entity: string, id: string): RowSource => {
+      const { kind, via } = kindForActivity(row);
+      return {
+        kind,
+        actor: { type: normalizeActorType(row.actorType), name: actorName(names, row.actorType, row.actorId) },
+        ...(via ? { via } : {}),
+        entity,
+        id,
+        recordedAt: row.createdAt.toISOString(),
+      };
+    };
+
+    const statusSource = (issueId: string, status: string): RowSource => {
+      const row = latestStatusRow.get(issueId);
+      if (!row || row.details?.status !== status) {
+        return { kind: "agent_state", actor: { type: "unknown", name: null }, entity: "issue", id: issueId, recordedAt: null };
+      }
+      return activitySource(row, "issue", issueId);
+    };
+
+    const withSource = <T extends { issueId?: string }>(items: T[], status: string) =>
+      items.map((item) => ({
+        ...item,
+        titleKind: "agent_text" as const,
+        source: statusSource(item.issueId ?? "", status),
+      }));
+
+    const shipped = { ...base.shipped, items: withSource(base.shipped.items as Array<{ issueId?: string }>, "done") };
+    const blockedNow = { ...base.blockedNow, items: withSource(base.blockedNow.items as Array<{ issueId?: string }>, "blocked") };
+    const newlyBlocked = { ...base.newlyBlocked, items: withSource(base.newlyBlocked.items as Array<{ issueId?: string }>, "blocked") };
+
+    // ---- Decisions (§4.3): company-wide by default; project calls split
+    // into linked (via issue_approvals) and company-level (no linked issue).
+    const approvalSource = (approval: RankedApproval["approval"]): RowSource => {
+      if (approval.requestedByAgentId) {
+        return {
+          kind: "agent_state",
+          actor: { type: "agent", name: names.agents.get(approval.requestedByAgentId) ?? nameById.get(approval.requestedByAgentId) ?? "an agent" },
+          entity: "approval",
+          id: approval.id,
+          recordedAt: approval.createdAt.toISOString(),
+        };
+      }
+      if (approval.requestedByUserId) {
+        return {
+          kind: "human_or_system",
+          actor: { type: "user", name: names.users.get(approval.requestedByUserId) ?? "a board user" },
+          entity: "approval",
+          id: approval.id,
+          recordedAt: approval.createdAt.toISOString(),
+        };
+      }
+      return { kind: "human_or_system", actor: { type: "system", name: "AgentDash" }, entity: "approval", id: approval.id, recordedAt: approval.createdAt.toISOString() };
+    };
+    const companyLabel = `in ${company?.name ?? "this company"}`;
+    const decisionItem = (entry: RankedApproval, scope: "company" | "project" | "company-level", scopeLabel: string) => {
+      const linkedIssue = (linksByApproval.get(entry.approval.id) ?? []).map((id) => visibleIssue(id)).find(Boolean) ?? null;
+      return {
+        approvalId: entry.approval.id,
+        type: entry.approval.type,
+        agentName: entry.approval.requestedByAgentId ? nameById.get(entry.approval.requestedByAgentId) ?? null : null,
+        risk: entry.risk,
+        waitingSince: entry.approval.createdAt.toISOString(),
+        scope,
+        scopeLabel,
+        issueRef: linkedIssue ? linkedIssue.identifier ?? linkedIssue.id : null,
+        source: approvalSource(entry.approval),
+      };
+    };
+    const decisionsWaiting: Record<string, unknown> = {
+      ...base.decisionsWaiting,
+      items: (base.decisionsWaiting.items as Array<{ approvalId: string }>).map((item) => {
+        const entry = ranked.find((r) => r.approval.id === item.approvalId);
+        return entry ? { ...item, ...decisionItem(entry, "company", companyLabel) } : item;
+      }),
+      scope: "company",
+      label: companyLabel,
+    };
+    let briefingDecisions: { total: number; items: BriefingDecision[]; breakdown?: string };
+    if (projectRow) {
+      const linked = ranked.filter((entry) => {
+        const ids = linksByApproval.get(entry.approval.id) ?? [];
+        return ids.some((id) => visibleIssue(id)?.projectId === projectRow.id);
+      });
+      const companyLevel = ranked.filter((entry) => (linksByApproval.get(entry.approval.id) ?? []).length === 0);
+      const levelLabel = `company-level, not tied to ${projectRow.name}`;
+      const linkedItems = linked.slice(0, DIGEST_LIMITS.decisions).map((entry) => decisionItem(entry, "project", `linked to ${projectRow.name}`));
+      const companyLevelItems = companyLevel.slice(0, DIGEST_LIMITS.decisions).map((entry) => decisionItem(entry, "company-level", levelLabel));
+      decisionsWaiting.linked = { total: linked.length, shown: linkedItems.length, items: linkedItems };
+      decisionsWaiting.companyLevel = { total: companyLevel.length, shown: companyLevelItems.length, items: companyLevelItems, label: levelLabel };
+      briefingDecisions = {
+        total: linked.length + companyLevel.length,
+        breakdown: `${linked.length} linked to ${projectRow.name}, ${companyLevel.length} ${levelLabel}`,
+        items: [...linkedItems, ...companyLevelItems].map((item) => ({
+          approvalId: item.approvalId,
+          type: item.type,
+          scopeLabel: item.scopeLabel,
+          source: item.source,
+        })),
+      };
+    } else {
+      const items = ranked.slice(0, DIGEST_LIMITS.decisions).map((entry) => decisionItem(entry, "company", companyLabel));
+      briefingDecisions = {
+        total: ranked.length,
+        items: items.map((item) => ({ approvalId: item.approvalId, type: item.type, scopeLabel: item.scopeLabel, source: item.source })),
+      };
+    }
+
+    // ---- changed[] projection: fixed fields only. `details` is NEVER
+    // copied; the only "what changed" facts are re-read from the entity.
+    const inWindow = kept.filter(({ row }) => row.createdAt.getTime() >= input.since.getTime());
+    const changedItems = inWindow.slice(0, DIGEST_LIMITS.changed).map(({ row, where }) => {
+      const issue = where.issue;
+      const target = issue
+        ? { type: "issue" as const, ref: issue.identifier ?? issue.id }
+        : row.entityType === "approval"
+          ? { type: "approval" as const, ref: row.entityId }
+          : row.entityType === "project"
+            ? { type: "project" as const, ref: row.entityId }
+            : row.entityType === "agent"
+              ? { type: "agent" as const, ref: row.entityId }
+              : null;
+      return {
+        action: row.action,
+        entityType: row.entityType,
+        recordedAt: row.createdAt.toISOString(),
+        project: where.projectId ? projectNameById.get(where.projectId) ?? null : null,
+        scope: where.companyLevel ? "company-level" : "project",
+        ref: issue?.identifier ?? null,
+        title: issue ? issue.title : null,
+        titleKind: issue ? ("agent_text" as const) : null,
+        current: issue
+          ? {
+              status: issue.status,
+              assignee: issue.assigneeAgentId ? names.agents.get(issue.assigneeAgentId) ?? null : null,
+            }
+          : null,
+        target,
+        source: activitySource(row, row.entityType, row.entityId),
+      };
+    });
+    const changed = {
+      total: inWindow.length,
+      shown: changedItems.length,
+      items: changedItems,
+      scanTruncated,
+    };
+
+    // ---- freshness (§4.4)
+    const openConditions = [
+      eq(issues.companyId, input.companyId),
+      isNull(issues.hiddenAt),
+      notInArray(issues.status, ["done", "cancelled"]),
+      ...(input.projectId ? [eq(issues.projectId, input.projectId)] : []),
+      visibleIssueCondition(visible),
+    ];
+    const [{ openCount }] = await db
+      .select({ openCount: sql<number>`count(*)::int` })
+      .from(issues)
+      .where(and(...openConditions));
+    const newest = kept[0]?.row.createdAt ?? null;
+    const recentActivity = kept.some(({ row }) => row.createdAt.getTime() >= quietSince.getTime());
+    const quiet = openCount > 0 && !recentActivity;
+    const freshness = {
+      asOf: asOf.toISOString(),
+      newestRecordAt: newest ? newest.toISOString() : null,
+      quiet,
+      quietDays: QUIET_DAYS,
+      quietReason: quiet
+        ? `${openCount} open task${openCount === 1 ? "" : "s"}, no recorded activity in the last ${QUIET_DAYS} days`
+        : null,
+    };
+
+    // ---- attention[] and briefing (§4.4)
+    const toBriefingIssue = (item: Record<string, unknown>): BriefingIssue => ({
+      issueId: String(item.issueId ?? ""),
+      identifier: (item.identifier as string | null) ?? null,
+      title: String(item.title ?? ""),
+      source: item.source as RowSource,
+      prTitle: ((item.workProducts as Array<{ title?: string; url?: string | null }> | undefined) ?? []).find((wp) => wp.url)?.title ?? null,
+    });
+    const briefingInput = {
+      scopeName,
+      since: input.since,
+      asOf,
+      decisions: briefingDecisions,
+      blocked: { total: blockedNow.total, items: (blockedNow.items as Array<Record<string, unknown>>).map(toBriefingIssue) },
+      shipped: { total: shipped.total, items: (shipped.items as Array<Record<string, unknown>>).map(toBriefingIssue) },
+      changedTotal: changed.total,
+      quiet: { quiet, reason: freshness.quietReason },
+      truncated: base.truncated || changed.total > changed.shown || scanTruncated,
+    };
+    const attention: AttentionItem[] = buildAttention({
+      ...briefingInput,
+      quietTarget: projectRow ? { type: "project", ref: projectRow.id } : { type: "company", ref: input.companyId },
+    });
+    const briefing = buildBriefing(briefingInput);
+
+    // ---- project block for get_project (§4.5): linked goal + lead report.
+    let project: Record<string, unknown> | null = null;
+    if (projectRow) {
+      const goal = projectRow.goalId
+        ? await db
+            .select({ id: goals.id, title: goals.title, status: goals.status, metric: goals.metricDefinition })
+            .from(goals)
+            .where(and(eq(goals.id, projectRow.goalId), eq(goals.companyId, input.companyId)))
+            .then((rows) => rows[0] ?? null)
+        : null;
+      const report = projectRow.leadAgentId
+        ? await db
+            .select({
+              issueId: issues.id,
+              identifier: issues.identifier,
+              body: documents.latestBody,
+              updatedAt: documents.updatedAt,
+              updatedByAgentId: documents.updatedByAgentId,
+            })
+            .from(issueDocuments)
+            .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
+            .innerJoin(issues, eq(issueDocuments.issueId, issues.id))
+            .where(
+              and(
+                eq(issueDocuments.companyId, input.companyId),
+                eq(issueDocuments.key, LEAD_REPORT_KEY),
+                eq(issues.projectId, projectRow.id),
+                isNull(issues.hiddenAt),
+                eq(documents.updatedByAgentId, projectRow.leadAgentId),
+              ),
+            )
+            .orderBy(desc(documents.updatedAt))
+            .limit(1)
+            .then((rows) => rows[0] ?? null)
+        : null;
+      const leadName = projectRow.leadAgentId
+        ? (await namesFor(input.companyId, [], [projectRow.leadAgentId])).agents.get(projectRow.leadAgentId) ?? null
+        : null;
+      project = {
+        id: projectRow.id,
+        name: projectRow.name,
+        lead: leadName,
+        linkedGoal: goal
+          ? {
+              id: goal.id,
+              title: goal.title,
+              status: goal.status,
+              ...(goal.metric
+                ? {
+                    metric: {
+                      target: goal.metric.target,
+                      unit: goal.metric.unit,
+                      current: goal.metric.currentValue ?? null,
+                      baseline: goal.metric.baseline ?? null,
+                    },
+                  }
+                : {}),
+            }
+          : null,
+        leadReport: report
+          ? {
+              author: leadName,
+              kind: "agent_text" as const,
+              agentWrote: true,
+              recordedAt: report.updatedAt.toISOString(),
+              ageMinutes: Math.max(0, Math.round((asOf.getTime() - report.updatedAt.getTime()) / 60_000)),
+              excerpt: report.body.length > LEAD_REPORT_EXCERPT ? `${report.body.slice(0, LEAD_REPORT_EXCERPT - 1)}…` : report.body,
+              issueRef: report.identifier ?? report.issueId,
+            }
+          : null,
+        notes: [
+          ...(goal ? [] : ["no goal linked"]),
+          ...(report ? [] : ["no lead report on file"]),
+        ],
+      };
+    }
+
+    return {
+      ...base,
+      shipped,
+      blockedNow,
+      newlyBlocked,
+      decisionsWaiting,
+      scope: projectRow
+        ? { type: "project" as const, company: company?.name ?? null, project: projectRow.name, projectId: projectRow.id }
+        : { type: "company" as const, company: company?.name ?? null },
+      changed,
+      freshness,
+      attention,
+      briefing,
+      ...(project ? { project } : {}),
+    };
+  }
+
+  return { digest, audienceAgents, tasksAssignedTo, visibleProjectIds };
+}
+
+type RankedApproval = {
+  approval: typeof approvals.$inferSelect;
+  risk: ReturnType<typeof scopeAndRankOpenApprovals>[number]["risk"];
+};
+
+/** Issues with no project are company-visible; others need a visible project. */
+function visibleIssueCondition(visible: ReadonlySet<string>) {
+  const ids = [...visible];
+  return ids.length ? or(isNull(issues.projectId), inArray(issues.projectId, ids))! : isNull(issues.projectId);
 }
 
 function emptyDigest(asOf: Date) {
