@@ -22,6 +22,10 @@ import {
   projects,
 } from "@paperclipai/db";
 import {
+  ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR,
+  ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR,
+} from "@paperclipai/shared";
+import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
@@ -290,6 +294,31 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
       .from(assistantActionHandles)
       .where(eq(assistantActionHandles.token, handleTokenHash(token)))
       .then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * Already-spent handles for the gated-budget tests. The budget counts
+   * `consumedAt` inside the rolling hour, so these rows read as confirms that
+   * already happened; expiresAt stays inside the sweep's grace window.
+   */
+  async function seedConsumedHandles(
+    grantId: string,
+    kind: "approval_decision" | "hire_request",
+    count: number,
+  ) {
+    const now = Date.now();
+    await db.insert(assistantActionHandles).values(
+      Array.from({ length: count }, () => ({
+        token: handleTokenHash(`spent-${randomUUID()}`),
+        companyId,
+        grantId,
+        actorUserId: USER_ID,
+        kind,
+        payload: {},
+        expiresAt: new Date(now + 15 * 60 * 1000),
+        consumedAt: new Date(now),
+      })),
+    );
   }
 
   async function prepareAndConfirm(token: string, approvalId: string, personSaid?: string) {
@@ -878,5 +907,118 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     expect(prep.status, prep.summary).toBe("ok");
     // Untrusted agent-authored text is attributed, never asserted as fact.
     expect(prep.summary).toContain('Priya wrote: "Sarah Johnson as QA Engineer"');
+  });
+
+  it("the per-grant confirm budget refuses the 21st confirm inside the hour", async () => {
+    const { token, grant } = await grantToken(DECIDE_SCOPES);
+    // Twenty confirms already spent by this grant inside the rolling hour.
+    await seedConsumedHandles(grant.id, "approval_decision", ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR);
+    const approval = await seedApproval(companyId);
+
+    const prep = envelope(
+      await callTool(token, "prepare_decision", { approval: approval.id, decision: "approve" }),
+    );
+    expect(prep.status, prep.summary).toBe("ok");
+
+    const conf = envelope(
+      await callTool(token, "confirm_action", { handle: prep.data!.handle as string }),
+    );
+    expect(conf.status).toBe("refused");
+    expect(conf.summary).toContain(`confirmed ${ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR} actions`);
+    expect((await readApproval(approval.id))!.status).toBe("pending");
+  });
+
+  it("the per-grant hire budget refuses the 6th hire inside the hour", async () => {
+    const { token, grant } = await grantToken(DECIDE_SCOPES);
+    await seedConsumedHandles(grant.id, "hire_request", ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR);
+
+    const prep = envelope(await callTool(token, "request_hire", { role: "qa", reason: "coverage" }));
+    expect(prep.status, prep.summary).toBe("ok");
+
+    const conf = envelope(
+      await callTool(token, "confirm_action", { handle: prep.data!.handle as string }),
+    );
+    expect(conf.status).toBe("refused");
+    expect(conf.summary).toContain(`hired ${ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR} agents`);
+
+    const hired = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.companyId, companyId), eq(agents.name, "Qa")));
+    expect(hired).toHaveLength(0);
+  });
+
+  it("a steward change between prepare and confirm refuses at confirm", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES, mkCompanyId, { userId: STEWARD_USER_ID });
+    const approval = await seedApproval(mkCompanyId, { requestedByAgentId: mkAgentId });
+    const prep = envelope(
+      await callTool(token, "prepare_decision", { approval: approval.id, decision: "approve" }),
+    );
+    expect(prep.status, prep.summary).toBe("ok");
+
+    // The handle survives the transfer — what is gone is the authority it
+    // was minted under. Confirm re-resolves the steward, so it refuses here
+    // rather than at token lookup: the grant and membership are untouched.
+    await agentStewardshipService(db).transfer(mkCompanyId, mkAgentId, {
+      userId: USER_ID,
+      transferredByUserId: USER_ID,
+    });
+    try {
+      const conf = envelope(
+        await callTool(token, "confirm_action", { handle: prep.data!.handle as string }),
+      );
+      expect(conf.status).toBe("refused");
+      expect(conf.summary).toContain("not the person who can decide");
+      expect((await readApproval(approval.id))!.status).toBe("pending");
+    } finally {
+      await agentStewardshipService(db).transfer(mkCompanyId, mkAgentId, {
+        userId: STEWARD_USER_ID,
+        transferredByUserId: STEWARD_USER_ID,
+      });
+    }
+  });
+
+  it("agents:create removed between prepare and confirm refuses at confirm", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES, companyId, { userId: MEMBER_USER_ID });
+    // A plain member can decide ordinary approvals but not agent hires — give
+    // the permission explicitly so prepare passes, then take it away. The
+    // refusal must come from the confirm path's own re-check, not token
+    // resolution: the membership stays active throughout.
+    await db.insert(principalPermissionGrants).values({
+      companyId,
+      principalType: "user",
+      principalId: MEMBER_USER_ID,
+      permissionKey: "agents:create",
+      grantedByUserId: USER_ID,
+    });
+    const approval = await seedApproval(companyId, {
+      type: "hire_agent",
+      requestedByAgentId: requesterAgentId,
+      payload: { name: "Sarah Johnson", title: "QA Engineer", agentId: pendingHireAgentId },
+    });
+
+    const prep = envelope(
+      await callTool(token, "prepare_decision", { approval: approval.id, decision: "approve" }),
+    );
+    expect(prep.status, prep.summary).toBe("ok");
+
+    await db
+      .delete(principalPermissionGrants)
+      .where(
+        and(
+          eq(principalPermissionGrants.companyId, companyId),
+          eq(principalPermissionGrants.principalType, "user"),
+          eq(principalPermissionGrants.principalId, MEMBER_USER_ID),
+          eq(principalPermissionGrants.permissionKey, "agents:create"),
+        ),
+      );
+
+    const conf = envelope(
+      await callTool(token, "confirm_action", { handle: prep.data!.handle as string }),
+    );
+    expect(conf.status).toBe("refused");
+    expect(conf.summary).toContain("agents:create");
+    expect(conf.summary).toContain("nothing was decided");
+    expect((await readApproval(approval.id))!.status).toBe("pending");
   });
 });
