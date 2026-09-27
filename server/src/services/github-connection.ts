@@ -18,6 +18,7 @@
 // returned, logged or put in an activity entry, and error messages never quote
 // it or GitHub's response body.
 
+import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { githubRepoConnections, heartbeatRuns, issues, projects, projectWorkspaces } from "@paperclipai/db";
@@ -491,7 +492,10 @@ export function githubConnectionService(db: Db, deps: GitHubConnectionDeps = {})
       const description = `GitHub fine-grained token for ${repo.owner}/${repo.name}`;
       let secretId: string;
       let restore: () => Promise<void>;
-      const current = existing?.secretId ? await secrets.getById(existing.secretId) : await secrets.getByName(companyId, secretName);
+      // Only the secret this connection already owns is rotated. A secret that
+      // merely has the expected name is never adopted: it may have been
+      // planted by someone else (GH #782 review).
+      const current = existing?.secretId ? await secrets.getById(existing.secretId) : null;
       if (current && current.companyId === companyId) {
         const previous = await secrets.resolveSecretValue(companyId, current.id, "latest").catch(() => null);
         await secrets.rotate(current.id, { value: token }, { userId: actorUserId });
@@ -500,9 +504,15 @@ export function githubConnectionService(db: Db, deps: GitHubConnectionDeps = {})
           if (previous !== null) await secrets.rotate(current.id, { value: previous }, { userId: actorUserId });
         };
       } else {
+        const nameTaken = Boolean(await secrets.getByName(companyId, secretName));
         const createdSecret = await secrets.create(
           companyId,
-          { name: secretName, provider: secretProvider(), value: token, description },
+          {
+            name: nameTaken ? `${secretName}-${randomUUID().slice(0, 8)}` : secretName,
+            provider: secretProvider(),
+            value: token,
+            description,
+          },
           { userId: actorUserId },
         );
         secretId = createdSecret.id;

@@ -24,7 +24,29 @@ export interface GitHubConnectionRouteDeps extends GitHubConnectionDeps {
   logActivity?: typeof logActivity;
 }
 
+/**
+ * Per-run limit on credential requests. git asks once per network operation;
+ * anything far beyond that is a script harvesting the token (GH #782 review).
+ */
+export const AGENT_GIT_CREDENTIAL_LIMIT = { max: 30, windowMs: 60_000 };
+
 export function githubConnectionRoutes(db: Db, deps: GitHubConnectionRouteDeps = {}) {
+  const credentialHits = new Map<string, number[]>();
+  function allowCredentialRequest(runId: string, now = Date.now()): boolean {
+    const since = now - AGENT_GIT_CREDENTIAL_LIMIT.windowMs;
+    const hits = (credentialHits.get(runId) ?? []).filter((at) => at > since);
+    if (hits.length >= AGENT_GIT_CREDENTIAL_LIMIT.max) {
+      credentialHits.set(runId, hits);
+      return false;
+    }
+    hits.push(now);
+    credentialHits.set(runId, hits);
+    if (credentialHits.size > 5_000) {
+      for (const [key, times] of credentialHits) if (!times.some((at) => at > since)) credentialHits.delete(key);
+    }
+    return true;
+  }
+
   const router = Router();
   const svc = githubConnectionService(db, deps);
   const access = accessService(db);
@@ -130,6 +152,11 @@ export function githubConnectionRoutes(db: Db, deps: GitHubConnectionRouteDeps =
         (actor.runId && actor.runId !== actor.jwtRunId)
       ) {
         res.status(403).send("");
+        return;
+      }
+      if (!allowCredentialRequest(actor.jwtRunId)) {
+        res.setHeader("Retry-After", String(Math.ceil(AGENT_GIT_CREDENTIAL_LIMIT.windowMs / 1000)));
+        res.status(429).send("");
         return;
       }
       const request = parseGitCredentialRequest(raw);

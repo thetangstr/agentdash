@@ -28,7 +28,8 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { logger } from "../middleware/logger.js";
-import { githubConnectionRoutes } from "../routes/github-connection.js";
+import { githubConnectionRoutes, AGENT_GIT_CREDENTIAL_LIMIT } from "../routes/github-connection.js";
+import { secretRoutes } from "../routes/secrets.js";
 import { secretService } from "../services/secrets.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -143,6 +144,7 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
       next();
     });
     app.use("/api", githubConnectionRoutes(db, { fetch: fetchImpl as never, env: {} }));
+    app.use("/api", secretRoutes(db));
     app.use(errorHandler);
     return app;
   }
@@ -337,6 +339,89 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
     expect(await observable(rotated, removed)).not.toContain(ROTATED);
   });
 
+  describe("the token secret is managed (GH #782 review)", () => {
+    async function connected() {
+      const seeded = await seedCompany();
+      await request(buildApp(seeded.owner, fakeGitHub().fn))
+        .put(`/api/companies/${seeded.company.id}/github-connections`)
+        .send({ repoUrl: "acme/app", githubToken: CANARY })
+        .expect(201);
+      const [connection] = await db.select().from(githubRepoConnections).where(eq(githubRepoConnections.companyId, seeded.company.id));
+      return { ...seeded, connection: connection!, secretId: connection!.secretId! };
+    }
+
+    it("a member cannot rotate, rename or delete it through the generic secrets API", async () => {
+      const { member, secretId, company } = await connected();
+      const app = buildApp(member, fakeGitHub().fn);
+      expect((await request(app).post(`/api/secrets/${secretId}/rotate`).send({ value: ROTATED })).status).toBe(403);
+      expect((await request(app).patch(`/api/secrets/${secretId}`).send({ name: "mine" })).status).toBe(403);
+      expect((await request(app).delete(`/api/secrets/${secretId}`)).status).toBe(403);
+      expect(await secretService(db).resolveSecretValue(company.id, secretId, "latest")).toBe(CANARY);
+      const [connection] = await db.select().from(githubRepoConnections);
+      expect(connection!.secretId).toBe(secretId);
+    });
+
+    it("an owner may still rotate it there", async () => {
+      const { owner, secretId, company } = await connected();
+      const res = await request(buildApp(owner, fakeGitHub().fn)).post(`/api/secrets/${secretId}/rotate`).send({ value: ROTATED });
+      expect(res.status).toBe(200);
+      expect(await secretService(db).resolveSecretValue(company.id, secretId, "latest")).toBe(ROTATED);
+    });
+
+    it("it is not listed, and nobody can create or rename into the reserved name", async () => {
+      const { member, owner, company, connection } = await connected();
+      const listed = await request(buildApp(member, fakeGitHub().fn)).get(`/api/companies/${company.id}/secrets`);
+      expect(listed.status).toBe(200);
+      expect(JSON.stringify(listed.body)).not.toContain(connection.secretId!);
+      const planted = await request(buildApp(owner, fakeGitHub().fn))
+        .post(`/api/companies/${company.id}/secrets`)
+        .send({ name: `github-token-${randomUUID()}`, value: ROTATED });
+      expect(planted.status).toBe(422);
+      const plain = await request(buildApp(member, fakeGitHub().fn))
+        .post(`/api/companies/${company.id}/secrets`)
+        .send({ name: "ordinary", value: "x" });
+      expect(plain.status).toBe(201);
+      expect((await request(buildApp(member, fakeGitHub().fn)).patch(`/api/secrets/${plain.body.id}`).send({ name: "github-token-x" })).status).toBe(422);
+    });
+
+    it("connect never adopts a pre-existing secret that merely has the expected name", async () => {
+      const { company, owner } = await seedCompany();
+      const project = await db.insert(projects).values({ companyId: company.id, name: "app" }).returning().then((rows) => rows[0]!);
+      const workspace = await db
+        .insert(projectWorkspaces)
+        .values({ companyId: company.id, projectId: project.id, name: "app", sourceType: "git_repo", repoUrl: "https://github.com/acme/app", isPrimary: true })
+        .returning()
+        .then((rows) => rows[0]!);
+      // Planted before the reservation existed (or by direct DB access).
+      const planted = await secretService(db).create(
+        company.id,
+        { name: `github-token-${workspace.id}`, provider: "local_encrypted", value: ROTATED },
+        { userId: "member" },
+      );
+      await request(buildApp(owner, fakeGitHub().fn))
+        .put(`/api/companies/${company.id}/github-connections`)
+        .send({ repoUrl: "acme/app", githubToken: CANARY, projectId: project.id })
+        .expect(201);
+      const [connection] = await db.select().from(githubRepoConnections);
+      expect(connection!.secretId).not.toBe(planted.id);
+      expect(await secretService(db).resolveSecretValue(company.id, connection!.secretId!, "latest")).toBe(CANARY);
+      expect(await secretService(db).resolveSecretValue(company.id, planted.id, "latest")).toBe(ROTATED);
+    });
+
+    it("cannot be bound into project or agent env, and a stored binding is skipped at run time", async () => {
+      const { company, secretId } = await connected();
+      const svc = secretService(db);
+      const binding = { GH_TOKEN: { type: "secret_ref", secretId } };
+      await expect(svc.normalizeEnvBindingsForPersistence(company.id, binding)).rejects.toThrow(/managed by a connection/);
+      await expect(svc.normalizeAdapterConfigForPersistence(company.id, { env: binding })).rejects.toThrow(/managed by a connection/);
+      const projectEnv = await svc.resolveEnvBindings(company.id, { ...binding, OTHER: "plain" });
+      expect(projectEnv.env).toEqual({ OTHER: "plain" });
+      const agentEnv = await svc.resolveAdapterConfigForRuntime(company.id, { env: binding });
+      expect(agentEnv.config.env).toEqual({});
+      expect(JSON.stringify([projectEnv, agentEnv.config])).not.toContain(CANARY);
+    });
+  });
+
   describe("POST /api/agent-git-credential", () => {
     async function seedRun(opts: { status?: string; connectProject?: boolean; assigned?: boolean } = {}) {
       const seeded = await seedCompany();
@@ -480,6 +565,18 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
     it("refuses an evaluator (read-only) principal", async () => {
       const { agentActor } = await seedRun();
       expect((await post(agentActor(undefined, undefined, { readOnly: true }))).status).toBe(403);
+    });
+
+    it("rate-limits credential requests per run", async () => {
+      const { agentActor } = await seedRun();
+      const app = buildApp(agentActor(), fakeGitHub().fn);
+      const body = "protocol=https\nhost=github.com\npath=acme/app.git\n\n";
+      for (let i = 0; i < AGENT_GIT_CREDENTIAL_LIMIT.max; i += 1) {
+        expect((await request(app).post("/api/agent-git-credential").set("content-type", "text/plain").send(body)).status).toBe(200);
+      }
+      const limited = await request(app).post("/api/agent-git-credential").set("content-type", "text/plain").send(body);
+      expect(limited.status).toBe(429);
+      expect(limited.text).not.toContain(CANARY);
     });
   });
 });

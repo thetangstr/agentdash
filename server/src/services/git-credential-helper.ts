@@ -74,7 +74,24 @@ export function cloneCredentialEnv(token: string): Record<string, string> {
 
 export type RunGit = (args: string[], cwd: string) => Promise<unknown>;
 
-const defaultRunGit: RunGit = (args, cwd) => execFile("git", args, { cwd, timeout: 15_000 });
+/**
+ * The server's env without anything that could redirect a `git config` write
+ * (GIT_DIR, GIT_CONFIG*, GIT_WORK_TREE, ...) or leak control-plane settings.
+ */
+export function sanitizedGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(base)) {
+    const upper = key.toUpperCase();
+    if (upper.startsWith("GIT_") || upper.startsWith("PAPERCLIP_") || upper.startsWith("AGENTDASH_") || upper === "DATABASE_URL") continue;
+    env[key] = value;
+  }
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_TERMINAL_PROMPT = "0";
+  return env;
+}
+
+const defaultRunGit: RunGit = (args, cwd) =>
+  execFile("git", args, { cwd, timeout: 15_000, env: sanitizedGitEnv() });
 
 /**
  * Point the checkout's local config at the agent-time helper. The first,

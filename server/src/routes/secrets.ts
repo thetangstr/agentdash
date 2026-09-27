@@ -8,12 +8,34 @@ import {
   updateSecretSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyAccess, assertCompanyAdministrator } from "./authz.js";
+import { accessService } from "../services/access.js";
+import { isReservedManagedSecretName } from "../services/secrets.js";
+import { unprocessable } from "../errors.js";
 import { logActivity, secretService } from "../services/index.js";
 
 export function secretRoutes(db: Db) {
   const router = Router();
   const svc = secretService(db);
+  const access = accessService(db);
+  // AgentDash (GH #782 review): a secret owned by a connection (the GitHub
+  // token) is rotated or deleted here only by a company owner/admin, and the
+  // reserved names cannot be created or taken by rename by anyone.
+  async function assertMayChangeSecret(req: Parameters<typeof assertCompanyAccess>[0], secret: { id: string; name: string; companyId: string }) {
+    if (await svc.isManaged(secret)) {
+      await assertCompanyAdministrator(
+        access,
+        req,
+        secret.companyId,
+        "This secret belongs to a connection (for example GitHub). Only a workspace owner or admin can change it; reconnect from the project's settings instead.",
+      );
+    }
+  }
+  function assertNameNotReserved(name: unknown) {
+    if (isReservedManagedSecretName(name)) {
+      throw unprocessable("Secret names starting with github-token- are reserved for connections.");
+    }
+  }
   const configuredDefaultProvider = process.env.PAPERCLIP_SECRETS_PROVIDER;
   const defaultProvider = (
     configuredDefaultProvider && SECRET_PROVIDERS.includes(configuredDefaultProvider as SecretProvider)
@@ -33,13 +55,18 @@ export function secretRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const secrets = await svc.list(companyId);
-    res.json(secrets);
+    // AgentDash (GH #782 review): connection-owned secrets are not listed, so
+    // their ids are not offered for binding (binding them is refused anyway).
+    const visible = [];
+    for (const secret of secrets) if (!(await svc.isManaged(secret))) visible.push(secret);
+    res.json(visible);
   });
 
   router.post("/companies/:companyId/secrets", validate(createSecretSchema), async (req, res) => {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    assertNameNotReserved(req.body.name);
 
     const created = await svc.create(
       companyId,
@@ -75,6 +102,7 @@ export function secretRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    await assertMayChangeSecret(req, existing);
 
     const rotated = await svc.rotate(
       id,
@@ -107,7 +135,9 @@ export function secretRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    await assertMayChangeSecret(req, existing);
 
+    if (req.body.name !== undefined && req.body.name !== existing.name) assertNameNotReserved(req.body.name);
     const updated = await svc.update(id, {
       name: req.body.name,
       description: req.body.description,
@@ -141,6 +171,7 @@ export function secretRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    await assertMayChangeSecret(req, existing);
 
     const removed = await svc.remove(id);
     if (!removed) {
