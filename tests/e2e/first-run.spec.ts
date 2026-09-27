@@ -13,9 +13,9 @@ import { E2E_GITHUB_TOKEN } from "./github-stub.global-setup";
  *
  * Checks: leaving after the repo step and coming back resumes at the first
  * issue; the first issue is created in the repo's project and assigned to an
- * engineer agent; Home offers "Connect Muse" (in-app instructions with this
- * box's assistant URL) and "Plan with your Chief of Staff", which opens the
- * CoS chat with its header line and suggestions.
+ * engineer agent; Home (not a hosted box here, so no first-run nudges) offers
+ * "Plan with your Chief of Staff", which opens the CoS chat with its header
+ * line and suggestions; the in-app assistant instructions open directly.
  */
 
 const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
@@ -59,13 +59,16 @@ test("a new workspace goes through the first run to Home with its first issue as
   await chip.click();
   await page.getByRole("button", { name: "Start", exact: true }).click();
 
-  // Home (#801's Home plus the first-run nudge): Connect Muse, in-app.
+  // Home. The e2e instance is not a hosted box, so the first-run nudges stay
+  // off (#813: only hosted boxes, for new companies); their visibility rules are
+  // covered by first-run-routes.test.ts and FirstRunHomeNudges.test.tsx.
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByTestId("home")).toBeVisible();
-  const muse = page.getByTestId("connect-muse");
-  await expect(muse).toContainText("Connect Muse so you can do this from your phone");
-  await muse.getByRole("link", { name: "Show me how" }).click();
-  await expect(page).toHaveURL(/\/connect-assistant$/);
+  await expect(page.getByTestId("connect-muse")).toHaveCount(0);
+  await expect(page.getByTestId("first-run-home-resume")).toHaveCount(0);
+
+  // The in-app assistant instructions are reachable directly.
+  await page.goto(`${BASE_URL}/connect-assistant`);
   await expect(page.getByTestId("assistant-mcp-url")).toContainText("/api/mcp/assistant");
   await expect(page.getByTestId("assistant-client-id")).toHaveText("muse");
   await page.getByRole("link", { name: "Back to Home" }).click();
