@@ -245,3 +245,68 @@ export async function pendingMigrations(sql: Sql, migrationsFolder: string): Pro
   }
   return null;
 }
+
+// ---- The edge router's role (GH #765, SC-4) --------------------------------
+//
+//   cloud_edge  LOGIN. What the router connects as: SELECT on the edge_routes
+//               view (slug, state, upstream host, encrypted edge secret) and
+//               EXECUTE on edge_record_activity and edge_request_resume, the
+//               two SECURITY DEFINER functions of migration 0005. No table
+//               privilege at all, no membership, owns nothing.
+
+export const EDGE_ROLE = "cloud_edge";
+export const EDGE_VIEW = "edge_routes";
+export const EDGE_FUNCTIONS = ["edge_record_activity(text[])", "edge_request_resume(text)"] as const;
+
+/** Create the router's role if missing and (re)set its password (as a SCRAM verifier). */
+export async function ensureEdgeRole(sql: Sql, password: string): Promise<void> {
+  if (password.length < 24) throw new Error("the edge role password must be at least 24 characters");
+  const edge = ident(EDGE_ROLE);
+  if (!(await sql`select 1 from pg_roles where rolname = ${EDGE_ROLE}`).length) {
+    await sql.unsafe(`create role ${edge} login noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls`);
+  }
+  await sql.unsafe(`alter role ${edge} login noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls password '${scramVerifier(password)}'`);
+  const [{ db }] = (await sql`select current_database() as db`) as unknown as [{ db: string }];
+  await sql.unsafe(`grant connect on database "${db.replace(/"/g, '""')}" to ${edge}`);
+}
+
+/** Exactly the router's privileges, re-applied after every migration. No-op until the role exists. */
+export async function applyEdgeGrants(sql: Sql): Promise<void> {
+  if (!(await sql`select 1 from pg_roles where rolname = ${EDGE_ROLE}`).length) return;
+  const edge = ident(EDGE_ROLE);
+  const memberships = await sql<{ role: string }[]>`
+    select r.rolname as role from pg_auth_members m join pg_roles r on r.oid = m.roleid
+     where m.member = (select oid from pg_roles where rolname = ${EDGE_ROLE})`;
+  for (const m of memberships) await sql.unsafe(`revoke ${ident(m.role)} from ${edge}`);
+  await sql.unsafe(`revoke all on schema public from ${edge}`);
+  await sql.unsafe(`grant usage on schema public to ${edge}`);
+  await sql.unsafe(`revoke all on all tables in schema public from ${edge}`);
+  await sql.unsafe(`revoke all on all sequences in schema public from ${edge}`);
+  await sql.unsafe(`revoke all on all functions in schema public from ${edge}`);
+  if ((await sql`select to_regclass(${`public.${EDGE_VIEW}`}) as v`)[0]?.v) {
+    await sql.unsafe(`grant select on public.${ident(EDGE_VIEW)} to ${edge}`);
+    for (const fn of EDGE_FUNCTIONS) await sql.unsafe(`grant execute on function public.${fn} to ${edge}`);
+  }
+}
+
+/** What is wrong with the CURRENT connection's role for running the router. Empty means fine. */
+export async function edgeRoleProblems(sql: Sql): Promise<string[]> {
+  const problems: string[] = [];
+  const [role] = await sql<{ name: string; rolsuper: boolean; rolcreaterole: boolean; rolcreatedb: boolean }[]>`
+    select current_user as name, rolsuper, rolcreaterole, rolcreatedb from pg_roles where rolname = current_user`;
+  if (!role) return ["cannot read the current role"];
+  if (role.rolsuper || role.rolcreaterole || role.rolcreatedb) problems.push(`${role.name} has superuser, CREATEROLE or CREATEDB`);
+  const member = await sql`select 1 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)`;
+  if (member.length) problems.push(`${role.name} is a member of another role`);
+  const [t] = await sql<{ n: number }[]>`
+    select count(*)::int as n from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r'
+       and (has_table_privilege(current_user, c.oid, 'SELECT') or has_table_privilege(current_user, c.oid, 'INSERT')
+         or has_table_privilege(current_user, c.oid, 'UPDATE') or has_table_privilege(current_user, c.oid, 'DELETE'))`;
+  if ((t?.n ?? 0) > 0) problems.push(`${role.name} has privileges on ${t!.n} table(s); the router may only read the ${EDGE_VIEW} view`);
+  const [v] = await sql<{ ok: boolean | null }[]>`
+    select case when to_regclass(${`public.${EDGE_VIEW}`}) is null then null
+                else has_table_privilege(current_user, ${`public.${EDGE_VIEW}`}, 'SELECT') end as ok`;
+  if (v?.ok !== true) problems.push(`${role.name} cannot read the ${EDGE_VIEW} view (run the migrations with CLOUD_EDGE_DB_PASSWORD)`);
+  return problems;
+}

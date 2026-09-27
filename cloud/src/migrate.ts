@@ -23,9 +23,11 @@ async function main() {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) throw new Error("DATABASE_URL is required");
   const runtimePassword = process.env.CLOUD_RUNTIME_DB_PASSWORD?.trim() || undefined;
+  // GH #765: the edge router's role, when the router is deployed.
+  const edgePassword = process.env.CLOUD_EDGE_DB_PASSWORD?.trim() || undefined;
   const started = Date.now();
-  const { transferred } = await migrateWithRoles(url, { runtimePassword });
-  log.info("migrated", { ms: Date.now() - started, ownershipTransferred: transferred, rolesEnsured: Boolean(runtimePassword) });
+  const { transferred } = await migrateWithRoles(url, { runtimePassword, edgePassword });
+  log.info("migrated", { ms: Date.now() - started, ownershipTransferred: transferred, rolesEnsured: Boolean(runtimePassword), edgeRoleEnsured: Boolean(edgePassword) });
 }
 
 main().then(

@@ -11,6 +11,14 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "imap", "pop", "ns1", "ns2", "railway", "vercel", "stripe", "resend", "official", "verify",
 ]);
 
+/**
+ * Punycode labels (`xn--…`) render as other scripts in browsers and could
+ * impersonate another box's name; no box may take one (GH #808 review).
+ */
+export function isReservedSlug(slug: string): boolean {
+  return RESERVED_SLUGS.has(slug) || RESERVED_SLUGS.has(slug.replace(/-restore$/, "")) || slug.startsWith("xn--");
+}
+
 export class SlugRefused extends Error {
   constructor(message: string) {
     super(message);
@@ -39,7 +47,7 @@ export function validateNewSlug(slug: string): void {
   } else if (slug.length > BOX_SLUG_MAX) {
     throw new SlugRefused(`new box slugs are at most ${BOX_SLUG_MAX} chars (so '<slug>-restore' can always be created)`);
   }
-  if (RESERVED_SLUGS.has(slug) || RESERVED_SLUGS.has(slug.replace(/-restore$/, ""))) {
+  if (isReservedSlug(slug)) {
     throw new SlugRefused(`'${slug}' is reserved`);
   }
 }
