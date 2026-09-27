@@ -16,6 +16,7 @@ import { type JobContext, type JobRow, JobRunner } from "../jobs/runner.js";
 import { createLogger } from "../logger.js";
 import { VariablesUnreadable } from "../railway/api.js";
 import { assertBoxProjectName, projectTag, ProjectNameRefused } from "../railway/names.js";
+import { backfillEdgeSecrets, EdgeNotLive } from "../railway/edge-backfill.js";
 import { PG_IMAGE, provisionHandler, START_COMMAND, type ProvisionerDeps } from "../railway/provisioner.js";
 import { escrowBlobKeyId, escrowKeyId, openEscrow, sealToEscrow } from "../railway/secrets.js";
 import { runEscrow } from "../admin/escrow.js";
@@ -121,7 +122,7 @@ function upserts(fake: FakeRailwayBoxes, serviceId: string): Array<Record<string
 
 describe("a fresh box, from nothing to awaiting_claim", () => {
   it("provisions from the GHCR image by digest, records every ID, and escrows the master key", async () => {
-    const { fake, runner } = setup();
+    const { fake, runner } = setup({}, { edgeLive: true });
     const { slug, boxId, jobId } = await newBox();
     expect(await runner.runOnce()).toBe(jobId);
     const job = await jobRow(jobId);
@@ -352,7 +353,7 @@ describe("secret safety (lib.sh rules)", () => {
   });
 
   it("no generated secret or the Railway token reaches a log line, the job table or a box event", async () => {
-    const { fake, runner } = setup();
+    const { fake, runner } = setup({}, { edgeLive: true });
     logLines.length = 0;
     const { boxId, jobId } = await newBox();
     await runner.runOnce();
@@ -499,5 +500,37 @@ describe("escrow key id and the offline tool (GH #800)", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("edge secret rollout (GH #807 review)", () => {
+  it("keeps the edge secret in the control plane but does not give it to a box while the router is not live", async () => {
+    const { fake, runner } = setup();
+    const { boxId, jobId } = await newBox();
+    await runner.runOnce();
+    expect((await jobRow(jobId)).state).toBe("succeeded");
+    const box = await boxRow(boxId);
+    expect(box.edgeSecretEnc).toBeTruthy();
+    expect(fake.svc(box.webServiceId).variables).not.toHaveProperty("AGENTDASH_EDGE_SECRET");
+  });
+
+  it("the fleet back-fill is refused until the router is live, then sets the stored secret once", async () => {
+    const { fake, runner, deps } = setup();
+    const { boxId } = await newBox();
+    await runner.runOnce();
+    // Boxes left by earlier tests point at project ids this fake reuses; take them out of the running states.
+    await db.execute(sql`update boxes set state = 'cleanup' where state = 'awaiting_claim' and id <> ${boxId}`);
+    const common = { client: deps.client, workspaceId: FAKE_WORKSPACE, dataKeys: KEYS, log };
+    await expect(backfillEdgeSecrets(db, { ...common, edgeLive: false })).rejects.toBeInstanceOf(EdgeNotLive);
+    const box = await boxRow(boxId);
+    expect(fake.svc(box.webServiceId).variables).not.toHaveProperty("AGENTDASH_EDGE_SECRET");
+    const first = await backfillEdgeSecrets(db, { ...common, edgeLive: true });
+    expect(first.set, JSON.stringify(first)).toContain(box.slug);
+    const web = fake.svc(box.webServiceId);
+    expect(web.variables.AGENTDASH_EDGE_SECRET).toBe(decryptField(KEYS, box.edgeSecretEnc!, "boxes.edge_secret_enc"));
+    expect(web.deployments).toHaveLength(1); // skipDeploys: no new deployment
+    const second = await backfillEdgeSecrets(db, { ...common, edgeLive: true });
+    expect(second.alreadySet).toContain(box.slug);
+    expect(second.set).not.toContain(box.slug);
   });
 });

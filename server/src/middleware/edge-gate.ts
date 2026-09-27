@@ -17,6 +17,9 @@
 //     (logging included) can see it.
 // With AGENTDASH_EDGE_SECRET unset nothing here runs: local dev, on-prem and
 // self-hosted installs behave exactly as before.
+//
+// Rotation (#807 review): AGENTDASH_EDGE_SECRET_PREVIOUS is accepted as well,
+// so a new secret can reach the router and the box in either order.
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { isIP } from "node:net";
@@ -31,6 +34,21 @@ type Env = NodeJS.ProcessEnv;
 export function configuredEdgeSecret(env: Env = process.env): string | null {
   const v = (env.AGENTDASH_EDGE_SECRET ?? "").trim();
   return v.length > 0 ? v : null;
+}
+
+/** The secrets a request may carry: the current one, then the previous one during a rotation. */
+export function configuredEdgeSecrets(env: Env = process.env): string[] {
+  const current = configuredEdgeSecret(env);
+  if (!current) return [];
+  const previous = (env.AGENTDASH_EDGE_SECRET_PREVIOUS ?? "").trim();
+  return previous && previous !== current ? [current, previous] : [current];
+}
+
+/** True when the presented header matches any accepted secret (each compared in constant time). */
+export function edgeHeaderMatchesAny(presented: string | string[] | undefined, secrets: string[]): boolean {
+  let ok = false;
+  for (const s of secrets) ok = edgeHeaderMatches(presented, s) || ok;
+  return ok;
 }
 
 function headerValue(raw: string | string[] | undefined): string | null {
@@ -67,18 +85,18 @@ export function edgeClientIp(raw: string | string[] | undefined): string | null 
  * Express). The health exemption does not apply: an upgrade is never health.
  */
 export function edgeUpgradeAllowed(req: IncomingMessage, env: Env = process.env): boolean {
-  const secret = configuredEdgeSecret(env);
-  if (!secret) return true;
-  const ok = edgeHeaderMatches(req.headers[EDGE_SECRET_HEADER], secret);
+  const secrets = configuredEdgeSecrets(env);
+  if (!secrets.length) return true;
+  const ok = edgeHeaderMatchesAny(req.headers[EDGE_SECRET_HEADER], secrets);
   delete req.headers[EDGE_SECRET_HEADER];
   return ok;
 }
 
-export function edgeGate(opts: { secret: string | null }): RequestHandler {
-  const secret = opts.secret;
+export function edgeGate(opts: { secret: string | null; previous?: string | null }): RequestHandler {
+  const secrets = [opts.secret, opts.previous].filter((s): s is string => typeof s === "string" && s.length > 0);
   return (req: Request, res, next) => {
-    if (!secret) return next();
-    const matched = edgeHeaderMatches(req.headers[EDGE_SECRET_HEADER], secret);
+    if (!secrets.length) return next();
+    const matched = edgeHeaderMatchesAny(req.headers[EDGE_SECRET_HEADER], secrets);
     // Never let the secret reach a logger, a handler or an error report.
     delete req.headers[EDGE_SECRET_HEADER];
     if (!matched) {
@@ -92,6 +110,8 @@ export function edgeGate(opts: { secret: string | null }): RequestHandler {
       return;
     }
     const clientIp = edgeClientIp(req.headers[EDGE_CLIENT_IP_HEADER]);
+    // Better Auth's own limiter reads this header (ipAddressHeaders); keep it only when it is a valid IP.
+    if (!clientIp) delete req.headers[EDGE_CLIENT_IP_HEADER];
     if (clientIp) {
       // Shadow Express's req.ip getter for this request, so every consumer
       // (each rate limiter, the trial's ip hash) sees the visitor.

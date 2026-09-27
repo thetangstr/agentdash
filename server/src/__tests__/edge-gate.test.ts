@@ -25,6 +25,8 @@ import { hostedBoxConfigErrors } from "../hosted-box-guard.js";
 import { setupLiveEventsWebSocketServer } from "../realtime/live-events-ws.js";
 import { LOG_REDACT_PATHS } from "../middleware/logger.js";
 import { oauthRoutes } from "../routes/oauth.js";
+import { buildBetterAuthAdvancedOptions } from "../auth/better-auth.js";
+import { configuredEdgeSecrets } from "../middleware/edge-gate.js";
 
 const SECRET = "e".repeat(8) + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
@@ -174,6 +176,19 @@ describe("with AGENTDASH_EDGE_SECRET unset", () => {
   });
 });
 
+const guardBase = {
+  AGENTDASH_DEPLOYMENT_KIND: "hosted",
+  PAPERCLIP_PUBLIC_URL: "https://acme.agentdash.cloud",
+  PAPERCLIP_AUTH_PUBLIC_BASE_URL: "https://acme.agentdash.cloud",
+  AGENTDASH_HERMES_MANAGED_PROFILES: "true",
+  AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE: "true",
+  AGENTDASH_INVITE_CODES: "AGD-0123456789ABCDEF0123456789",
+} as NodeJS.ProcessEnv;
+const guardConfig = { deploymentMode: "authenticated", authBaseUrlMode: "explicit", authPublicBaseUrl: "https://acme.agentdash.cloud", authDisableSignUp: false } as Parameters<typeof hostedBoxConfigErrors>[0];
+function edgeErrors(env: NodeJS.ProcessEnv) {
+  return hostedBoxConfigErrors(guardConfig, { ...guardBase, ...env }).filter((e) => /EDGE/.test(e));
+}
+
 describe("hosted boot guard", () => {
   const base = {
     AGENTDASH_DEPLOYMENT_KIND: "hosted",
@@ -184,7 +199,6 @@ describe("hosted boot guard", () => {
     AGENTDASH_INVITE_CODES: "AGD-0123456789ABCDEF0123456789",
   } as NodeJS.ProcessEnv;
   const config = { deploymentMode: "authenticated", authBaseUrlMode: "explicit", authPublicBaseUrl: "https://acme.agentdash.cloud", authDisableSignUp: false } as Parameters<typeof hostedBoxConfigErrors>[0];
-  const edgeErrors = (env: NodeJS.ProcessEnv) => hostedBoxConfigErrors(config, { ...base, ...env }).filter((e) => /EDGE/.test(e));
 
   it("accepts a long secret with an https public URL under the edge domain", () => {
     expect(edgeErrors({ AGENTDASH_EDGE_SECRET: SECRET, AGENTDASH_EDGE_DOMAIN: "agentdash.cloud" })).toEqual([]);
@@ -225,5 +239,35 @@ describe("OAuth issuer behind the edge", () => {
     expect(prm.body.resource).toMatch(/^https:\/\/acme\.agentdash\.cloud\//);
     // The Railway host itself, without the router, cannot reach the metadata at all.
     expect((await request(a).get("/.well-known/oauth-authorization-server").set("Host", "web-production-a78ce.up.railway.app")).status).toBe(403);
+  });
+});
+
+describe("#807 review", () => {
+  const PREVIOUS = "p".repeat(8) + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+  it("accepts the previous secret during a rotation, and nothing else", async () => {
+    const a = express();
+    a.use(edgeGate({ secret: SECRET, previous: PREVIOUS }));
+    a.get("/x", (_req, res) => res.json({ ok: true }));
+    expect((await request(a).get("/x").set(EDGE_SECRET_HEADER, SECRET)).status).toBe(200);
+    expect((await request(a).get("/x").set(EDGE_SECRET_HEADER, PREVIOUS)).status).toBe(200);
+    expect((await request(a).get("/x").set(EDGE_SECRET_HEADER, "neither")).status).toBe(403);
+    expect(configuredEdgeSecrets({ AGENTDASH_EDGE_SECRET: SECRET, AGENTDASH_EDGE_SECRET_PREVIOUS: PREVIOUS } as NodeJS.ProcessEnv)).toEqual([SECRET, PREVIOUS]);
+    expect(configuredEdgeSecrets({ AGENTDASH_EDGE_SECRET_PREVIOUS: PREVIOUS } as NodeJS.ProcessEnv)).toEqual([]);
+  });
+
+  it("points Better Auth's rate limiter at the router's client address only when the edge secret is set", () => {
+    expect(buildBetterAuthAdvancedOptions({ disableSecureCookies: false, edgeSecretSet: true })).toMatchObject({ ipAddress: { ipAddressHeaders: ["x-agentdash-client-ip"] } });
+    expect(buildBetterAuthAdvancedOptions({ disableSecureCookies: false, edgeSecretSet: false })).not.toHaveProperty("ipAddress");
+  });
+
+  it("drops an invalid client address even with a matching secret", async () => {
+    const res = await request(app(SECRET)).get("/x").set(EDGE_SECRET_HEADER, SECRET).set(EDGE_CLIENT_IP_HEADER, "not-an-ip");
+    expect(res.body.sawClientIpHeader).toBe(false);
+  });
+
+  it("the boot guard refuses an edge secret without AGENTDASH_EDGE_DOMAIN, and a short previous secret", () => {
+    expect(edgeErrors({ AGENTDASH_EDGE_SECRET: SECRET }).join("\n")).toMatch(/AGENTDASH_EDGE_DOMAIN is not/);
+    expect(edgeErrors({ AGENTDASH_EDGE_SECRET: SECRET, AGENTDASH_EDGE_DOMAIN: "agentdash.cloud", AGENTDASH_EDGE_SECRET_PREVIOUS: "short" }).join("\n")).toMatch(/PREVIOUS is shorter/);
   });
 });

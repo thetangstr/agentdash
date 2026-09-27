@@ -8,6 +8,8 @@ import { type Refusal, requireAdmin, type RequireAdminOptions } from "./auth.js"
 import { operatorAudit } from "./db/schema.js";
 import type { Logger } from "./logger.js";
 import { internalRoutes } from "./routes/internal.js";
+import { backfillEdgeSecrets } from "./railway/edge-backfill.js";
+import { RailwayClient } from "./railway/client.js";
 
 export function createApp(opts: {
   db: CloudDb;
@@ -41,7 +43,21 @@ export function createApp(opts: {
       detail: { reason: r.reason, socketIp: r.socketIp, method: r.method, path: r.path, failures: r.failures ?? null },
     });
   };
-  app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log));
+  app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log, {
+    // AgentDash (#807 review): the fleet step for when the edge router goes live.
+    ...(config.railwayToken && config.railwayWorkspaceId
+      ? {
+          edgeBackfill: () =>
+            backfillEdgeSecrets(db, {
+              client: new RailwayClient({ token: config.railwayToken!, log }),
+              workspaceId: config.railwayWorkspaceId!,
+              dataKeys: config.dataKeys,
+              edgeLive: config.edgeLive,
+              log,
+            }),
+        }
+      : {}),
+  }));
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not found" });

@@ -152,7 +152,14 @@ export function hostedBoxConfigErrors(
     if (!publicUrl.startsWith("https://")) {
       errors.push("AGENTDASH_EDGE_SECRET is set but PAPERCLIP_PUBLIC_URL is not https://; behind the edge router the public URL is https://<slug>.agentdash.cloud.");
     }
+    const previous = (env.AGENTDASH_EDGE_SECRET_PREVIOUS ?? "").trim();
+    if (previous && previous.length < MIN_EDGE_SECRET_LENGTH) {
+      errors.push(`AGENTDASH_EDGE_SECRET_PREVIOUS is shorter than ${MIN_EDGE_SECRET_LENGTH} characters.`);
+    }
     const edgeDomain = (env.AGENTDASH_EDGE_DOMAIN ?? "").trim().toLowerCase();
+    if (!edgeDomain) {
+      errors.push("AGENTDASH_EDGE_SECRET is set but AGENTDASH_EDGE_DOMAIN is not; set it to the router's domain (agentdash.cloud) so the public URL can be checked.");
+    }
     if (edgeDomain && publicUrl.startsWith("https://")) {
       let host = "";
       try {

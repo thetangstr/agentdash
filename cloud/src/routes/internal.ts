@@ -10,12 +10,36 @@ import { abandonBox, BoxOpError, createBoxForOperator, retryBox } from "../jobs/
 import { requestProvision } from "../jobs/queue.js";
 import type { Logger } from "../logger.js";
 import { isSettingKey, SettingValidationError, settingsService } from "../settings.js";
+import { EdgeNotLive } from "../railway/edge-backfill.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
 
-export function internalRoutes(db: CloudDb, log: Logger): ExpressRouter {
+export interface InternalRouteDeps {
+  /** The fleet edge-secret back-fill (#807 review); absent without a Railway token. */
+  edgeBackfill?: () => Promise<unknown>;
+}
+
+export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps = {}): ExpressRouter {
   const router = Router();
+
+  router.post("/fleet/edge-backfill", async (_req, res) => {
+    if (!deps.edgeBackfill) {
+      res.status(409).json({ error: "no Railway token configured" });
+      return;
+    }
+    try {
+      const result = await deps.edgeBackfill();
+      log.info("edge secret back-fill", { result: result as Record<string, unknown> });
+      res.json(result);
+    } catch (err) {
+      if (err instanceof EdgeNotLive) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
   const svc = settingsService(db);
 
   router.get("/settings", async (_req, res) => {

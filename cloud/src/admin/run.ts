@@ -16,6 +16,7 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
                              create a box for <email> and request provisioning (kill switch and cap apply)
   boxes retry <slug>         resume a failed box's provision job at its failed step
   boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
+  fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
   jobs list [state]          list jobs (all by default; queued, running, succeeded, failed, dead)
   waitlist list [state]      list the waitlist (waiting by default; approved, rejected, all)
   waitlist approve <id>      approve a waiting entry
@@ -96,6 +97,7 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
   if (group === "boxes" && (action === "retry" || action === "abandon") && rest.length === 1) {
     return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));
   }
+  if (group === "fleet" && action === "edge-backfill") return print(await call("POST", "/fleet/edge-backfill"));
   if (group === "jobs" && action === "list") {
     return print(await call("GET", `/jobs?state=${encodeURIComponent(rest[0] ?? "all")}`));
   }
