@@ -423,6 +423,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         companyId: claims.company_id,
         keyId: undefined,
         runId: runIdHeader || normalizeRunId(claims.run_id),
+        // AgentDash (GH #782): the run the JWT was minted for, which a header cannot override.
+        jwtRunId: normalizeRunId(claims.run_id) || undefined,
         source: "agent_jwt",
         principalKind: jwtPrincipalKind,
         readOnly: jwtPrincipalKind === "evaluator",

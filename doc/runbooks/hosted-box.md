@@ -121,6 +121,30 @@ The code is **not single-use**: until the operator closes sign-up (section 7), a
 2. Record the box in the operator's box list: slug, URL, release, founder email, date claimed.
 3. Escrow the secrets master key (section 9).
 
+### Connecting the founder's GitHub repo (GH #782)
+
+Agents on a box reach the customer's repo only through a **fine-grained personal access token** the founder pastes into a project's Configuration tab (and, after UX-5, the first-run "Your repo" step). The GitHub App (#797) replaces it before signup opens; see "What changes with the GitHub App" below.
+
+**What the token must be.** Fine-grained (`github_pat_…`; classic `ghp_` tokens are refused), **Repository access: Only select repositories** with just the one repo, **Contents: Read and write** and **Pull requests: Read and write** (Metadata: Read comes with them), and an expiry. Nothing else. Create it at `https://github.com/settings/personal-access-tokens/new`.
+
+**Who can set it.** The instance admin or a company owner/admin (`PUT /api/companies/:companyId/github-connections`). The API never shows the token to anyone, members included; but see "What an agent can do with it": anyone who can give an agent work in the connected project can, in effect, ask that agent for it.
+
+**What happens on save.** The server calls GitHub twice, read-only (`GET /repos/{owner}/{repo}`, requiring `permissions.push`, and `GET /repos/{owner}/{repo}/pulls`), and refuses with the missing permission named. Then it stores the token as an encrypted company secret (`github-token-<workspaceId>`, the same secrets service as the model key), attaches the repo to the project's primary workspace as `https://github.com/<owner>/<repo>` with no local folder (so the run path makes a managed checkout), and records a `github_repo_connections` row (repo, credential source, secret id; never the token). Reconnecting the same repo rotates the token in place. `AGENTDASH_GITHUB_API_URL` points the check at a stub in tests; leave it unset on a box.
+
+**How an agent gets repo access.**
+
+1. The server clones the managed checkout with the token in an environment variable of that one `git` process and a `-c` credential helper that echoes it; the token is not in the URL, in argv or in the new repo's config.
+2. The checkout's local git config gets a credential helper for `https://github.com` that holds no secret: on `git push` it calls `POST /api/agent-git-credential` with the run's own `PAPERCLIP_API_KEY`, which is the short-lived JWT the heartbeat mints for that run. The server answers only to that JWT (never a long-lived agent API key, which a member who creates an agent can read), only for the run signed into it while it is running, only when the agent is the assignee of the run's issue and that issue is in the project the repo is connected to, and only for that repo on github.com. Each answer is an activity entry (`github_connection.credential_issued`). An agent whose `adapterConfig.env` pins its own `PAPERCLIP_API_KEY` gets no credential, and neither does a run whose issue was reassigned away from its agent mid-run. A renamed repo has to be reconnected under its new name (the check does not follow GitHub's redirect).
+3. `GH_TOKEN` is not injected: Hermes strips `GH_TOKEN`/`GITHUB_TOKEN` from every terminal child, and the Hermes wrapper does not forward run env anyway. Agents pass the credential to `gh pr create` for one command (the prompt surfaces show how) and record the PR as a work product on the issue.
+4. Anything shaped like a GitHub token is scrubbed from run logs, excerpts, persisted results, run events and HTTP log lines. Scrubbing matches the raw token shape only: an encoded copy (base64, hex, split across words) passes through.
+5. The token secret is **managed**: its name is reserved (`github-token-…`), the generic secrets API does not list it, only a company owner/admin can rotate or delete it there, and it cannot be bound into project or agent env or referenced by an SSH or sandbox environment (refused on write, skipped or refused at run time). Every service-level secret change names its company and refuses a managed secret unless the connection flow itself asks, so deleting an environment never deletes the token. The credential endpoint is rate-limited per run.
+
+**What an agent can do with it.** The agent has a shell, so during a run it can obtain the token (`git credential fill`) and use it for whatever the token allows until it expires or is revoked: push any branch, open and comment on pull requests, and, because Contents is read and write, **push to the default branch** unless the repo protects it. That is why the scope is one repo with two permissions. Tell the founder to **protect the default branch** (require a pull request before merging) on GitHub. Scrubbing matches the token's shape in our logs; it cannot stop an agent that is told (by a teammate who can assign it work, or by text in the repo it reads) to post the token elsewhere, encoded or not. So treat everyone who can direct agents in the connected project as able to obtain the token. If a leak is suspected, revoke the token on GitHub and paste a new one.
+
+**Revoke or rotate.** Revoke on GitHub (Settings → Developer settings → Fine-grained tokens); pushes fail at once. Paste a new token in the project's Configuration tab to rotate. `DELETE /api/companies/:companyId/github-connections/:id` removes the connection and its secret.
+
+**What changes with the GitHub App (#797).** Only the credential source: a `github_app` entry in `CREDENTIAL_SOURCES` (`server/src/services/github-connection.ts`) mints a short-lived installation token from `github_repo_connections.github_app_installation_id`. The workspace, the checkout's credential helper, the agent endpoint and the redaction stay as they are.
+
 ## 8. Custom domain `<slug>.agentdash.cloud`
 
 DNS for agentdash.cloud is at GoDaddy, with no API access, so this is manual.

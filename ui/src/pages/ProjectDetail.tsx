@@ -16,6 +16,7 @@ import { useToastActions } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { ProjectProperties, type ProjectConfigFieldKey, type ProjectFieldSaveState } from "../components/ProjectProperties";
+import { ProjectGitHubSection } from "../components/ProjectGitHubSection";
 import { InlineEditor } from "../components/InlineEditor";
 import { useCapability } from "../hooks/useCapability";
 import { DirectionRestricted } from "../components/DirectionRestricted";
@@ -255,6 +256,10 @@ export function ProjectDetail() {
   const canonicalProjectRef = project ? projectRouteRef(project) : routeProjectRef;
   const projectLookupRef = project?.id ?? routeProjectRef;
   const resolvedCompanyId = project?.companyId ?? selectedCompanyId;
+  // AgentDash (GH #782): the GitHub section is default-profile only; an
+  // agentdash_mk company keeps its project settings exactly as before.
+  const resolvedCompany = companies.find((company) => company.id === resolvedCompanyId) ?? null;
+  const showGitHubSection = Boolean(resolvedCompany) && resolvedCompany?.productProfile !== "agentdash_mk";
 
   /**
    * A project defines a workstream, so changing it is company direction. The
@@ -708,6 +713,12 @@ export function ProjectDetail() {
             getFieldSaveState={(field) => fieldSaveStates[field] ?? "idle"}
             onArchive={(archived) => archiveProject.mutate(archived)}
             archivePending={archiveProject.isPending}
+            // AgentDash (GH #782): connect a GitHub repo (renders nothing on the MK profile)
+            extraSection={
+              showGitHubSection && resolvedCompanyId && project?.id ? (
+                <ProjectGitHubSection companyId={resolvedCompanyId} projectId={project.id} />
+              ) : null
+            }
           />
           {/* AgentDash: goals-eval-hitl */}
           {resolvedCompanyId && project?.id && (

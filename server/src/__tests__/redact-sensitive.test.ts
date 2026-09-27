@@ -118,4 +118,10 @@ describe("redactSensitive", () => {
     expect(json).not.toContain("null");
     expect(json).not.toContain("[1,2,3]");
   });
+
+  it("redacts a GitHub token by its shape, whatever the key (GH #782)", () => {
+    const pat = "github_pat_11ABCDEFGHIJKLMNOPQRSTUV_abcdefghijklmnopqrstuvwxyz0123456789";
+    const out = redactSensitive({ githubToken: pat, note: `pasted ${pat}`, nested: [{ value: pat }] });
+    expect(JSON.stringify(out)).not.toContain(pat);
+  });
 });

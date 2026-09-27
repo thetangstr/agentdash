@@ -33,6 +33,8 @@ declare global {
         /** AgentDash (GH #677 security): actor resolved from the MCP endpoint's ephemeral pcin_ loopback credential. */
         assistantLoopback?: boolean;
         runId?: string;
+        /** AgentDash (GH #782): for `agent_jwt` only, the run id signed into the JWT (never from a header). */
+        jwtRunId?: string;
         source?:
           | "local_implicit"
           | "session"

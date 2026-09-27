@@ -38,3 +38,5 @@ export { verdictRoutes } from "./verdicts.js";
 // AgentDash: Company Evaluator (Stage 1 shadow) — ledger reads + operator ingest/snapshot
 export { evaluationRoutes } from "./evaluation.js";
 export { featureFlagRoutes } from "./feature-flags.js";
+// AgentDash (GH #782)
+export { githubConnectionRoutes } from "./github-connection.js";

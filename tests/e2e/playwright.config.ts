@@ -88,6 +88,12 @@ export default defineConfig({
       // Default the two to the same value so they cannot disagree.
       PAPERCLIP_E2E_SKIP_LLM:
         process.env.PAPERCLIP_E2E_SKIP_LLM ?? "true",
+      // GH #782: github-connect.spec.ts runs a stub of GitHub's REST API on
+      // this port; the server validates pasted tokens against it instead of
+      // api.github.com.
+      AGENTDASH_GITHUB_API_URL:
+        process.env.AGENTDASH_GITHUB_API_URL ??
+        `http://127.0.0.1:${process.env.PAPERCLIP_E2E_GITHUB_STUB_PORT ?? 3297}`,
     },
   },
   outputDir: "./test-results",

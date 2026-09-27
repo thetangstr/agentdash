@@ -1,15 +1,34 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { companySecrets, companySecretVersions } from "@paperclipai/db";
+import { companySecrets, companySecretVersions, githubRepoConnections } from "@paperclipai/db";
 import type { AgentEnvConfig, EnvBinding, SecretProvider } from "@paperclipai/shared";
 import { envBindingSchema } from "@paperclipai/shared";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { getSecretProvider, listSecretProviders } from "../secrets/provider-registry.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SENSITIVE_ENV_KEY_RE =
   /(api[-_]?key|access[-_]?token|auth(?:_?token)?|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)/i;
 const REDACTED_SENTINEL = "***REDACTED***";
+
+// AgentDash (GH #782 review): "managed" secrets belong to a connection (today
+// the GitHub token of a github_repo_connections row). They are written only by
+// their owning service, are reserved by name prefix so nobody can pre-create
+// one, cannot be bound into project or agent env (that would hand the token to
+// every run and bypass the per-run credential checks), and the generic secrets
+// routes restrict their rotation and deletion to company administrators.
+export const MANAGED_SECRET_NAME_PREFIXES = ["github-token-"] as const;
+
+export function isReservedManagedSecretName(name: unknown): boolean {
+  return typeof name === "string" && MANAGED_SECRET_NAME_PREFIXES.some((prefix) => name.trim().toLowerCase().startsWith(prefix));
+}
+
+export interface SecretMutationScope {
+  /** The company the caller acts for; a secret of any other company is not found. */
+  companyId: string;
+  /** Only the owning connection flow (and the admin-checked secrets routes) may change a managed secret. */
+  allowManaged?: boolean;
+}
 
 type CanonicalEnvBinding =
   | { type: "plain"; value: string }
@@ -80,6 +99,36 @@ export function secretService(db: Db) {
     return secret;
   }
 
+  /** True for a secret owned by a connection (or reserved by name for one). */
+  async function isManaged(secret: { id: string; name: string } | null): Promise<boolean> {
+    if (!secret) return false;
+    if (isReservedManagedSecretName(secret.name)) return true;
+    const owner = await db
+      .select({ id: githubRepoConnections.id })
+      .from(githubRepoConnections)
+      .where(eq(githubRepoConnections.secretId, secret.id))
+      .then((rows) => rows[0] ?? null);
+    return Boolean(owner);
+  }
+
+  async function isManagedSecretId(secretId: string): Promise<boolean> {
+    return isManaged(await getById(secretId));
+  }
+
+  /**
+   * Every mutation names the company it acts for, so a secret id from another
+   * company is refused, and a managed (connection-owned) secret is refused
+   * unless the caller is its owning flow (GH #782 re-review).
+   */
+  async function loadForMutation(secretId: string, scope: SecretMutationScope) {
+    const secret = await getById(secretId);
+    if (!secret || secret.companyId !== scope.companyId) return null;
+    if (!scope.allowManaged && (await isManaged(secret))) {
+      throw forbidden("This secret belongs to a connection (for example GitHub) and cannot be changed here.");
+    }
+    return secret;
+  }
+
   async function resolveSecretValue(
     companyId: string,
     secretId: string,
@@ -130,6 +179,11 @@ export function secretService(db: Db) {
       }
 
       await assertSecretInCompany(companyId, binding.secretId);
+      if (await isManagedSecretId(binding.secretId)) {
+        throw unprocessable(
+          `${key} refers to a secret managed by a connection (for example a GitHub token); it cannot be bound into env.`,
+        );
+      }
       normalized[key] = {
         type: "secret_ref",
         secretId: binding.secretId,
@@ -165,6 +219,8 @@ export function secretService(db: Db) {
     getById,
     getByName,
     resolveSecretValue,
+    isManaged,
+    isManagedSecretId,
 
     create: async (
       companyId: string,
@@ -218,9 +274,10 @@ export function secretService(db: Db) {
     rotate: async (
       secretId: string,
       input: { value: string; externalRef?: string | null },
-      actor?: { userId?: string | null; agentId?: string | null },
+      actor: { userId?: string | null; agentId?: string | null } | undefined,
+      scope: SecretMutationScope,
     ) => {
-      const secret = await getById(secretId);
+      const secret = await loadForMutation(secretId, scope);
       if (!secret) throw notFound("Secret not found");
       const provider = getSecretProvider(secret.provider as SecretProvider);
       const nextVersion = secret.latestVersion + 1;
@@ -258,8 +315,9 @@ export function secretService(db: Db) {
     update: async (
       secretId: string,
       patch: { name?: string; description?: string | null; externalRef?: string | null },
+      scope: SecretMutationScope,
     ) => {
-      const secret = await getById(secretId);
+      const secret = await loadForMutation(secretId, scope);
       if (!secret) throw notFound("Secret not found");
 
       if (patch.name && patch.name !== secret.name) {
@@ -284,8 +342,8 @@ export function secretService(db: Db) {
         .then((rows) => rows[0] ?? null);
     },
 
-    remove: async (secretId: string) => {
-      const secret = await getById(secretId);
+    remove: async (secretId: string, scope: SecretMutationScope) => {
+      const secret = await loadForMutation(secretId, scope);
       if (!secret) return null;
       await db.delete(companySecrets).where(eq(companySecrets.id, secretId));
       return secret;
@@ -338,6 +396,9 @@ export function secretService(db: Db) {
         if (binding.type === "plain") {
           resolved[key] = binding.value;
         } else {
+          // AgentDash (GH #782 review): a managed secret never reaches run env,
+          // even if a binding to it was stored before this check existed.
+          if (await isManagedSecretId(binding.secretId)) continue;
           resolved[key] = await resolveSecretValue(companyId, binding.secretId, binding.version);
           secretKeys.add(key);
         }
@@ -369,6 +430,9 @@ export function secretService(db: Db) {
         if (binding.type === "plain") {
           env[key] = binding.value;
         } else {
+          // AgentDash (GH #782 review): a managed secret never reaches run env,
+          // even if a binding to it was stored before this check existed.
+          if (await isManagedSecretId(binding.secretId)) continue;
           env[key] = await resolveSecretValue(companyId, binding.secretId, binding.version);
           secretKeys.add(key);
         }
