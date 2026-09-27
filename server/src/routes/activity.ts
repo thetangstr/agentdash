@@ -7,7 +7,13 @@ import {
   normalizeActivityLimit,
   normalizeIssueRunsLimit,
 } from "../services/activity.js";
-import { assertAuthenticated, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import {
+  assertAuthenticated,
+  assertBoard,
+  assertCompanyAccess,
+  assistantGrantAttribution,
+  getActorInfo,
+} from "./authz.js";
 import { heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 
@@ -86,7 +92,8 @@ export function activityRoutes(db: Db) {
       agentId: agentId ?? null,
       // Mirror the column in details so readers that only see `details`
       // (live events, older UIs) can still tell the row was posted by hand.
-      details: { ...(details ?? {}), origin: "manual" },
+      // An assistant-grant caller keeps its `via` provenance (GH #678).
+      details: { ...(details ?? {}), ...assistantGrantAttribution(req), origin: "manual" },
       origin: "manual",
     });
     res.status(201).json(event);

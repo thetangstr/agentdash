@@ -376,6 +376,29 @@ describe.sequential("activity routes", () => {
     });
   });
 
+  it("keeps assistant-grant provenance on a manual post", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "act-4", ...row }));
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      companyIds: ["company-1"],
+      source: "assistant_grant",
+      assistantGrantId: "grant-9",
+      assistantClientName: "ChatGPT",
+      isInstanceAdmin: false,
+    });
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({ action: "note.added", entityType: "company", entityId: "company-1" }));
+
+    expect(res.status).toBe(201);
+    expect(mockActivityService.create.mock.calls[0]![0]).toMatchObject({
+      actorType: "user",
+      origin: "manual",
+      details: { via: "assistant_grant grant-9 (ChatGPT)", origin: "manual" },
+    });
+  });
+
   it("refuses the manual post from an agent credential", async () => {
     const app = await createApp({ type: "agent", agentId: "agent-1", companyId: "company-1", source: "agent_key" });
     const res = await requestApp(app, (baseUrl) => request(baseUrl)

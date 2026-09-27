@@ -19,9 +19,11 @@ export const activityLog = pgTable(
     // AgentDash (consolidation PR-C): who authored the row. "server" = a server
     // route wrote it with the actor taken from the authenticated principal;
     // "manual" = a board user posted it through POST /companies/:id/activity.
-    // NULL = written before this column existed, origin unknown. Only "server"
-    // rows may ever be presented as a human/system record.
-    origin: text("origin").$type<"server" | "manual">().default("server"),
+    // NULL = origin unknown (written before this column existed, or by an
+    // insert that did not say). No default: a default of "server" would fail
+    // open, so every insert site sets it explicitly. Only "server" rows may
+    // ever be presented as a human/system record.
+    origin: text("origin").$type<"server" | "manual">(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({

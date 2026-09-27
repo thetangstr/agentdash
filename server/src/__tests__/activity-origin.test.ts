@@ -25,14 +25,13 @@ const migrationSql = readFileSync(
 );
 
 describe("activity_log.origin migration", () => {
-  it("adds the column without a default first, so pre-existing rows stay NULL (unknown)", () => {
+  it("adds a nullable column with no default, so nothing fails open to 'server'", () => {
     const statements = migrationSql
       .split("--> statement-breakpoint")
       .map((chunk) => chunk.replace(/^--.*$/gm, "").trim())
       .filter(Boolean);
-    expect(statements[0]).toBe('ALTER TABLE "activity_log" ADD COLUMN "origin" text;');
-    expect(statements[0]).not.toMatch(/DEFAULT/i);
-    expect(statements[1]).toBe(`ALTER TABLE "activity_log" ALTER COLUMN "origin" SET DEFAULT 'server';`);
+    expect(statements).toEqual(['ALTER TABLE "activity_log" ADD COLUMN "origin" text;']);
+    expect(migrationSql).not.toMatch(/SET DEFAULT/i);
   });
 });
 
@@ -79,7 +78,24 @@ describeEmbeddedPostgres("activity_log.origin", () => {
     expect(rows[0]!.origin).toBe("server");
   });
 
-  it("defaults direct inserts to server and keeps an explicit manual origin", async () => {
+  it("an insert that does not set origin reads as unknown (NULL), never as a server record", async () => {
+    await seedCompany();
+    const [row] = await db
+      .insert(activityLog)
+      .values({
+        companyId,
+        actorType: "system",
+        actorId: "system",
+        action: "issue.updated",
+        entityType: "issue",
+        entityId: randomUUID(),
+      })
+      .returning();
+    expect(row!.origin).toBeNull();
+    expect(row!.origin).not.toBe("server");
+  });
+
+  it("keeps the explicit origin each insert site sets", async () => {
     await seedCompany();
     const svc = activityService(db);
     const serverRow = await svc.create({
@@ -89,6 +105,7 @@ describeEmbeddedPostgres("activity_log.origin", () => {
       action: "company.updated",
       entityType: "company",
       entityId: companyId,
+      origin: "server",
     });
     const manualRow = await svc.create({
       companyId,
