@@ -13,12 +13,15 @@ export default function ChatPanel({
   agentDirectory = [],
   cardContext,
   headerProps,
+  suggestions,
 }: {
   conversationId: string;
   companyId: string;
   agentDirectory?: Array<{ id: string; name: string; role: string }>;
   cardContext?: CardContext;
   headerProps?: ChatHeaderProps;
+  /** AgentDash (GH #786): suggested first messages, shown until the person has sent one. */
+  suggestions?: string[];
 }) {
   const messages = useMessages(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -78,6 +81,20 @@ export default function ChatPanel({
       </div>
       <div className="border-t border-border-soft bg-surface-raised px-4 py-2">
         <div className="max-w-2xl mx-auto">
+          {suggestions && suggestions.length > 0 && !messages.some((m) => m.authorKind === "user") ? (
+            <div className="mb-2 flex flex-wrap gap-2" data-testid="chat-suggestions">
+              {suggestions.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  className="rounded-full border border-border-soft px-3 py-1 text-left text-xs text-text-secondary hover:bg-surface-sunken"
+                  onClick={() => send(suggestion)}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <Composer onSend={send} agentDirectory={agentDirectory} />
         </div>
       </div>

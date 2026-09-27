@@ -40,3 +40,5 @@ export { evaluationRoutes } from "./evaluation.js";
 export { featureFlagRoutes } from "./feature-flags.js";
 // AgentDash (GH #782)
 export { githubConnectionRoutes } from "./github-connection.js";
+// AgentDash (GH #786)
+export { firstRunRoutes } from "./first-run.js";

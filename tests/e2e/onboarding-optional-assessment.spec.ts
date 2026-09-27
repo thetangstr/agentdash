@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 /**
  * E2E (GH #785, UX-4): the five-question assessment is optional.
  *
- * - naming a new workspace at /company-create goes straight to setup (/cos)
+ * - naming a new workspace at /company-create goes straight to setup (/setup)
  *   and never through /assess;
  * - the assessment is still reachable later: Settings → Advanced links to it,
  *   and /assess opens for the workspace.
@@ -41,7 +41,8 @@ test("a new workspace goes from /company-create to setup without the assessment"
   await page.getByRole("button", { name: "Continue" }).click();
   expect((await created).status()).toBe(201);
 
-  await expect(page).toHaveURL(/\/cos(\?|$)/);
+  // GH #786: setup is now the first run at /setup.
+  await expect(page).toHaveURL(/\/setup(\?|$)/);
   expect(visited.some((path) => path.startsWith("/assess"))).toBe(false);
 
   const companies = (await (await request.get(`${BASE_URL}/api/companies`)).json()) as Array<{

@@ -1,4 +1,7 @@
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
+import { useQuery } from "@tanstack/react-query";
+import { healthApi } from "./api/health";
+import { queryKeys } from "./lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
@@ -6,6 +9,7 @@ import { CloudAccessGate } from "./components/CloudAccessGate";
 import { FirstRunStart } from "./components/FirstRunStart";
 // Dashboard.tsx is left in place (unreferenced) — the dashboard route now renders Overview.
 import { DashboardHome } from "./pages/Home";
+import { ConnectAssistant } from "./pages/ConnectAssistant";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
@@ -66,6 +70,7 @@ import { AssessPage } from "./pages/AssessPage";
 import { AssessHistoryPage } from "./pages/AssessHistoryPage";
 import { AuthPage } from "./pages/Auth";
 import { CompanyCreatePage } from "./pages/CompanyCreate";
+import { FirstRunPage } from "./pages/FirstRun";
 import { ForgotPasswordPage } from "./pages/ForgotPassword";
 import { ResetPasswordPage } from "./pages/ResetPassword";
 import { BoardClaimPage } from "./pages/BoardClaim";
@@ -111,6 +116,8 @@ function boardRoutes() {
       <Route index element={<Navigate to="dashboard" replace />} />
       {/* AgentDash: UX-3 (#784) — Home on the default profile, Overview on agentdash_mk. */}
       <Route path="dashboard" element={<DashboardHome />} />
+      {/* AgentDash (GH #786): assistant connection instructions until Settings › Connections (#793) */}
+      <Route path="connect-assistant" element={<ConnectAssistant />} />
       <Route path="dashboard/live" element={<DashboardLive />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
@@ -220,11 +227,18 @@ function LegacySettingsRedirect() {
 
 function OnboardingRoutePage() {
   const { companies } = useCompany();
+  // AgentDash (GH #786): the wizard is retired from the hosted path. A hosted
+  // box sends /onboarding to the first run (or to naming the workspace).
+  const { data: health } = useQuery({ queryKey: queryKeys.health, queryFn: () => healthApi.get(), retry: false });
   const { openOnboarding } = useDialogActions();
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const matchedCompany = companyPrefix
     ? companies.find((company) => company.issuePrefix.toUpperCase() === companyPrefix.toUpperCase()) ?? null
     : null;
+
+  if (health?.hostedBox) {
+    return <Navigate to={companies.length > 0 ? "/setup" : "/company-create"} replace />;
+  }
 
   const title = matchedCompany
     ? `Add another agent to ${matchedCompany.name}`
@@ -342,6 +356,8 @@ export function App() {
           <Route path="trial/claim" element={<TrialClaimPage />} />
           {/* AgentDash: CoS onboarding v2 conversation */}
           <Route path="cos" element={<CoSConversation />} />
+          {/* AgentDash (GH #786): hosted first run — model key, GitHub, first issue */}
+          <Route path="setup" element={<FirstRunPage />} />
           {/* AgentDash (GH #677): OAuth consent for assistant MCP clients.
               Inside the gate so CloudAccessGate handles sign-in and returns
               here via ?next= — this is a person-facing approval, not a public
@@ -398,6 +414,7 @@ export function App() {
           <Route path="activity" element={<UnprefixedBoardRedirect />} />
           <Route path="activity/*" element={<UnprefixedBoardRedirect />} />
           <Route path="shipped" element={<UnprefixedBoardRedirect />} />
+          <Route path="connect-assistant" element={<UnprefixedBoardRedirect />} />
           {/* Explicit, not a splat. React Router ranks a dynamic+static pair
               (":companyPrefix/settings") above a splat ("company/*"), so the
               wildcard lost and /company/settings was read as a company called

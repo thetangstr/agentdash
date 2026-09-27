@@ -113,10 +113,16 @@ export function CloudAccessGate() {
   // off, the CLI BootstrapPendingPage is shown as before.
   const selfServeBootstrap = healthQuery.data?.selfServeBootstrap === true;
   const instanceHasCompany = healthQuery.data?.instanceHasCompany === true;
+  // AgentDash (GH #786): a hosted box's founder names the workspace at
+  // /company-create and continues to the /setup first run; the onboarding
+  // wizard is retired from the hosted path.
+  const hostedBox = healthQuery.data?.hostedBox === true;
+  const selfServeTarget = hostedBox ? "/company-create" : "/onboarding";
 
   if (isAuthenticatedMode && healthQuery.data?.bootstrapStatus === "bootstrap_pending") {
     if (selfServeBootstrap && sessionQuery.data) {
-      return <Navigate to="/onboarding" replace />;
+      if (location.pathname === selfServeTarget) return <Outlet />;
+      return <Navigate to={selfServeTarget} replace />;
     }
     return <BootstrapPendingPage hasActiveInvite={healthQuery.data.bootstrapInviteActive} />;
   }
@@ -144,7 +150,8 @@ export function CloudAccessGate() {
     // company yet) route the first user to the onboarding wizard instead of a
     // dead-end. Once any company exists, keep invite-only "No company access".
     if (selfServeBootstrap && !instanceHasCompany) {
-      return <Navigate to="/onboarding" replace />;
+      if (hostedBox && location.pathname === selfServeTarget) return <Outlet />;
+      return <Navigate to={selfServeTarget} replace />;
     }
     return <NoBoardAccessPage />;
   }

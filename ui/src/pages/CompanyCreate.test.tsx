@@ -101,12 +101,12 @@ describe("CompanyCreatePage", () => {
     await flushReact();
   }
 
-  it("GH #785: a new default-profile workspace goes straight to setup (/cos), never /assess", async () => {
+  it("GH #785/#786: a new default-profile workspace goes straight to the first run (/setup), never /assess", async () => {
     mockCreate.mockResolvedValue({ id: "company-1", name: "Acme", productProfile: "default" });
     await submitName("Acme");
     expect(mockCreate).toHaveBeenCalledWith({ name: "Acme" }, { fromSignup: true });
     expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
-    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
+    expect(mockNavigate).toHaveBeenCalledWith("/setup?companyId=company-1", { replace: true });
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("/assess"), expect.anything());
   });
 
@@ -137,7 +137,7 @@ describe("CompanyCreatePage", () => {
 
     expect(mockCreate).toHaveBeenCalledWith({ name: "Acme" }, { fromSignup: true });
     expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
-    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
+    expect(mockNavigate).toHaveBeenCalledWith("/setup?companyId=company-1", { replace: true });
   });
 
   it("redirects to /cos when the server returns 409 already_member (invite-flow safety)", async () => {
