@@ -159,6 +159,24 @@ function secretName(input: {
   return `environment-${input.driver}-${slug}-${input.field}-${randomUUID().slice(0, 8)}`;
 }
 
+/**
+ * AgentDash (GH #782 re-review): an environment may reference only a secret
+ * of its own company that is not managed by a connection. The GitHub token
+ * must never reach an SSH host or a sandbox provider.
+ */
+async function assertEnvironmentSecretRefAllowed(db: Db, companyId: string, secretId: string): Promise<void> {
+  const secrets = secretService(db);
+  const secret = await secrets.getById(secretId);
+  if (!secret || secret.companyId !== companyId) {
+    throw unprocessable("The referenced secret does not exist in this company.");
+  }
+  if (await secrets.isManaged(secret)) {
+    throw unprocessable(
+      "The referenced secret belongs to a connection (for example a GitHub token) and cannot be used by an environment.",
+    );
+  }
+}
+
 async function createEnvironmentSecret(input: {
   db: Db;
   companyId: string;
@@ -204,6 +222,7 @@ async function persistConfigSecretRefs(input: {
       continue;
     }
     if (isUuidSecretRef(trimmed)) {
+      await assertEnvironmentSecretRefAllowed(input.db, input.companyId, trimmed);
       nextConfig = writeConfigValueAtPath(nextConfig, path, trimmed);
       continue;
     }
@@ -234,6 +253,11 @@ async function resolveConfigSecretRefsForRuntime(input: {
     if (typeof current !== "string") continue;
     const trimmed = current.trim();
     if (!isUuidSecretRef(trimmed)) continue;
+    // A managed secret stored before this check existed is never hydrated.
+    if (await secrets.isManagedSecretId(trimmed)) {
+      nextConfig = writeConfigValueAtPath(nextConfig, path, undefined);
+      continue;
+    }
     nextConfig = writeConfigValueAtPath(
       nextConfig,
       path,
@@ -354,6 +378,9 @@ export async function normalizeEnvironmentConfigForPersistence(input: {
     const secrets = secretService(input.db);
     const { privateKey, ...stored } = parsed.data;
     let nextPrivateKeySecretRef = stored.privateKeySecretRef;
+    if (!privateKey && stored.privateKeySecretRef) {
+      await assertEnvironmentSecretRefAllowed(input.db, input.companyId, stored.privateKeySecretRef.secretId);
+    }
     if (privateKey) {
       nextPrivateKeySecretRef = await createEnvironmentSecret({
         db: input.db,
@@ -368,7 +395,7 @@ export async function normalizeEnvironmentConfigForPersistence(input: {
         stored.privateKeySecretRef &&
         stored.privateKeySecretRef.secretId !== nextPrivateKeySecretRef.secretId
       ) {
-        await secrets.remove(stored.privateKeySecretRef.secretId);
+        await secrets.remove(stored.privateKeySecretRef.secretId, { companyId: input.companyId }).catch(() => null);
       }
     }
     return {
@@ -448,6 +475,11 @@ export async function resolveEnvironmentDriverConfigForRuntime(
   const secrets = secretService(db);
 
   if (parsed.driver === "ssh" && parsed.config.privateKeySecretRef) {
+    if (await secrets.isManagedSecretId(parsed.config.privateKeySecretRef.secretId)) {
+      throw unprocessable(
+        "This SSH environment references a secret that belongs to a connection; set its private key again.",
+      );
+    }
     return {
       driver: "ssh",
       config: {

@@ -3,7 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { companySecrets, companySecretVersions, githubRepoConnections } from "@paperclipai/db";
 import type { AgentEnvConfig, EnvBinding, SecretProvider } from "@paperclipai/shared";
 import { envBindingSchema } from "@paperclipai/shared";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { getSecretProvider, listSecretProviders } from "../secrets/provider-registry.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -21,6 +21,13 @@ export const MANAGED_SECRET_NAME_PREFIXES = ["github-token-"] as const;
 
 export function isReservedManagedSecretName(name: unknown): boolean {
   return typeof name === "string" && MANAGED_SECRET_NAME_PREFIXES.some((prefix) => name.trim().toLowerCase().startsWith(prefix));
+}
+
+export interface SecretMutationScope {
+  /** The company the caller acts for; a secret of any other company is not found. */
+  companyId: string;
+  /** Only the owning connection flow (and the admin-checked secrets routes) may change a managed secret. */
+  allowManaged?: boolean;
 }
 
 type CanonicalEnvBinding =
@@ -106,6 +113,20 @@ export function secretService(db: Db) {
 
   async function isManagedSecretId(secretId: string): Promise<boolean> {
     return isManaged(await getById(secretId));
+  }
+
+  /**
+   * Every mutation names the company it acts for, so a secret id from another
+   * company is refused, and a managed (connection-owned) secret is refused
+   * unless the caller is its owning flow (GH #782 re-review).
+   */
+  async function loadForMutation(secretId: string, scope: SecretMutationScope) {
+    const secret = await getById(secretId);
+    if (!secret || secret.companyId !== scope.companyId) return null;
+    if (!scope.allowManaged && (await isManaged(secret))) {
+      throw forbidden("This secret belongs to a connection (for example GitHub) and cannot be changed here.");
+    }
+    return secret;
   }
 
   async function resolveSecretValue(
@@ -253,9 +274,10 @@ export function secretService(db: Db) {
     rotate: async (
       secretId: string,
       input: { value: string; externalRef?: string | null },
-      actor?: { userId?: string | null; agentId?: string | null },
+      actor: { userId?: string | null; agentId?: string | null } | undefined,
+      scope: SecretMutationScope,
     ) => {
-      const secret = await getById(secretId);
+      const secret = await loadForMutation(secretId, scope);
       if (!secret) throw notFound("Secret not found");
       const provider = getSecretProvider(secret.provider as SecretProvider);
       const nextVersion = secret.latestVersion + 1;
@@ -293,8 +315,9 @@ export function secretService(db: Db) {
     update: async (
       secretId: string,
       patch: { name?: string; description?: string | null; externalRef?: string | null },
+      scope: SecretMutationScope,
     ) => {
-      const secret = await getById(secretId);
+      const secret = await loadForMutation(secretId, scope);
       if (!secret) throw notFound("Secret not found");
 
       if (patch.name && patch.name !== secret.name) {
@@ -319,8 +342,8 @@ export function secretService(db: Db) {
         .then((rows) => rows[0] ?? null);
     },
 
-    remove: async (secretId: string) => {
-      const secret = await getById(secretId);
+    remove: async (secretId: string, scope: SecretMutationScope) => {
+      const secret = await loadForMutation(secretId, scope);
       if (!secret) return null;
       await db.delete(companySecrets).where(eq(companySecrets.id, secretId));
       return secret;

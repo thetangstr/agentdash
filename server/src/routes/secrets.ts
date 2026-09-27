@@ -111,6 +111,8 @@ export function secretRoutes(db: Db) {
         externalRef: req.body.externalRef,
       },
       { userId: req.actor.userId ?? "board", agentId: null },
+      // Managed secrets reach this line only after assertMayChangeSecret (company admin).
+      { companyId: existing.companyId, allowManaged: true },
     );
 
     await logActivity(db, {
@@ -142,7 +144,7 @@ export function secretRoutes(db: Db) {
       name: req.body.name,
       description: req.body.description,
       externalRef: req.body.externalRef,
-    });
+    }, { companyId: existing.companyId, allowManaged: true });
 
     if (!updated) {
       res.status(404).json({ error: "Secret not found" });
@@ -173,7 +175,7 @@ export function secretRoutes(db: Db) {
     assertCompanyAccess(req, existing.companyId);
     await assertMayChangeSecret(req, existing);
 
-    const removed = await svc.remove(id);
+    const removed = await svc.remove(id, { companyId: existing.companyId, allowManaged: true });
     if (!removed) {
       res.status(404).json({ error: "Secret not found" });
       return;

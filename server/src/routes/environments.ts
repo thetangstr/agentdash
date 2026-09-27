@@ -353,7 +353,9 @@ export function environmentRoutes(
     }
     const secretId = readSshEnvironmentPrivateKeySecretId(existing);
     if (secretId) {
-      await secrets.remove(secretId);
+      // Scoped to this environment's company; a managed secret (the GitHub
+      // token) is never deleted from here (GH #782 re-review).
+      await secrets.remove(secretId, { companyId: existing.companyId }).catch(() => null);
     }
     const actor = getActorInfo(req);
     await logActivity(db, {

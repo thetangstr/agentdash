@@ -1424,7 +1424,7 @@ export function routineService(
       }
 
       const secretValue = crypto.randomBytes(24).toString("hex");
-      await secretsSvc.rotate(existing.secretId, { value: secretValue }, actor);
+      await secretsSvc.rotate(existing.secretId, { value: secretValue }, actor, { companyId: existing.companyId });
       const [updated] = await db
         .update(routineTriggers)
         .set({

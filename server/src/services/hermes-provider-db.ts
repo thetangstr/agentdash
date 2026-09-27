@@ -25,17 +25,17 @@ export function companySecretStore(db: Db): HermesProviderSecretStore {
       const existing = await svc.getByName(companyId, name);
       if (existing) {
         const previous = await svc.resolveSecretValue(companyId, existing.id, "latest");
-        await svc.rotate(existing.id, { value }, { userId: actorUserId });
+        await svc.rotate(existing.id, { value }, { userId: actorUserId }, { companyId });
         return {
           restore: async () => {
-            await svc.rotate(existing.id, { value: previous }, { userId: actorUserId });
+            await svc.rotate(existing.id, { value: previous }, { userId: actorUserId }, { companyId });
           },
         };
       }
       const created = await svc.create(companyId, { name, provider, value, description }, { userId: actorUserId });
       return {
         restore: async () => {
-          await svc.remove(created.id);
+          await svc.remove(created.id, { companyId });
         },
       };
     },

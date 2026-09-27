@@ -498,10 +498,10 @@ export function githubConnectionService(db: Db, deps: GitHubConnectionDeps = {})
       const current = existing?.secretId ? await secrets.getById(existing.secretId) : null;
       if (current && current.companyId === companyId) {
         const previous = await secrets.resolveSecretValue(companyId, current.id, "latest").catch(() => null);
-        await secrets.rotate(current.id, { value: token }, { userId: actorUserId });
+        await secrets.rotate(current.id, { value: token }, { userId: actorUserId }, { companyId, allowManaged: true });
         secretId = current.id;
         restore = async () => {
-          if (previous !== null) await secrets.rotate(current.id, { value: previous }, { userId: actorUserId });
+          if (previous !== null) await secrets.rotate(current.id, { value: previous }, { userId: actorUserId }, { companyId, allowManaged: true });
         };
       } else {
         const nameTaken = Boolean(await secrets.getByName(companyId, secretName));
@@ -517,7 +517,7 @@ export function githubConnectionService(db: Db, deps: GitHubConnectionDeps = {})
         );
         secretId = createdSecret.id;
         restore = async () => {
-          await secrets.remove(createdSecret.id);
+          await secrets.remove(createdSecret.id, { companyId, allowManaged: true });
         };
       }
 
@@ -569,7 +569,7 @@ export function githubConnectionService(db: Db, deps: GitHubConnectionDeps = {})
       if (!row) throw notFound("GitHub connection not found");
       // The token first: if it cannot be removed, keep the connection so the
       // disconnect can be retried rather than orphaning an encrypted token.
-      if (row.secretId) await secrets.remove(row.secretId);
+      if (row.secretId) await secrets.remove(row.secretId, { companyId, allowManaged: true });
       await db.delete(githubRepoConnections).where(eq(githubRepoConnections.id, row.id));
       return { id: row.id, repo: `${row.repoOwner}/${row.repoName}`, projectId: row.projectId };
     },
