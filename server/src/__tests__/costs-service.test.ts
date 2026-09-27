@@ -456,6 +456,7 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   afterEach(async () => {
     await db.delete(financeEvents);
     await db.delete(costEvents);
+    await db.delete(heartbeatRuns);
     await db.delete(issues);
     await db.delete(projects);
     await db.delete(agents);
@@ -675,6 +676,138 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
       inputTokens: 60,
       cachedInputTokens: 6,
       outputTokens: 12,
+    });
+  });
+
+  it("byIssue attributes cost events to issues directly and via the producing run", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runLinkedIssueId = randomUUID();
+    const orphanIssueId = randomUUID();
+    const runId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values([
+      { id: companyId, name: "Paperclip", issuePrefix: prefix, requireBoardApprovalForNewAgents: false },
+      { id: otherCompanyId, name: "Other", issuePrefix: `T${otherCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`, requireBoardApprovalForNewAgents: false },
+    ]);
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Cost Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values([
+      {
+        id: issueId,
+        companyId,
+        title: "Direct cost issue",
+        status: "done",
+        priority: "medium",
+        issueNumber: 1,
+        identifier: `${prefix}-1`,
+      },
+      {
+        id: runLinkedIssueId,
+        companyId,
+        title: "Run-linked issue",
+        status: "done",
+        priority: "medium",
+        issueNumber: 2,
+        identifier: `${prefix}-2`,
+      },
+      {
+        id: orphanIssueId,
+        companyId: otherCompanyId,
+        title: "Other company's issue",
+        status: "done",
+        priority: "medium",
+        issueNumber: 1,
+        identifier: "OTH-1",
+      },
+    ]);
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "succeeded",
+      contextSnapshot: { issueId: runLinkedIssueId },
+      createdAt: new Date("2026-04-10T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-10T00:00:00.000Z"),
+    });
+    await db.insert(costEvents).values([
+      {
+        companyId,
+        agentId,
+        issueId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 50,
+        costCents: 700,
+        occurredAt: new Date("2026-04-10T00:00:00.000Z"),
+      },
+      {
+        // No issue_id on the event: attribution falls back to the run's
+        // context snapshot, the same chain issue readers use.
+        companyId,
+        agentId,
+        heartbeatRunId: runId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 200,
+        cachedInputTokens: 0,
+        outputTokens: 60,
+        costCents: 300,
+        occurredAt: new Date("2026-04-10T00:01:00.000Z"),
+      },
+      {
+        // A cost event pointing at another company's issue must not join.
+        companyId,
+        agentId,
+        issueId: orphanIssueId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 9999,
+        occurredAt: new Date("2026-04-10T00:02:00.000Z"),
+      },
+    ]);
+
+    const rows = await costs.byIssue(companyId, {
+      from: new Date("2026-04-01T00:00:00.000Z"),
+      to: new Date("2026-04-15T23:59:59.999Z"),
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      issueId,
+      issueIdentifier: `${prefix}-1`,
+      issueTitle: "Direct cost issue",
+      costCents: 700,
+      inputTokens: 100,
+    });
+    expect(rows[1]).toMatchObject({
+      issueId: runLinkedIssueId,
+      issueIdentifier: `${prefix}-2`,
+      issueTitle: "Run-linked issue",
+      costCents: 300,
     });
   });
 

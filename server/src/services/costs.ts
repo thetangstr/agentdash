@@ -516,5 +516,45 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .groupBy(effectiveProjectId, projects.name)
         .orderBy(desc(costCentsExpr));
     },
+
+    /**
+     * AgentDash (GH #796): per-issue spend so the Costs page can answer "what
+     * did the money buy". Attribution prefers `cost_events.issue_id` and falls
+     * back to the producing run's context snapshot — the same chain the issue
+     * cost summary uses, not a second truth.
+     */
+    byIssue: async (companyId: string, range?: CostDateRange) => {
+      const runIssueId = sql<string | null>`(${heartbeatRuns.contextSnapshot} ->> 'issueId')::uuid`;
+      const effectiveIssueId = sql<string | null>`coalesce(${costEvents.issueId}, ${runIssueId})`;
+      const conditions: ReturnType<typeof eq>[] = [eq(costEvents.companyId, companyId)];
+      if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
+      if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
+
+      const costCentsExpr = sumAsNumber(costEvents.costCents);
+
+      return db
+        .select({
+          issueId: effectiveIssueId,
+          issueIdentifier: issues.identifier,
+          issueTitle: issues.title,
+          issueStatus: issues.status,
+          costCents: costCentsExpr,
+          inputTokens: sumAsNumber(costEvents.inputTokens),
+          cachedInputTokens: sumAsNumber(costEvents.cachedInputTokens),
+          outputTokens: sumAsNumber(costEvents.outputTokens),
+        })
+        .from(costEvents)
+        .leftJoin(heartbeatRuns, eq(costEvents.heartbeatRunId, heartbeatRuns.id))
+        .innerJoin(
+          issues,
+          and(
+            sql`${issues.id} = ${effectiveIssueId}`,
+            eq(issues.companyId, companyId),
+          ),
+        )
+        .where(and(...conditions, sql`${effectiveIssueId} is not null`))
+        .groupBy(effectiveIssueId, issues.identifier, issues.title, issues.status)
+        .orderBy(desc(costCentsExpr));
+    },
   };
 }

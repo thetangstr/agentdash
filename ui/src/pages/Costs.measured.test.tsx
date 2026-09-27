@@ -22,6 +22,7 @@ const mockCostsApi = vi.hoisted(() => ({
   summary: vi.fn(),
   byAgent: vi.fn(),
   byProject: vi.fn(),
+  byIssue: vi.fn(),
   byAgentModel: vi.fn(),
   byProvider: vi.fn(),
   byBiller: vi.fn(),
@@ -33,6 +34,11 @@ const mockCostsApi = vi.hoisted(() => ({
   financeEvents: vi.fn(),
 }));
 vi.mock("../api/costs", () => ({ costsApi: mockCostsApi }));
+
+const mockIssuesApi = vi.hoisted(() => ({
+  listShipped: vi.fn(),
+}));
+vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 
 const mockBudgetsApi = vi.hoisted(() => ({
   overview: vi.fn(),
@@ -79,6 +85,7 @@ function setup(measured: boolean, budgetCents: number) {
       : [],
   );
   mockCostsApi.byProject.mockResolvedValue([]);
+  mockCostsApi.byIssue.mockResolvedValue([]);
   mockCostsApi.byAgentModel.mockResolvedValue([]);
   mockCostsApi.byProvider.mockResolvedValue([]);
   mockCostsApi.byBiller.mockResolvedValue([]);
@@ -103,6 +110,17 @@ function setup(measured: boolean, budgetCents: number) {
   mockCostsApi.financeByBiller.mockResolvedValue([]);
   mockCostsApi.financeByKind.mockResolvedValue([]);
   mockCostsApi.financeEvents.mockResolvedValue([]);
+  mockIssuesApi.listShipped.mockResolvedValue({
+    items: [],
+    total: 0,
+    nextCursor: null,
+    monthTotal: {
+      since: "2026-09-01T00:00:00.000Z",
+      count: 0,
+      pullRequests: 0,
+      usage: { metered: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, costCents: 0 },
+    },
+  });
   mockBudgetsApi.overview.mockResolvedValue(budgetOverview());
 }
 
