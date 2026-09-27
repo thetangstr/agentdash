@@ -9,7 +9,13 @@
 //   CLOUD_EDGE_DOMAIN         default agentdash.cloud
 //   CLOUD_EDGE_CLIENT_IP_SOURCE  x-real-ip (default: Railway's edge sets it) or socket
 //   CLOUD_FIND_URL            default https://www.agentdash.cloud/find
+//   CLOUD_PRIVATE_NETWORK_CIDRS  sockets whose X-Real-IP is never believed (default 10.0.0.0/8,fc00::/7)
 //   PORT                      default 8080
+//
+// Follow-up (GH #808 review, LOW): edge secrets are decrypted with the full
+// CLOUD_DATA_KEY. A dedicated edge-secret key (the provisioner encrypting
+// edge_secret_enc under it, existing rows re-encrypted) would keep the router
+// from holding a key that also opens claim codes; tracked on #765.
 import postgres from "postgres";
 import { parseKeyring } from "../crypto.js";
 import { edgeRoleProblems } from "../db/roles.js";
@@ -57,6 +63,8 @@ async function main() {
     requestResume: async (slug) => {
       await sql`select edge_request_resume(${slug})`;
     },
+    routeAgeMs: () => table.ageMs,
+    privateNetworkCidrs: (process.env.CLOUD_PRIVATE_NETWORK_CIDRS ?? "10.0.0.0/8,fc00::/7").split(",").map((c) => c.trim()).filter(Boolean),
     status: () => ({ routes: table.size, routeTableAgeMs: Number.isFinite(table.ageMs) ? table.ageMs : null }),
   });
   const port = Number(process.env.PORT ?? "8080");
