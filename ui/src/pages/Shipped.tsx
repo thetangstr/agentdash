@@ -27,6 +27,10 @@ import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
 export const SHIPPED_PAGE_SIZE = 50;
 export const SHIPPED_EMPTY_TEXT =
   "Pull requests and results your agents produce land here, with what they cost.";
+// AgentDash: UX-11 — the default profile's empty Shipped page also sets the
+// expectation for a first result; agentdash_mk keeps the operator wording.
+export const SHIPPED_EMPTY_TEXT_DEFAULT_PROFILE =
+  "Pull requests and results land here with what they cost. Your first one usually takes 20 to 30 minutes.";
 const ALL = "__all__";
 
 function monthLabel(iso: string) {
@@ -34,7 +38,8 @@ function monthLabel(iso: string) {
 }
 
 export function Shipped() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
+  const isDefaultProfile = selectedCompany?.productProfile !== "agentdash_mk";
   const { setBreadcrumbs } = useBreadcrumbs();
   const [projectId, setProjectId] = useState(ALL);
   const [agentId, setAgentId] = useState(ALL);
@@ -131,7 +136,11 @@ export function Shipped() {
             <PackageCheck className="h-10 w-10 text-muted-foreground/50" />
           </div>
           <p className="mb-4 max-w-md text-sm text-muted-foreground">
-            {filtered ? "Nothing shipped for this filter yet." : SHIPPED_EMPTY_TEXT}
+            {filtered
+              ? "Nothing shipped for this filter yet."
+              : isDefaultProfile
+                ? SHIPPED_EMPTY_TEXT_DEFAULT_PROFILE
+                : SHIPPED_EMPTY_TEXT}
           </p>
           {!filtered ? (
             <Button asChild variant="outline" size="sm">

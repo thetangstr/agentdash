@@ -22,6 +22,17 @@ const NEXT_LABEL: Record<Exclude<FirstRunStep, "done">, string> = {
   first_issue: "tell your team what to build first",
 };
 
+// AgentDash: UX-11 — the repo step speaks the plan's empty-state copy and
+// names the action after what it does, not the setup flow it resumes.
+const STEP_COPY: Partial<
+  Record<Exclude<FirstRunStep, "done">, { text: string; action: string }>
+> = {
+  repo: {
+    text: "Connect a repo so your agents have somewhere to work.",
+    action: "Connect GitHub",
+  },
+};
+
 function dismissKey(companyId: string) {
   return `agentdash.connectAssistantCard.dismissed.${companyId}`;
 }
@@ -59,9 +70,13 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
           </p>
         ) : (
           <>
-            <p className="mt-1 text-muted-foreground">Next: {NEXT_LABEL[data.nextStep]}.</p>
+            {STEP_COPY[data.nextStep] ? (
+              <p className="mt-1 text-muted-foreground">{STEP_COPY[data.nextStep]!.text}</p>
+            ) : (
+              <p className="mt-1 text-muted-foreground">Next: {NEXT_LABEL[data.nextStep]}.</p>
+            )}
             <Button asChild size="sm" className="mt-3">
-              <Link to="/setup">Continue setup</Link>
+              <Link to="/setup">{STEP_COPY[data.nextStep]?.action ?? "Continue setup"}</Link>
             </Button>
           </>
         )}
