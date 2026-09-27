@@ -20,6 +20,7 @@ import { FirstRunHomeNudges } from "./FirstRunHomeNudges";
 
 const base = {
   applies: true,
+  showHomeNudge: true,
   canManage: true,
   canConfigureModel: true,
   model: { required: true, done: true },
@@ -94,6 +95,12 @@ describe("FirstRunHomeNudges", () => {
     const dismiss = container.querySelector('button[aria-label="Dismiss the Connect Muse card"]') as HTMLButtonElement;
     act(() => dismiss.click());
     expect(container.querySelector('[data-testid="connect-muse"]')).toBeNull();
+  });
+
+  it("renders nothing when the server withholds the nudge (self-hosted, or an established company)", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "repo", showHomeNudge: false });
+    await render();
+    expect(container.innerHTML).toBe("");
   });
 
   it("renders nothing for members mid-setup or when the first run does not apply", async () => {

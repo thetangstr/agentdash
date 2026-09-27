@@ -5,6 +5,8 @@ export type FirstRunStep = "model" | "repo" | "first_issue" | "done";
 
 export interface FirstRunStatus {
   applies: boolean;
+  /** Home shows the first-run nudges: hosted box, and a new company or one with no issues. */
+  showHomeNudge: boolean;
   nextStep: FirstRunStep;
   canManage: boolean;
   /** The model key is an instance setting: only the instance admin can set it. */

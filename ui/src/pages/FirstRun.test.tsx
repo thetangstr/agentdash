@@ -36,6 +36,7 @@ import { FirstRunPage } from "./FirstRun";
 function status(overrides: Partial<FirstRunStatus> = {}): FirstRunStatus {
   return {
     applies: true,
+    showHomeNudge: true,
     nextStep: "model",
     canManage: true,
     canConfigureModel: true,
