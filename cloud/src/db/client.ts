@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-import { applyRuntimeGrants, ensureRoles, OWNER_ROLE, pendingMigrations, RUNTIME_ROLE, runtimeRoleProblems, transferOwnership } from "./roles.js";
+import { applyEdgeGrants, applyRuntimeGrants, ensureEdgeRole, ensureRoles, OWNER_ROLE, pendingMigrations, RUNTIME_ROLE, runtimeRoleProblems, transferOwnership } from "./roles.js";
 import * as schema from "./schema.js";
 
 export type CloudDb = PostgresJsDatabase<typeof schema>;
@@ -33,6 +33,8 @@ export async function migrateCloudDb(url: string): Promise<void> {
 export interface MigrateWithRolesOptions {
   /** Creates the roles if missing and sets the runtime role's password. Omit once the roles exist. */
   runtimePassword?: string;
+  /** Creates the edge router's role if missing and sets its password (GH #765). */
+  edgePassword?: string;
   owner?: string;
   runtime?: string;
 }
@@ -50,6 +52,7 @@ export async function migrateWithRoles(migratorUrl: string, opts: MigrateWithRol
   const sql = postgres(migratorUrl, { max: 1, onnotice: () => {} });
   try {
     if (opts.runtimePassword) await ensureRoles(sql, { owner, runtime, runtimePassword: opts.runtimePassword });
+    if (opts.edgePassword) await ensureEdgeRole(sql, opts.edgePassword);
     const roles = await sql`select rolname from pg_roles where rolname in (${owner}, ${runtime})`;
     if (roles.length !== 2) {
       throw new Error(`roles ${owner} and ${runtime} do not exist yet; set CLOUD_RUNTIME_DB_PASSWORD for the first run`);
@@ -61,6 +64,7 @@ export async function migrateWithRoles(migratorUrl: string, opts: MigrateWithRol
     // Anything a migration created as the migrator itself (it should not) is handed over too.
     await transferOwnership(sql, { owner });
     await applyRuntimeGrants(sql, { runtime });
+    await applyEdgeGrants(sql);
     return { transferred };
   } finally {
     await sql.end({ timeout: 5 });

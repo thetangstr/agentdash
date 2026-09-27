@@ -25,7 +25,7 @@ afterAll(async () => {
 describe("migrations", () => {
   it("create every §3.2 table in the control plane's own database", async () => {
     const rows = await db.execute<{ table_name: string }>(
-      sql`select table_name from information_schema.tables where table_schema = 'public' order by table_name`,
+      sql`select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE' order by table_name`,
     );
     expect(rows.map((r) => r.table_name)).toEqual([
       "accounts",
