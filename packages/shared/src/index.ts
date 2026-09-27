@@ -896,6 +896,7 @@ export {
   createAgentSchema,
   createAgentHireSchema,
   updateAgentSchema,
+  agentAdapterConfigCompletenessError,
   agentInstructionsBundleModeSchema,
   updateAgentInstructionsBundleSchema,
   upsertAgentInstructionsFileSchema,
@@ -1386,3 +1387,15 @@ export {
   type OtaReceipt,
 } from "./types/ota.js";
 export * from "./assistant-oauth.js";
+
+// AgentDash assistant MCP (M4, GH #679): the gated-action request bodies.
+export {
+  assistantPrepareDecisionSchema,
+  assistantPrepareHireSchema,
+  assistantConfirmActionSchema,
+  updateAssistantGrantSchema,
+  type AssistantPrepareDecision,
+  type AssistantPrepareHire,
+  type AssistantConfirmAction,
+  type UpdateAssistantGrant,
+} from "./validators/assistant-actions.js";

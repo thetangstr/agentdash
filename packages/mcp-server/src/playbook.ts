@@ -282,9 +282,26 @@ activity record — say what you did and hand back the link.
 - **A refusal is a real answer.** If a call comes back refused — the grant
   lacks the work scope, or the hourly write limit (30 writes, 10 new tasks)
   is spent — say so and stop; do not retry hoping to be right.
-- **Decisions are a separate class.** Approving a pending request is not a
-  work tool; when it exists it is a two-step, person-confirmed flow — never
-  improvise it through comments.
+
+## Decisions are a separate class
+
+Approving or rejecting what waits on the person — and asking for a new hire —
+is not a work tool. If your grant includes the decide scope you have three
+tools for it, and they only ever work as a pair:
+
+- **prepare_decision** or **request_hire** returns a readBack — the exact
+  sentence to say to the person — plus a one-time handle. Read the sentence
+  back and wait. Nothing has happened yet.
+- **confirm_action** executes it, and only then. Call it only after the
+  person has heard the read-back and said yes, and pass their words back as
+  personSaid — they go in the audit record beside what you claimed. The
+  handle works once and dies in 15 minutes; an expired, spent, or superseded
+  handle refuses with a reason you can relay.
+- **Never improvise a decision.** No comment, task, or message accomplishes
+  what the two-step flow gates. If a call refuses — no decide scope, lost
+  authority, already decided — say so plainly and stop.
+- **A yes you did not hear is not a yes.** "It would be good to approve
+  that" is not agreement. When in doubt, read the readBack again and ask.
 
 ## Answer honestly about gaps
 

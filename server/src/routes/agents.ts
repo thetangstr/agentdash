@@ -7,7 +7,6 @@ import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
-  AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   createAgentKeySchema,
   createAgentHireSchema,
   createAgentSchema,
@@ -42,6 +41,7 @@ import {
   isConnectCodeHashCollisionError,
 } from "../lib/connect-codes.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
+import { normalizeNewAgentRuntimeConfig } from "../services/agent-create-config.js";
 import {
   freeTierCapExceededPayload,
   withCompanyTierCapacityGuard,
@@ -1243,23 +1243,6 @@ export function agentRoutes(
       enabled: parseBooleanLike(heartbeat.enabled) ?? false,
       intervalSec: Math.max(0, parseNumberLike(heartbeat.intervalSec) ?? 0),
     };
-  }
-
-  function normalizeNewAgentRuntimeConfig(runtimeConfig: unknown): Record<string, unknown> {
-    const parsedRuntimeConfig = asRecord(runtimeConfig);
-    const normalizedRuntimeConfig = parsedRuntimeConfig ? { ...parsedRuntimeConfig } : {};
-    const parsedHeartbeat = asRecord(normalizedRuntimeConfig.heartbeat);
-    const heartbeat = parsedHeartbeat ? { ...parsedHeartbeat } : {};
-
-    if (parseBooleanLike(heartbeat.enabled) == null) {
-      heartbeat.enabled = false;
-    }
-    if (parseNumberLike(heartbeat.maxConcurrentRuns) == null) {
-      heartbeat.maxConcurrentRuns = AGENT_DEFAULT_MAX_CONCURRENT_RUNS;
-    }
-
-    normalizedRuntimeConfig.heartbeat = heartbeat;
-    return normalizedRuntimeConfig;
   }
 
   function listRuntimeModelProfileAdapterConfigs(runtimeConfig: unknown): Array<{
