@@ -20,7 +20,7 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationSql = readFileSync(
-  path.resolve(here, "../../../packages/db/src/migrations/0135_activity_log_origin.sql"),
+  path.resolve(here, "../../../packages/db/src/migrations/0136_activity_log_origin.sql"),
   "utf8",
 );
 
