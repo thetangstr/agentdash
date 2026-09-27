@@ -76,6 +76,7 @@ import { ResetPasswordPage } from "./pages/ResetPassword";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
 import { InviteLandingPage } from "./pages/InviteLanding";
+import { ClaimPage } from "./pages/Claim";
 import { TrialLandingPage } from "./pages/TrialLanding";
 import { InvestorsPage } from "./pages/InvestorsPage";
 import { PricingPage } from "./pages/PricingPage";
@@ -310,6 +311,8 @@ export function App() {
         <Route path="board-claim/:token" element={<BoardClaimPage />} />
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
+        {/* AgentDash (#767): the one-time claim link of a hosted box — public, outside CloudAccessGate. */}
+        <Route path="claim" element={<ClaimPage />} />
         {/* AgentDash (Test Drive): public no-signup trial — rendered outside
             CloudAccessGate, no Layout/sidebar, token is the only credential. */}
         <Route path="trial" element={<TrialLandingPage />} />

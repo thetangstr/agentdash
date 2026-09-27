@@ -47,6 +47,8 @@ import {
   reserveCompanyInviteSignup,
 } from "../services/invites.js";
 import { logger } from "./logger.js";
+// AgentDash (#767): the claim-code binding (email + zero users) on hosted boxes.
+import { CLAIM_ATTEMPT_HEADER, checkClaimSignup, configuredClaimEmail, newClaimAttempt, releaseUnusedClaim } from "../lib/claim-code.js";
 
 const SIGNUP_PATH_PREFIX = "/sign-up";
 
@@ -101,6 +103,8 @@ function refuse(res: Parameters<RequestHandler>[1]) {
 export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): RequestHandler {
   return (req, res, next) => {
     const inviteOnly = options.inviteOnly === true;
+    // AgentDash (#767 review): the claim attempt id is set only by this guard, never by a client.
+    delete req.headers[CLAIM_ATTEMPT_HEADER];
     if (!options.enabled && !inviteOnly) return next();
     if (!req.path.startsWith(SIGNUP_PATH_PREFIX)) return next();
 
@@ -114,54 +118,86 @@ export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): Re
       delete (req.body as Record<string, unknown>).inviteToken;
     }
 
+    const token = tokenFromBody ?? readInviteTokenCookie(req.headers.cookie ?? null);
+
     // A shared instance code opens the design-partner gate — but never a
     // signup-disabled box (inviteOnly), where only a company invite admits.
-    if (!inviteOnly && code && isAcceptedSignupInviteCode(code)) return next();
-
-    const token = tokenFromBody ?? readInviteTokenCookie(req.headers.cookie ?? null);
-    const authorizeInvite = async () => {
-      if (!options.db || !token) return false;
-      return reserveCompanyInviteSignup(options.db, token, email);
-    };
-
-    void authorizeInvite()
-      .then((ok) => {
-        if (ok) {
-          // Body-delivered tokens are invisible to the create.after claim
-          // hook — normalize them onto the cookie transport.
-          if (tokenFromBody) injectInviteTokenCookie(req, tokenFromBody);
-          // GH #743 re-review: the reservation was taken BEFORE the auth
-          // layer ran. If that layer refuses the sign-up (weak password,
-          // duplicate account) or the client hangs up mid-request, release
-          // the hold so the token isn't parked for the TTL. A completed
-          // sign-up has already written the claim, which the release CAS
-          // refuses to touch.
-          if (options.db && token && email) {
-            let released = false;
-            const release = () => {
-              if (released || !options.db || !token || !email) return;
-              released = true;
-              void releaseCompanyInviteSignup(options.db, token, email).catch(
-                (err: unknown) => {
-                  logger.warn(
-                    { error: err instanceof Error ? err.message : String(err) },
-                    "[signup-gate] failed to release invite reservation",
-                  );
-                },
-              );
-            };
+    const codeAccepted = !inviteOnly && code !== null && isAcceptedSignupInviteCode(code);
+    if (codeAccepted && !configuredClaimEmail()) return next();
+    if (codeAccepted) {
+      // AgentDash (#767): a claim code opens sign-up once, for the claim
+      // email, while the box has no users. Fails closed without a db handle.
+      // A company-invite token presented alongside still gets its own chance.
+      if (!options.db) return refuse(res);
+      void checkClaimSignup(options.db, email)
+        .then((claim) => {
+          if (claim.ok) {
+            // The user.create.before hook takes the persisted claim for this attempt;
+            // if the sign-up fails without a user, give the claim back.
+            const attempt = newClaimAttempt();
+            req.headers[CLAIM_ATTEMPT_HEADER] = attempt;
             res.once("finish", () => {
-              if (res.statusCode >= 400) release();
+              if (res.statusCode >= 400 && options.db) {
+                void releaseUnusedClaim(options.db, attempt).catch((err: unknown) =>
+                  logger.warn({ error: err instanceof Error ? err.message : String(err) }, "[signup-gate] failed to release an unused claim"),
+                );
+              }
             });
-            res.once("close", () => {
-              if (!res.writableEnded) release();
-            });
+            return next();
           }
-          next();
-          return;
-        }
-        refuse(res);
-      })
-      .catch(next);
+          if (token) return continueWithToken();
+          res.status(claim.status).json({ code: claim.code, error: claim.error });
+        })
+        .catch(next);
+      return;
+    }
+    continueWithToken();
+
+    function continueWithToken() {
+      const authorizeInvite = async () => {
+        if (!options.db || !token) return false;
+        return reserveCompanyInviteSignup(options.db, token, email);
+      };
+
+      void authorizeInvite()
+        .then((ok) => {
+          if (ok) {
+            // Body-delivered tokens are invisible to the create.after claim
+            // hook — normalize them onto the cookie transport.
+            if (tokenFromBody) injectInviteTokenCookie(req, tokenFromBody);
+            // GH #743 re-review: the reservation was taken BEFORE the auth
+            // layer ran. If that layer refuses the sign-up (weak password,
+            // duplicate account) or the client hangs up mid-request, release
+            // the hold so the token isn't parked for the TTL. A completed
+            // sign-up has already written the claim, which the release CAS
+            // refuses to touch.
+            if (options.db && token && email) {
+              let released = false;
+              const release = () => {
+                if (released || !options.db || !token || !email) return;
+                released = true;
+                void releaseCompanyInviteSignup(options.db, token, email).catch(
+                  (err: unknown) => {
+                    logger.warn(
+                      { error: err instanceof Error ? err.message : String(err) },
+                      "[signup-gate] failed to release invite reservation",
+                    );
+                  },
+                );
+              };
+              res.once("finish", () => {
+                if (res.statusCode >= 400) release();
+              });
+              res.once("close", () => {
+                if (!res.writableEnded) release();
+              });
+            }
+            next();
+            return;
+          }
+          refuse(res);
+        })
+        .catch(next);
+    }
   };
 }

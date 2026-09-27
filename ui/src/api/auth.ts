@@ -112,7 +112,9 @@ export const authApi = {
   // AgentDash (#731): `inviteToken` carries a pending company-invite token
   // through the hosted signup gate; the server strips it before Better Auth
   // sees the body.
-  signUpEmail: async (input: { name: string; email: string; password: string; inviteToken?: string }) => {
+  // AgentDash (#767): `inviteCode` carries a hosted box's one-time claim code
+  // (the /claim page); the server strips it before Better Auth too.
+  signUpEmail: async (input: { name: string; email: string; password: string; inviteToken?: string; inviteCode?: string }) => {
     await authPost("/sign-up/email", input);
   },
 

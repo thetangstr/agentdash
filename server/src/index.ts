@@ -58,6 +58,7 @@ import type {
   InstanceDatabaseBackupRunResult,
   InstanceDatabaseBackupTrigger,
 } from "./routes/instance-database-backups.js";
+import { CLAIM_ATTEMPT_HEADER } from "./lib/claim-code.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -519,7 +520,7 @@ export async function startServer(): Promise<StartedServer> {
   // POST /api/onboarding/mcp-signup. Only wired in authenticated mode where
   // a Better Auth instance exists; without it the route answers 503.
   let mcpSignupCreateUser:
-    | ((input: { name: string; email: string; password: string }) => Promise<{ userId: string | null }>)
+    | ((input: { name: string; email: string; password: string; claimAttempt?: string }) => Promise<{ userId: string | null }>)
     | undefined;
   // AgentDash: MCP-native first login — captures the one-time password-reset
   // URL for the founding user so the MCP journey can return a browser-login
@@ -642,6 +643,8 @@ export async function startServer(): Promise<StartedServer> {
     mcpSignupCreateUser = async (input) => {
       const result = (await auth.api.signUpEmail({
         body: { name: input.name, email: input.email, password: input.password },
+        // AgentDash (#767 review): the claim attempt the route took, for the user.create.before hook.
+        ...(input.claimAttempt ? { headers: new Headers({ [CLAIM_ATTEMPT_HEADER]: input.claimAttempt }) } : {}),
       })) as { user?: { id?: string } } | null | undefined;
       return { userId: result?.user?.id ?? null };
     };
