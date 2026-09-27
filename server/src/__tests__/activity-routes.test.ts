@@ -310,6 +310,105 @@ describe.sequential("activity routes", () => {
     expect(mockActivityService.create).not.toHaveBeenCalled();
   });
 
+  // AgentDash (consolidation PR-C): the manual POST can no longer forge who
+  // acted. The server stamps the actor from the principal and marks the row
+  // manual, whatever the body claims.
+  it("ignores a forged actorType/actorId and stamps the row manual", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "act-1", ...row }));
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({
+        actorType: "system",
+        actorId: "system",
+        action: "issue.updated",
+        entityType: "issue",
+        entityId: "issue-1",
+        details: { status: { from: "in_progress", to: "done" }, origin: "server" },
+      }));
+
+    expect(res.status).toBe(201);
+    expect(mockActivityService.create).toHaveBeenCalledTimes(1);
+    const row = mockActivityService.create.mock.calls[0]![0];
+    expect(row).toMatchObject({
+      companyId: "company-1",
+      actorType: "user",
+      actorId: "user-1",
+      action: "issue.updated",
+      entityType: "issue",
+      entityId: "issue-1",
+      origin: "manual",
+    });
+    expect(row.details).toEqual({ status: { from: "in_progress", to: "done" }, origin: "manual" });
+    expect(res.body.origin).toBe("manual");
+    expect(res.body.actorType).toBe("user");
+  });
+
+  it("does not let a board caller pose as an agent or plugin", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "act-2", ...row }));
+    const app = await createApp();
+    for (const actorType of ["agent", "plugin"] as const) {
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .post("/api/companies/company-1/activity")
+        .send({ actorType, actorId: "agent-9", action: "approval.approved", entityType: "approval", entityId: "ap-1" }));
+      expect(res.status).toBe(201);
+    }
+    for (const [row] of mockActivityService.create.mock.calls) {
+      expect(row).toMatchObject({ actorType: "user", actorId: "user-1", origin: "manual" });
+    }
+  });
+
+  it("still accepts a legitimate manual post without actor fields", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "act-3", ...row }));
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({ action: "note.added", entityType: "company", entityId: "company-1" }));
+
+    expect(res.status).toBe(201);
+    expect(mockActivityService.create.mock.calls[0]![0]).toMatchObject({
+      actorType: "user",
+      actorId: "user-1",
+      action: "note.added",
+      agentId: null,
+      details: { origin: "manual" },
+      origin: "manual",
+    });
+  });
+
+  it("keeps assistant-grant provenance on a manual post", async () => {
+    mockActivityService.create.mockImplementation(async (row: Record<string, unknown>) => ({ id: "act-4", ...row }));
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      companyIds: ["company-1"],
+      source: "assistant_grant",
+      assistantGrantId: "grant-9",
+      assistantClientName: "ChatGPT",
+      isInstanceAdmin: false,
+    });
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({ action: "note.added", entityType: "company", entityId: "company-1" }));
+
+    expect(res.status).toBe(201);
+    expect(mockActivityService.create.mock.calls[0]![0]).toMatchObject({
+      actorType: "user",
+      origin: "manual",
+      details: { via: "assistant_grant grant-9 (ChatGPT)", origin: "manual" },
+    });
+  });
+
+  it("refuses the manual post from an agent credential", async () => {
+    const app = await createApp({ type: "agent", agentId: "agent-1", companyId: "company-1", source: "agent_key" });
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/activity")
+      .send({ actorType: "system", actorId: "system", action: "issue.updated", entityType: "issue", entityId: "issue-1" }));
+
+    expect(res.status).toBe(403);
+    expect(mockActivityService.create).not.toHaveBeenCalled();
+  });
+
   it("requires company access before listing issues for another company's run", async () => {
     mockHeartbeatService.getRun.mockResolvedValue({
       id: "run-2",

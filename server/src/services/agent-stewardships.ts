@@ -730,6 +730,8 @@ export function agentStewardshipService(db: Db) {
           userId: input.userId,
           reason: "member_archived",
         },
+        // AgentDash (consolidation PR-C): server-written, actor resolved here.
+        origin: "server" as const,
       })),
     );
   }

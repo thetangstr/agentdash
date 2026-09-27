@@ -601,7 +601,9 @@ export function activityService(db: Db) {
       return [fromContext, ...fromActivity];
     },
 
-    create: (data: typeof activityLog.$inferInsert) =>
+    // AgentDash (consolidation PR-C): origin is required — the column has no
+    // default, so a caller must say whether the row is a server record.
+    create: (data: typeof activityLog.$inferInsert & { origin: "server" | "manual" }) =>
       db
         .insert(activityLog)
         .values(data)
