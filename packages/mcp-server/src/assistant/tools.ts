@@ -672,7 +672,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         }>;
         total: number;
         shown: number;
-        /** Open issues assigned to the calling person — "waiting on me" work with no approval row. */
+        /** Open manual-origin issues assigned to the calling person — the "waiting on me" main list. */
         tasksAssignedToYou?: Array<{
           issueId: string;
           identifier: string | null;
@@ -681,6 +681,15 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           updatedAt: string;
         }>;
         tasksAssignedToYouTotal?: number;
+        /** Machine-filed open issues (routines, evaluations, escalations) — "other activity", not decisions. */
+        otherTasksAssignedToYou?: Array<{
+          issueId: string;
+          identifier: string | null;
+          title: string;
+          status: string;
+          updatedAt: string;
+        }>;
+        otherTasksAssignedToYouTotal?: number;
       }>("GET", `/companies/${companyId()}/assistant/pending-decisions`);
 
       const cap = Math.min(limit ?? 10, 10);
@@ -705,7 +714,15 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           link: task.identifier ? await ctx.issueLink(task.identifier) : await ctx.homeLink(),
         })),
       );
+      const otherTasks = await Promise.all(
+        (response.otherTasksAssignedToYou ?? []).slice(0, cap).map(async (task) => ({
+          ...task,
+          title: clip(task.title, 120),
+          link: task.identifier ? await ctx.issueLink(task.identifier) : await ctx.homeLink(),
+        })),
+      );
       const taskMore = (response.tasksAssignedToYouTotal ?? tasks.length) - tasks.length;
+      const otherTasksTotal = response.otherTasksAssignedToYouTotal ?? otherTasks.length;
       const undecidable = items.filter((d) => !d.canDecide).length;
       const primary = items[0]?.link ?? tasks[0]?.link ?? (await ctx.homeLink());
       const names = items.slice(0, 3).map((d) => d.summary.replace(/\.$/, ""));
@@ -722,6 +739,11 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           `${response.tasksAssignedToYouTotal ?? tasks.length} task${(response.tasksAssignedToYouTotal ?? tasks.length) === 1 ? "" : "s"} assigned to you${taskMore > 0 ? ` (showing ${tasks.length})` : ""}`,
         );
       }
+      if (otherTasksTotal > 0) {
+        summaryParts.push(
+          `${otherTasksTotal} machine-filed item${otherTasksTotal === 1 ? "" : "s"} assigned to you are grouped as other activity, not decisions`,
+        );
+      }
       return ok({
         summary:
           summaryParts.length === 0
@@ -732,6 +754,8 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           total: decisionTotal,
           tasksAssignedToYou: tasks,
           tasksAssignedToYouTotal: response.tasksAssignedToYouTotal ?? tasks.length,
+          otherTasksAssignedToYou: otherTasks,
+          otherTasksAssignedToYouTotal: otherTasksTotal,
           truncated: more > 0 || taskMore > 0,
         }),
         links: { primary },

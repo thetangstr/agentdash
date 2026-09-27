@@ -44,10 +44,6 @@ const EMPTY_TEXT =
 // readable home.
 export { decisionsListLength };
 
-function isMachineGenerated(task: WaitingOnYouTask): boolean {
-  return (task.originKind ?? "manual") !== "manual";
-}
-
 function DecisionRow({ decision }: { decision: WaitingOnYouDecision }) {
   return (
     <li data-testid="decisions-row" className="flex items-start gap-3 px-4 py-3">
@@ -144,13 +140,15 @@ export function Decisions() {
     return <PageSkeleton variant="approvals" />;
   }
 
+  // The manual/machine split is server-side: `tasksAssignedToYou` is the
+  // manual main list, `otherTasksAssignedToYou` the machine-filed group.
   const decisions = waiting?.decisions ?? [];
-  const tasks = waiting?.tasksAssignedToYou ?? [];
-  const manualTasks = tasks.filter((t) => !isMachineGenerated(t));
-  const otherTasks = tasks.filter(isMachineGenerated);
+  const manualTasks = waiting?.tasksAssignedToYou ?? [];
+  const otherTasks = waiting?.otherTasksAssignedToYou ?? [];
+  const otherTasksTotal = waiting?.otherTasksAssignedToYouTotal ?? otherTasks.length;
   const mainCount = decisionsListLength(waiting);
   const moreDecisions = (waiting?.total ?? 0) - decisions.length;
-  const moreTasks = (waiting?.tasksAssignedToYouTotal ?? 0) - tasks.length;
+  const moreTasks = (waiting?.tasksAssignedToYouTotal ?? 0) - manualTasks.length;
 
   return (
     <div className="mx-auto w-full max-w-[920px] space-y-4 px-1 py-6 sm:px-4" data-testid="decisions">
@@ -231,7 +229,7 @@ export function Decisions() {
           >
             {showOther ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
             Other activity
-            <span className="normal-case tracking-normal">· {otherTasks.length}</span>
+            <span className="normal-case tracking-normal">· {otherTasksTotal}</span>
           </button>
           {showOther ? (
             <ul className="divide-y divide-border border-t border-border">

@@ -79,7 +79,10 @@ describe("GET /companies/:companyId/assistant/digest", () => {
       truncated: false,
     });
     mockDigestService.audienceAgents.mockResolvedValue([]);
-    mockDigestService.tasksAssignedTo.mockResolvedValue({ total: 0, items: [] });
+    mockDigestService.tasksAssignedTo.mockResolvedValue({
+      manual: { total: 0, items: [] },
+      other: { total: 0, items: [] },
+    });
   });
 
   it("passes a parsed since through to the digest", async () => {
@@ -149,7 +152,10 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
     mockDigestService.audienceAgents.mockResolvedValue([
       { id: "agent-1", name: "Priya", role: "engineer" },
     ]);
-    mockDigestService.tasksAssignedTo.mockResolvedValue({ total: 0, items: [] });
+    mockDigestService.tasksAssignedTo.mockResolvedValue({
+      manual: { total: 0, items: [] },
+      other: { total: 0, items: [] },
+    });
     mockAuthorityService.requireDecisionActor.mockResolvedValue("steward");
     mockSummarizeApprovalRisk.mockReset().mockReturnValue({ level: "low" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([
@@ -230,7 +236,7 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
       {
         id: "appr-board",
         companyId: "company-1",
-        type: "budget_override",
+        type: "budget_override_required",
         status: "pending",
         revision: 1,
         payload: {},
@@ -284,11 +290,19 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
 
   it("returns tasks assigned to the calling person alongside decisions", async () => {
     mockDigestService.tasksAssignedTo.mockResolvedValue({
-      total: 2,
-      items: [
-        { issueId: "issue-9", identifier: "ACME-313", title: "Pick the launch date", status: "todo", updatedAt: "2026-09-23T09:00:00Z" },
-        { issueId: "issue-10", identifier: "ACME-314", title: "Sign the vendor contract", status: "in_progress", updatedAt: "2026-09-23T08:00:00Z" },
-      ],
+      manual: {
+        total: 2,
+        items: [
+          { issueId: "issue-9", identifier: "ACME-313", title: "Pick the launch date", status: "todo", updatedAt: "2026-09-23T09:00:00Z" },
+          { issueId: "issue-10", identifier: "ACME-314", title: "Sign the vendor contract", status: "in_progress", updatedAt: "2026-09-23T08:00:00Z" },
+        ],
+      },
+      other: {
+        total: 1,
+        items: [
+          { issueId: "issue-11", identifier: "ACME-315", title: "Weekly metrics snapshot", status: "todo", updatedAt: "2026-09-23T07:00:00Z", originKind: "routine_execution" },
+        ],
+      },
     });
     const app = await createApp();
     const res = await request(app).get("/companies/company-1/assistant/pending-decisions");
@@ -297,6 +311,10 @@ describe("GET /companies/:companyId/assistant/pending-decisions", () => {
     expect(res.body.tasksAssignedToYouTotal).toBe(2);
     expect(res.body.tasksAssignedToYou).toHaveLength(2);
     expect(res.body.tasksAssignedToYou[0].identifier).toBe("ACME-313");
+    // Machine-filed assignments travel in their own group — the badge and
+    // the Decisions main list must never count them.
+    expect(res.body.otherTasksAssignedToYouTotal).toBe(1);
+    expect(res.body.otherTasksAssignedToYou[0].identifier).toBe("ACME-315");
   });
 
   it("passes a null user id for a user-less actor so every human-assigned task counts", async () => {

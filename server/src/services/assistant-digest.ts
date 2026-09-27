@@ -92,7 +92,14 @@ export function assistantDigestService(db: Db) {
    * ever names them. A user-less actor (the local bootstrap operator)
    * answers for the whole company, so every human-assigned open task
    * counts — the same reading the digest audience gives that actor.
-   * `items` caps at 25; `total` is the real count.
+   *
+   * UX-7 (#788): the manual-vs-machine split happens HERE, before the
+   * 25-item cap, so every surface (Home, the Decisions page, the sidebar
+   * badge, list_pending_decisions) reads the same groups and the badge
+   * count is the true manual total, never the size of the slice. `manual`
+   * is the main list — tasks a human filed; `other` is machine-generated
+   * work (routines, evaluations, escalations — any non-manual originKind),
+   * grouped under "Other activity" on the Decisions page.
    */
   async function tasksAssignedTo(companyId: string, userId: string | null) {
     const rows = await db
@@ -102,9 +109,6 @@ export function assistantDigestService(db: Db) {
         title: issues.title,
         status: issues.status,
         updatedAt: issues.updatedAt,
-        // UX-7 (#788): the Decisions page splits machine-generated items
-        // (routines, evaluations, escalations) into a muted "Other activity"
-        // group — manual origin is the main list.
         originKind: issues.originKind,
       })
       .from(issues)
@@ -117,16 +121,20 @@ export function assistantDigestService(db: Db) {
         ),
       )
       .orderBy(desc(issues.updatedAt));
+
+    const toTask = (row: (typeof rows)[number]) => ({
+      issueId: row.id,
+      identifier: row.identifier,
+      title: row.title,
+      status: row.status,
+      updatedAt: row.updatedAt.toISOString(),
+      originKind: row.originKind,
+    });
+    const manual = rows.filter((row) => (row.originKind ?? "manual") === "manual");
+    const other = rows.filter((row) => (row.originKind ?? "manual") !== "manual");
     return {
-      total: rows.length,
-      items: rows.slice(0, 25).map((row) => ({
-        issueId: row.id,
-        identifier: row.identifier,
-        title: row.title,
-        status: row.status,
-        updatedAt: row.updatedAt.toISOString(),
-        originKind: row.originKind,
-      })),
+      manual: { total: manual.length, items: manual.slice(0, 25).map(toTask) },
+      other: { total: other.length, items: other.slice(0, 25).map(toTask) },
     };
   }
 

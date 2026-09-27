@@ -18,7 +18,7 @@ import { MarkdownBody } from "../components/MarkdownBody";
 
 export function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
-  const { selectedCompanyId, setSelectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany, setSelectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -64,11 +64,18 @@ export function ApprovalDetail() {
   }, [agents]);
 
   useEffect(() => {
+    // UX-7 (#788): on the default profile the approvals list is the
+    // Decisions page — the breadcrumb names the page it returns to.
+    // agentdash_mk keeps its Approvals list untouched.
+    const listCrumb =
+      selectedCompany?.productProfile === "agentdash_mk"
+        ? { label: "Approvals", href: "/approvals" }
+        : { label: "Decisions", href: "/decisions" };
     setBreadcrumbs([
-      { label: "Approvals", href: "/approvals" },
+      listCrumb,
       { label: approval?.id?.slice(0, 8) ?? approvalId ?? "Approval" },
     ]);
-  }, [setBreadcrumbs, approval, approvalId]);
+  }, [setBreadcrumbs, approval, approvalId, selectedCompany?.productProfile]);
 
   const refresh = () => {
     if (!approvalId) return;

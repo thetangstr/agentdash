@@ -2,6 +2,7 @@
 // you", as a leaf module so both the digest and waiting-on-you.ts import it
 // without a cycle. See waiting-on-you.ts for the definition in words.
 import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
+import { effectsFor } from "./assistant-gated-actions.js";
 
 /** Statuses where a human decision is still possible. */
 export const WAITING_APPROVAL_STATUSES = ["pending", "revision_requested"] as const;
@@ -13,7 +14,8 @@ export const APPROVAL_KIND_PHRASES: Record<string, string> = {
   send_email: "send an email",
   connector_send: "send a message through a connector",
   environment_provision: "provision an environment",
-  budget_override: "change a budget",
+  // The type budgets.ts actually files; "budget_override" was a dead key.
+  budget_override_required: "approve spending past a budget limit",
 };
 
 export type WaitingApprovalLike = {
@@ -27,41 +29,19 @@ export type WaitingApprovalLike = {
 
 /**
  * AgentDash: UX-7 (#788) — what a yes and a no do, in person words, for the
- * Decisions page row. Same phrasing family as the assistant's confirm
- * read-back: deliberately small and kind-keyed — a wrong consequence
- * invented here would be decided on as fact.
+ * Decisions page row. The wording is `effectsFor` from the gated-actions
+ * service (GH #679 / #780): the assistant's confirm read-back and this row
+ * must describe the same consequence, so there is exactly one function. A
+ * wrong consequence invented here would be decided on as fact.
  */
 export function decisionConsequences(approval: {
   type: string;
   status?: string | null;
   payload: unknown;
 }): { approve: string; reject: string } {
-  const payload =
-    typeof approval.payload === "object" && approval.payload !== null
-      ? (approval.payload as Record<string, unknown>)
-      : {};
-  if (approval.type === "hire_agent") {
-    // A hire approval with a payload agentId activates a pending_approval
-    // agent; without one, the approve effect creates the agent on the spot.
-    const creates = typeof payload.agentId !== "string";
-    return {
-      approve: creates
-        ? "The hire is approved and the new agent is created on the requested adapter."
-        : "The hire is approved and the agent becomes active.",
-      reject: creates
-        ? "The request is rejected and does not proceed."
-        : "The hire is refused and the proposed agent is terminated.",
-    };
-  }
-  if (approval.type === "budget_override_required" || approval.type === "budget_override") {
-    return {
-      approve: "The spend limit is raised and the work resumes.",
-      reject: "The limit stays — the run that hit it stays paused.",
-    };
-  }
   return {
-    approve: "The request is approved and whatever it was gating proceeds.",
-    reject: "The request is rejected and does not proceed.",
+    approve: effectsFor(approval, "approve")[0]!,
+    reject: effectsFor(approval, "reject")[0]!,
   };
 }
 

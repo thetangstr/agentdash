@@ -108,8 +108,16 @@ export function waitingOnYouService(db: Db) {
         decisions,
         total: ranked.length,
         shown: decisions.length,
-        tasksAssignedToYou: tasks.items,
-        tasksAssignedToYouTotal: tasks.total,
+        // UX-7 (#788): the manual/machine split is decided here, not in any
+        // client. `tasksAssignedToYou` is the main list (manual-origin
+        // issues only) and `tasksAssignedToYouTotal` is its uncapped count —
+        // so Home, the Decisions page, the sidebar badge and the assistant's
+        // list_pending_decisions all read the same number. Machine-filed
+        // issues live in `otherTasksAssignedToYou`.
+        tasksAssignedToYou: tasks.manual.items,
+        tasksAssignedToYouTotal: tasks.manual.total,
+        otherTasksAssignedToYou: tasks.other.items,
+        otherTasksAssignedToYouTotal: tasks.other.total,
       };
     },
   };

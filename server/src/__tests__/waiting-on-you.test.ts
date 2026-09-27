@@ -84,7 +84,7 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
     await db.insert(approvals).values([
       { id: A_MINE_HIRE, companyId: COMPANY, type: "hire_agent", requestedByAgentId: MINE, status: "pending", payload: { name: "Nova" }, createdAt: hoursAgo(5) },
       { id: A_MINE_REVISION, companyId: COMPANY, type: "send_email", requestedByAgentId: MINE, status: "revision_requested", payload: {}, createdAt: hoursAgo(4) },
-      { id: A_BOARD, companyId: COMPANY, type: "budget_override", requestedByUserId: OTHER_USER, status: "pending", payload: {}, createdAt: hoursAgo(3) },
+      { id: A_BOARD, companyId: COMPANY, type: "budget_override_required", requestedByUserId: OTHER_USER, status: "pending", payload: {}, createdAt: hoursAgo(3) },
       { id: A_THEIRS, companyId: COMPANY, type: "send_email", requestedByAgentId: THEIRS, status: "pending", payload: {}, createdAt: hoursAgo(2) },
       { id: A_MINE_APPROVED, companyId: COMPANY, type: "hire_agent", requestedByAgentId: MINE, status: "approved", payload: {}, createdAt: hoursAgo(1) },
       { id: A_OTHER_COMPANY, companyId: OTHER_COMPANY, type: "hire_agent", status: "pending", payload: {}, createdAt: hoursAgo(1) },
@@ -139,6 +139,8 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
       total: number;
       tasksAssignedToYou: Array<{ issueId: string }>;
       tasksAssignedToYouTotal: number;
+      otherTasksAssignedToYou: Array<{ issueId: string }>;
+      otherTasksAssignedToYouTotal: number;
     };
   }
 
@@ -163,6 +165,8 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
       total: number;
       tasksAssignedToYou: Array<{ issueId: string }>;
       tasksAssignedToYouTotal: number;
+      otherTasksAssignedToYou?: Array<{ issueId: string }>;
+      otherTasksAssignedToYouTotal?: number;
     } }).data;
   }
 
@@ -170,8 +174,12 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
     const home = await homeWaitingOnYou();
     expect(home.decisions.map((d) => d.approvalId).sort()).toEqual([A_BOARD, A_MINE_HIRE, A_MINE_REVISION].sort());
     expect(home.total).toBe(3);
-    expect(home.tasksAssignedToYou.map((t) => t.issueId).sort()).toEqual([I_OPEN, I_REVIEW, I_ROUTINE].sort());
-    expect(home.tasksAssignedToYouTotal).toBe(3);
+    // The server splits before the item cap: manual origins are the main
+    // list, the routine-filed issue is other activity.
+    expect(home.tasksAssignedToYou.map((t) => t.issueId).sort()).toEqual([I_OPEN, I_REVIEW].sort());
+    expect(home.tasksAssignedToYouTotal).toBe(2);
+    expect(home.otherTasksAssignedToYou.map((t) => t.issueId)).toEqual([I_ROUTINE]);
+    expect(home.otherTasksAssignedToYouTotal).toBe(1);
   });
 
   it("decisions say what yes and no do, and tasks carry their origin for grouping", async () => {
@@ -180,14 +188,19 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
       | { effects?: { approve: string; reject: string } }
       | undefined;
     // A hire approval with no payload agentId creates the agent on approve.
+    // The wording is #780's effectsFor — the same sentence the assistant's
+    // confirm read-back says.
     expect(hire?.effects?.approve).toContain("created");
     expect(hire?.effects?.reject).toBeTruthy();
     const budget = home.decisions.find((d) => d.approvalId === A_BOARD) as
       | { effects?: { approve: string; reject: string } }
       | undefined;
-    expect(budget?.effects?.approve).toContain("limit");
-    expect(budget?.effects?.reject).toContain("paused");
-    const routine = home.tasksAssignedToYou.find((t) => t.issueId === I_ROUTINE) as
+    // Non-hire kinds get the canonical generic wording — this page used to
+    // carry a second copy that claimed the limit rises; that was not what
+    // the decision path does.
+    expect(budget?.effects?.approve).toBe("The request is approved and whatever it was gating proceeds.");
+    expect(budget?.effects?.reject).toBe("The request is rejected and does not proceed.");
+    const routine = home.otherTasksAssignedToYou.find((t) => t.issueId === I_ROUTINE) as
       | { originKind?: string }
       | undefined;
     expect(routine?.originKind).toBe("routine_execution");
@@ -197,12 +210,41 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
     expect(manual?.originKind).toBe("manual");
   });
 
+  it("the manual count is the true total, not the length of the 25-item page", async () => {
+    // UX-7 review: the badge reads these totals, so the split must happen
+    // before the slice — a person with 30 manual assignments gets 30, not
+    // however many rows fit in the payload.
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Busy Co", issuePrefix: "BSY" });
+    await db.insert(issues).values(
+      Array.from({ length: 30 }, (_, i) => ({
+        id: randomUUID(),
+        companyId,
+        title: `Manual ask ${i}`,
+        status: "todo",
+        assigneeUserId: USER,
+        identifier: `BSY-${i + 1}`,
+      })),
+    );
+    await db.insert(issues).values([
+      { id: randomUUID(), companyId, title: "Routine one", status: "todo", assigneeUserId: USER, identifier: "BSY-31", originKind: "routine_execution" },
+      { id: randomUUID(), companyId, title: "Routine two", status: "todo", assigneeUserId: USER, identifier: "BSY-32", originKind: "routine_execution" },
+    ]);
+
+    const direct = await waitingOnYouService(db).list(companyId, actor);
+    expect(direct.tasksAssignedToYouTotal).toBe(30);
+    expect(direct.tasksAssignedToYou).toHaveLength(25);
+    expect(direct.otherTasksAssignedToYouTotal).toBe(2);
+    expect(direct.otherTasksAssignedToYou).toHaveLength(2);
+  });
+
   it("Home equals list_pending_decisions for the same person", async () => {
     const [home, mcp] = await Promise.all([homeWaitingOnYou(), mcpListPendingDecisions()]);
     expect(mcp.decisions.map((d) => d.approvalId)).toEqual(home.decisions.map((d) => d.approvalId));
     expect(mcp.total).toBe(home.total);
     expect(mcp.tasksAssignedToYou.map((t) => t.issueId)).toEqual(home.tasksAssignedToYou.map((t) => t.issueId));
     expect(mcp.tasksAssignedToYouTotal).toBe(home.tasksAssignedToYouTotal);
+    expect(mcp.otherTasksAssignedToYouTotal).toBe(home.otherTasksAssignedToYouTotal);
   });
 
   it("whats_new's decisions waiting are the same approvals in the same order", async () => {

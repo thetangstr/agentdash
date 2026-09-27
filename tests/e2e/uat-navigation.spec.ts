@@ -48,6 +48,7 @@ const ROUTES = [
   "/agents/all",
   "/issues",
   "/inbox",
+  "/decisions",
   "/org",
   "/goals",
   "/approvals",
@@ -115,7 +116,9 @@ test.describe("every destination stays reachable", () => {
       await page.goto("/dashboard");
       // Only the links actually rendered for this user — role and profile
       // decide what the shell offers, and clicking a hidden one proves nothing.
-      const labels = ["Dashboard", "Inbox", "Issues", "Org", "Billing", "Settings", "My Agent"];
+      // The default profile shows "Decisions" where agentdash_mk shows
+      // "Inbox" — the `if (!count)` guard skips whichever isn't offered.
+      const labels = ["Dashboard", "Inbox", "Decisions", "Issues", "Org", "Billing", "Settings", "My Agent"];
       for (const label of labels) {
         const link = page.getByRole("link", { name: label, exact: true }).first();
         if (!(await link.count())) {

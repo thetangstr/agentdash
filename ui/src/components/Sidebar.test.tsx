@@ -123,11 +123,12 @@ describe("Sidebar", () => {
       decisions: [{ approvalId: "appr-1" }],
       total: 1,
       shown: 1,
-      tasksAssignedToYou: [
-        { issueId: "i-1", originKind: "manual" },
-        { issueId: "i-2", originKind: "routine_execution" },
-      ],
-      tasksAssignedToYouTotal: 2,
+      // The server splits before it caps: manual rows in
+      // tasksAssignedToYou, machine-filed rows in otherTasksAssignedToYou.
+      tasksAssignedToYou: [{ issueId: "i-1", originKind: "manual" }],
+      tasksAssignedToYouTotal: 1,
+      otherTasksAssignedToYou: [{ issueId: "i-2", originKind: "routine_execution" }],
+      otherTasksAssignedToYouTotal: 1,
     });
     mockAccessApi.listMembers.mockResolvedValue({ access: { canManageAgents: true } });
   });
@@ -239,6 +240,24 @@ describe("Sidebar", () => {
     expect(decisions?.textContent).toContain("2");
     expect([...container.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/inbox")).toBe(false);
     expect(mockDashboardApi.waitingOnYou).toHaveBeenCalledWith("company-1");
+    await act(async () => root.unmount());
+  });
+
+  // UX-7 review: the badge reads the server's uncapped totals — a person
+  // with 30 manual assignments sees 31, not "25 rows happened to load".
+  it("counts the server's totals, not the length of the capped lists", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue({
+      decisions: [{ approvalId: "appr-1" }],
+      total: 1,
+      shown: 1,
+      tasksAssignedToYou: [{ issueId: "i-1", originKind: "manual" }],
+      tasksAssignedToYouTotal: 30,
+      otherTasksAssignedToYou: [],
+      otherTasksAssignedToYouTotal: 4,
+    });
+    const root = await renderSidebar();
+    const decisions = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/decisions");
+    expect(decisions?.textContent).toContain("31");
     await act(async () => root.unmount());
   });
 

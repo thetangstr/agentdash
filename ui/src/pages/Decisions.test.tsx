@@ -51,6 +51,8 @@ function waitingWith(overrides: Partial<WaitingOnYou> = {}): WaitingOnYou {
     ],
     total: 1,
     shown: 1,
+    // The server applies the split: manual rows are the main list,
+    // machine-filed rows arrive in otherTasksAssignedToYou.
     tasksAssignedToYou: [
       {
         issueId: "i-1",
@@ -60,6 +62,9 @@ function waitingWith(overrides: Partial<WaitingOnYou> = {}): WaitingOnYou {
         updatedAt: new Date().toISOString(),
         originKind: "manual",
       },
+    ],
+    tasksAssignedToYouTotal: 1,
+    otherTasksAssignedToYou: [
       {
         issueId: "i-2",
         identifier: "ACM-2",
@@ -69,7 +74,7 @@ function waitingWith(overrides: Partial<WaitingOnYou> = {}): WaitingOnYou {
         originKind: "routine_execution",
       },
     ],
-    tasksAssignedToYouTotal: 2,
+    otherTasksAssignedToYouTotal: 1,
     ...overrides,
   };
 }
@@ -151,7 +156,15 @@ describe("Decisions", () => {
 
   it("says the exact empty line when nothing needs the person", async () => {
     mockDashboardApi.waitingOnYou.mockResolvedValue(
-      waitingWith({ decisions: [], total: 0, shown: 0, tasksAssignedToYou: [], tasksAssignedToYouTotal: 0 }),
+      waitingWith({
+        decisions: [],
+        total: 0,
+        shown: 0,
+        tasksAssignedToYou: [],
+        tasksAssignedToYouTotal: 0,
+        otherTasksAssignedToYou: [],
+        otherTasksAssignedToYouTotal: 0,
+      }),
     );
     await render();
     expect(q("decisions-empty")?.textContent).toBe(EMPTY_TEXT);
@@ -164,7 +177,9 @@ describe("Decisions", () => {
         decisions: [],
         total: 0,
         shown: 0,
-        tasksAssignedToYou: [
+        tasksAssignedToYou: [],
+        tasksAssignedToYouTotal: 0,
+        otherTasksAssignedToYou: [
           {
             issueId: "i-9",
             identifier: "ACM-9",
@@ -174,7 +189,7 @@ describe("Decisions", () => {
             originKind: "stale_active_run_evaluation",
           },
         ],
-        tasksAssignedToYouTotal: 1,
+        otherTasksAssignedToYouTotal: 1,
       }),
     );
     await render();
