@@ -6,7 +6,7 @@ import { toNodeHandler } from "better-auth/node";
 import { configuredEdgeSecret, EDGE_CLIENT_IP_HEADER } from "../middleware/edge-gate.js";
 import { APIError } from "better-auth/api";
 // AgentDash (#767 review): the atomic, persisted claim of a hosted box.
-import { CLAIM_ATTEMPT_HEADER, claimEmailMatches, claimHeldBy, configuredClaimEmail, takeClaim } from "../lib/claim-code.js";
+import { CLAIM_ATTEMPT_HEADER, claimEmailMatches, claimHeldBy, completeClaim, configuredClaimEmail, takeClaim } from "../lib/claim-code.js";
 import type { Db } from "@paperclipai/db";
 import {
   authAccounts,
@@ -367,6 +367,12 @@ export function createBetterAuthInstance(
             user: { id: string; email: string; name: string | null },
             context: unknown,
           ) => {
+            // AgentDash (#812): the box's claim counts once its user exists.
+            if (configuredClaimEmail()) {
+              await completeClaim(db).catch((err: unknown) =>
+                logger.warn({ error: err instanceof Error ? err.message : String(err) }, "[auth] could not mark the box claim completed"),
+              );
+            }
             // GH #743 review: claim the invite token only once the user row
             // exists, and expire the invite cookie on the response.
             await claimInviteSignupAfterCreate(context, { db, email: user.email });

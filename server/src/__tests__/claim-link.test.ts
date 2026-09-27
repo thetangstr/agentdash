@@ -19,7 +19,9 @@ import { onboardingMcpSignupRoutes } from "../routes/onboarding-mcp-signup.js";
 import { healthRoutes } from "../routes/health.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { inviteService } from "../services/invites.js";
-import { checkClaimSignup, claimEmailMatches, resetClaimedCacheForTests } from "../lib/claim-code.js";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { boxClaimed, boxClaimedCached, CLAIM_ATTEMPT_HEADER, checkClaimSignup, claimEmailMatches, resetClaimedCacheForTests, takeClaim } from "../lib/claim-code.js";
 
 const support = await getEmbeddedPostgresTestSupport();
 const describeEmbedded = support.supported ? describe : describe.skip;
@@ -186,6 +188,77 @@ describeEmbedded("one-time claim link (#767)", () => {
       .send({ name: "N", password: PASSWORD, email: "intruder@example.com", inviteCode: CLAIM_CODE });
     expect(forged.status).toBe(403);
     expect(await users()).toHaveLength(0);
+  });
+
+  // #812 / pre-release review: a claim row with no user behind it must never strand the claimant.
+  describe("stuck claims (#812)", () => {
+    const orphan = (ageMinutes: number) =>
+      db.insert(agentdashBoxClaim).values({ email: "founder@example.com", attempt: "dead-attempt", claimedAt: new Date(Date.now() - ageMinutes * 60_000) });
+
+    it("a crash between taking the claim and inserting the user: not claimed, and the claimant gets in once the row is stale", async () => {
+      await orphan(10);
+      expect(await boxClaimed(db)).toBe(false);
+      expect((await checkClaimSignup(db, "founder@example.com")).ok).toBe(true);
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const health = express();
+      health.use("/health", healthRoutes(db, { deploymentMode: "authenticated", deploymentExposure: "public", authReady: true, companyDeletionEnabled: false }));
+      expect((await request(health).get("/health")).body.claimed).toBe(false);
+      const ok = await signUp(authApp(), { email: "founder@example.com", inviteCode: CLAIM_CODE });
+      expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+      expect(await users()).toHaveLength(1);
+      const [row] = await db.select().from(agentdashBoxClaim);
+      expect(row!.attempt).not.toBe("dead-attempt");
+      expect(row!.completedAt).not.toBeNull();
+    });
+
+    it("a fresh row from an attempt still in flight keeps the race safe but is not reported as claimed", async () => {
+      await orphan(0);
+      expect(await boxClaimed(db)).toBe(false);
+      expect(await boxClaimedCached(db)).toBe(false);
+      const blocked = await signUp(authApp(), { email: "founder@example.com", inviteCode: CLAIM_CODE });
+      expect(blocked.status).toBe(409);
+      expect(await users()).toHaveLength(0);
+      expect(await takeClaim(db, "founder@example.com", "other-attempt")).toBe(false);
+      expect(await takeClaim(db, "founder@example.com", "other-attempt", 0)).toBe(true); // once stale
+    });
+
+    it("an aborted claim request gives the claim back", async () => {
+      // Stands in for Better Auth: takes the claim for the guard's attempt, then never answers.
+      const app = express();
+      app.use(express.json());
+      app.use("/api/auth", inviteCodeSignupGuard({ enabled: true, db }));
+      app.use("/api/auth", async (req, _res) => {
+        await takeClaim(db, "founder@example.com", String(req.headers[CLAIM_ATTEMPT_HEADER]));
+      });
+      const server = app.listen(0, "127.0.0.1");
+      await new Promise<void>((r) => server.once("listening", () => r()));
+      try {
+        const port = (server.address() as AddressInfo).port;
+        const body = JSON.stringify({ name: "N", email: "founder@example.com", password: PASSWORD, inviteCode: CLAIM_CODE });
+        const req = http.request({ host: "127.0.0.1", port, path: "/api/auth/sign-up/email", method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } });
+        req.on("error", () => {});
+        req.end(body);
+        for (let i = 0; i < 50 && (await db.select().from(agentdashBoxClaim)).length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+        expect(await db.select().from(agentdashBoxClaim)).toHaveLength(1);
+        req.destroy(); // the client gives up
+        for (let i = 0; i < 50 && (await db.select().from(agentdashBoxClaim)).length > 0; i++) await new Promise((r) => setTimeout(r, 20));
+        expect(await db.select().from(agentdashBoxClaim)).toHaveLength(0);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((r) => server.close(() => r()));
+      }
+    });
+
+    it("health caches claimed=true for good only once a user exists", async () => {
+      await orphan(0);
+      expect(await boxClaimedCached(db)).toBe(false);
+      resetClaimedCacheForTests();
+      await db.update(agentdashBoxClaim).set({ completedAt: new Date() });
+      expect(await boxClaimedCached(db)).toBe(true); // a completed claim, but no user: not cached for good
+      await truncateWithRetry(db, sql`${agentdashBoxClaim}`);
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await boxClaimedCached(db, 0)).toBe(false);
+    });
   });
 
   describe("MCP sign-up", () => {
