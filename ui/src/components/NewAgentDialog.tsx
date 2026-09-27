@@ -5,6 +5,8 @@ import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { agentsApi } from "../api/agents";
 import { adaptersApi } from "../api/adapters";
+import { conversationsApi } from "../api/conversations";
+import { healthApi } from "../api/health";
 import { queryKeys } from "@/lib/queryKeys";
 import {
   Dialog,
@@ -15,6 +17,8 @@ import {
   ArrowLeft,
   Bot,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { listUIAdapters } from "../adapters";
 import { isVisualAdapterChoice } from "../adapters/metadata";
@@ -33,10 +37,30 @@ function isAgentAdapterType(type: string): boolean {
 
 export function NewAgentDialog() {
   const { newAgentOpen, closeNewAgent, openNewIssue } = useDialog();
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
   const navigate = useNavigate();
   const [showAdvancedCards, setShowAdvancedCards] = useState(false);
+  const [hireRole, setHireRole] = useState("");
+  const [hireWork, setHireWork] = useState("");
+  const [hireSubmitting, setHireSubmitting] = useState(false);
+  const [hireError, setHireError] = useState<string | null>(null);
   const disabledTypes = useDisabledAdaptersSync();
+  const isMkProfile = selectedCompany?.productProfile === "agentdash_mk";
+
+  const { data: health, isError: healthFailed } = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+  // AgentDash (GH #789): hosted agentdash.cloud boxes run Hermes only, so the
+  // adapter grid is a dead end there — hiring goes through the CoS instead.
+  // Gated on the default profile as well: MK on a hosted box keeps its
+  // existing dialog. While health is loading we render nothing rather than
+  // flash the adapter/CEO path on a hosted box — but a failed health check
+  // falls through to the normal dialog rather than spinning forever.
+  const hostedHirePath = health?.hostedBox === true && !isMkProfile;
+  const hirePathPending = !isMkProfile && health === undefined && !healthFailed;
 
   // Fetch registered adapters from server (syncs disabled store + provides data)
   const { data: serverAdapters } = useQuery({
@@ -52,7 +76,13 @@ export function NewAgentDialog() {
     enabled: !!selectedCompanyId && newAgentOpen,
   });
 
-  const ceoAgent = (agents ?? []).find((a) => a.role === "ceo");
+  // The delegate follows the button's promise: "Ask your Chief of Staff" on
+  // the default profile, "Ask the CEO" on agentdash_mk. Each falls back to
+  // the other executive so a workspace missing one still delegates.
+  const findByRole = (role: string) => (agents ?? []).find((a) => a.role === role);
+  const delegateAgent = isMkProfile
+    ? findByRole("ceo") ?? findByRole("chief_of_staff")
+    : findByRole("chief_of_staff") ?? findByRole("ceo");
 
   /**
    * On an empty workspace there is nobody to delegate to, and offering it
@@ -102,10 +132,32 @@ export function NewAgentDialog() {
   function handleAskCeo() {
     closeNewAgent();
     openNewIssue({
-      assigneeAgentId: ceoAgent?.id,
+      assigneeAgentId: delegateAgent?.id,
       title: "Create a new agent",
       description: "(type in what kind of agent you want here)",
     });
+  }
+
+  async function handleAskChiefOfStaff() {
+    if (!selectedCompanyId || hireSubmitting) return;
+    setHireSubmitting(true);
+    setHireError(null);
+    const role = hireRole.trim() || "an agent";
+    const work = hireWork.trim();
+    const body =
+      `Please hire ${role}.` +
+      (work ? ` It should work on: ${work}.` : "");
+    try {
+      const conversation = await conversationsApi.companyInbox(selectedCompanyId);
+      await conversationsApi.post(conversation.id, body, selectedCompanyId);
+      setHireRole("");
+      setHireWork("");
+      closeNewAgent();
+      navigate("/cos");
+    } catch {
+      setHireError("Couldn't send that. Try again.");
+      setHireSubmitting(false);
+    }
   }
 
   function handleAdvancedConfig() {
@@ -149,7 +201,51 @@ export function NewAgentDialog() {
         </div>
 
         <div className="p-6 space-y-6">
-          {!showAdvancedCards && hasAnyAgent ? (
+          {hirePathPending ? (
+            <div className="flex justify-center py-8" aria-hidden="true">
+              <Bot className="h-6 w-6 animate-pulse text-muted-foreground" />
+            </div>
+          ) : hostedHirePath ? (
+            <>
+              {/* Hosted hire path: a short form filed through the CoS */}
+              <div className="text-center space-y-3">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-accent">
+                  <Bot className="h-6 w-6 text-foreground" />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Ask your Chief of Staff for a hire — tell it the role and what
+                  it should work on, and it handles setup, reporting, and
+                  permissions.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <Input
+                  placeholder="Role — e.g. Frontend engineer"
+                  value={hireRole}
+                  onChange={(e) => setHireRole(e.target.value)}
+                />
+                <Textarea
+                  placeholder="What should it work on?"
+                  value={hireWork}
+                  onChange={(e) => setHireWork(e.target.value)}
+                  rows={3}
+                />
+                {hireError && (
+                  <p className="text-sm text-destructive">{hireError}</p>
+                )}
+                <Button
+                  className="w-full"
+                  size="lg"
+                  onClick={handleAskChiefOfStaff}
+                  disabled={hireSubmitting || !hireRole.trim()}
+                >
+                  <Bot className="h-4 w-4 mr-2" />
+                  {hireSubmitting ? "Asking…" : "Ask your Chief of Staff"}
+                </Button>
+              </div>
+            </>
+          ) : !showAdvancedCards && hasAnyAgent ? (
             <>
               {/* Recommendation */}
               <div className="text-center space-y-3">
@@ -165,7 +261,9 @@ export function NewAgentDialog() {
 
               <Button className="w-full" size="lg" onClick={handleAskCeo}>
                 <Bot className="h-4 w-4 mr-2" />
-                Ask the CEO to create a new agent
+                {isMkProfile
+                  ? "Ask the CEO to create a new agent"
+                  : "Ask your Chief of Staff to create a new agent"}
               </Button>
 
               {/* Advanced link */}
