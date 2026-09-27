@@ -16,6 +16,12 @@ export const activityLog = pgTable(
     agentId: uuid("agent_id").references(() => agents.id),
     runId: uuid("run_id").references(() => heartbeatRuns.id),
     details: jsonb("details").$type<Record<string, unknown>>(),
+    // AgentDash (consolidation PR-C): who authored the row. "server" = a server
+    // route wrote it with the actor taken from the authenticated principal;
+    // "manual" = a board user posted it through POST /companies/:id/activity.
+    // NULL = written before this column existed, origin unknown. Only "server"
+    // rows may ever be presented as a human/system record.
+    origin: text("origin").$type<"server" | "manual">().default("server"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({

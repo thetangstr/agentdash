@@ -81,6 +81,9 @@ export async function logActivity(db: Db, input: LogActivityInput) {
     agentId: input.agentId ?? null,
     runId: input.runId ?? null,
     details: redactedDetails,
+    // AgentDash (consolidation PR-C): logActivity is only called by server
+    // code with the actor it resolved itself, so these rows are server records.
+    origin: "server",
   });
 
   publishLiveEvent({

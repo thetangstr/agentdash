@@ -7,13 +7,18 @@ import {
   normalizeActivityLimit,
   normalizeIssueRunsLimit,
 } from "../services/activity.js";
-import { assertAuthenticated, assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 
+// AgentDash (consolidation PR-C): the manual activity POST no longer lets the
+// caller choose who the row is attributed to. `actorType` and `actorId` are
+// still accepted so existing callers keep working, but they are ignored: the
+// server stamps the actor from the authenticated principal and marks the row
+// `origin: "manual"`, so it can never be mistaken for a server-emitted record.
 const createActivitySchema = z.object({
-  actorType: z.enum(["agent", "user", "system", "plugin"]).optional().default("system"),
-  actorId: z.string().min(1),
+  actorType: z.enum(["agent", "user", "system", "plugin"]).optional(),
+  actorId: z.string().min(1).optional(),
   action: z.string().min(1),
   entityType: z.string().min(1),
   entityId: z.string().min(1),
@@ -68,10 +73,21 @@ export function activityRoutes(db: Db) {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    const actor = getActorInfo(req);
+    const { action, entityType, entityId, agentId } = req.body as z.infer<typeof createActivitySchema>;
+    const details = req.body.details ? sanitizeRecord(req.body.details) : null;
     const event = await svc.create({
       companyId,
-      ...req.body,
-      details: req.body.details ? sanitizeRecord(req.body.details) : null,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      action,
+      entityType,
+      entityId,
+      agentId: agentId ?? null,
+      // Mirror the column in details so readers that only see `details`
+      // (live events, older UIs) can still tell the row was posted by hand.
+      details: { ...(details ?? {}), origin: "manual" },
+      origin: "manual",
     });
     res.status(201).json(event);
   });
