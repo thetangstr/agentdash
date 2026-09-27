@@ -45,7 +45,7 @@ import {
   createBoardApiToken,
   hashBearerToken,
 } from "../services/board-auth.js";
-import { claimEmailMatches, configuredClaimEmail } from "../lib/claim-code.js";
+import { claimEmailMatches, configuredClaimEmail, newClaimAttempt, releaseUnusedClaim, takeClaim } from "../lib/claim-code.js";
 
 /**
  * Server-side user creation, threaded in from server/src/index.ts where the
@@ -57,6 +57,8 @@ export type McpSignupCreateUser = (input: {
   name: string;
   email: string;
   password: string;
+  /** AgentDash (#767 review): the claim attempt that holds the persisted claim; forwarded to the auth hook. */
+  claimAttempt?: string;
 }) => Promise<{ userId: string | null }>;
 
 /**
@@ -294,10 +296,25 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
       // and can set a real browser password via "Forgot password".
       const password = randomBytes(32).toString("hex");
 
+      // AgentDash (#767 review): on a claim-bound box, take the persisted claim
+      // atomically before creating the user; parallel MCP sign-ups get 409.
+      let claimAttempt: string | undefined;
+      if (configuredClaimEmail()) {
+        claimAttempt = newClaimAttempt();
+        if (!(await takeClaim(db, email, claimAttempt))) {
+          res.status(409).json({
+            code: "instance_already_claimed",
+            error: "This instance already has a user. MCP signup only works on a fresh install. Sign in with an existing account instead.",
+          });
+          return;
+        }
+      }
+
       let userId: string | null = null;
       try {
-        ({ userId } = await opts.createUser({ name, email, password }));
+        ({ userId } = await opts.createUser({ name, email, password, ...(claimAttempt ? { claimAttempt } : {}) }));
       } catch (err) {
+        if (claimAttempt) await releaseUnusedClaim(db, claimAttempt).catch(() => {});
         const message = err instanceof Error ? err.message : "sign-up failed";
         logger.warn({ email, error: message }, "[mcp-signup] user creation failed");
         res.status(400).json({ code: "signup_failed", error: message });

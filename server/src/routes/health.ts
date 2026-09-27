@@ -14,7 +14,7 @@ import { computeHealthChecks, type HealthChecks } from "../observability/health-
 import { alerterStatus } from "../observability/alerter.js";
 import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
 import { isHostedBox } from "../services/license.js";
-import { instanceHasUsers } from "../lib/claim-code.js";
+import { boxClaimedCached } from "../lib/claim-code.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
 // creation + instance-admin promotion behind an env flag so existing
@@ -174,13 +174,13 @@ export function healthRoutes(
         : false;
 
     // AgentDash (#767, SC-6): on a hosted box, whether anyone has claimed it
-    // (at least one account exists). The control plane polls this to close
+    // (the persisted claim, or any account; cached, #767 review). The control plane polls this to close
     // sign-up and to tell an unclaimed box from one in use; nothing else about
     // users is exposed. Hosted boxes only, so other installs' responses and
     // their mocked-db tests are unchanged.
     const claimed =
       hostedBox && opts.deploymentMode === "authenticated" && typeof (db as { select?: unknown }).select === "function"
-        ? await instanceHasUsers(db)
+        ? await boxClaimedCached(db)
         : undefined;
 
     // AgentDash: adapter readiness — the MCP onboarding journey gates plan

@@ -48,7 +48,7 @@ import {
 } from "../services/invites.js";
 import { logger } from "./logger.js";
 // AgentDash (#767): the claim-code binding (email + zero users) on hosted boxes.
-import { checkClaimSignup, configuredClaimEmail } from "../lib/claim-code.js";
+import { CLAIM_ATTEMPT_HEADER, checkClaimSignup, configuredClaimEmail, newClaimAttempt, releaseUnusedClaim } from "../lib/claim-code.js";
 
 const SIGNUP_PATH_PREFIX = "/sign-up";
 
@@ -103,6 +103,8 @@ function refuse(res: Parameters<RequestHandler>[1]) {
 export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): RequestHandler {
   return (req, res, next) => {
     const inviteOnly = options.inviteOnly === true;
+    // AgentDash (#767 review): the claim attempt id is set only by this guard, never by a client.
+    delete req.headers[CLAIM_ATTEMPT_HEADER];
     if (!options.enabled && !inviteOnly) return next();
     if (!req.path.startsWith(SIGNUP_PATH_PREFIX)) return next();
 
@@ -129,7 +131,20 @@ export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): Re
       if (!options.db) return refuse(res);
       void checkClaimSignup(options.db, email)
         .then((claim) => {
-          if (claim.ok) return next();
+          if (claim.ok) {
+            // The user.create.before hook takes the persisted claim for this attempt;
+            // if the sign-up fails without a user, give the claim back.
+            const attempt = newClaimAttempt();
+            req.headers[CLAIM_ATTEMPT_HEADER] = attempt;
+            res.once("finish", () => {
+              if (res.statusCode >= 400 && options.db) {
+                void releaseUnusedClaim(options.db, attempt).catch((err: unknown) =>
+                  logger.warn({ error: err instanceof Error ? err.message : String(err) }, "[signup-gate] failed to release an unused claim"),
+                );
+              }
+            });
+            return next();
+          }
           if (token) return continueWithToken();
           res.status(claim.status).json({ code: claim.code, error: claim.error });
         })

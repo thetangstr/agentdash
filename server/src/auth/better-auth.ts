@@ -4,6 +4,9 @@ import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { toNodeHandler } from "better-auth/node";
 import { configuredEdgeSecret, EDGE_CLIENT_IP_HEADER } from "../middleware/edge-gate.js";
+import { APIError } from "better-auth/api";
+// AgentDash (#767 review): the atomic, persisted claim of a hosted box.
+import { CLAIM_ATTEMPT_HEADER, claimEmailMatches, claimHeldBy, configuredClaimEmail, takeClaim } from "../lib/claim-code.js";
 import type { Db } from "@paperclipai/db";
 import {
   authAccounts,
@@ -355,8 +358,11 @@ export function createBetterAuthInstance(
           // AgentDash (#726/#731): on a hosted box, the only ways to create a
           // user are gated email sign-up and a pending company invite.
           // See `refuseUngatedUserCreation`.
-          before: async (user: unknown, context: unknown) =>
-            refuseUngatedUserCreation(context, { db, email: userEmail(user) }),
+          before: async (user: unknown, context: unknown) => {
+            await refuseUngatedUserCreation(context, { db, email: userEmail(user) });
+            // AgentDash (#767 review): on a box with a claim binding, exactly one claim creates a user.
+            await enforceClaimOnUserCreation(context, { db, email: userEmail(user) });
+          },
           after: async (
             user: { id: string; email: string; name: string | null },
             context: unknown,
@@ -489,6 +495,47 @@ export async function refuseUngatedUserCreation(
       + "Open your company invite link first, or sign up by email with an invite code, "
       + "then sign in with SSO.",
   );
+}
+
+/** One request header from the endpoint context, however it is shaped. */
+function headerFromContext(context: unknown, name: string): string | null {
+  const headers = context && typeof context === "object" ? (context as { headers?: unknown }).headers : undefined;
+  if (headers instanceof Headers) return headers.get(name);
+  if (headers && typeof headers === "object") {
+    const raw = (headers as Record<string, unknown>)[name];
+    if (typeof raw === "string") return raw;
+  }
+  return null;
+}
+
+/**
+ * AgentDash (#767 review, SC-6): a `user.create.before` hook for boxes with a
+ * claim binding (AGENTDASH_CLAIM_EMAIL). The claim sign-up (browser or MCP)
+ * carries a server-set attempt id; the first attempt to take the persisted
+ * claim row may create the user, and only for the claim email. Every other
+ * creation on such a box needs a valid company invite. The row is taken with
+ * one atomic INSERT, so N parallel claim sign-ups create exactly one user.
+ */
+export async function enforceClaimOnUserCreation(context: unknown, opts: { db: Db; email: string | null }): Promise<void> {
+  if (!configuredClaimEmail()) return;
+  const email = opts.email;
+  const attempt = headerFromContext(context, CLAIM_ATTEMPT_HEADER);
+  if (email && attempt) {
+    if (await claimHeldBy(opts.db, attempt)) return;
+    if (claimEmailMatches(email) && (await takeClaim(opts.db, email, attempt))) return;
+  }
+  const token = readInviteTokenCookie(cookieHeaderFromContext(context));
+  if (email && token) {
+    try {
+      if (await reserveCompanyInviteSignup(opts.db, token, email)) return;
+    } catch (err) {
+      logger.warn({ error: err instanceof Error ? err.message : String(err) }, "[auth] company-invite check failed on a claim-bound box");
+    }
+  }
+  throw new APIError("CONFLICT", {
+    code: "claim_code_used",
+    message: "This workspace has already been claimed. Sign in with the account that claimed it.",
+  });
 }
 
 /** The `Set-Cookie` collector on the endpoint context, however it is shaped. */

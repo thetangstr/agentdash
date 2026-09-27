@@ -10,7 +10,7 @@ import express from "express";
 import request from "supertest";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { authUsers, boardApiKeys, companies, createDb, instanceUserRoles, invites } from "@paperclipai/db";
+import { agentdashBoxClaim, authUsers, boardApiKeys, companies, createDb, instanceUserRoles, invites } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
 import { inviteCodeSignupGuard } from "../middleware/invite-code-signup-guard.js";
@@ -19,7 +19,7 @@ import { onboardingMcpSignupRoutes } from "../routes/onboarding-mcp-signup.js";
 import { healthRoutes } from "../routes/health.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { inviteService } from "../services/invites.js";
-import { checkClaimSignup, claimEmailMatches } from "../lib/claim-code.js";
+import { checkClaimSignup, claimEmailMatches, resetClaimedCacheForTests } from "../lib/claim-code.js";
 
 const support = await getEmbeddedPostgresTestSupport();
 const describeEmbedded = support.supported ? describe : describe.skip;
@@ -71,7 +71,8 @@ describeEmbedded("one-time claim link (#767)", () => {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
-    await truncateWithRetry(db, sql`${boardApiKeys}, ${instanceUserRoles}, ${invites}, ${companies}, ${authUsers}`);
+    await truncateWithRetry(db, sql`${boardApiKeys}, ${instanceUserRoles}, ${invites}, ${companies}, ${authUsers}, ${agentdashBoxClaim}`);
+    resetClaimedCacheForTests();
   });
 
   afterAll(async () => {
@@ -144,6 +145,49 @@ describeEmbedded("one-time claim link (#767)", () => {
     expect(await checkClaimSignup(db, "anyone@example.com")).toEqual({ ok: true });
   });
 
+  // #767 review, HIGH: the zero-user check was not atomic with user creation.
+  it("of 8 parallel claim sign-ups with the claim email, exactly one creates a user", async () => {
+    const app = authApp();
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => signUp(app, { email: "founder@example.com", inviteCode: CLAIM_CODE })),
+    );
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    for (const r of results.filter((x) => x.status !== 200)) expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(await users()).toHaveLength(1);
+    expect(await db.select().from(agentdashBoxClaim)).toHaveLength(1);
+  });
+
+  it("the claim is persisted: with every user gone, the code still does not work", async () => {
+    const app = authApp();
+    expect((await signUp(app, { email: "founder@example.com", inviteCode: CLAIM_CODE })).status).toBe(200);
+    await truncateWithRetry(db, sql`${authUsers}`);
+    expect(await users()).toHaveLength(0);
+    const again = await signUp(app, { email: "founder@example.com", inviteCode: CLAIM_CODE });
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe("claim_code_used");
+    expect(await users()).toHaveLength(0);
+  });
+
+  it("a failed claim sign-up (weak password) does not lock the box", async () => {
+    const app = authApp();
+    const weak = await signUp(app, { email: "founder@example.com", inviteCode: CLAIM_CODE, password: "short" });
+    expect(weak.status).toBeGreaterThanOrEqual(400);
+    await new Promise((r) => setTimeout(r, 100)); // the release runs off the response
+    expect(await db.select().from(agentdashBoxClaim)).toHaveLength(0);
+    expect((await signUp(app, { email: "founder@example.com", inviteCode: CLAIM_CODE })).status).toBe(200);
+  });
+
+  it("a client cannot supply the claim attempt header", async () => {
+    const app = authApp();
+    const forged = await request(app)
+      .post("/api/auth/sign-up/email")
+      .set("Origin", "http://127.0.0.1:3100")
+      .set("x-agentdash-claim-attempt", "forged")
+      .send({ name: "N", password: PASSWORD, email: "intruder@example.com", inviteCode: CLAIM_CODE });
+    expect(forged.status).toBe(403);
+    expect(await users()).toHaveLength(0);
+  });
+
   describe("MCP sign-up", () => {
     beforeEach(() => {
       process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP = "true";
@@ -178,6 +222,15 @@ describeEmbedded("one-time claim link (#767)", () => {
       const again = await request(app).post("/api/onboarding/mcp-signup").send({ email: "founder@example.com", name: "F", inviteCode: CLAIM_CODE });
       expect(again.status).toBe(409);
     });
+
+    it("of 8 parallel MCP claims, exactly one creates a user", async () => {
+      const app = mcpApp();
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () => request(app).post("/api/onboarding/mcp-signup").send({ email: "founder@example.com", name: "F", inviteCode: CLAIM_CODE })),
+      );
+      expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+      expect(await users()).toHaveLength(1);
+    });
   });
 
   describe("health", () => {
@@ -192,6 +245,7 @@ describeEmbedded("one-time claim link (#767)", () => {
       const before = await request(healthApp()).get("/health");
       expect(before.body).toMatchObject({ hostedBox: true, claimed: false });
       expect((await signUp(authApp(), { email: "founder@example.com", inviteCode: CLAIM_CODE })).status).toBe(200);
+      resetClaimedCacheForTests(); // "false" is cached for a few seconds; "true" for good
       const after = await request(healthApp()).get("/health");
       expect(after.body).toMatchObject({ hostedBox: true, claimed: true });
       // Nothing about the user beyond the flag.
