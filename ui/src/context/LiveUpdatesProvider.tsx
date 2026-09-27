@@ -536,7 +536,9 @@ function buildJoinRequestToast(
     title: `${label} wants to join`,
     body: "A new join request is waiting for approval.",
     tone: "info",
-    action: { label: "View inbox", href: "/inbox/mine" },
+    // UX-7 (#788): /inbox/mine redirects to Decisions on the default profile;
+    // join requests live on the join queue, which renders on both profiles.
+    action: { label: "View inbox", href: "/inbox/requests" },
     dedupeKey: `join-request:${entityId}`,
   };
 }

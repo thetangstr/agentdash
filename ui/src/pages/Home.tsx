@@ -167,7 +167,8 @@ function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
           </li>
         ))}
       </ul>
-      <MoreLine count={moreDecisions} to="/approvals/pending" noun={moreDecisions === 1 ? "decision" : "decisions"} />
+      {/* UX-7 (#788): the rest of this list lives on the Decisions page now. */}
+      <MoreLine count={moreDecisions} to="/decisions" noun={moreDecisions === 1 ? "decision" : "decisions"} />
       <ul className={shownDecisions.length > 0 ? "divide-y divide-border border-t border-border" : "divide-y divide-border"}>
         {shownTasks.map((task) => (
           <li key={task.issueId} data-testid="home-waiting-row" className="flex items-start gap-3 px-4 py-2.5">

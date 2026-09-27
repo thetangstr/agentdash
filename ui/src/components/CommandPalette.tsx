@@ -36,7 +36,10 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
+  // AgentDash: UX-7 (GH #788) — the Inbox command leads to Decisions on the
+  // default profile; agentdash_mk keeps its real Inbox.
+  const isMk = selectedCompany?.productProfile === "agentdash_mk";
   const { openNewIssue, openNewAgent } = useDialogActions();
   const { isMobile, setSidebarOpen } = useSidebar();
   const searchQuery = query.trim();
@@ -146,9 +149,9 @@ export function CommandPalette() {
             <LayoutDashboard className="mr-2 h-4 w-4" />
             Dashboard
           </CommandItem>
-          <CommandItem onSelect={() => go("/inbox")}>
+          <CommandItem onSelect={() => go(isMk ? "/inbox" : "/decisions")}>
             <Inbox className="mr-2 h-4 w-4" />
-            Inbox
+            {isMk ? "Inbox" : "Decisions"}
           </CommandItem>
           <CommandItem onSelect={() => go("/issues")}>
             <CircleDot className="mr-2 h-4 w-4" />

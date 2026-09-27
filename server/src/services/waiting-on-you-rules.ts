@@ -26,6 +26,46 @@ export type WaitingApprovalLike = {
 };
 
 /**
+ * AgentDash: UX-7 (#788) — what a yes and a no do, in person words, for the
+ * Decisions page row. Same phrasing family as the assistant's confirm
+ * read-back: deliberately small and kind-keyed — a wrong consequence
+ * invented here would be decided on as fact.
+ */
+export function decisionConsequences(approval: {
+  type: string;
+  status?: string | null;
+  payload: unknown;
+}): { approve: string; reject: string } {
+  const payload =
+    typeof approval.payload === "object" && approval.payload !== null
+      ? (approval.payload as Record<string, unknown>)
+      : {};
+  if (approval.type === "hire_agent") {
+    // A hire approval with a payload agentId activates a pending_approval
+    // agent; without one, the approve effect creates the agent on the spot.
+    const creates = typeof payload.agentId !== "string";
+    return {
+      approve: creates
+        ? "The hire is approved and the new agent is created on the requested adapter."
+        : "The hire is approved and the agent becomes active.",
+      reject: creates
+        ? "The request is rejected and does not proceed."
+        : "The hire is refused and the proposed agent is terminated.",
+    };
+  }
+  if (approval.type === "budget_override_required" || approval.type === "budget_override") {
+    return {
+      approve: "The spend limit is raised and the work resumes.",
+      reject: "The limit stays — the run that hit it stays paused.",
+    };
+  }
+  return {
+    approve: "The request is approved and whatever it was gating proceeds.",
+    reject: "The request is rejected and does not proceed.",
+  };
+}
+
+/**
  * Scope open approvals to the person's audience and rank them. Pure, so the
  * digest (which queries approvals itself) and the pending-decisions list rank
  * and scope identically.

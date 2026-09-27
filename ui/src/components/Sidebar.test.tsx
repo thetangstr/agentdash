@@ -15,6 +15,14 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
   getExperimental: vi.fn(),
 }));
 
+const mockDashboardApi = vi.hoisted(() => ({
+  waitingOnYou: vi.fn(),
+}));
+
+const mockAccessApi = vi.hoisted(() => ({
+  listMembers: vi.fn(),
+}));
+
 vi.mock("@/lib/router", () => ({
   NavLink: ({ to, children, className, ...props }: {
     to: string;
@@ -66,6 +74,14 @@ vi.mock("../api/instanceSettings", () => ({
   instanceSettingsApi: mockInstanceSettingsApi,
 }));
 
+vi.mock("../api/dashboard", () => ({
+  dashboardApi: mockDashboardApi,
+}));
+
+vi.mock("../api/access", () => ({
+  accessApi: mockAccessApi,
+}));
+
 vi.mock("../hooks/useInboxBadge", () => ({
   useInboxBadge: () => ({ inbox: 0, failedRuns: 0 }),
 }));
@@ -103,6 +119,17 @@ describe("Sidebar", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
+    mockDashboardApi.waitingOnYou.mockResolvedValue({
+      decisions: [{ approvalId: "appr-1" }],
+      total: 1,
+      shown: 1,
+      tasksAssignedToYou: [
+        { issueId: "i-1", originKind: "manual" },
+        { issueId: "i-2", originKind: "routine_execution" },
+      ],
+      tasksAssignedToYouTotal: 2,
+    });
+    mockAccessApi.listMembers.mockResolvedValue({ access: { canManageAgents: true } });
   });
 
   afterEach(() => {
@@ -196,6 +223,37 @@ describe("Sidebar", () => {
     expect([...container.querySelectorAll("a")].some((a) => a.textContent === "Shipped")).toBe(false);
     const dashboard = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/dashboard");
     expect(dashboard?.textContent).toContain("Dashboard");
+    await act(async () => root.unmount());
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+  });
+
+  // AgentDash: UX-7 (GH #788) — the default profile's Inbox item becomes
+  // Decisions; its badge is the page's main-list length (approvals plus
+  // manual-origin assigned issues — machine-generated rows don't count).
+  it("shows Decisions with the waiting-list length as its badge on the default profile", async () => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    const root = await renderSidebar();
+    const decisions = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/decisions");
+    expect(decisions?.textContent).toContain("Decisions");
+    // 1 approval + 1 manual task; the routine_execution row is muted.
+    expect(decisions?.textContent).toContain("2");
+    expect([...container.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/inbox")).toBe(false);
+    expect(mockDashboardApi.waitingOnYou).toHaveBeenCalledWith("company-1");
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the Inbox item and skips the Decisions query on the agentdash_mk profile", async () => {
+    mockCompany.current = {
+      id: "company-1",
+      issuePrefix: "PAP",
+      name: "Paperclip",
+      productProfile: "agentdash_mk",
+    };
+    const root = await renderSidebar();
+    const inbox = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/inbox");
+    expect(inbox?.textContent).toContain("Inbox");
+    expect([...container.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/decisions")).toBe(false);
+    expect(mockDashboardApi.waitingOnYou).not.toHaveBeenCalled();
     await act(async () => root.unmount());
     mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });

@@ -50,6 +50,7 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
   const A_OTHER_COMPANY = randomUUID();
   const I_OPEN = randomUUID();
   const I_REVIEW = randomUUID();
+  const I_ROUTINE = randomUUID();
   const I_DONE = randomUUID();
   const I_HIDDEN = randomUUID();
   const I_THEIRS = randomUUID();
@@ -91,6 +92,10 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
     await db.insert(issues).values([
       { id: I_OPEN, companyId: COMPANY, title: "Approve the pricing copy", status: "todo", assigneeUserId: USER, identifier: "WAI-1" },
       { id: I_REVIEW, companyId: COMPANY, title: "Pick the demo date", status: "in_review", assigneeUserId: USER, identifier: "WAI-2" },
+      // UX-7 (#788): machine-filed work waits on the person too — the row
+      // carries its originKind so the Decisions page can group it under
+      // "Other activity" instead of the main list.
+      { id: I_ROUTINE, companyId: COMPANY, title: "Weekly metrics snapshot", status: "todo", assigneeUserId: USER, identifier: "WAI-6", originKind: "routine_execution" },
       { id: I_DONE, companyId: COMPANY, title: "Already done", status: "done", assigneeUserId: USER, identifier: "WAI-3" },
       { id: I_HIDDEN, companyId: COMPANY, title: "Hidden", status: "todo", assigneeUserId: USER, identifier: "WAI-4", hiddenAt: new Date() },
       { id: I_THEIRS, companyId: COMPANY, title: "Someone else's", status: "todo", assigneeUserId: OTHER_USER, identifier: "WAI-5" },
@@ -165,8 +170,31 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
     const home = await homeWaitingOnYou();
     expect(home.decisions.map((d) => d.approvalId).sort()).toEqual([A_BOARD, A_MINE_HIRE, A_MINE_REVISION].sort());
     expect(home.total).toBe(3);
-    expect(home.tasksAssignedToYou.map((t) => t.issueId).sort()).toEqual([I_OPEN, I_REVIEW].sort());
-    expect(home.tasksAssignedToYouTotal).toBe(2);
+    expect(home.tasksAssignedToYou.map((t) => t.issueId).sort()).toEqual([I_OPEN, I_REVIEW, I_ROUTINE].sort());
+    expect(home.tasksAssignedToYouTotal).toBe(3);
+  });
+
+  it("decisions say what yes and no do, and tasks carry their origin for grouping", async () => {
+    const home = await homeWaitingOnYou();
+    const hire = home.decisions.find((d) => d.approvalId === A_MINE_HIRE) as
+      | { effects?: { approve: string; reject: string } }
+      | undefined;
+    // A hire approval with no payload agentId creates the agent on approve.
+    expect(hire?.effects?.approve).toContain("created");
+    expect(hire?.effects?.reject).toBeTruthy();
+    const budget = home.decisions.find((d) => d.approvalId === A_BOARD) as
+      | { effects?: { approve: string; reject: string } }
+      | undefined;
+    expect(budget?.effects?.approve).toContain("limit");
+    expect(budget?.effects?.reject).toContain("paused");
+    const routine = home.tasksAssignedToYou.find((t) => t.issueId === I_ROUTINE) as
+      | { originKind?: string }
+      | undefined;
+    expect(routine?.originKind).toBe("routine_execution");
+    const manual = home.tasksAssignedToYou.find((t) => t.issueId === I_OPEN) as
+      | { originKind?: string }
+      | undefined;
+    expect(manual?.originKind).toBe("manual");
   });
 
   it("Home equals list_pending_decisions for the same person", async () => {

@@ -4,6 +4,7 @@ import { approvalAuthorityService } from "./approval-authority.js";
 import { approvalService, issueApprovalService } from "./index.js";
 import {
   APPROVAL_KIND_PHRASES,
+  decisionConsequences,
   scopeAndRankOpenApprovals,
   type WaitingApprovalLike as ApprovalLike,
 } from "./waiting-on-you-rules.js";
@@ -94,6 +95,10 @@ export function waitingOnYouService(db: Db) {
             waitingSince: approval.createdAt?.toISOString?.() ?? null,
             canDecide,
             risk,
+            // UX-7 (#788): the Decisions row states what yes/no do without
+            // opening the detail — same phrasing family as the assistant's
+            // confirm read-back.
+            effects: decisionConsequences(approval),
           };
         }),
       );

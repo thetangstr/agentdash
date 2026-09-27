@@ -102,6 +102,10 @@ export function assistantDigestService(db: Db) {
         title: issues.title,
         status: issues.status,
         updatedAt: issues.updatedAt,
+        // UX-7 (#788): the Decisions page splits machine-generated items
+        // (routines, evaluations, escalations) into a muted "Other activity"
+        // group — manual origin is the main list.
+        originKind: issues.originKind,
       })
       .from(issues)
       .where(
@@ -121,6 +125,7 @@ export function assistantDigestService(db: Db) {
         title: row.title,
         status: row.status,
         updatedAt: row.updatedAt.toISOString(),
+        originKind: row.originKind,
       })),
     };
   }

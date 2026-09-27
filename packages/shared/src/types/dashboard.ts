@@ -111,6 +111,12 @@ export interface WaitingOnYouDecision {
   waitingSince: string | null;
   canDecide: boolean;
   risk: { level: string; reason?: string } | null;
+  /**
+   * AgentDash: UX-7 (#788) — what a yes and a no do, in person words, so a
+   * Decisions row can state consequences without opening the detail. Same
+   * phrasing family the assistant's confirm read-back uses.
+   */
+  effects?: { approve: string; reject: string };
 }
 
 export interface WaitingOnYouTask {
@@ -119,6 +125,12 @@ export interface WaitingOnYouTask {
   title: string;
   status: string;
   updatedAt: string;
+  /**
+   * AgentDash: UX-7 (#788) — the issue's origin (`routine_execution`,
+   * `stale_active_run_evaluation`, …). `manual` is the main Decisions list;
+   * anything else is machine-generated and groups under "Other activity".
+   */
+  originKind?: string;
 }
 
 export interface WaitingOnYou {
