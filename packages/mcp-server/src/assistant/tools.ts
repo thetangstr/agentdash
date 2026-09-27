@@ -101,6 +101,32 @@ interface DigestSection {
   }>;
 }
 
+/**
+ * AgentDash consolidation PR-A: where a row points. The server names the
+ * target; this tool turns it into a deep link on the instance's public base.
+ */
+interface DigestTarget {
+  type: "issue" | "approval" | "project" | "agent" | "company";
+  ref: string;
+}
+
+interface DigestProjectBlock {
+  id: string;
+  name: string;
+  lead: string | null;
+  linkedGoal: { id: string; title: string; status: string; metric?: Record<string, unknown> } | null;
+  leadReport: {
+    author: string | null;
+    kind: "agent_text";
+    agentWrote: true;
+    recordedAt: string;
+    ageMinutes: number;
+    excerpt: string;
+    issueRef: string;
+  } | null;
+  notes: string[];
+}
+
 interface DigestResponse {
   agentsAnsweredFor: number;
   since: string | null;
@@ -110,8 +136,14 @@ interface DigestResponse {
   blockedNow: DigestSection;
   /** The in-window subset of blockedNow ("became blocked" proxy). */
   newlyBlocked: DigestSection;
-  decisionsWaiting: DigestSection;
+  decisionsWaiting: DigestSection & { linked?: DigestSection; companyLevel?: DigestSection };
   truncated: boolean;
+  // AgentDash consolidation PR-A — additive; older servers omit them.
+  changed?: { total: number; shown: number; items: Array<Record<string, unknown> & { target?: DigestTarget | null }> };
+  freshness?: Record<string, unknown>;
+  attention?: Array<Record<string, unknown> & { target?: DigestTarget | null }>;
+  briefing?: string;
+  project?: DigestProjectBlock;
 }
 
 /**
@@ -201,8 +233,15 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
   const whatsNew = makeAssistantTool(
     "whats_new",
     "AgentDash: what changed since a time. Finished work with PRs, what is blocked now and what became blocked, and decisions waiting for you. Start here for \"what happened\".",
-    z.object({ since: sinceInput, project: refInput("A project name or id").optional() }),
-    async ({ since, project }) => {
+    z.object({
+      since: sinceInput,
+      project: refInput("A project name or id").optional(),
+      format: z
+        .enum(["summary", "briefing"])
+        .optional()
+        .describe("\"briefing\" returns the short sourced briefing as the summary"),
+    }),
+    async ({ since, project, format }) => {
       const resolved = resolveSince(since);
       if ("error" in resolved) return refused({ summary: resolved.error });
 
@@ -246,15 +285,51 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       }
       const firstLink = digest.shipped.items.find((item) => item.identifier)?.identifier;
       const primary = firstLink ? await ctx.issueLink(firstLink) : await ctx.homeLink();
+      // AgentDash consolidation PR-A: every server-named target becomes a
+      // deep link; titles in the new sections are clipped like the old ones.
+      const linkFor = async (target: DigestTarget | null | undefined) => {
+        if (!target) return null;
+        if (target.type === "issue") return ctx.issueLink(target.ref);
+        if (target.type === "approval") return ctx.approvalLink(target.ref);
+        if (target.type === "project") return ctx.projectLink(target.ref);
+        if (target.type === "agent") return ctx.agentLink(target.ref);
+        return ctx.homeLink();
+      };
+      const changed = digest.changed
+        ? {
+            ...digest.changed,
+            items: await Promise.all(
+              digest.changed.items.map(async (item) => ({
+                ...item,
+                title: typeof item.title === "string" ? clip(item.title, 120) : item.title ?? null,
+                link: await linkFor(item.target),
+              })),
+            ),
+          }
+        : undefined;
+      const attention = digest.attention
+        ? await Promise.all(digest.attention.map(async (item) => ({ ...item, link: await linkFor(item.target) })))
+        : undefined;
+      const decisionsWaiting = {
+        ...boundDigestSection(digest.decisionsWaiting),
+        ...(digest.decisionsWaiting.linked ? { linked: boundDigestSection(digest.decisionsWaiting.linked) } : {}),
+        ...(digest.decisionsWaiting.companyLevel ? { companyLevel: boundDigestSection(digest.decisionsWaiting.companyLevel) } : {}),
+      };
       const boundedDigest = {
         ...digest,
         shipped: boundDigestSection(digest.shipped),
         blockedNow: boundDigestSection(digest.blockedNow),
         newlyBlocked: boundDigestSection(digest.newlyBlocked),
-        decisionsWaiting: boundDigestSection(digest.decisionsWaiting),
+        decisionsWaiting,
+        ...(changed ? { changed } : {}),
+        ...(attention ? { attention } : {}),
       };
+      // The existing summary is unchanged; the sourced briefing is opt-in.
+      const summary = format === "briefing" && digest.briefing
+        ? `${digest.briefing} ${primary}`
+        : `${parts.join("; ")}. ${primary}`;
       return ok({
-        summary: `${parts.join("; ")}. ${primary}`,
+        summary,
         data: redactAssistantValue(boundedDigest as unknown as Record<string, unknown>),
         links: { primary },
         truncated: digest.truncated,
@@ -324,11 +399,17 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       if (unresolvedResult) return unresolvedResult;
       const found = (resolution as { value: ProjectRow }).value;
 
-      const [detail, issues, agents, users] = await Promise.all([
+      const [detail, issues, agents, users, digest] = await Promise.all([
         client.requestJson<ProjectRow & { goalId?: string | null }>("GET", `/projects/${found.id}`).catch(() => found),
         client.requestJson<IssueRow[]>("GET", `/companies/${companyId()}/issues?projectId=${found.id}&limit=500`),
         agentMap(client, companyId()),
         userMap(client, companyId()),
+        // AgentDash consolidation PR-A: the linked goal, lead report and
+        // freshness come from the project-scoped digest (server-derived
+        // provenance). An older server without them leaves the fields null.
+        client
+          .requestJson<DigestResponse>("GET", `/companies/${companyId()}/assistant/digest?projectId=${found.id}`)
+          .catch(() => null),
       ]);
       const list = Array.isArray(issues) ? issues : [];
       const counts: Record<string, number> = {};
@@ -357,10 +438,34 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       const countText = Object.entries(counts).map(([s, n]) => `${n} ${s}`).join(", ") || "no tasks yet";
       const lastShippedTitle = recentlyShipped[0]?.card.title;
       const link = await ctx.projectLink(found.id);
+      const projectBlock = digest?.project ?? null;
+      const leadReport = projectBlock?.leadReport
+        ? {
+            ...projectBlock.leadReport,
+            excerpt: clip(projectBlock.leadReport.excerpt, FREE_TEXT_LIMIT),
+            link: await ctx.issueLink(projectBlock.leadReport.issueRef),
+          }
+        : null;
+      const linkedGoal = projectBlock?.linkedGoal
+        ? { ...projectBlock.linkedGoal, title: clip(projectBlock.linkedGoal.title, 120) }
+        : null;
       return ok({
         summary: `${found.name}: ${list.length} task${list.length === 1 ? "" : "s"} (${countText})${lead ? `, led by ${lead}` : ""}${lastShippedTitle ? `. Last shipped: ${lastShippedTitle}` : ""}. ${link}`,
         data: redactAssistantValue({
-          project: { id: found.id, name: found.name, status: detail.status ?? null, goal: detail.description ? clip(detail.description, FREE_TEXT_LIMIT) : null, lead, targetDate: detail.targetDate ?? null },
+          project: {
+            id: found.id,
+            name: found.name,
+            status: detail.status ?? null,
+            goal: detail.description ? clip(detail.description, FREE_TEXT_LIMIT) : null,
+            lead,
+            targetDate: detail.targetDate ?? null,
+            // AgentDash consolidation PR-A: additive. `goal` above stays the
+            // description string for compatibility.
+            linkedGoal,
+            leadReport,
+            notes: projectBlock ? projectBlock.notes : ["goal and lead report unavailable"],
+          },
+          freshness: digest?.freshness ?? null,
           counts,
           total: list.length,
           inProgress,

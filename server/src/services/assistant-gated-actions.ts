@@ -76,6 +76,11 @@ export interface AssistantGatedActor {
   membershipRole: string | null;
 }
 
+/** AgentDash consolidation PR-A (H2): the `details.via` every gated write carries. */
+function gatedVia(actor: AssistantGatedActor) {
+  return `assistant_grant ${actor.grantId} (${actor.clientName})`;
+}
+
 export type GatedResult<T extends Record<string, unknown>> =
   | ({ ok: true } & T)
   | { ok: false; code: string; reason: string; status?: number };
@@ -756,7 +761,7 @@ export function assistantGatedActionsService(
           action: "approval.revision_requested",
           entityType: "approval",
           entityId: updated.id,
-          details: { type: updated.type },
+          details: { type: updated.type, via: gatedVia(actor) },
         }).catch((err) => logger.warn({ err }, "revision-requested activity not recorded"));
         await auditConfirmed({
           companyId,
@@ -824,11 +829,13 @@ export function assistantGatedActionsService(
         await decisionEffects.afterApprove(decided, applied, {
           actorUserId: actor.userId,
           decisionNote: payload.note,
+          via: gatedVia(actor),
         });
       } else {
         await decisionEffects.afterReject(decided, applied, {
           actorUserId: actor.userId,
           decisionNote: payload.note,
+          via: gatedVia(actor),
         });
       }
 
@@ -1078,7 +1085,7 @@ export function assistantGatedActionsService(
         action: "approval.created",
         entityType: "approval",
         entityId: approval.id,
-        details: { type: approval.type, linkedAgentId: configuredAgent.id },
+        details: { type: approval.type, linkedAgentId: configuredAgent.id, via: gatedVia(actor) },
       }).catch((err) => logger.warn({ err }, "assistant hire approval activity not recorded"));
     }
     await auditConfirmed({

@@ -18,6 +18,8 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { projectRoutes } from "../routes/projects.js";
 import { issueRoutes } from "../routes/issues.js";
+import { assistantRoutes } from "../routes/assistant.js";
+import { logActivity } from "../services/activity-log.js";
 import { errorHandler } from "../middleware/index.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -103,6 +105,7 @@ describeEmbeddedPostgres("restricted project visibility", () => {
     });
     app.use("/api", projectRoutes(db));
     app.use("/api", issueRoutes(db));
+    app.use("/api", assistantRoutes(db));
     app.use(errorHandler);
     return app;
   }
@@ -182,6 +185,39 @@ describeEmbeddedPostgres("restricted project visibility", () => {
     );
     const list = Array.isArray(res.body) ? res.body : res.body.issues;
     expect((list ?? []).map((i: { title: string }) => i.title)).not.toContain("Secret issue");
+  });
+
+  // AgentDash consolidation PR-A (review H3): the assistant digest and its
+  // changed[] feed obey the same rule — a restricted project is nonexistent.
+  it("assistant digest: 404 on the restricted projectId, and changed[] omits its rows", async () => {
+    for (const [issueId, title] of [[OPEN_ISSUE, "Open issue"], [SECRET_ISSUE, "Secret issue"]] as const) {
+      await logActivity(db, {
+        companyId: COMPANY,
+        actorType: "user",
+        actorId: "titus",
+        action: "issue.updated",
+        entityType: "issue",
+        entityId: issueId,
+        details: { status: "todo", title },
+      });
+    }
+    const digestFor = (actor: Record<string, unknown>, query = "") =>
+      request(appAs(actor)).get(`/api/companies/${COMPANY}/assistant/digest${query}`);
+
+    expect((await digestFor(asUser("megan", "member"), `?projectId=${SECRET_PROJECT}`)).status).toBe(404);
+    expect((await digestFor(asUser("sam", "member"), `?projectId=${SECRET_PROJECT}`)).status).toBe(200);
+    expect((await digestFor(asUser("titus", "admin"), `?projectId=${SECRET_PROJECT}`)).status).toBe(200);
+    expect((await digestFor(asUser("megan", "member"), `?projectId=${randomUUID()}`)).status).toBe(404);
+
+    const megan = await digestFor(asUser("megan", "member"));
+    expect(megan.status).toBe(200);
+    const meganTitles = megan.body.changed.items.map((row: { title: string | null }) => row.title);
+    expect(meganTitles).toContain("Open issue");
+    expect(JSON.stringify(megan.body)).not.toContain("Secret issue");
+    expect(JSON.stringify(megan.body)).not.toContain(SECRET_ISSUE);
+
+    const sam = await digestFor(asUser("sam", "member"));
+    expect(sam.body.changed.items.map((row: { title: string | null }) => row.title)).toContain("Secret issue");
   });
 
   it("a legacy operator row is a member here too — no residual privilege", async () => {
