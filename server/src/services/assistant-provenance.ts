@@ -15,9 +15,11 @@
  *   (`origin = NULL`) are at most `agent_state`.
  * - `agent_text`: free text an agent wrote (titles, lead reports), quoted.
  *
- * A write that came through an assistant grant is still the person's
- * (`human_or_system`) but carries `via: "assistant"` so "did anyone check
- * that?" has an honest answer (review N1).
+ * A write that came through an assistant grant (the server writes
+ * `details.via = "assistant_grant …"`, GH #678) is labeled `via: "assistant"`
+ * and is NEVER `human_or_system`: the assistant acted on the person's grant,
+ * nobody checked it by hand (review N1, PR-C security review). It is
+ * `agent_state`, attributed to the person "via assistant".
  */
 
 export type SourceKind = "human_or_system" | "agent_state" | "agent_text";
@@ -40,14 +42,14 @@ export interface ActivityProvenanceInput {
 
 /** The kind an activity row may claim — see the module header. */
 export function kindForActivity(row: ActivityProvenanceInput): { kind: SourceKind; via?: "assistant" } {
-  if (row.origin !== "server") return { kind: "agent_state" };
-  if (row.actorType !== "user" && row.actorType !== "system") return { kind: "agent_state" };
-  // `details.via` is only trusted on server rows, where the server wrote it
-  // (assistantGrantAttribution); manual rows never reach this line.
+  // Checked first, on every row: an assistant-grant write can only ever be
+  // downgraded, so honoring `via` wherever it appears never upgrades a row.
   const via = row.details?.via;
   if (typeof via === "string" && via.startsWith("assistant_grant")) {
-    return { kind: "human_or_system", via: "assistant" };
+    return { kind: "agent_state", via: "assistant" };
   }
+  if (row.origin !== "server") return { kind: "agent_state" };
+  if (row.actorType !== "user" && row.actorType !== "system") return { kind: "agent_state" };
   return { kind: "human_or_system" };
 }
 
@@ -71,7 +73,7 @@ export function attributionPhrase(source: RowSource, verb: string) {
   if (source.actor.type === "unknown" || !source.actor.name) return `${verb}, no recorded author`;
   const who = source.actor.type === "system" ? "AgentDash" : source.actor.name;
   const via = source.via === "assistant" ? " via assistant" : "";
-  const claim = source.kind === "human_or_system" ? "" : " (agent-set)";
+  const claim = source.kind === "human_or_system" || source.via === "assistant" ? "" : " (agent-set)";
   return `${who} ${verb}${via}${claim}`;
 }
 

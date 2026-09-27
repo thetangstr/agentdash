@@ -45,10 +45,12 @@ describe("kindForActivity", () => {
     }
   });
 
-  it("labels a server row written through an assistant grant as via assistant", () => {
-    expect(
-      kindForActivity({ origin: "server", actorType: "user", details: { via: "assistant_grant g-1 (ChatGPT)" } }),
-    ).toEqual({ kind: "human_or_system", via: "assistant" });
+  it("a row written through an assistant grant is via assistant and never human_or_system", () => {
+    for (const actorType of ["user", "system"]) {
+      expect(
+        kindForActivity({ origin: "server", actorType, details: { via: "assistant_grant g-1 (ChatGPT)" } }),
+      ).toEqual({ kind: "agent_state", via: "assistant" });
+    }
   });
 });
 
@@ -83,7 +85,7 @@ describe("buildBriefing (golden)", () => {
   it("says who did it via assistant, says when nobody is on record, and states truncation", () => {
     const text = buildBriefing({
       ...baseInput,
-      blocked: { total: 1, items: [{ ...baseInput.blocked.items[0]!, source: { ...kai, via: "assistant" } }] },
+      blocked: { total: 1, items: [{ ...baseInput.blocked.items[0]!, source: { ...kai, kind: "agent_state", via: "assistant" } }] },
       shipped: {
         total: 3,
         items: [{ ...baseInput.shipped.items[0]!, source: { ...marco, actor: { type: "unknown", name: null } } }],

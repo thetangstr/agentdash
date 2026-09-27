@@ -685,4 +685,39 @@ describeEmbeddedPostgres("consolidation acceptance queries (A1–A9)", () => {
     expect(JSON.stringify(raw)).not.toContain(SECRET_DETAIL);
     expect(JSON.stringify(raw)).not.toContain("verifiedBy");
   });
+
+  // PR-C security review: an M3 work-tool call through a grant is logged by
+  // the real route as actor "user" with origin "server" and details.via — it
+  // must surface as "via assistant", never as a human/system record.
+  it("an M3 tool call through a grant is shown as via assistant, never human_or_system", async () => {
+    const viaIssue = (
+      await db
+        .insert(issues)
+        .values({ companyId: yarda, identifier: "YAR-9", title: "Confirm vendor list", status: "todo", priority: "medium", assigneeAgentId: marco } as never)
+        .returning()
+    )[0]!.id;
+    const { token } = await grantToken(FOUNDER, ["agentdash:read", "agentdash:work"]);
+    const update = await call(token, "update_work_item", { ref: "YAR-9", status: "done" });
+    expect(update.env?.status).toBe("ok");
+
+    const [logged] = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.entityId, viaIssue));
+    expect(logged).toMatchObject({ actorType: "user", actorId: FOUNDER, origin: "server" });
+    expect(String((logged!.details as Record<string, unknown>).via)).toMatch(/^assistant_grant /);
+
+    const { env } = await call(token, "whats_new", { since: "24h", format: "briefing" });
+    const shipped = env!.data.shipped.items.find((i: any) => i.identifier === "YAR-9");
+    expect(shipped.source).toMatchObject({ kind: "agent_state", via: "assistant", actor: { type: "user", name: "Kai Founder" } });
+    const changedRows = env!.data.changed.items.filter((row: any) => row.source.id === viaIssue);
+    expect(changedRows.length).toBeGreaterThan(0);
+    for (const row of changedRows) {
+      expect(row.source.via).toBe("assistant");
+      expect(row.source.kind).not.toBe("human_or_system");
+    }
+    for (const row of sourcesIn(env!.data)) {
+      if (row.source.via === "assistant") expect(row.source.kind).not.toBe("human_or_system");
+    }
+  });
 });
