@@ -35,6 +35,13 @@ import {
 } from "./tier-policy.js";
 
 export const FIRST_RUN_ORIGIN_KIND = "first_run";
+
+/**
+ * When the hosted first run shipped (#804). A company created before this is
+ * an established workspace: an upgrade must not start nagging it to "finish
+ * setting up" unless it has no issues at all.
+ */
+export const FIRST_RUN_SHIPPED_AT = new Date("2026-09-27T00:00:00.000Z");
 export const FIRST_RUN_STEPS = ["model", "repo", "first_issue", "done"] as const;
 export type FirstRunStep = (typeof FIRST_RUN_STEPS)[number];
 
@@ -50,8 +57,15 @@ const MAX_DESCRIPTION_LENGTH = 4000;
 const INACTIVE_AGENT_STATUSES = ["terminated", "pending_approval"];
 
 export interface FirstRunStatus {
-  /** False for an agentdash_mk workspace: its onboarding is unchanged. */
+  /** False for an agentdash_mk workspace: its onboarding is unchanged. /setup works whenever this is true. */
   applies: boolean;
+  /**
+   * Whether Home shows the first-run nudges ("Finish setting up", then
+   * "Connect Muse"): a hosted box only, and only for a company created after
+   * the first run shipped or one with no issues yet. Established companies
+   * and self-hosted installs never see them; /setup stays reachable directly.
+   */
+  showHomeNudge: boolean;
   nextStep: FirstRunStep;
   model: { required: boolean; done: boolean };
   repo: { done: boolean; repo: string | null; projectId: string | null };
@@ -125,8 +139,22 @@ export function firstRunService(db: Db, deps: FirstRunDeps = {}) {
       ? await db.select({ name: agents.name }).from(agents).where(eq(agents.id, issue.assigneeAgentId)).then((rows) => rows[0] ?? null)
       : null;
     const nextStep: FirstRunStep = !modelDone ? "model" : !connection ? "repo" : !issue ? "first_issue" : "done";
+    const applies = company.productProfile !== "agentdash_mk";
+    let showHomeNudge = false;
+    if (applies && required) {
+      const createdAfterShip = company.createdAt.getTime() >= FIRST_RUN_SHIPPED_AT.getTime();
+      showHomeNudge =
+        createdAfterShip ||
+        !(await db
+          .select({ id: issues.id })
+          .from(issues)
+          .where(eq(issues.companyId, companyId))
+          .limit(1)
+          .then((rows) => rows[0]));
+    }
     return {
-      applies: company.productProfile !== "agentdash_mk",
+      applies,
+      showHomeNudge,
       nextStep,
       model: { required, done: modelDone },
       repo: {

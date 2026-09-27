@@ -191,6 +191,40 @@ describeEmbeddedPostgres("first-run routes", () => {
     expect(res.body.firstIssue).toMatchObject({ done: true, title: "Add a health badge", assigneeName: "Engineer" });
   });
 
+  it("shows the Home nudge on a hosted box for a new company", async () => {
+    const { company, owner } = await seed({ connect: false });
+    const res = await request(app(owner)).get(`/api/companies/${company.id}/first-run`);
+    expect(res.body).toMatchObject({ applies: true, showHomeNudge: true });
+  });
+
+  it("never shows the Home nudge off a hosted box, but /setup still applies", async () => {
+    hosted = false;
+    const { company, owner } = await seed({ connect: false });
+    const res = await request(app(owner)).get(`/api/companies/${company.id}/first-run`);
+    expect(res.body).toMatchObject({ applies: true, showHomeNudge: false });
+  });
+
+  it("does not nudge an established company that already has issues on upgrade", async () => {
+    const { company, owner } = await seed({ connect: false });
+    await db.update(companies).set({ createdAt: new Date("2026-06-01T00:00:00.000Z") }).where(eq(companies.id, company.id));
+    await db.insert(issues).values({ companyId: company.id, title: "Existing work" });
+    const res = await request(app(owner)).get(`/api/companies/${company.id}/first-run`);
+    expect(res.body).toMatchObject({ applies: true, showHomeNudge: false, nextStep: "repo" });
+  });
+
+  it("still nudges an old company that has no issues yet", async () => {
+    const { company, owner } = await seed({ connect: false });
+    await db.update(companies).set({ createdAt: new Date("2026-06-01T00:00:00.000Z") }).where(eq(companies.id, company.id));
+    const res = await request(app(owner)).get(`/api/companies/${company.id}/first-run`);
+    expect(res.body.showHomeNudge).toBe(true);
+  });
+
+  it("does not nudge an agentdash_mk company", async () => {
+    const { company, owner } = await seed({ profile: "agentdash_mk", connect: false });
+    const res = await request(app(owner)).get(`/api/companies/${company.id}/first-run`);
+    expect(res.body).toMatchObject({ applies: false, showHomeNudge: false });
+  });
+
   it("skips the model step when the box is not hosted", async () => {
     hosted = false;
     const { company, owner } = await seed();

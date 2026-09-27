@@ -5,7 +5,9 @@
 //     set it, who can);
 //   - once the first issue exists: "Connect Muse so you can do this from your
 //     phone", linking to the in-app assistant instructions. Dismissible.
-// Default profile only: the server reports `applies: false` for agentdash_mk.
+// Only when the server says so (`showHomeNudge`): a hosted box, and a company
+// created after the first run shipped or one with no issues yet. Established
+// companies and self-hosted installs see nothing; /setup stays reachable.
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Smartphone, X } from "lucide-react";
@@ -38,7 +40,7 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
     queryKey: queryKeys.firstRun(companyId),
     queryFn: () => firstRunApi.status(companyId),
   });
-  if (!data || !data.applies) return null;
+  if (!data || !data.applies || !data.showHomeNudge) return null;
 
   if (data.nextStep !== "done") {
     if (!data.canManage) return null;
