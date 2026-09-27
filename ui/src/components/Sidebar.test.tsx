@@ -23,6 +23,10 @@ const mockAccessApi = vi.hoisted(() => ({
   listMembers: vi.fn(),
 }));
 
+const mockCapabilitiesApi = vi.hoisted(() => ({
+  get: vi.fn(),
+}));
+
 vi.mock("@/lib/router", () => ({
   NavLink: ({ to, children, className, ...props }: {
     to: string;
@@ -82,6 +86,10 @@ vi.mock("../api/access", () => ({
   accessApi: mockAccessApi,
 }));
 
+vi.mock("../api/capabilities", () => ({
+  capabilitiesApi: mockCapabilitiesApi,
+}));
+
 vi.mock("../hooks/useInboxBadge", () => ({
   useInboxBadge: () => ({ inbox: 0, failedRuns: 0 }),
 }));
@@ -95,11 +103,11 @@ vi.mock("./SidebarCompanyMenu", () => ({
 }));
 
 vi.mock("./SidebarProjects", () => ({
-  SidebarProjects: () => null,
+  SidebarProjects: () => <div>Projects list</div>,
 }));
 
 vi.mock("./SidebarAgents", () => ({
-  SidebarAgents: () => null,
+  SidebarAgents: () => <div>Agents list</div>,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -131,6 +139,11 @@ describe("Sidebar", () => {
       otherTasksAssignedToYouTotal: 1,
     });
     mockAccessApi.listMembers.mockResolvedValue({ access: { canManageAgents: true } });
+    mockCapabilitiesApi.get.mockResolvedValue({
+      capabilities: {},
+      membershipRole: "member",
+      isInstanceAdmin: false,
+    });
   });
 
   afterEach(() => {
@@ -140,6 +153,14 @@ describe("Sidebar", () => {
   });
 
   it("does not flash the Workspaces link while experimental settings are loading", async () => {
+    // The inline Workspaces link is MK-only now (UX-6); default folds it into
+    // the collapsed Advanced group.
+    mockCompany.current = {
+      id: "company-1",
+      issuePrefix: "PAP",
+      name: "Paperclip",
+      productProfile: "agentdash_mk",
+    };
     mockInstanceSettingsApi.getExperimental.mockImplementation(() => new Promise(() => {}));
     const root = createRoot(container);
     const queryClient = new QueryClient({
@@ -160,9 +181,16 @@ describe("Sidebar", () => {
     await act(async () => {
       root.unmount();
     });
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });
 
   it("shows the Workspaces link when isolated workspaces are enabled", async () => {
+    mockCompany.current = {
+      id: "company-1",
+      issuePrefix: "PAP",
+      name: "Paperclip",
+      productProfile: "agentdash_mk",
+    };
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
     const root = createRoot(container);
     const queryClient = new QueryClient({
@@ -184,6 +212,7 @@ describe("Sidebar", () => {
     await act(async () => {
       root.unmount();
     });
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });
 
   // AgentDash: UX-2 (#783) — Shipped is a default-profile link; MK keeps its sidebar.
@@ -261,7 +290,85 @@ describe("Sidebar", () => {
     await act(async () => root.unmount());
   });
 
-  it("keeps the Inbox item and skips the Decisions query on the agentdash_mk profile", async () => {
+  // AgentDash: UX-6 (#787) — six-item sidebar for the default profile.
+  it("renders exactly the six primary items on the default profile", async () => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    const root = await renderSidebar();
+
+    const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs.filter((h) => h === "/dashboard").length).toBe(1);
+    for (const href of ["/cos", "/issues", "/decisions", "/shipped", "/agents", "/company/settings"]) {
+      expect(hrefs, `expected ${href}`).toContain(href);
+    }
+    const linkTexts = [...container.querySelectorAll("a")].map((a) => a.textContent);
+    for (const label of ["Home", "Ask", "Work", "Decisions", "Shipped", "Team", "Settings"]) {
+      // includes(), not equality — Decisions carries its badge count in the
+      // anchor's textContent ("Decisions2").
+      expect(linkTexts.some((text) => text?.includes(label)), `expected "${label}"`).toBe(true);
+    }
+    // No MK items and no per-project/per-agent lists; Evaluation and the
+    // inbox redirect live under Advanced (collapsed), not top-level.
+    expect(linkTexts).not.toContain("My Agent");
+    expect(linkTexts).not.toContain("Inbox");
+    expect(linkTexts).not.toContain("Evaluation");
+    expect(container.textContent).not.toContain("Projects list");
+    expect(container.textContent).not.toContain("Agents list");
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the Advanced group collapsed by default on the default profile", async () => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    const root = await renderSidebar();
+
+    const trigger = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Advanced",
+    );
+    expect(trigger).toBeDefined();
+    expect(trigger?.getAttribute("aria-expanded") ?? trigger?.getAttribute("data-state")).toMatch(/false|closed/);
+    // Advanced destinations exist but their links are not rendered while collapsed.
+    const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs).not.toContain("/routines");
+    expect(hrefs).not.toContain("/billing");
+    await act(async () => root.unmount());
+  });
+
+  // UX-6 review: Evaluation stays reachable, folded under Advanced; the
+  // /instance/settings links are instance-admin only.
+  it("keeps Evaluation under Advanced and gates instance links on instance admins", async () => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    let root = await renderSidebar();
+
+    const expandAdvanced = async () => {
+      const trigger = [...container.querySelectorAll("button")].find(
+        (b) => b.textContent === "Advanced",
+      );
+      await act(async () => {
+        trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+    };
+
+    await expandAdvanced();
+    let hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("/evaluation");
+    // Not an instance admin: the /instance/settings group is absent.
+    expect(hrefs.some((h) => h?.startsWith("/instance/settings"))).toBe(false);
+    await act(async () => root.unmount());
+
+    mockCapabilitiesApi.get.mockResolvedValue({
+      capabilities: {},
+      membershipRole: "member",
+      isInstanceAdmin: true,
+    });
+    root = await renderSidebar();
+    await expandAdvanced();
+    hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("/instance/settings/heartbeats");
+    expect(hrefs).toContain("/instance/settings/plugins");
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the MK sidebar unchanged, including Evaluation and per-entity lists", async () => {
     mockCompany.current = {
       id: "company-1",
       issuePrefix: "PAP",
@@ -273,6 +380,15 @@ describe("Sidebar", () => {
     expect(inbox?.textContent).toContain("Inbox");
     expect([...container.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/decisions")).toBe(false);
     expect(mockDashboardApi.waitingOnYou).not.toHaveBeenCalled();
+
+    const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    for (const href of ["/my-agent", "/guides", "/inbox", "/issues", "/routines", "/goals", "/org", "/skills", "/costs", "/evaluation", "/billing", "/activity", "/company/settings"]) {
+      expect(hrefs, `expected ${href}`).toContain(href);
+    }
+    expect(container.textContent).toContain("Projects list");
+    expect(container.textContent).toContain("Agents list");
+    // No Advanced group on MK.
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Advanced")).toBe(false);
     await act(async () => root.unmount());
     mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });

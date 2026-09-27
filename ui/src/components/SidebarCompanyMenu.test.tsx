@@ -14,10 +14,34 @@ const mockAuthApi = vi.hoisted(() => ({
   updateProfile: vi.fn(),
   signOut: vi.fn(),
 }));
+const mockHealthApi = vi.hoisted(() => ({
+  get: vi.fn(),
+}));
+const mockDialog = vi.hoisted(() => ({
+  openOnboarding: vi.fn(),
+}));
+const mockState = vi.hoisted(() => ({
+  companies: [
+    { id: "company-1", name: "Acme Labs", issuePrefix: "ACME", status: "active" },
+  ] as Array<Record<string, unknown>>,
+  selectedCompany: {
+    id: "company-1",
+    name: "Acme Labs",
+    brandColor: "#3366ff",
+  } as Record<string, unknown>,
+}));
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
 
 vi.mock("@/api/auth", () => ({
   authApi: mockAuthApi,
+}));
+
+vi.mock("@/api/health", () => ({
+  healthApi: mockHealthApi,
+}));
+
+vi.mock("../context/DialogContext", () => ({
+  useDialogActions: () => mockDialog,
 }));
 
 vi.mock("@/lib/router", () => ({
@@ -28,11 +52,8 @@ vi.mock("@/lib/router", () => ({
 
 vi.mock("@/context/CompanyContext", () => ({
   useCompany: () => ({
-    selectedCompany: {
-      id: "company-1",
-      name: "Acme Labs",
-      brandColor: "#3366ff",
-    },
+    selectedCompany: mockState.selectedCompany,
+    companies: mockState.companies,
   }),
 }));
 
@@ -68,6 +89,15 @@ describe("SidebarCompanyMenu", () => {
       },
     });
     mockAuthApi.signOut.mockResolvedValue(undefined);
+    mockHealthApi.get.mockResolvedValue({ hostedBox: false });
+    mockState.companies = [
+      { id: "company-1", name: "Acme Labs", issuePrefix: "ACME", status: "active" },
+    ];
+    mockState.selectedCompany = {
+      id: "company-1",
+      name: "Acme Labs",
+      brandColor: "#3366ff",
+    };
   });
 
   afterEach(() => {
@@ -118,6 +148,71 @@ describe("SidebarCompanyMenu", () => {
 
     expect(mockAuthApi.signOut).toHaveBeenCalledTimes(1);
 
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // UX-6 review (#787): the hidden rail's "Add company" path survives here —
+  // self-hosted single-company only. Hosted boxes bind exactly one workspace,
+  // and a multi-company user still has the rail's own button.
+  async function openMenu() {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarCompanyMenu />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    const trigger = container.querySelector('button[aria-label="Open Acme Labs menu"]');
+    await act(async () => {
+      trigger?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    return root;
+  }
+
+  it("offers New company to a single-company self-hosted user and calls openOnboarding", async () => {
+    const root = await openMenu();
+    const item = Array.from(document.body.querySelectorAll('[data-slot="dropdown-menu-item"]'))
+      .find((element) => element.textContent?.includes("New company"));
+    expect(item).toBeTruthy();
+
+    await act(async () => {
+      item?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    expect(mockDialog.openOnboarding).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("hides New company on hosted boxes and for multi-company users", async () => {
+    mockHealthApi.get.mockResolvedValue({ hostedBox: true });
+    let root = await openMenu();
+    expect(document.body.textContent).not.toContain("New company");
+    await act(async () => {
+      root.unmount();
+    });
+    document.body.innerHTML = "";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+
+    mockHealthApi.get.mockResolvedValue({ hostedBox: false });
+    mockState.companies = [
+      { id: "company-1", name: "Acme Labs", issuePrefix: "ACME", status: "active" },
+      { id: "company-2", name: "Beta Co", issuePrefix: "BETA", status: "active" },
+    ];
+    root = await openMenu();
+    expect(document.body.textContent).not.toContain("New company");
     await act(async () => {
       root.unmount();
     });

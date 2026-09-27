@@ -30,6 +30,10 @@ async function createCompany(request: APIRequestContext, productProfile?: string
 
 async function expectHealthySettledUrl(page: Page, url: string, where: string) {
   await page.waitForLoadState("networkidle").catch(() => undefined);
+  // The profile-aware redirect is a client-side Navigate that fires after the
+  // companies query resolves — on a slow runner networkidle settles before
+  // React commits it, so wait for the URL itself, not just a quiet network.
+  await page.waitForURL(`**${url}`, { timeout: 15_000 }).catch(() => undefined);
   const pathname = new URL(page.url()).pathname;
   expect(pathname, `${where}: deep link was rewritten`).toBe(url);
   const body = (await page.locator("body").innerText().catch(() => "")) ?? "";

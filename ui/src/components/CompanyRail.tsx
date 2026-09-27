@@ -124,7 +124,7 @@ function SortableCompanyItem({
 }
 
 export function CompanyRail() {
-  const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
+  const { companies, selectedCompanyId, selectedCompany, setSelectedCompanyId } = useCompany();
   const { openOnboarding } = useDialogActions();
   const navigate = useNavigate();
   const location = useLocation();
@@ -197,6 +197,15 @@ export function CompanyRail() {
     },
     [orderedCompanies, persistOrder]
   );
+
+  // AgentDash: UX-6 (#787) — a rail for switching companies is noise when the
+  // person only belongs to one. MK layout unchanged.
+  if (
+    sidebarCompanies.length <= 1 &&
+    selectedCompany?.productProfile !== "agentdash_mk"
+  ) {
+    return null;
+  }
 
   return (
     <div className="flex flex-col items-center w-[72px] shrink-0 h-full bg-background border-r border-border">
