@@ -61,6 +61,16 @@ export const ASSISTANT_WRITE_LIMIT_PER_HOUR = 30;
 export const ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR = 10;
 
 /**
+ * GH #679 review: the per-grant budget for the gated class, counted in
+ * consumed handles over a rolling hour — durable, so a restart cannot reset
+ * it and every confirm, executed or refused, draws it down. A grant with
+ * `agentdash:decide` can still only land twenty confirmations and five hires
+ * an hour: decision capacity is opt-in, never unbounded.
+ */
+export const ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR = 20;
+export const ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR = 5;
+
+/**
  * The ONLY routes an `assistant_grant` credential may reach, and the scope
  * each requires.
  *
@@ -167,8 +177,9 @@ export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
    * Whether the write draws down the per-grant 30/hour work budget (spec
    * §7.1). Default true. The gated-action routes opt out: that budget is
    * defined for the work class, and a person confirming decisions should not
-   * starve their work tools — the gated class is bounded by handle TTL and
-   * the decide scope instead.
+   * starve their work tools — the gated class is bounded by the decide scope,
+   * the handle TTL, and its own per-grant consumed-handle budget
+   * (ASSISTANT_GATED_*_LIMIT_PER_HOUR, GH #679 review).
    */
   consumesWriteAllowance?: boolean;
   /** The only top-level request-body keys the toolset sends. */

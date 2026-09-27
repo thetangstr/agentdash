@@ -1,8 +1,13 @@
-import { randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { createHash, randomBytes } from "node:crypto";
+import { and, eq, gt, isNotNull, isNull, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, assistantActionHandles, assistantGrants, companies, projects } from "@paperclipai/db";
-import { AGENT_ROLES } from "@paperclipai/shared";
+import {
+  AGENT_ROLES,
+  ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR,
+  ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR,
+  agentAdapterConfigCompletenessError,
+} from "@paperclipai/shared";
 import { accessService } from "./access.js";
 import { approvalAuthorityService, type ApprovalDecisionActor } from "./approval-authority.js";
 import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
@@ -21,6 +26,7 @@ import { absoluteUrl, approvalUrl } from "../lib/public-base-url.js";
 import { logger } from "../middleware/logger.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
+import { normalizeNewAgentRuntimeConfig } from "./agent-create-config.js";
 import {
   exceededFreeTierCapacityAction,
   freeTierCapExceededPayload,
@@ -113,9 +119,11 @@ function kindPhrase(approval: { type: string }): string {
 /**
  * The specifics a person needs in the read-back for the kinds we can describe
  * from the payload. Deliberately small: a wrong detail invented here would be
- * confirmed as fact.
+ * confirmed as fact. Payload text is agent-supplied, so it is quoted back as
+ * something the asker WROTE (GH #679 review) — "X wrote: '…'" — never stated
+ * as our own claim about the hire.
  */
-function approvalDetail(approval: ApprovalRow): string | null {
+function approvalDetail(approval: ApprovalRow, asker: string): string | null {
   const payload =
     typeof approval.payload === "object" && approval.payload !== null
       ? (approval.payload as Record<string, unknown>)
@@ -125,8 +133,8 @@ function approvalDetail(approval: ApprovalRow): string | null {
     const title = typeof payload.title === "string" ? payload.title : null;
     const role = typeof payload.role === "string" ? payload.role : null;
     const descriptor = title ?? role;
-    if (name && descriptor) return ` — ${name} as ${descriptor}`;
-    if (name) return ` — ${name}`;
+    if (name && descriptor) return ` — ${asker} wrote: "${name} as ${descriptor}"`;
+    if (name) return ` — ${asker} wrote: "${name}"`;
     return null;
   }
   return null;
@@ -177,6 +185,28 @@ export function assistantGatedActionsService(
     return { userId: actor.userId, source: "assistant_grant", isInstanceAdmin: false };
   }
 
+  /**
+   * The sweep (GH #679 review) bounds the table; done opportunistically on
+   * mint and confirm. The cutoff is expiry + 1h, not expiry itself:
+   *
+   *   - a just-expired handle must still read back "expired", not an
+   *     unhelpful "invalid", so expired rows live one grace hour;
+   *   - consumedAt IS the gated-budget count — a consumed row's expiresAt is
+   *     never more than TTL (15m) after consumption, so anything consumed
+   *     inside the rolling hour always has expiresAt within the last hour
+   *     and survives. Deleting earlier would let a grant outrun the cap.
+   */
+  async function sweepExpiredHandles() {
+    await db
+      .delete(assistantActionHandles)
+      .where(lt(assistantActionHandles.expiresAt, new Date(Date.now() - 60 * 60 * 1000)));
+  }
+
+  /** Stored hashed like the OAuth tokens — a leaked table row cannot be confirmed with. */
+  function hashHandleToken(token: string): string {
+    return createHash("sha256").update(token).digest("hex");
+  }
+
   async function mintHandle(input: {
     companyId: string;
     actor: AssistantGatedActor;
@@ -188,7 +218,7 @@ export function assistantGatedActionsService(
     const [row] = await db
       .insert(assistantActionHandles)
       .values({
-        token,
+        token: hashHandleToken(token),
         companyId: input.companyId,
         grantId: input.actor.grantId,
         actorUserId: input.actor.userId,
@@ -197,6 +227,7 @@ export function assistantGatedActionsService(
         expiresAt,
       })
       .returning();
+    await sweepExpiredHandles();
     return { token, expiresAt, id: row!.id };
   }
 
@@ -229,7 +260,7 @@ export function assistantGatedActionsService(
     const asker = approval.requestedByAgentId
       ? await agentsSvc.getById(approval.requestedByAgentId).then((a) => a?.name ?? "An agent")
       : "The board";
-    const detail = approvalDetail(approval);
+    const detail = approvalDetail(approval, asker);
     const noteClause = note ? ` — your note: "${note}"` : "";
     const verb =
       decision === "approve" ? "Approve" : decision === "reject" ? "Reject" : "Send back for changes on";
@@ -448,12 +479,13 @@ export function assistantGatedActionsService(
    *      concurrent confirms cannot both execute.
    */
   async function consumeHandle(companyId: string, actor: AssistantGatedActor, token: string) {
+    await sweepExpiredHandles();
     const record = await db
       .select()
       .from(assistantActionHandles)
       .where(
         and(
-          eq(assistantActionHandles.token, token),
+          eq(assistantActionHandles.token, hashHandleToken(token)),
           eq(assistantActionHandles.grantId, actor.grantId),
           eq(assistantActionHandles.companyId, companyId),
         ),
@@ -577,10 +609,58 @@ export function assistantGatedActionsService(
       };
     }
 
+    // GH #679 review: the gated class is exempt from the work write-allowance,
+    // but it is NOT unbounded — a grant can land at most
+    // ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR confirms (and
+    // ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR hires) per rolling hour, counted in
+    // consumed handles so the budget is durable and unavoidable: every confirm
+    // attempt, executed or refused, already spent one by the time this runs.
+    const consumedThisHour = await countConsumedHandles(actor.grantId, null);
+    if (consumedThisHour > ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR) {
+      return {
+        ok: false,
+        code: "gated_budget_exceeded",
+        reason: `This connection has confirmed ${ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR} actions in the last hour — wait a bit, then ask me to prepare it again. Nothing was done.`,
+        status: 429,
+      };
+    }
+    if (record.kind === "hire_request") {
+      const hiresThisHour = await countConsumedHandles(actor.grantId, "hire_request");
+      if (hiresThisHour > ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR) {
+        return {
+          ok: false,
+          code: "gated_budget_exceeded",
+          reason: `This connection has hired ${ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR} agents in the last hour — wait a bit, then ask me to prepare it again. Nothing was filed.`,
+          status: 429,
+        };
+      }
+    }
+
     if (record.kind === "hire_request") {
       return confirmHire(companyId, actor, record, personSaid, grant.decisionsNeedTap);
     }
     return confirmDecision(companyId, actor, record, personSaid, grant.decisionsNeedTap);
+  }
+
+  /**
+   * Consumed handles minted by this grant inside the rolling hour — the count
+   * the gated budget enforces. `consumedAt` is set by exactly one UPDATE per
+   * handle, so this is a truthful count of confirm attempts including the one
+   * in flight.
+   */
+  async function countConsumedHandles(grantId: string, kind: AssistantActionKind | null) {
+    const since = new Date(Date.now() - 60 * 60 * 1000);
+    const conditions = [
+      eq(assistantActionHandles.grantId, grantId),
+      isNotNull(assistantActionHandles.consumedAt),
+      gt(assistantActionHandles.consumedAt, since),
+    ];
+    if (kind) conditions.push(eq(assistantActionHandles.kind, kind));
+    const rows = await db
+      .select({ id: assistantActionHandles.id })
+      .from(assistantActionHandles)
+      .where(and(...conditions));
+    return rows.length;
   }
 
   async function confirmDecision(
@@ -838,6 +918,24 @@ export function assistantGatedActionsService(
       };
     }
 
+    // GH #679 review — the same configuration completeness check the
+    // `/agent-hires` create body runs through createAgentHireSchema, applied
+    // here because this path resolves its own fields instead of parsing a
+    // body. adapterConfig stays {} by design, so this is the guard if the
+    // resolved adapter ever lands on "process" without a command.
+    const completenessError = agentAdapterConfigCompletenessError({
+      adapterType: payload.adapterType,
+      adapterConfig: {},
+    });
+    if (completenessError) {
+      return {
+        ok: false,
+        code: "invalid",
+        reason: `${completenessError} No hire was filed.`,
+        status: 422,
+      };
+    }
+
     const company = await db
       .select({ requireBoardApprovalForNewAgents: companies.requireBoardApprovalForNewAgents })
       .from(companies)
@@ -854,7 +952,9 @@ export function assistantGatedActionsService(
           capabilities: payload.reason,
           adapterType: payload.adapterType,
           adapterConfig: {},
-          runtimeConfig: {},
+          // Same normalization /agent-hires applies (GH #679 review): the
+          // heartbeat block is filled in even though the assistant sends none.
+          runtimeConfig: normalizeNewAgentRuntimeConfig({}),
           budgetMonthlyCents: 0,
           status: requiresApproval ? "pending_approval" : "idle",
           spentMonthlyCents: 0,
@@ -921,7 +1021,7 @@ export function assistantGatedActionsService(
           capabilities: payload.reason,
           adapterType: payload.adapterType,
           adapterConfig: {},
-          runtimeConfig: {},
+          runtimeConfig: configuredAgent.runtimeConfig ?? {},
           budgetMonthlyCents: 0,
           desiredSkills: [],
           metadata: {
@@ -934,7 +1034,7 @@ export function assistantGatedActionsService(
           requestedConfigurationSnapshot: {
             adapterType: payload.adapterType,
             adapterConfig: {},
-            runtimeConfig: {},
+            runtimeConfig: configuredAgent.runtimeConfig ?? {},
             desiredSkills: [],
           },
         },

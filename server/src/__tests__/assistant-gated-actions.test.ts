@@ -53,6 +53,7 @@ type TestDb = ReturnType<typeof createDb>;
 
 const USER_ID = randomUUID();
 const STEWARD_USER_ID = randomUUID();
+const MEMBER_USER_ID = randomUUID();
 const DECIDE_SCOPES = ["agentdash:read", "agentdash:work", "agentdash:decide"];
 
 describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
@@ -111,6 +112,7 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     await db.insert(authUsers).values([
       { id: USER_ID, name: "Deciding Person", email: "decider@example.test", createdAt: now, updatedAt: now },
       { id: STEWARD_USER_ID, name: "Steward Person", email: "steward@example.test", createdAt: now, updatedAt: now },
+      { id: MEMBER_USER_ID, name: "Member Person", email: "member@example.test", createdAt: now, updatedAt: now },
     ]);
 
     const company = await db
@@ -136,6 +138,8 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
 
     await db.insert(companyMemberships).values([
       { companyId, principalType: "user", principalId: USER_ID, status: "active", membershipRole: "owner" },
+      // A plain member — can hire by role, but holds no agents:create grant.
+      { companyId, principalType: "user", principalId: MEMBER_USER_ID, status: "active", membershipRole: "operator" },
       { companyId: mkCompanyId, principalType: "user", principalId: USER_ID, status: "active", membershipRole: "operator" },
       { companyId: mkCompanyId, principalType: "user", principalId: STEWARD_USER_ID, status: "active", membershipRole: "operator" },
     ]);
@@ -184,12 +188,16 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     await fs.rm(tempHome, { recursive: true, force: true }).catch(() => {});
   });
 
-  async function grantToken(scopes: string[], cid = companyId, opts: { decisionsNeedTap?: boolean } = {}) {
+  async function grantToken(
+    scopes: string[],
+    cid = companyId,
+    opts: { decisionsNeedTap?: boolean; userId?: string } = {},
+  ) {
     const grant = await db
       .insert(assistantGrants)
       .values({
         companyId: cid,
-        userId: USER_ID,
+        userId: opts.userId ?? USER_ID,
         clientId: `client-${randomUUID().slice(0, 8)}`,
         clientName: "Muse (Meta)",
         redirectHost: "agent.meta.ai",
@@ -273,11 +281,14 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     return db.select().from(approvals).where(eq(approvals.id, id)).then((rows) => rows[0] ?? null);
   }
 
+  const handleTokenHash = (token: string) =>
+    createHash("sha256").update(token).digest("hex");
+
   async function handleRowFor(token: string) {
     return db
       .select()
       .from(assistantActionHandles)
-      .where(eq(assistantActionHandles.token, token))
+      .where(eq(assistantActionHandles.token, handleTokenHash(token)))
       .then((rows) => rows[0] ?? null);
   }
 
@@ -325,6 +336,8 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
 
     const handle = await handleRowFor(env.data!.handle as string);
     expect(handle).toBeTruthy();
+    // Stored sha256-hashed like the OAuth tokens — the raw handle never rests.
+    expect(handle!.token).toBe(handleTokenHash(env.data!.handle as string));
     expect(handle!.grantId).toBe(grant.id);
     expect(handle!.actorUserId).toBe(USER_ID);
     expect(handle!.kind).toBe("approval_decision");
@@ -392,7 +405,7 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     await db
       .update(assistantActionHandles)
       .set({ expiresAt: new Date(Date.now() - 1000) })
-      .where(eq(assistantActionHandles.token, handle));
+      .where(eq(assistantActionHandles.token, handleTokenHash(handle)));
 
     const conf = envelope(await callTool(token, "confirm_action", { handle }));
     expect(conf.status).toBe("refused");
@@ -615,6 +628,11 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     expect(hired.createdByUserId).toBe(USER_ID);
     // The assistant never picks host-executed config — it stays empty.
     expect(hired.adapterConfig?.command).toBeUndefined();
+    // agent-hires parity: normalizeNewAgentRuntimeConfig filled the heartbeat
+    // block the board route would have (GH #679 review).
+    const rc = hired.runtimeConfig as { heartbeat?: { enabled?: boolean; maxConcurrentRuns?: number } };
+    expect(rc?.heartbeat?.enabled).toBe(false);
+    expect(typeof rc?.heartbeat?.maxConcurrentRuns).toBe("number");
     expect((hired.metadata as Record<string, unknown>)?.source).toBe("assistant_hire_request");
     expect((hired.metadata as Record<string, unknown>)?.projectId).toBe(projectId);
 
@@ -728,5 +746,137 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     });
     expect(res.status).toBe(403);
     expect((await res.json()).error).toBe("Assistant credentials cannot reach this route");
+  });
+
+  it("two concurrent confirms cannot both execute — the handle spends once", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES);
+    const approval = await seedApproval(companyId);
+    const prep = envelope(
+      await callTool(token, "prepare_decision", { approval: approval.id, decision: "approve" }),
+    );
+    const handle = prep.data!.handle as string;
+
+    const [a, b] = await Promise.all([
+      callTool(token, "confirm_action", { handle }),
+      callTool(token, "confirm_action", { handle }),
+    ]);
+    const statuses = [envelope(a).status, envelope(b).status].sort();
+    expect(statuses).toEqual(["ok", "refused"]);
+    expect((await readApproval(approval.id))!.status).toBe("approved");
+
+    // Exactly one decision was recorded — the conditional UPDATE, not the
+    // read, is what makes the handle single-use.
+    const decides = await db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.action, "approval.approved"), eq(activityLog.entityId, approval.id)));
+    expect(decides).toHaveLength(1);
+  });
+
+  it("losing membership between prepare and confirm refuses the confirmation", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES);
+    const approval = await seedApproval(companyId);
+    const prep = envelope(
+      await callTool(token, "prepare_decision", { approval: approval.id, decision: "approve" }),
+    );
+    expect(prep.status, prep.summary).toBe("ok");
+
+    await db
+      .delete(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.companyId, companyId),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, USER_ID),
+        ),
+      );
+    try {
+      const conf = await callTool(token, "confirm_action", { handle: prep.data!.handle as string });
+      // Refusal lands wherever the lost authority is noticed first — token
+      // resolution stops resolving without an active membership, or the
+      // route's re-check does. Either way: refused, nothing was decided.
+      const env = envelope(conf);
+      if (env) {
+        expect(env.status).toBe("refused");
+      } else {
+        expect(conf.httpStatus !== 200 || conf.error).toBeTruthy();
+      }
+      expect((await readApproval(approval.id))!.status).toBe("pending");
+    } finally {
+      await db.insert(companyMemberships).values({
+        companyId,
+        principalType: "user",
+        principalId: USER_ID,
+        status: "active",
+        membershipRole: "owner",
+      });
+    }
+  });
+
+  it("request_hire on a full free workspace refuses instead of filing", async () => {
+    // isBillingDisabled() bypasses caps whenever no Stripe key is configured —
+    // provide one (and a free planTier by default) so the cap actually binds.
+    // FREE_AGENT_CAP is 1 and two agents are already seeded.
+    const savedStripe = process.env.STRIPE_SECRET_KEY;
+    const savedDisabled = process.env.AGENTDASH_BILLING_DISABLED;
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    delete process.env.AGENTDASH_BILLING_DISABLED;
+    try {
+      const { token } = await grantToken(DECIDE_SCOPES);
+      const prep = envelope(
+        await callTool(token, "request_hire", { role: "qa", reason: "coverage" }),
+      );
+      expect(prep.status, prep.summary).toBe("ok");
+
+      const conf = envelope(
+        await callTool(token, "confirm_action", { handle: prep.data!.handle as string }),
+      );
+      expect(conf.status).toBe("refused");
+      expect(conf.summary).toContain("Upgrade to Pro");
+      expect(conf.summary).toContain("No hire was filed");
+
+      const hired = await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), eq(agents.name, "Qa")));
+      expect(hired).toHaveLength(0);
+    } finally {
+      if (savedStripe === undefined) delete process.env.STRIPE_SECRET_KEY;
+      else process.env.STRIPE_SECRET_KEY = savedStripe;
+      if (savedDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+      else process.env.AGENTDASH_BILLING_DISABLED = savedDisabled;
+    }
+  });
+
+  it("a member without agents:create cannot decide a hire approval", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES, companyId, { userId: MEMBER_USER_ID });
+    const approval = await seedApproval(companyId, {
+      type: "hire_agent",
+      requestedByAgentId: requesterAgentId,
+      payload: { name: "Sarah Johnson", title: "QA Engineer", agentId: pendingHireAgentId },
+    });
+
+    const prep = envelope(
+      await callTool(token, "prepare_decision", { approval: approval.id, decision: "approve" }),
+    );
+    expect(prep.status).toBe("refused");
+    expect(prep.summary).toContain("agents:create");
+    expect((await readApproval(approval.id))!.status).toBe("pending");
+  });
+
+  it("the read-back quotes agent-written hire fields as the asker's words", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES);
+    const approval = await seedApproval(companyId, {
+      type: "hire_agent",
+      requestedByAgentId: requesterAgentId,
+      payload: { name: "Sarah Johnson", title: "QA Engineer" },
+    });
+
+    const prep = envelope(
+      await callTool(token, "prepare_decision", { approval: approval.id, decision: "approve" }),
+    );
+    expect(prep.status, prep.summary).toBe("ok");
+    // Untrusted agent-authored text is attributed, never asserted as fact.
+    expect(prep.summary).toContain('Priya wrote: "Sarah Johnson as QA Engineer"');
   });
 });

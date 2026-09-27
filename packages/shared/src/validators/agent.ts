@@ -144,20 +144,30 @@ const createAgentBaseSchema = z.object({
  * heartbeat forever with "Process adapter missing command" — visible only in
  * the server log, never to the person who created it. The adapter's own
  * testEnvironment already flagged it; nothing ran that check by default.
+ *
+ * Exposed as a plain predicate so a non-zod caller — the assistant hire path,
+ * which resolves its own fields rather than parsing a create body — runs the
+ * SAME check the schema does instead of a lookalike.
  */
+export function agentAdapterConfigCompletenessError(input: {
+  adapterType?: unknown;
+  adapterConfig?: unknown;
+}): string | null {
+  if (input.adapterType !== "process") return null;
+  const config = isPlainRecord(input.adapterConfig) ? input.adapterConfig : {};
+  const command = typeof config.command === "string" ? config.command.trim() : "";
+  if (command) return null;
+  return (
+    "A process agent needs adapterConfig.command — without it every run fails. "
+    + "Set the command to execute, or create the agent with a different adapter."
+  );
+}
+
 function assertAdapterConfigComplete(value: unknown, ctx: z.RefinementCtx): void {
   if (!isPlainRecord(value)) return;
-  if (value.adapterType !== "process") return;
-  const config = isPlainRecord(value.adapterConfig) ? value.adapterConfig : {};
-  const command = typeof config.command === "string" ? config.command.trim() : "";
-  if (command) return;
-  ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    message:
-      "A process agent needs adapterConfig.command — without it every run fails. "
-      + "Set the command to execute, or create the agent with a different adapter.",
-    path: ["adapterConfig", "command"],
-  });
+  const message = agentAdapterConfigCompletenessError(value);
+  if (!message) return;
+  ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ["adapterConfig", "command"] });
 }
 
 export const createAgentSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema)

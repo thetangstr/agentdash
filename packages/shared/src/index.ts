@@ -896,6 +896,7 @@ export {
   createAgentSchema,
   createAgentHireSchema,
   updateAgentSchema,
+  agentAdapterConfigCompletenessError,
   agentInstructionsBundleModeSchema,
   updateAgentInstructionsBundleSchema,
   upsertAgentInstructionsFileSchema,
