@@ -2,6 +2,10 @@ interface BillingConfig {
   proPriceId: string;
   trialDays: number;
   publicBaseUrl: string;
+  // AgentDash (GH #790): whether a real Stripe client is wired. When false the
+  // UI must hide checkout/trial CTAs — the stub answers 503 anyway, but an
+  // offer that can only fail is a dead end.
+  configured: boolean;
 }
 
 interface CompaniesAdapter {
@@ -79,6 +83,7 @@ export function billingService(deps: Deps) {
         tier: c.planTier ?? "free",
         seatsPaid: c.planSeatsPaid ?? 0,
         periodEnd: c.planPeriodEnd ?? null,
+        configured: deps.config.configured,
       };
     },
   };

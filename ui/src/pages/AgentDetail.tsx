@@ -58,6 +58,7 @@ import {
   readAgentRunFailureClassification,
   type AgentRunFailureGuidanceAction,
 } from "../components/AgentRunFailureGuidance";
+import { RunQuotaUpgrade } from "../components/RunQuotaUpgrade";
 import {
   AgentHarnessReadinessPanel,
   needsBackgroundPreflight,
@@ -4034,6 +4035,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 {run.errorCode && <span className="text-muted-foreground ml-1">({run.errorCode})</span>}
               </div>
             )}
+            <RunQuotaUpgrade run={run} />
             {failureClassification ? (
               <AgentRunFailureGuidance classification={failureClassification} actions={recoveryActions} />
             ) : null}

@@ -589,6 +589,7 @@ export async function createApp(
     },
     billingRoutes(db, {
     stripe: stripeSdk,
+    configured: !!stripeKey,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
     proPriceId: process.env.STRIPE_PRO_PRICE_ID ?? "",
     trialDays: parseInt(process.env.STRIPE_TRIAL_DAYS ?? "14", 10),

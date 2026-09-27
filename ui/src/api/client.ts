@@ -71,8 +71,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : null;
       }
     }
+    // AgentDash: cap-exceeded payloads carry { code, message } rather than
+    // { error } — prefer `error`, fall back to `message`, then the status line.
+    const bodyError = (errorBody as { error?: unknown } | null)?.error;
+    const bodyMessage = (errorBody as { message?: unknown } | null)?.message;
     throw new ApiError(
-      (errorBody as { error?: string } | null)?.error ?? `Request failed: ${res.status}`,
+      (typeof bodyError === "string" && bodyError) ||
+        (typeof bodyMessage === "string" && bodyMessage) ||
+        `Request failed: ${res.status}`,
       res.status,
       errorBody,
       retryAfterMs,

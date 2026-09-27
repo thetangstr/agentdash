@@ -4635,6 +4635,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await cancelRunInternal(
         run.id,
         `Run quota exceeded: ${payload.used}/${payload.included} runs used this billing period. Upgrade at ${payload.upgrade_url}`,
+        "quota_exceeded",
       );
       logger.info(
         { runId: run.id, companyId: run.companyId, agentId: run.agentId, ...payload },
@@ -8559,7 +8560,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
+  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane", errorCode = "cancelled") {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
@@ -8582,11 +8583,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const cancelled = await setRunStatus(run.id, "cancelled", {
       finishedAt: new Date(),
       error: reason,
-      errorCode: "cancelled",
+      errorCode,
       ...(agent ? {
         resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
           resultJson: parseObject(run.resultJson),
-          errorCode: "cancelled",
+          errorCode,
           errorMessage: reason,
         }),
       } : {}),

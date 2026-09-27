@@ -66,6 +66,7 @@ async function createApp(
   stripe: ReturnType<typeof makeStripe>,
   trialDays = 14,
   actorOverrides: Record<string, unknown> = {},
+  configured = true,
 ) {
   const { billingRoutes } = await import("../routes/billing.js");
   const app = express();
@@ -86,6 +87,7 @@ async function createApp(
     proPriceId: "price_agentdash_pro",
     trialDays,
     publicBaseUrl: "https://app.agentdash.example",
+    configured,
   }));
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     res.status(err.status ?? 500).json({ error: err.message });
@@ -309,5 +311,42 @@ describe("billing mutations require owner or admin", () => {
     const res = await request(app).get("/api/billing/status?companyId=company-1");
 
     expect(res.status).toBe(200);
+  });
+
+  // AgentDash (GH #790): the /status gate was widened for instance admins so
+  // Billing loads on a local_trusted box, whose local-board actor carries no
+  // companyIds list at all.
+  it("lets an instance admin read status with no companyIds at all", async () => {
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 14, {
+      isInstanceAdmin: true,
+      companyIds: null,
+      source: "local_implicit",
+    });
+
+    const res = await request(app).get("/api/billing/status?companyId=company-1");
+
+    expect(res.status).toBe(200);
+    expect(res.body.tier).toBe("pro_active");
+    expect(res.body.configured).toBe(true);
+  });
+
+  it("reports configured:false on the status response when Stripe is not wired", async () => {
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 14, {}, false);
+
+    const res = await request(app).get("/api/billing/status?companyId=company-1");
+
+    expect(res.status).toBe(200);
+    expect(res.body.configured).toBe(false);
+  });
+
+  it("still refuses status to a non-member, non-admin", async () => {
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 14, { companyIds: ["other-company"] });
+
+    const res = await request(app).get("/api/billing/status?companyId=company-1");
+
+    expect(res.status).toBe(403);
   });
 });

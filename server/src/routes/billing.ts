@@ -24,6 +24,10 @@ interface RoutesConfig {
   proPriceId: string;
   trialDays: number;
   publicBaseUrl: string;
+  // AgentDash (GH #790): reported on /status so the UI can hide checkout/trial
+  // on instances where Stripe was never configured. Omitted means not
+  // configured — fail closed, the stub would 503 anyway.
+  configured?: boolean;
 }
 
 export function billingRoutes(db: Db, cfg: RoutesConfig) {
@@ -32,7 +36,12 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
   const svc = billingService({
     stripe: cfg.stripe,
     companies,
-    config: { proPriceId: cfg.proPriceId, trialDays: cfg.trialDays, publicBaseUrl: cfg.publicBaseUrl },
+    config: {
+      proPriceId: cfg.proPriceId,
+      trialDays: cfg.trialDays,
+      publicBaseUrl: cfg.publicBaseUrl,
+      configured: cfg.configured === true,
+    },
   });
   // AgentDash (Cloud SKU, G4): usage-based billing aggregator over cost_events.
   const usage = usageBillingService(db);
@@ -237,7 +246,9 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
     // Deliberately membership-only. Which plan you are on is not spend, and
     // hiding it just sends people to ask an owner what is already on their own
     // screen — see billing-checkout-routes.test.ts.
-    if (req.actor.type !== "board" || !req.actor.companyIds?.includes(companyId)) {
+    // Instance admins (the local_trusted "local-board" actor has no companyIds
+    // list at all) read status too, or Billing never loads on a dev box.
+    if (req.actor.type !== "board" || (!req.actor.isInstanceAdmin && !req.actor.companyIds?.includes(companyId))) {
       throw forbidden("Not a member of this company");
     }
     const r = await svc.getStatus(companyId);
