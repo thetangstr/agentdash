@@ -6,6 +6,7 @@ import {
 } from "@paperclipai/shared";
 import { AgentCeilingEditor } from "@/components/settings/AgentCeilingEditor";
 import { NeedsReconciliationPanel } from "@/components/settings/NeedsReconciliationPanel";
+import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { companiesApi } from "../api/companies";
@@ -511,6 +512,9 @@ export function CompanySettings() {
           )}
         </div>
       </div>
+
+      {/* AgentDash (GH #785): the optional readiness assessment (default profile only) */}
+      <ReadinessAssessmentCard productProfile={selectedCompany.productProfile} />
 
       {/* Import / Export */}
       <div className="space-y-4">
