@@ -95,6 +95,11 @@ describe("buildBriefing (golden)", () => {
     });
     expect(text).toContain("Kai marked it blocked via assistant");
     expect(text).toContain("marked it done, no recorded author");
+    const legacy = buildBriefing({
+      ...baseInput,
+      shipped: { total: 1, items: [{ ...baseInput.shipped.items[0]!, source: { ...marco, origin: "unknown", actor: { type: "unknown", name: null } } }] },
+    });
+    expect(legacy).toContain("marked it done, origin unknown");
     expect(text).toContain("Quiet: 2 open tasks, no recorded activity in the last 3 days.");
     expect(text).toContain("lists are capped, counts are complete");
   });

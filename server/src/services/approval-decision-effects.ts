@@ -25,6 +25,12 @@ export interface DecisionEffectsContext {
   /** The human the decision is attributed to. */
   actorUserId: string;
   decisionNote: string | null;
+  /**
+   * AgentDash consolidation PR-A (H2): set when the decision arrived through
+   * an assistant grant (`assistant_grant <grant> (<client>)`), so the
+   * activity row reads "via assistant", never as a hand-checked record.
+   */
+  via?: string;
 }
 
 /**
@@ -70,7 +76,7 @@ export function approvalDecisionEffectsService(
   async function afterApprove(
     approval: ApprovalRow,
     applied: boolean,
-    { actorUserId, decisionNote }: DecisionEffectsContext,
+    { actorUserId, decisionNote, via }: DecisionEffectsContext,
   ): Promise<void> {
   if (applied) {
     const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
@@ -88,6 +94,7 @@ export function approvalDecisionEffectsService(
         type: approval.type,
         requestedByAgentId: approval.requestedByAgentId,
         linkedIssueIds,
+        ...(via ? { via } : {}),
       },
     });
 
@@ -229,7 +236,7 @@ export function approvalDecisionEffectsService(
   async function afterReject(
     approval: ApprovalRow,
     applied: boolean,
-    { actorUserId, decisionNote }: DecisionEffectsContext,
+    { actorUserId, decisionNote, via }: DecisionEffectsContext,
   ): Promise<void> {
   if (applied) {
     await logActivity(db, {
@@ -239,7 +246,7 @@ export function approvalDecisionEffectsService(
       action: "approval.rejected",
       entityType: "approval",
       entityId: approval.id,
-      details: { type: approval.type },
+      details: { type: approval.type, ...(via ? { via } : {}) },
     });
 
     await stewardInbox.recordApprovalEvent(approval.id, "approval.resolved");

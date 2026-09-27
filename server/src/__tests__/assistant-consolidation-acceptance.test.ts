@@ -1,8 +1,11 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import http from "node:http";
 import express, { type Express } from "express";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   activityLog,
   agents,
@@ -84,6 +87,7 @@ describeEmbeddedPostgres("consolidation acceptance queries (A1–A9)", () => {
   let secretIssue = "";
   let linkedApproval = "";
   let hireApproval = "";
+  let tempHome = "";
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-consolidation-acceptance-");
@@ -126,6 +130,10 @@ describeEmbeddedPostgres("consolidation acceptance queries (A1–A9)", () => {
     baseUrl = `http://127.0.0.1:${port}`;
     resourceUri = `${baseUrl}/api/mcp/assistant`;
     vi.stubEnv("PAPERCLIP_PUBLIC_URL", baseUrl);
+    // The gated hire path writes an instructions bundle; keep it hermetic.
+    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "consolidation-acceptance-"));
+    vi.stubEnv("PAPERCLIP_HOME", tempHome);
+    vi.stubEnv("AGENTDASH_DEFAULT_ADAPTER", "");
 
     yarda = (await db.insert(companies).values({ name: "Yarda", issuePrefix: "YAR" }).returning())[0]!.id;
     kiddo = (await db.insert(companies).values({ name: "KiddoQuest", issuePrefix: "KQ" }).returning())[0]!.id;
@@ -366,6 +374,7 @@ describeEmbeddedPostgres("consolidation acceptance queries (A1–A9)", () => {
     vi.unstubAllEnvs();
     await new Promise<void>((resolve) => server?.close(() => resolve()));
     await tempDb?.cleanup();
+    if (tempHome) await fs.rm(tempHome, { recursive: true, force: true }).catch(() => {});
   });
 
   async function grantToken(userId: string, scopes: string[] = ["agentdash:read"], companyId = yarda) {
@@ -719,5 +728,142 @@ describeEmbeddedPostgres("consolidation acceptance queries (A1–A9)", () => {
     for (const row of sourcesIn(env!.data)) {
       if (row.source.via === "assistant") expect(row.source.kind).not.toBe("human_or_system");
     }
+  });
+
+  // Review H2 (#827): decisions and hires confirmed through the M4 gated path
+  // are the assistant's doing — shown "via assistant", never human_or_system.
+  const DECIDE = ["agentdash:read", "agentdash:work", "agentdash:decide"];
+
+  it("a decision confirmed through confirm_action shows as via assistant", async () => {
+    const approvalId = (
+      await db
+        .insert(approvals)
+        .values({ companyId: yarda, type: "approve_ceo_strategy", requestedByAgentId: marco, status: "pending", payload: {} })
+        .returning()
+    )[0]!.id;
+    const { token } = await grantToken(FOUNDER, DECIDE);
+    const prep = await call(token, "prepare_decision", { approval: approvalId, decision: "approve" });
+    expect(prep.env?.status, prep.env?.summary).toBe("ok");
+    const conf = await call(token, "confirm_action", { handle: prep.env!.data.handle, personSaid: "yes, approve it" });
+    expect(conf.env?.status, conf.env?.summary).toBe("ok");
+
+    const [logged] = await db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.entityId, approvalId), eq(activityLog.action, "approval.approved")));
+    expect(logged).toMatchObject({ actorType: "user", actorId: FOUNDER, origin: "server" });
+    expect(String((logged!.details as Record<string, unknown>).via)).toMatch(/^assistant_grant /);
+
+    const { env } = await call(token, "whats_new", { since: "24h" });
+    const row = env!.data.changed.items.find(
+      (item: any) => item.source.id === approvalId && item.action === "approval.approved",
+    );
+    expect(row).toBeTruthy();
+    expect(row.source).toMatchObject({ kind: "agent_state", via: "assistant", actor: { type: "user", name: "Kai Founder" } });
+  });
+
+  it("a hire requested through request_hire shows as via assistant", async () => {
+    await db.update(companies).set({ requireBoardApprovalForNewAgents: true }).where(eq(companies.id, yarda));
+    try {
+      const { token } = await grantToken(FOUNDER, DECIDE);
+      const prep = await call(token, "request_hire", { role: "designer", reason: "booking pages need a refresh" });
+      expect(prep.env?.status, prep.env?.summary).toBe("ok");
+      const conf = await call(token, "confirm_action", { handle: prep.env!.data.handle });
+      expect(conf.env?.status, conf.env?.summary).toBe("ok");
+
+      const hire = await db
+        .select()
+        .from(approvals)
+        .where(and(eq(approvals.companyId, yarda), eq(approvals.type, "hire_agent"), eq(approvals.requestedByUserId, FOUNDER)))
+        .then((rows) => rows[0]!);
+      const { env } = await call(token, "whats_new", { since: "24h" });
+      const waiting = env!.data.decisionsWaiting.items.find((item: any) => item.approvalId === hire.id);
+      expect(waiting.source).toMatchObject({ kind: "agent_state", via: "assistant", actor: { type: "user", name: "Kai Founder" } });
+      const created = env!.data.changed.items.find(
+        (item: any) => item.source.id === hire.id && item.action === "approval.created",
+      );
+      expect(created.source).toMatchObject({ kind: "agent_state", via: "assistant" });
+      for (const row of sourcesIn(env!.data)) {
+        if (row.source.via === "assistant") expect(row.source.kind).not.toBe("human_or_system");
+      }
+    } finally {
+      await db.update(companies).set({ requireBoardApprovalForNewAgents: false }).where(eq(companies.id, yarda));
+    }
+  });
+
+  it("a pre-PR-C row (origin NULL) shows its author as origin unknown, not its stored name", async () => {
+    const legacyIssue = (
+      await db
+        .insert(issues)
+        .values({ companyId: yarda, identifier: "YAR-10", title: "Legacy task", status: "blocked", priority: "medium", assigneeAgentId: marco } as never)
+        .returning()
+    )[0]!.id;
+    // Written the way the old manual POST could: any actor, no origin.
+    await db.insert(activityLog).values({
+      companyId: yarda,
+      actorType: "system",
+      actorId: "system",
+      action: "issue.updated",
+      entityType: "issue",
+      entityId: legacyIssue,
+      details: { status: "blocked" },
+    });
+    const { token } = await grantToken(FOUNDER);
+    const { env, raw } = await call(token, "whats_new", { since: "24h", format: "briefing" });
+    const row = env!.data.changed.items.find((item: any) => item.source.id === legacyIssue);
+    expect(row.source).toMatchObject({ kind: "agent_state", origin: "unknown", actor: { type: "unknown", name: null } });
+    const blocked = env!.data.blockedNow.items.find((item: any) => item.identifier === "YAR-10");
+    expect(blocked.source).toMatchObject({ kind: "agent_state", origin: "unknown", actor: { type: "unknown", name: null } });
+    expect(JSON.stringify(raw)).not.toMatch(/"name":"AgentDash"[^}]*"id":"${legacyIssue}"/);
+  });
+
+  it("manual free text is clipped and marked user-written; rows naming a missing approval are dropped", async () => {
+    const board = express();
+    board.use(express.json());
+    board.use((req, _res, next) => {
+      (req as any).actor = {
+        type: "board",
+        userId: FOUNDER,
+        companyIds: [yarda],
+        source: "session",
+        isInstanceAdmin: false,
+        memberships: [{ companyId: yarda, membershipRole: "owner", status: "active" }],
+      };
+      next();
+    });
+    board.use("/api", activityRoutes(db));
+    board.use(errorHandler);
+    const boardServer = http.createServer(board);
+    await new Promise<void>((resolve) => boardServer.listen(0, "127.0.0.1", resolve));
+    const boardPort = (boardServer.address() as { port: number }).port;
+    const longAction = `issue.updated ${"x".repeat(300)}`;
+    try {
+      const posted = await fetch(`http://127.0.0.1:${boardPort}/api/companies/${yarda}/activity`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: longAction, entityType: "issue", entityId: blockedIssue }),
+      });
+      expect(posted.status).toBe(201);
+    } finally {
+      await new Promise<void>((resolve) => boardServer.close(() => resolve()));
+    }
+    const ghost = randomUUID();
+    await logActivity(db, {
+      companyId: yarda,
+      actorType: "user",
+      actorId: FOUNDER,
+      action: "approval.created",
+      entityType: "approval",
+      entityId: ghost,
+    });
+
+    const { token } = await grantToken(FOUNDER);
+    const { env, raw } = await call(token, "whats_new", { since: "24h" });
+    const manual = env!.data.changed.items.find((item: any) => item.actionKind === "user_text");
+    expect(manual).toBeTruthy();
+    expect(manual.action.length).toBeLessThanOrEqual(80);
+    expect(manual.source).toMatchObject({ kind: "agent_state", origin: "manual" });
+    expect(JSON.stringify(raw)).not.toContain("x".repeat(100));
+    expect(env!.data.changed.items.some((item: any) => item.source.id === ghost)).toBe(false);
   });
 });

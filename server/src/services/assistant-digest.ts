@@ -461,6 +461,23 @@ export function assistantDigestService(db: Db) {
       activityRows.filter((row) => row.entityType === "project" && uuidLike(row.entityId)).map((row) => row.entityId),
     )];
 
+    // Approval rows in the feed: the approval must exist in this company (a
+    // row naming a missing approval is dropped), and a decision taken on the
+    // assistant channel (#780 passes `channel: "assistant"`) reads "via
+    // assistant" even on rows written before the gated path stamped `via`.
+    const approvalEntityRows = approvalEntityIds.length
+      ? await db
+          .select({ id: approvals.id, decisionChannel: approvals.decisionChannel })
+          .from(approvals)
+          .where(and(eq(approvals.companyId, input.companyId), inArray(approvals.id, approvalEntityIds)))
+      : [];
+    const approvalChannelById = new Map(approvalEntityRows.map((row) => [row.id, row.decisionChannel]));
+    const ASSISTANT_DECISION_ACTIONS = new Set([
+      "approval.approved",
+      "approval.rejected",
+      "approval.revision_requested",
+    ]);
+
     // Approvals map to projects only through issue_approvals (§4.3).
     const allApprovalIds = [...new Set([...approvalEntityIds, ...ranked.map((r) => r.approval.id)])];
     const approvalLinks = allApprovalIds.length
@@ -526,6 +543,7 @@ export function assistantDigestService(db: Db) {
         return { projectId: row.entityId, issue: null, companyLevel: false };
       }
       if (row.entityType === "approval") {
+        if (!approvalChannelById.has(row.entityId)) return null; // no such approval here
         const linked = linksByApproval.get(row.entityId);
         if (!linked || linked.length === 0) return { projectId: null, issue: null, companyLevel: true };
         // Linked approvals are attributed through their first visible issue;
@@ -605,11 +623,27 @@ export function assistantDigestService(db: Db) {
       origin: string | null;
       details: Record<string, unknown> | null;
       createdAt: Date;
-    }, entity: string, id: string): RowSource => {
-      const { kind, via } = kindForActivity(row);
+    }, entity: string, id: string, opts: { assistantChannel?: boolean } = {}): RowSource => {
+      const derived = kindForActivity(row);
+      const via = derived.via ?? (opts.assistantChannel ? "assistant" : undefined);
+      const kind = via ? "agent_state" : derived.kind;
+      // A row from before PR-C (origin NULL) could carry a forged actor, so
+      // its stored name is never shown: the author is "origin unknown".
+      if (row.origin === null) {
+        return {
+          kind: "agent_state",
+          actor: { type: "unknown", name: null },
+          origin: "unknown",
+          ...(via ? { via } : {}),
+          entity,
+          id,
+          recordedAt: row.createdAt.toISOString(),
+        };
+      }
       return {
         kind,
         actor: { type: normalizeActorType(row.actorType), name: actorName(names, row.actorType, row.actorId) },
+        origin: row.origin === "manual" ? "manual" : "server",
         ...(via ? { via } : {}),
         entity,
         id,
@@ -639,6 +673,22 @@ export function assistantDigestService(db: Db) {
     // ---- Decisions (§4.3): company-wide by default; project calls split
     // into linked (via issue_approvals) and company-level (no linked issue).
     const approvalSource = (approval: RankedApproval["approval"]): RowSource => {
+      // A hire filed through an assistant grant (request_hire) stamps
+      // requestedByUserId but was requested by the assistant: via assistant.
+      const metadata = (approval.payload as { metadata?: { source?: unknown } } | null)?.metadata;
+      if (metadata?.source === "assistant_hire_request") {
+        return {
+          kind: "agent_state",
+          actor: {
+            type: approval.requestedByUserId ? "user" : "unknown",
+            name: approval.requestedByUserId ? names.users.get(approval.requestedByUserId) ?? "a board user" : null,
+          },
+          via: "assistant",
+          entity: "approval",
+          id: approval.id,
+          recordedAt: approval.createdAt.toISOString(),
+        };
+      }
       if (approval.requestedByAgentId) {
         return {
           kind: "agent_state",
@@ -728,7 +778,10 @@ export function assistantDigestService(db: Db) {
               ? { type: "agent" as const, ref: row.entityId }
               : null;
       return {
-        action: row.action,
+        // `action` is free text on manual rows (the POST has no length
+        // limit): clipped, and marked as written by the posting user.
+        action: row.action.length > 80 ? `${row.action.slice(0, 79)}…` : row.action,
+        actionKind: row.origin === "manual" ? ("user_text" as const) : ("event" as const),
         entityType: row.entityType,
         recordedAt: row.createdAt.toISOString(),
         project: where.projectId ? projectNameById.get(where.projectId) ?? null : null,
@@ -743,7 +796,12 @@ export function assistantDigestService(db: Db) {
             }
           : null,
         target,
-        source: activitySource(row, row.entityType, row.entityId),
+        source: activitySource(row, row.entityType, row.entityId, {
+          assistantChannel:
+            row.entityType === "approval" &&
+            ASSISTANT_DECISION_ACTIONS.has(row.action) &&
+            approvalChannelById.get(row.entityId) === "assistant",
+        }),
       };
     });
     const changed = {

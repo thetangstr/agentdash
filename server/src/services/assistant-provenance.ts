@@ -29,6 +29,8 @@ export interface RowSource {
   kind: SourceKind;
   actor: { type: SourceActorType; name: string | null };
   via?: "assistant";
+  /** Who wrote the underlying activity row; "unknown" = before PR-C. */
+  origin?: "server" | "manual" | "unknown";
   entity: string;
   id: string;
   recordedAt: string | null;
@@ -70,6 +72,7 @@ export function quoteTitle(value: string | null | undefined, max = 60) {
 
 /** "Marco marked it done" / "Kai marked it done via assistant" / honest unknown. */
 export function attributionPhrase(source: RowSource, verb: string) {
+  if (source.origin === "unknown") return `${verb}, origin unknown`;
   if (source.actor.type === "unknown" || !source.actor.name) return `${verb}, no recorded author`;
   const who = source.actor.type === "system" ? "AgentDash" : source.actor.name;
   const via = source.via === "assistant" ? " via assistant" : "";
