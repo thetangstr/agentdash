@@ -18,6 +18,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { FirstIssueStep } from "@/components/onboarding/FirstIssueStep";
 import { GitHubConnectStep } from "@/components/onboarding/GitHubConnectStep";
 import { HermesProviderStep } from "@/components/onboarding/HermesProviderStep";
+import { ProviderKeyBlocked } from "@/components/onboarding/ProviderKeyBlocked";
 
 const STEP_LABELS: Array<{ step: Exclude<FirstRunStep, "done">; label: string }> = [
   { step: "model", label: "Your model" },
@@ -133,11 +134,9 @@ export function FirstRunPage() {
         <h1 className="mb-2 text-lg font-semibold">Waiting for a model provider</h1>
         <p className="text-muted-foreground">
           Your agents need a model provider key before they can work, and only the instance administrator can add
-          it. Ask them to open setup; you can look around in the meantime.
+          it. You can look around in the meantime.
         </p>
-        <Link className="mt-4 inline-block underline" to={home}>
-          Go to Home
-        </Link>
+        <ProviderKeyBlocked companyId={company.id} homeHref={home} />
       </div>
     ) : provider ? (
       <HermesProviderStep

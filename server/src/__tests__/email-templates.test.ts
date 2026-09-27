@@ -7,7 +7,7 @@
 // + plaintext body would impersonate a trusted brand using AgentDash's
 // verified-domain DKIM/SPF as cover.
 import { describe, it, expect } from "vitest";
-import { sanitizeDisplayName, inviteEmailTemplate, resetPasswordEmailTemplate } from "../auth/email.ts";
+import { sanitizeDisplayName, inviteEmailTemplate, resetPasswordEmailTemplate, modelKeyRequestEmailTemplate } from "../auth/email.ts";
 import { formatTokenLifetime } from "../auth/better-auth.ts";
 
 describe("sanitizeDisplayName", () => {
@@ -101,6 +101,45 @@ describe("inviteEmailTemplate", () => {
     // create a second header line in some MTAs. The CRLF-free subject
     // assertion above covers that case.
     expect(t.text).toContain("CarolFwd: spam invited"); // CR/LF dropped, words remain plaintext
+  });
+});
+
+// AgentDash (GH #794): same sanitization discipline as the invite email —
+// requester and company names are user-controlled strings reaching a real
+// mail header, and the body must never carry anything key-shaped.
+describe("modelKeyRequestEmailTemplate", () => {
+  it("falls back to neutral copy when names are null", () => {
+    const t = modelKeyRequestEmailTemplate({
+      settingsUrl: "https://app.example.com/company/settings/model-key",
+      companyName: null,
+      requesterName: null,
+    });
+    expect(t.subject).toContain("A teammate");
+    expect(t.subject).toContain("your workspace");
+    expect(t.text).toContain("https://app.example.com/company/settings/model-key");
+  });
+
+  it("strips phishing payloads and CRLF from requester and company names", () => {
+    const t = modelKeyRequestEmailTemplate({
+      settingsUrl: "https://app.example.com/company/settings/model-key",
+      companyName: "Acme\r\nBcc: leak@x.com",
+      requesterName: 'IT Helpdesk <help@it.com>\nFwd: urgent',
+    });
+    expect(t.subject).not.toMatch(/[\r\n]/);
+    for (const part of [t.subject, t.text, t.html]) {
+      expect(part).not.toContain("<help@");
+      expect(part).not.toContain("help@it.com");
+    }
+  });
+
+  it("escapes HTML special chars in the rendered body", () => {
+    const t = modelKeyRequestEmailTemplate({
+      settingsUrl: "https://app.example.com/company/settings/model-key",
+      companyName: "Bob & Co",
+      requesterName: "Carol",
+    });
+    expect(t.html).toContain("Bob &amp; Co");
+    expect(t.html).not.toContain("Bob & Co");
   });
 });
 

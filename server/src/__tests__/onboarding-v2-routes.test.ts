@@ -42,9 +42,25 @@ const mockInvites = {
   createCompanyInvite: vi.fn(),
 };
 const mockSendEmail = vi.fn().mockResolvedValue({ status: "skipped" });
+const mockLogActivity = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../auth/email.js", () => ({
   sendEmail: (...args: unknown[]) => mockSendEmail(...args),
+  // AgentDash (GH #794): echo-shaped stub so tests can inspect exactly what
+  // the route put in the email (names + settings URL, never key material).
+  modelKeyRequestEmailTemplate: ({
+    settingsUrl,
+    companyName,
+    requesterName,
+  }: {
+    settingsUrl: string;
+    companyName: string | null;
+    requesterName: string | null;
+  }) => ({
+    subject: `${requesterName ?? "A teammate"} needs a model key for ${companyName ?? "the workspace"}`,
+    html: `<a href="${settingsUrl}">${requesterName ?? ""} ${companyName ?? ""}</a>`,
+    text: `Open ${settingsUrl} — ${requesterName ?? ""} / ${companyName ?? ""}`,
+  }),
   inviteEmailTemplate: ({
     inviteUrl,
     companyName,
@@ -104,6 +120,7 @@ vi.mock("../services/index.js", () => ({
   agentInstructionsService: () => mockInstructions,
   cosOnboardingStateService: () => mockCosState,
   inviteService: () => mockInvites,
+  logActivity: (...args: unknown[]) => mockLogActivity(...args),
 }));
 
 const mockFinalize = vi.fn();
@@ -112,8 +129,18 @@ vi.mock("../services/deep-interview-crystallize.js", () => ({
 }));
 
 vi.mock("@paperclipai/db", () => ({
-  authUsers: { id: "id" },
-  companies: { id: "id" },
+  authUsers: { id: "id", name: "name", email: "email" },
+  activityLog: { companyId: "company_id", action: "action", actorId: "actor_id", createdAt: "created_at" },
+  companies: { id: "id", name: "name" },
+  companyMemberships: {
+    id: "id",
+    companyId: "company_id",
+    principalType: "principal_type",
+    principalId: "principal_id",
+    status: "status",
+    membershipRole: "membership_role",
+  },
+  instanceUserRoles: { userId: "user_id", role: "role" },
   assistantConversations: { id: "id", companyId: "company_id" },
   deepInterviewStates: { id: "id", scope: "scope", scopeRefId: "scope_ref_id" },
   assistantMessages: {
@@ -127,6 +154,9 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
+  gt: vi.fn(),
+  inArray: vi.fn(),
+  ne: vi.fn(),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
 }));
 
@@ -134,6 +164,7 @@ import { onboardingV2Routes } from "../routes/onboarding-v2.js";
 import { errorHandler } from "../middleware/error-handler.js";
 
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalPublicUrl = process.env.PAPERCLIP_PUBLIC_URL;
 
 beforeEach(() => {
   mockAccess.listActiveUserMemberships.mockResolvedValue([]);
@@ -145,6 +176,8 @@ afterEach(() => {
   if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
   else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
   delete process.env.AGENTDASH_BILLING_DISABLED;
+  if (originalPublicUrl === undefined) delete process.env.PAPERCLIP_PUBLIC_URL;
+  else process.env.PAPERCLIP_PUBLIC_URL = originalPublicUrl;
 });
 
 function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
@@ -1392,5 +1425,209 @@ describe("cosAgentId author validation", () => {
     expect(mockConversations.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ authorKind: "agent", authorId: "cos1" }),
     );
+  });
+});
+
+// AgentDash (GH #794, UX-13): the model-key "who can fix it" + "let them know"
+// routes. The stub db pops one queued array per select; contact resolution
+// runs memberships → (instance_user_roles + auth_users) and request-model-key
+// interleaves requester + company lookups before the tail of that join.
+const MEMBERSHIPS = [
+  { principalId: "u-fix", principalType: "user", companyId: "c1", status: "active", membershipRole: "admin" },
+  { principalId: "u-admin", principalType: "user", companyId: "c1", status: "active", membershipRole: "admin" },
+  { principalId: "u-owner", principalType: "user", companyId: "c1", status: "active", membershipRole: "owner" },
+  { principalId: "u-member", principalType: "user", companyId: "c1", status: "active", membershipRole: "member" },
+];
+const CONTACT_USERS = [
+  { id: "u-fix", name: "Fixer Instance", email: "fixer@x.test" },
+  { id: "u-admin", name: "Admin Two", email: "admin@x.test" },
+  { id: "u-owner", name: "Owner Three", email: "owner@x.test" },
+  { id: "u-member", name: "Member Four", email: "member@x.test" },
+];
+
+function boardActor(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "board",
+    userId: "u-member",
+    source: "session",
+    companyIds: ["c1"],
+    memberships: [{ companyId: "c1", status: "active" }],
+    ...overrides,
+  };
+}
+
+describe("GET /api/onboarding/model-key-admins (#794)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects unauthenticated callers", async () => {
+    const app = buildApp({ type: "none", source: "none" });
+    const res = await request(app).get("/api/onboarding/model-key-admins?companyId=c1");
+    expect(res.status).toBe(401);
+  });
+
+  it("requires companyId", async () => {
+    const app = buildApp(boardActor());
+    const res = await request(app).get("/api/onboarding/model-key-admins");
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a user with no access to the company", async () => {
+    const app = buildApp(boardActor({ companyIds: ["c2"] }));
+    const res = await request(app).get("/api/onboarding/model-key-admins?companyId=c1");
+    expect(res.status).toBe(403);
+  });
+
+  it("returns active admin members with canFix for instance admins only", async () => {
+    const app = buildApp(boardActor(), [
+      MEMBERSHIPS,
+      [{ userId: "u-fix" }],
+      CONTACT_USERS,
+    ]);
+    const res = await request(app).get("/api/onboarding/model-key-admins?companyId=c1");
+    expect(res.status).toBe(200);
+    // owner normalizes to admin; member is not a contact; u-fix is the fixer.
+    expect(res.body.admins).toEqual([
+      expect.objectContaining({ userId: "u-fix", name: "Fixer Instance", canFix: true, membershipRole: "admin" }),
+      expect.objectContaining({ userId: "u-admin", name: "Admin Two", canFix: false }),
+      expect.objectContaining({ userId: "u-owner", name: "Owner Three", canFix: false, membershipRole: "admin" }),
+    ]);
+    expect(res.body.admins.map((a: { userId: string }) => a.userId)).not.toContain("u-member");
+  });
+});
+
+describe("POST /api/onboarding/request-model-key (#794)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendEmail.mockResolvedValue({ status: "sent" });
+  });
+
+  it("rejects unauthenticated callers and non-members", async () => {
+    const anon = buildApp({ type: "none", source: "none" });
+    expect(
+      (await request(anon).post("/api/onboarding/request-model-key").send({ companyId: "c1" })).status,
+    ).toBe(401);
+    const outsider = buildApp(boardActor({ companyIds: ["c2"] }));
+    expect(
+      (await request(outsider).post("/api/onboarding/request-model-key").send({ companyId: "c1" })).status,
+    ).toBe(403);
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("emails only instance admins when they exist, excludes the requester, and logs the activity", async () => {
+    // Requester is u-owner (also an admin) — they must not email themselves.
+    // First fixture is the cooldown lookup; the rest are contacts/requester/company.
+    process.env.PAPERCLIP_PUBLIC_URL = "https://app.agentdash.test";
+    const app = buildApp(boardActor({ userId: "u-owner" }), [
+      [],
+      MEMBERSHIPS,
+      [{ id: "u-owner", name: "Owner Three" }],
+      [{ name: "Acme" }],
+      [{ userId: "u-fix" }],
+      CONTACT_USERS,
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      // A hostile caller supplies the wrong host; the email must still name
+      // the configured public URL, never the request's headers.
+      .set("x-forwarded-proto", "https")
+      .set("x-forwarded-host", "evil.example.com")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([{ name: "Fixer Instance", status: "sent" }]);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    const email = mockSendEmail.mock.calls[0][0];
+    expect(email.to).toBe("fixer@x.test");
+    expect(email.subject).toContain("Owner Three");
+    expect(email.subject).toContain("Acme");
+    expect(email.text).toContain("https://app.agentdash.test/company/settings/model-key");
+    expect(email.text).not.toContain("evil.example.com");
+    // Redaction: nothing key-shaped goes out, and the response carries no emails.
+    expect(email.text).not.toMatch(/sk-|api[_-]?key\s*[:=]/i);
+    expect(JSON.stringify(res.body)).not.toContain("@x.test");
+
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "c1",
+        actorId: "u-owner",
+        action: "model_key.requested",
+        details: { recipientCount: 1 },
+      }),
+    );
+  });
+
+  it("falls back to company admins when no contact is an instance admin", async () => {
+    const app = buildApp(boardActor({ userId: "u-member" }), [
+      [],
+      MEMBERSHIPS,
+      [{ id: "u-member", name: "Member Four" }],
+      [{ name: "Acme" }],
+      [],
+      CONTACT_USERS,
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(mockSendEmail).toHaveBeenCalledTimes(3);
+    expect(mockSendEmail.mock.calls.map((call) => call[0].to).sort()).toEqual([
+      "admin@x.test",
+      "fixer@x.test",
+      "owner@x.test",
+    ]);
+    expect(res.body.results).toHaveLength(3);
+  });
+
+  // The cooldown is what makes the button honest: a member who keeps pressing
+  // "Let them know" cannot keep emailing the admins.
+  it("429s a repeat request inside the per-company+requester cooldown", async () => {
+    const app = buildApp(boardActor({ userId: "u-member" }), [
+      [{ createdAt: new Date() }],
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(429);
+    expect(res.body.error ?? res.body.message).toMatch(/already been told/i);
+    expect(res.body.details?.retryAfterSeconds).toBeGreaterThan(0);
+    expect(mockSendEmail).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("reports honest statuses when the mailer skips or fails", async () => {
+    mockSendEmail.mockResolvedValueOnce({ status: "skipped" });
+    const app = buildApp(boardActor({ userId: "u-owner" }), [
+      [],
+      [{ principalId: "u-fix", principalType: "user", companyId: "c1", status: "active", membershipRole: "admin" }],
+      [{ id: "u-owner", name: "Owner Three" }],
+      [{ name: "Acme" }],
+      [{ userId: "u-fix" }],
+      [{ id: "u-fix", name: "Fixer Instance", email: "fixer@x.test" }],
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([{ name: "Fixer Instance", status: "skipped" }]);
+  });
+
+  it("returns an empty result set when nobody reachable remains", async () => {
+    const app = buildApp(boardActor({ userId: "u-owner" }), [
+      [],
+      [{ principalId: "u-owner", principalType: "user", companyId: "c1", status: "active", membershipRole: "owner" }],
+      [{ id: "u-owner", name: "Owner Three" }],
+      [{ name: "Acme" }],
+      [],
+      [{ id: "u-owner", name: "Owner Three", email: "owner@x.test" }],
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([]);
+    expect(mockSendEmail).not.toHaveBeenCalled();
   });
 });

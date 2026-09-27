@@ -85,6 +85,22 @@ export interface SetupHermesProviderResponse {
   profilesUpdated: number;
 }
 
+// AgentDash (GH #794, UX-13): who can fix a missing model key. The server
+// deliberately omits emails — members only need names; the notification
+// itself is sent by the request-model-key route.
+export interface ModelKeyAdmin {
+  userId: string;
+  name: string | null;
+  membershipRole: string | null;
+  /** Instance admin — the person the setup route actually lets through. */
+  canFix: boolean;
+}
+
+export interface ModelKeyRequestResult {
+  name: string | null;
+  status: "sent" | "skipped" | "failed" | string;
+}
+
 export const onboardingApi = {
   adapterStatus: () => api.get<AdapterStatusResponse>("/onboarding/adapter-status"),
   setupHermesProvider: (input: {
@@ -94,6 +110,12 @@ export const onboardingApi = {
     model?: string;
   }) =>
     api.post<SetupHermesProviderResponse>("/onboarding/setup-adapter", { preset: "hermes", ...input }),
+  modelKeyAdmins: (companyId: string) =>
+    api.get<{ admins: ModelKeyAdmin[] }>(
+      `/onboarding/model-key-admins?companyId=${encodeURIComponent(companyId)}`,
+    ),
+  requestModelKey: (companyId: string) =>
+    api.post<{ results: ModelKeyRequestResult[] }>("/onboarding/request-model-key", { companyId }),
   listMemberSessions: () =>
     api.get<MemberOnboardingSession[]>("/onboarding/member-sessions"),
   advanceMemberSession: (

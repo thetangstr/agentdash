@@ -20,13 +20,25 @@ const mockCompany = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/firstRun", () => ({ firstRunApi: { status: mockStatus, createFirstIssue: mockCreate } }));
-vi.mock("@/api/onboarding", () => ({ onboardingApi: { adapterStatus: mockAdapterStatus, setupHermesProvider: vi.fn() } }));
+const mockModelKeyAdmins = vi.hoisted(() => vi.fn());
+const mockRequestModelKey = vi.hoisted(() => vi.fn());
+vi.mock("@/api/onboarding", () => ({
+  onboardingApi: {
+    adapterStatus: mockAdapterStatus,
+    setupHermesProvider: vi.fn(),
+    modelKeyAdmins: mockModelKeyAdmins,
+    requestModelKey: mockRequestModelKey,
+  },
+}));
 vi.mock("@/api/githubConnections", () => ({
   GITHUB_FINE_GRAINED_TOKEN_URL: "https://github.com/settings/personal-access-tokens/new",
   githubConnectionsApi: { connect: vi.fn() },
 }));
 vi.mock("@/context/CompanyContext", () => ({ useCompany: () => mockCompany }));
-vi.mock("@/lib/router", () => ({ useNavigate: () => mockNavigate }));
+vi.mock("@/lib/router", () => ({
+  useNavigate: () => mockNavigate,
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+}));
 
 import { FirstRunPage } from "./FirstRun";
 
@@ -56,7 +68,8 @@ describe("FirstRunPage", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
-    for (const mock of [mockStatus, mockCreate, mockAdapterStatus, mockNavigate]) mock.mockReset();
+    for (const mock of [mockStatus, mockCreate, mockAdapterStatus, mockNavigate, mockModelKeyAdmins, mockRequestModelKey]) mock.mockReset();
+    mockModelKeyAdmins.mockResolvedValue({ admins: [] });
     mockCompany.selectedCompany = { id: "company-1", issuePrefix: "ACM", productProfile: "default" };
     mockCompany.selectedCompanyId = "company-1";
     mockCompany.companies = [mockCompany.selectedCompany, { id: "company-2", issuePrefix: "NEW", productProfile: "default" }];
@@ -164,10 +177,15 @@ describe("FirstRunPage", () => {
 
   it("tells a company admin who cannot set the model key who can, with a link Home (#794)", async () => {
     mockStatus.mockResolvedValue(status({ canConfigureModel: false }));
+    mockModelKeyAdmins.mockResolvedValue({
+      admins: [{ userId: "u1", name: "Asha Instance", email: "asha@x.test", membershipRole: "admin", canFix: true }],
+    });
     await render();
     const waiting = container.querySelector('[data-testid="first-run-model-waiting"]');
     expect(waiting?.textContent).toContain("instance administrator");
-    expect(waiting?.querySelector("a")?.getAttribute("href")).toBe("/ACM/dashboard");
+    expect(waiting?.textContent).toContain("Asha Instance");
+    expect(waiting?.querySelector('a[href="/ACM/dashboard"]')).not.toBeNull();
+    expect(waiting?.querySelector('a[href="/company/settings/model-key"]')).not.toBeNull();
     expect(container.querySelector("form")).toBeNull();
   });
 

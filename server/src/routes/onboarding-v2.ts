@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { authUsers, assistantConversations, assistantMessages, companies as companiesTable, deepInterviewStates } from "@paperclipai/db";
-import { and, desc, eq } from "drizzle-orm";
+import { authUsers, activityLog, assistantConversations, assistantMessages, companies as companiesTable, companyMemberships, deepInterviewStates, instanceUserRoles } from "@paperclipai/db";
+import { and, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import {
   onboardingOrchestrator,
   cosInterview,
@@ -22,7 +22,7 @@ import {
   MEMBER_ONBOARDING_STEPS,
   type MemberOnboardingStep,
 } from "../services/member-onboarding.js";
-import { unauthorized, badRequest, forbidden, notFound } from "../errors.js";
+import { HttpError, unauthorized, badRequest, forbidden, notFound } from "../errors.js";
 import { assertCompanyAccess, assertInstanceAdmin } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { actorMayApplyAdapterPreset } from "../services/adapter-host-execution-policy.js";
@@ -51,7 +51,9 @@ import {
   readHermesProviderStatus,
 } from "../services/hermes-provider-setup.js";
 import { isHostedBox } from "../services/license.js";
-import { sendEmail, inviteEmailTemplate } from "../auth/email.js";
+import { absoluteUrl } from "../lib/public-base-url.js";
+import { normalizeHumanRole } from "../services/company-member-roles.js";
+import { sendEmail, inviteEmailTemplate, modelKeyRequestEmailTemplate } from "../auth/email.js";
 import {
   FIXED_QUESTIONS,
   isAgentPlanPayload,
@@ -66,6 +68,9 @@ import {
 // could submit thousands of emails in one POST and trigger thousands of
 // Resend sends per call.
 const MAX_INVITE_BATCH = 25;
+
+/** Per company+requester cooldown on the "let admins know" nudge (GH #794). */
+const MODEL_KEY_REQUEST_COOLDOWN_MS = 10 * 60 * 1000;
 
 type OnboardingTierCapacityServices = {
   companies: {
@@ -1158,7 +1163,165 @@ No greetings. No markdown headings outside the JSON block.`;
     res.status(201).json(result);
   });
 
+  // AgentDash (GH #794, UX-13): who can fix a missing model key. Naming the
+  // people who can act is identity information, not authority — the same
+  // roster /people already exposes. `canFix` marks instance admins (the
+  // setup-adapter route's own gate); owner/admin members are the fallback
+  // because on a hosted box the founder holds both roles.
+  router.get("/model-key-admins", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const companyId = typeof req.query.companyId === "string" ? req.query.companyId.trim() : "";
+    if (!companyId) throw badRequest("companyId required");
+    assertCompanyAccess(req, companyId);
+    // Names + canFix are enough for the ask — emails stay server-side and
+    // only leave the box through the notification email itself.
+    const admins = (await modelKeyContacts(db, companyId)).map(({ email: _email, ...contact }) => contact);
+    res.json({ admins });
+  });
+
+  // "Let them know" — emails the admins who can add the key (instance admins
+  // in this company, else owner/admin members) through the existing mailer.
+  // The key itself never touches this route; only names and the settings URL
+  // go in the email.
+  router.post("/request-model-key", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const requesterId = req.actor.userId;
+    const companyId = typeof req.body?.companyId === "string" ? req.body.companyId.trim() : "";
+    if (!companyId) throw badRequest("companyId required");
+    assertCompanyAccess(req, companyId);
+
+    // Cooldown: one nudge per company per requester per window, backed by the
+    // activity rows this route already writes — durable across restarts and
+    // checked before any mailer call so a member cannot spam administrators.
+    const recentRequest = await db
+      .select({ createdAt: activityLog.createdAt })
+      .from(activityLog)
+      .where(
+        and(
+          eq(activityLog.companyId, companyId),
+          eq(activityLog.action, "model_key.requested"),
+          eq(activityLog.actorId, requesterId),
+          gt(activityLog.createdAt, new Date(Date.now() - MODEL_KEY_REQUEST_COOLDOWN_MS)),
+        ),
+      )
+      .orderBy(desc(activityLog.createdAt))
+      .limit(1);
+    if (recentRequest.length > 0) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((recentRequest[0]!.createdAt.getTime() + MODEL_KEY_REQUEST_COOLDOWN_MS - Date.now()) / 1000),
+      );
+      throw new HttpError(
+        429,
+        "The people who can fix this have already been told — give them a little while.",
+        { retryAfterSeconds },
+      );
+    }
+
+    const [contacts, requesterRows, companyRows] = await Promise.all([
+      modelKeyContacts(db, companyId),
+      db
+        .select({ id: authUsers.id, name: authUsers.name })
+        .from(authUsers)
+        .where(eq(authUsers.id, requesterId)),
+      db
+        .select({ name: companiesTable.name })
+        .from(companiesTable)
+        .where(eq(companiesTable.id, companyId))
+        .limit(1),
+    ]);
+    const requesterName = requesterRows[0]?.name ?? null;
+    const companyName = companyRows[0]?.name ?? null;
+
+    // The link lands in an admin's inbox — it must name the address the
+    // operator advertises, never the caller's Host header (link injection,
+    // same class of bug as #539). With no public URL configured the path is
+    // sent on its own; the mailer is normally absent there too.
+    const settingsUrl = absoluteUrl("/company/settings/model-key") ?? "/company/settings/model-key";
+
+    const recipients = contacts.filter(
+      (contact) => contact.email && contact.userId !== requesterId && (contact.canFix || !contacts.some((c) => c.canFix)),
+    );
+    const results: Array<{ name: string | null; status: string }> = [];
+    for (const contact of recipients) {
+      const { subject, html, text } = modelKeyRequestEmailTemplate({
+        settingsUrl,
+        companyName,
+        requesterName,
+      });
+      const outcome = await sendEmail({ to: contact.email!, subject, html, text });
+      results.push({ name: contact.name, status: outcome.status });
+    }
+
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: requesterId,
+      action: "model_key.requested",
+      entityType: "company",
+      entityId: companyId,
+      details: { recipientCount: results.length },
+    });
+
+    res.json({ results });
+  });
+
   return router;
+}
+
+/** Members who can act on a missing model key, resolved once for both routes. */
+async function modelKeyContacts(db: Db, companyId: string) {
+  const memberships = await db
+    .select()
+    .from(companyMemberships)
+    .where(
+      and(
+        eq(companyMemberships.companyId, companyId),
+        eq(companyMemberships.principalType, "user"),
+        ne(companyMemberships.status, "archived"),
+      ),
+    );
+  const adminMemberships = memberships.filter(
+    (member) =>
+      member.status === "active" &&
+      member.membershipRole !== null &&
+      normalizeHumanRole(member.membershipRole) === "admin",
+  );
+  const candidateIds = adminMemberships.map((member) => member.principalId);
+  if (candidateIds.length === 0) return [];
+
+  const [instanceAdminRows, userRows] = await Promise.all([
+    db
+      .select({ userId: instanceUserRoles.userId })
+      .from(instanceUserRoles)
+      .where(
+        and(
+          eq(instanceUserRoles.role, "instance_admin"),
+          inArray(instanceUserRoles.userId, candidateIds),
+        ),
+      ),
+    db
+      .select({ id: authUsers.id, name: authUsers.name, email: authUsers.email })
+      .from(authUsers)
+      .where(inArray(authUsers.id, candidateIds)),
+  ]);
+  const fixerIds = new Set(instanceAdminRows.map((row) => row.userId));
+  const usersById = new Map(userRows.map((row) => [row.id, row]));
+
+  return adminMemberships.map((member) => {
+    const user = usersById.get(member.principalId);
+    return {
+      userId: member.principalId,
+      name: user?.name ?? null,
+      email: user?.email ?? null,
+      membershipRole: member.membershipRole ? normalizeHumanRole(member.membershipRole) : null,
+      canFix: fixerIds.has(member.principalId),
+    };
+  });
 }
 
 // --- helpers ---

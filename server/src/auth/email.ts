@@ -265,6 +265,44 @@ export function inviteEmailTemplate(input: {
   return { subject, html, text };
 }
 
+/**
+ * AgentDash (GH #794): "let them know" email when a member hits the
+ * model-key dead end. Plain HTML like the invite mail; the requester's
+ * display name is sanitized before it can reach a subject line.
+ */
+export function modelKeyRequestEmailTemplate(input: {
+  settingsUrl: string;
+  companyName: string | null;
+  requesterName: string | null;
+}): { subject: string; html: string; text: string } {
+  const company = sanitizeDisplayName(input.companyName) ?? "your workspace";
+  const requester = sanitizeDisplayName(input.requesterName) ?? "A teammate";
+  const subject = `${requester} needs a model key for ${company}`;
+  const text = [
+    `${requester} asked you to add a model provider key for ${company} on`,
+    "AgentDash. The workspace's agents and Chief of Staff cannot run until",
+    "one is set.",
+    "",
+    `Add or rotate the key: ${input.settingsUrl}`,
+    "",
+    "Only an administrator can do this. The key is checked once and never",
+    "shown again.",
+  ].join("\n");
+
+  const html = `
+    <!doctype html>
+    <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; max-width: 560px; margin: 24px auto; line-height: 1.6;">
+      <h1 style="font-size: 22px; margin: 0 0 16px;">A model key is needed</h1>
+      <p>${escapeHtml(requester)} asked you to add a model provider key for <strong>${escapeHtml(company)}</strong> on AgentDash. The workspace's agents and Chief of Staff cannot run until one is set.</p>
+      <p><a href="${escapeHtml(input.settingsUrl)}" style="display: inline-block; padding: 10px 16px; background: #1f1e1d; color: #fff; text-decoration: none; border-radius: 6px;">Open Settings</a></p>
+      <p style="font-size: 13px; color: #666;">Or copy this URL: ${escapeHtml(input.settingsUrl)}</p>
+      <p style="font-size: 13px; color: #666;">Only an administrator can do this. The key is checked once and never shown again.</p>
+    </body></html>
+  `.trim();
+
+  return { subject, html, text };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
