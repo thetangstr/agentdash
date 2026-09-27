@@ -1,0 +1,2 @@
+-- AgentDash (#812): a box claim counts only once a user exists or the claim is completed; stale uncompleted claims can be retaken.
+ALTER TABLE "agentdash_box_claim" ADD COLUMN "completed_at" timestamp with time zone;

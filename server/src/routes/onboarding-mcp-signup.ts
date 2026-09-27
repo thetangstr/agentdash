@@ -45,7 +45,7 @@ import {
   createBoardApiToken,
   hashBearerToken,
 } from "../services/board-auth.js";
-import { claimEmailMatches, configuredClaimEmail, newClaimAttempt, releaseUnusedClaim, takeClaim } from "../lib/claim-code.js";
+import { claimEmailMatches, completeClaim, configuredClaimEmail, newClaimAttempt, releaseUnusedClaim, takeClaim } from "../lib/claim-code.js";
 
 /**
  * Server-side user creation, threaded in from server/src/index.ts where the
@@ -337,6 +337,8 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
         });
         return;
       }
+      // AgentDash (#812): the claim counts once its user exists.
+      if (claimAttempt) await completeClaim(db);
 
       // Mint the board API key — same columns as the CLI approve flow
       // (services/board-auth.ts approveCliAuthChallenge insert).

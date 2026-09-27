@@ -53,22 +53,54 @@ export async function instanceHasUsers(db: Db): Promise<boolean> {
   return Number(rows[0]?.n ?? 0) > 0;
 }
 
-/** Whether the box has been claimed: the persisted claim, or (older boxes) any account. */
-export async function boxClaimed(db: Db): Promise<boolean> {
-  const marker = await db.select({ id: agentdashBoxClaim.id }).from(agentdashBoxClaim).limit(1);
-  return marker.length > 0 || (await instanceHasUsers(db));
+/**
+ * An uncompleted claim row (no user was created under it) this old can be
+ * taken over: the attempt that took it died (aborted request, crash) (#812).
+ */
+export const CLAIM_STALE_MS = 5 * 60_000;
+
+async function claimState(db: Db): Promise<{ users: boolean; completed: boolean }> {
+  const rows = (await db.execute(sql`
+    select exists (select 1 from "user") as users,
+           exists (select 1 from agentdash_box_claim where completed_at is not null) as completed`)) as unknown as Array<{
+    users: boolean;
+    completed: boolean;
+  }>;
+  return { users: Boolean(rows[0]?.users), completed: Boolean(rows[0]?.completed) };
 }
 
 /**
- * Take the claim for this attempt. True for exactly one caller, ever, and only
- * while the box has no users; the loser of a race gets false.
+ * Whether the box has been claimed: an account exists, or a claim completed
+ * with a user (which stays true even if that user is later deleted). A claim
+ * row with no user behind it is NOT a claim (#812).
  */
-export async function takeClaim(db: Db, email: string, attempt: string): Promise<boolean> {
+export async function boxClaimed(db: Db): Promise<boolean> {
+  const s = await claimState(db);
+  return s.users || s.completed;
+}
+
+/** Mark the claim completed once its user exists (the user.create.after hook, and MCP sign-up). */
+export async function completeClaim(db: Db): Promise<void> {
+  await db.execute(sql`
+    update agentdash_box_claim set completed_at = now()
+     where id = 'box' and completed_at is null and exists (select 1 from "user")`);
+}
+
+/**
+ * Take the claim for this attempt. True for exactly one caller at a time, and
+ * only while the box has no users; the loser of a race gets false. A stale,
+ * uncompleted row (its attempt died) is taken over (#812).
+ */
+export async function takeClaim(db: Db, email: string, attempt: string, staleMs: number = CLAIM_STALE_MS): Promise<boolean> {
   const rows = await db.execute(sql`
     insert into agentdash_box_claim (id, email, attempt)
     select 'box', ${normalizeClaimEmail(email) ?? email}, ${attempt}
      where not exists (select 1 from "user")
-    on conflict (id) do nothing
+    on conflict (id) do update
+       set email = excluded.email, attempt = excluded.attempt, claimed_at = now()
+     where agentdash_box_claim.completed_at is null
+       and agentdash_box_claim.claimed_at < now() - ${staleMs} * interval '1 millisecond'
+       and not exists (select 1 from "user")
     returning id`);
   return (rows as unknown as unknown[]).length > 0;
 }
@@ -86,14 +118,15 @@ export async function releaseUnusedClaim(db: Db, attempt: string): Promise<void>
      where id = 'box' and attempt = ${attempt} and not exists (select 1 from "user")`);
 }
 
-// Health polls are anonymous and frequent: a claimed box stays claimed, so
-// `true` is cached for good; `false` for a few seconds.
-let claimedCache: { value: boolean; at: number } | null = null;
+// Health polls are anonymous and frequent. `true` is cached for good only once
+// a user exists (#812: never on a claim row alone); otherwise for a few seconds.
+let claimedCache: { value: boolean; permanent: boolean; at: number } | null = null;
 export async function boxClaimedCached(db: Db, maxAgeMs = 10_000): Promise<boolean> {
-  if (claimedCache?.value === true) return true;
+  if (claimedCache?.permanent) return true;
   if (claimedCache && Date.now() - claimedCache.at < maxAgeMs) return claimedCache.value;
-  const value = await boxClaimed(db);
-  claimedCache = { value, at: Date.now() };
+  const s = await claimState(db);
+  const value = s.users || s.completed;
+  claimedCache = { value, permanent: s.users, at: Date.now() };
   return value;
 }
 export function resetClaimedCacheForTests(): void {

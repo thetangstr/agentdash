@@ -136,12 +136,21 @@ export function inviteCodeSignupGuard(options: InviteCodeSignupGuardOptions): Re
             // if the sign-up fails without a user, give the claim back.
             const attempt = newClaimAttempt();
             req.headers[CLAIM_ATTEMPT_HEADER] = attempt;
+            // #812: release on a failed response AND on an aborted request (close
+            // without a finished response); the release deletes only a row with no user.
+            let released = false;
+            const release = () => {
+              if (released || !options.db) return;
+              released = true;
+              void releaseUnusedClaim(options.db, attempt).catch((err: unknown) =>
+                logger.warn({ error: err instanceof Error ? err.message : String(err) }, "[signup-gate] failed to release an unused claim"),
+              );
+            };
             res.once("finish", () => {
-              if (res.statusCode >= 400 && options.db) {
-                void releaseUnusedClaim(options.db, attempt).catch((err: unknown) =>
-                  logger.warn({ error: err instanceof Error ? err.message : String(err) }, "[signup-gate] failed to release an unused claim"),
-                );
-              }
+              if (res.statusCode >= 400) release();
+            });
+            res.once("close", () => {
+              if (!res.writableFinished || res.statusCode >= 400) release();
             });
             return next();
           }
