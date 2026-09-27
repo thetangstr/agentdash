@@ -38,6 +38,7 @@ function status(overrides: Partial<FirstRunStatus> = {}): FirstRunStatus {
     applies: true,
     nextStep: "model",
     canManage: true,
+    canConfigureModel: true,
     model: { required: true, done: false },
     repo: { done: false, repo: null, projectId: null },
     firstIssue: { done: false, issueId: null, identifier: null, title: null, status: null, assigneeAgentId: null, assigneeName: null },
@@ -158,6 +159,15 @@ describe("FirstRunPage", () => {
     mockStatus.mockResolvedValue(status({ applies: false }));
     await render();
     expect(container.textContent).toContain("COS PAGE");
+  });
+
+  it("tells a company admin who cannot set the model key who can, with a link Home (#794)", async () => {
+    mockStatus.mockResolvedValue(status({ canConfigureModel: false }));
+    await render();
+    const waiting = container.querySelector('[data-testid="first-run-model-waiting"]');
+    expect(waiting?.textContent).toContain("instance administrator");
+    expect(waiting?.querySelector("a")?.getAttribute("href")).toBe("/ACM/dashboard");
+    expect(container.querySelector("form")).toBeNull();
   });
 
   it("tells a member the owner is setting up, with no forms", async () => {

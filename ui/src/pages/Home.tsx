@@ -20,6 +20,7 @@ import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
 import { Overview } from "./Overview";
+import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
 
 export const HOME_LIST_LIMIT = 6;
 export const WAITING_EMPTY_TEXT = "Nothing needs you right now. Decisions and issues assigned to you show up here.";
@@ -300,6 +301,9 @@ export function Home() {
           </Link>
         </Button>
       </div>
+
+      {/* AgentDash (GH #786): finish setup, then connect an assistant */}
+      <FirstRunHomeNudges companyId={selectedCompanyId} />
 
       <WaitingOnYouBlock data={waiting} />
 

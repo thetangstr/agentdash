@@ -9,7 +9,7 @@
 // onboarding and is sent to /cos.
 import { useEffect, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { firstRunApi, type FirstRunStep } from "@/api/firstRun";
 import { onboardingApi } from "@/api/onboarding";
 import { useCompany } from "@/context/CompanyContext";
@@ -93,10 +93,10 @@ export function FirstRunPage() {
     if (status?.applies && status.nextStep === "done") navigate(home, { replace: true });
   }, [status?.applies, status?.nextStep, home, navigate]);
 
-  if (loading) return <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
+  if (loading) return <div role="status" className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
   if (!company) {
     if (companies.length === 0 && !requestedCompanyId) return <Navigate to="/company-create" replace />;
-    return <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
+    return <div role="status" className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
   }
   if (statusQuery.error) {
     return (
@@ -105,7 +105,7 @@ export function FirstRunPage() {
       </div>
     );
   }
-  if (!status) return <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
+  if (!status) return <div role="status" className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
   if (!status.applies) return <Navigate to="/cos" replace />;
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.firstRun(company.id) });
@@ -117,9 +117,9 @@ export function FirstRunPage() {
         <p className="text-muted-foreground">
           The workspace owner is connecting a model and a repository. You can look around in the meantime.
         </p>
-        <a className="mt-4 inline-block underline" href={home}>
+        <Link className="mt-4 inline-block underline" to={home}>
           Go to Home
-        </a>
+        </Link>
       </div>
     );
   }
@@ -127,7 +127,19 @@ export function FirstRunPage() {
   let body: ReactNode = null;
   if (status.nextStep === "model") {
     const provider = adapterQuery.data?.hermesProvider;
-    body = provider ? (
+    body = !status.canConfigureModel ? (
+      // #794: a company admin who is not the instance admin cannot set the key.
+      <div className="mx-auto max-w-lg px-6 py-12 text-sm" data-testid="first-run-model-waiting">
+        <h1 className="mb-2 text-lg font-semibold">Waiting for a model provider</h1>
+        <p className="text-muted-foreground">
+          Your agents need a model provider key before they can work, and only the instance administrator can add
+          it. Ask them to open setup; you can look around in the meantime.
+        </p>
+        <Link className="mt-4 inline-block underline" to={home}>
+          Go to Home
+        </Link>
+      </div>
+    ) : provider ? (
       <HermesProviderStep
         companyId={company.id}
         options={provider.options}
@@ -138,7 +150,7 @@ export function FirstRunPage() {
         }}
       />
     ) : (
-      <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>
+      <div role="status" className="p-8 text-center text-sm text-muted-foreground">Loading…</div>
     );
   } else if (status.nextStep === "repo") {
     body = (

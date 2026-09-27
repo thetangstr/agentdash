@@ -9,6 +9,7 @@ import { CloudAccessGate } from "./components/CloudAccessGate";
 import { FirstRunStart } from "./components/FirstRunStart";
 // Dashboard.tsx is left in place (unreferenced) — the dashboard route now renders Overview.
 import { DashboardHome } from "./pages/Home";
+import { ConnectAssistant } from "./pages/ConnectAssistant";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
@@ -115,6 +116,8 @@ function boardRoutes() {
       <Route index element={<Navigate to="dashboard" replace />} />
       {/* AgentDash: UX-3 (#784) — Home on the default profile, Overview on agentdash_mk. */}
       <Route path="dashboard" element={<DashboardHome />} />
+      {/* AgentDash (GH #786): assistant connection instructions until Settings › Connections (#793) */}
+      <Route path="connect-assistant" element={<ConnectAssistant />} />
       <Route path="dashboard/live" element={<DashboardLive />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
@@ -411,6 +414,7 @@ export function App() {
           <Route path="activity" element={<UnprefixedBoardRedirect />} />
           <Route path="activity/*" element={<UnprefixedBoardRedirect />} />
           <Route path="shipped" element={<UnprefixedBoardRedirect />} />
+          <Route path="connect-assistant" element={<UnprefixedBoardRedirect />} />
           {/* Explicit, not a splat. React Router ranks a dynamic+static pair
               (":companyPrefix/settings") above a splat ("company/*"), so the
               wildcard lost and /company/settings was read as a company called

@@ -13,8 +13,9 @@ import { E2E_GITHUB_TOKEN } from "./github-stub.global-setup";
  *
  * Checks: leaving after the repo step and coming back resumes at the first
  * issue; the first issue is created in the repo's project and assigned to an
- * engineer agent; Home shows it in "Working now" with "Plan with your Chief of
- * Staff", which opens the CoS chat with its header line and suggestions.
+ * engineer agent; Home offers "Connect Muse" (in-app instructions with this
+ * box's assistant URL) and "Plan with your Chief of Staff", which opens the
+ * CoS chat with its header line and suggestions.
  */
 
 const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
@@ -58,13 +59,17 @@ test("a new workspace goes through the first run to Home with its first issue as
   await chip.click();
   await page.getByRole("button", { name: "Start", exact: true }).click();
 
-  // Home: Working now.
+  // Home (#801's Home plus the first-run nudge): Connect Muse, in-app.
   await expect(page).toHaveURL(/\/dashboard$/);
-  const card = page.getByTestId("first-run-home-card");
-  await expect(card).toContainText("Working now");
-  await expect(card).toContainText(suggestion);
-  await expect(card).toContainText("Engineer");
-  await expect(card.getByTestId("connect-muse")).toContainText("Connect Muse so you can do this from your phone");
+  await expect(page.getByTestId("home")).toBeVisible();
+  const muse = page.getByTestId("connect-muse");
+  await expect(muse).toContainText("Connect Muse so you can do this from your phone");
+  await muse.getByRole("link", { name: "Show me how" }).click();
+  await expect(page).toHaveURL(/\/connect-assistant$/);
+  await expect(page.getByTestId("assistant-mcp-url")).toContainText("/api/mcp/assistant");
+  await expect(page.getByTestId("assistant-client-id")).toHaveText("muse");
+  await page.getByRole("link", { name: "Back to Home" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
 
   // Server state: the issue is in the repo's project and assigned to an engineer.
   const companies = (await (await request.get(`${BASE_URL}/api/companies`)).json()) as Array<{ id: string; name: string }>;
@@ -76,7 +81,7 @@ test("a new workspace goes through the first run to Home with its first issue as
   expect(engineer?.id).toBe(status.firstIssue.assigneeAgentId);
 
   // Optional planning: the CoS chat, with its header line and suggestions.
-  await card.getByTestId("plan-with-cos").click();
+  await page.getByTestId("home-plan-with-cos").click();
   await expect(page).toHaveURL(/\/cos$/);
   await expect(page.getByText("Tell me what you want built.")).toBeVisible();
   await expect(page.getByTestId("chat-suggestions")).toBeVisible();

@@ -7,6 +7,8 @@ export interface FirstRunStatus {
   applies: boolean;
   nextStep: FirstRunStep;
   canManage: boolean;
+  /** The model key is an instance setting: only the instance admin can set it. */
+  canConfigureModel: boolean;
   model: { required: boolean; done: boolean };
   repo: { done: boolean; repo: string | null; projectId: string | null };
   firstIssue: {

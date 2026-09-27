@@ -35,7 +35,7 @@ describeEmbeddedPostgres("first-run routes", () => {
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
   let home = "";
   const saved: Record<string, string | undefined> = {};
-  let providerConfigured = false;
+  let providerConfigured = true;
   let hosted = true;
   const wakeups: Array<{ agentId: string; issueId: unknown }> = [];
 
@@ -54,7 +54,7 @@ describeEmbeddedPostgres("first-run routes", () => {
   }, 30_000);
 
   afterEach(async () => {
-    providerConfigured = false;
+    providerConfigured = true;
     hosted = true;
     wakeups.length = 0;
     delete process.env.STRIPE_SECRET_KEY;
@@ -157,6 +157,7 @@ describeEmbeddedPostgres("first-run routes", () => {
 
   it("resumes at the first incomplete step: model, then repo, then first issue, then done", async () => {
     const { company, owner } = await seed({ connect: false });
+    providerConfigured = false;
     const get = () => request(app(owner)).get(`/api/companies/${company.id}/first-run`);
 
     let res = await get();
@@ -226,6 +227,28 @@ describeEmbeddedPostgres("first-run routes", () => {
     expect(again.body).toMatchObject({ created: false, hiredAgentId: null, issue: { id: issue!.id } });
     expect(await db.select().from(agents).where(eq(agents.companyId, company.id))).toHaveLength(2);
     expect(wakeups).toHaveLength(1);
+  });
+
+  it("refuses the first issue on a hosted box until the model key is set", async () => {
+    const { company, owner } = await seed();
+    hosted = true;
+    providerConfigured = false;
+    const res = await request(app(owner)).post(`/api/companies/${company.id}/first-run/first-issue`).send({ title: "Fix a bug" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("model provider key");
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+    expect(await db.select().from(agents).where(eq(agents.companyId, company.id))).toHaveLength(1);
+    expect(wakeups).toHaveLength(0);
+
+    providerConfigured = true;
+    expect((await request(app(owner)).post(`/api/companies/${company.id}/first-run/first-issue`).send({ title: "Fix a bug" })).status).toBe(201);
+  });
+
+  it("reports canConfigureModel for the instance admin only", async () => {
+    const { company, owner } = await seed();
+    expect((await request(app(owner)).get(`/api/companies/${company.id}/first-run`)).body.canConfigureModel).toBe(false);
+    const admin = { ...owner, isInstanceAdmin: true };
+    expect((await request(app(admin)).get(`/api/companies/${company.id}/first-run`)).body.canConfigureModel).toBe(true);
   });
 
   it("reuses an existing engineer instead of hiring", async () => {

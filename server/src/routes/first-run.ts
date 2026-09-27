@@ -36,6 +36,9 @@ export function firstRunRoutes(db: Db, deps: FirstRunRouteDeps = {}) {
     res.json({
       ...status,
       canManage: req.actor.type === "board" && (await isCompanyAdministrator(access, req, companyId)),
+      // The model key is an instance setting (#739): only the instance admin sets it.
+      canConfigureModel:
+        req.actor.type === "board" && (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin === true),
     });
   });
 

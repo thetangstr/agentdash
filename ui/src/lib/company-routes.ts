@@ -23,6 +23,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "guides",
   // AgentDash: UX-2 (#783) — the Shipped page.
   "shipped",
+  // AgentDash (GH #786): in-app assistant connection instructions
+  "connect-assistant",
   // Missing here meant the sidebar's own "My Agent" link was broken.
   //
   // A root that is not in this set is assumed to BE a company prefix, so

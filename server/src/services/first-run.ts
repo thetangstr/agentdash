@@ -205,6 +205,13 @@ export function firstRunService(db: Db, deps: FirstRunDeps = {}) {
       const existing = await firstRunIssue(companyId);
       if (existing) return { issue: existing, created: false, hiredAgentId: null as string | null };
 
+      // On a hosted box the engineer runs on Hermes with the customer's model
+      // key; without it the first run would start and fail (and count against
+      // quota). Refuse until the model step is done (GH #786 review).
+      if (hosted() && !(await providerConfigured())) {
+        throw conflict("Add a model provider key first, so your engineer has a model to run on.");
+      }
+
       if (typeof input.title !== "string" || input.title.trim().length === 0) {
         throw badRequest("Say in one sentence what the team should build first.");
       }
