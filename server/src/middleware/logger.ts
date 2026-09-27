@@ -47,6 +47,8 @@ const SECRET_BODY_FIELDS = ["password", "newPassword", "currentPassword", "token
 export const LOG_REDACT_PATHS = [
   "req.headers.authorization",
   "req.headers.cookie",
+  // AgentDash (#766): the edge gate strips it first; redacted here as well.
+  'req.headers["x-agentdash-edge"]',
   ...SECRET_BODY_FIELDS.map((field) => `reqBody.${field}`),
   // GH #743 re-review: `/api/invites/:token` path params attach as reqParams.
   "reqParams.token",

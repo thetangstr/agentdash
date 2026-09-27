@@ -202,7 +202,12 @@ export class FakeRailwayBoxes extends FakeRailway {
     }
     const h = /^https:\/\/([^/]+)\/api\/health$/.exec(url);
     if (h) {
-      const web = [...this.services.values()].find((s) => s.domains.includes(h[1]!));
+      // The slug host (through the edge router) reaches the same web service.
+      const slug = /^([a-z0-9-]+)\.agentdash\.cloud$/.exec(h[1]!)?.[1];
+      const project = slug ? [...this.projects.values()].find((p) => p.name === `agentdash-box-${slug}`) : undefined;
+      const web = project
+        ? this.byName(project.id, "web")
+        : [...this.services.values()].find((s) => s.domains.includes(h[1]!));
       if (!web || !web.deployments.some((d) => d.status === "SUCCESS")) return json(502, { error: "no deployment" });
       return json(200, this.opts.health ?? { status: "ok", deploymentMode: "authenticated", hostedBox: true });
     }

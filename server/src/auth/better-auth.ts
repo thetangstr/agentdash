@@ -3,6 +3,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { toNodeHandler } from "better-auth/node";
+import { configuredEdgeSecret, EDGE_CLIENT_IP_HEADER } from "../middleware/edge-gate.js";
 import type { Db } from "@paperclipai/db";
 import {
   authAccounts,
@@ -49,10 +50,15 @@ export function deriveAuthCookiePrefix(instanceId = resolvePaperclipInstanceId()
   return `paperclip-${scopedInstanceId}`;
 }
 
-export function buildBetterAuthAdvancedOptions(input: { disableSecureCookies: boolean }) {
+export function buildBetterAuthAdvancedOptions(input: { disableSecureCookies: boolean; edgeSecretSet?: boolean }) {
+  const edgeSecretSet = input.edgeSecretSet ?? configuredEdgeSecret() !== null;
   return {
     cookiePrefix: deriveAuthCookiePrefix(),
     ...(input.disableSecureCookies ? { useSecureCookies: false } : {}),
+    // AgentDash (#807 review): behind the edge router every request's
+    // X-Forwarded-For is the router; Better Auth's limiter keys on the
+    // visitor address the router sends (validated by the edge gate).
+    ...(edgeSecretSet ? { ipAddress: { ipAddressHeaders: [EDGE_CLIENT_IP_HEADER] } } : {}),
   };
 }
 

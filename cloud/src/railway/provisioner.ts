@@ -176,6 +176,8 @@ export function boxVariables(input: {
     AGENTDASH_TRIAL_ANONYMOUS: "false",
     AGENTDASH_RELEASE_TAG: input.releaseTag,
     AGENTDASH_BOX_SLUG: input.slug,
+    // AgentDash (#766, SC-5): the box's boot guard checks the public URL is under it when the edge secret is set.
+    AGENTDASH_EDGE_DOMAIN: input.edgeDomain,
     AGENTDASH_CLAIM_EMAIL: input.claimEmail,
   };
 }
@@ -431,12 +433,16 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
           }
           vars.AGENTDASH_INVITE_CODES = claim;
         }
-        if (!deployed || !names.has("AGENTDASH_EDGE_SECRET")) {
-          let edge = box.edgeSecretEnc ? decryptField(deps.dataKeys, box.edgeSecretEnc, "boxes.edge_secret_enc") : null;
-          if (!edge) {
-            edge = newEdgeSecret();
-            await recordBox(ctx.db, box.id, { edgeSecretEnc: encryptField(deps.dataKeys, edge, "boxes.edge_secret_enc") });
-          }
+        // The control plane always keeps the box's edge secret (the router sends it).
+        // The BOX only gets it once the router is live (#807 review): a box that
+        // enforces it before the router serves its name would refuse every visitor.
+        // Boxes made earlier get it from backfillEdgeSecrets when the router goes live.
+        let edge = box.edgeSecretEnc ? decryptField(deps.dataKeys, box.edgeSecretEnc, "boxes.edge_secret_enc") : null;
+        if (!edge) {
+          edge = newEdgeSecret();
+          await recordBox(ctx.db, box.id, { edgeSecretEnc: encryptField(deps.dataKeys, edge, "boxes.edge_secret_enc") });
+        }
+        if (deps.edgeLive && (!deployed || !names.has("AGENTDASH_EDGE_SECRET"))) {
           vars.AGENTDASH_EDGE_SECRET = edge;
         }
         let generatedMasterKey: string | null = null;
