@@ -156,6 +156,10 @@ function seededClient(overrides: Handler = () => null): PaperclipApiClient {
           { issueId: "issue-3", identifier: "ACME-313", title: "Pick the launch date", status: "todo", updatedAt: "2026-09-23T09:00:00Z" },
         ],
         tasksAssignedToYouTotal: 1,
+        otherTasksAssignedToYou: [
+          { issueId: "issue-4", identifier: "ACME-314", title: "Weekly metrics snapshot", status: "todo", updatedAt: "2026-09-23T08:00:00Z", originKind: "routine_execution" },
+        ],
+        otherTasksAssignedToYouTotal: 1,
       };
     }
     return null;
@@ -552,6 +556,12 @@ describe("tool outputs", () => {
     expect(tasks[0].identifier).toBe("ACME-313");
     expect(tasks[0].link).toBe("https://dash.example.test/ACME/issues/ACME-313");
     expect(result.content[0].text).toMatch(/1 task assigned to you/);
+    // Machine-filed assignments surface under their own group, matching the
+    // Decisions page's "Other activity" — never counted as waiting on you.
+    const otherTasks = data.otherTasksAssignedToYou as Array<Record<string, unknown>>;
+    expect(data.otherTasksAssignedToYouTotal).toBe(1);
+    expect(otherTasks[0].identifier).toBe("ACME-314");
+    expect(result.content[0].text).toMatch(/1 machine-filed item.*other activity/);
   });
 
   it("get_work_item names the person a task is assigned to", async () => {

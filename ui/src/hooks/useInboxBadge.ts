@@ -50,7 +50,7 @@ export function useDismissedInboxAlerts() {
   return { dismissed, dismiss };
 }
 
-export function useInboxDismissals(companyId: string | null | undefined) {
+export function useInboxDismissals(companyId: string | null | undefined, enabled = true) {
   const queryClient = useQueryClient();
   const queryKey = companyId
     ? queryKeys.inboxDismissals(companyId)
@@ -59,7 +59,7 @@ export function useInboxDismissals(companyId: string | null | undefined) {
   const { data: dismissals = [] } = useQuery({
     queryKey,
     queryFn: () => inboxDismissalsApi.list(companyId!),
-    enabled: !!companyId,
+    enabled: !!companyId && enabled,
   });
 
   const dismissMutation = useMutation({
@@ -140,9 +140,9 @@ export function useReadInboxItems() {
   return { readItems, markRead, markUnread };
 }
 
-export function useInboxBadge(companyId: string | null | undefined) {
+export function useInboxBadge(companyId: string | null | undefined, enabled = true) {
   const { dismissed: dismissedAlerts } = useDismissedInboxAlerts();
-  const { dismissedAtByKey } = useInboxDismissals(companyId);
+  const { dismissedAtByKey } = useInboxDismissals(companyId, enabled);
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -151,7 +151,7 @@ export function useInboxBadge(companyId: string | null | undefined) {
   const { data: approvals = [] } = useQuery({
     queryKey: queryKeys.approvals.list(companyId!),
     queryFn: () => approvalsApi.list(companyId!),
-    enabled: !!companyId,
+    enabled: !!companyId && enabled,
   });
 
   const { data: joinRequests = [] } = useQuery({
@@ -166,14 +166,14 @@ export function useInboxBadge(companyId: string | null | undefined) {
         throw err;
       }
     },
-    enabled: !!companyId,
+    enabled: !!companyId && enabled,
     retry: false,
   });
 
   const { data: dashboard } = useQuery({
     queryKey: queryKeys.dashboard(companyId!),
     queryFn: () => dashboardApi.summary(companyId!),
-    enabled: !!companyId,
+    enabled: !!companyId && enabled,
   });
 
   const { data: mineIssuesRaw = [] } = useQuery({
@@ -185,7 +185,7 @@ export function useInboxBadge(companyId: string | null | undefined) {
         status: INBOX_ISSUE_STATUSES,
         limit: INBOX_BADGE_ISSUE_LIMIT,
       }),
-    enabled: !!companyId,
+    enabled: !!companyId && enabled,
   });
 
   const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);
@@ -194,7 +194,7 @@ export function useInboxBadge(companyId: string | null | undefined) {
   const { data: heartbeatRuns = [] } = useQuery({
     queryKey: [...queryKeys.heartbeats(companyId!), "limit", INBOX_BADGE_HEARTBEAT_RUN_LIMIT],
     queryFn: () => heartbeatsApi.list(companyId!, undefined, INBOX_BADGE_HEARTBEAT_RUN_LIMIT),
-    enabled: !!companyId,
+    enabled: !!companyId && enabled,
   });
 
   // AgentDash-MK: the badge counted the unscoped company approval list while

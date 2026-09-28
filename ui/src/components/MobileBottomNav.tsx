@@ -6,12 +6,14 @@ import {
   SquarePen,
   Users,
   Inbox,
+  ShieldQuestion,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { useDecisionsBadge } from "../hooks/useDecisionsBadge";
 
 interface MobileBottomNavProps {
   visible: boolean;
@@ -36,9 +38,14 @@ type MobileNavItem = MobileNavLinkItem | MobileNavActionItem;
 
 export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   const location = useLocation();
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
   const { openNewIssue } = useDialogActions();
-  const inboxBadge = useInboxBadge(selectedCompanyId);
+  // AgentDash: UX-7 (GH #788) — default profile's fifth slot is Decisions,
+  // badged by the same main-list length as the sidebar; agentdash_mk keeps
+  // its Inbox.
+  const isMk = selectedCompany?.productProfile === "agentdash_mk";
+  const inboxBadge = useInboxBadge(selectedCompanyId, isMk);
+  const decisionsBadge = useDecisionsBadge(selectedCompanyId, !isMk);
 
   const items = useMemo<MobileNavItem[]>(
     () => [
@@ -46,15 +53,23 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
       { type: "link", to: "/issues", label: "Issues", icon: CircleDot },
       { type: "action", label: "Create", icon: SquarePen, onClick: () => openNewIssue() },
       { type: "link", to: "/agents/all", label: "Agents", icon: Users },
-      {
-        type: "link",
-        to: "/inbox",
-        label: "Inbox",
-        icon: Inbox,
-        badge: inboxBadge.inbox,
-      },
+      isMk
+        ? {
+            type: "link",
+            to: "/inbox",
+            label: "Inbox",
+            icon: Inbox,
+            badge: inboxBadge.inbox,
+          }
+        : {
+            type: "link",
+            to: "/decisions",
+            label: "Decisions",
+            icon: ShieldQuestion,
+            badge: decisionsBadge,
+          },
     ],
-    [openNewIssue, inboxBadge.inbox],
+    [openNewIssue, inboxBadge.inbox, decisionsBadge, isMk],
   );
 
   return (

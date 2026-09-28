@@ -159,6 +159,33 @@ function hireApprovalCreatesAgent(approval: {
   return typeof payload.agentId !== "string";
 }
 
+/**
+ * The one source of truth for "what does yes/no do" wording — the assistant's
+ * confirm read-back and the Decisions page row both render these strings, so
+ * a consequence can never be described two ways. Pure and module-level on
+ * purpose: waiting-on-you-rules.ts imports it without instantiating the
+ * service.
+ */
+export function effectsFor(
+  approval: { type: string; status?: string | null; payload: unknown },
+  decision: AssistantDecision,
+): string[] {
+  if (decision === "request_changes") {
+    return ["The request goes back to whoever asked, with your note — nothing is approved."];
+  }
+  if (decision === "reject") {
+    return approval.type === "hire_agent" && !hireApprovalCreatesAgent(approval)
+      ? ["The hire is refused and the proposed agent is terminated."]
+      : ["The request is rejected and does not proceed."];
+  }
+  if (approval.type === "hire_agent") {
+    return hireApprovalCreatesAgent(approval)
+      ? ["The hire is approved and the new agent is created on the requested adapter."]
+      : ["The hire is approved and the agent becomes active."];
+  }
+  return ["The request is approved and whatever it was gating proceeds."];
+}
+
 /** "qa engineer" → "qa" when it matches a known role, else "general". */
 function normalizeRequestedRole(role: string): (typeof AGENT_ROLES)[number] {
   const normalized = role.trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -270,23 +297,6 @@ export function assistantGatedActionsService(
     const verb =
       decision === "approve" ? "Approve" : decision === "reject" ? "Reject" : "Send back for changes on";
     return `${verb} ${asker}'s request to ${kindPhrase(approval)}${detail ?? ""}${noteClause}.`;
-  }
-
-  function effectsFor(approval: ApprovalRow, decision: AssistantDecision): string[] {
-    if (decision === "request_changes") {
-      return ["The request goes back to whoever asked, with your note — nothing is approved."];
-    }
-    if (decision === "reject") {
-      return approval.type === "hire_agent" && !hireApprovalCreatesAgent(approval)
-        ? ["The hire is refused and the proposed agent is terminated."]
-        : ["The request is rejected and does not proceed."];
-    }
-    if (approval.type === "hire_agent") {
-      return hireApprovalCreatesAgent(approval)
-        ? ["The hire is approved and the new agent is created on the requested adapter."]
-        : ["The hire is approved and the agent becomes active."];
-    }
-    return ["The request is approved and whatever it was gating proceeds."];
   }
 
   /**

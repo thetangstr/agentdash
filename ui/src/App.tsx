@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { healthApi } from "./api/health";
 import { queryKeys } from "./lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
+import { PageSkeleton } from "./components/PageSkeleton";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
 import { FirstRunStart } from "./components/FirstRunStart";
@@ -30,6 +32,7 @@ import { Goals } from "./pages/Goals";
 import { GoalDetail } from "./pages/GoalDetail";
 import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
+import { Decisions } from "./pages/Decisions";
 import { Costs } from "./pages/Costs";
 import { Activity } from "./pages/Activity";
 import { Shipped } from "./pages/Shipped";
@@ -98,7 +101,7 @@ import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting"
 import { About as MarketingAbout } from "./marketing/pages/About";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
-import { loadLastInboxTab } from "./lib/inbox";
+import { InboxRootRedirect, ProfileRouteSwitch } from "./components/ProfileRouteSwitch";
 import MyAgent from "./pages/MyAgent";
 import { OAuthConsent } from "./pages/OAuthConsent";
 import { NewVersionNotice } from "./components/NewVersionNotice";
@@ -182,9 +185,14 @@ function boardRoutes() {
       <Route path="execution-workspaces/:workspaceId/routines" element={<ExecutionWorkspaceDetail />} />
       <Route path="goals" element={<Goals />} />
       <Route path="goals/:goalId" element={<GoalDetail />} />
-      <Route path="approvals" element={<Navigate to="/approvals/pending" replace />} />
-      <Route path="approvals/pending" element={<Approvals />} />
-      <Route path="approvals/all" element={<Approvals />} />
+      {/* AgentDash: UX-7 (GH #788) — the default profile merges Inbox and
+          Approvals into Decisions; agentdash_mk keeps the original pages.
+          The approval DETAIL route stays on both profiles — a Decisions row
+          opens it. */}
+      <Route path="decisions" element={<ProfileRouteSwitch mk={<Navigate to="/inbox/mine" replace />} fallback={<Decisions />} skeleton={<PageSkeleton variant="approvals" />} />} />
+      <Route path="approvals" element={<ProfileRouteSwitch mk={<Navigate to="/approvals/pending" replace />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="approvals" />} />} />
+      <Route path="approvals/pending" element={<ProfileRouteSwitch mk={<Approvals />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="approvals" />} />} />
+      <Route path="approvals/all" element={<ProfileRouteSwitch mk={<Approvals />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="approvals" />} />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="costs" element={<Costs />} />
       <Route path="evaluation" element={<EvaluationOverviewPage />} />
@@ -203,11 +211,11 @@ function boardRoutes() {
       <Route path="my-agent/connect-machine" element={<Navigate to="../my-agent" replace />} />
       <Route path="inbox/override" element={<OverrideInbox />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
-      <Route path="inbox/company" element={<CompanyInbox />} />
-      <Route path="inbox/mine" element={<Inbox />} />
-      <Route path="inbox/recent" element={<Inbox />} />
-      <Route path="inbox/unread" element={<Inbox />} />
-      <Route path="inbox/all" element={<Inbox />} />
+      <Route path="inbox/company" element={<ProfileRouteSwitch mk={<CompanyInbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
+      <Route path="inbox/mine" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
+      <Route path="inbox/recent" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
+      <Route path="inbox/unread" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
+      <Route path="inbox/all" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
       <Route path="inbox/requests" element={<JoinRequestQueue />} />
       <Route path="inbox/new" element={<Navigate to="/inbox/mine" replace />} />
       <Route path="u/:userSlug" element={<UserProfile />} />
@@ -217,10 +225,6 @@ function boardRoutes() {
       <Route path="*" element={<NotFoundPage scope="board" />} />
     </>
   );
-}
-
-function InboxRootRedirect() {
-  return <Navigate to={`/inbox/${loadLastInboxTab()}`} replace />;
 }
 
 function LegacySettingsRedirect() {

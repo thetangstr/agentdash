@@ -2,6 +2,7 @@
 // you", as a leaf module so both the digest and waiting-on-you.ts import it
 // without a cycle. See waiting-on-you.ts for the definition in words.
 import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
+import { effectsFor } from "./assistant-gated-actions.js";
 
 /** Statuses where a human decision is still possible. */
 export const WAITING_APPROVAL_STATUSES = ["pending", "revision_requested"] as const;
@@ -13,7 +14,8 @@ export const APPROVAL_KIND_PHRASES: Record<string, string> = {
   send_email: "send an email",
   connector_send: "send a message through a connector",
   environment_provision: "provision an environment",
-  budget_override: "change a budget",
+  // The type budgets.ts actually files; "budget_override" was a dead key.
+  budget_override_required: "approve spending past a budget limit",
 };
 
 export type WaitingApprovalLike = {
@@ -24,6 +26,24 @@ export type WaitingApprovalLike = {
   requestedByAgentId: string | null;
   createdAt: Date;
 };
+
+/**
+ * AgentDash: UX-7 (#788) — what a yes and a no do, in person words, for the
+ * Decisions page row. The wording is `effectsFor` from the gated-actions
+ * service (GH #679 / #780): the assistant's confirm read-back and this row
+ * must describe the same consequence, so there is exactly one function. A
+ * wrong consequence invented here would be decided on as fact.
+ */
+export function decisionConsequences(approval: {
+  type: string;
+  status?: string | null;
+  payload: unknown;
+}): { approve: string; reject: string } {
+  return {
+    approve: effectsFor(approval, "approve")[0]!,
+    reject: effectsFor(approval, "reject")[0]!,
+  };
+}
 
 /**
  * Scope open approvals to the person's audience and rank them. Pure, so the

@@ -205,7 +205,7 @@ describeEmbeddedPostgres("assistant digest service", () => {
     await seedAgent(companyId, "Priya", "user-1");
     await db.insert(approvals).values({
       companyId,
-      type: "budget_override",
+      type: "budget_override_required",
       status: "pending",
       payload: {},
       requestedByAgentId: null,
@@ -326,13 +326,14 @@ describeEmbeddedPostgres("assistant digest service", () => {
     await seedIssue(companyId, null, { title: "Mine hidden", assigneeUserId: "user-1", status: "todo", completedAt: null, hiddenAt: new Date() });
 
     const mine = await assistantDigestService(db).tasksAssignedTo(companyId, "user-1");
-    expect(mine.total).toBe(1);
-    expect(mine.items[0]?.title).toBe("Mine open");
+    expect(mine.manual.total).toBe(1);
+    expect(mine.manual.items[0]?.title).toBe("Mine open");
+    expect(mine.other.total).toBe(0);
 
     // A user-less actor answers for the whole company — every human task.
     const all = await assistantDigestService(db).tasksAssignedTo(companyId, null);
-    expect(all.total).toBe(2);
-    expect(all.items.map((item) => item.title).sort()).toEqual(["Mine open", "Theirs open"]);
+    expect(all.manual.total).toBe(2);
+    expect(all.manual.items.map((item) => item.title).sort()).toEqual(["Mine open", "Theirs open"]);
   });
 
   it("counts beyond the shown window and marks the digest truncated", async () => {

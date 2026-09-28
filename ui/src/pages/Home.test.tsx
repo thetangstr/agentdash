@@ -19,7 +19,13 @@ vi.mock("../api/dashboard", () => ({ dashboardApi: mockDashboardApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/auth", () => ({ authApi: mockAuthApi }));
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompanyId: "company-1", selectedCompany: mockCompany.current }),
+  useCompany: () => ({
+    selectedCompanyId: "company-1",
+    selectedCompany: mockCompany.current,
+    // DashboardHome waits on the profile resolving before it picks a page.
+    companies: mockCompany.current ? [mockCompany.current] : [],
+    loading: false,
+  }),
 }));
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }) }));
 vi.mock("./Overview", () => ({ Overview: () => <div data-testid="mk-overview">MK dashboard</div> }));
@@ -65,6 +71,8 @@ const waiting: WaitingOnYou = {
     { issueId: "i-7", identifier: "ACM-7", title: "Pick a date for the demo", status: "todo", updatedAt: new Date().toISOString() },
   ],
   tasksAssignedToYouTotal: 2,
+  otherTasksAssignedToYou: [],
+  otherTasksAssignedToYouTotal: 0,
 };
 
 const working: WorkingNow = {
@@ -225,7 +233,7 @@ describe("Home", () => {
   });
 
   it("shows each block's empty state with no data", async () => {
-    mockDashboardApi.waitingOnYou.mockResolvedValue({ decisions: [], total: 0, shown: 0, tasksAssignedToYou: [], tasksAssignedToYouTotal: 0 });
+    mockDashboardApi.waitingOnYou.mockResolvedValue({ decisions: [], total: 0, shown: 0, tasksAssignedToYou: [], tasksAssignedToYouTotal: 0, otherTasksAssignedToYou: [], otherTasksAssignedToYouTotal: 0 });
     mockDashboardApi.workingNow.mockResolvedValue({ items: [], total: 0 });
     mockIssuesApi.listShipped.mockResolvedValue(shippedFeed(0));
     await render();

@@ -111,6 +111,12 @@ export interface WaitingOnYouDecision {
   waitingSince: string | null;
   canDecide: boolean;
   risk: { level: string; reason?: string } | null;
+  /**
+   * AgentDash: UX-7 (#788) — what a yes and a no do, in person words, so a
+   * Decisions row can state consequences without opening the detail. Same
+   * phrasing family the assistant's confirm read-back uses.
+   */
+  effects?: { approve: string; reject: string };
 }
 
 export interface WaitingOnYouTask {
@@ -119,6 +125,12 @@ export interface WaitingOnYouTask {
   title: string;
   status: string;
   updatedAt: string;
+  /**
+   * AgentDash: UX-7 (#788) — the issue's origin (`routine_execution`,
+   * `stale_active_run_evaluation`, …). `manual` is the main Decisions list;
+   * anything else is machine-generated and groups under "Other activity".
+   */
+  originKind?: string;
 }
 
 export interface WaitingOnYou {
@@ -126,7 +138,23 @@ export interface WaitingOnYou {
   /** Every waiting approval, not only those in `decisions`. */
   total: number;
   shown: number;
+  /**
+   * Open issues a human filed and assigned to the person — the "Assigned to
+   * you" main list on the Decisions page. The server applies the
+   * manual-vs-machine split before its item cap, so
+   * `total + tasksAssignedToYouTotal` is the canonical "waiting on you"
+   * count the Home block, the sidebar badge and list_pending_decisions all
+   * share.
+   */
   tasksAssignedToYou: WaitingOnYouTask[];
-  /** Every open issue assigned to the person, not only those listed. */
+  /** Every manual-origin open issue assigned to the person, not only those listed. */
   tasksAssignedToYouTotal: number;
+  /**
+   * Machine-filed open issues assigned to the person (routines,
+   * evaluations, escalations — any non-`manual` originKind). These are
+   * "Other activity" on the Decisions page and never count in the badge.
+   */
+  otherTasksAssignedToYou: WaitingOnYouTask[];
+  /** Every machine-origin open issue assigned to the person, not only those listed. */
+  otherTasksAssignedToYouTotal: number;
 }

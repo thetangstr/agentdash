@@ -12,6 +12,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "routines",
   "goals",
   "approvals",
+  // AgentDash: UX-7 (GH #788) — the Decisions page (default profile).
+  "decisions",
   "costs",
   "evaluation",
   "billing",

@@ -12,6 +12,7 @@ import {
   Bot,
   BookOpen,
   ShieldAlert,
+  ShieldQuestion,
   Boxes,
   Repeat,
   GitBranch,
@@ -27,6 +28,7 @@ import { SidebarAgents } from "./SidebarAgents";
 import { useDialogActions } from "../context/DialogContext";
 import { accessApi } from "@/api/access";
 import { useCompany } from "../context/CompanyContext";
+import { useDecisionsBadge } from "../hooks/useDecisionsBadge";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
@@ -38,7 +40,12 @@ import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
   const { selectedCompanyId, selectedCompany } = useCompany();
-  const inboxBadge = useInboxBadge(selectedCompanyId);
+  // AgentDash-MK: presentation only. The server 404s these routes off-profile,
+  // so hiding the link is convenience, never the access control.
+  const showMyAgentLink = selectedCompany?.productProfile === "agentdash_mk";
+  // UX-7 (GH #788): the legacy inbox badge only matters where the Inbox still
+  // exists — gating the hook skips its six queries on the default profile.
+  const inboxBadge = useInboxBadge(selectedCompanyId, showMyAgentLink);
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
     queryFn: () => instanceSettingsApi.getExperimental(),
@@ -51,9 +58,6 @@ export function Sidebar() {
   });
   const liveRunCount = liveRuns?.length ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
-  // AgentDash-MK: presentation only. The server 404s these routes off-profile,
-  // so hiding the link is convenience, never the access control.
-  const showMyAgentLink = selectedCompany?.productProfile === "agentdash_mk";
   const { data: companyAccess } = useQuery({
     queryKey: queryKeys.access.companyMembers(selectedCompanyId ?? ""),
     queryFn: () => accessApi.listMembers(selectedCompanyId!),
@@ -62,6 +66,12 @@ export function Sidebar() {
   // Override is administrator-only and exceptional; the server enforces both,
   // so this only decides whether the entry point is offered.
   const showOverrideLink = showMyAgentLink && companyAccess?.access.canManageAgents === true;
+
+  // AgentDash: UX-7 (GH #788) — the default profile's "Inbox" is the Decisions
+  // page, and its badge IS the page's main-list length: pending approvals plus
+  // issues assigned to you with a manual origin. Same query key as Home, so
+  // the sidebar and both pages read one answer.
+  const decisionsBadge = useDecisionsBadge(selectedCompanyId, !showMyAgentLink);
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -111,14 +121,25 @@ export function Sidebar() {
           {showOverrideLink ? (
             <SidebarNavItem to="/inbox/override" label="Override" icon={ShieldAlert} />
           ) : null}
-          <SidebarNavItem
-            to="/inbox"
-            label="Inbox"
-            icon={Inbox}
-            badge={inboxBadge.inbox}
-            badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
-            alert={inboxBadge.failedRuns > 0}
-          />
+          {/* AgentDash: UX-7 (GH #788) — Decisions on the default profile;
+              the tabbed Inbox stays exactly as it was on agentdash_mk. */}
+          {showMyAgentLink ? (
+            <SidebarNavItem
+              to="/inbox"
+              label="Inbox"
+              icon={Inbox}
+              badge={inboxBadge.inbox}
+              badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+              alert={inboxBadge.failedRuns > 0}
+            />
+          ) : (
+            <SidebarNavItem
+              to="/decisions"
+              label="Decisions"
+              icon={ShieldQuestion}
+              badge={decisionsBadge}
+            />
+          )}
           <PluginSlotOutlet
             slotTypes={["sidebar"]}
             context={pluginContext}

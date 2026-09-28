@@ -31,7 +31,14 @@ vi.mock("@/lib/router", () => ({
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    selectedCompany: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" },
+    // AgentDash: UX-7 (GH #788) — the Inbox slot only survives on the
+    // agentdash_mk profile; default shows Decisions.
+    selectedCompany: {
+      id: "company-1",
+      issuePrefix: "PAP",
+      name: "Paperclip",
+      productProfile: "agentdash_mk",
+    },
   }),
 }));
 
@@ -43,6 +50,10 @@ vi.mock("../context/DialogContext", () => ({
 
 vi.mock("../hooks/useInboxBadge", () => ({
   useInboxBadge: () => ({ inbox: 7, failedRuns: 0 }),
+}));
+
+vi.mock("../hooks/useDecisionsBadge", () => ({
+  useDecisionsBadge: () => 0,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

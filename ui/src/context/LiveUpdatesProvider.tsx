@@ -520,6 +520,7 @@ function buildActivityToast(
 
 function buildJoinRequestToast(
   payload: Record<string, unknown>,
+  isMk: boolean,
 ): ToastInput | null {
   const entityType = readString(payload.entityType);
   const action = readString(payload.action);
@@ -536,7 +537,10 @@ function buildJoinRequestToast(
     title: `${label} wants to join`,
     body: "A new join request is waiting for approval.",
     tone: "info",
-    action: { label: "View inbox", href: "/inbox/mine" },
+    // UX-7 (#788): agentdash_mk keeps its original inbox link. On the
+    // default profile /inbox/mine redirects to Decisions, which does not
+    // list join requests — the join queue does, on both profiles.
+    action: { label: "View inbox", href: isMk ? "/inbox/mine" : "/inbox/requests" },
     dedupeKey: `join-request:${entityId}`,
   };
 }
@@ -784,7 +788,7 @@ function handleLiveEvent(
   event: LiveEvent,
   pushToast: (toast: ToastInput) => string | null,
   gate: ToastGate,
-  currentActor: { userId: string | null; agentId: string | null },
+  currentActor: { userId: string | null; agentId: string | null; isMk?: boolean },
 ) {
   if (event.companyId !== expectedCompanyId) return;
 
@@ -847,7 +851,7 @@ function handleLiveEvent(
     const action = readString(payload.action);
     const toast =
       buildActivityToast(queryClient, expectedCompanyId, payload, currentActor) ??
-      buildJoinRequestToast(payload);
+      buildJoinRequestToast(payload, currentActor.isMk === true);
     if (
       toast &&
       !shouldSuppressActivityToastForVisibleIssue(queryClient, pathname, payload)
@@ -927,9 +931,10 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
   const socketAuthKey = session?.session?.id ?? currentUserId ?? "signed_out";
   const liveCompanyId = resolveLiveCompanyId(selectedCompanyId, selectedCompany?.id ?? null);
   const canConnectSocket = sessionStatus === "success" && session !== null && liveCompanyId !== null;
-  const currentActorRef = useRef<{ userId: string | null; agentId: string | null }>({
+  const currentActorRef = useRef<{ userId: string | null; agentId: string | null; isMk: boolean }>({
     userId: currentUserId,
     agentId: null,
+    isMk: selectedCompany?.productProfile === "agentdash_mk",
   });
 
   useEffect(() => {
@@ -940,8 +945,11 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
     currentActorRef.current = {
       userId: currentUserId,
       agentId: null,
+      // UX-7 (#788): toast links resolve against the profile at event time —
+      // the socket outlives any single render.
+      isMk: selectedCompany?.productProfile === "agentdash_mk",
     };
-  }, [currentUserId]);
+  }, [currentUserId, selectedCompany?.productProfile]);
 
   useEffect(() => {
     if (!canConnectSocket || !liveCompanyId) return;
@@ -996,6 +1004,7 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
           handleLiveEvent(queryClient, liveCompanyId, pathnameRef.current, parsed, pushToast, gateRef.current, {
             userId: currentActorRef.current.userId,
             agentId: currentActorRef.current.agentId,
+            isMk: currentActorRef.current.isMk,
           });
         } catch {
           // Ignore non-JSON payloads.

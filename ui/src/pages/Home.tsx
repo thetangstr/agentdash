@@ -19,6 +19,9 @@ import { queryKeys } from "../lib/queryKeys";
 import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
+import { PageSkeleton } from "../components/PageSkeleton";
+import { useResolvedProductProfile } from "../components/ProfileRouteSwitch";
+import { decisionsListLength } from "../hooks/useDecisionsBadge";
 import { Overview } from "./Overview";
 import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
 
@@ -54,16 +57,19 @@ export function formatElapsed(fromIso: string, now: number = Date.now()): string
   return `${Math.floor(hours / 24)}d`;
 }
 
-/** Waiting on you = approvals waiting plus open issues assigned to you. */
+/** Waiting on you = waiting approvals plus manual issues assigned to you —
+ *  the one definition in useDecisionsBadge that the badge also reads. */
 export function waitingCount(data: WaitingOnYou | undefined): number {
-  if (!data) return 0;
-  return (data.total ?? 0) + (data.tasksAssignedToYouTotal ?? 0);
+  return decisionsListLength(data);
 }
 
 /** Default profile gets Home; agentdash_mk keeps the Overview dashboard. */
 export function DashboardHome() {
-  const { selectedCompany } = useCompany();
-  if (selectedCompany?.productProfile === "agentdash_mk") return <Overview />;
+  // ProfileRouteSwitch's hook: while the profile resolves there is no
+  // answer — rendering Home here would flash the wrong surface to MK.
+  const { resolving, isMk } = useResolvedProductProfile();
+  if (resolving) return <PageSkeleton variant="dashboard" />;
+  if (isMk) return <Overview />;
   return <Home />;
 }
 
@@ -167,7 +173,8 @@ function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
           </li>
         ))}
       </ul>
-      <MoreLine count={moreDecisions} to="/approvals/pending" noun={moreDecisions === 1 ? "decision" : "decisions"} />
+      {/* UX-7 (#788): the rest of this list lives on the Decisions page now. */}
+      <MoreLine count={moreDecisions} to="/decisions" noun={moreDecisions === 1 ? "decision" : "decisions"} />
       <ul className={shownDecisions.length > 0 ? "divide-y divide-border border-t border-border" : "divide-y divide-border"}>
         {shownTasks.map((task) => (
           <li key={task.issueId} data-testid="home-waiting-row" className="flex items-start gap-3 px-4 py-2.5">
