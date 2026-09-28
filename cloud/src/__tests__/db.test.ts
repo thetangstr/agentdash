@@ -31,12 +31,15 @@ describe("migrations", () => {
       "accounts",
       "box_events",
       "boxes",
+      "cloud_sessions",
       "email_tokens",
       "invite_codes",
       "jobs",
       "operator_audit",
       "railway_workspaces",
+      "rate_events",
       "settings",
+      "signup_requests",
       "waitlist",
     ]);
   });

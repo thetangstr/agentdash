@@ -99,6 +99,11 @@ import { Landing as MarketingLanding } from "./marketing/pages/Landing";
 import { Demo as MarketingDemo } from "./marketing/pages/Demo";
 import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
 import { About as MarketingAbout } from "./marketing/pages/About";
+// AgentDash (SC-7, GH #768): the self-serve front door on www.
+import { Start as MarketingStart } from "./marketing/pages/Start";
+import { StartVerify as MarketingStartVerify } from "./marketing/pages/StartVerify";
+import { StartProgress as MarketingStartProgress } from "./marketing/pages/StartProgress";
+import { Find as MarketingFind } from "./marketing/pages/Find";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { InboxRootRedirect, ProfileRouteSwitch } from "./components/ProfileRouteSwitch";
@@ -350,6 +355,11 @@ export function App() {
         <Route path="demo" element={<MarketingDemo />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
+        {/* AgentDash (SC-7, GH #768): signup, magic-link landing, progress and returning users. */}
+        <Route path="start" element={<MarketingStart />} />
+        <Route path="start/verify" element={<MarketingStartVerify />} />
+        <Route path="start/progress" element={<MarketingStartProgress />} />
+        <Route path="find" element={<MarketingFind />} />
         <Route path="assess" element={<AssessPage />} />
         <Route path="assess/history" element={<AssessHistoryPage />} />
 
@@ -474,7 +484,7 @@ export function App() {
 // AgentDash: the public marketing surface does not depend on the API, so a
 // server outage must not blur the homepage with the dashboard's
 // "Connection Lost" overlay. Marketing routes render MarketingShell.
-const MARKETING_PATHS = new Set(["/", "/demo", "/about", "/consulting", "/mcp"]);
+const MARKETING_PATHS = new Set(["/", "/demo", "/about", "/consulting", "/mcp", "/start", "/start/verify", "/start/progress", "/find"]);
 function ProductOnlyOverlay() {
   const location = useLocation();
   if (MARKETING_PATHS.has(location.pathname.replace(/\/+$/, "") || "/")) return null;

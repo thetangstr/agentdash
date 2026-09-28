@@ -19,7 +19,9 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
   jobs list [state]          list jobs (all by default; queued, running, succeeded, failed, dead)
   waitlist list [state]      list the waitlist (waiting by default; approved, rejected, all)
-  waitlist approve <id>      approve a waiting entry
+  waitlist approve <id>      approve a waiting entry (the person is emailed)
+  waitlist approve-next <n>  approve the oldest n waiting entries
+  waitlist release           give approved entries their job if provisioning is open now (also runs every minute)
 
 env: CLOUD_CONTROL_URL (default http://localhost:3200; https required for any non-local host),
      CLOUD_ADMIN_TOKEN (required)`;
@@ -104,6 +106,10 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
   if (group === "waitlist" && action === "list") {
     return print(await call("GET", `/waitlist?state=${encodeURIComponent(rest[0] ?? "waiting")}`));
   }
+  if (group === "waitlist" && action === "approve-next" && rest.length === 1) {
+    return print(await call("POST", "/waitlist/approve-next", { count: Number(rest[0]) }));
+  }
+  if (group === "waitlist" && action === "release" && rest.length === 0) return print(await call("POST", "/waitlist/release"));
   if (group === "waitlist" && action === "approve" && rest.length === 1) {
     return print(await call("POST", `/waitlist/${encodeURIComponent(rest[0]!)}/approve`));
   }

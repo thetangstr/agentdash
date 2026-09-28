@@ -18,6 +18,9 @@
 //      claimed:false, the claim link signs the founder up and lands on /cos,
 //      health reports claimed:true, the sweep marks the box active and the
 //      close_signup job closes its sign-up.
+//   3b. Set jobs/claim.ts CLAIM_EMAIL_IN_FRAGMENT_SINCE to the first release
+//       containing #836's /claim change; until then links use ?email=, which
+//       every release reads.
 //   4. No box on an older release is still awaiting its claim (they stay
 //      "unknown" to the sweep and would never be cleaned up, only flagged).
 //

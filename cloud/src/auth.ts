@@ -17,7 +17,7 @@ import type { CloudConfig } from "./config.js";
 import { constantTimeEqual } from "./crypto.js";
 import type { Logger } from "./logger.js";
 
-function normaliseIp(raw: string | undefined): string | null {
+export function normaliseIp(raw: string | undefined): string | null {
   if (!raw) return null;
   let ip = raw.trim();
   if (ip.startsWith("::ffff:") && isIP(ip.slice(7)) === 4) ip = ip.slice(7);

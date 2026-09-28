@@ -43,6 +43,20 @@
       "when": 1790467276561,
       "tag": "0005_edge_routes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790615276236,
+      "tag": "0006_front_door",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790619500123,
+      "tag": "0007_prune_rate_events",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,9 @@
 // AgentDash: cloud-control entry point. Loads config from env, checks the
 // database (split role mode, GH #763), serves, and runs the job runner and
 // the cleanup sweep when a Railway token is configured (GH #764).
-import { createApp } from "./app.js";
+import { createApp, mailerFromConfig } from "./app.js";
+import { frontDoor as makeFrontDoor } from "./front-door/service.js";
+import { pruneRateEvents } from "./front-door/rate-limit.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { createCloudDb, migrateCloudDb, verifyRuntimeDb } from "./db/client.js";
 import { type Alerter, combineAlerters, logAlerter, resendEmailAlerter, webhookAlerter } from "./jobs/alerts.js";
@@ -15,6 +17,9 @@ import { provisionHandler } from "./railway/provisioner.js";
 
 const log = createLogger({ base: { service: "cloud-control" } });
 const SWEEP_MS = 10 * 60_000;
+const READY_MAIL_MS = 20_000;
+const RELEASE_MS = 60_000;
+const PRUNE_MS = 60 * 60_000;
 
 async function main() {
   const config = loadConfig();
@@ -74,11 +79,27 @@ async function main() {
     log.info("RAILWAY_API_TOKEN not set: the job runner and cleanup sweep are idle");
   }
 
-  const server = createApp({ db, config, log }).listen(config.port, () => {
+  // AgentDash (SC-7, GH #768): the front door, plus its two background passes:
+  // the ready email (claim link) for boxes that reached awaiting_claim, and
+  // the release of approved waitlist entries once provisioning is open.
+  if (config.frontDoor.mailTransport === "log") log.warn("CLOUD_MAIL_TRANSPORT=log: front-door emails (with their links) go to the log; local development only");
+  else if (!config.resendApiKey) log.warn("CLOUD_RESEND_API_KEY is not set: /start and /find answer 503 until it is");
+  if (!config.frontDoor.turnstileSecret) log.warn("Turnstile is not configured: every signup waits for operator approval");
+  const frontDoor = makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
+  const passes = [
+    setInterval(() => void frontDoor.sendReadyEmails().catch((err: unknown) => log.error("ready email pass failed", { err })), READY_MAIL_MS),
+    setInterval(() => void frontDoor.releaseApproved().catch((err: unknown) => log.error("waitlist release pass failed", { err })), RELEASE_MS),
+    // GH #836 review: rate_events is pruned hourly.
+    setInterval(() => void pruneRateEvents(db).catch((err: unknown) => log.error("rate_events prune failed", { err })), PRUNE_MS),
+  ];
+  for (const t of passes) t.unref();
+
+  const server = createApp({ db, config, log, frontDoor }).listen(config.port, () => {
     log.info("listening", { port: config.port, release: config.release, railwayApi: config.railwayToken ? "configured" : "not configured" });
   });
   const shutdown = () => {
     if (sweep) clearInterval(sweep);
+    for (const t of passes) clearInterval(t);
     void (runner?.stop() ?? Promise.resolve()).finally(() => {
       server.close(() => void close().finally(() => process.exit(0)));
     });

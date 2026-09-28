@@ -1,5 +1,6 @@
 // AgentDash (#767, SC-6): claim a hosted box from the one-time link the
-// control plane sends: https://<slug>.agentdash.cloud/claim?email=<email>#code=<code>
+// control plane sends: https://<slug>.agentdash.cloud/claim#code=<code>&email=<email>
+// (older links carried the email as ?email=, which still works).
 //
 // The code travels in the URL FRAGMENT, which browsers never send to a
 // server or put in a Referer, and this page removes it from the address bar
@@ -24,6 +25,14 @@ export function readClaimCodeFromHash(hash: string): string | null {
   return code.length > 0 ? code : null;
 }
 
+/** The claim email from the fragment (`#code=…&email=…`), or null. */
+export function readClaimEmailFromHash(hash: string): string | null {
+  const raw = hash.replace(/^#/, "");
+  if (!raw.includes("=")) return null;
+  const email = (new URLSearchParams(raw).get("email") ?? "").trim();
+  return email.length > 0 ? email : null;
+}
+
 export function claimErrorMessage(err: unknown): string {
   if (err instanceof AuthApiError) {
     if (err.code === "claim_code_used") return "This claim link has already been used. Sign in with the account that claimed this workspace.";
@@ -39,7 +48,9 @@ export function ClaimPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
-  const email = useMemo(() => (searchParams.get("email") ?? "").trim(), [searchParams]);
+  // AgentDash (#836): the email rides in the fragment (never logged); ?email= is the older form.
+  const [hashEmail] = useState<string | null>(() => (typeof window === "undefined" ? null : readClaimEmailFromHash(window.location.hash)));
+  const email = useMemo(() => (hashEmail ?? searchParams.get("email") ?? "").trim(), [hashEmail, searchParams]);
   // Read the fragment once, then drop it from the address bar and history.
   const [code] = useState<string | null>(() => (typeof window === "undefined" ? null : readClaimCodeFromHash(window.location.hash)));
   useEffect(() => {

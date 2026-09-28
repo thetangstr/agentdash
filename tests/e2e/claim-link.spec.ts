@@ -9,7 +9,8 @@ const PASSWORD = `claim-e2e-${Date.now()}-pw`;
 
 test.skip(!BASE || !EMAIL || !CODE, "needs CLAIM_E2E_EMAIL and CLAIM_E2E_CODE (set by the config for a local run)");
 
-const link = () => `${BASE}/claim?email=${encodeURIComponent(EMAIL)}#code=${encodeURIComponent(CODE)}`;
+// #836: the control plane's current link form, email in the fragment beside the code.
+const link = () => `${BASE}/claim#code=${encodeURIComponent(CODE)}&email=${encodeURIComponent(EMAIL)}`;
 
 test("the claim link creates the founder's account and lands on /cos; the link is then dead", async ({ page, browser, request }) => {
   const before = await (await request.get(`${BASE}/api/health`)).json();

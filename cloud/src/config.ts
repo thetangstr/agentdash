@@ -53,6 +53,31 @@ export interface CloudConfig {
   boxSourceRepo: string;
   /** The edge router serves the slug hosts (SC-4 and DNS #758); until then health is checked on the Railway host only. */
   edgeLive: boolean;
+  /** SC-7 (GH #768): the public front door. See ./front-door/. */
+  frontDoor: FrontDoorConfig;
+}
+
+export interface FrontDoorConfig {
+  /** Where the /start pages live; links in emails point here. */
+  siteUrl: string;
+  /** The From line of every front-door email (a verified Resend domain). */
+  mailFrom: string;
+  /** "resend" (default; needs CLOUD_RESEND_API_KEY) or "log" (local development only: links are written to the log). */
+  mailTransport: "resend" | "log";
+  /** Cloudflare Turnstile. Without the secret, signups may only wait on the list (never auto-provisioned). */
+  turnstileSecret: Secret | null;
+  turnstileSiteKey: string | null;
+  /**
+   * Shared secret www's routing middleware (repo-root middleware.ts) sends in
+   * X-AgentDash-Edge-Proxy with the visitor's address in X-AgentDash-Client-IP.
+   * The address header is believed ONLY when this secret matches (constant
+   * time); otherwise, and whenever it is unset, the address is the socket or
+   * Railway's X-Real-IP (GH #836 security review).
+   */
+  proxySecret: Secret | null;
+  /** Extra disposable domains, and domains to allow despite the list. */
+  disposableExtra: string[];
+  disposableAllow: string[];
 }
 
 export class ConfigError extends Error {}
@@ -216,5 +241,48 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     boxImageRepo: imageRepo,
     boxSourceRepo: sourceRepo,
     edgeLive: (env.CLOUD_EDGE_LIVE ?? "").trim().toLowerCase() === "true",
+    frontDoor: loadFrontDoorConfig(env),
+  };
+}
+
+function domainList(raw: string | undefined): string[] {
+  return (raw ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+export function loadFrontDoorConfig(env: NodeJS.ProcessEnv): FrontDoorConfig {
+  const siteUrl = (env.CLOUD_PUBLIC_SITE_URL ?? "https://www.agentdash.cloud").trim().replace(/\/+$/, "");
+  let site: URL;
+  try {
+    site = new URL(siteUrl);
+  } catch {
+    throw new ConfigError("CLOUD_PUBLIC_SITE_URL is not a valid URL");
+  }
+  const localHost = site.hostname === "localhost" || site.hostname === "127.0.0.1";
+  if (site.protocol !== "https:" && !(site.protocol === "http:" && localHost)) {
+    throw new ConfigError("CLOUD_PUBLIC_SITE_URL must be https (http only for localhost)");
+  }
+  const transport = (env.CLOUD_MAIL_TRANSPORT ?? "resend").trim();
+  if (transport !== "resend" && transport !== "log") throw new ConfigError("CLOUD_MAIL_TRANSPORT must be 'resend' or 'log'");
+  // A dev transport writes links to the log: never outside localhost (GH #836 review).
+  if (transport === "log" && !localHost) throw new ConfigError("CLOUD_MAIL_TRANSPORT=log is allowed only when CLOUD_PUBLIC_SITE_URL is localhost");
+  const proxySecret = env.CLOUD_VERCEL_PROXY_SECRET?.trim() || null;
+  if (proxySecret) {
+    const weak = checkAdminTokenStrength(proxySecret);
+    if (weak) throw new ConfigError(`CLOUD_VERCEL_PROXY_SECRET ${weak}; generate one with \`openssl rand -hex 32\``);
+  }
+  const secret = env.CLOUD_TURNSTILE_SECRET_KEY?.trim();
+  const siteKey = env.CLOUD_TURNSTILE_SITE_KEY?.trim() || null;
+  if (Boolean(secret) !== Boolean(siteKey)) {
+    throw new ConfigError("CLOUD_TURNSTILE_SECRET_KEY and CLOUD_TURNSTILE_SITE_KEY are set together or not at all");
+  }
+  return {
+    siteUrl,
+    mailFrom: env.CLOUD_MAIL_FROM?.trim() || "AgentDash <no-reply@agentdash.cloud>",
+    mailTransport: transport,
+    turnstileSecret: secret ? new Secret(secret) : null,
+    turnstileSiteKey: siteKey,
+    proxySecret: proxySecret ? new Secret(proxySecret) : null,
+    disposableExtra: domainList(env.CLOUD_DISPOSABLE_DOMAINS_EXTRA),
+    disposableAllow: domainList(env.CLOUD_DISPOSABLE_DOMAINS_ALLOW),
   };
 }

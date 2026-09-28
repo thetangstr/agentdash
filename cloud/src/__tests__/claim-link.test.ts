@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { encryptField, parseKeyring } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { accounts, boxEvents, boxes, jobs } from "../db/schema.js";
-import { claimLink, claimLinkForBox, probeClaim } from "../jobs/claim.js";
+import { CLAIM_EMAIL_IN_FRAGMENT_SINCE, claimLink, claimLinkForBox, claimReadsEmailFromFragment, compareReleases, probeClaim } from "../jobs/claim.js";
 import { sweepCleanup } from "../jobs/cleanup.js";
 import { closeSignupHandler } from "../jobs/close-signup.js";
 import { JobRunner } from "../jobs/runner.js";
@@ -40,12 +40,38 @@ const health = (body: Record<string, unknown>): typeof fetch =>
   (async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
 
 describe("claim link", () => {
-  it("puts the code in the fragment and the email in the query", () => {
-    const url = claimLink({ slug: "acme", edgeDomain: "agentdash.cloud", email: "founder+x@example.com", code: CODE });
-    expect(url).toBe(`https://acme.agentdash.cloud/claim?email=founder%2Bx%40example.com#code=${CODE}`);
+  it("fragment form: the code and the email in the fragment, nothing in the query", () => {
+    const url = claimLink({ slug: "acme", edgeDomain: "agentdash.cloud", email: "founder+x@example.com", code: CODE, emailInFragment: true });
+    expect(url).toBe(`https://acme.agentdash.cloud/claim#code=${CODE}&email=founder%2Bx%40example.com`);
     const u = new URL(url);
-    expect(u.search).not.toContain("AGD-");
-    expect(u.hash).toBe(`#code=${CODE}`);
+    expect(u.search).toBe("");
+    expect(new URLSearchParams(u.hash.slice(1)).get("code")).toBe(CODE);
+    expect(new URLSearchParams(u.hash.slice(1)).get("email")).toBe("founder+x@example.com");
+  });
+
+  it("query form (older releases): email in ?email=, the code still only in the fragment", () => {
+    const url = claimLink({ slug: "acme", edgeDomain: "agentdash.cloud", email: "founder+x@example.com", code: CODE, emailInFragment: false });
+    expect(url).toBe(`https://acme.agentdash.cloud/claim?email=founder%2Bx%40example.com#code=${CODE}`);
+    expect(new URL(url).search).not.toContain("AGD-");
+  });
+
+  it("picks the fragment form only for a known release at or after the first one that reads it (GH #836 re-review)", () => {
+    expect(CLAIM_EMAIL_IN_FRAGMENT_SINCE).toBeNull(); // no such release yet: every link uses ?email=
+    expect(compareReleases("v2026.1004.0", "v2026.927.3")).toBeGreaterThan(0);
+    expect(compareReleases("v2026.927.1", "v2026.927.1")).toBe(0);
+    expect(compareReleases("canary/v2026.927.0-canary.1", "v2026.927.0")).toBeNull();
+    const since = "v2026.1002.0";
+    expect(claimReadsEmailFromFragment("v2026.1002.0", since)).toBe(true);
+    expect(claimReadsEmailFromFragment("v2026.1015.2", since)).toBe(true);
+    expect(claimReadsEmailFromFragment("v2026.927.0", since)).toBe(false);
+    expect(claimReadsEmailFromFragment(null, since)).toBe(false);
+    expect(claimReadsEmailFromFragment("not-a-tag", since)).toBe(false);
+    expect(claimReadsEmailFromFragment("v2026.1015.2", null)).toBe(false);
+    const enc = encryptField(KEYS, CODE, "boxes.claim_code_enc");
+    const opts = { dataKeys: KEYS, edgeDomain: "agentdash.cloud", email: "f@example.com", fragmentSince: since };
+    expect(claimLinkForBox({ slug: "acme", claimCodeEnc: enc, releaseTag: "v2026.1003.0" }, opts)).toBe(`https://acme.agentdash.cloud/claim#code=${CODE}&email=f%40example.com`);
+    expect(claimLinkForBox({ slug: "acme", claimCodeEnc: enc, releaseTag: "v2026.927.0" }, opts)).toBe(`https://acme.agentdash.cloud/claim?email=f%40example.com#code=${CODE}`);
+    expect(claimLinkForBox({ slug: "acme", claimCodeEnc: enc, releaseTag: null }, opts)).toBe(`https://acme.agentdash.cloud/claim?email=f%40example.com#code=${CODE}`);
   });
 
   it("is built from the encrypted claim code, and gone once the code is erased", () => {

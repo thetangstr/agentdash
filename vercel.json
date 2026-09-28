@@ -5,6 +5,10 @@
   "outputDirectory": "ui/dist",
   "rewrites": [
     {
+      "source": "/api/cloud/:path*",
+      "destination": "https://cloud-control-production.up.railway.app/api/cloud/:path*"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://web-production-33a3b6.up.railway.app/api/:path*"
     },

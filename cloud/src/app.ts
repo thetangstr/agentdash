@@ -10,6 +10,16 @@ import type { Logger } from "./logger.js";
 import { internalRoutes } from "./routes/internal.js";
 import { backfillEdgeSecrets } from "./railway/edge-backfill.js";
 import { RailwayClient } from "./railway/client.js";
+import { frontDoor as makeFrontDoor, type FrontDoor } from "./front-door/service.js";
+import { logMailer, type Mailer, resendMailer, unconfiguredMailer } from "./front-door/mailer.js";
+import { publicRoutes } from "./routes/public.js";
+
+/** The front door's mail transport from config (SC-7, GH #768). */
+export function mailerFromConfig(config: CloudConfig, log: Logger): Mailer {
+  if (config.frontDoor.mailTransport === "log") return logMailer(log);
+  if (!config.resendApiKey) return unconfiguredMailer();
+  return resendMailer({ apiKey: config.resendApiKey, from: config.frontDoor.mailFrom });
+}
 
 export function createApp(opts: {
   db: CloudDb;
@@ -17,8 +27,11 @@ export function createApp(opts: {
   log: Logger;
   /** Test hooks for the operator guard (limiter, audit cap, clock). */
   admin?: Omit<RequireAdminOptions, "onRefused">;
+  /** SC-7 (GH #768): the front door; built from config when omitted. Tests pass one with fakes. */
+  frontDoor?: FrontDoor;
 }): Express {
   const { db, config, log } = opts;
+  const frontDoor = opts.frontDoor ?? makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "32kb" }));
@@ -33,6 +46,9 @@ export function createApp(opts: {
     }
   });
 
+  // AgentDash (SC-7, GH #768): the public front door, reached through www's /api/cloud rewrite.
+  app.use("/api/cloud", publicRoutes({ frontDoor, config }));
+
   // Refused operator requests are audited (append-only table, GH #778). No
   // credential is ever part of a Refusal.
   const onRefused = async (r: Refusal) => {
@@ -44,6 +60,7 @@ export function createApp(opts: {
     });
   };
   app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log, {
+    frontDoor,
     // AgentDash (#807 review): the fleet step for when the edge router goes live.
     ...(config.railwayToken && config.railwayWorkspaceId
       ? {
@@ -65,6 +82,10 @@ export function createApp(opts: {
 
   // Errors never echo internals to the caller; the log line is redacted.
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    if ((err as { type?: string }).type === "entity.parse.failed" || (err as { type?: string }).type === "entity.too.large") {
+      if (!res.headersSent) res.status(400).json({ error: "bad request body" });
+      return;
+    }
     log.error("request failed", { err, path: req.path, method: req.method });
     if (!res.headersSent) res.status(500).json({ error: "internal error" });
   });
