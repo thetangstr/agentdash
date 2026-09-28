@@ -94,6 +94,19 @@ export function publicRoutes(opts: { frontDoor: FrontDoor; config: Pick<CloudCon
     res.json(await fd.publicConfig());
   });
 
+  // GH #836 re-review: a deploy check for www's middleware. Answers only
+  // whether THIS request carried the proxy secret and a usable client address;
+  // never the secret, the address or any other header.
+  const proxyCheckLimiter = new MemoryLimiter(30, 60_000);
+  router.get("/proxy-check", (req, res) => {
+    const visitor = visitorOf(req, config);
+    if (!proxyCheckLimiter.take(visitor.ip ?? "unknown")) {
+      res.status(429).json({ error: "Too many checks.", code: "rate_limited" });
+      return;
+    }
+    res.json({ trustedProxy: visitor.viaProxy });
+  });
+
   router.get("/slug-available", async (req, res) => {
     const visitor = visitorOf(req, config);
     if (!slugLimiter.take(visitor.ip ?? "unknown")) {

@@ -48,6 +48,7 @@ const BOX_CREATE_LOCK = 768_001;
  */
 export const MAX_SLUG_HOLDS = 3;
 export const MAX_HOLD_MS = 2 * 3_600_000;
+export const SLUG_HOLD_WINDOW_MS = 24 * 3_600_000;
 
 export type Refusal = { ok: false; status: number; code: string; error: string };
 const refuse = (status: number, code: string, error: string): Refusal => ({ ok: false, status, code, error });
@@ -256,6 +257,8 @@ export function frontDoor(deps: FrontDoorDeps) {
           .where(and(
             eq(signupRequests.slug, slug),
             isNull(signupRequests.verifiedAt),
+            // GH #836 re-review: holds count over a rolling day, so a name is never blocked for good.
+            gt(signupRequests.createdAt, new Date(now().getTime() - SLUG_HOLD_WINDOW_MS)),
             visitor.ip ? sql`(${accounts.email} = ${email} or ${signupRequests.ip} = ${visitor.ip})` : sql`${accounts.email} = ${email}`,
           ));
         if ((holds?.n ?? 0) >= MAX_SLUG_HOLDS) {

@@ -554,7 +554,8 @@ describe("end to end with a fake provisioner", () => {
 
     expect(await fd.sendReadyEmails()).toBeGreaterThanOrEqual(1);
     const ready = lastMailTo(w.email, "ready");
-    const claimUrl = `https://${w.slug}.agentdash.cloud/claim#code=${CODE}&email=${encodeURIComponent(w.email)}`;
+    // No release reads the email from the fragment yet (CLAIM_EMAIL_IN_FRAGMENT_SINCE is null), so ?email=.
+    const claimUrl = `https://${w.slug}.agentdash.cloud/claim?email=${encodeURIComponent(w.email)}#code=${CODE}`;
     expect(ready.text).toContain(claimUrl);
     // Once per box.
     mail.length = 0;
@@ -700,5 +701,34 @@ describe("security review fixes (GH #836)", () => {
     release();
     await new Promise((r) => setTimeout(r, 20));
     expect(slowMail.map((m) => m.kind)).toEqual(["find"]);
+  });
+
+  it("slug holds count over a rolling day, so the cap lifts", async () => {
+    const { app } = await build();
+    const base = who();
+    for (let i = 0; i < MAX_SLUG_HOLDS; i++) {
+      clockOffsetMs = i * 31 * 60_000;
+      expect((await signup(app, { ...base, ip: `192.0.2.${150 + i}` })).status).toBe(202);
+    }
+    clockOffsetMs = MAX_SLUG_HOLDS * 31 * 60_000;
+    expect((await signup(app, { ...base, ip: "192.0.2.198" })).body.code).toBe("slug_hold_limit");
+    // A day later (after the rate windows too), the same person may try again.
+    await db.execute(sql`update signup_requests set created_at = created_at - interval '25 hours' where slug = ${base.slug}`);
+    await db.execute(sql`update rate_events set created_at = created_at - interval '25 hours' where key = ${base.email}`);
+    expect((await signup(app, { ...base, ip: "192.0.2.197" })).status).toBe(202);
+  });
+
+  it("GET /proxy-check reports only whether the proxy secret vouched for the request", async () => {
+    const { app } = await build();
+    const yes = await request(app).get("/api/cloud/proxy-check").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, "198.51.100.44");
+    expect(yes.status).toBe(200);
+    expect(yes.body).toEqual({ trustedProxy: true });
+    expect((await request(app).get("/api/cloud/proxy-check").set(IP_HEADER, "198.51.100.44")).body).toEqual({ trustedProxy: false });
+    expect((await request(app).get("/api/cloud/proxy-check").set(PROXY_HEADER, "wrong").set(IP_HEADER, "198.51.100.44")).body).toEqual({ trustedProxy: false });
+    expect(JSON.stringify(yes.body)).not.toContain("198.51.100.44");
+    // Rate limited per address.
+    let last = 200;
+    for (let i = 0; i < 31; i++) last = (await request(app).get("/api/cloud/proxy-check").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, "198.51.100.45")).status;
+    expect(last).toBe(429);
   });
 });
