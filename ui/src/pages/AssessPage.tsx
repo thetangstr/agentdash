@@ -147,8 +147,8 @@ export function AssessPage() {
               one workspace and one Chief of Staff agent, no credit card needed.
             </p>
             <div style={{ marginTop: 32, display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <Button href="/auth?mode=sign_up">Start free</Button>
-              <Button href="/auth" variant="ghost">Sign in</Button>
+              <Button href="/start">Start free</Button>
+              <Button href="/find" variant="ghost">Sign in</Button>
             </div>
           </SectionContainer>
         </MarketingShell>

@@ -6,6 +6,18 @@
   "redirects": [
     {
       "source": "/auth",
+      "has": [
+        {
+          "type": "query",
+          "key": "mode",
+          "value": "sign_up"
+        }
+      ],
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/auth",
       "destination": "/find",
       "permanent": false
     },
@@ -108,6 +120,30 @@
     {
       "source": "/api/invites/validate",
       "destination": "https://cloud-control-production.up.railway.app/api/invites/validate"
+    },
+    {
+      "source": "/api/health",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/health"
+    },
+    {
+      "source": "/api/auth/get-session",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/auth/get-session"
+    },
+    {
+      "source": "/api/onboarding/finalize-assessment",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/onboarding/finalize-assessment"
+    },
+    {
+      "source": "/api/onboarding/complete-initial-assessment",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/onboarding/complete-initial-assessment"
+    },
+    {
+      "source": "/api/companies/:companyId/assess",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/companies/:companyId/assess"
+    },
+    {
+      "source": "/api/companies/:companyId/assess/:path*",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/companies/:companyId/assess/:path*"
     },
     {
       "source": "/api/:path*",
