@@ -142,6 +142,9 @@ importers:
 
   cloud:
     dependencies:
+      disposable-email-domains-js:
+        specifier: ^1.26.0
+        version: 1.26.0
       drizzle-orm:
         specifier: '>=0.45.2'
         version: 0.45.2(@electric-sql/pglite@0.3.15)(kysely@0.29.0)(pg@8.18.0)(postgres@3.4.8)
@@ -5147,6 +5150,9 @@ packages:
   diff@5.2.2:
     resolution: {integrity: sha512-vtcDfH3TOjP8UekytvnHH1o1P4FcUdt4eQ1Y+Abap1tk/OB2MWQvcwS2ClCd1zuIhc3JKOx6p3kod8Vfys3E+A==}
     engines: {node: '>=0.3.1'}
+
+  disposable-email-domains-js@1.26.0:
+    resolution: {integrity: sha512-pSqALZAiuw6HDC1HqhhtvShRnniUNObQ6kzwa5N280XbyxxCPBZnQQ7fO6Uk/CNTi4cAaKE1UZl3Mc30Zfj4UA==}
 
   doctrine@3.0.0:
     resolution: {integrity: sha512-yS+Q5i3hBf7GBkd4KG8a7eBNNWNGLTaEwwYWUijIYM7zrlYDM0BFXHjjPWlWZ1Rg7UaddZeIDmi9jF3HmqiQ2w==}
@@ -12692,6 +12698,8 @@ snapshots:
       wrappy: 1.0.2
 
   diff@5.2.2: {}
+
+  disposable-email-domains-js@1.26.0: {}
 
   doctrine@3.0.0:
     dependencies:

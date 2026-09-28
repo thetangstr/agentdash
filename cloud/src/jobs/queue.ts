@@ -40,7 +40,13 @@ export async function enqueueJob(
   return { id: live.id, created: false };
 }
 
-export type WaitlistReason = "kill_switch" | "waitlist_mode" | "daily_cap";
+/**
+ * Why a box waits: provisioning is off (the kill switch, or the frozen
+ * claim-tracking capability), waitlist mode needs an operator's approval,
+ * the daily cap is spent, or (SC-7) the signup had no bot check because
+ * Turnstile is not configured, so only an operator may let it through.
+ */
+export type WaitlistReason = "kill_switch" | "waitlist_mode" | "daily_cap" | "needs_approval";
 
 export type ProvisionRequestResult =
   | { outcome: "queued"; jobId: string }
@@ -65,7 +71,7 @@ export async function provisionsToday(db: CloudDb | Tx): Promise<number> {
 export async function requestProvision(
   db: CloudDb,
   boxId: string,
-  opts: { actor: string; approved?: boolean },
+  opts: { actor: string; approved?: boolean; requireApproval?: boolean },
 ): Promise<ProvisionRequestResult> {
   return await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${ENQUEUE_LOCK_KEY})`);
@@ -78,6 +84,7 @@ export async function requestProvision(
     let reason: WaitlistReason | null = null;
     if (!settings.provisioning_enabled || !capabilities.claimTrackingReady) reason = "kill_switch";
     else if (settings.waitlist_mode && !opts.approved) reason = "waitlist_mode";
+    else if (opts.requireApproval && !opts.approved) reason = "needs_approval";
     else if ((await provisionsToday(tx)) >= settings.daily_cap) reason = "daily_cap";
 
     if (reason) {

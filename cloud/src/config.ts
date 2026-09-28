@@ -53,6 +53,33 @@ export interface CloudConfig {
   boxSourceRepo: string;
   /** The edge router serves the slug hosts (SC-4 and DNS #758); until then health is checked on the Railway host only. */
   edgeLive: boolean;
+  /** SC-7 (GH #768): the public front door. See ./front-door/. */
+  frontDoor: FrontDoorConfig;
+}
+
+export interface FrontDoorConfig {
+  /** Where the /start pages live; links in emails point here. */
+  siteUrl: string;
+  /** The From line of every front-door email (a verified Resend domain). */
+  mailFrom: string;
+  /** "resend" (default; needs CLOUD_RESEND_API_KEY) or "log" (local development only: links are written to the log). */
+  mailTransport: "resend" | "log";
+  /** Cloudflare Turnstile. Without the secret, signups may only wait on the list (never auto-provisioned). */
+  turnstileSecret: Secret | null;
+  turnstileSiteKey: string | null;
+  /**
+   * A request header carrying the visitor's address, set by the proxy in
+   * front of the public API (Vercel: x-vercel-forwarded-for). Null: the
+   * address comes from CLOUD_CLIENT_IP_SOURCE. The header can be forged by a
+   * caller that skips the proxy, so the per-proxy ceiling below still counts
+   * the address the request really came from.
+   */
+  clientIpHeader: string | null;
+  /** Ceiling on signups an hour from one connecting address (the proxy itself, when a client IP header is used). */
+  proxySignupsPerHour: number;
+  /** Extra disposable domains, and domains to allow despite the list. */
+  disposableExtra: string[];
+  disposableAllow: string[];
 }
 
 export class ConfigError extends Error {}
@@ -216,5 +243,44 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     boxImageRepo: imageRepo,
     boxSourceRepo: sourceRepo,
     edgeLive: (env.CLOUD_EDGE_LIVE ?? "").trim().toLowerCase() === "true",
+    frontDoor: loadFrontDoorConfig(env),
+  };
+}
+
+function domainList(raw: string | undefined): string[] {
+  return (raw ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+export function loadFrontDoorConfig(env: NodeJS.ProcessEnv): FrontDoorConfig {
+  const siteUrl = (env.CLOUD_PUBLIC_SITE_URL ?? "https://www.agentdash.cloud").trim().replace(/\/+$/, "");
+  let site: URL;
+  try {
+    site = new URL(siteUrl);
+  } catch {
+    throw new ConfigError("CLOUD_PUBLIC_SITE_URL is not a valid URL");
+  }
+  const localHost = site.hostname === "localhost" || site.hostname === "127.0.0.1";
+  if (site.protocol !== "https:" && !(site.protocol === "http:" && localHost)) {
+    throw new ConfigError("CLOUD_PUBLIC_SITE_URL must be https (http only for localhost)");
+  }
+  const transport = (env.CLOUD_MAIL_TRANSPORT ?? "resend").trim();
+  if (transport !== "resend" && transport !== "log") throw new ConfigError("CLOUD_MAIL_TRANSPORT must be 'resend' or 'log'");
+  const header = env.CLOUD_PUBLIC_CLIENT_IP_HEADER?.trim().toLowerCase() || null;
+  if (header && !/^[a-z0-9-]+$/.test(header)) throw new ConfigError("CLOUD_PUBLIC_CLIENT_IP_HEADER must be a header name");
+  const secret = env.CLOUD_TURNSTILE_SECRET_KEY?.trim();
+  const siteKey = env.CLOUD_TURNSTILE_SITE_KEY?.trim() || null;
+  if (Boolean(secret) !== Boolean(siteKey)) {
+    throw new ConfigError("CLOUD_TURNSTILE_SECRET_KEY and CLOUD_TURNSTILE_SITE_KEY are set together or not at all");
+  }
+  return {
+    siteUrl,
+    mailFrom: env.CLOUD_MAIL_FROM?.trim() || "AgentDash <no-reply@agentdash.cloud>",
+    mailTransport: transport,
+    turnstileSecret: secret ? new Secret(secret) : null,
+    turnstileSiteKey: siteKey,
+    clientIpHeader: header,
+    proxySignupsPerHour: positiveInt(env, "CLOUD_PROXY_SIGNUPS_PER_HOUR", 120),
+    disposableExtra: domainList(env.CLOUD_DISPOSABLE_DOMAINS_EXTRA),
+    disposableAllow: domainList(env.CLOUD_DISPOSABLE_DOMAINS_ALLOW),
   };
 }

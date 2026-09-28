@@ -11,11 +11,14 @@ import { requestProvision } from "../jobs/queue.js";
 import type { Logger } from "../logger.js";
 import { isSettingKey, SettingValidationError, settingsService } from "../settings.js";
 import { EdgeNotLive } from "../railway/edge-backfill.js";
+import type { FrontDoor } from "../front-door/service.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
 
 export interface InternalRouteDeps {
+  /** SC-7 (GH #768): approval emails and the approved-waitlist release. */
+  frontDoor?: Pick<FrontDoor, "notifyApproved" | "releaseApproved">;
   /** The fleet edge-secret back-fill (#807 review); absent without a Railway token. */
   edgeBackfill?: () => Promise<unknown>;
 }
@@ -109,25 +112,23 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
     res.json({ waitlist: rows });
   });
 
-  router.post("/waitlist/:id/approve", async (req, res) => {
-    const { id } = req.params;
-    if (!UUID_RE.test(id)) {
-      res.status(400).json({ error: "id must be a uuid" });
-      return;
-    }
+  /**
+   * Approve one waiting entry: it leaves the waitlist, its box is asked for
+   * provisioning (the kill switch and the daily cap still apply; if either
+   * holds, the box stays waitlisted as approved-pending and the release
+   * sweep picks it up later), and the person is emailed (SC-7).
+   */
+  async function approveEntry(id: string, ip: string | null) {
     const [row] = await db
       .update(waitlist)
       .set({ state: "approved", approvedAt: new Date(), approvedBy: "admin-cli", updatedAt: new Date() })
       .where(and(eq(waitlist.id, id), eq(waitlist.state, "waiting")))
       .returning();
-    if (!row) {
-      res.status(404).json({ error: "no waiting entry with that id" });
-      return;
-    }
+    if (!row) return null;
     await db.insert(boxEvents).values({
       kind: "waitlist_approved",
       actor: "admin-cli",
-      detail: { waitlistId: row.id },
+      detail: { waitlistId: row.id, ip },
     });
     log.info("waitlist entry approved", { waitlistId: row.id });
     // AgentDash (GH #764): approval takes the box off the waitlist. The kill
@@ -142,8 +143,51 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
         const r = await requestProvision(db, b.id, { actor: "admin-cli", approved: true });
         provisioning.push({ slug: b.slug, outcome: r.outcome, ...(r.outcome === "waitlisted" ? { reason: r.reason } : {}) });
       }
+      const first = provisioning[0];
+      if (deps.frontDoor && first) await deps.frontDoor.notifyApproved(row.accountId, first.slug, first.outcome === "queued");
     }
-    res.json({ waitlist: row, provisioning });
+    return { waitlist: row, provisioning };
+  }
+
+  router.post("/waitlist/:id/approve", async (req, res) => {
+    const { id } = req.params;
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "id must be a uuid" });
+      return;
+    }
+    const ip = typeof res.locals.adminIp === "string" ? res.locals.adminIp : null;
+    const result = await approveEntry(id, ip);
+    if (!result) {
+      res.status(404).json({ error: "no waiting entry with that id" });
+      return;
+    }
+    res.json(result);
+  });
+
+  // SC-7 (GH #768): approve the oldest N waiting entries in one go (spec §5.1, "in a batch").
+  router.post("/waitlist/approve-next", async (req, res) => {
+    const count = Number((req.body ?? {}).count);
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      res.status(400).json({ error: "count must be an integer from 1 to 100" });
+      return;
+    }
+    const ip = typeof res.locals.adminIp === "string" ? res.locals.adminIp : null;
+    const oldest = await db.select({ id: waitlist.id }).from(waitlist).where(eq(waitlist.state, "waiting")).orderBy(waitlist.createdAt).limit(count);
+    const approved = [];
+    for (const { id } of oldest) {
+      const r = await approveEntry(id, ip);
+      if (r) approved.push(r);
+    }
+    res.json({ approved });
+  });
+
+  // SC-7 (GH #768): approved entries whose box still waits get their job if the gates are open now.
+  router.post("/waitlist/release", async (_req, res) => {
+    if (!deps.frontDoor) {
+      res.status(409).json({ error: "the front door is not configured" });
+      return;
+    }
+    res.json({ released: await deps.frontDoor.releaseApproved() });
   });
 
   // AgentDash (GH #764): the job queue and the failed-box actions.

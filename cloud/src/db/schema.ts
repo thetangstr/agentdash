@@ -352,3 +352,68 @@ export const settings = pgTable("settings", {
   updatedAt: updatedAt(),
   updatedBy: text("updated_by"),
 });
+
+// ---- Front door (SC-7, GH #768) ----------------------------------------
+
+/**
+ * A signup on /start, before its email is verified. The box is created only
+ * when the magic link is used (spec §5.1: verification before provisioning),
+ * so an unverified signup never holds a slug for long: it counts against a
+ * slug only while its link is unexpired.
+ */
+export const signupRequests = pgTable(
+  "signup_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    emailTokenId: uuid("email_token_id").references(() => emailTokens.id),
+    slug: text("slug").notNull(),
+    workspaceName: text("workspace_name").notNull(),
+    /** The client address the signup came from (per-IP limits, spec §5.1). */
+    ip: text("ip"),
+    /** True when no bot check ran (Turnstile not configured): the box may only wait on the list. */
+    unverifiedHuman: boolean("unverified_human").notNull().default(false),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    boxId: uuid("box_id").references(() => boxes.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("signup_requests_slug_idx").on(t.slug, t.expiresAt),
+    index("signup_requests_ip_idx").on(t.ip, t.createdAt),
+    index("signup_requests_account_idx").on(t.accountId),
+  ],
+);
+
+/** A short-lived front-door session, set when a magic link is used. Only the token's hash is stored. */
+export const cloudSessions = pgTable(
+  "cloud_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("cloud_sessions_hash_uq").on(t.tokenHash)],
+);
+
+/**
+ * Rate-limit hits for the public API, one row per counted request. Durable
+ * and shared across replicas; counted over a sliding window. The runtime
+ * role has no DELETE, so rows are never removed (they are tiny).
+ */
+export const rateEvents = pgTable(
+  "rate_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    bucket: text("bucket").notNull(),
+    key: text("key").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("rate_events_lookup_idx").on(t.bucket, t.key, t.createdAt)],
+);
