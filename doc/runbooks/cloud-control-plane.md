@@ -60,7 +60,7 @@ www's `/start`, `/start/verify`, `/start/progress` and `/find` call `/api/cloud/
 
 **Deploy checklist**
 
-1. `cloud-migrate` first (migration `0006_front_door`: `signup_requests`, `cloud_sessions`, `rate_events`), then `cloud-control`.
+1. `cloud-migrate` first (migrations `0006_front_door`: `signup_requests`, `cloud_sessions`, `rate_events`; and `0007_prune_rate_events`), then `cloud-control`.
 2. Set the variables above on `cloud-control` (not the Turnstile pair until #759 is done). Keep `waitlist_mode=true`, `daily_cap=10`.
 2b. **Vercel:** add `CLOUD_VERCEL_PROXY_SECRET` (the same value, Production scope only, marked sensitive) to the www project's environment variables. Never put it in `vercel.json`, a command line or a log.
 3. `curl -s https://cloud-control-production.up.railway.app/api/cloud/config` answers `{"turnstileSiteKey":null,"signupOpen":true,"waitlist":true,…}`.
