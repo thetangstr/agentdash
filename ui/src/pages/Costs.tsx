@@ -1027,12 +1027,23 @@ export function Costs() {
                     !shippedMonth?.usage.metered
                       ? "Not metered yet"
                       : shippedMonth.pullRequests > 0
-                        ? formatCents(Math.round(shippedMonth.usage.costCents / shippedMonth.pullRequests))
+                        ? shippedMonth.usage.costCents > 0
+                          ? formatCents(Math.round(shippedMonth.usage.costCents / shippedMonth.pullRequests))
+                          // Token-only usage: cents never recorded, so "cost"
+                          // would read a dishonest $0.00 — show the real signal.
+                          : `${formatTokens(Math.round(
+                              (shippedMonth.usage.inputTokens +
+                                shippedMonth.usage.cachedInputTokens +
+                                shippedMonth.usage.outputTokens) /
+                                shippedMonth.pullRequests,
+                            ))} tokens`
                         : "No PRs yet"
                   }
                   subtitle={
                     shippedMonth?.usage.metered
-                      ? "Metered spend on this month's shipped issues ÷ shipped PRs"
+                      ? shippedMonth.usage.costCents > 0
+                        ? "Metered spend on this month's shipped issues ÷ shipped PRs"
+                        : "Metered tokens on this month's shipped issues ÷ shipped PRs"
                       : "No metered spend on shipped issues yet"
                   }
                   icon={ReceiptText}
@@ -1182,7 +1193,13 @@ export function Costs() {
                               ) : null}
                               {row.issueTitle ?? "Untitled issue"}
                             </Link>
-                            <span className="font-medium tabular-nums">{formatCents(row.costCents)}</span>
+                            <span className="font-medium tabular-nums">
+                              {row.costCents > 0
+                                ? formatCents(row.costCents)
+                                : `${formatTokens(
+                                      row.inputTokens + row.cachedInputTokens + row.outputTokens,
+                                    )} tokens`}
+                            </span>
                           </div>
                         ))
                       )}

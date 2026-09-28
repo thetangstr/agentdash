@@ -228,6 +228,36 @@ describe("Costs page (UX-15)", () => {
     expect(container.querySelector('[data-testid="by-issue-card"]')?.textContent).toContain("Not metered yet.");
   });
 
+  it("shows tokens, not $0.00, when shipped usage recorded no cents", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue(
+      shippedFeed({
+        since: "2026-09-01T00:00:00.000Z",
+        count: 3,
+        pullRequests: 3,
+        usage: { metered: true, inputTokens: 1_200, cachedInputTokens: 0, outputTokens: 600, costCents: 0 },
+      }),
+    );
+    mockCostsApi.byIssue.mockResolvedValue([
+      {
+        issueId: "issue-1",
+        issueIdentifier: "ACME-1",
+        issueTitle: "Ship the thing",
+        issueStatus: "done",
+        costCents: 0,
+        inputTokens: 9_000,
+        cachedInputTokens: 0,
+        outputTokens: 3_000,
+      },
+    ]);
+    await render();
+    const perPr = container.querySelector('[data-testid="cost-per-shipped-pr-tile"]')?.textContent ?? "";
+    expect(perPr).toContain("600 tokens");
+    expect(perPr).not.toContain("$0.00");
+    const byIssue = container.querySelector('[data-testid="by-issue-card"]')?.textContent ?? "";
+    expect(byIssue).toContain("12.0k tokens");
+    expect(byIssue).not.toContain("$0.00");
+  });
+
   it("agentdash_mk keeps the five finance tabs and the finance tiles", async () => {
     productProfile = "agentdash_mk";
     await render();

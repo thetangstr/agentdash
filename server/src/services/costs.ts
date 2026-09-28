@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, lt, lte, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
@@ -24,6 +24,8 @@ const FAILED_STATUSES: HeartbeatRunStatus[] = ["failed", "timed_out"];
 
 const METERED_BILLING_TYPE = "metered_api";
 const SUBSCRIPTION_BILLING_TYPES = ["subscription_included", "subscription_overage"] as const;
+/** GH #796: the Costs page shows the top 8; the endpoint still needs a bound. */
+const BY_ISSUE_LIMIT = 100;
 
 function sumAsNumber(column: typeof costEvents.costCents | typeof costEvents.inputTokens | typeof costEvents.cachedInputTokens | typeof costEvents.outputTokens) {
   return sql<number>`coalesce(sum(${column}), 0)::double precision`;
@@ -519,22 +521,24 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
 
     /**
      * AgentDash (GH #796): per-issue spend so the Costs page can answer "what
-     * did the money buy". Attribution prefers `cost_events.issue_id` and falls
-     * back to the producing run's context snapshot — the same chain the issue
-     * cost summary uses, not a second truth.
+     * did the money buy". Attribution is `cost_events.issue_id` alone — the
+     * run's context issue is already resolved and validated into that column
+     * when the event is written (resolveLedgerScopeForRun), so this matches
+     * the Shipped feed's usageByIssue exactly and a malformed run snapshot
+     * can never turn this read into a 500. `visibleWhere` is the caller's
+     * restricted-project condition over issues.project_id.
      */
-    byIssue: async (companyId: string, range?: CostDateRange) => {
-      const runIssueId = sql<string | null>`(${heartbeatRuns.contextSnapshot} ->> 'issueId')::uuid`;
-      const effectiveIssueId = sql<string | null>`coalesce(${costEvents.issueId}, ${runIssueId})`;
-      const conditions: ReturnType<typeof eq>[] = [eq(costEvents.companyId, companyId)];
+    byIssue: async (companyId: string, range?: CostDateRange, opts: { visibleWhere?: SQL; limit?: number } = {}) => {
+      const conditions = [eq(costEvents.companyId, companyId)];
       if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
       if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
+      if (opts.visibleWhere) conditions.push(opts.visibleWhere);
 
       const costCentsExpr = sumAsNumber(costEvents.costCents);
 
       return db
         .select({
-          issueId: effectiveIssueId,
+          issueId: costEvents.issueId,
           issueIdentifier: issues.identifier,
           issueTitle: issues.title,
           issueStatus: issues.status,
@@ -544,17 +548,17 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
           outputTokens: sumAsNumber(costEvents.outputTokens),
         })
         .from(costEvents)
-        .leftJoin(heartbeatRuns, eq(costEvents.heartbeatRunId, heartbeatRuns.id))
         .innerJoin(
           issues,
           and(
-            sql`${issues.id} = ${effectiveIssueId}`,
+            eq(issues.id, costEvents.issueId),
             eq(issues.companyId, companyId),
           ),
         )
-        .where(and(...conditions, sql`${effectiveIssueId} is not null`))
-        .groupBy(effectiveIssueId, issues.identifier, issues.title, issues.status)
-        .orderBy(desc(costCentsExpr));
+        .where(and(...conditions))
+        .groupBy(costEvents.issueId, issues.identifier, issues.title, issues.status)
+        .orderBy(desc(costCentsExpr))
+        .limit(opts.limit ?? BY_ISSUE_LIMIT);
     },
   };
 }
