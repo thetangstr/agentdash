@@ -1,0 +1,1 @@
+ALTER TABLE "companies" ADD COLUMN "new_issues_start_as_todo" boolean DEFAULT false NOT NULL;

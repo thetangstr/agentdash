@@ -234,6 +234,8 @@ A configuration change that exceeds the ceiling fails with \`422\` and \`details
 
 ### Delegating and consolidating
 
+**Status decides whether delegated work starts.** \`todo\` means "start now": the assignee is woken as soon as the issue exists. \`backlog\` parks work: nobody is woken until someone moves it to \`todo\`. An issue created with no status gets the company default (\`backlog\` unless the company has turned on "start new issues right away"), so pass \`"status": "todo"\` explicitly whenever the work should begin now, and \`"status": "backlog"\` when you mean to park it. If you know who should do the work, assign them. A \`todo\` issue created with no assignee is handed to the Chief of Staff for triage, except one the Chief of Staff filed itself — a Chief of Staff delegating later must assign or park it.
+
 Delegate with child issues. When you consolidate, fetch \`GET /api/issues/:id/child-contributions\`. That returns each child's **complete child contribution** — full comments, linked documents, and work products, with the contributing agent on each entry — plus \`contributingAgentIds\` and a \`complete\` flag.
 
 Two rules follow:

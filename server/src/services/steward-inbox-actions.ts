@@ -7,6 +7,7 @@ import { logger } from "../middleware/logger.js";
 import { accessService } from "./access.js";
 import { logActivity } from "./index.js";
 import { issueService } from "./index.js";
+import { type IssueAssignmentWakeupDeps, queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
 import { stewardInboxService } from "./steward-inbox.js";
 
 /**
@@ -48,7 +49,14 @@ const HANDLE_TTL_MS = 15 * 60 * 1000;
  * asked to split it.
  */
 const MAX_ITEMS_PER_INSTRUCTION = 10;
-const MAX_WORK_LENGTH = 500;
+/**
+ * `work` names the job and becomes the issue title; `description` carries the
+ * brief. A `work` longer than a title is not refused — it is kept whole as the
+ * description and a title is cut from its first line, because the person meant
+ * every word of it and a rejection just makes them retype it on the board.
+ */
+const MAX_TITLE_LENGTH = 120;
+const MAX_DESCRIPTION_LENGTH = 20_000;
 
 /** The only cadences offered. Two options is the whole preference surface. */
 export const ALLOWED_CADENCE_MINUTES = [30, 60] as const;
@@ -58,7 +66,29 @@ export type StewardInboxActionKind = "assign_work" | "set_cadence";
 
 export interface AssignWorkRequest {
   kind: "assign_work";
-  items: Array<{ agent: string; work: string }>;
+  items: Array<{ agent: string; work: string; description?: string | null }>;
+}
+
+/**
+ * Split one instruction into the issue's title and description.
+ *
+ * Exported for the unit tests; the rule is small enough that the tests are the
+ * spec: an explicit description always wins, a short `work` is the title as-is,
+ * and a long one is kept whole as the description under a title cut from it.
+ */
+export function splitWorkIntoTitleAndDescription(
+  work: string,
+  description?: string | null,
+): { title: string; description: string | null } {
+  const brief = description?.trim() || null;
+  if (work.length <= MAX_TITLE_LENGTH) return { title: work, description: brief };
+
+  const firstLine = work.split(/\r?\n/, 1)[0]!.trim();
+  const title =
+    firstLine.length <= MAX_TITLE_LENGTH
+      ? firstLine
+      : `${firstLine.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`;
+  return { title, description: brief ? `${work}\n\n${brief}` : work };
 }
 export interface SetCadenceRequest {
   kind: "set_cadence";
@@ -127,7 +157,19 @@ export function suggestNames(given: string, candidates: string[]): string[] {
     .map((entry) => entry.name);
 }
 
-export function stewardInboxActionsService(db: Db) {
+export function stewardInboxActionsService(
+  db: Db,
+  options: {
+    /**
+     * Wakes the assignee when work is assigned. Optional so the unit tests can
+     * construct the service without a heartbeat; the bridge route always
+     * passes one, because assigned work that does not start is the bug this
+     * path had (MK, 2026-09: inbox assignments sat in backlog until someone
+     * commented).
+     */
+    heartbeat?: IssueAssignmentWakeupDeps;
+  } = {},
+) {
   const inbox = stewardInboxService(db);
   const access = accessService(db);
 
@@ -226,21 +268,28 @@ export function stewardInboxActionsService(db: Db) {
       .where(eq(agents.companyId, endpoint.companyId));
     const names = roster.map((a) => a.name);
 
-    const resolved: Array<{ agentId: string; agentName: string; work: string }> = [];
+    const resolved: Array<{
+      agentId: string;
+      agentName: string;
+      work: string;
+      title: string;
+      description: string | null;
+    }> = [];
     const ambiguities: Ambiguity[] = [];
 
     for (const item of request.items) {
       const work = (item.work ?? "").trim();
       if (!work) return { ok: false, reason: `No work described for "${item.agent}".` };
-      if (work.length > MAX_WORK_LENGTH) {
+      const { title, description } = splitWorkIntoTitleAndDescription(work, item.description);
+      if (description && description.length > MAX_DESCRIPTION_LENGTH) {
         return {
           ok: false,
-          reason: `The work described for "${item.agent}" is too long for a title. Shorten it, or open the issue in AgentDash and describe it there.`,
+          reason: `The brief for "${item.agent}" is over ${MAX_DESCRIPTION_LENGTH.toLocaleString("en-US")} characters. Put the long material in a document and link it.`,
         };
       }
       const exact = roster.filter((a) => normalize(a.name) === normalize(item.agent));
       if (exact.length === 1) {
-        resolved.push({ agentId: exact[0]!.id, agentName: exact[0]!.name, work });
+        resolved.push({ agentId: exact[0]!.id, agentName: exact[0]!.name, work, title, description });
         continue;
       }
       // Either nothing matched or more than one did; both are questions, not guesses.
@@ -259,7 +308,10 @@ export function stewardInboxActionsService(db: Db) {
     return {
       ok: true,
       handle,
-      readback: resolved.map((r) => `${r.agentName} — ${r.work}`),
+      // Says that the work starts on confirm, so nobody is surprised by it.
+      readback: resolved.map(
+        (r) => `${r.agentName} — ${r.title}${r.description ? " (with a brief)" : ""} — starts as soon as you confirm`,
+      ),
     };
   }
 
@@ -335,7 +387,19 @@ export function stewardInboxActionsService(db: Db) {
       return { ok: false, reason: "You do not have permission to assign work." };
     }
 
-    const items = (record.payload as { items?: Array<{ agentId: string; agentName: string; work: string }> }).items ?? [];
+    const items =
+      (
+        record.payload as {
+          items?: Array<{
+            agentId: string;
+            agentName: string;
+            work: string;
+            // Absent on handles minted before titles and briefs were split.
+            title?: string;
+            description?: string | null;
+          }>;
+        }
+      ).items ?? [];
     const created: Array<{ issueId: string; identifier: string | null; agentName: string }> = [];
     const failed: Array<{ agentName: string; work: string; reason: string }> = [];
     const issues = issueService(db);
@@ -355,8 +419,16 @@ export function stewardInboxActionsService(db: Db) {
       try {
         // Typed, never cast: the compiler checks this literal, so a mis-keyed
         // createdByUserId fails the build instead of silently writing NULL.
+        const split = item.title
+          ? { title: item.title, description: item.description ?? null }
+          : splitWorkIntoTitleAndDescription(item.work);
+        // `todo`, not the create default of `backlog`: a person assigning work
+        // to an agent means "do this now". Backlog is for parking, and parked
+        // work wakes nobody.
         const issue = await issues.create(endpoint.companyId, {
-          title: item.work,
+          title: split.title,
+          description: split.description,
+          status: "todo",
           assigneeAgentId: item.agentId,
           createdByUserId: endpoint.userId,
         });
@@ -375,6 +447,17 @@ export function stewardInboxActionsService(db: Db) {
           agentId: item.agentId,
           details: { via: "inbox_connect", assignedTo: item.agentName },
         }).catch((err) => logger.warn({ err }, "inbox assignment activity not recorded"));
+        if (options.heartbeat) {
+          void queueIssueAssignmentWakeup({
+            heartbeat: options.heartbeat,
+            issue,
+            reason: "issue_assigned",
+            mutation: "create",
+            contextSource: "inbox.assign_work",
+            requestedByActorType: "user",
+            requestedByActorId: endpoint.userId,
+          });
+        }
       } catch (err) {
         logger.error(
           { err, endpointId, agentId: item.agentId },

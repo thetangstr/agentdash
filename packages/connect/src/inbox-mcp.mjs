@@ -83,7 +83,7 @@ const TOOLS = [
     name: "inbox_propose",
     route: "propose",
     description:
-      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X'). If a name does not resolve this returns the alternatives — ask the person rather than guessing.",
+      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X'): `work` is a short name for the job (it becomes the issue title) and `description` is the full brief. Confirmed work is created as todo and the agent starts on it straight away. If a name does not resolve this returns the alternatives — ask the person rather than guessing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -92,7 +92,11 @@ const TOOLS = [
           type: "array",
           items: {
             type: "object",
-            properties: { agent: { type: "string" }, work: { type: "string" } },
+            properties: {
+              agent: { type: "string" },
+              work: { type: "string", description: "Short name for the job; becomes the issue title" },
+              description: { type: "string", description: "The full brief: context, what done looks like, constraints" },
+            },
             required: ["agent", "work"],
           },
         },

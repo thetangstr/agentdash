@@ -63,6 +63,7 @@ import {
 import { parseIssueGraphLivenessIncidentKey } from "./recovery/origins.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { authUsers } from "@paperclipai/db";
+import { defaultStatusForNewIssue, triageOwnerForNewIssue } from "./issue-start-policy.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -239,6 +240,12 @@ type IssueCreateInput = Omit<typeof issues.$inferInsert, "companyId"> & {
   labelIds?: string[];
   blockedByIssueIds?: string[];
   inheritExecutionWorkspaceFromIssueId?: string | null;
+  /**
+   * AgentDash: hand an unowned `todo` to the Chief of Staff. Callers set it
+   * only when the creator is allowed to assign work — routing assigns the
+   * CoS and wakes it with text the creator wrote.
+   */
+  routeUnownedTodoToChiefOfStaff?: boolean;
 };
 type IssueChildCreateInput = IssueCreateInput & {
   acceptanceCriteria?: string[];
@@ -3111,24 +3118,34 @@ export function issueService(db: Db) {
         labelIds: inputLabelIds,
         blockedByIssueIds,
         inheritExecutionWorkspaceFromIssueId,
+        routeUnownedTodoToChiefOfStaff,
         ...issueData
       } = data;
+      // AgentDash: the issue start policy (see issue-start-policy.ts). An
+      // omitted status takes the company default; an unowned `todo` goes to
+      // the Chief of Staff when the caller may assign — but never back to a
+      // CoS that created it, which would wake itself for its own issue.
+      if (issueData.status == null) issueData.status = await defaultStatusForNewIssue(db, companyId);
+      if (routeUnownedTodoToChiefOfStaff) {
+        const triageOwnerId = await triageOwnerForNewIssue(db, companyId, issueData);
+        if (triageOwnerId && triageOwnerId !== issueData.createdByAgentId) issueData.assigneeAgentId = triageOwnerId;
+      }
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
       if (!isolatedWorkspacesEnabled) {
         delete issueData.executionWorkspaceId;
         delete issueData.executionWorkspacePreference;
         delete issueData.executionWorkspaceSettings;
       }
-      if (data.assigneeAgentId && data.assigneeUserId) {
+      if (issueData.assigneeAgentId && issueData.assigneeUserId) {
         throw unprocessable("Issue can only have one assignee");
       }
-      if (data.assigneeAgentId) {
-        await assertAssignableAgent(companyId, data.assigneeAgentId);
+      if (issueData.assigneeAgentId) {
+        await assertAssignableAgent(companyId, issueData.assigneeAgentId);
       }
-      if (data.assigneeUserId) {
-        await assertAssignableUser(companyId, data.assigneeUserId);
+      if (issueData.assigneeUserId) {
+        await assertAssignableUser(companyId, issueData.assigneeUserId);
       }
-      if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
+      if (issueData.status === "in_progress" && !issueData.assigneeAgentId && !issueData.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
       return db.transaction(async (tx) => {

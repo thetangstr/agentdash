@@ -960,6 +960,13 @@
       "when": 1790514590534,
       "tag": "0136_activity_log_origin",
       "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1790569913269,
+      "tag": "0137_company_new_issues_start_as_todo",
+      "breakpoints": true
     }
   ]
 }

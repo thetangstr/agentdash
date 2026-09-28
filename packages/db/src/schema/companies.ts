@@ -24,6 +24,10 @@ export const companies = pgTable(
     requireBoardApprovalForNewAgents: boolean("require_board_approval_for_new_agents")
       .notNull()
       .default(false),
+    // AgentDash: the status a new issue gets when its creator names none.
+    // Off = `backlog` (parked, nobody woken); on = `todo` (the assignee is
+    // woken and starts). An explicit status on create always wins.
+    newIssuesStartAsTodo: boolean("new_issues_start_as_todo").notNull().default(false),
     feedbackDataSharingEnabled: boolean("feedback_data_sharing_enabled")
       .notNull()
       .default(false),

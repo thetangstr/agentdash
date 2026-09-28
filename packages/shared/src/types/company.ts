@@ -14,6 +14,8 @@ export interface Company {
   spentMonthlyCents: number;
   attachmentMaxBytes: number;
   requireBoardApprovalForNewAgents: boolean;
+  /** AgentDash: new issues with no status given start as `todo` instead of `backlog`. */
+  newIssuesStartAsTodo: boolean;
   feedbackDataSharingEnabled: boolean;
   feedbackDataSharingConsentAt: Date | null;
   feedbackDataSharingConsentByUserId: string | null;
