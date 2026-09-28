@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { healthApi } from "./api/health";

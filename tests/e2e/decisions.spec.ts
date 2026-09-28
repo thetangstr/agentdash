@@ -29,6 +29,13 @@ async function createCompany(request: APIRequestContext, productProfile?: string
 }
 
 async function expectHealthySettledUrl(page: Page, url: string, where: string) {
+  // Wait on the URL itself: networkidle can settle before the post-skeleton
+  // client-side Navigate commits on slow CI, so asserting pathname right
+  // after it raced the redirect. Fall through to the assertion on timeout —
+  // it reports the actual landing path.
+  await page
+    .waitForURL((u) => new URL(u).pathname === url, { timeout: 15_000 })
+    .catch(() => undefined);
   await page.waitForLoadState("networkidle").catch(() => undefined);
   const pathname = new URL(page.url()).pathname;
   expect(pathname, `${where}: deep link was rewritten`).toBe(url);

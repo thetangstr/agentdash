@@ -54,16 +54,33 @@ if (typeof window !== "undefined") {
 const CompanyContext = createContext<CompanyContextValue | null>(null);
 
 export function resolveBootstrapCompanySelection(input: {
-  companies: Array<Pick<Company, "id">>;
-  sidebarCompanies: Array<Pick<Company, "id">>;
+  companies: Array<Pick<Company, "id" | "issuePrefix">>;
+  sidebarCompanies: Array<Pick<Company, "id" | "issuePrefix">>;
   selectedCompanyId: string | null;
   storedCompanyId: string | null;
+  routeCompanyPrefix?: string | null;
+  selectionSource?: CompanySelectionSource;
 }) {
   if (input.companies.length === 0) return null;
 
   const selectableCompanies = input.sidebarCompanies.length > 0
     ? input.sidebarCompanies
     : input.companies;
+  // A company-prefixed deep link names the company it is about; select it
+  // rather than whichever company happened to be stored, so profile-gated
+  // route switches read the right profile on a mixed-profile instance. A
+  // manual switch wins while its remembered-path navigation is in flight —
+  // same guard as shouldSyncCompanySelectionFromRoute.
+  const manualSwitchInFlight =
+    input.selectionSource === "manual" &&
+    input.selectedCompanyId !== null &&
+    selectableCompanies.some((company) => company.id === input.selectedCompanyId);
+  if (input.routeCompanyPrefix && !manualSwitchInFlight) {
+    const routeCompany = selectableCompanies.find(
+      (company) => company.issuePrefix.toUpperCase() === input.routeCompanyPrefix!.toUpperCase(),
+    );
+    if (routeCompany) return routeCompany.id;
+  }
   if (input.selectedCompanyId && selectableCompanies.some((company) => company.id === input.selectedCompanyId)) {
     return input.selectedCompanyId;
   }
@@ -126,12 +143,16 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       sidebarCompanies,
       selectedCompanyId,
       storedCompanyId: localStorage.getItem(STORAGE_KEY),
+      // Read at effect time so a cold deep link's prefix is current; a first
+      // segment that matches no issuePrefix falls through to stored/first.
+      routeCompanyPrefix: window.location.pathname.split("/").filter(Boolean)[0] ?? null,
+      selectionSource,
     });
     if (next === null || next === selectedCompanyId) return;
     setSelectedCompanyIdState(next);
     setSelectionSource("bootstrap");
     localStorage.setItem(STORAGE_KEY, next);
-  }, [companies, companyListUnauthorized, isLoading, selectedCompanyId, sidebarCompanies]);
+  }, [companies, companyListUnauthorized, isLoading, selectedCompanyId, selectionSource, sidebarCompanies]);
 
   const setSelectedCompanyId = useCallback((companyId: string, options?: CompanySelectionOptions) => {
     setSelectedCompanyIdState(companyId);
