@@ -178,6 +178,12 @@ export function OAuthConsent() {
                 </div>
               </dl>
 
+              {/* AgentDash (GH #793): one line on what the assistant can do. */}
+              <p className="mt-4 text-sm text-muted-foreground">
+                {view.data.clientName} can ask your agents for work, tell you what
+                shipped, and bring you their decisions.
+              </p>
+
               <fieldset className="mt-4">
                 <legend className="text-xs font-medium text-muted-foreground">
                   What it may do

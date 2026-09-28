@@ -7,7 +7,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockStatus = vi.hoisted(() => vi.fn());
+const mockListGrants = vi.hoisted(() => vi.fn());
 vi.mock("@/api/firstRun", () => ({ firstRunApi: { status: mockStatus } }));
+vi.mock("@/api/assistant-grants", () => ({
+  assistantGrantsApi: { listMine: mockListGrants },
+}));
 vi.mock("@/lib/router", async () => {
   const dom = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return { Link: dom.Link };
@@ -38,6 +42,8 @@ describe("FirstRunHomeNudges", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockStatus.mockReset();
+    mockListGrants.mockReset();
+    mockListGrants.mockResolvedValue({ grants: [] });
     try {
       window.localStorage.clear();
     } catch {
@@ -61,9 +67,13 @@ describe("FirstRunHomeNudges", () => {
         </QueryClientProvider>,
       );
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    // The grants query only fires once firstRun.status resolves, so flush
+    // a few ticks for the chained query to settle.
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
   }
 
   it("offers to continue setup when a step is left", async () => {
@@ -94,6 +104,26 @@ describe("FirstRunHomeNudges", () => {
     expect(container.textContent).not.toContain("Plan with your Chief of Staff");
     const dismiss = container.querySelector('button[aria-label="Dismiss the Connect Muse card"]') as HTMLButtonElement;
     act(() => dismiss.click());
+    expect(container.querySelector('[data-testid="connect-muse"]')).toBeNull();
+  });
+
+  // AgentDash (GH #793): once a grant exists the card has done its job.
+  it("hides the Connect Muse card when the person already has an assistant grant", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "done" });
+    mockListGrants.mockResolvedValue({
+      grants: [
+        {
+          id: "g1",
+          clientId: "muse",
+          clientName: "Muse",
+          redirectHost: "muse.meta.example",
+          scopes: ["agentdash:read"],
+          createdAt: null,
+          lastUsedAt: null,
+        },
+      ],
+    });
+    await render();
     expect(container.querySelector('[data-testid="connect-muse"]')).toBeNull();
   });
 

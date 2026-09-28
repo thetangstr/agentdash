@@ -27,10 +27,14 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
+const mockCompany = vi.hoisted(() => ({
+  current: { id: "company-1", name: "Paperclip" } as Record<string, unknown>,
+}));
+
 vi.mock("@/context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    selectedCompany: { id: "company-1", name: "Paperclip" },
+    selectedCompany: mockCompany.current,
   }),
 }));
 
@@ -67,12 +71,30 @@ async function flushReact() {
   });
 }
 
+async function renderSidebar(container: HTMLDivElement) {
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <CompanySettingsSidebar />
+      </QueryClientProvider>,
+    );
+  });
+  await flushReact();
+  return root;
+}
+
 describe("CompanySettingsSidebar", () => {
   let container: HTMLDivElement;
 
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
+    mockCompany.current = { id: "company-1", name: "Paperclip" };
     mockSidebarBadgesApi.get.mockResolvedValue({
       inbox: 0,
       approvals: 0,
@@ -88,19 +110,7 @@ describe("CompanySettingsSidebar", () => {
   });
 
   it("renders the company back link and the settings sections in the sidebar", async () => {
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <CompanySettingsSidebar />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
+    const root = await renderSidebar(container);
 
     expect(container.textContent).toContain("Paperclip");
     expect(container.textContent).toContain("Company Settings");
@@ -136,6 +146,31 @@ describe("CompanySettingsSidebar", () => {
         label: "Invites",
         end: true,
       }),
+    );
+    // AgentDash (GH #793): Connections shows on the default profile.
+    expect(sidebarNavItemMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/company/settings/connections",
+        label: "Connections",
+        end: true,
+      }),
+    );
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("hides the Connections item on the agentdash_mk profile", async () => {
+    mockCompany.current = {
+      id: "company-1",
+      name: "Paperclip",
+      productProfile: "agentdash_mk",
+    };
+    const root = await renderSidebar(container);
+
+    expect(sidebarNavItemMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Connections" }),
     );
 
     await act(async () => {

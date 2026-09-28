@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ChevronLeft, MailPlus, MonitorCog, Settings, Shield, SlidersHorizontal } from "lucide-react";
+import { Activity, ChevronLeft, Link2, MailPlus, MonitorCog, Settings, Shield, SlidersHorizontal } from "lucide-react";
 import { sidebarBadgesApi } from "@/api/sidebarBadges";
 import { ApiError } from "@/api/client";
 import { Link } from "@/lib/router";
@@ -54,6 +54,15 @@ export function CompanySettingsSidebar() {
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide px-3 py-2">
         <div className="flex flex-col gap-0.5">
           <SidebarNavItem to="/company/settings" label="General" icon={SlidersHorizontal} end />
+          {/* AgentDash (GH #793): default profile only — MK keeps its settings nav. */}
+          {selectedCompany?.productProfile !== "agentdash_mk" ? (
+            <SidebarNavItem
+              to="/company/settings/connections"
+              label="Connections"
+              icon={Link2}
+              end
+            />
+          ) : null}
           <SidebarNavItem
             to="/company/settings/environments"
             label="Environments"
