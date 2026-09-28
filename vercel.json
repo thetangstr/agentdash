@@ -3,6 +3,103 @@
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm run preflight:workspace-links && pnpm --filter @paperclipai/adapter-utils build && pnpm --filter @paperclipai/ui build",
   "outputDirectory": "ui/dist",
+  "redirects": [
+    {
+      "source": "/auth",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/login",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/signin",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/sign-in",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/forgot-password",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/reset-password",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/invite/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/board-claim/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/cli-auth/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/claim",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/companies",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/signup",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/sign-up",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/company-create",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/onboarding",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/trial",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/share/:path*",
+      "destination": "/",
+      "permanent": false
+    },
+    {
+      "source": "/:path((?!(?:demo|consulting|about|mcp|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
+      "destination": "/find",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/cloud/:path*",

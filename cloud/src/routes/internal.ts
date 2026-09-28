@@ -202,13 +202,13 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
   });
   router.post("/invites/import", async (req, res) => {
     if (!deps.invites) return void res.status(409).json({ error: "invites are not configured" });
-    const { codes, label } = (req.body ?? {}) as { codes?: unknown; label?: unknown };
+    const { codes, label, allowShort } = (req.body ?? {}) as { codes?: unknown; label?: unknown; allowShort?: unknown };
     const list = typeof codes === "string" ? parseCodeList(codes) : Array.isArray(codes) && codes.every((c) => typeof c === "string") ? parseCodeList(codes.join("\n")) : null;
     if (!list || list.length === 0 || list.length > 10_000) {
       res.status(400).json({ error: 'body must be {"codes": "<codes separated by commas or newlines>", "label"?: "..."} with 1 to 10000 codes' });
       return;
     }
-    const result = await deps.invites.importCodes(list, typeof label === "string" ? label.slice(0, 120) : null, "admin-cli", adminIp(res));
+    const result = await deps.invites.importCodes(list, typeof label === "string" ? label.slice(0, 120) : null, "admin-cli", adminIp(res), { allowShort: allowShort === true });
     log.info("invite codes imported", result);
     res.json(result);
   });

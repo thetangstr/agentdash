@@ -26,9 +26,23 @@ import { visitorOf } from "./routes/public.js";
 export const INVITE_WINDOW_MS = 15 * 60_000;
 /** Same as the box's auth-tier limiter: 10 attempts per 15 minutes per client. */
 export const INVITE_MAX_PER_IP = 10;
-/** Ceiling per connecting address (Vercel, when the client IP comes from a header). */
-export const INVITE_MAX_PER_PROXY = 600;
 const CODE_MAX = 120;
+/**
+ * GH #837 review: codes shorter than this are refused at import unless the
+ * operator insists. At 10 guesses per 15 minutes per address a short code
+ * falls to a distributed guesser; 12 random characters from [A-Z0-9] do not.
+ */
+export const INVITE_MIN_LENGTH = 12;
+
+/** Length buckets for an import report: shows how guessable a batch is without showing a code. */
+export function lengthHistogram(codes: string[]): Record<string, number> {
+  const out: Record<string, number> = { "1-7": 0, "8-11": 0, "12-15": 0, "16-23": 0, "24+": 0 };
+  for (const c of codes) {
+    const n = c.length;
+    out[n < 8 ? "1-7" : n < 12 ? "8-11" : n < 16 ? "12-15" : n < 24 ? "16-23" : "24+"]! += 1;
+  }
+  return out;
+}
 
 function hmacUnder(key: { reveal(): string }, code: string): string {
   return createHmac("sha256", Buffer.from(key.reveal(), "hex")).update(`agentdash-invite-code:${code}`, "utf8").digest("hex");
@@ -65,14 +79,26 @@ export function inviteService(db: CloudDb, keys: DataKeyring) {
     },
 
     /** Import codes (only their HMACs are stored). Returns counts, never codes. */
-    async importCodes(codes: string[], label: string | null, actor: string, ip: string | null): Promise<{ added: number; alreadyPresent: number; rejected: number }> {
+    async importCodes(
+      codes: string[],
+      label: string | null,
+      actor: string,
+      ip: string | null,
+      opts: { allowShort?: boolean } = {},
+    ): Promise<{ added: number; alreadyPresent: number; rejected: number; rejectedShort: number; lengths: Record<string, number> }> {
       let added = 0;
       let alreadyPresent = 0;
       let rejected = 0;
+      let rejectedShort = 0;
+      const lengths = lengthHistogram(codes);
       await db.transaction(async (tx) => {
         for (const code of codes) {
           if (code.length > CODE_MAX) {
             rejected += 1;
+            continue;
+          }
+          if (code.length < INVITE_MIN_LENGTH && !opts.allowShort) {
+            rejectedShort += 1;
             continue;
           }
           const existing = await tx.select({ id: inviteCodes.id }).from(inviteCodes).where(inArray(inviteCodes.codeHash, candidateHashes(keys, code)));
@@ -83,9 +109,9 @@ export function inviteService(db: CloudDb, keys: DataKeyring) {
           await tx.insert(inviteCodes).values({ codeHash: inviteCodeHash(keys, code), label });
           added += 1;
         }
-        await tx.insert(operatorAudit).values({ kind: "invite_codes_changed", actor, ip, detail: { action: "import", label, added, alreadyPresent, rejected } });
+        await tx.insert(operatorAudit).values({ kind: "invite_codes_changed", actor, ip, detail: { action: "import", label, added, alreadyPresent, rejected, rejectedShort, allowShort: Boolean(opts.allowShort), lengths } });
       });
-      return { added, alreadyPresent, rejected };
+      return { added, alreadyPresent, rejected, rejectedShort, lengths };
     },
 
     async add(label: string | null, actor: string, ip: string | null): Promise<{ id: string; code: string }> {
@@ -131,7 +157,8 @@ export function inviteValidateRoutes(opts: {
   };
   router.post("/invites/validate", async (req, res) => {
     const visitor = visitorOf(req, config);
-    if (visitor.proxyIp && !(await takeHit(db, { bucket: "invite_proxy", limit: INVITE_MAX_PER_PROXY, windowMs: INVITE_WINDOW_MS }, visitor.proxyIp))) return limited(res);
+    // GH #837 review: the same trusted-proxy rule as the front door (visitorOf): the
+    // client-IP header counts only with www's shared secret.
     if (!(await takeHit(db, { bucket: "invite_ip", limit: INVITE_MAX_PER_IP, windowMs: INVITE_WINDOW_MS }, visitor.ip ?? "unknown"))) return limited(res);
     const raw = (req.body ?? {}).code;
     const code = typeof raw === "string" ? raw.trim() : "";

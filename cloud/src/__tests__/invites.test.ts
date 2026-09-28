@@ -35,7 +35,9 @@ async function serve(app: AppT): Promise<http.Server> {
 const ADMIN = randomBytes(32).toString("hex");
 const KEY_A = "55".repeat(32);
 const KEY_B = "66".repeat(32);
-const IP = "x-test-client-ip";
+const IP = "x-agentdash-client-ip";
+const PROXY_HEADER = "x-agentdash-edge-proxy";
+const PROXY_SECRET = randomBytes(32).toString("hex");
 let pg: TestDatabase;
 let db: CloudDb;
 let close: () => Promise<void>;
@@ -49,14 +51,14 @@ function config(extra: Record<string, string> = {}) {
     CLOUD_DATA_KEY: KEY_A,
     CLOUD_ADMIN_TOKEN: ADMIN,
     CLOUD_ADMIN_ALLOWED_IPS: "127.0.0.1,::1",
-    CLOUD_PUBLIC_CLIENT_IP_HEADER: IP,
+    CLOUD_VERCEL_PROXY_SECRET: PROXY_SECRET,
     ...extra,
   });
 }
 
 const ip = () => `198.18.${++n % 250}.${Math.floor(Math.random() * 250)}`;
 const validate = (app: Target | Server, body: unknown, from = ip()) =>
-  request(app).post("/api/invites/validate").set(IP, from).send(body as object);
+  request(app).post("/api/invites/validate").set(PROXY_HEADER, PROXY_SECRET).set(IP, from).send(body as object);
 
 beforeAll(async () => {
   pg = await startTestDatabase();
@@ -73,16 +75,16 @@ afterAll(async () => {
 describe("POST /api/invites/validate", () => {
   it("answers {valid:true} for a known code and {valid:false} for a wrong one", async () => {
     const cfg = config();
-    await inviteService(db, cfg.dataKeys).importCodes(["AGD-KNOWN-1"], "test", "test", null);
+    await inviteService(db, cfg.dataKeys).importCodes(["AGD-KNOWN-00001"], "test", "test", null);
     const app = await serve(createApp({ db, config: cfg, log }));
-    const ok = await validate(app, { code: "AGD-KNOWN-1" });
+    const ok = await validate(app, { code: "AGD-KNOWN-00001" });
     expect(ok.status).toBe(200);
     expect(ok.body).toEqual({ valid: true });
-    expect((await validate(app, { code: "  AGD-KNOWN-1  " })).body).toEqual({ valid: true });
+    expect((await validate(app, { code: "  AGD-KNOWN-00001  " })).body).toEqual({ valid: true });
     const bad = await validate(app, { code: "AGD-KNOWN-2" });
     expect(bad.status).toBe(200);
     expect(bad.body).toEqual({ valid: false });
-    expect(logLines.join("\n")).not.toContain("AGD-KNOWN-1");
+    expect(logLines.join("\n")).not.toContain("AGD-KNOWN-00001");
   });
 
   it("answers 400 invalid_body for a missing, empty or oversized code", async () => {
@@ -119,6 +121,18 @@ describe("POST /api/invites/validate", () => {
     expect((await validate(app, { code })).body).toEqual({ valid: false });
   });
 
+  it("keys the limit on the real address unless the proxy secret vouches for the header (GH #837 review)", async () => {
+    const app = await serve(createApp({ db, config: config(), log }));
+    // No secret: rotating a forged X-AgentDash-Client-IP does not escape the 10 per 15 minutes on 127.0.0.1.
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      statuses.push((await request(app).post("/api/invites/validate").set(IP, `203.0.113.${i}`).send({ code: "guess" })).status);
+    }
+    expect(statuses.slice(-1)[0]).toBe(429);
+    // With the secret, a fresh header address is its own client.
+    expect((await validate(app, { code: "guess" })).status).toBe(200);
+  });
+
   it("every other /api path answers 410", async () => {
     const app = await serve(createApp({ db, config: config(), log }));
     for (const path of ["/api/health", "/api/auth/sign-in/email", "/api/companies"]) {
@@ -153,16 +167,25 @@ describe("admin invites", () => {
 
   it("import reads stdin and never echoes a code; add prints its one code; revoke; list", async () => {
     const env = { CLOUD_CONTROL_URL: url, CLOUD_ADMIN_TOKEN: ADMIN };
-    let t = io("OLD-CODE-1,OLD-CODE-2\nOLD-CODE-3\n");
+    let t = io("OLD-CODE-00001,OLD-CODE-00002\nOLD-CODE-00003\n");
     expect(await runAdmin(["invites", "import", "old-instance"], env, t.io)).toBe(0);
-    expect(JSON.parse(t.out.join(""))).toEqual({ added: 3, alreadyPresent: 0, rejected: 0 });
+    expect(JSON.parse(t.out.join(""))).toEqual({ added: 3, alreadyPresent: 0, rejected: 0, rejectedShort: 0, lengths: { "1-7": 0, "8-11": 0, "12-15": 3, "16-23": 0, "24+": 0 } });
     expect(t.out.join("")).not.toContain("OLD-CODE");
-    t = io("OLD-CODE-1");
+    t = io("OLD-CODE-00001");
     expect(await runAdmin(["invites", "import"], env, t.io)).toBe(0);
-    expect(JSON.parse(t.out.join(""))).toEqual({ added: 0, alreadyPresent: 1, rejected: 0 });
+    expect(JSON.parse(t.out.join(""))).toMatchObject({ added: 0, alreadyPresent: 1, rejected: 0 });
+
+    // GH #837 review: short, guessable codes are refused unless the operator insists.
+    t = io("SHORT1,MKTHINK26,LONG-ENOUGH-CODE-1");
+    expect(await runAdmin(["invites", "import", "short-test"], env, t.io)).toBe(0);
+    expect(JSON.parse(t.out.join(""))).toEqual({ added: 1, alreadyPresent: 0, rejected: 0, rejectedShort: 2, lengths: { "1-7": 1, "8-11": 1, "12-15": 0, "16-23": 1, "24+": 0 } });
+    expect(t.out.join("")).not.toContain("SHORT1");
+    t = io("MKTHINK26");
+    expect(await runAdmin(["invites", "import", "short-test", "--allow-short"], env, t.io)).toBe(0);
+    expect(JSON.parse(t.out.join(""))).toMatchObject({ added: 1, rejectedShort: 0 });
 
     const app = await serve(createApp({ db, config: config(), log }));
-    expect((await validate(app, { code: "OLD-CODE-2" })).body).toEqual({ valid: true });
+    expect((await validate(app, { code: "OLD-CODE-00002" })).body).toEqual({ valid: true });
 
     t = io();
     expect(await runAdmin(["invites", "add", "partner"], env, t.io)).toBe(0);

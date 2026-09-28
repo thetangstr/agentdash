@@ -20,7 +20,9 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
   fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
   invites list               list self-hosted invite codes (ids and labels; codes are never stored)
-  invites import [label]     read codes from stdin (commas or newlines) and store their hashes
+  invites import [label] [--allow-short]
+                             read codes from stdin (commas or newlines) and store their hashes;
+                             codes under 12 characters are refused unless --allow-short
   invites add [label]        make one new code and print it once
   invites revoke <id>        revoke a code
   jobs list [state]          list jobs (all by default; queued, running, succeeded, failed, dead)
@@ -107,13 +109,19 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
   }
   if (group === "fleet" && action === "edge-backfill") return print(await call("POST", "/fleet/edge-backfill"));
   if (group === "invites" && action === "list") return print(await call("GET", "/invites"));
-  if (group === "invites" && action === "import" && rest.length <= 1) {
+  if (group === "invites" && action === "import") {
+    const allowShort = rest.includes("--allow-short");
+    const args = rest.filter((a) => a !== "--allow-short");
+    if (args.length > 1) {
+      io.err(USAGE);
+      return 64;
+    }
     if (!io.readStdin) {
       io.err("invites import reads codes from stdin");
       return 2;
     }
     const codes = await io.readStdin();
-    return print(await call("POST", "/invites/import", { codes, ...(rest[0] ? { label: rest[0] } : {}) }));
+    return print(await call("POST", "/invites/import", { codes, ...(args[0] ? { label: args[0] } : {}), ...(allowShort ? { allowShort: true } : {}) }));
   }
   if (group === "invites" && action === "add" && rest.length <= 1) return print(await call("POST", "/invites", rest[0] ? { label: rest[0] } : {}));
   if (group === "invites" && action === "revoke" && rest.length === 1) return print(await call("POST", `/invites/${encodeURIComponent(rest[0]!)}/revoke`));
