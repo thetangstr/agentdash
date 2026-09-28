@@ -41,12 +41,16 @@ describe("Landing", () => {
     expect(text).toContain("Claude Code or Codex");
     expect(text).toContain("Simulated walkthrough");
     expect(text).toContain("Self-hosted and open source today");
-    expect(text).not.toMatch(/Start free|Placeholder|Logo 1/);
+    expect(text).not.toMatch(/Placeholder|Logo 1/);
+    // SC-9 (GH #770): the self-serve front door exists, so the page offers it.
+    expect(text).toContain("Start free");
 
     const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? "");
     expect(hrefs.some((h) => h.startsWith(`mailto:${CONTACT_EMAIL}`))).toBe(true);
     expect(hrefs.some((h) => h.startsWith(GITHUB_URL))).toBe(true);
     expect(hrefs).toContain("/demo");
+    expect(hrefs).toContain("/start");
+    expect(hrefs).not.toContain("/auth");
     expect(hrefs.some((h) => h.includes("sign_up"))).toBe(false);
   });
 

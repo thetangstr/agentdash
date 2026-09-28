@@ -104,7 +104,8 @@ export const ACCOUNT_TRANSITIONS: Record<AccountStatus, readonly AccountStatus[]
   deleted: [],
 };
 
-export const OPERATOR_AUDIT_KINDS = ["setting_changed", "admin_refused"] as const;
+// AgentDash (SC-9, GH #770): invite_codes_changed records imports, adds and revokes (counts and ids, never a code).
+export const OPERATOR_AUDIT_KINDS = ["setting_changed", "admin_refused", "invite_codes_changed"] as const;
 export type OperatorAuditKind = (typeof OPERATOR_AUDIT_KINDS)[number];
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();

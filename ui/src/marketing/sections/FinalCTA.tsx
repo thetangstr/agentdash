@@ -13,8 +13,8 @@ export function FinalCTA() {
           AgentDash would run it, what would wait on you, and what it would cost.
         </p>
         <div className="mkt-final__cta-row">
-          <Button href={CTA.walkthrough.href}>{CTA.walkthrough.label}</Button>
-          <Button href={CTA.selfHost.href} variant="ghost">{CTA.selfHost.label}</Button>
+          <Button href={CTA.startFree.href}>{CTA.startFree.label}</Button>
+          <Button href={CTA.walkthrough.href} variant="ghost">{CTA.walkthrough.label}</Button>
         </div>
         <p className="mkt-final__note">{READINESS_LINE}</p>
       </div>

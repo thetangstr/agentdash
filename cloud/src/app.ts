@@ -13,6 +13,7 @@ import { RailwayClient } from "./railway/client.js";
 import { frontDoor as makeFrontDoor, type FrontDoor } from "./front-door/service.js";
 import { logMailer, type Mailer, resendMailer, unconfiguredMailer } from "./front-door/mailer.js";
 import { publicRoutes } from "./routes/public.js";
+import { inviteService, inviteValidateRoutes } from "./invites.js";
 
 /** The front door's mail transport from config (SC-7, GH #768). */
 export function mailerFromConfig(config: CloudConfig, log: Logger): Mailer {
@@ -48,6 +49,12 @@ export function createApp(opts: {
 
   // AgentDash (SC-7, GH #768): the public front door, reached through www's /api/cloud rewrite.
   app.use("/api/cloud", publicRoutes({ frontDoor, config }));
+  // AgentDash (SC-9, GH #770): the self-hosted invite validator, reached through www's rewrite.
+  app.use("/api", inviteValidateRoutes({ db, log, config }));
+  // Every other /api path on www used to reach the old shared instance; it is gone (spec §7 step 2).
+  app.use("/api", (_req, res) => {
+    res.status(410).json({ error: "gone", message: "This API moved. Hosted workspaces live at https://<name>.agentdash.cloud; find yours at https://www.agentdash.cloud/find." });
+  });
 
   // Refused operator requests are audited (append-only table, GH #778). No
   // credential is ever part of a Refusal.
@@ -61,6 +68,7 @@ export function createApp(opts: {
   };
   app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log, {
     frontDoor,
+    invites: inviteService(db, config.dataKeys),
     // AgentDash (#807 review): the fleet step for when the edge router goes live.
     ...(config.railwayToken && config.railwayWorkspaceId
       ? {

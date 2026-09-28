@@ -5,6 +5,8 @@ export interface AdminIo {
   out: (line: string) => void;
   err: (line: string) => void;
   fetch: typeof fetch;
+  /** Reads all of stdin (for `invites import`). */
+  readStdin?: () => Promise<string>;
 }
 
 export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <command>
@@ -17,6 +19,10 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   boxes retry <slug>         resume a failed box's provision job at its failed step
   boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
   fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
+  invites list               list self-hosted invite codes (ids and labels; codes are never stored)
+  invites import [label]     read codes from stdin (commas or newlines) and store their hashes
+  invites add [label]        make one new code and print it once
+  invites revoke <id>        revoke a code
   jobs list [state]          list jobs (all by default; queued, running, succeeded, failed, dead)
   waitlist list [state]      list the waitlist (waiting by default; approved, rejected, all)
   waitlist approve <id>      approve a waiting entry (the person is emailed)
@@ -100,6 +106,17 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
     return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));
   }
   if (group === "fleet" && action === "edge-backfill") return print(await call("POST", "/fleet/edge-backfill"));
+  if (group === "invites" && action === "list") return print(await call("GET", "/invites"));
+  if (group === "invites" && action === "import" && rest.length <= 1) {
+    if (!io.readStdin) {
+      io.err("invites import reads codes from stdin");
+      return 2;
+    }
+    const codes = await io.readStdin();
+    return print(await call("POST", "/invites/import", { codes, ...(rest[0] ? { label: rest[0] } : {}) }));
+  }
+  if (group === "invites" && action === "add" && rest.length <= 1) return print(await call("POST", "/invites", rest[0] ? { label: rest[0] } : {}));
+  if (group === "invites" && action === "revoke" && rest.length === 1) return print(await call("POST", `/invites/${encodeURIComponent(rest[0]!)}/revoke`));
   if (group === "jobs" && action === "list") {
     return print(await call("GET", `/jobs?state=${encodeURIComponent(rest[0] ?? "all")}`));
   }
