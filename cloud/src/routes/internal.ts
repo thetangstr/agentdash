@@ -12,6 +12,7 @@ import type { Logger } from "../logger.js";
 import { isSettingKey, SettingValidationError, settingsService } from "../settings.js";
 import { EdgeNotLive } from "../railway/edge-backfill.js";
 import type { FrontDoor } from "../front-door/service.js";
+import { type inviteService, parseCodeList } from "../invites.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
@@ -19,6 +20,8 @@ const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
 export interface InternalRouteDeps {
   /** SC-7 (GH #768): approval emails and the approved-waitlist release. */
   frontDoor?: Pick<FrontDoor, "notifyApproved" | "releaseApproved">;
+  /** SC-9 (GH #770): the self-hosted invite codes. */
+  invites?: ReturnType<typeof inviteService>;
   /** The fleet edge-secret back-fill (#807 review); absent without a Railway token. */
   edgeBackfill?: () => Promise<unknown>;
 }
@@ -188,6 +191,39 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
       return;
     }
     res.json({ released: await deps.frontDoor.releaseApproved() });
+  });
+
+  // AgentDash (SC-9, GH #770): the self-hosted invite codes. No response ever carries a stored code;
+  // `add` returns the one new code it made, once.
+  const adminIp = (res: import("express").Response) => (typeof res.locals.adminIp === "string" ? res.locals.adminIp : null);
+  router.get("/invites", async (_req, res) => {
+    if (!deps.invites) return void res.status(409).json({ error: "invites are not configured" });
+    res.json({ invites: await deps.invites.list() });
+  });
+  router.post("/invites/import", async (req, res) => {
+    if (!deps.invites) return void res.status(409).json({ error: "invites are not configured" });
+    const { codes, label, allowShort } = (req.body ?? {}) as { codes?: unknown; label?: unknown; allowShort?: unknown };
+    const list = typeof codes === "string" ? parseCodeList(codes) : Array.isArray(codes) && codes.every((c) => typeof c === "string") ? parseCodeList(codes.join("\n")) : null;
+    if (!list || list.length === 0 || list.length > 10_000) {
+      res.status(400).json({ error: 'body must be {"codes": "<codes separated by commas or newlines>", "label"?: "..."} with 1 to 10000 codes' });
+      return;
+    }
+    const result = await deps.invites.importCodes(list, typeof label === "string" ? label.slice(0, 120) : null, "admin-cli", adminIp(res), { allowShort: allowShort === true });
+    log.info("invite codes imported", result);
+    res.json(result);
+  });
+  router.post("/invites", async (req, res) => {
+    if (!deps.invites) return void res.status(409).json({ error: "invites are not configured" });
+    const label = typeof (req.body ?? {}).label === "string" ? String(req.body.label).slice(0, 120) : null;
+    const result = await deps.invites.add(label, "admin-cli", adminIp(res));
+    log.info("invite code added", { id: result.id });
+    res.status(201).json(result);
+  });
+  router.post("/invites/:id/revoke", async (req, res) => {
+    if (!deps.invites) return void res.status(409).json({ error: "invites are not configured" });
+    if (!UUID_RE.test(req.params.id)) return void res.status(400).json({ error: "id must be a uuid" });
+    if (!(await deps.invites.revoke(req.params.id, "admin-cli", adminIp(res)))) return void res.status(404).json({ error: "no live invite code with that id" });
+    res.json({ id: req.params.id, revoked: true });
   });
 
   // AgentDash (GH #764): the job queue and the failed-box actions.

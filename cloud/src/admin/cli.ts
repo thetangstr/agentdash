@@ -5,6 +5,11 @@ runAdmin(process.argv.slice(2), process.env, {
   out: (l) => process.stdout.write(l + "\n"),
   err: (l) => process.stderr.write(l + "\n"),
   fetch,
+  readStdin: async () => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString("utf8");
+  },
 }).then(
   (code) => process.exit(code),
   (err: unknown) => {

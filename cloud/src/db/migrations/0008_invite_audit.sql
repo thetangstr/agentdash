@@ -1,0 +1,2 @@
+ALTER TABLE "operator_audit" DROP CONSTRAINT "operator_audit_kind_ck";--> statement-breakpoint
+ALTER TABLE "operator_audit" ADD CONSTRAINT "operator_audit_kind_ck" CHECK (kind in ('setting_changed', 'admin_refused', 'invite_codes_changed'));

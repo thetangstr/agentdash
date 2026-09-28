@@ -21,7 +21,10 @@ function walk(dir: string, out: string[] = []): string[] {
 const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /placeholder:? replace|\[Founder|\[Title\]|Logo [1-5]\b|FILL IN/i, why: "placeholder copy" },
   { pattern: /agentdash\.example|@agentdash\.com\b/, why: "mailbox that does not exist (agentdash.com is parked)" },
-  { pattern: /Start free|No credit card|free trial/i, why: "self-serve signup is not available" },
+  // SC-9 (GH #770): "Start free" is allowed now that /start exists (one free
+  // workspace per email). Trial and card claims stay out: the trial runs
+  // inside a workspace, and the site should not promise billing terms.
+  { pattern: /No credit card|free trial/i, why: "billing terms belong to the product, not the homepage" },
   { pattern: /Skills Registry|Smart Model Routing|Policy Engine|HubSpot/i, why: "capability dropped from v2" },
   { pattern: /customers? (love|trust)|trusted by|\b\d+\+? (companies|customers|teams) (use|run)/i, why: "adoption claim without evidence" },
   { pattern: /\$\d+\s*\/\s*(seat|month|mo)\b/i, why: "pricing is not decided for the hosted offering" },
@@ -41,6 +44,13 @@ describe("marketing copy guardrails", () => {
       expect(hits).toEqual([]);
     });
   }
+  it("every Start free call to action goes to /start, and Sign in goes to /find", async () => {
+    const { CTA } = await import("./site");
+    expect(CTA.startFree).toEqual({ label: "Start free", href: "/start" });
+    expect(CTA.signIn.href).toBe("/find");
+    const hits = files.filter((f) => /["'`]\/auth["'`]/.test(readFileSync(f, "utf8"))).map((f) => f.replace(ROOT, "marketing"));
+    expect(hits).toEqual([]);
+  });
   it("every simulated surface says so", () => {
     for (const f of ["demo/StewardDemo.tsx", "sections/HeroPlayer.tsx", "video/parts.tsx"]) {
       expect(readFileSync(join(ROOT, f), "utf8")).toMatch(/Simulated/);

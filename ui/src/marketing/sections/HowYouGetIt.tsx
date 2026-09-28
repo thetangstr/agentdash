@@ -11,9 +11,9 @@ export function HowYouGetIt() {
         <Eyebrow>How you get it today</Eyebrow>
         <h2 className="mkt-display-section">Three honest options.</h2>
         <p>
-          AgentDash runs as one instance per company on a machine you control.
-          There is no shared, multi-tenant cloud yet, and we would rather say so
-          than sell you a sign-up button.
+          AgentDash runs as one instance per company: on a machine you control,
+          or hosted for you as your own workspace. There is no shared,
+          multi-tenant cloud; every company gets its own.
         </p>
       </div>
       <div className="mkt-get">
@@ -38,13 +38,14 @@ export function HowYouGetIt() {
           <Button href={CTA.walkthrough.href}>{CTA.walkthrough.label}</Button>
         </article>
         <article className="mkt-get__card">
-          <span className="mkt-get__status is-soon">In design</span>
+          <span className="mkt-get__status is-soon">Waitlist</span>
           <h3>Hosted AgentDash</h3>
           <p>
-            Sign up and get your own hosted environment. We are working out how it
-            should be provisioned, priced and secured, and it is not available yet.
+            Sign up and get your own workspace at your-name.agentdash.cloud, set up
+            for you in about three minutes. One free workspace per email; we are
+            letting people in a few at a time.
           </p>
-          <Button href={CTA.cloudList.href} variant="ghost">{CTA.cloudList.label}</Button>
+          <Button href={CTA.startFree.href} variant="ghost">{CTA.startFree.label}</Button>
         </article>
       </div>
     </SectionContainer>

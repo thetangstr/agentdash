@@ -3,14 +3,151 @@
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm run preflight:workspace-links && pnpm --filter @paperclipai/adapter-utils build && pnpm --filter @paperclipai/ui build",
   "outputDirectory": "ui/dist",
+  "redirects": [
+    {
+      "source": "/auth",
+      "has": [
+        {
+          "type": "query",
+          "key": "mode",
+          "value": "sign_up"
+        }
+      ],
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/auth",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/login",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/signin",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/sign-in",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/forgot-password",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/reset-password",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/invite/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/board-claim/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/cli-auth/:path*",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/claim",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/companies",
+      "destination": "/find",
+      "permanent": false
+    },
+    {
+      "source": "/signup",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/sign-up",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/company-create",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/onboarding",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/trial",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
+      "source": "/share/:path*",
+      "destination": "/",
+      "permanent": false
+    },
+    {
+      "source": "/:path((?!(?:demo|consulting|about|mcp|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
+      "destination": "/find",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/cloud/:path*",
       "destination": "https://cloud-control-production.up.railway.app/api/cloud/:path*"
     },
     {
+      "source": "/api/invites/validate",
+      "destination": "https://cloud-control-production.up.railway.app/api/invites/validate"
+    },
+    {
+      "source": "/api/health",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/health"
+    },
+    {
+      "source": "/api/auth/get-session",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/auth/get-session"
+    },
+    {
+      "source": "/api/onboarding/finalize-assessment",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/onboarding/finalize-assessment"
+    },
+    {
+      "source": "/api/onboarding/complete-initial-assessment",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/onboarding/complete-initial-assessment"
+    },
+    {
+      "source": "/api/companies/:companyId/assess",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/companies/:companyId/assess"
+    },
+    {
+      "source": "/api/companies/:companyId/assess/:path*",
+      "destination": "https://web-production-33a3b6.up.railway.app/api/companies/:companyId/assess/:path*"
+    },
+    {
       "source": "/api/:path*",
-      "destination": "https://web-production-33a3b6.up.railway.app/api/:path*"
+      "destination": "https://cloud-control-production.up.railway.app/api/gone"
     },
     {
       "source": "/:path((?!api/|api$).*)",

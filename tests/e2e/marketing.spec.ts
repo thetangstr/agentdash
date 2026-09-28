@@ -18,8 +18,12 @@ test.describe("marketing site", () => {
     await expect(page).toHaveTitle(/Chief of Staff/);
     await expect(page.locator("main")).toContainText("Simulated walkthrough");
     await expect(page.locator("main")).toContainText("Self-hosted and open source today");
-    await expect(page.locator("body")).not.toContainText(/Start free|Placeholder|Logo 1/);
+    await expect(page.locator("body")).not.toContainText(/Placeholder|Logo 1/);
     await expect(page.locator('a[href*="sign_up"]')).toHaveCount(0);
+    // SC-9 (GH #770): "Start free" goes to the self-serve front door, "Sign in" to /find.
+    await expect(page.locator(".mkt-hero").getByRole("link", { name: "Start free" })).toHaveAttribute("href", "/start");
+    await expect(page.locator(".mkt-header__cta").getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/find");
+    await expect(page.locator('a[href="/auth"]')).toHaveCount(0);
     await expect(page.locator('a[href^="mailto:"]').first()).toBeVisible();
     await expect(page.locator('a[href="/demo"]').first()).toBeVisible();
   });

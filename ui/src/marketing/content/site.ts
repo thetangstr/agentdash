@@ -33,12 +33,11 @@ export const CTA = {
       "Hi, I'd like a walkthrough of AgentDash on our own work.\n\nCompany:\nWhat we'd want a Chief of Staff agent to own first:\n",
     ),
   },
-  cloudList: {
-    label: "Join the hosted list",
-    href: mailto(
-      "AgentDash Cloud interest",
-      "Hi, tell me when a hosted AgentDash environment is available.\n\nCompany:\nTeam size:\n",
-    ),
+  // AgentDash (SC-9, GH #770): self-serve signup exists now (/start, SC-7);
+  // new workspaces open a few at a time behind a waitlist.
+  startFree: {
+    label: "Start free",
+    href: "/start",
   },
   selfHost: {
     label: "Install it yourself",
@@ -48,9 +47,10 @@ export const CTA = {
     label: "Try the demo",
     href: "/demo",
   },
+  // Hosted workspaces sign in on their own address; /find mails the link.
   signIn: {
     label: "Sign in",
-    href: "/auth",
+    href: "/find",
   },
 } as const;
 
@@ -93,4 +93,4 @@ export const NAV_LINKS = [
 
 /** Plain statement of where the product is, repeated wherever a CTA appears. */
 export const READINESS_LINE =
-  "Self-hosted and open source today. A hosted environment is in design.";
+  "Self-hosted and open source today. Hosted workspaces are opening a few at a time.";

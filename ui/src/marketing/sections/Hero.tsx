@@ -23,8 +23,8 @@ export function Hero() {
               your agent workforce, and keep anything risky waiting on your decision.
             </p>
             <div className="mkt-hero__cta-row">
-              <Button href={CTA.demo.href}>{CTA.demo.label}</Button>
-              <Button href={CTA.walkthrough.href} variant="ghost">{CTA.walkthrough.label}</Button>
+              <Button href={CTA.startFree.href}>{CTA.startFree.label}</Button>
+              <Button href={CTA.demo.href} variant="ghost">{CTA.demo.label}</Button>
             </div>
             <p className="mkt-hero__reassure">{READINESS_LINE}</p>
           </div>

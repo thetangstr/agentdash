@@ -68,3 +68,47 @@ www's `/start`, `/start/verify`, `/start/progress` and `/find` call `/api/cloud/
 5. Sign up at `https://www.agentdash.cloud/start` from a private window: the verify email arrives from no-reply@agentdash.cloud, the link lands on "You're on the list", and `admin waitlist list` shows the entry. Check the `signup_requests.ip` of that row is your address, not a Vercel one; if it is Vercel's, the middleware is not running or the two secrets differ. Also check that `curl -s -X POST https://cloud-control-production.up.railway.app/api/cloud/signup -H 'Content-Type: application/json' -H 'X-AgentDash-Client-IP: 203.0.113.9' -d '{}'` is keyed by your own address (it is refused as `invalid_email`; the point is that no row or limit ever records 203.0.113.9).
 5b. **Middleware check without a signup:** `curl -s https://www.agentdash.cloud/api/cloud/proxy-check` answers `{"trustedProxy":true}`; the same call straight to `https://cloud-control-production.up.railway.app/api/cloud/proxy-check` with a made-up `X-AgentDash-Edge-Proxy` answers `false`. It returns nothing else and is rate-limited (30 a minute per address). A Vercel preview can run the same check first (its rewrites point at the same control plane), once the preview scope has the secret too.
 6. `admin waitlist approve <id>`: the approval email arrives and the page says "You're in"; `admin jobs list` shows no provision job (gated).
+
+## 5. The self-hosted invite validator and www's API (SC-9, GH #770)
+
+Fresh self-hosted installs call `https://www.agentdash.cloud/api/invites/validate` (`{code}` in, `{valid}` out) before creating their founding user. That URL now reaches `cloud-control` (`cloud/src/invites.ts`) through `vercel.json`; the contract is the box's `server/src/routes/invite-codes.ts` exactly: 200 `{valid}`, 400 `invalid_body`, 429 `{error:"Rate limited", retryAfter}` after 10 attempts per 15 minutes per client. Codes are stored only as an HMAC under `CLOUD_DATA_KEY` (old keys in `CLOUD_DATA_KEYS_PREVIOUS` still match). Every other `/api/*` path on www answers **410** from the control plane: nothing on www reaches the old shared instance any more. The per-client limit keys on the address www's middleware vouches for with `CLOUD_VERCEL_PROXY_SECRET` (section 4), never on a bare header.
+
+**Old app routes on www** (`vercel.json` `redirects`, all temporary): `/auth`, `/auth/*`, `/login`, `/signin`, `/sign-in`, `/forgot-password`, `/reset-password`, `/invite/*`, `/board-claim/*`, `/cli-auth/*`, `/claim`, `/companies` go to `/find`; `/signup`, `/sign-up`, `/company-create`, `/onboarding`, `/trial` go to `/start`; `/share/*` goes to `/`; and a catch-all sends every other path without a dot to `/find` (company boards such as `/ACME/dashboard`, `/cos`, `/settings`). Kept: `/`, `/demo`, `/consulting`, `/about`, `/mcp`, `/start/*`, `/find`, `/terms`, `/privacy`, `/pricing`, `/investors`, `/assess/*`, `/api/*`, `/assets/*`, `/brands/*` and every file path. **`/assess` stays on the old instance for now:** `vercel.json` still sends exactly its API paths there, ahead of the 410 rule: `/api/health`, `/api/auth/get-session`, `/api/onboarding/finalize-assessment`, `/api/onboarding/complete-initial-assessment`, `/api/companies/:id/assess` and `/api/companies/:id/assess/*`.
+
+**Short codes:** `invites import` refuses codes under 12 characters and reports a length histogram (`lengths`, bucketed; never a code). At 10 guesses per 15 minutes per address, a short human-chosen code falls to a guesser with many addresses. The old instance's `AGENTDASH_INVITE_CODES` is free-form (no format or minimum in any release), so read the histogram first; `--allow-short` imports them anyway, and the better fix is to issue replacements with `invites add`.
+
+**Operator commands** (every change lands in `operator_audit` as `invite_codes_changed`, with counts and ids, never a code):
+
+```sh
+# F5 (#760): copy the old instance's codes once. Paste them on stdin; nothing is echoed back.
+pnpm --filter @agentdash/cloud-control admin invites import old-instance < codes.txt   # add --allow-short only on purpose
+pnpm --filter @agentdash/cloud-control admin invites add "<label>"      # prints one new code, once
+pnpm --filter @agentdash/cloud-control admin invites list               # ids and labels only
+pnpm --filter @agentdash/cloud-control admin invites revoke <id>
+```
+
+To read the old instance's codes without printing them: `railway variables --service web --kv | grep '^AGENTDASH_INVITE_CODES=' | cut -d= -f2- > codes.txt` in the old `agentdash` project (founder only; the control plane's token cannot reach it), run the import, then `rm -P codes.txt`.
+
+**Deploy checklist (after SC-7's)**
+
+1. `cloud-migrate` (migrations `0007_prune_rate_events` from SC-7 and `0008_invite_audit`), then `cloud-control`.
+2. F5: import the old codes (above). `admin invites list` shows them.
+3. Against the control plane directly: `curl -s -X POST https://cloud-control-production.up.railway.app/api/invites/validate -H 'Content-Type: application/json' -d '{"code":"<a known code>"}'` answers `{"valid":true}`, and a wrong code `{"valid":false}`.
+4. Deploy www with the new `vercel.json`. Repeat step 3 against `https://www.agentdash.cloud/api/invites/validate`; `curl -s -o /dev/null -w '%{http_code}' https://www.agentdash.cloud/api/health` answers 410.
+5. A self-hosted MCP sign-up with a code against the default URL succeeds (`AGENTDASH_INVITE_VALIDATION_URL` unset); with a wrong code it answers 403 `invalid_invite_code`.
+6. www: "Start free" opens `/start`, "Sign in" opens `/find`.
+7. Comment the import command and the step 3 and 4 output on #760.
+
+**Rollback:** revert the `vercel.json` change and redeploy www; the old instance still answers `/api/*` until it is retired.
+
+## 6. Retiring the old shared instance (founder, after #760)
+
+The old instance is the Railway project `agentdash`, service `web` (`web-production-33a3b6.up.railway.app`). Nothing in the control plane can reach it (its token is scoped to the boxes workspace), and **no step here is automated**: the founder runs each one and approves the retirement on #760. Do not start until section 5's checklist has passed and www has served the new `vercel.json` for at least 7 days with no `/api/*` traffic you need (Vercel's logs show the 410s).
+
+0. **Re-home or pull `/assess` first.** www's readiness assessment still calls the old instance (section 5). Either move it (#838) or remove the page, its footer link and those six rewrites, before step 4; otherwise scaling to zero breaks `/assess` on the live site.
+1. **Confirm nothing depends on it.** `grep -rn web-production-33a3b6` in the repository: the remaining references are the release smoke test (`.github/workflows/deploy.yml`, `scripts/release-control-contract.test.mjs`) and historical docs. Retarget or delete the smoke test in its own pull request first; the Deploy workflow is inert without a `RAILWAY_TOKEN` secret.
+2. **Record what it holds.** In the Railway dashboard, note its variables (names only), volumes and database size. Check whether any real user signed up there (the instance ran in `authenticated` mode with a company); if one did, tell them where their data goes before step 3.
+3. **Export.** Follow the export plan on #675: a `pg_dump` of its Postgres and a copy of the `/paperclip` volume, encrypted, stored beside the other backups (runbook `hosted-box.md` §13 describes the restore test that export already passed). Record the file names and checksums on #760.
+4. **Scale to zero.** Remove the `web` deployment (`railway down` in the project, or scale replicas to 0). Keep Postgres and the volume. Confirm `https://web-production-33a3b6.up.railway.app/api/health` no longer answers and that www and the self-hosted validator still work (section 5, steps 3 to 5).
+5. **Wait 30 days.** Anything that still needed it surfaces here; scaling back up restores it as it was.
+6. **Delete.** The founder deletes the project in the Railway dashboard, then records the date, the export's location and checksums on #760 and closes it.

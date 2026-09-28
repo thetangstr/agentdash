@@ -41,7 +41,7 @@ export function MarketingHeader() {
         </nav>
         <div className="mkt-header__cta">
           <Button href={CTA.signIn.href} variant="link">{CTA.signIn.label}</Button>
-          <Button href={CTA.walkthrough.href}>{CTA.walkthrough.label}</Button>
+          <Button href={CTA.startFree.href}>{CTA.startFree.label}</Button>
         </div>
         <button
           type="button"
@@ -62,7 +62,7 @@ export function MarketingHeader() {
           <a href={CTA.signIn.href} onClick={() => setOpen(false)}>{CTA.signIn.label}</a>
         </nav>
         <div className="mkt-header__sheet-cta">
-          <Button href={CTA.walkthrough.href}>{CTA.walkthrough.label}</Button>
+          <Button href={CTA.startFree.href}>{CTA.startFree.label}</Button>
           <Button href={CTA.demo.href} variant="ghost">{CTA.demo.label}</Button>
         </div>
       </div>
