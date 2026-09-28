@@ -91,7 +91,7 @@ To read the old instance's codes without printing them: `railway variables --ser
 
 **Deploy checklist (after SC-7's)**
 
-1. `cloud-migrate` (migration `0007_invite_audit`), then `cloud-control`.
+1. `cloud-migrate` (migrations `0007_prune_rate_events` from SC-7 and `0008_invite_audit`), then `cloud-control`.
 2. F5: import the old codes (above). `admin invites list` shows them.
 3. Against the control plane directly: `curl -s -X POST https://cloud-control-production.up.railway.app/api/invites/validate -H 'Content-Type: application/json' -d '{"code":"<a known code>"}'` answers `{"valid":true}`, and a wrong code `{"valid":false}`.
 4. Deploy www with the new `vercel.json`. Repeat step 3 against `https://www.agentdash.cloud/api/invites/validate`; `curl -s -o /dev/null -w '%{http_code}' https://www.agentdash.cloud/api/health` answers 410.
