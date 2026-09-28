@@ -252,7 +252,15 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget" | "mandates";
+type AgentDetailView =
+  | "dashboard"
+  | "instructions"
+  | "configuration"
+  | "skills"
+  | "runs"
+  | "budget"
+  | "mandates"
+  | "settings";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "instructions" || value === "prompts") return "instructions";
@@ -261,7 +269,64 @@ function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "budget") return "budget";
   if (value === "mandates") return "mandates";
   if (value === "runs") return value;
+  // AgentDash (GH #795): default profile folds the five detail views under one
+  // Settings tab; the bare /settings URL opens a small section index there.
+  if (value === "settings") return "settings";
   return "dashboard";
+}
+
+// AgentDash (GH #795): default-profile tab grouping. The five config-heavy
+// views stay at their existing URLs so deep links keep working; on
+// agentdash_mk nothing here applies and the seven-tab layout is preserved.
+const AGENT_DETAIL_SETTINGS_VIEWS: readonly AgentDetailView[] = [
+  "instructions",
+  "skills",
+  "configuration",
+  "budget",
+  "mandates",
+];
+
+const AGENT_DETAIL_SETTINGS_TABS: { value: AgentDetailView; label: string }[] = [
+  { value: "instructions", label: "Instructions" },
+  { value: "skills", label: "Skills" },
+  { value: "configuration", label: "Configuration" },
+  { value: "budget", label: "Budget" },
+  { value: "mandates", label: "Mandates" },
+];
+
+// GH #795: "settings" only exists as a grouping on the default profile. On
+// agentdash_mk a typed /settings URL keeps its historic unknown-tab behavior
+// and lands on the dashboard.
+export function resolveAgentDetailView(view: AgentDetailView, isMk: boolean): AgentDetailView {
+  return isMk && view === "settings" ? "dashboard" : view;
+}
+
+export function agentDetailInSettings(view: AgentDetailView, isMk: boolean): boolean {
+  return !isMk && (view === "settings" || AGENT_DETAIL_SETTINGS_VIEWS.includes(view));
+}
+
+export function agentDetailTopTabs(
+  isMk: boolean,
+): { value: AgentDetailView; label: string }[] {
+  return isMk
+    ? [
+        { value: "dashboard", label: "Dashboard" },
+        { value: "instructions", label: "Instructions" },
+        { value: "skills", label: "Skills" },
+        { value: "configuration", label: "Configuration" },
+        { value: "runs", label: "Runs" },
+        { value: "budget", label: "Budget" },
+        { value: "mandates", label: "Mandates" },
+      ]
+    : [
+        { value: "dashboard", label: "Overview" },
+        { value: "runs", label: "Runs" },
+        { value: "settings", label: "Settings" },
+      ];
+}
+
+export function agentDetailTabValue(view: AgentDetailView, isMk: boolean): AgentDetailView {
+  return agentDetailInSettings(view, isMk) ? "settings" : view;
 }
 
 function usageNumber(usage: Record<string, unknown> | null, ...keys: string[]) {
@@ -658,11 +723,6 @@ export function AgentDetail() {
   const navigate = useNavigate();
   const [actionError, setActionError] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
-  const activeView = urlRunId ? "runs" as AgentDetailView : parseAgentDetailView(urlTab ?? null);
-  const needsDashboardData = activeView === "dashboard";
-  const needsRunData = activeView === "runs" || Boolean(urlRunId);
-  const shouldLoadHeartbeats = needsDashboardData || needsRunData;
-  const needsAgentsList = needsDashboardData || activeView === "mandates";
   const [configDirty, setConfigDirty] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const saveConfigActionRef = useRef<(() => void) | null>(null);
@@ -675,6 +735,18 @@ export function AgentDetail() {
     return companies.find((company) => company.issuePrefix.toUpperCase() === requestedPrefix)?.id ?? null;
   }, [companies, companyPrefix]);
   const lookupCompanyId = routeCompanyId ?? selectedCompanyId ?? undefined;
+  const routeView = urlRunId ? ("runs" as AgentDetailView) : parseAgentDetailView(urlTab ?? null);
+  const viewedCompany = useMemo(
+    () => companies.find((company) => company.id === lookupCompanyId) ?? null,
+    [companies, lookupCompanyId],
+  );
+  const isMkProfile = viewedCompany?.productProfile === "agentdash_mk";
+  const activeView: AgentDetailView = resolveAgentDetailView(routeView, isMkProfile);
+  const inSettingsGroup = agentDetailInSettings(activeView, isMkProfile);
+  const needsDashboardData = activeView === "dashboard";
+  const needsRunData = activeView === "runs" || Boolean(urlRunId);
+  const shouldLoadHeartbeats = needsDashboardData || needsRunData;
+  const needsAgentsList = needsDashboardData || activeView === "mandates";
   const canFetchAgent = routeAgentRef.length > 0 && (isUuidLike(routeAgentRef) || Boolean(lookupCompanyId));
   const setSaveConfigAction = useCallback((fn: (() => void) | null) => { saveConfigActionRef.current = fn; }, []);
   const setCancelConfigAction = useCallback((fn: (() => void) | null) => { cancelConfigActionRef.current = fn; }, []);
@@ -786,6 +858,8 @@ export function AgentDetail() {
                 ? "budget"
               : activeView === "mandates"
                 ? "mandates"
+              : activeView === "settings"
+                ? "settings"
               : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
       navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
@@ -965,6 +1039,8 @@ export function AgentDetail() {
         crumbs.push({ label: "Runs" });
       } else if (activeView === "budget") {
         crumbs.push({ label: "Budget" });
+      } else if (activeView === "settings") {
+        crumbs.push({ label: "Settings" });
       } else {
         crumbs.push({ label: "Dashboard" });
       }
@@ -1094,20 +1170,12 @@ export function AgentDetail() {
 
       {!urlRunId && (
         <Tabs
-          value={activeView}
+          value={agentDetailTabValue(activeView, isMkProfile)}
           onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
         >
           <PageTabBar
-            items={[
-              { value: "dashboard", label: "Dashboard" },
-              { value: "instructions", label: "Instructions" },
-              { value: "skills", label: "Skills" },
-              { value: "configuration", label: "Configuration" },
-              { value: "runs", label: "Runs" },
-              { value: "budget", label: "Budget" },
-              { value: "mandates", label: "Mandates" },
-            ]}
-            value={activeView}
+            items={agentDetailTopTabs(isMkProfile)}
+            value={agentDetailTabValue(activeView, isMkProfile)}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
           />
         </Tabs>
@@ -1267,6 +1335,34 @@ export function AgentDetail() {
         </div>
       )}
 
+      {/* GH #795: on the default profile the five detail views live under the
+          Settings tab — a secondary nav keeps them one click apart. */}
+      {inSettingsGroup && (
+        <Tabs
+          value={activeView}
+          onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
+        >
+          <PageTabBar
+            align="start"
+            items={AGENT_DETAIL_SETTINGS_TABS}
+            value={activeView}
+            onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
+          />
+        </Tabs>
+      )}
+
+      {inSettingsGroup && activeView === "settings" && (
+        <div className="max-w-xl rounded-lg border border-border divide-y divide-border">
+          {AGENT_DETAIL_SETTINGS_TABS.map((item) => (
+            <EntityRow
+              key={item.value}
+              title={item.label}
+              to={`/agents/${canonicalAgentRef}/${item.value}`}
+            />
+          ))}
+        </div>
+      )}
+
       {/* View content */}
       {activeView === "dashboard" && (
         <AgentOverview
@@ -1276,6 +1372,7 @@ export function AgentDetail() {
           runtimeState={runtimeState}
           agentId={agent.id}
           agentRouteId={canonicalAgentRef}
+          isMk={isMkProfile}
         />
       )}
 
@@ -1351,7 +1448,16 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: string }) {
+export function LatestRunCard({
+  runs,
+  agentId,
+  showEmptySummary,
+}: {
+  runs: HeartbeatRun[];
+  agentId: string;
+  /** GH #795: default profile says "No summary." instead of a blank body. */
+  showEmptySummary?: boolean;
+}) {
   if (runs.length === 0) return null;
 
   const sorted = [...runs].sort(
@@ -1428,12 +1534,155 @@ function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: strin
           <span className="ml-auto text-xs text-muted-foreground">{relativeTime(run.createdAt)}</span>
         </div>
 
-        {summary && (
+        {summary ? (
           <div className="overflow-hidden max-h-16">
             <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{summary}</MarkdownBody>
           </div>
-        )}
+        ) : showEmptySummary && !isLive && !run.error ? (
+          <p className="text-sm text-muted-foreground" data-testid="latest-run-no-summary">
+            No summary.
+          </p>
+        ) : null}
       </Link>
+    </div>
+  );
+}
+
+/* ---- GH #795: default-profile vitals + run-health warning ---- */
+
+const NO_OP_RUN_STATES = new Set<string>(["empty_response", "plan_only", "needs_followup"]);
+const PRODUCED_RUN_STATES = new Set<string>(["advanced", "completed"]);
+const FINISHED_RUN_STATES = new Set<string>(["succeeded", "failed", "timed_out", "cancelled"]);
+const RUN_HEALTH_WINDOW = 10;
+const RUN_HEALTH_MIN_EVALUATED = 3;
+const RUN_HEALTH_WARN_FRACTION = 0.6;
+
+// Mirrors livenessStateToOutcome in server/src/services/run-facts.ts — keep the
+// two mappings in sync. "no_op" is the server-side verdict for a run that left
+// no comment, work product, or status change.
+function runLivenessOutcome(run: HeartbeatRun): "produced" | "no_op" | "blocked" | "failed" | null {
+  const state = run.livenessState;
+  if (state && PRODUCED_RUN_STATES.has(state)) return "produced";
+  if (state && NO_OP_RUN_STATES.has(state)) return "no_op";
+  if (state === "blocked") return "blocked";
+  if (state === "failed") return "failed";
+  if (run.status === "failed" || run.status === "timed_out" || run.status === "cancelled") {
+    return "failed";
+  }
+  return null;
+}
+
+export function runsLeftNothingShare(runs: HeartbeatRun[]): {
+  evaluated: number;
+  leftNothing: number;
+} {
+  const evaluated = [...runs]
+    .filter((run) => FINISHED_RUN_STATES.has(run.status))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, RUN_HEALTH_WINDOW)
+    .map(runLivenessOutcome)
+    .filter((outcome) => outcome === "produced" || outcome === "no_op" || outcome === "blocked");
+  return {
+    evaluated: evaluated.length,
+    leftNothing: evaluated.filter((outcome) => outcome === "no_op").length,
+  };
+}
+
+export function AgentRunHealthNote({ runs }: { runs: HeartbeatRun[] }) {
+  const share = runsLeftNothingShare(runs);
+  if (share.evaluated < RUN_HEALTH_MIN_EVALUATED) return null;
+  if (share.leftNothing / share.evaluated < RUN_HEALTH_WARN_FRACTION) return null;
+  return (
+    <div
+      data-testid="agent-run-health-warning"
+      className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-400/40 dark:bg-amber-950/30 dark:text-amber-200"
+    >
+      {share.leftNothing} of the last {share.evaluated} runs left no comment, work product, or
+      status change. Worth a look — the agent may be waking up with nothing to do.
+    </div>
+  );
+}
+
+function VitalCard({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border p-3 space-y-1">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="text-sm">{children}</div>
+    </div>
+  );
+}
+
+export function AgentVitalsStrip({
+  agent,
+  runs,
+  assignedIssues,
+}: {
+  agent: AgentDetailRecord;
+  runs: HeartbeatRun[];
+  assignedIssues: { id: string; title: string; status: string; identifier?: string | null }[];
+}) {
+  const liveRun = [...runs]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .find((run) => run.status === "running" || run.status === "queued");
+  const liveIssueId = asNonEmptyString(liveRun?.contextSnapshot?.issueId);
+  const liveIssue = liveIssueId ? assignedIssues.find((issue) => issue.id === liveIssueId) : undefined;
+  const inProgressIssue = assignedIssues.find((issue) => issue.status === "in_progress");
+
+  const { data: lastShipped } = useQuery({
+    queryKey: [...queryKeys.shipped(agent.companyId, { agentId: agent.id }), "agent-vitals"],
+    queryFn: () => issuesApi.listShipped(agent.companyId, { agentId: agent.id, limit: 1 }),
+    enabled: Boolean(agent.companyId),
+    staleTime: 30_000,
+  });
+  const shipped = lastShipped?.items[0] ?? null;
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-3" data-testid="agent-vitals">
+      <VitalCard label="Doing now">
+        {liveIssue ? (
+          <Link
+            to={`/issues/${liveIssue.identifier ?? liveIssue.id}`}
+            className="font-medium hover:underline"
+          >
+            {liveIssue.title}
+          </Link>
+        ) : liveRun ? (
+          <Link
+            to={`/agents/${agentRouteRef(agent)}/runs/${liveRun.id}`}
+            className="font-medium hover:underline"
+          >
+            Running now
+          </Link>
+        ) : inProgressIssue ? (
+          <Link
+            to={`/issues/${inProgressIssue.identifier ?? inProgressIssue.id}`}
+            className="font-medium hover:underline"
+          >
+            {inProgressIssue.title}
+          </Link>
+        ) : (
+          <span className="text-muted-foreground">Nothing in progress.</span>
+        )}
+      </VitalCard>
+      <VitalCard label="Last shipped">
+        {shipped ? (
+          <span className="space-x-2">
+            {shipped.issue.identifier ? (
+              <Link to={`/issues/${shipped.issue.identifier}`} className="font-medium hover:underline">
+                {shipped.title}
+              </Link>
+            ) : (
+              <span className="font-medium">{shipped.title}</span>
+            )}
+            <span className="text-xs text-muted-foreground">{relativeTime(shipped.createdAt)}</span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground">Nothing shipped yet.</span>
+        )}
+      </VitalCard>
+      <VitalCard label="Spend this month">
+        <span className="font-medium">{formatCents(agent.spentMonthlyCents ?? 0)}</span>
+      </VitalCard>
     </div>
   );
 }
@@ -1447,6 +1696,7 @@ function AgentOverview({
   runtimeState,
   agentId,
   agentRouteId,
+  isMk,
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
@@ -1454,6 +1704,7 @@ function AgentOverview({
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
+  isMk: boolean;
 }) {
   // Origin block (AGE-13): resolve the creator's display name/avatar. The
   // steward arrives on the agent payload already resolved (name/email), so
@@ -1478,8 +1729,16 @@ function AgentOverview({
   const accountableName = accountableLabel(agent);
   return (
     <div className="space-y-8">
+      {/* GH #795: the default profile leads with doing/shipped/spend and a
+          health warning when recent runs keep leaving nothing behind.
+          agentdash_mk keeps the overview it had. */}
+      {!isMk && <AgentRunHealthNote runs={runs} />}
+      {!isMk && (
+        <AgentVitalsStrip agent={agent} runs={runs} assignedIssues={assignedIssues} />
+      )}
+
       {/* Latest Run */}
-      <LatestRunCard runs={runs} agentId={agentRouteId} />
+      <LatestRunCard runs={runs} agentId={agentRouteId} showEmptySummary={!isMk} />
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
