@@ -65,7 +65,10 @@ export function publicRoutes(opts: { frontDoor: FrontDoor; config: Pick<CloudCon
   // Only JSON bodies: a cross-site form post cannot send one without a preflight.
   router.use((req, res, next) => {
     if (req.method === "POST" && !req.is("application/json")) {
-      res.status(415).json({ error: "send application/json", code: "unsupported_media_type" });
+      // Drain the unread body first: answering with it unread makes Node reset the connection.
+      const reply = () => void (res.headersSent || res.status(415).json({ error: "send application/json", code: "unsupported_media_type" }));
+      if (req.readableEnded) return reply();
+      req.on("end", reply).on("error", reply).resume();
       return;
     }
     next();

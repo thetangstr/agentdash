@@ -2,6 +2,7 @@
 // a capturing mailer, a fake MX resolver, a fake Turnstile and, end to end, a
 // fake provisioner in the real job runner.
 import { randomBytes } from "node:crypto";
+import http from "node:http";
 import { eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +23,21 @@ import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 const caps = vi.hoisted(() => ({ claimTrackingReady: false }));
 vi.mock("../capabilities.js", () => ({ capabilities: caps }));
 
+// supertest given a bare app starts and stops a server per request on an
+// ephemeral port, which intermittently reset or crossed connections when a
+// port was reused at once. Every app here listens once, for the whole suite.
+http.globalAgent = new http.Agent({ keepAlive: false });
+const servers: http.Server[] = [];
+type AppT = ReturnType<typeof createApp>;
+type Target = AppT | http.Server;
+async function serve(app: AppT): Promise<http.Server> {
+  const server = app.listen(0, "127.0.0.1");
+  // Wait until it listens: supertest calls listen() itself (and later close())
+  // on a server that has no address yet, which reset requests mid-flight.
+  await new Promise<void>((r) => server.once("listening", () => r()));
+    servers.push(server);
+  return server;
+}
 const ADMIN = randomBytes(32).toString("hex");
 const IP_HEADER = "x-test-client-ip";
 let pg: TestDatabase;
@@ -54,7 +70,7 @@ const fakeTurnstileFetch = (async (url: string | URL | Request) => {
   return new Response(JSON.stringify({ success: turnstileAnswer }), { status: 200, headers: { "content-type": "application/json" } });
 }) as typeof fetch;
 
-function build(extra: Record<string, string> = TURNSTILE): { app: ReturnType<typeof createApp>; fd: FrontDoor; cfg: ReturnType<typeof config> } {
+async function build(extra: Record<string, string> = TURNSTILE): Promise<{ app: http.Server; fd: FrontDoor; cfg: ReturnType<typeof config> }> {
   const cfg = config(extra);
   const fd = frontDoor({
     db,
@@ -68,7 +84,7 @@ function build(extra: Record<string, string> = TURNSTILE): { app: ReturnType<typ
     },
     now: () => new Date(Date.now() + clockOffsetMs),
   });
-  return { app: createApp({ db, config: cfg, log, frontDoor: fd }), fd, cfg };
+  return { app: await serve(createApp({ db, config: cfg, log, frontDoor: fd })), fd, cfg };
 }
 
 /** A fresh identity per test so the per-IP, per-domain and per-email counts never collide. */
@@ -82,16 +98,19 @@ function who(opts: { freemail?: boolean } = {}) {
   };
 }
 
-async function signup(app: ReturnType<typeof createApp>, w: { email: string; slug: string; ip: string }, over: Record<string, unknown> = {}) {
-  return await request(app)
+async function signup(app: Target, w: { email: string; slug: string; ip: string }, over: Record<string, unknown> = {}) {
+  const res = await request(app)
     .post("/api/cloud/signup")
     .set(IP_HEADER, w.ip)
     .send({ email: w.email, workspaceName: "Acme Robotics", slug: w.slug, acceptTerms: true, turnstileToken: "tok", ...over });
+  lastSignup = { status: res.status, body: res.body, who: w };
+  return res;
 }
 
+let lastSignup: unknown = null;
 function lastMailTo(email: string, kind?: MailMessage["kind"]): MailMessage {
   const m = [...mail].reverse().find((x) => x.to === email && (!kind || x.kind === kind));
-  if (!m) throw new Error(`no ${kind ?? ""} mail to ${email}; got ${mail.map((x) => `${x.kind}:${x.to}`).join(", ")}`);
+  if (!m) throw new Error(`no ${kind ?? ""} mail to ${email}; got ${mail.map((x) => `${x.kind}:${x.to}`).join(", ")}; last signup answered ${JSON.stringify(lastSignup)}`);
   return m;
 }
 
@@ -101,7 +120,7 @@ function tokenFrom(m: MailMessage): string {
   return match[1]!;
 }
 
-async function verify(app: ReturnType<typeof createApp>, token: string, ip = "203.0.113.9") {
+async function verify(app: Target, token: string, ip = "203.0.113.9") {
   return await request(app).post("/api/cloud/verify").set(IP_HEADER, ip).send({ token });
 }
 
@@ -123,6 +142,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await Promise.all(servers.map((sv) => new Promise<void>((r) => sv.close(() => r()))));
   await close?.();
   await pg?.stop();
 });
@@ -162,7 +182,7 @@ describe("email policy", () => {
 
 describe("POST /api/cloud/signup", () => {
   it("accepts a good signup and mails a single-use magic link; nothing else is created yet", async () => {
-    const { app } = build();
+    const { app } = await build();
     const w = who();
     const res = await signup(app, w);
     expect(res.status).toBe(202);
@@ -180,7 +200,7 @@ describe("POST /api/cloud/signup", () => {
   });
 
   it("validates the form: email, name, terms, slug", async () => {
-    const { app } = build();
+    const { app } = await build();
     const w = who();
     expect((await signup(app, w, { email: "nope" })).body.code).toBe("invalid_email");
     expect((await signup(app, w, { workspaceName: "" })).body.code).toBe("invalid_name");
@@ -190,7 +210,7 @@ describe("POST /api/cloud/signup", () => {
   });
 
   it("refuses a failed Turnstile check when Turnstile is configured", async () => {
-    const { app } = build();
+    const { app } = await build();
     turnstileAnswer = false;
     const res = await signup(app, who());
     expect(res.status).toBe(400);
@@ -198,7 +218,7 @@ describe("POST /api/cloud/signup", () => {
   });
 
   it("refuses disposable addresses and domains without MX", async () => {
-    const { app } = build();
+    const { app } = await build();
     const a = await signup(app, { ...who(), email: "x@mailinator.com" });
     expect(a.status).toBe(400);
     expect(a.body.code).toBe("disposable_email");
@@ -208,7 +228,7 @@ describe("POST /api/cloud/signup", () => {
   });
 
   it("limits one address to 3 signups an hour", async () => {
-    const { app } = build();
+    const { app } = await build();
     const ip = `192.0.2.${seq % 250}`;
     for (let i = 0; i < 3; i++) expect((await signup(app, { ...who(), ip })).status).toBe(202);
     const fourth = await signup(app, { ...who(), ip });
@@ -217,7 +237,7 @@ describe("POST /api/cloud/signup", () => {
   });
 
   it("caps the connecting address too, so a forged client-IP header does not escape the limits", async () => {
-    const { app } = build({ ...TURNSTILE, CLOUD_PROXY_SIGNUPS_PER_HOUR: "2" });
+    const { app } = await build({ ...TURNSTILE, CLOUD_PROXY_SIGNUPS_PER_HOUR: "2" });
     // All requests connect from 127.0.0.1 (the "proxy"); each forges a new client IP.
     // Earlier tests already used the proxy's budget, so the ceiling is hit at once or within two.
     const results = [];
@@ -226,7 +246,7 @@ describe("POST /api/cloud/signup", () => {
   });
 
   it("refuses a slug another pending signup holds, and a slug a box has", async () => {
-    const { app } = build();
+    const { app } = await build();
     const a = who();
     expect((await signup(app, a)).status).toBe(202);
     const clash = await signup(app, { ...who(), slug: a.slug });
@@ -239,7 +259,7 @@ describe("POST /api/cloud/signup", () => {
 
   it("answers 503 (never 202) when email is not configured", async () => {
     const cfg = config(TURNSTILE);
-    const app = createApp({ db, config: cfg, log }); // no Resend key: the unconfigured mailer
+    const app = await serve(createApp({ db, config: cfg, log })); // no Resend key: the unconfigured mailer
     expect((await request(app).get("/api/cloud/config")).body.signupOpen).toBe(false);
     const res = await signup(app, who());
     expect(res.status).toBe(503);
@@ -249,7 +269,7 @@ describe("POST /api/cloud/signup", () => {
 
 describe("magic links", () => {
   it("are single use: the second use is refused", async () => {
-    const { app } = build();
+    const { app } = await build();
     const w = who();
     await signup(app, w);
     const token = tokenFrom(lastMailTo(w.email, "verify"));
@@ -262,7 +282,7 @@ describe("magic links", () => {
   });
 
   it("expire after 30 minutes", async () => {
-    const { app } = build();
+    const { app } = await build();
     const w = who();
     await signup(app, w);
     const token = tokenFrom(lastMailTo(w.email, "verify"));
@@ -274,7 +294,7 @@ describe("magic links", () => {
   });
 
   it("GET /verify never uses the token; it hands the browser to the page, token in the fragment", async () => {
-    const { app } = build();
+    const { app } = await build();
     const w = who();
     await signup(app, w);
     const token = tokenFrom(lastMailTo(w.email, "verify"));
@@ -285,7 +305,7 @@ describe("magic links", () => {
   });
 
   it("refuse garbage", async () => {
-    const { app } = build();
+    const { app } = await build();
     expect((await verify(app, "short")).body.code).toBe("link_invalid");
     expect((await verify(app, "A".repeat(43))).body.code).toBe("link_invalid");
   });
@@ -293,7 +313,7 @@ describe("magic links", () => {
 
 describe("while provisioning is gated (claimTrackingReady=false)", () => {
   it("a verified signup waits on the list, nothing is queued, and the person is told", async () => {
-    const { app } = build();
+    const { app } = await build();
     // Even an operator who stored provisioning_enabled=true before the gate cannot open it.
     await db.execute(sql`insert into settings (key, value) values ('provisioning_enabled', 'true'::jsonb), ('waitlist_mode', 'false'::jsonb)`);
     const w = who();
@@ -311,7 +331,7 @@ describe("while provisioning is gated (claimTrackingReady=false)", () => {
   });
 
   it("an operator's approval leaves the box approved-pending: still no job", async () => {
-    const { app } = build();
+    const { app } = await build();
     const w = who();
     await signup(app, w);
     const v = await verify(app, tokenFrom(lastMailTo(w.email, "verify")));
@@ -331,7 +351,7 @@ describe("while provisioning is gated (claimTrackingReady=false)", () => {
   });
 
   it("the public config says new signups wait", async () => {
-    const { app } = build();
+    const { app } = await build();
     const res = await request(app).get("/api/cloud/config");
     expect(res.body).toEqual({ turnstileSiteKey: "site-key-for-tests", signupOpen: true, waitlist: true, edgeDomain: "agentdash.cloud" });
   });
@@ -344,7 +364,7 @@ describe("with provisioning open (capability mocked on)", () => {
   });
 
   it("the kill switch sends signups to the waitlist", async () => {
-    const { app } = build();
+    const { app } = await build();
     await setSetting("provisioning_enabled", false);
     await setSetting("waitlist_mode", false);
     const w = who();
@@ -354,7 +374,7 @@ describe("with provisioning open (capability mocked on)", () => {
   });
 
   it("waitlist mode: the job starts only after `admin waitlist approve`", async () => {
-    const { app } = build();
+    const { app } = await build();
     await setSetting("waitlist_mode", true);
     await setSetting("daily_cap", 1000);
     const w = who();
@@ -371,7 +391,7 @@ describe("with provisioning open (capability mocked on)", () => {
   });
 
   it("the daily cap overflows to the waitlist, and approved-pending boxes are released when there is room", async () => {
-    const { app, fd } = build();
+    const { app, fd } = await build();
     await setSetting("waitlist_mode", false);
     const today = (await db.execute(sql`select count(*)::int as n from jobs where kind = 'provision' and created_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC'`)) as unknown as Array<{ n: number }>;
     await setSetting("daily_cap", today[0]!.n + 1);
@@ -394,7 +414,7 @@ describe("with provisioning open (capability mocked on)", () => {
   });
 
   it("without Turnstile configured, a signup is accepted but only an operator can let it through", async () => {
-    const { app } = build({});
+    const { app } = await build({});
     await setSetting("waitlist_mode", false);
     await setSetting("daily_cap", 1000);
     expect((await request(app).get("/api/cloud/config")).body).toMatchObject({ turnstileSiteKey: null, waitlist: true });
@@ -408,7 +428,7 @@ describe("with provisioning open (capability mocked on)", () => {
   });
 
   it("one Free box per verified email", async () => {
-    const { app } = build();
+    const { app } = await build();
     await setSetting("waitlist_mode", false);
     await setSetting("daily_cap", 1000);
     const w = who();
@@ -425,7 +445,7 @@ describe("with provisioning open (capability mocked on)", () => {
   });
 
   it("one box a day from one address", async () => {
-    const { app } = build();
+    const { app } = await build();
     await setSetting("waitlist_mode", false);
     await setSetting("daily_cap", 1000);
     const ip = `192.0.2.${200 + (seq % 50)}`;
@@ -438,7 +458,7 @@ describe("with provisioning open (capability mocked on)", () => {
   });
 
   it("five boxes a day for one company domain; freemail domains are exempt", async () => {
-    const { app } = build();
+    const { app } = await build();
     await setSetting("waitlist_mode", false);
     await setSetting("daily_cap", 1000);
     const domain = `bigco${Date.now() % 100000}.test`;
@@ -460,7 +480,7 @@ describe("end to end with a fake provisioner", () => {
     await setSetting("provisioning_enabled", true);
     await setSetting("waitlist_mode", true);
     await setSetting("daily_cap", 1000);
-    const { app, fd, cfg } = build();
+    const { app, fd, cfg } = await build();
     const w = who();
 
     expect((await request(app).get(`/api/cloud/slug-available?slug=${w.slug}`)).body).toEqual({ slug: w.slug, available: true });
@@ -544,7 +564,7 @@ describe("end to end with a fake provisioner", () => {
 
 describe("the rest of the public surface", () => {
   it("boxes/mine needs a session", async () => {
-    const { app } = build();
+    const { app } = await build();
     const res = await request(app).get("/api/cloud/boxes/mine");
     expect(res.status).toBe(401);
     expect(res.body.code).toBe("no_session");
@@ -552,7 +572,7 @@ describe("the rest of the public surface", () => {
   });
 
   it("resend by email re-mails the verify link of a pending signup, and nothing for a stranger", async () => {
-    const { app } = build();
+    const { app } = await build();
     const w = who();
     await signup(app, w);
     const first = tokenFrom(lastMailTo(w.email, "verify"));
@@ -566,20 +586,20 @@ describe("the rest of the public surface", () => {
   });
 
   it("refuses non-JSON posts and malformed JSON", async () => {
-    const { app } = build();
+    const { app } = await build();
     expect((await request(app).post("/api/cloud/signup").type("form").send("email=a@b.c")).status).toBe(415);
     expect((await request(app).post("/api/cloud/signup").set("content-type", "application/json").send("{bad")).status).toBe(400);
   });
 
   it("slug-available explains why a name is not available", async () => {
-    const { app } = build();
+    const { app } = await build();
     expect((await request(app).get("/api/cloud/slug-available?slug=admin")).body).toMatchObject({ available: false, reason: "reserved" });
     expect((await request(app).get("/api/cloud/slug-available?slug=A")).body).toMatchObject({ available: false, reason: "invalid" });
     expect((await request(app).get("/api/cloud/slug-available?slug=this-name-is-too-long")).body).toMatchObject({ available: false, reason: "invalid" });
   });
 
   it("find refuses a failed bot check", async () => {
-    const { app } = build();
+    const { app } = await build();
     turnstileAnswer = false;
     const res = await request(app).post("/api/cloud/find").send({ email: "a@acme.test", turnstileToken: "x" });
     expect(res.body.code).toBe("bot_check_failed");
