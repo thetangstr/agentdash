@@ -9,6 +9,10 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "account", "accounts", "root", "system", "security", "abuse", "postmaster", "hostmaster", "webmaster", "noreply",
   "no-reply", "help", "blog", "dev", "test", "demo", "internal", "ops", "cdn", "static", "assets", "ftp", "smtp",
   "imap", "pop", "ns1", "ns2", "railway", "vercel", "stripe", "resend", "official", "verify",
+  // GH #836 review: labels mail providers use for sending, bounce and click tracking on our domain,
+  // and names that impersonate us or large providers.
+  "send", "bounce", "bounces", "email", "em", "click", "clicks", "track", "mx", "dkim", "spf", "dmarc",
+  "openai", "anthropic", "claude", "meta", "google", "apple", "microsoft", "amazon", "aws", "github",
 ]);
 
 /**

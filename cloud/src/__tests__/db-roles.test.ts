@@ -117,9 +117,21 @@ describe("role split", () => {
   });
 
   it("the runtime role cannot DELETE from any table; removal is a state change (GH #799)", async () => {
-    for (const t of ["boxes", "accounts", "jobs", "settings", "waitlist", "email_tokens", "invite_codes", "railway_workspaces"]) {
+    for (const t of ["boxes", "accounts", "jobs", "settings", "waitlist", "email_tokens", "invite_codes", "railway_workspaces", "rate_events", "signup_requests", "cloud_sessions"]) {
       expect(await denied(rt.unsafe(`delete from ${t}`)), t).toBe("42501");
     }
+  });
+
+  it("prunes rate_events only through prune_rate_events, and never rows inside the longest window (GH #836)", async () => {
+    await su`insert into rate_events (bucket, key, created_at) values ('t', 'old', now() - interval '3 hours'), ('t', 'recent', now() - interval '30 minutes'), ('t', 'now', now())`;
+    expect(await denied(rt.unsafe("delete from rate_events"))).toBe("42501");
+    // Asking for 0 seconds still keeps everything younger than an hour.
+    const [r] = await rt`select prune_rate_events(0) as n`;
+    expect(r!.n).toBeGreaterThanOrEqual(1);
+    const left = await su`select key from rate_events where bucket = 't' order by key`;
+    expect(left.map((x) => x.key)).toEqual(["now", "recent"]);
+    const [owner] = await su`select pg_get_userbyid(proowner) as o, prosecdef from pg_proc where proname = 'prune_rate_events'`;
+    expect(owner).toMatchObject({ o: "cloud_owner", prosecdef: true });
   });
 
   it("a membership in cloud_owner (even NOINHERIT) fails the boot check and is revoked by the next migrate (GH #799)", async () => {

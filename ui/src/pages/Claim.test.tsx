@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthApiError } from "../api/auth";
-import { ClaimPage, claimErrorMessage, readClaimCodeFromHash } from "./Claim";
+import { ClaimPage, claimErrorMessage, readClaimCodeFromHash, readClaimEmailFromHash } from "./Claim";
 
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSignUp = vi.hoisted(() => vi.fn());
@@ -59,6 +59,15 @@ describe("readClaimCodeFromHash", () => {
     expect(readClaimCodeFromHash("#code=")).toBeNull();
     expect(readClaimCodeFromHash("")).toBeNull();
     expect(readClaimCodeFromHash("#other=1")).toBeNull();
+  });
+});
+
+describe("readClaimEmailFromHash (#836)", () => {
+  it("reads email= from the fragment beside the code", () => {
+    expect(readClaimEmailFromHash(`#code=${CODE}&email=founder%40example.com`)).toBe("founder@example.com");
+    expect(readClaimCodeFromHash(`#code=${CODE}&email=founder%40example.com`)).toBe(CODE);
+    expect(readClaimEmailFromHash(`#code=${CODE}`)).toBeNull();
+    expect(readClaimEmailFromHash(`#${CODE}`)).toBeNull();
   });
 });
 
@@ -119,6 +128,21 @@ describe("ClaimPage", () => {
     const email = q<HTMLInputElement>("#claim-email");
     expect(email.value).toBe("founder@example.com");
     expect(email.readOnly).toBe(true);
+  });
+
+  it("takes the email from the fragment when the link carries it there (#836), and clears it from the URL", async () => {
+    search.value = "";
+    window.history.replaceState(null, "", `/claim#code=${CODE}&email=fragment%40example.com`);
+    mockSignUp.mockResolvedValue(undefined);
+    mockGetSession.mockResolvedValue({ session: { id: "s" }, user: { id: "u" } });
+    render();
+    await flush();
+    expect(window.location.hash).toBe("");
+    expect(window.location.search).toBe("");
+    expect(q<HTMLInputElement>("#claim-email").value).toBe("fragment@example.com");
+    fill();
+    await submit();
+    expect(mockSignUp).toHaveBeenCalledWith({ name: "Founder", email: "fragment@example.com", password: "correct-horse-battery", inviteCode: CODE });
   });
 
   it("claims with the code and email, then lands on /cos", async () => {

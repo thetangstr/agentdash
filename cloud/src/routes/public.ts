@@ -5,27 +5,38 @@
 import { Router, type Request, type Response, type Router as ExpressRouter } from "express";
 import type { CloudConfig } from "../config.js";
 import { clientIp, fromPrivateNetwork, normaliseIp, socketIp } from "../auth.js";
+import { constantTimeEqual } from "../crypto.js";
 import type { FrontDoor, Visitor } from "../front-door/service.js";
 import { MemoryLimiter } from "../front-door/rate-limit.js";
 
 export const SESSION_COOKIE = "agd_cloud_session";
 
+export const PROXY_SECRET_HEADER = "x-agentdash-edge-proxy";
+export const PROXY_CLIENT_IP_HEADER = "x-agentdash-client-ip";
+
+function headerValue(req: Request, name: string): string | undefined {
+  const raw = req.headers[name];
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
 /**
- * The visitor's address. Through Vercel, the connecting address is Vercel's,
- * so the visitor's comes from the configured header; the connecting address
- * is kept as `proxyIp` so a caller that skips Vercel and forges the header
- * still meets a ceiling on its real address.
+ * The visitor's address (GH #836 security review). Through Vercel the
+ * connecting address is Vercel's, so www's routing middleware (repo-root
+ * middleware.ts) sends the visitor's in X-AgentDash-Client-IP together with
+ * the shared secret in X-AgentDash-Edge-Proxy. The address header is believed
+ * only when the secret matches, compared in constant time; with no secret
+ * configured it is always ignored. Anyone calling the Railway host directly
+ * is keyed by the address they really connect from.
  */
 export function visitorOf(req: Request, config: Pick<CloudConfig, "clientIpSource" | "privateNetwork" | "frontDoor">): Visitor {
   const connecting = fromPrivateNetwork(req, config) ? socketIp(req) : clientIp(req, config.clientIpSource);
-  const header = config.frontDoor.clientIpHeader;
-  if (header) {
-    const raw = req.headers[header];
-    const first = (Array.isArray(raw) ? raw[0] : raw)?.split(",")[0];
-    const ip = normaliseIp(first);
-    if (ip) return { ip, proxyIp: connecting };
+  const secret = config.frontDoor.proxySecret;
+  const presented = headerValue(req, PROXY_SECRET_HEADER);
+  if (secret && presented && constantTimeEqual(presented, secret.reveal())) {
+    const ip = normaliseIp(headerValue(req, PROXY_CLIENT_IP_HEADER)?.split(",")[0]);
+    if (ip) return { ip, viaProxy: true };
   }
-  return { ip: connecting, proxyIp: null };
+  return { ip: connecting, viaProxy: false };
 }
 
 function readCookie(req: Request, name: string): string | null {

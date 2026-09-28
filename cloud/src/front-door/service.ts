@@ -41,6 +41,13 @@ export const SLOW_AFTER_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
 const LIVE_BOX_STATES: BoxState[] = ["requested", "waitlisted", "provisioning", "awaiting_claim", "active", "suspended", "failed", "pending_delete", "cleanup"];
 const BOX_CREATE_LOCK = 768_001;
+/**
+ * GH #836 review: an unverified signup may not hold a name forever. One
+ * email or one address gets at most this many unverified signups for the
+ * same name, and resending never stretches one signup's hold past MAX_HOLD_MS.
+ */
+export const MAX_SLUG_HOLDS = 3;
+export const MAX_HOLD_MS = 2 * 3_600_000;
 
 export type Refusal = { ok: false; status: number; code: string; error: string };
 const refuse = (status: number, code: string, error: string): Refusal => ({ ok: false, status, code, error });
@@ -48,8 +55,8 @@ const refuse = (status: number, code: string, error: string): Refusal => ({ ok: 
 export interface Visitor {
   /** The visitor's address, as best known. */
   ip: string | null;
-  /** The address the request actually came from, when it differs (a proxy). */
-  proxyIp: string | null;
+  /** True when the address came from www's authenticated proxy header. */
+  viaProxy: boolean;
 }
 
 export interface FrontDoorDeps {
@@ -106,7 +113,11 @@ export function frontDoor(deps: FrontDoorDeps) {
     log.info("front-door email sent", { mailKind: message.kind });
   }
 
-  /** Mail that must not fail the request (the state change already committed). */
+  /**
+   * Mail that must not fail the request, and (GH #836 review) is not awaited
+   * by the public routes, so an address with an account answers in the same
+   * time as one without.
+   */
   async function sendQuietly(message: Parameters<Mailer["send"]>[0]): Promise<void> {
     try {
       await send(message);
@@ -222,9 +233,6 @@ export function frontDoor(deps: FrontDoorDeps) {
       if (!(await botCheck(body.turnstileToken, visitor.ip))) {
         return refuse(400, "bot_check_failed", "We could not confirm you are human. Reload the page and try again.");
       }
-      if (visitor.proxyIp && !(await takeHit(db, { ...LIMITS.signupPerProxy, limit: fd.proxySignupsPerHour }, visitor.proxyIp))) {
-        return refuse(429, "rate_limited", "Too many signups right now. Try again in an hour.");
-      }
       if (visitor.ip && !(await takeHit(db, LIMITS.signupPerIp, visitor.ip))) {
         return refuse(429, "rate_limited", "Too many signups from your network. Try again in an hour.");
       }
@@ -240,6 +248,20 @@ export function frontDoor(deps: FrontDoorDeps) {
       const slugCheck = await checkSlug(slug);
       if (!slugCheck.available) return refuse(slugCheck.reason === "taken" ? 409 : 400, `slug_${slugCheck.reason}`, slugCheck.message);
 
+      {
+        const [holds] = await db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(signupRequests)
+          .innerJoin(accounts, eq(accounts.id, signupRequests.accountId))
+          .where(and(
+            eq(signupRequests.slug, slug),
+            isNull(signupRequests.verifiedAt),
+            visitor.ip ? sql`(${accounts.email} = ${email} or ${signupRequests.ip} = ${visitor.ip})` : sql`${accounts.email} = ${email}`,
+          ));
+        if ((holds?.n ?? 0) >= MAX_SLUG_HOLDS) {
+          return refuse(429, "slug_hold_limit", "You have asked for this name several times without confirming. Check your inbox for the link, or pick another name.");
+        }
+      }
       if (visitor.ip && (await boxesFromIpToday(visitor.ip)) >= BOXES_PER_IP_PER_DAY) {
         return refuse(429, "ip_daily_limit", "A workspace was already created from your network today. Try again tomorrow.");
       }
@@ -262,7 +284,7 @@ export function frontDoor(deps: FrontDoorDeps) {
       try {
         if (acct.status === "active" && (await liveBoxes(acct.id)).length > 0) {
           const t = await issueToken(acct.id, "find");
-          await send(emails.alreadyHaveBox(email, { link: magicLink(t.token) }));
+          void sendQuietly(emails.alreadyHaveBox(email, { link: magicLink(t.token) }));
           return { ok: true };
         }
         const t = await issueToken(acct.id, "verify");
@@ -275,7 +297,7 @@ export function frontDoor(deps: FrontDoorDeps) {
           unverifiedHuman: !fd.turnstileSecret,
           expiresAt: t.expiresAt,
         });
-        await send(emails.verify(email, { link: magicLink(t.token), slug }));
+        void sendQuietly(emails.verify(email, { link: magicLink(t.token), slug }));
       } catch (err) {
         if (err instanceof MailNotConfigured) return refuse(503, "signup_unavailable", "Signup is not open yet. Try again soon.");
         throw err;
@@ -416,7 +438,7 @@ export function frontDoor(deps: FrontDoorDeps) {
         for (const b of await liveBoxes(acct.id)) {
           if (b.state !== "awaiting_claim") continue;
           const claimUrl = claimLinkForBox(b, { dataKeys: config.dataKeys, edgeDomain: config.edgeDomain, email: acct.email });
-          if (claimUrl) await send(emails.ready(acct.email, { claimUrl, slug: b.slug, publicUrl: boxUrl(b.slug) }));
+          if (claimUrl) void sendQuietly(emails.ready(acct.email, { claimUrl, slug: b.slug, publicUrl: boxUrl(b.slug) }));
         }
         return { ok: true };
       }
@@ -434,9 +456,14 @@ export function frontDoor(deps: FrontDoorDeps) {
       if (!pending) return { ok: true };
       // The name must still be free for this person.
       if (!(await checkSlug(pending.slug, acct.id)).available) return { ok: true };
+      // The hold never stretches past MAX_HOLD_MS from the signup.
+      const holdEnds = new Date(pending.createdAt.getTime() + MAX_HOLD_MS);
+      if (holdEnds.getTime() <= now().getTime()) return { ok: true };
       const t = await issueToken(acct.id, "verify");
-      await db.update(signupRequests).set({ emailTokenId: t.id, expiresAt: t.expiresAt }).where(eq(signupRequests.id, pending.id));
-      await send(emails.verify(email, { link: magicLink(t.token), slug: pending.slug }));
+      const expiresAt = t.expiresAt < holdEnds ? t.expiresAt : holdEnds;
+      await db.update(emailTokens).set({ expiresAt }).where(eq(emailTokens.id, t.id));
+      await db.update(signupRequests).set({ emailTokenId: t.id, expiresAt }).where(eq(signupRequests.id, pending.id));
+      void sendQuietly(emails.verify(email, { link: magicLink(t.token), slug: pending.slug }));
       return { ok: true };
     },
 
@@ -455,13 +482,13 @@ export function frontDoor(deps: FrontDoorDeps) {
       const rows = await liveBoxes(acct.id);
       try {
         if (!rows.length) {
-          await send(emails.findNone(email, { startUrl: `${site}/start` }));
+          void sendQuietly(emails.findNone(email, { startUrl: `${site}/start` }));
           return { ok: true };
         }
         const t = await issueToken(acct.id, "find");
         const note = (s: BoxState) =>
           s === "active" ? "sign in there" : s === "awaiting_claim" ? "ready: open it from the link below" : s === "suspended" ? "paused: visiting it wakes it" : "being set up";
-        await send(emails.find(email, { signInLink: magicLink(t.token), boxes: rows.map((b) => ({ slug: b.slug, url: boxUrl(b.slug), note: note(b.state) })) }));
+        void sendQuietly(emails.find(email, { signInLink: magicLink(t.token), boxes: rows.map((b) => ({ slug: b.slug, url: boxUrl(b.slug), note: note(b.state) })) }));
       } catch (err) {
         if (err instanceof MailNotConfigured) return refuse(503, "unavailable", "This is not available yet. Try again soon.");
         throw err;

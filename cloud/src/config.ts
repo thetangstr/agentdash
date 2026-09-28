@@ -68,15 +68,13 @@ export interface FrontDoorConfig {
   turnstileSecret: Secret | null;
   turnstileSiteKey: string | null;
   /**
-   * A request header carrying the visitor's address, set by the proxy in
-   * front of the public API (Vercel: x-vercel-forwarded-for). Null: the
-   * address comes from CLOUD_CLIENT_IP_SOURCE. The header can be forged by a
-   * caller that skips the proxy, so the per-proxy ceiling below still counts
-   * the address the request really came from.
+   * Shared secret www's routing middleware (repo-root middleware.ts) sends in
+   * X-AgentDash-Edge-Proxy with the visitor's address in X-AgentDash-Client-IP.
+   * The address header is believed ONLY when this secret matches (constant
+   * time); otherwise, and whenever it is unset, the address is the socket or
+   * Railway's X-Real-IP (GH #836 security review).
    */
-  clientIpHeader: string | null;
-  /** Ceiling on signups an hour from one connecting address (the proxy itself, when a client IP header is used). */
-  proxySignupsPerHour: number;
+  proxySecret: Secret | null;
   /** Extra disposable domains, and domains to allow despite the list. */
   disposableExtra: string[];
   disposableAllow: string[];
@@ -265,8 +263,13 @@ export function loadFrontDoorConfig(env: NodeJS.ProcessEnv): FrontDoorConfig {
   }
   const transport = (env.CLOUD_MAIL_TRANSPORT ?? "resend").trim();
   if (transport !== "resend" && transport !== "log") throw new ConfigError("CLOUD_MAIL_TRANSPORT must be 'resend' or 'log'");
-  const header = env.CLOUD_PUBLIC_CLIENT_IP_HEADER?.trim().toLowerCase() || null;
-  if (header && !/^[a-z0-9-]+$/.test(header)) throw new ConfigError("CLOUD_PUBLIC_CLIENT_IP_HEADER must be a header name");
+  // A dev transport writes links to the log: never outside localhost (GH #836 review).
+  if (transport === "log" && !localHost) throw new ConfigError("CLOUD_MAIL_TRANSPORT=log is allowed only when CLOUD_PUBLIC_SITE_URL is localhost");
+  const proxySecret = env.CLOUD_VERCEL_PROXY_SECRET?.trim() || null;
+  if (proxySecret) {
+    const weak = checkAdminTokenStrength(proxySecret);
+    if (weak) throw new ConfigError(`CLOUD_VERCEL_PROXY_SECRET ${weak}; generate one with \`openssl rand -hex 32\``);
+  }
   const secret = env.CLOUD_TURNSTILE_SECRET_KEY?.trim();
   const siteKey = env.CLOUD_TURNSTILE_SITE_KEY?.trim() || null;
   if (Boolean(secret) !== Boolean(siteKey)) {
@@ -278,8 +281,7 @@ export function loadFrontDoorConfig(env: NodeJS.ProcessEnv): FrontDoorConfig {
     mailTransport: transport,
     turnstileSecret: secret ? new Secret(secret) : null,
     turnstileSiteKey: siteKey,
-    clientIpHeader: header,
-    proxySignupsPerHour: positiveInt(env, "CLOUD_PROXY_SIGNUPS_PER_HOUR", 120),
+    proxySecret: proxySecret ? new Secret(proxySecret) : null,
     disposableExtra: domainList(env.CLOUD_DISPOSABLE_DOMAINS_EXTRA),
     disposableAllow: domainList(env.CLOUD_DISPOSABLE_DOMAINS_ALLOW),
   };

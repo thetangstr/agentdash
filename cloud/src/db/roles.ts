@@ -31,6 +31,8 @@ export const OWNER_ROLE = "cloud_owner";
 export const RUNTIME_ROLE = "cloud_app";
 /** Append-only tables: the runtime role may only read and add rows. */
 export const AUDIT_TABLES = ["operator_audit", "box_events"] as const;
+/** SECURITY DEFINER functions the runtime role may execute (and nothing else). */
+export const RUNTIME_FUNCTIONS = ["prune_rate_events(integer)"] as const;
 
 type Sql = postgres.Sql | postgres.ReservedSql;
 
@@ -151,6 +153,11 @@ export async function applyRuntimeGrants(sql: Sql, opts: RoleNames = {}): Promis
   await sql.unsafe(`revoke all on all sequences in schema public from ${runtime}`);
   await sql.unsafe(`grant usage, select on all sequences in schema public to ${runtime}`);
   await sql.unsafe(`revoke all on all functions in schema public from ${runtime}`);
+  // GH #836 review: the one function the runtime role may call (SECURITY DEFINER; deletes only old rate_events rows).
+  for (const fn of RUNTIME_FUNCTIONS) {
+    const [row] = await sql<{ f: string | null }[]>`select to_regprocedure(${`public.${fn}`})::text as f`;
+    if (row?.f) await sql.unsafe(`grant execute on function public.${fn} to ${runtime}`);
+  }
   // The runtime role belongs to no role at all: a membership (even with
   // NOINHERIT) lets it SET ROLE to that role, e.g. the owner, and DROP.
   const memberships = await sql.unsafe<{ role: string }[]>(

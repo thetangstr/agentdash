@@ -44,7 +44,9 @@ export function resendMailer(opts: { apiKey: Secret; from: string; fetch?: typeo
 export function logMailer(log: Logger): Mailer {
   return {
     async send(m) {
-      log.warn("DEV MAIL (CLOUD_MAIL_TRANSPORT=log; never use in production)", { mailKind: m.kind, to: m.to, subject: m.subject, body: m.text });
+      // GH #836 review: even here the credentials in links are redacted.
+      const body = m.text.replace(/([#&?](?:token|code)=)[^\s&#]+/g, "$1[redacted]");
+      log.warn("DEV MAIL (CLOUD_MAIL_TRANSPORT=log; localhost only)", { mailKind: m.kind, to: m.to, subject: m.subject, body });
     },
   };
 }

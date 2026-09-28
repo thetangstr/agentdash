@@ -40,12 +40,15 @@ const health = (body: Record<string, unknown>): typeof fetch =>
   (async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
 
 describe("claim link", () => {
-  it("puts the code in the fragment and the email in the query", () => {
+  it("puts the code and the email in the fragment, nothing in the query", () => {
     const url = claimLink({ slug: "acme", edgeDomain: "agentdash.cloud", email: "founder+x@example.com", code: CODE });
-    expect(url).toBe(`https://acme.agentdash.cloud/claim?email=founder%2Bx%40example.com#code=${CODE}`);
+    // GH #836 review: the email rides in the fragment too, never the query string.
+    expect(url).toBe(`https://acme.agentdash.cloud/claim#code=${CODE}&email=founder%2Bx%40example.com`);
+    expect(new URL(url).search).toBe("");
     const u = new URL(url);
     expect(u.search).not.toContain("AGD-");
-    expect(u.hash).toBe(`#code=${CODE}`);
+    expect(new URLSearchParams(u.hash.slice(1)).get("code")).toBe(CODE);
+    expect(new URLSearchParams(u.hash.slice(1)).get("email")).toBe("founder+x@example.com");
   });
 
   it("is built from the encrypted claim code, and gone once the code is erased", () => {

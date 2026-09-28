@@ -14,7 +14,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 const SHOTS = process.env.FRONT_DOOR_SHOTS;
 // The app's service worker would proxy the Turnstile script past page.route.
 test.use({ serviceWorkers: "block" });
-const CLAIM = "https://acme.agentdash.cloud/claim?email=founder%40acme.test#code=AGD-0123456789ABCDEF0123456789";
+const CLAIM = "https://acme.agentdash.cloud/claim#code=AGD-0123456789ABCDEF0123456789&email=founder%40acme.test";
 
 interface Stub {
   config?: Record<string, unknown>;

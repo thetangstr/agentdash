@@ -3,6 +3,7 @@
 // the cleanup sweep when a Railway token is configured (GH #764).
 import { createApp, mailerFromConfig } from "./app.js";
 import { frontDoor as makeFrontDoor } from "./front-door/service.js";
+import { pruneRateEvents } from "./front-door/rate-limit.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { createCloudDb, migrateCloudDb, verifyRuntimeDb } from "./db/client.js";
 import { type Alerter, combineAlerters, logAlerter, resendEmailAlerter, webhookAlerter } from "./jobs/alerts.js";
@@ -18,6 +19,7 @@ const log = createLogger({ base: { service: "cloud-control" } });
 const SWEEP_MS = 10 * 60_000;
 const READY_MAIL_MS = 20_000;
 const RELEASE_MS = 60_000;
+const PRUNE_MS = 60 * 60_000;
 
 async function main() {
   const config = loadConfig();
@@ -87,6 +89,8 @@ async function main() {
   const passes = [
     setInterval(() => void frontDoor.sendReadyEmails().catch((err: unknown) => log.error("ready email pass failed", { err })), READY_MAIL_MS),
     setInterval(() => void frontDoor.releaseApproved().catch((err: unknown) => log.error("waitlist release pass failed", { err })), RELEASE_MS),
+    // GH #836 review: rate_events is pruned hourly.
+    setInterval(() => void pruneRateEvents(db).catch((err: unknown) => log.error("rate_events prune failed", { err })), PRUNE_MS),
   ];
   for (const t of passes) t.unref();
 

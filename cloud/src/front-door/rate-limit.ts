@@ -16,7 +16,6 @@ export interface LimitRule {
 
 export const LIMITS = {
   signupPerIp: { bucket: "signup_ip", limit: 3, windowMs: 3_600_000 },
-  signupPerProxy: { bucket: "signup_proxy", limit: 120, windowMs: 3_600_000 },
   signupPerEmail: { bucket: "signup_email", limit: 5, windowMs: 3_600_000 },
   findPerIp: { bucket: "find_ip", limit: 5, windowMs: 3_600_000 },
   findPerEmail: { bucket: "find_email", limit: 3, windowMs: 3_600_000 },
@@ -66,4 +65,16 @@ export class MemoryLimiter {
     e.count += 1;
     return true;
   }
+}
+
+/** The longest window any limit counts over; prune_rate_events never deletes younger rows. */
+export const LONGEST_WINDOW_MS = Math.max(...Object.values(LIMITS).map((l) => l.windowMs), 3_600_000);
+
+/**
+ * Delete rate_events rows older than the longest window (GH #836 review),
+ * through the SECURITY DEFINER function (the runtime role has no DELETE).
+ */
+export async function pruneRateEvents(db: CloudDb): Promise<number> {
+  const rows = (await db.execute(sql`select prune_rate_events(${Math.ceil(LONGEST_WINDOW_MS / 1000)}) as n`)) as unknown as Array<{ n: number }>;
+  return rows[0]?.n ?? 0;
 }

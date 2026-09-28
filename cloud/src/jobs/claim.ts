@@ -14,9 +14,16 @@ import { decryptField, type DataKeyring } from "../crypto.js";
 
 export type ClaimState = "claimed" | "unclaimed" | "unknown";
 
-/** The one-time claim link (spec §3.5 step 2): the code rides in the fragment, never sent to a server. */
+/**
+ * The one-time claim link (spec §3.5 step 2). The code AND the email ride in
+ * the fragment, which browsers never send to a server or put in a Referer
+ * (GH #836 review: the email was in the query string, so it reached the
+ * box's and the edge's request logs). The box's /claim page reads both from
+ * the fragment (ui/src/pages/Claim.tsx), and still accepts ?email= from
+ * older links.
+ */
 export function claimLink(input: { slug: string; edgeDomain: string; email: string; code: string }): string {
-  return `https://${input.slug}.${input.edgeDomain}/claim?email=${encodeURIComponent(input.email)}#code=${encodeURIComponent(input.code)}`;
+  return `https://${input.slug}.${input.edgeDomain}/claim#code=${encodeURIComponent(input.code)}&email=${encodeURIComponent(input.email)}`;
 }
 
 /** The claim link for a box, from its encrypted claim code; null once the code is erased (after the claim). */

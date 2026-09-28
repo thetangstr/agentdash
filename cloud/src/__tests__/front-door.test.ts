@@ -13,7 +13,9 @@ import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { accounts, boxEvents, boxes, emailTokens, jobs, waitlist } from "../db/schema.js";
 import { hasMx, isDisposableDomain, normaliseEmail } from "../front-door/email-policy.js";
 import type { MailMessage } from "../front-door/mailer.js";
-import { frontDoor, type FrontDoor } from "../front-door/service.js";
+import { frontDoor, type FrontDoor, MAX_SLUG_HOLDS } from "../front-door/service.js";
+import { logMailer, emails } from "../front-door/mailer.js";
+import { pruneRateEvents } from "../front-door/rate-limit.js";
 import { type JobHandler, JobRunner } from "../jobs/runner.js";
 import { createLogger } from "../logger.js";
 import { settingsService } from "../settings.js";
@@ -39,7 +41,10 @@ async function serve(app: AppT): Promise<http.Server> {
   return server;
 }
 const ADMIN = randomBytes(32).toString("hex");
-const IP_HEADER = "x-test-client-ip";
+const IP_HEADER = "x-agentdash-client-ip";
+const PROXY_HEADER = "x-agentdash-edge-proxy";
+// A CSPRNG-shaped proxy secret (config refuses weak ones).
+const PROXY_SECRET = randomBytes(32).toString("hex");
 let pg: TestDatabase;
 let db: CloudDb;
 let close: () => Promise<void>;
@@ -57,7 +62,7 @@ function config(extra: Record<string, string> = {}) {
     CLOUD_ADMIN_TOKEN: ADMIN,
     CLOUD_ADMIN_ALLOWED_IPS: "127.0.0.1,::1",
     CLOUD_PUBLIC_SITE_URL: "https://www.agentdash.test",
-    CLOUD_PUBLIC_CLIENT_IP_HEADER: IP_HEADER,
+    CLOUD_VERCEL_PROXY_SECRET: PROXY_SECRET,
     CLOUD_DISPOSABLE_DOMAINS_EXTRA: "throwaway.test",
     ...extra,
   });
@@ -101,7 +106,7 @@ function who(opts: { freemail?: boolean } = {}) {
 async function signup(app: Target, w: { email: string; slug: string; ip: string }, over: Record<string, unknown> = {}) {
   const res = await request(app)
     .post("/api/cloud/signup")
-    .set(IP_HEADER, w.ip)
+    .set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip)
     .send({ email: w.email, workspaceName: "Acme Robotics", slug: w.slug, acceptTerms: true, turnstileToken: "tok", ...over });
   lastSignup = { status: res.status, body: res.body, who: w };
   return res;
@@ -121,7 +126,7 @@ function tokenFrom(m: MailMessage): string {
 }
 
 async function verify(app: Target, token: string, ip = "203.0.113.9") {
-  return await request(app).post("/api/cloud/verify").set(IP_HEADER, ip).send({ token });
+  return await request(app).post("/api/cloud/verify").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, ip).send({ token });
 }
 
 function cookieOf(res: request.Response): string {
@@ -236,13 +241,29 @@ describe("POST /api/cloud/signup", () => {
     expect(fourth.body.code).toBe("rate_limited");
   });
 
-  it("caps the connecting address too, so a forged client-IP header does not escape the limits", async () => {
-    const { app } = await build({ ...TURNSTILE, CLOUD_PROXY_SIGNUPS_PER_HOUR: "2" });
-    // All requests connect from 127.0.0.1 (the "proxy"); each forges a new client IP.
-    // Earlier tests already used the proxy's budget, so the ceiling is hit at once or within two.
-    const results = [];
-    for (let i = 0; i < 3; i++) results.push((await signup(app, who())).status);
-    expect(results).toContain(429);
+  it("believes the client-IP header only with the proxy secret (GH #836 review)", async () => {
+    const { app } = await build();
+    // Forged header, no secret: every request is keyed by the real (socket) address, 127.0.0.1,
+    // so rotating the forged address does not escape the 3-an-hour limit.
+    await db.execute(sql`insert into rate_events (bucket, key) select 'signup_ip', '127.0.0.1' from generate_series(1, 3)`);
+    const forged = await request(app).post("/api/cloud/signup").set(IP_HEADER, "203.0.113.77")
+      .send({ email: who().email, workspaceName: "Acme", slug: who().slug, acceptTerms: true, turnstileToken: "tok" });
+    expect(forged.status).toBe(429);
+    const wrong = await request(app).post("/api/cloud/signup").set(PROXY_HEADER, "not-the-secret").set(IP_HEADER, "203.0.113.78")
+      .send({ email: who().email, workspaceName: "Acme", slug: who().slug, acceptTerms: true, turnstileToken: "tok" });
+    expect(wrong.status).toBe(429);
+    // With the secret, the header's address is the key.
+    const w = who();
+    expect((await signup(app, w)).status).toBe(202);
+    const rows = (await db.execute(sql`select ip from signup_requests order by created_at desc limit 1`)) as unknown as Array<{ ip: string }>;
+    expect(rows[0]!.ip).toBe(w.ip);
+  });
+
+  it("ignores the client-IP header entirely when no proxy secret is configured", async () => {
+    const { app } = await build({ ...TURNSTILE, CLOUD_VERCEL_PROXY_SECRET: "" });
+    const res = await request(app).post("/api/cloud/signup").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, "203.0.113.79")
+      .send({ email: who().email, workspaceName: "Acme", slug: who().slug, acceptTerms: true, turnstileToken: "tok" });
+    expect(res.status).toBe(429); // keyed by 127.0.0.1, which the previous test filled
   });
 
   it("refuses a slug another pending signup holds, and a slug a box has", async () => {
@@ -533,7 +554,7 @@ describe("end to end with a fake provisioner", () => {
 
     expect(await fd.sendReadyEmails()).toBeGreaterThanOrEqual(1);
     const ready = lastMailTo(w.email, "ready");
-    const claimUrl = `https://${w.slug}.agentdash.cloud/claim?email=${encodeURIComponent(w.email)}#code=${CODE}`;
+    const claimUrl = `https://${w.slug}.agentdash.cloud/claim#code=${CODE}&email=${encodeURIComponent(w.email)}`;
     expect(ready.text).toContain(claimUrl);
     // Once per box.
     mail.length = 0;
@@ -545,16 +566,16 @@ describe("end to end with a fake provisioner", () => {
     expect(after.headers["cache-control"]).toBe("no-store");
 
     // "Resend my link" re-mails the claim link and never touches the box.
-    const resend = await request(app).post("/api/cloud/resend").set("cookie", cookie).set(IP_HEADER, w.ip).send({});
+    const resend = await request(app).post("/api/cloud/resend").set("cookie", cookie).set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({});
     expect(resend.status).toBe(202);
     expect(lastMailTo(w.email, "ready").text).toContain(claimUrl);
 
     // /find mails the workspaces for a known, verified address only.
-    const find = await request(app).post("/api/cloud/find").set(IP_HEADER, w.ip).send({ email: w.email, turnstileToken: "tok" });
+    const find = await request(app).post("/api/cloud/find").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({ email: w.email, turnstileToken: "tok" });
     expect(find.status).toBe(202);
     expect(lastMailTo(w.email, "find").text).toContain(`${w.slug}: https://${w.slug}.agentdash.cloud`);
     mail.length = 0;
-    const stranger = await request(app).post("/api/cloud/find").set(IP_HEADER, w.ip).send({ email: "nobody@nowhere.test", turnstileToken: "tok" });
+    const stranger = await request(app).post("/api/cloud/find").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({ email: "nobody@nowhere.test", turnstileToken: "tok" });
     expect(stranger.status).toBe(202);
     expect(mail).toHaveLength(0);
     // Nothing secret reached the log.
@@ -576,12 +597,12 @@ describe("the rest of the public surface", () => {
     const w = who();
     await signup(app, w);
     const first = tokenFrom(lastMailTo(w.email, "verify"));
-    const res = await request(app).post("/api/cloud/resend").set(IP_HEADER, w.ip).send({ email: w.email });
+    const res = await request(app).post("/api/cloud/resend").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({ email: w.email });
     expect(res.status).toBe(202);
     const second = tokenFrom(lastMailTo(w.email, "verify"));
     expect(second).not.toBe(first);
     mail.length = 0;
-    await request(app).post("/api/cloud/resend").set(IP_HEADER, w.ip).send({ email: "nobody@nowhere.test" }).expect(202);
+    await request(app).post("/api/cloud/resend").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({ email: "nobody@nowhere.test" }).expect(202);
     expect(mail).toHaveLength(0);
   });
 
@@ -603,5 +624,81 @@ describe("the rest of the public surface", () => {
     turnstileAnswer = false;
     const res = await request(app).post("/api/cloud/find").send({ email: "a@acme.test", turnstileToken: "x" });
     expect(res.body.code).toBe("bot_check_failed");
+  });
+});
+
+describe("security review fixes (GH #836)", () => {
+  it("reserves mail-provider labels and impersonation names", async () => {
+    const { app } = await build();
+    for (const slug of ["send", "bounce", "email", "click", "smtp", "mail", "anthropic", "openai", "google", "microsoft", "support", "billing", "security", "status"]) {
+      expect((await request(app).get(`/api/cloud/slug-available?slug=${slug}`)).body.available, slug).toBe(false);
+    }
+  });
+
+  it(`caps how often one email or address can hold the same unconfirmed name (${MAX_SLUG_HOLDS})`, async () => {
+    const { app } = await build();
+    const base = who();
+    for (let i = 0; i < MAX_SLUG_HOLDS; i++) {
+      clockOffsetMs = i * 31 * 60_000; // each earlier hold has expired
+      expect((await signup(app, { ...base, ip: `192.0.2.${100 + i}` })).status).toBe(202);
+    }
+    clockOffsetMs = MAX_SLUG_HOLDS * 31 * 60_000;
+    const res = await signup(app, { ...base, ip: "192.0.2.199" });
+    expect(res.status).toBe(429);
+    expect(res.body.code).toBe("slug_hold_limit");
+    // Another person may still take the name once the holds have lapsed.
+    expect((await signup(app, { ...who(), slug: base.slug })).status).toBe(202);
+  });
+
+  it("resend never stretches a hold past two hours from the signup", async () => {
+    const { app } = await build();
+    const w = who();
+    await signup(app, w);
+    clockOffsetMs = 2 * 3_600_000 + 60_000;
+    mail.length = 0;
+    await request(app).post("/api/cloud/resend").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({ email: w.email }).expect(202);
+    expect(mail).toHaveLength(0);
+  });
+
+  it("prunes rate_events older than the longest window, keeping recent ones", async () => {
+    await db.execute(sql`insert into rate_events (bucket, key, created_at) values ('prune_t', 'old', now() - interval '2 hours'), ('prune_t', 'new', now())`);
+    expect(await pruneRateEvents(db)).toBeGreaterThanOrEqual(1);
+    const left = (await db.execute(sql`select key from rate_events where bucket = 'prune_t'`)) as unknown as Array<{ key: string }>;
+    expect(left.map((r) => r.key)).toEqual(["new"]);
+  });
+
+  it("refuses the log mail transport outside localhost, and redacts links in it", async () => {
+    expect(() => config({ CLOUD_MAIL_TRANSPORT: "log" })).toThrow(/localhost/);
+    expect(config({ CLOUD_MAIL_TRANSPORT: "log", CLOUD_PUBLIC_SITE_URL: "http://localhost:5173" }).frontDoor.mailTransport).toBe("log");
+    const lines: string[] = [];
+    const devLog = createLogger({ write: (l) => lines.push(l), level: "debug" });
+    const token = "T".repeat(43);
+    await logMailer(devLog).send(emails.verify("a@acme.test", { link: `http://localhost:5173/start/verify#token=${token}`, slug: "acme" }));
+    expect(lines.join("\n")).not.toContain(token);
+    expect(lines.join("\n")).toContain("#token=[redacted]");
+  });
+
+  it("find and resend answer before the email is sent", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const cfg = config(TURNSTILE);
+    const slowMail: MailMessage[] = [];
+    const fd = frontDoor({
+      db, log, config: cfg, fetch: fakeTurnstileFetch,
+      resolveMx: async (d) => [{ exchange: `mx.${d}` }],
+      mailer: { send: async (m) => { await gate; slowMail.push(m); } },
+    });
+    const app = await serve(createApp({ db, config: cfg, log, frontDoor: fd }));
+    const w = who();
+    // A verified account with a box, to make /find send something.
+    const [acct] = await db.insert(accounts).values({ email: w.email, status: "pending_verification" }).returning();
+    await db.update(accounts).set({ status: "active" }).where(eq(accounts.id, acct!.id));
+    await db.insert(boxes).values({ accountId: acct!.id, slug: w.slug });
+    const res = await request(app).post("/api/cloud/find").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({ email: w.email, turnstileToken: "tok" });
+    expect(res.status).toBe(202);
+    expect(slowMail).toHaveLength(0); // answered while the send is still pending
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(slowMail.map((m) => m.kind)).toEqual(["find"]);
   });
 });
