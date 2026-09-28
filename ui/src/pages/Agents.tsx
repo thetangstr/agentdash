@@ -91,7 +91,10 @@ function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean
 }
 
 export function Agents() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
+  // AgentDash: UX-11 — on the default profile the Team page explains who hires
+  // agents and points at Ask; agentdash_mk keeps the create-agent wording.
+  const isDefaultProfile = selectedCompany?.productProfile !== "agentdash_mk";
   const { openNewAgent } = useDialogActions();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
@@ -243,12 +246,22 @@ export function Agents() {
       {error && <p className="text-sm text-destructive">{error.message}</p>}
 
       {agents && agents.length === 0 && (
-        <EmptyState
-          icon={Bot}
-          message="Create your first agent to get started."
-          action="New Agent"
-          onAction={openNewAgent}
-        />
+        isDefaultProfile ? (
+          <EmptyState
+            icon={Bot}
+            message="Your Chief of Staff hires agents when an issue needs them. You can also ask for one."
+            action="Ask for a hire"
+            actionTo="/cos"
+            actionIcon={null}
+          />
+        ) : (
+          <EmptyState
+            icon={Bot}
+            message="Create your first agent to get started."
+            action="New Agent"
+            onAction={openNewAgent}
+          />
+        )
       )}
 
       {/* List view */}

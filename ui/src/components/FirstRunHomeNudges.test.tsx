@@ -77,12 +77,22 @@ describe("FirstRunHomeNudges", () => {
   }
 
   it("offers to continue setup when a step is left", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "model" });
+    await render();
+    const resume = container.querySelector('[data-testid="first-run-home-resume"]')!;
+    expect(resume.textContent).toContain("connect a model provider");
+    expect(resume.querySelector("a")?.getAttribute("href")).toBe("/setup");
+    expect(container.querySelector('[data-testid="connect-muse"]')).toBeNull();
+  });
+
+  it("speaks the plan's empty-state copy on the repo step (UX-11)", async () => {
     mockStatus.mockResolvedValue({ ...base, nextStep: "repo" });
     await render();
     const resume = container.querySelector('[data-testid="first-run-home-resume"]')!;
-    expect(resume.textContent).toContain("connect your GitHub repo");
-    expect(resume.querySelector("a")?.getAttribute("href")).toBe("/setup");
-    expect(container.querySelector('[data-testid="connect-muse"]')).toBeNull();
+    expect(resume.textContent).toContain("Connect a repo so your agents have somewhere to work.");
+    const link = resume.querySelector("a")!;
+    expect(link.textContent).toBe("Connect GitHub");
+    expect(link.getAttribute("href")).toBe("/setup");
   });
 
   it("says who can add the model key when this admin cannot (#794)", async () => {

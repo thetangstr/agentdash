@@ -571,7 +571,10 @@ export function IssuesList({
   onUpdateIssue,
 }: IssuesListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
+  // AgentDash: UX-11 — the default profile's empty Work page points at Ask;
+  // agentdash_mk keeps the create-issue wording.
+  const isDefaultProfile = selectedCompany?.productProfile !== "agentdash_mk";
   const { openNewIssue } = useDialogActions();
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -1414,12 +1417,22 @@ export function IssuesList({
         </p>
       )}
       {!isLoading && filtered.length === 0 && viewState.viewMode === "list" && (
-        <EmptyState
-          icon={CircleDot}
-          message="No issues match the current filters or search."
-          action={createActionLabel}
-          onAction={() => openCreateIssueDialog()}
-        />
+        isDefaultProfile && issues.length === 0 && normalizedIssueSearch.length === 0 ? (
+          <EmptyState
+            icon={CircleDot}
+            message="No issues yet. Everything you or your assistant asks for shows up here."
+            action="Ask"
+            actionTo="/cos"
+            actionIcon={null}
+          />
+        ) : (
+          <EmptyState
+            icon={CircleDot}
+            message="No issues match the current filters or search."
+            action={createActionLabel}
+            onAction={() => openCreateIssueDialog()}
+          />
+        )
       )}
 
       {viewState.viewMode === "board" ? (

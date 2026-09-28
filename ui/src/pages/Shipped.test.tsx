@@ -12,8 +12,11 @@ const mockIssuesApi = vi.hoisted(() => ({ listShipped: vi.fn() }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/agents", () => ({ agentsApi: { list: vi.fn().mockResolvedValue([]) } }));
 vi.mock("../api/projects", () => ({ projectsApi: { list: vi.fn().mockResolvedValue([]) } }));
+const companyState = vi.hoisted(() => ({
+  selectedCompany: { id: "company-1", productProfile: undefined as string | undefined },
+}));
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompanyId: "company-1", selectedCompany: { id: "company-1" } }),
+  useCompany: () => ({ selectedCompanyId: "company-1", selectedCompany: companyState.selectedCompany }),
 }));
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }) }));
 vi.mock("../components/PageSkeleton", () => ({ PageSkeleton: () => <div>loading</div> }));
@@ -21,7 +24,7 @@ vi.mock("@/lib/router", () => ({
   Link: ({ to, children }: { to: string; children: ReactNode }) => <a href={to}>{children}</a>,
 }));
 
-const { Shipped, SHIPPED_EMPTY_TEXT } = await import("./Shipped");
+const { Shipped, SHIPPED_EMPTY_TEXT, SHIPPED_EMPTY_TEXT_DEFAULT_PROFILE } = await import("./Shipped");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -137,8 +140,21 @@ describe("Shipped page", () => {
     mockIssuesApi.listShipped.mockResolvedValue(feed([]));
     await render();
     const empty = container.querySelector('[data-testid="shipped-empty"]');
-    expect(empty?.textContent).toContain(SHIPPED_EMPTY_TEXT);
+    expect(empty?.textContent).toContain(SHIPPED_EMPTY_TEXT_DEFAULT_PROFILE);
     expect(empty?.querySelector('a[href="/dashboard"]')?.textContent).toBe("See what's running");
+  });
+
+  it("keeps the operator empty-state wording on agentdash_mk", async () => {
+    companyState.selectedCompany.productProfile = "agentdash_mk";
+    try {
+      mockIssuesApi.listShipped.mockResolvedValue(feed([]));
+      await render();
+      const empty = container.querySelector('[data-testid="shipped-empty"]');
+      expect(empty?.textContent).toContain(SHIPPED_EMPTY_TEXT);
+      expect(empty?.textContent).not.toContain("20 to 30 minutes");
+    } finally {
+      companyState.selectedCompany.productProfile = undefined;
+    }
   });
 
   it("says 'not metered yet' instead of $0 or 0 tokens for unmetered issues and months", async () => {

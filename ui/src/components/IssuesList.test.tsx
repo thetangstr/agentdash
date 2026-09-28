@@ -11,6 +11,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 const companyState = vi.hoisted(() => ({
   selectedCompanyId: "company-1",
+  selectedCompany: undefined as { id: string; productProfile?: string } | undefined,
 }));
 
 const dialogState = vi.hoisted(() => ({
@@ -1606,6 +1607,59 @@ describe("IssuesList", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  it("points an empty default-profile Work page at Ask (UX-11)", async () => {
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[]}
+        agents={[]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues-empty-default"
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain(
+        "No issues yet. Everything you or your assistant asks for shows up here.",
+      );
+    });
+    const ask = Array.from(container.querySelectorAll("a")).find((a) => a.textContent === "Ask");
+    expect(ask?.getAttribute("href")).toBe("/cos");
+    expect(dialogState.openNewIssue).not.toHaveBeenCalled();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the create-issue empty state on agentdash_mk (UX-11)", async () => {
+    companyState.selectedCompany = { id: "company-1", productProfile: "agentdash_mk" };
+    try {
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues-empty-mk"
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("No issues match the current filters or search.");
+      });
+      expect(container.textContent).not.toContain("Everything you or your assistant asks for");
+
+      act(() => {
+        root.unmount();
+      });
+    } finally {
+      delete companyState.selectedCompany;
+    }
   });
 });
 
