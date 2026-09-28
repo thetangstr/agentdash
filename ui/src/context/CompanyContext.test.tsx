@@ -41,6 +41,7 @@ function makeCompany(id: string): Company {
     spentMonthlyCents: 0,
     attachmentMaxBytes: 10 * 1024 * 1024,
     requireBoardApprovalForNewAgents: false,
+    newIssuesStartAsTodo: false,
     feedbackDataSharingEnabled: false,
     feedbackDataSharingConsentAt: null,
     feedbackDataSharingConsentByUserId: null,

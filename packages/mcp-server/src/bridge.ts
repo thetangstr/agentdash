@@ -100,11 +100,20 @@ export function bridgeTools(client: PaperclipApiClient): ToolDefinition[] {
 
     makeTool(
       "inbox_propose",
-      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X'). It also records a check-interval preference, but nothing acts on it -- the check is triggered by the operator's own harness schedule, not by AgentDash, so do not tell the operator that setting it changes when the inbox is checked. If a name does not resolve this returns the alternatives -- put the question to the operator rather than guessing.",
+      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X'): `work` is a short name for the job (it becomes the issue title) and `description` is the full brief; confirmed work is created as todo and the agent starts on it straight away. It also records a check-interval preference, but nothing acts on it -- the check is triggered by the operator's own harness schedule, not by AgentDash, so do not tell the operator that setting it changes when the inbox is checked. If a name does not resolve this returns the alternatives -- put the question to the operator rather than guessing.",
       z.object({
         kind: z.enum(["assign_work", "set_cadence"]),
         items: z
-          .array(z.object({ agent: z.string().min(1), work: z.string().min(1) }))
+          .array(
+            z.object({
+              agent: z.string().min(1),
+              work: z.string().min(1).describe("Short name for the job; becomes the issue title"),
+              description: z
+                .string()
+                .optional()
+                .describe("The full brief: context, what done looks like, constraints"),
+            }),
+          )
           .optional()
           .describe("For assign_work: who, and what they should do"),
         minutes: z.number().int().optional().describe("For set_cadence: 30 or 60"),

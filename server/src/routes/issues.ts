@@ -630,6 +630,34 @@ export function issueRoutes(
     throw unauthorized();
   }
 
+  /**
+   * AgentDash: may this create hand an unowned `todo` to the Chief of Staff?
+   * Routing assigns the CoS and wakes it with text the caller wrote, so it
+   * takes the same `tasks:assign` authority as naming an assignee yourself.
+   * Without it the issue is created unowned, exactly as before. Never throws:
+   * the answer is only ever "route" or "don't".
+   */
+  async function callerMayRouteToChiefOfStaff(
+    req: Request,
+    companyId: string,
+    input: { assigneeAgentId?: string | null; assigneeUserId?: string | null },
+  ): Promise<boolean> {
+    if (input.assigneeAgentId || input.assigneeUserId) return false;
+    try {
+      await assertCanAssignTasks(req, companyId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function wasRoutedToChiefOfStaff(
+    input: { assigneeAgentId?: string | null; assigneeUserId?: string | null },
+    issue: { assigneeAgentId: string | null },
+  ): boolean {
+    return !input.assigneeAgentId && !input.assigneeUserId && Boolean(issue.assigneeAgentId);
+  }
+
   function requireAgentRunId(req: Request, res: Response) {
     if (req.actor.type !== "agent") return null;
     const runId = req.actor.runId?.trim();
@@ -2040,10 +2068,12 @@ export function issueRoutes(
 
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
     const { requestId: _requestId, ...issueInput } = req.body;
+    const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, companyId, issueInput);
     let issue;
     try {
       issue = await svc.create(companyId, {
         ...issueInput,
+        routeUnownedTodoToChiefOfStaff,
         executionPolicy,
         ...(originId ? { originKind: ASSISTANT_WORK_ORIGIN_KIND, originId } : {}),
         createdByAgentId: actor.agentId,
@@ -2082,6 +2112,7 @@ export function issueRoutes(
         identifier: issue.identifier,
         // AgentDash (GH #678): provenance when the write came via an assistant grant.
         ...assistantGrantAttribution(req),
+        ...(wasRoutedToChiefOfStaff(issueInput, issue) ? { routedToChiefOfStaff: issue.assigneeAgentId } : {}),
         ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
         ...summarizeIssueReferenceActivityDetails({
           addedReferencedIssues: referenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
@@ -2141,8 +2172,10 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+    const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, parent.companyId, req.body);
     const { issue, parentBlockerAdded } = await svc.createChild(parent.id, {
       ...req.body,
+      routeUnownedTodoToChiefOfStaff,
       executionPolicy,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
@@ -2164,6 +2197,7 @@ export function issueRoutes(
         identifier: issue.identifier,
         title: issue.title,
         inheritedExecutionWorkspaceFromIssueId: parent.id,
+        ...(wasRoutedToChiefOfStaff(req.body, issue) ? { routedToChiefOfStaff: issue.assigneeAgentId } : {}),
         ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
         ...(parentBlockerAdded ? { parentBlockerAdded: true } : {}),
       },

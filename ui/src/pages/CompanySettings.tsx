@@ -98,6 +98,14 @@ export function CompanySettings() {
     }
   });
 
+  const issueStartMutation = useMutation({
+    mutationFn: (startAsTodo: boolean) =>
+      companiesApi.update(selectedCompanyId!, { newIssuesStartAsTodo: startAsTodo }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+    }
+  });
+
   const inviteMutation = useMutation({
     mutationFn: () =>
       accessApi.createOpenClawInvitePrompt(selectedCompanyId!),
@@ -431,6 +439,22 @@ export function CompanySettings() {
             checked={!!selectedCompany.requireBoardApprovalForNewAgents}
             onChange={(v) => settingsMutation.mutate(v)}
             toggleTestId="company-settings-team-approval-toggle"
+          />
+        </div>
+      </div>
+
+      {/* Work */}
+      <div className="space-y-4" data-testid="company-settings-work-section">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Work
+        </div>
+        <div className="rounded-md border border-border px-4 py-3">
+          <ToggleField
+            label="Start new issues right away"
+            hint="Issues created without a status start as To do, and the assigned agent begins immediately. When off they go to Backlog and wait. Unassigned To do issues go to the Chief of Staff."
+            checked={!!selectedCompany.newIssuesStartAsTodo}
+            onChange={(v) => issueStartMutation.mutate(v)}
+            toggleTestId="company-settings-issue-start-toggle"
           />
         </div>
       </div>

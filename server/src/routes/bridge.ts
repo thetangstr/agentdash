@@ -9,6 +9,7 @@ import { approvalCardDeliveryService } from "../services/approval-card-delivery.
 import { stewardInboxService } from "../services/steward-inbox.js";
 import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
 import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
+import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { bridgeService } from "../services/bridge.js";
 import { requireProductProfile } from "../services/companies.js";
@@ -49,7 +50,9 @@ export function bridgeRoutes(
   const cardDelivery = approvalCardDeliveryService(db);
   const inbox = stewardInboxService(db);
   const inboxDecisions = stewardInboxDecisionService(db, options);
-  const inboxActions = stewardInboxActionsService(db);
+  const inboxActions = stewardInboxActionsService(db, {
+    heartbeat: heartbeatService(db, { pluginWorkerManager: options.pluginWorkerManager }),
+  });
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);

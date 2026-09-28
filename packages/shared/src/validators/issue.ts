@@ -142,7 +142,11 @@ export const createIssueSchema = z.object({
   inheritExecutionWorkspaceFromIssueId: z.string().uuid().optional().nullable(),
   title: z.string().min(1),
   description: multilineTextSchema.optional().nullable(),
-  status: z.enum(ISSUE_STATUSES).optional().default("backlog"),
+  // AgentDash: no default here. An omitted status is resolved on the server
+  // from the company's `newIssuesStartAsTodo` setting (backlog when off). A
+  // default in the schema would be baked in by every client that parses with
+  // it — the CLI and the MCP tools do — and the setting would never apply.
+  status: z.enum(ISSUE_STATUSES).optional(),
   priority: z.enum(ISSUE_PRIORITIES).optional().default("medium"),
   assigneeAgentId: z.string().uuid().optional().nullable(),
   assigneeUserId: z.string().optional().nullable(),

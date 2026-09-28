@@ -31,6 +31,7 @@ import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { bridgeService } from "../services/bridge.js";
 import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
 import {
+  splitWorkIntoTitleAndDescription,
   stewardInboxActionsService,
   suggestNames,
 } from "../services/steward-inbox-actions.js";
@@ -939,7 +940,9 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     });
 
     expect(proposal.ok).toBe(true);
-    expect(proposal.readback).toEqual([`${agent.name} — draft the site visit agenda`]);
+    expect(proposal.readback).toEqual([
+      `${agent.name} — draft the site visit agenda — starts as soon as you confirm`,
+    ]);
     expect(proposal.handle).toBeTruthy();
     // Proposing changes nothing.
     expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
@@ -989,6 +992,90 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(rows[0]!.assigneeAgentId).toBe(agent.id);
     // Attributed to the person, never to the machine or a service identity.
     expect(rows[0]!.createdByUserId).toBe(steward.principalId);
+  });
+
+  /**
+   * MK, 2026-09: inbox assignments landed in `backlog`, which wakes nobody, so
+   * work "assigned" from the inbox sat until someone commented on it. Assigned
+   * work is `todo` and the assignee is woken on confirm.
+   */
+  it("creates assigned work as todo, with its brief, and wakes the agent", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const wakes: Array<{ agentId: string; opts: any }> = [];
+    const actions = stewardInboxActionsService(db, {
+      heartbeat: {
+        wakeup: async (agentId, opts) => {
+          wakes.push({ agentId, opts });
+          return null;
+        },
+      },
+    });
+    const proposal = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [
+        {
+          agent: agent.name,
+          work: "draft the KPI summary",
+          description: "Use the Q3 numbers. Done means a one-page summary on this issue.",
+        },
+      ],
+    });
+    expect(proposal.readback).toEqual([
+      `${agent.name} — draft the KPI summary (with a brief) — starts as soon as you confirm`,
+    ]);
+
+    expect((await actions.confirm(endpoint.id, proposal.handle!)).ok).toBe(true);
+
+    const [row] = await db.select().from(issues).where(eq(issues.companyId, company.id));
+    expect(row!.status).toBe("todo");
+    expect(row!.title).toBe("draft the KPI summary");
+    expect(row!.description).toBe("Use the Q3 numbers. Done means a one-page summary on this issue.");
+    await Promise.resolve();
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({
+      agentId: agent.id,
+      opts: {
+        source: "assignment",
+        reason: "issue_assigned",
+        payload: { issueId: row!.id },
+        requestedByActorType: "user",
+        requestedByActorId: steward.principalId,
+      },
+    });
+  });
+
+  /** A long instruction used to be refused as "too long for a title". */
+  it("keeps a long instruction whole as the brief instead of refusing it", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+    const longWork = `Pull the current status for the retrofit project\n${"Context line. ".repeat(60)}`;
+    const proposal = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: longWork }],
+    });
+    expect(proposal.ok).toBe(true);
+
+    await actions.confirm(endpoint.id, proposal.handle!);
+    const [row] = await db.select().from(issues).where(eq(issues.companyId, company.id));
+    expect(row!.title).toBe("Pull the current status for the retrofit project");
+    expect(row!.description).toBe(longWork.trim());
+  });
+
+  it("splits titles and briefs by a small, fixed rule", () => {
+    expect(splitWorkIntoTitleAndDescription("short job")).toEqual({ title: "short job", description: null });
+    expect(splitWorkIntoTitleAndDescription("short job", "  the brief  ")).toEqual({
+      title: "short job",
+      description: "the brief",
+    });
+    const oneLongLine = "x".repeat(300);
+    const split = splitWorkIntoTitleAndDescription(oneLongLine);
+    expect(split.title).toHaveLength(120);
+    expect(split.title.endsWith("…")).toBe(true);
+    expect(split.description).toBe(oneLongLine);
+    // An explicit brief is kept, after the full instruction, never dropped.
+    expect(splitWorkIntoTitleAndDescription(oneLongLine, "more").description).toBe(`${oneLongLine}\n\nmore`);
   });
 
   it("spends a confirmation exactly once", async () => {
