@@ -25,7 +25,10 @@ function offersDelegation(agents: Array<{ role: string }>): boolean {
 
 /** Mirrors handleAskCeo's assignee resolution. */
 function assigneeForDelegatedIssue(agents: Array<{ id: string; role: string }>) {
-  return agents.find((a) => a.role === "ceo")?.id;
+  return (
+    agents.find((a) => a.role === "chief_of_staff")?.id ??
+    agents.find((a) => a.role === "ceo")?.id
+  );
 }
 
 describe("New Agent on an empty workspace", () => {
@@ -44,5 +47,14 @@ describe("New Agent on an empty workspace", () => {
     // nobody restores the old behaviour thinking it was harmless.
     expect(assigneeForDelegatedIssue([])).toBeUndefined();
     expect(assigneeForDelegatedIssue([{ id: "a1", role: "ceo" }])).toBe("a1");
+    // Default-profile workspaces run a Chief of Staff, not a CEO — the lookup
+    // must find it or the same unassigned-issue dead end returns.
+    expect(assigneeForDelegatedIssue([{ id: "c1", role: "chief_of_staff" }])).toBe("c1");
+    expect(
+      assigneeForDelegatedIssue([
+        { id: "a1", role: "ceo" },
+        { id: "c1", role: "chief_of_staff" },
+      ]),
+    ).toBe("c1");
   });
 });

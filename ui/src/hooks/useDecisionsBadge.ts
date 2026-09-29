@@ -14,7 +14,7 @@ import { queryKeys } from "../lib/queryKeys";
  */
 export function decisionsListLength(data: WaitingOnYou | undefined): number {
   if (!data) return 0;
-  return (data.total ?? 0) + (data.tasksAssignedToYouTotal ?? 0);
+  return (data.total ?? 0) + (data.tasksAssignedToYouTotal ?? 0) + (data.pendingQuestionsTotal ?? 0);
 }
 
 /**

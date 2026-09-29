@@ -1,3 +1,4 @@
+import { WorkforceAgentPanel } from "./WorkforceOnboarding";
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
 import { describeAgentKeyProvenance } from "@/lib/agent-key-provenance";
@@ -1737,6 +1738,8 @@ function AgentOverview({
       {!isMk && (
         <AgentVitalsStrip agent={agent} runs={runs} assignedIssues={assignedIssues} />
       )}
+
+      <details className="rounded-xl border p-3"><summary className="cursor-pointer text-sm font-medium">Workforce role and first-job readiness</summary><WorkforceAgentPanel key={`${agent.companyId}:${agent.id}`} companyId={agent.companyId} agent={agent}/></details>
 
       {/* Latest Run */}
       <LatestRunCard runs={runs} agentId={agentRouteId} showEmptySummary={!isMk} />

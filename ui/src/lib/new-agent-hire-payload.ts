@@ -3,6 +3,7 @@ import { buildNewAgentRuntimeConfig } from "./new-agent-runtime-config";
 
 export function buildNewAgentHirePayload(input: {
   name: string;
+  workforceTemplateId?: string;
   effectiveRole: string;
   title?: string;
   reportsTo?: string | null;
@@ -13,6 +14,7 @@ export function buildNewAgentHirePayload(input: {
 }) {
   const {
     name,
+    workforceTemplateId,
     effectiveRole,
     title,
     reportsTo,
@@ -25,6 +27,7 @@ export function buildNewAgentHirePayload(input: {
   return {
     name: name.trim(),
     role: effectiveRole,
+    ...(workforceTemplateId ? { workforceTemplateId } : {}),
     ...(title?.trim() ? { title: title.trim() } : {}),
     ...(reportsTo ? { reportsTo } : {}),
     ...(selectedSkillKeys.length > 0 ? { desiredSkills: selectedSkillKeys } : {}),

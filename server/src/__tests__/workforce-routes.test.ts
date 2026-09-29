@@ -50,4 +50,28 @@ describe('workforce HTTP authority', () => {
     expect((await request(app(worker())).post(`${base()}/agents/${agentId}/first-job`).send({})).status).toBe(403);
     expect((await request(app(board())).post(`${base()}/agents/${agentId}/first-job`).send({})).status).toBe(200);
   });
+  it('restricts proposal review and target changes to company direction authority', async () => {
+    for (const actor of [worker(), board('member')]) {
+      expect((await request(app(actor)).get(`${base()}/proposals`)).status).toBe(403);
+      expect((await request(app(actor)).post(`${base()}/proposals/${randomUUID()}/review`).send({ decision: 'approve', expectedRevision: 1 })).status).toBe(403);
+      expect((await request(app(actor)).patch(`${base()}/agents/${agentId}/enrollment`).send({ objective: 'Private update' })).status).toBe(403);
+    }
+    expect((await request(app(board())).patch(`${base()}/agents/${agentId}/enrollment`).send({ templateId: 'marketing-content' })).status).toBe(400);
+    const updated = await request(app(board())).patch(`${base()}/agents/${agentId}/enrollment`).send({ objective: 'Qualify leads', metrics: ['10 qualified leads'], goalId: null });
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({ templateId: 'sales-support', objective: 'Qualify leads', metrics: ['10 qualified leads'], goalId: null });
+    expect((await request(app({ ...worker(), companyId: randomUUID() })).get(`${base()}/proposals`)).status).toBe(403);
+  });
+  it('returns inspectable source provenance and reviews through HTTP', async () => {
+    const brief = await request(app(board())).get(`${base()}/brief`);
+    const published = await request(app(board())).put(`${base()}/brief`).send({ expectedRevision: brief.body.revision, sources: [{ id: 'source', label: 'Owner source', content: 'Approved audience' }], facts: [] });
+    const proposal = await request(app(worker())).post(`${base()}/proposals`).send({ facts: [{ key: 'audience', value: 'Businesses', sourceReference: 'source' }], sourceReferences: ['source'] });
+    expect(proposal.status).toBe(201);
+    const list = await request(app(board())).get(`${base()}/proposals`);
+    expect(list.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: proposal.body.id, status: 'proposed', sources: [{ id: 'source', label: 'Owner source', content: 'Approved audience' }] })]));
+    const reviewed = await request(app(board())).post(`${base()}/proposals/${proposal.body.id}/review`).send({ decision: 'approve', expectedRevision: published.body.revision });
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body).toMatchObject({ status: 'approved', reviewedByUserId: 'owner' });
+  });
+
 });

@@ -36,3 +36,11 @@ export const WORKFORCE_PROMPT_ADAPTER_TYPES = ['claude_local', 'codex_local', 'g
 export function supportsWorkforcePrompt(adapterType: string): boolean {
   return (WORKFORCE_PROMPT_ADAPTER_TYPES as readonly string[]).includes(adapterType);
 }
+
+export interface WorkforceFactProposal {
+  id: string; companyId: string; agentId: string;
+  status: 'proposed' | 'approved' | 'rejected'; briefRevision: number;
+  facts: WorkforceBrief['facts']; sourceReferences: string[];
+  sources: WorkforceBrief['sources']; createdAt: string;
+  reviewedByUserId: string | null; reviewedAt: string | null;
+}

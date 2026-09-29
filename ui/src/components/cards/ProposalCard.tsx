@@ -1,3 +1,4 @@
+import { WorkforceTemplatePreview } from "../WorkforceTemplatePreview";
 // AgentDash: chat substrate card — agent hire proposal
 import type { ProposalPayload } from "@paperclipai/shared";
 import { useState } from "react";
@@ -18,6 +19,7 @@ export function ProposalCard({
       <div className="text-lg font-semibold text-text-primary">
         {payload.name} — {payload.role}
       </div>
+      <WorkforceTemplatePreview templateId={payload.workforceTemplateId}/>
       <div className="mt-2 text-text-primary">{payload.oneLineOkr}</div>
       <div className="mt-2 text-sm text-text-secondary">{payload.rationale}</div>
       <div className="mt-4 flex gap-2">

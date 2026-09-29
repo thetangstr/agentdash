@@ -1480,6 +1480,7 @@ describe("IssueChatThread", () => {
         kind: "ask_user_questions",
       }),
       [{ questionId: "scope", optionIds: ["phase-1"] }],
+      false,
     );
 
     act(() => {

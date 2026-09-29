@@ -276,4 +276,56 @@ describe('workforce persisted contracts', () => {
     expect(await svc.getReadiness(company.id, agent.id)).toMatchObject({ phase: 'awaiting_review', acceptedVerdictId: null });
   });
 
+  it('reviews only a selected sourced proposal once and preserves other knowledge', async () => {
+    const { company, agent, svc } = await fixture();
+    await svc.updateBrief(company.id, input, owner);
+    const proposal = await svc.proposeFacts(company.id, agent.id, { facts: [{ key: 'audience', value: 'Small businesses', sourceReference: 'owner-input' }], sourceReferences: ['owner-input'] });
+    const other = await svc.proposeFacts(company.id, agent.id, { facts: [{ key: 'brandVoice', value: 'Unconfirmed', sourceReference: 'owner-input' }], sourceReferences: ['owner-input'] });
+    expect(typeof svc.reviewProposal).toBe('function');
+    const results = await Promise.allSettled([svc.reviewProposal(company.id, proposal.id, { decision: 'approve', expectedRevision: 1 }, owner), svc.reviewProposal(company.id, proposal.id, { decision: 'approve', expectedRevision: 1 }, owner)]);
+    expect(results.filter(x => x.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(x => x.status === 'rejected')).toMatchObject({ reason: { status: 409 } });
+    expect(await svc.getBrief(company.id)).toMatchObject({ revision: 2, sources: input.sources, facts: [...input.facts, { key: 'audience', value: 'Small businesses', sourceReference: 'owner-input' }] });
+    expect(await svc.listProposals(company.id, owner)).toEqual(expect.arrayContaining([expect.objectContaining({ id: proposal.id, status: 'approved', reviewedByUserId: 'owner' }), expect.objectContaining({ id: other.id, status: 'proposed' })]));
+    await expect(svc.reviewProposal(company.id, other.id, { decision: 'approve', expectedRevision: 2 }, owner)).rejects.toMatchObject({ status: 409 });
+    await svc.reviewProposal(company.id, other.id, { decision: 'reject', expectedRevision: 2 }, owner);
+    expect((await svc.getBrief(company.id)).revision).toBe(2);
+  });
+  it('rejects stale and cross-company proposal reviews and agent publication', async () => {
+    const { company, agent, svc } = await fixture(); const other = await fixture();
+    await svc.updateBrief(company.id, input, owner);
+    const proposal = await svc.proposeFacts(company.id, agent.id, { facts: input.facts, sourceReferences: ['owner-input'] });
+    expect(typeof svc.reviewProposal).toBe('function');
+    await expect(svc.reviewProposal(other.company.id, proposal.id, { decision: 'approve', expectedRevision: 1 }, owner)).rejects.toMatchObject({ status: 404 });
+    await expect(svc.reviewProposal(company.id, proposal.id, { decision: 'approve', expectedRevision: 1 }, { agentId: agent.id })).rejects.toMatchObject({ status: 403 });
+    await svc.updateBrief(company.id, { expectedRevision: 1, sources: [], facts: [] }, owner);
+    await expect(svc.reviewProposal(company.id, proposal.id, { decision: 'approve', expectedRevision: 2 }, owner)).rejects.toMatchObject({ status: 409 });
+    expect((await svc.getBrief(company.id)).facts).toEqual([]);
+  });
+  it('updates declared targets atomically without altering role, instructions, or the first job snapshot', async () => {
+    const { company, agent, svc } = await fixture(); const other = await fixture();
+    const [goal] = await db.insert(goals).values({ companyId: company.id, title: 'Demand' }).returning();
+    const [foreign] = await db.insert(goals).values({ companyId: other.company.id, title: 'Private' }).returning();
+    await svc.enroll(company.id, agent.id, { templateId: 'sales-support', objective: 'Original', goalId: goal.id }, owner);
+    const job = await svc.startFirstJob(company.id, agent.id, owner);
+    expect(typeof svc.updateEnrollment).toBe('function');
+    await expect(svc.updateEnrollment(company.id, agent.id, { objective: 'Must not persist', goalId: foreign.id }, owner)).rejects.toMatchObject({ status: 404 });
+    expect((await svc.getEnrollment(company.id, agent.id))?.objective).toBe('Original');
+    const updated = await svc.updateEnrollment(company.id, agent.id, { objective: 'Qualify 20 leads', metrics: ['20 qualified leads'], goalId: null }, owner);
+    expect(updated).toMatchObject({ templateId: 'sales-support', templateVersion: 1, objective: 'Qualify 20 leads', metrics: ['20 qualified leads'], goalId: null });
+    expect((await svc.startFirstJob(company.id, agent.id, owner)).goalId).toBe(job.goalId);
+    expect((await db.select().from(agents).where(eq(agents.id, agent.id)))[0].adapterConfig).toEqual({ custom: 'preserved' });
+    await expect(svc.updateEnrollment(other.company.id, agent.id, { metrics: [] }, owner)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('rolls back oversized proposal approval without review credit or partial publication', async () => {
+    const { company, agent, svc } = await fixture();
+    await svc.updateBrief(company.id, { ...input, facts: Array.from({ length: 40 }, (_, i) => ({ key: `key-${i}`, value: 'Approved', sourceReference: 'owner-input' })) }, owner);
+    const proposal = await svc.proposeFacts(company.id, agent.id, { facts: [{ key: 'extra', value: 'Too many', sourceReference: 'owner-input' }], sourceReferences: ['owner-input'] });
+    await expect(svc.reviewProposal(company.id, proposal.id, { decision: 'approve', expectedRevision: 1 }, owner)).rejects.toBeDefined();
+    expect((await svc.getBrief(company.id)).revision).toBe(1);
+    expect((await svc.listProposals(company.id, owner))[0].status).toBe('proposed');
+    expect(await db.select().from(activityLog).where(and(eq(activityLog.companyId, company.id), eq(activityLog.action, 'workforce.proposal_approved')))).toHaveLength(0);
+  });
+
 });

@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 // @vitest-environment node
 
 const { getCommentMock } = vi.hoisted(() => ({
@@ -678,5 +679,20 @@ describe("LiveUpdatesProvider run lifecycle toasts", () => {
       body: "boom",
       tone: "error",
     });
+  });
+});
+
+describe('workforce question attention invalidation', () => {
+  it.each(['created', 'answered', 'cancelled'])('invalidates only the affected company attention on question %s', (event) => {
+    const client = new QueryClient();
+    for (const company of ['company-1', 'company-2']) {
+      client.setQueryData(queryKeys.home.waitingOnYou(company), { pendingQuestionsTotal: 1 });
+      client.setQueryData(['workforce', company, 'a', 'readiness'], { phase: 'needs_input' });
+    }
+    __liveUpdatesTestUtils.invalidateActivityQueries(client, 'company-1', { entityType: 'issue', entityId: 'issue-1', action: `issue.thread_interaction_${event}`, details: null }, { userId: null, agentId: null });
+    expect(client.getQueryState(queryKeys.home.waitingOnYou('company-1'))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(['workforce', 'company-1', 'a', 'readiness'])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(queryKeys.home.waitingOnYou('company-2'))?.isInvalidated).toBe(false);
+    client.clear();
   });
 });

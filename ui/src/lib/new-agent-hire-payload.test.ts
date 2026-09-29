@@ -58,4 +58,8 @@ describe("buildNewAgentHirePayload", () => {
       requireHarnessPreflight: true,
     });
   });
+  it('carries a selected workforce role without replacing human instructions or capabilities', () => {
+    expect(buildNewAgentHirePayload({ name: 'Mira', effectiveRole: 'general', workforceTemplateId: 'sales-support', configValues: defaultCreateValues, adapterConfig: { instructions: 'Keep my custom instructions' } })).toMatchObject({ workforceTemplateId: 'sales-support', adapterConfig: { instructions: 'Keep my custom instructions' }, role: 'general' });
+  });
+
 });

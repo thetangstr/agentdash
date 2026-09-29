@@ -5,4 +5,5 @@ contract and the same creator template: approved company knowledge is data,
 required named human questions hold dependent work, private answers stay on their
 issue, and first-job acceptance needs inspectable evidence plus neutral review.
 Do not restore a separate persona or fork this shared learning behavior.
+Human proposal review and department target changes are described in the same canonical worker bundle; this inert legacy persona grants no review authority.
 /AgentDash: workforce-learning -->

@@ -7,3 +7,6 @@ export const updateWorkforceBriefSchema = z.object({ expectedRevision: z.number(
 export const proposeWorkforceFactsSchema = z.object({ facts: facts.refine(rows => rows.length > 0, 'At least one fact is required'), sourceReferences: z.array(z.string().trim().min(1).max(120)).min(1).max(12) }).strict();
 export const enrollWorkforceSchema = z.object({ templateId: workforceTemplateIdSchema, objective: z.string().trim().min(1).max(4000).optional(), metrics: z.array(z.string().trim().min(1).max(500)).max(20).optional(), goalId: z.string().uuid().optional() }).strict();
 export const acknowledgeWorkforceLearningSchema = z.object({ revision: z.number().int().nonnegative() }).strict();
+
+export const reviewWorkforceProposalSchema = z.object({ decision: z.enum(['approve', 'reject']), expectedRevision: z.number().int().nonnegative() }).strict();
+export const updateWorkforceEnrollmentSchema = enrollWorkforceSchema.omit({ templateId: true }).extend({ goalId: z.string().uuid().nullable().optional() }).strict();

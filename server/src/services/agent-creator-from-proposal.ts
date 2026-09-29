@@ -50,6 +50,7 @@ export function agentCreatorFromProposal(deps: Deps) {
 }
 
 // AgentDash: this remains the proposal creator's agent-facing prompt surface.
+// AgentDash: human fact-review and target-update guidance remains in the canonical bundle.
 // All named policy blocks, including workforce-learning, are inherited verbatim
 // from onboarding-assets/default/AGENTS.md via the canonical bundle loader.
 // Update that source for shared behavior; do not duplicate its mandate here.

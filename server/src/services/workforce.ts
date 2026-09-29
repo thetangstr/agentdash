@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { z } from 'zod';
 import { agents, companies, companyContext, goals, issues, workforceEnrollments, type Db } from '@paperclipai/db';
-import { supportsWorkforcePrompt, resolveWorkforceTemplate, updateWorkforceBriefSchema, proposeWorkforceFactsSchema, enrollWorkforceSchema, type WorkforceBrief, type WorkforceReadiness, type WorkforceRuntimeContext } from '@paperclipai/shared';
+import { supportsWorkforcePrompt, resolveWorkforceTemplate, updateWorkforceBriefSchema, proposeWorkforceFactsSchema, enrollWorkforceSchema, reviewWorkforceProposalSchema, updateWorkforceEnrollmentSchema, type WorkforceFactProposal, type WorkforceBrief, type WorkforceReadiness, type WorkforceRuntimeContext } from '@paperclipai/shared';
 import { readPaperclipSkillSyncPreference, writePaperclipSkillSyncPreference } from '@paperclipai/adapter-utils/server-utils';
 import { isUniqueViolation } from '../lib/pg-error.js';
 import { badRequest, conflict, forbidden, notFound, unprocessable } from '../errors.js';
@@ -70,12 +70,60 @@ export function workforceService(db: Db) {
       await company(companyId, connection, true);
       const prior = await readBrief(companyId, connection);
       if (prior.revision !== parsed.expectedRevision) throw conflict('Company brief revision changed');
-      const brief: WorkforceBrief = { revision: prior.revision + 1, sources: parsed.sources, facts: parsed.facts, confirmedByUserId: actor.userId, updatedAt: new Date().toISOString() };
-      const values = { companyId, value: JSON.stringify(brief), confidence: '1.00', verifiedByUserId: actor.userId };
-      await tx.insert(companyContext).values({ ...values, contextType: 'workforce_brief_revision', key: String(brief.revision) });
-      await tx.insert(companyContext).values({ ...values, contextType: 'workforce_brief', key: 'current' }).onConflictDoUpdate({ target: [companyContext.companyId, companyContext.contextType, companyContext.key], set: { value: values.value, verifiedByUserId: actor.userId, updatedAt: new Date() } });
-      await audit(connection, companyId, companyId, 'workforce.brief_updated', actor);
-      return brief;
+      return publishBrief(connection, companyId, prior.revision, { sources: parsed.sources, facts: parsed.facts }, actor);
+    });
+  }
+  async function publishBrief(connection: Db, companyId: string, revision: number, input: Pick<WorkforceBrief, 'sources' | 'facts'>, actor: { userId: string }) {
+    const brief: WorkforceBrief = { revision: revision + 1, ...input, confirmedByUserId: actor.userId, updatedAt: new Date().toISOString() };
+    const values = { companyId, value: JSON.stringify(brief), confidence: '1.00', verifiedByUserId: actor.userId };
+    await connection.insert(companyContext).values({ ...values, contextType: 'workforce_brief_revision', key: String(brief.revision) });
+    await connection.insert(companyContext).values({ ...values, contextType: 'workforce_brief', key: 'current' }).onConflictDoUpdate({ target: [companyContext.companyId, companyContext.contextType, companyContext.key], set: { value: values.value, verifiedByUserId: actor.userId, updatedAt: new Date() } });
+    await audit(connection, companyId, companyId, 'workforce.brief_updated', actor);
+    return brief;
+  }
+  async function listProposals(companyId: string, actor: Actor): Promise<WorkforceFactProposal[]> {
+    requireHuman(actor); await company(companyId);
+    const rows = await db.select().from(companyContext).where(and(eq(companyContext.companyId, companyId), eq(companyContext.contextType, 'workforce_fact_proposal')));
+    return rows.map(row => JSON.parse(row.value) as WorkforceFactProposal);
+  }
+  async function reviewProposal(companyId: string, proposalId: string, input: z.infer<typeof reviewWorkforceProposalSchema>, actor: Actor) {
+    requireHuman(actor);
+    const parsed = reviewWorkforceProposalSchema.parse(input);
+    return db.transaction(async tx => {
+      const connection = tx as unknown as Db;
+      await company(companyId, connection, true);
+      const [row] = await tx.select().from(companyContext).where(and(eq(companyContext.companyId, companyId), eq(companyContext.contextType, 'workforce_fact_proposal'), eq(companyContext.key, proposalId)));
+      if (!row) throw notFound('Company proposal not found');
+      const proposal = JSON.parse(row.value) as WorkforceFactProposal;
+      if (proposal.status !== 'proposed') throw conflict('Proposal has already been reviewed');
+      if (parsed.decision === 'approve') {
+        const brief = await readBrief(companyId, connection);
+        if (brief.revision !== parsed.expectedRevision || brief.revision !== proposal.briefRevision) throw conflict('Company sources changed; request a new proposal before approval');
+        const validated = proposeWorkforceFactsSchema.parse({ facts: proposal.facts, sourceReferences: proposal.sourceReferences });
+        const sources = brief.sources.filter(source => validated.sourceReferences.includes(source.id));
+        if (validated.sourceReferences.some(id => !sources.some(source => source.id === id)) || validated.facts.some(fact => !sources.some(source => fact.sourceReference === source.id || fact.sourceReference === source.label))) throw conflict('Proposal sources are no longer shared; request a new proposal');
+        const facts = new Map(brief.facts.map(fact => [fact.key, fact]));
+        for (const fact of proposal.facts) facts.set(fact.key, fact);
+        const merged = updateWorkforceBriefSchema.parse({ expectedRevision: brief.revision, sources: brief.sources, facts: [...facts.values()] });
+        await publishBrief(connection, companyId, brief.revision, { sources: merged.sources, facts: merged.facts }, { userId: actor.userId! });
+      }
+      const reviewed: WorkforceFactProposal = { ...proposal, status: parsed.decision === 'approve' ? 'approved' : 'rejected', reviewedByUserId: actor.userId!, reviewedAt: new Date().toISOString() };
+      await tx.update(companyContext).set({ value: JSON.stringify(reviewed), verifiedByUserId: actor.userId!, updatedAt: new Date() }).where(eq(companyContext.id, row.id));
+      await audit(connection, companyId, proposal.id, `workforce.proposal_${reviewed.status}`, actor);
+      return reviewed;
+    });
+  }
+  async function updateEnrollment(companyId: string, agentId: string, input: z.infer<typeof updateWorkforceEnrollmentSchema>, actor: Actor) {
+    requireHuman(actor);
+    const parsed = updateWorkforceEnrollmentSchema.parse(input);
+    return db.transaction(async tx => {
+      const connection = tx as unknown as Db;
+      await company(companyId, connection, true);
+      const { enrollment } = await requiredEnrollment(companyId, agentId, connection);
+      if (parsed.goalId && !(await tx.select().from(goals).where(and(eq(goals.companyId, companyId), eq(goals.id, parsed.goalId))))[0]) throw notFound('Company goal not found');
+      const [updated] = await tx.update(workforceEnrollments).set({ ...parsed, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id)).returning();
+      await audit(connection, companyId, enrollment.id, 'workforce.targets_updated', actor);
+      return updated;
     });
   }
   async function proposeFacts(companyId: string, agentId: string, input: z.infer<typeof proposeWorkforceFactsSchema>) {
@@ -87,7 +135,7 @@ export function workforceService(db: Db) {
       if (parsed.sourceReferences.some(id => !brief.sources.some(source => source.id === id))) throw badRequest('Proposals must reference explicitly shared company sources');
       const permittedSources = brief.sources.filter(source => parsed.sourceReferences.includes(source.id));
       if (parsed.facts.some(fact => !permittedSources.some(source => source.id === fact.sourceReference || source.label === fact.sourceReference))) throw badRequest('Each proposed fact must cite a declared company source');
-      const proposal = { id: randomUUID(), companyId, agentId, status: 'proposed' as const, briefRevision: brief.revision, ...parsed };
+      const proposal: WorkforceFactProposal = { id: randomUUID(), companyId, agentId, status: 'proposed', briefRevision: brief.revision, ...parsed, sources: permittedSources, createdAt: new Date().toISOString(), reviewedByUserId: null, reviewedAt: null };
       await tx.insert(companyContext).values({ companyId, contextType: 'workforce_fact_proposal', key: proposal.id, value: JSON.stringify(proposal), confidence: '0.00' });
       await audit(connection, companyId, proposal.id, 'workforce.facts_proposed', { agentId });
       return proposal;
@@ -306,5 +354,5 @@ export function workforceService(db: Db) {
     const taskFacts = issueId ? (await workforceIssueInputs(db, companyId, agentId, issueId)).taskFacts : [];
     return { enrollment, template, taskFacts: taskFacts.map(f => ({ ...f, value: f.value.slice(0, 500) })), brief: { ...brief, sources: brief.sources.map(s => ({ ...s, content: s.content.slice(0, 500) })), facts: brief.facts.map(f => ({ ...f, value: f.value.slice(0, 500) })) }, readiness: (await getReadiness(companyId, agentId))!, sourceUrl: `/api/companies/${companyId}/workforce/brief` };
   }
-  return { getBrief, updateBrief, proposeFacts, enroll, getEnrollment, getReadiness, startFirstJob, startFirstJobWithCreation, acknowledgeLearning, ensureSkillsInstalled, getRuntimeContext };
+  return { listProposals, reviewProposal, updateEnrollment, getBrief, updateBrief, proposeFacts, enroll, getEnrollment, getReadiness, startFirstJob, startFirstJobWithCreation, acknowledgeLearning, ensureSkillsInstalled, getRuntimeContext };
 }

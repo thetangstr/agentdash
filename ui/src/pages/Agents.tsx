@@ -232,6 +232,7 @@ export function Agents() {
               </button>
             </div>
           )}
+          <Link to="/workforce" className="text-sm underline">Set up a role</Link>
           <Button size="sm" variant="outline" onClick={openNewAgent}>
             <Plus className="h-3.5 w-3.5 mr-1.5" />
             New Agent

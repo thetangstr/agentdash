@@ -1,3 +1,4 @@
+import { PendingQuestionRow } from '../components/WorkforceQuestions';
 // AgentDash: UX-3 (#784) — an honest Home for the default profile.
 //
 // Three blocks, in this order: Waiting on you, Working now, Shipped this week.
@@ -127,6 +128,7 @@ function MoreLine({ count, to, noun }: { count: number; to: string; noun: string
 }
 
 function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
+  const { selectedCompanyId } = useCompany();
   const decisions = data?.decisions ?? [];
   const tasks = data?.tasksAssignedToYou ?? [];
   const shownDecisions = decisions.slice(0, HOME_LIST_LIMIT);
@@ -173,6 +175,8 @@ function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
           </li>
         ))}
       </ul>
+      {selectedCompanyId && <ul className="divide-y border-t">{data?.pendingQuestions?.slice(0, HOME_LIST_LIMIT).map(question => <PendingQuestionRow key={`${selectedCompanyId}:${question.interactionId}`} companyId={selectedCompanyId} question={question}/>)}</ul>}
+      <MoreLine count={(data?.pendingQuestionsTotal ?? 0) - Math.min(data?.pendingQuestions?.length ?? 0, HOME_LIST_LIMIT)} to="/decisions" noun="questions"/>
       {/* UX-7 (#788): the rest of this list lives on the Decisions page now. */}
       <MoreLine count={moreDecisions} to="/decisions" noun={moreDecisions === 1 ? "decision" : "decisions"} />
       <ul className={shownDecisions.length > 0 ? "divide-y divide-border border-t border-border" : "divide-y divide-border"}>

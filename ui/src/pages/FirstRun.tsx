@@ -182,6 +182,7 @@ export function FirstRunPage() {
   return (
     <div className="min-h-screen bg-surface-page" data-testid="first-run">
       <StepIndicator current={status.nextStep} showModel={status.model.required} />
+      {(status.nextStep === 'repo' || status.nextStep === 'first_issue') && <div className="mx-auto mt-6 max-w-lg rounded-lg border p-4 text-sm"><p>Marketing and sales roles can start without a repository.</p><Link className="underline" to={`/${company.issuePrefix}/workforce`}>Set up a marketing or sales role</Link></div>}
       {body}
     </div>
   );

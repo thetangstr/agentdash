@@ -53,6 +53,7 @@ export function CompanySettingsSidebar() {
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide px-3 py-2">
         <div className="flex flex-col gap-0.5">
+          <SidebarNavItem to="/workforce#company-brief" label="Company knowledge" icon={MonitorCog} />
           <SidebarNavItem to="/company/settings" label="General" icon={SlidersHorizontal} end />
           {/* AgentDash (GH #793): default profile only — MK keeps its settings nav. */}
           {selectedCompany?.productProfile !== "agentdash_mk" ? (

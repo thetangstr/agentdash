@@ -1,3 +1,4 @@
+import { PendingQuestionRow } from '../components/WorkforceQuestions';
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@/lib/router";
@@ -196,6 +197,8 @@ export function Decisions() {
         </p>
       ) : null}
 
+      {(waiting?.pendingQuestions.length ?? 0) > 0 && <section className="rounded-xl border bg-card" aria-label="Questions waiting for you"><h2 className="px-4 pt-3 text-sm font-semibold">Questions waiting for you</h2><ul className="divide-y">{waiting?.pendingQuestions.map(question => <PendingQuestionRow key={`${selectedCompanyId}:${question.interactionId}`} companyId={selectedCompanyId} question={question}/>)}</ul></section>}
+      {(waiting?.pendingQuestionsTotal ?? 0) > (waiting?.pendingQuestions.length ?? 0) && <p className="text-sm">More questions are waiting; answer these to load the next questions.</p>}
       {manualTasks.length > 0 ? (
         <section className="rounded-xl border border-border bg-card" aria-label="Assigned to you">
           <header className="border-b border-border px-4 py-2.5">

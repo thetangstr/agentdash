@@ -1,7 +1,7 @@
 // AgentDash: workforce mutations that set direction require a human administrator.
 import { Router, type Request } from 'express';
 import type { Db } from '@paperclipai/db';
-import { WORKFORCE_TEMPLATES, updateWorkforceBriefSchema, proposeWorkforceFactsSchema, enrollWorkforceSchema, acknowledgeWorkforceLearningSchema } from '@paperclipai/shared';
+import { WORKFORCE_TEMPLATES, reviewWorkforceProposalSchema, updateWorkforceEnrollmentSchema, updateWorkforceBriefSchema, proposeWorkforceFactsSchema, enrollWorkforceSchema, acknowledgeWorkforceLearningSchema } from '@paperclipai/shared';
 import { validate } from '../middleware/validate.js';
 import { forbidden } from '../errors.js';
 import { heartbeatService } from '../services/heartbeat.js';
@@ -43,6 +43,18 @@ export function workforceRoutes(db: Db, options: { heartbeat?: Pick<ReturnType<t
   router.put(`${base}/brief`, validate(updateWorkforceBriefSchema), async (req, res) => {
     const { companyId, actor } = human(req);
     res.json(await svc.updateBrief(companyId, req.body, actor));
+  });
+  router.get(`${base}/proposals`, async (req, res) => {
+    const { companyId, actor } = human(req);
+    res.json(await svc.listProposals(companyId, actor));
+  });
+  router.post(`${base}/proposals/:proposalId/review`, validate(reviewWorkforceProposalSchema), async (req, res) => {
+    const { companyId, actor } = human(req);
+    res.json(await svc.reviewProposal(companyId, req.params.proposalId as string, req.body, actor));
+  });
+  router.patch(`${base}/agents/:agentId/enrollment`, validate(updateWorkforceEnrollmentSchema), async (req, res) => {
+    const { companyId, actor } = human(req);
+    res.json(await svc.updateEnrollment(companyId, req.params.agentId as string, req.body, actor));
   });
   router.post(`${base}/proposals`, validate(proposeWorkforceFactsSchema), async (req, res) => {
     const companyId = access(req);
