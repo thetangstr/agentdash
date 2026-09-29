@@ -1,3 +1,4 @@
+import { workforceService } from "../services/workforce.js";
 import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -73,7 +74,7 @@ import {
   checkCompanyInstructionsPath,
   findProtectedHostDirectoryOverlap,
 } from "../services/instructions-root-confinement.js";
-import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
+import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
@@ -2522,6 +2523,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     const sourceIssueIds = parseSourceIssueIds(req.body);
     const {
       desiredSkills: requestedDesiredSkills,
@@ -2627,6 +2629,10 @@ export function agentRoutes(
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
+    // AgentDash: enrollment is atomic with creation; filesystem work follows commit.
+    if (req.body.workforceTemplateId !== undefined) {
+      await workforceService(db).ensureSkillsInstalled(companyId, agent.id, { userId: req.actor.userId ?? "board" });
+    }
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
     const actor = getActorInfo(req);
@@ -2738,6 +2744,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
 
     const company = await db
       .select()
@@ -2876,6 +2883,10 @@ export function agentRoutes(
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
+    // AgentDash: enrollment is atomic with creation; filesystem work follows commit.
+    if (req.body.workforceTemplateId !== undefined) {
+      await workforceService(db).ensureSkillsInstalled(companyId, agent.id, { userId: req.actor.userId ?? "board" });
+    }
 
     const actor = getActorInfo(req);
     await logActivity(db, {

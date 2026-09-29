@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
 import request from 'supertest';
@@ -14,21 +17,25 @@ import { errorHandler } from '../middleware/index.js';
 describe('workforce verdict reviewer identity', () => {
   let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   let db: ReturnType<typeof createDb>;
+  let home: string;
+  const previousHome = process.env.PAPERCLIP_HOME;
   beforeAll(async () => {
+    home = await mkdtemp(path.join(tmpdir(), "workforce-verdict-")); process.env.PAPERCLIP_HOME = home;
     temp = await startEmbeddedPostgresTestDatabase('workforce-verdict-identity-');
     db = createDb(temp.connectionString);
   });
-  afterAll(async () => { await temp?.cleanup(); });
+  afterAll(async () => { await temp?.cleanup(); await rm(home, { recursive: true, force: true }); if (previousHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = previousHome; });
 
   async function fixture() {
     const [company] = await db.insert(companies).values({ name: 'Review identity', issuePrefix: randomUUID().slice(0, 8) }).returning();
     const [worker, reviewer] = await db.insert(agents).values([
-      { companyId: company.id, name: 'Worker' },
+      { companyId: company.id, name: 'Worker', adapterType: 'codex_local' },
       { companyId: company.id, name: 'Independent reviewer' },
     ]).returning();
     const svc = workforceService(db);
     const owner = { userId: 'owner' };
     await svc.enroll(company.id, worker.id, { templateId: 'sales-support' }, owner);
+    await svc.ensureSkillsInstalled(company.id, worker.id, owner);
     await svc.updateBrief(company.id, {
       expectedRevision: 0, sources: [],
       facts: ['offer', 'pricing', 'idealCustomer', 'qualificationRules'].map(key => ({ key, value: 'Approved input', sourceReference: 'Owner intake' })),

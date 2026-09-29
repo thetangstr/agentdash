@@ -1,3 +1,5 @@
+import { workforceService } from "../services/workforce.js";
+import { loadDefaultAgentInstructionsBundle } from "../services/default-agent-instructions.js";
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { authUsers, activityLog, assistantConversations, assistantMessages, companies as companiesTable, companyMemberships, deepInterviewStates, instanceUserRoles } from "@paperclipai/db";
@@ -23,7 +25,7 @@ import {
   type MemberOnboardingStep,
 } from "../services/member-onboarding.js";
 import { HttpError, unauthorized, badRequest, forbidden, notFound } from "../errors.js";
-import { assertCompanyAccess, assertInstanceAdmin } from "./authz.js";
+import { assertCompanyAccess, assertCanSetCompanyDirection, assertInstanceAdmin } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { actorMayApplyAdapterPreset } from "../services/adapter-host-execution-policy.js";
 import {
@@ -37,7 +39,7 @@ import {
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
-import { parseTrailer } from "../services/cos-replier.js";
+import { parseTrailer, WORKFORCE_PROPOSAL_GUIDANCE } from "../services/cos-replier.js";
 import {
   applyAdapterPreset,
   readAdapterStatus,
@@ -55,6 +57,7 @@ import { absoluteUrl } from "../lib/public-base-url.js";
 import { normalizeHumanRole } from "../services/company-member-roles.js";
 import { sendEmail, inviteEmailTemplate, modelKeyRequestEmailTemplate } from "../auth/email.js";
 import {
+  workforceTemplateIdSchema,
   FIXED_QUESTIONS,
   isAgentPlanPayload,
   type AgentProposal,
@@ -492,6 +495,12 @@ export function onboardingV2Routes(db: Db) {
     const proposal = await agentProposer({ llm: realProposerLlm }).propose(
       transcript.length > 0 ? transcript : [{ role: "user", content: "(no interview captured)", ts: new Date().toISOString() }],
     );
+    if (req.body.workforceTemplateId !== undefined) {
+      const selected = workforceTemplateIdSchema.safeParse(req.body.workforceTemplateId);
+      if (!selected.success) throw badRequest("Unknown workforce template");
+      proposal.workforceTemplateId = selected.data;
+    }
+    if (proposal.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     const result = await withCompanyTierCapacityGuard(
       db,
       companyId,
@@ -517,6 +526,7 @@ export function onboardingV2Routes(db: Db) {
       },
     );
     if (!result) return;
+    if (proposal.workforceTemplateId) await workforceService(db).ensureSkillsInstalled(companyId, result.agentId, { userId: req.actor.userId });
     res.status(201).json({
       agent: { id: result.agentId, name: proposal.name, title: proposal.role },
       apiKey: result.apiKey,
@@ -605,9 +615,10 @@ export function onboardingV2Routes(db: Db) {
     const planMsg = planRows[0];
     if (!planMsg) throw notFound("No plan card found in this conversation");
     const payload = planMsg.cardPayload as AgentPlanProposalV1Payload | null;
-    if (!payload || !Array.isArray(payload.agents) || payload.agents.length === 0) {
+    if (!isAgentPlanPayload(payload)) {
       throw badRequest("Plan card has no agents to materialize");
     }
+    if (payload.agents.some(agent => agent.workforceTemplateId !== undefined)) assertCanSetCompanyDirection(req, companyId);
     if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
 
     const materialized = await withCompanyTierCapacityGuard(
@@ -635,6 +646,7 @@ export function onboardingV2Routes(db: Db) {
             role: "general",
             title: planAgent.role,
             adapterType: planAgent.adapterType,
+            workforceTemplateId: planAgent.workforceTemplateId,
             adapterConfig: {},
             reportsTo: reportsToAgentId,
             status: "idle",
@@ -665,11 +677,13 @@ ${kpis || "- (none captured)"}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 `;
-          await instructions.materializeManagedBundle(
+          const defaultBundle = await loadDefaultAgentInstructionsBundle("default");
+          const bundle = await instructions.materializeManagedBundle(
             created,
-            { "AGENTS.md": agentsMd },
+            { ...defaultBundle, "AGENTS.md": `${defaultBundle["AGENTS.md"]}\n\n${agentsMd}` },
             { entryFile: "AGENTS.md", replaceExisting: false },
           );
+          await txAgents.update(created.id, { adapterConfig: bundle.adapterConfig });
           createdAgentIds.push(created.id);
         }
 
@@ -678,7 +692,7 @@ ${kpis || "- (none captured)"}
             conversationId,
             authorKind: "agent",
             authorId: cos.id,
-            body: "Done — your team's ready. You can talk to any of them via @mention, or stay here and route through me.",
+            body: "Done — your team has been created. You can talk to any of them via @mention, or stay here and route through me.",
           });
         }
 
@@ -687,6 +701,11 @@ ${kpis || "- (none captured)"}
       },
     );
     if (!materialized) return;
+    for (let i = 0; i < payload.agents.length; i++) {
+      if (payload.agents[i].workforceTemplateId) {
+        await workforceService(db).ensureSkillsInstalled(companyId, materialized.createdAgentIds[i], { userId: req.actor.userId });
+      }
+    }
 
     // AgentDash (issue #174): materialize the captured onboarding goals
     // ({shortTerm, longTerm}) into the goals table so the user sees them on
@@ -837,7 +856,7 @@ ${kpis || "- (none captured)"}
     // user-controlled is a user turn.
     const priorPlanJson = JSON.stringify(priorPayload, null, 2);
     const userRevision = revisionText.trim();
-    const system = `You are the Chief of Staff for AgentDash. The user reviewed a plan you proposed and wants to revise it. Apply their feedback as a DELTA on the prior plan — preserve parts they did not call out, change only what they pushed back on.
+    const system = `${WORKFORCE_PROPOSAL_GUIDANCE}\n\nYou are the Chief of Staff for AgentDash. The user reviewed a plan you proposed and wants to revise it. Apply their feedback as a DELTA on the prior plan — preserve parts they did not call out, change only what they pushed back on.
 
 In the visible body (before the JSON), give a SHORT one-line preamble like "Updated based on your feedback:" followed by a 1-3 sentence summary of what you changed and why. Then list the revised team in one line per agent. End with "Want me to set them up, or revise again?"
 
@@ -1402,7 +1421,7 @@ async function realProposerLlm(
   // AgentProposal parsed from a fenced JSON trailer. Mirrors the multi-agent
   // plan-payload contract used by revise-plan / the initial plan generator.
   const transcriptText = transcript.map((t) => `${t.role}: ${t.content}`).join("\n");
-  const system =
+  const system = WORKFORCE_PROPOSAL_GUIDANCE + "\n\n" +
     "You are the Chief of Staff for AgentDash. Based on the onboarding "
     + "interview, propose ONE founding agent that will deliver the most immediate "
     + "value. Reply with a short one-line preamble, then a fenced JSON trailer:\n"
@@ -1492,7 +1511,7 @@ async function generateInitialTeamPlan(
   }
 
   const transcriptText = transcript.map((t) => `${t.role}: ${t.content}`).join("\n");
-  const system =
+  const system = WORKFORCE_PROPOSAL_GUIDANCE + "\n\n" +
     "You are the Chief of Staff for AgentDash. The user just finished the "
     + "onboarding interview. Propose a small agent team (2-5 agents) that will "
     + "deliver their 90-day goal. In the visible body (before the JSON), give a "

@@ -216,6 +216,14 @@ export function workforceService(db: Db) {
         reason: 'Read and acknowledge the current approved company brief.',
       };
     }
+    // AgentDash: accepted work remains evidence, but setup is incomplete until
+    // every pinned skill is installed and the most recent install succeeded.
+    const missingSkills = template.skills.some(skill => !enrollment.installedSkillKeys.includes(`company/${companyId}/${skill.key}`));
+    if (enrollment.skillInstallError || missingSkills) {
+      return { ...result, phase: 'learning', reason: enrollment.skillInstallError
+        ? 'Workforce skill installation failed; retry installation before marking this worker ready.'
+        : 'Install the pinned workforce skills before marking this worker ready.' };
+    }
     if (result.acceptedVerdictId) {
       return { ...result, phase: 'ready', reason: 'First-job evidence has a current neutral passed verdict.' };
     }

@@ -94,6 +94,7 @@ describe('workforce persisted contracts', () => {
   it('requires artifact and latest neutral pass, then invalidates learning when approved context changes', async () => {
     const { company, agent, svc } = await fixture();
     await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, owner);
+    await svc.ensureSkillsInstalled(company.id, agent.id, owner);
     const facts = ['offer', 'audience', 'brandVoice', 'approvedClaims'].map(key => ({ key, value: 'Confirmed owner input', sourceReference: 'Owner intake' }));
     await svc.updateBrief(company.id, { ...input, facts }, owner);
     await svc.acknowledgeLearning(company.id, agent.id, 1, owner);
@@ -135,6 +136,27 @@ describe('workforce persisted contracts', () => {
     const job = await svc.startFirstJob(company.id, agent.id, owner);
     const [question] = await db.insert(issueThreadInteractions).values({ companyId: company.id, issueId: job.id, kind: 'ask_user_questions', status: 'cancelled', payload: { version: 1, workforceAgentId: agent.id, workforceEnrollmentId: (await svc.getEnrollment(company.id, agent.id))!.id, workforceTemplateId: 'sales-support', workforceTemplateVersion: 1, questions: [{ id: 'price', prompt: 'What price is approved?', required: true, selectionMode: 'single', options: [{ id: 'a', label: '$50' }] }] } }).returning();
     expect(await svc.getReadiness(company.id, agent.id)).toMatchObject({ phase: 'needs_input', pendingQuestionIds: [question.id] });
+  });
+  it('keeps accepted work unready until pinned skills are installed and recovers after retry', async () => {
+    const { company, agent, svc } = await fixture();
+    await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, owner);
+    await svc.updateBrief(company.id, { ...input, facts: ['offer', 'audience', 'brandVoice', 'approvedClaims'].map(key => ({ key, value: 'Approved', sourceReference: 'Owner intake' })) }, owner);
+    await svc.acknowledgeLearning(company.id, agent.id, 1, owner);
+    const job = await svc.startFirstJob(company.id, agent.id, owner);
+    await documentService(db).upsertIssueDocument({ issueId: job.id, key: 'deliverable', title: 'Campaign', format: 'markdown', body: 'Actual source-backed campaign draft', createdByAgentId: agent.id });
+    const [pass] = await db.insert(verdicts).values({ companyId: company.id, entityType: 'issue', issueId: job.id, outcome: 'passed', reviewerUserId: 'reviewer' }).returning();
+    expect(await svc.getReadiness(company.id, agent.id)).toMatchObject({ phase: 'learning', acceptedVerdictId: pass.id });
+    await svc.ensureSkillsInstalled(company.id, agent.id, owner);
+    expect((await svc.getReadiness(company.id, agent.id))?.phase).toBe('ready');
+    const blockedHome = path.join(skillHome, 'blocked-retry'); await writeFile(blockedHome, 'blocked');
+    process.env.PAPERCLIP_HOME = blockedHome;
+    try { expect((await svc.ensureSkillsInstalled(company.id, agent.id, owner)).skillInstallError).toBeTruthy(); }
+    finally { process.env.PAPERCLIP_HOME = skillHome; }
+    const failed = await svc.getReadiness(company.id, agent.id);
+    expect(failed).toMatchObject({ phase: 'learning', acceptedVerdictId: pass.id });
+    expect(failed?.reason).toMatch(/skill.*install/i);
+    await svc.ensureSkillsInstalled(company.id, agent.id, owner);
+    expect(await svc.getReadiness(company.id, agent.id)).toMatchObject({ phase: 'ready', acceptedVerdictId: pass.id });
   });
   it('retries failed local installation, pins actual skill files and preserves existing assignments', async () => {
     const { company, agent, svc } = await fixture();
@@ -242,6 +264,7 @@ describe('workforce persisted contracts', () => {
   it('accepts a work product without a document and requires new review after it changes', async () => {
     const { company, agent, svc } = await fixture();
     await svc.enroll(company.id, agent.id, { templateId: 'sales-support' }, owner);
+    await svc.ensureSkillsInstalled(company.id, agent.id, owner);
     await svc.updateBrief(company.id, { expectedRevision: 0, sources: [], facts: ['offer', 'pricing', 'idealCustomer', 'qualificationRules'].map(key => ({ key, value: 'Approved', sourceReference: 'Owner' })) }, owner);
     await svc.acknowledgeLearning(company.id, agent.id, 1, owner);
     const job = await svc.startFirstJob(company.id, agent.id, owner);

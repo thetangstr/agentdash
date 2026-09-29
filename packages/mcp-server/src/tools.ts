@@ -1,3 +1,4 @@
+import { workforceTemplateIdSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import {
   addIssueCommentSchema,
@@ -184,6 +185,7 @@ const readConversationToolSchema = z.object({
 });
 
 const hireAgentToolSchema = z.object({
+  workforceTemplateId: workforceTemplateIdSchema.optional(),
   companyId: companyIdOptional,
   name: z.string().min(1),
   adapterType: z.string().min(1),

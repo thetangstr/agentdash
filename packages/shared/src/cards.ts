@@ -2,6 +2,7 @@
 import type { AgentAdapterType } from "./constants.js";
 
 export interface ProposalPayload {
+  workforceTemplateId?: "marketing-content" | "sales-support";
   name: string;
   role: string;
   oneLineOkr: string;
@@ -28,6 +29,7 @@ export interface InterviewQuestionPayload {
 // CoS-led onboarding (Phase C) — concrete plan card emitted after goals capture.
 // See docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
 export interface AgentPlanProposalAgent {
+  workforceTemplateId?: "marketing-content" | "sales-support";
   role: string;
   name: string;
   adapterType: AgentAdapterType;

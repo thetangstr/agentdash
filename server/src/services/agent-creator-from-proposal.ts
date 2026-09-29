@@ -1,4 +1,5 @@
 import type { AgentProposal, InterviewTurn } from "@paperclipai/shared";
+import { notFound } from "../errors.js";
 
 interface Deps {
   agents: any;
@@ -16,11 +17,15 @@ export function agentCreatorFromProposal(deps: Deps) {
   return {
     create: async (input: CreateInput) => {
       const { companyId, reportsToAgentId, proposal, transcript } = input;
+      const leader = await deps.agents.getById(reportsToAgentId);
+      if (!leader || leader.companyId !== companyId) throw notFound("Reporting agent not found");
       const created = await deps.agents.create(companyId, {
         name: proposal.name,
         role: "general", // role-string mapping reserved for future expansion
         title: proposal.role,
-        adapterType: "claude_local",
+        // AgentDash: inherit the company's configured runtime, never a fixed provider.
+        adapterType: leader.adapterType,
+        workforceTemplateId: proposal.workforceTemplateId,
         adapterConfig: {},
         reportsTo: reportsToAgentId,
         status: "idle",
@@ -32,10 +37,11 @@ export function agentCreatorFromProposal(deps: Deps) {
         "AGENTS.md": renderAgents(proposal),
         "HEARTBEAT.md": renderHeartbeat(),
       };
-      await deps.instructions.materializeManagedBundle(created, files, {
+      const materialized = await deps.instructions.materializeManagedBundle(created, files, {
         entryFile: "AGENTS.md",
         replaceExisting: false,
       });
+      await deps.agents.update(created.id, { adapterConfig: materialized.adapterConfig });
       const apiKey = await deps.agents.createApiKey(created.id, "default", { source: "agent_creation" });
       return { agentId: created.id, apiKey };
     },

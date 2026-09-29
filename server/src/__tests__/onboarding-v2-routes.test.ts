@@ -2,6 +2,8 @@ import express from "express";
 import request from "supertest";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+vi.mock("../services/workforce.js", () => ({ workforceService: () => ({ ensureSkillsInstalled: vi.fn() }) }));
+
 const mockOrchestrator = { bootstrap: vi.fn() };
 const mockConversations = {
   paginate: vi.fn().mockResolvedValue([]),
@@ -11,6 +13,7 @@ const mockConversations = {
   addParticipant: vi.fn().mockResolvedValue(undefined),
 };
 const mockAgents = {
+  update: vi.fn().mockResolvedValue({}),
   create: vi.fn(),
   getById: vi.fn(),
   createApiKey: vi.fn(),
@@ -1259,7 +1262,7 @@ describe("POST /api/onboarding/interview/turn — real-LLM plan parse path", () 
             plan: {
               rationale: "A lean two-agent team covering operations and engineering to unblock onboarding.",
               agents: [
-                { role: "operations_lead", name: "Maya", adapterType: "hermes_local", responsibilities: ["Triage incoming requests", "Draft standard replies"], kpis: ["Time-to-first-response"] },
+                { role: "operations_lead", name: "Maya", adapterType: "hermes_local", workforceTemplateId: "marketing-content", responsibilities: ["Triage incoming requests", "Draft standard replies"], kpis: ["Time-to-first-response"] },
                 { role: "engineering_lead", name: "Dev", adapterType: "hermes_local", responsibilities: ["Ship product fixes"], kpis: ["Issues closed per sprint"] },
               ],
               alignmentToShortTerm: "Unblocks manual onboarding within the first two weeks.",
@@ -1295,6 +1298,8 @@ describe("POST /api/onboarding/interview/turn — real-LLM plan parse path", () 
     expect(payload.agents).toHaveLength(2);
     expect(payload.agents[0].name).toBe("Maya");
     expect(payload.agents[0].adapterType).toBe("hermes_local");
+    expect(payload.agents[0].workforceTemplateId).toBe("marketing-content");
+    expect(payload.agents[1].workforceTemplateId).toBeUndefined();
     expect(payload.rationale).toMatch(/two-agent/);
   });
 

@@ -5,6 +5,8 @@ import type { AgentProposal, InterviewTurn } from "@paperclipai/shared";
 describe("agentCreatorFromProposal", () => {
   it("creates an agent + materializes SOUL/AGENTS/HEARTBEAT from the proposal", async () => {
     const agents = {
+      update: vi.fn().mockResolvedValue({}),
+      getById: vi.fn().mockResolvedValue({ id: "cos-1", companyId: "c1", adapterType: "claude_local" }),
       create: vi.fn().mockResolvedValue({ id: "agent-2", role: "general", adapterType: "claude_local", adapterConfig: {} }),
       createApiKey: vi.fn().mockResolvedValue({ id: "k", token: "agk_x" }),
     };
