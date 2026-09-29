@@ -176,3 +176,4 @@ export { assistantActionHandles } from "./assistant_action_handles.js";
 export { evaluationEvents } from "./evaluation_events.js";
 export { evaluationScorecards } from "./evaluation_scorecards.js";
 export { evaluationIngestState } from "./evaluation_ingest_state.js";
+export { workforceEnrollments } from './workforce_enrollments.js';

@@ -1400,3 +1400,8 @@ export {
   type AssistantConfirmAction,
   type UpdateAssistantGrant,
 } from "./validators/assistant-actions.js";
+
+// AgentDash: workforce launch contracts.
+export * from './types/workforce.js';
+export * from './validators/workforce.js';
+export * from './workforce-templates.js';

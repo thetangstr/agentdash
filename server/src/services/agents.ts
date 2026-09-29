@@ -1,3 +1,5 @@
+import { workforceService } from "./workforce.js";
+import { workforceTemplateIdSchema } from "@paperclipai/shared";
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -422,7 +424,18 @@ export function agentService(db: Db) {
 
     getById,
 
-    create: async (companyId: string, data: Omit<typeof agents.$inferInsert, "companyId">) => {
+    create: async (companyId: string, input: Omit<typeof agents.$inferInsert, "companyId"> & { workforceTemplateId?: string }): Promise<ReturnType<typeof normalizeAgentRow>> => {
+      // AgentDash: enrollment is part of creation; filesystem installation runs after hiring commits.
+      const { workforceTemplateId, ...data } = input;
+      if (workforceTemplateId !== undefined) {
+        workforceTemplateIdSchema.parse(workforceTemplateId);
+        return db.transaction(async (tx) => {
+          const connection = tx as unknown as Db;
+          const created = await agentService(connection).create(companyId, data);
+          await workforceService(connection).enroll(companyId, created.id, { templateId: workforceTemplateId as "marketing-content" | "sales-support" }, {});
+          return created;
+        });
+      }
       if (data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
       }
