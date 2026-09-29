@@ -22,9 +22,9 @@ vi.mock("../api/companies", () => ({
   companiesApi: mockCompaniesApi,
 }));
 
-const activeCompany = { id: "company-1" };
-const secondActiveCompany = { id: "company-2" };
-const archivedCompany = { id: "archived-company" };
+const activeCompany = { id: "company-1", issuePrefix: "PAP" };
+const secondActiveCompany = { id: "company-2", issuePrefix: "MKC" };
+const archivedCompany = { id: "archived-company", issuePrefix: "ARC" };
 
 function makeCompany(id: string): Company {
   return {
@@ -105,6 +105,60 @@ describe("resolveBootstrapCompanySelection", () => {
       sidebarCompanies: [activeCompany],
       selectedCompanyId: null,
       storedCompanyId: "archived-company",
+    })).toBe("company-1");
+  });
+
+  // AgentDash: UX-7 follow-up — a company-prefixed deep link names the company
+  // it is about; on a mixed-profile instance the stored/manual company must
+  // not shadow it, or profile-gated routes read the wrong profile.
+  it("selects the company named by a route prefix ahead of stored selection", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [activeCompany, secondActiveCompany],
+      sidebarCompanies: [activeCompany, secondActiveCompany],
+      selectedCompanyId: null,
+      storedCompanyId: "company-1",
+      routeCompanyPrefix: "mkc",
+    })).toBe("company-2");
+  });
+
+  it("selects the route-prefix company ahead of an existing selection", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [activeCompany, secondActiveCompany],
+      sidebarCompanies: [activeCompany, secondActiveCompany],
+      selectedCompanyId: "company-1",
+      storedCompanyId: "company-1",
+      routeCompanyPrefix: "MKC",
+    })).toBe("company-2");
+  });
+
+  it("lets an in-flight manual switch finish instead of re-selecting the route company", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [activeCompany, secondActiveCompany],
+      sidebarCompanies: [activeCompany, secondActiveCompany],
+      selectedCompanyId: "company-2",
+      storedCompanyId: "company-1",
+      routeCompanyPrefix: "PAP",
+      selectionSource: "manual",
+    })).toBe("company-2");
+  });
+
+  it("ignores a route prefix that matches no company", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [activeCompany, secondActiveCompany],
+      sidebarCompanies: [activeCompany, secondActiveCompany],
+      selectedCompanyId: null,
+      storedCompanyId: "company-2",
+      routeCompanyPrefix: "decisions",
+    })).toBe("company-2");
+  });
+
+  it("does not select an archived company via its route prefix", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [archivedCompany, activeCompany],
+      sidebarCompanies: [activeCompany],
+      selectedCompanyId: null,
+      storedCompanyId: null,
+      routeCompanyPrefix: "ARC",
     })).toBe("company-1");
   });
 });

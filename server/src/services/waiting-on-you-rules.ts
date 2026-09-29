@@ -2,10 +2,54 @@
 // you", as a leaf module so both the digest and waiting-on-you.ts import it
 // without a cycle. See waiting-on-you.ts for the definition in words.
 import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
-import { effectsFor } from "./assistant-gated-actions.js";
+
+export type AssistantDecision = "approve" | "reject" | "request_changes";
 
 /** Statuses where a human decision is still possible. */
 export const WAITING_APPROVAL_STATUSES = ["pending", "revision_requested"] as const;
+
+export function hireApprovalCreatesAgent(approval: {
+  type: string;
+  status?: string | null;
+  payload: unknown;
+}): boolean {
+  if (approval.type !== "hire_agent") return false;
+  // WAITING_APPROVAL_STATUSES is the same pending/revision_requested set the
+  // gated-actions service checks against DECIDABLE_STATUSES — kept local so
+  // this module stays a leaf.
+  if (!(WAITING_APPROVAL_STATUSES as readonly string[]).includes(approval.status ?? "")) return false;
+  const payload =
+    typeof approval.payload === "object" && approval.payload !== null
+      ? (approval.payload as Record<string, unknown>)
+      : {};
+  return typeof payload.agentId !== "string";
+}
+
+/**
+ * The one source of truth for "what does yes/no do" wording — the assistant's
+ * confirm read-back and the Decisions page row both render these strings, so
+ * a consequence can never be described two ways. Lives in this leaf module so
+ * consumers do not import the whole gated-actions service for it.
+ */
+export function effectsFor(
+  approval: { type: string; status?: string | null; payload: unknown },
+  decision: AssistantDecision,
+): string[] {
+  if (decision === "request_changes") {
+    return ["The request goes back to whoever asked, with your note — nothing is approved."];
+  }
+  if (decision === "reject") {
+    return approval.type === "hire_agent" && !hireApprovalCreatesAgent(approval)
+      ? ["The hire is refused and the proposed agent is terminated."]
+      : ["The request is rejected and does not proceed."];
+  }
+  if (approval.type === "hire_agent") {
+    return hireApprovalCreatesAgent(approval)
+      ? ["The hire is approved and the new agent is created on the requested adapter."]
+      : ["The hire is approved and the agent becomes active."];
+  }
+  return ["The request is approved and whatever it was gating proceeds."];
+}
 
 /** Human phrasing for an approval kind — one clause, payload stays out. */
 export const APPROVAL_KIND_PHRASES: Record<string, string> = {

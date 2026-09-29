@@ -1616,6 +1616,7 @@ describe("IssuesList", () => {
         agents={[]}
         projects={[]}
         viewStateKey="paperclip:test-issues-empty-default"
+        showAskEmptyState
         onUpdateIssue={() => undefined}
       />,
       container,
@@ -1629,6 +1630,31 @@ describe("IssuesList", () => {
     const ask = Array.from(container.querySelectorAll("a")).find((a) => a.textContent === "Ask");
     expect(ask?.getAttribute("href")).toBe("/cos");
     expect(dialogState.openNewIssue).not.toHaveBeenCalled();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the filtered-empty state on embedded lists on the default profile (UX-11)", async () => {
+    // AgentDash: UX-11 follow-up — the Ask empty state belongs to the Issues
+    // page only; project/routine/workspace/sub-issue lists get the same
+    // component without the flag.
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[]}
+        agents={[]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues-empty-embedded"
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("No issues match the current filters or search.");
+    });
+    expect(container.textContent).not.toContain("Everything you or your assistant asks for");
 
     act(() => {
       root.unmount();

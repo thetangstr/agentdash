@@ -394,6 +394,10 @@ interface IssuesListProps {
   isLoadingMoreIssues?: boolean;
   mutedIssueIds?: Set<string>;
   issueBadgeById?: Map<string, string>;
+  // AgentDash: UX-11 follow-up — the "ask for something" empty state is the
+  // Issues page's first-use copy; project, routine, workspace, and sub-issue
+  // lists keep the filtered-empty copy.
+  showAskEmptyState?: boolean;
   onLoadMoreIssues?: () => void;
   onSearchChange?: (search: string) => void;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
@@ -566,6 +570,7 @@ export function IssuesList({
   isLoadingMoreIssues = false,
   mutedIssueIds,
   issueBadgeById,
+  showAskEmptyState = false,
   onLoadMoreIssues,
   onSearchChange,
   onUpdateIssue,
@@ -1417,7 +1422,7 @@ export function IssuesList({
         </p>
       )}
       {!isLoading && filtered.length === 0 && viewState.viewMode === "list" && (
-        isDefaultProfile && issues.length === 0 && normalizedIssueSearch.length === 0 ? (
+        showAskEmptyState && isDefaultProfile && issues.length === 0 && normalizedIssueSearch.length === 0 ? (
           <EmptyState
             icon={CircleDot}
             message="No issues yet. Everything you or your assistant asks for shows up here."
