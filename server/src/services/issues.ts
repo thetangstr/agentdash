@@ -52,7 +52,7 @@ import {
   parseProjectExecutionWorkspacePolicy,
 } from "./execution-workspace-policy.js";
 import { mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
-import { instanceSettingsService } from "./instance-settings.js";
+import { instanceSettingsService, readInstanceExperimentalSettings, readInstanceGeneralSettings } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
@@ -3363,6 +3363,15 @@ export function issueService(db: Db) {
       },
       dbOrTx: IssueMutationExecutor = db,
     ) => {
+      // Existence-only preflight preserves missing-target no-initialization behavior.
+      // The locked transaction read below remains authoritative for all domain work.
+      if (dbOrTx === db) {
+        const [exists] = await db.select({ id: issues.id }).from(issues).where(eq(issues.id, id));
+        if (!exists) return null;
+      }
+      // Root compatibility initializes/captures settings before domain locks.
+      // A supplied transaction may already hold those locks: use read-only lookup.
+      const experimentalSettings = dbOrTx === db ? await instanceSettings.getExperimental() : null;
       const runUpdate = async (tx: IssueMutationExecutor) => {
         const existing = await tx
           .select()
@@ -3379,7 +3388,7 @@ export function issueService(db: Db) {
           actorUserId,
           ...issueData
         } = data;
-        const isolatedWorkspacesEnabled = (await instanceSettingsService(tx as Db).getExperimental()).enableIsolatedWorkspaces;
+        const isolatedWorkspacesEnabled = (experimentalSettings ?? await readInstanceExperimentalSettings(tx)).enableIsolatedWorkspaces;
         if (!isolatedWorkspacesEnabled) {
           delete issueData.executionWorkspaceId;
           delete issueData.executionWorkspacePreference;
@@ -4063,6 +4072,12 @@ export function issueService(db: Db) {
       actor: { agentId?: string; userId?: string; runId?: string | null },
       dbOrTx: IssueMutationExecutor = db,
     ) => {
+      if (dbOrTx === db) {
+        // Existence only: the transaction still rereads before accepting the comment.
+        const [exists] = await db.select({ id: issues.id }).from(issues).where(eq(issues.id, issueId));
+        if (!exists) throw notFound("Issue not found");
+      }
+      const generalSettings = dbOrTx === db ? await instanceSettings.getGeneral() : null;
       const insertComment = async (executor: IssueMutationExecutor) => {
         const issue = await executor
           .select({ companyId: issues.companyId })
@@ -4071,9 +4086,9 @@ export function issueService(db: Db) {
           .then((rows) => rows[0] ?? null);
         if (!issue) throw notFound("Issue not found");
 
-        // Settings may lazily initialize a row; keep that write on this executor too.
+        // Supplied executors only read settings, even with the issue already locked.
         const currentUserRedactionOptions = {
-          enabled: (await instanceSettingsService(executor as Db).getGeneral()).censorUsernameInLogs,
+          enabled: (generalSettings ?? await readInstanceGeneralSettings(executor)).censorUsernameInLogs,
         };
         const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
         const [comment] = await executor

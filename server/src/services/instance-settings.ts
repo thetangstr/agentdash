@@ -68,13 +68,27 @@ function toInstanceSettings(row: typeof instanceSettings.$inferSelect): Instance
   };
 }
 
+// AgentDash: transaction-bound domain primitives must never initialize the
+// singleton after taking domain locks. These reads reuse canonical defaults.
+async function readSettingsRow(executor: Pick<Db, "select">) {
+  return executor
+    .select()
+    .from(instanceSettings)
+    .where(eq(instanceSettings.singletonKey, DEFAULT_SINGLETON_KEY))
+    .then((rows) => rows[0] ?? null);
+}
+
+export async function readInstanceGeneralSettings(executor: Pick<Db, "select">): Promise<InstanceGeneralSettings> {
+  return normalizeGeneralSettings((await readSettingsRow(executor))?.general);
+}
+
+export async function readInstanceExperimentalSettings(executor: Pick<Db, "select">): Promise<InstanceExperimentalSettings> {
+  return normalizeExperimentalSettings((await readSettingsRow(executor))?.experimental);
+}
+
 export function instanceSettingsService(db: Db) {
   async function getOrCreateRow() {
-    const existing = await db
-      .select()
-      .from(instanceSettings)
-      .where(eq(instanceSettings.singletonKey, DEFAULT_SINGLETON_KEY))
-      .then((rows) => rows[0] ?? null);
+    const existing = await readSettingsRow(db);
     if (existing) return existing;
 
     const now = new Date();
@@ -97,11 +111,7 @@ export function instanceSettingsService(db: Db) {
 
     if (created) return created;
 
-    const raced = await db
-      .select()
-      .from(instanceSettings)
-      .where(eq(instanceSettings.singletonKey, DEFAULT_SINGLETON_KEY))
-      .then((rows) => rows[0] ?? null);
+    const raced = await readSettingsRow(db);
     if (raced) return raced;
 
     throw new Error("Failed to initialize instance settings row");

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import {
   activityLog, agents, companies, companyMemberships, createDb, executionWorkspaces,
   goals, heartbeatRuns, instanceSettings, issueComments, issueLabels, issueReferenceMentions,
@@ -12,7 +12,7 @@ import { issueThreadInteractionService } from '../services/issue-thread-interact
 import { issueReferenceService } from '../services/issue-references.js';
 import { routineService } from '../services/routines.js';
 import { insertActivity, publishActivity, logActivity, setPluginEventBus, type ActivityPublication } from '../services/activity-log.js';
-import { instanceSettingsService } from '../services/instance-settings.js';
+import { instanceSettingsService, readInstanceGeneralSettings, readInstanceExperimentalSettings } from '../services/instance-settings.js';
 import { publishLiveEvent } from '../services/live-events.js';
 import type { PluginEventBus } from '../services/plugin-event-bus.js';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
@@ -46,18 +46,156 @@ describe('issue acceptance DB primitives', () => {
     return { companyId: f.company.id, actorType: 'user' as const, actorId: 'human', action: 'issue.comment.created', entityType: 'issue', entityId: f.issue.id };
   }
 
-  it('rolls back a comment, its recency and lazy settings initialization together', async () => {
+  it('rolls back comment and recency without creating absent settings', async () => {
     const f = await fixture();
     await db.delete(instanceSettings);
     await expect(db.transaction(async tx => {
       const comment = await f.svc.addComment(f.issue.id, 'Accepted text', { userId: 'human' }, tx);
       expect(comment.authorUserId).toBe('human');
+      expect(await tx.select().from(instanceSettings)).toEqual([]);
       expect(await tx.select().from(issueComments).where(eq(issueComments.id, comment.id))).toHaveLength(1);
       throw rollback;
     })).rejects.toBe(rollback);
     expect(await db.select().from(issueComments).where(eq(issueComments.issueId, f.issue.id))).toEqual([]);
     expect(await readIssue(f.issue.id)).toEqual(f.issue);
     expect(await db.select().from(instanceSettings)).toEqual([]);
+  });
+
+  it('reads canonical normalized settings without creating or changing the singleton', async () => {
+    await db.delete(instanceSettings);
+    const defaults = await instanceSettingsService(db).get();
+    await db.delete(instanceSettings);
+    expect(await readInstanceGeneralSettings(db)).toEqual(defaults.general);
+    expect(await readInstanceExperimentalSettings(db)).toEqual(defaults.experimental);
+    expect(await db.select().from(instanceSettings)).toEqual([]);
+
+    await instanceSettingsService(db).updateGeneral({ censorUsernameInLogs: true, keyboardShortcuts: true });
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: true, enableEnvironments: true });
+    const configured = await instanceSettingsService(db).get();
+    const before = await db.select().from(instanceSettings);
+    expect(await readInstanceGeneralSettings(db)).toEqual(configured.general);
+    expect(await readInstanceExperimentalSettings(db)).toEqual(configured.experimental);
+    expect(await db.select().from(instanceSettings)).toEqual(before);
+
+    await db.update(instanceSettings).set({ general: { censorUsernameInLogs: 'invalid' }, experimental: { enableIsolatedWorkspaces: 'invalid' } });
+    const invalid = await db.select().from(instanceSettings);
+    expect(await readInstanceGeneralSettings(db)).toEqual(defaults.general);
+    expect(await readInstanceExperimentalSettings(db)).toEqual(defaults.experimental);
+    expect(await instanceSettingsService(db).getGeneral()).toEqual(defaults.general);
+    expect(await instanceSettingsService(db).getExperimental()).toEqual(defaults.experimental);
+    expect(await db.select().from(instanceSettings)).toEqual(invalid);
+  });
+
+  it('reads actual transaction-local settings and leaves root settings unchanged on rollback', async () => {
+    await db.delete(instanceSettings);
+    const before = await instanceSettingsService(db).get();
+    await expect(db.transaction(async tx => {
+      await instanceSettingsService(tx as typeof db).updateGeneral({ censorUsernameInLogs: true });
+      await instanceSettingsService(tx as typeof db).updateExperimental({ enableIsolatedWorkspaces: true });
+      expect((await readInstanceGeneralSettings(tx)).censorUsernameInLogs).toBe(true);
+      expect((await readInstanceExperimentalSettings(tx)).enableIsolatedWorkspaces).toBe(true);
+      expect(await readInstanceGeneralSettings(db)).toEqual(before.general);
+      expect(await readInstanceExperimentalSettings(db)).toEqual(before.experimental);
+      throw rollback;
+    })).rejects.toBe(rollback);
+    expect(await instanceSettingsService(db).get()).toEqual(before);
+  });
+
+  it('does not initialize settings for known-missing root update/comment targets', async () => {
+    await db.delete(instanceSettings);
+    const svc = issueService(db);
+    expect(await svc.update(randomUUID(), { title: 'Missing' })).toBeNull();
+    expect(await db.select().from(instanceSettings)).toEqual([]);
+    await expect(svc.addComment(randomUUID(), 'Missing', { userId: 'human' })).rejects.toThrow('Issue not found');
+    expect(await db.select().from(instanceSettings)).toEqual([]);
+    expect(publishLiveEvent).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('keeps lazy initialization in canonical getters and root primitive wrappers', async () => {
+    const f = await fixture();
+    const roots = [
+      () => instanceSettingsService(db).getGeneral(),
+      () => instanceSettingsService(db).getExperimental(),
+      () => f.svc.update(f.issue.id, { title: 'Root update' }),
+      () => f.svc.addComment(f.issue.id, 'Root comment', { userId: 'human' }),
+      () => logActivity(db, audit(f)),
+    ];
+    for (const root of roots) {
+      await db.delete(instanceSettings);
+      await root();
+      expect(await db.select().from(instanceSettings)).toHaveLength(1);
+    }
+    expect((await readIssue(f.issue.id)).title).toBe('Root update');
+    expect(await db.select().from(issueComments).where(eq(issueComments.issueId, f.issue.id))).toHaveLength(1);
+    expect(await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).toHaveLength(1);
+    expect(publishLiveEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['update', 'activity'] as const)('avoids settings/issue lock inversion for prelocked %s acceptance', async operation => {
+    const f = await fixture();
+    await db.delete(instanceSettings);
+    let settingsReady!: () => void;
+    const settingsGate = new Promise<void>(resolve => { settingsReady = resolve; });
+    let issueReady!: () => void;
+    const issueGate = new Promise<void>(resolve => { issueReady = resolve; });
+    const backendIds: number[] = [];
+    let publication: ActivityPublication | undefined;
+    const body = `Evidence at ${os.homedir()}/work`;
+
+    // A owns the actual singleton initialization lock, then needs the issue.
+    const comment = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL statement_timeout = '6s'`);
+      const [backend] = await tx.execute(sql`select pg_backend_pid() as pid`);
+      backendIds.push(Number(backend.pid));
+      await instanceSettingsService(tx as typeof db).updateGeneral({ censorUsernameInLogs: true });
+      settingsReady();
+      await issueGate;
+      return f.svc.addComment(f.issue.id, body, { agentId: f.agent.id, runId: f.run.id }, tx);
+    });
+    // B already owns the issue before entering any primitive. A local helper
+    // lock reorder cannot fix this supported caller-owned transaction path.
+    const accepted = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL statement_timeout = '6s'`);
+      const [backend] = await tx.execute(sql`select pg_backend_pid() as pid`);
+      backendIds.push(Number(backend.pid));
+      await settingsGate;
+      await tx.select().from(issues).where(eq(issues.id, f.issue.id)).for('update');
+      issueReady();
+      if (operation === 'activity') {
+        publication = await insertActivity(tx, { ...audit(f), details: { accessToken: 'secret-value', path: body } });
+      }
+      const updated = await f.svc.update(f.issue.id, { title: `Accepted ${operation}`, executionWorkspaceId: randomUUID() }, tx);
+      // A's uncommitted settings are invisible here: defaults disable isolated
+      // workspaces, and reads must not create another singleton or wait on A.
+      expect(updated?.executionWorkspaceId).toBeNull();
+      expect(await tx.select().from(instanceSettings)).toEqual([]);
+      return updated;
+    });
+    const results = await Promise.allSettled([comment, accepted]);
+    expect(new Set(backendIds).size).toBe(2);
+    expect(results.map(result => {
+      if (result.status === 'fulfilled') return { status: result.status };
+      const error = result.reason as { code?: string; cause?: { code?: string; message?: string }; message?: string };
+      return { status: result.status, code: error.code ?? error.cause?.code, message: error.cause?.message ?? error.message };
+    })).toEqual([{ status: 'fulfilled' }, { status: 'fulfilled' }]);
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, f.issue.id));
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({ authorAgentId: f.agent.id, authorUserId: null, createdByRunId: f.run.id });
+    expect(comments[0].body).not.toContain(os.homedir());
+    expect((await readIssue(f.issue.id)).title).toBe(`Accepted ${operation}`);
+    expect((await instanceSettingsService(db).getGeneral()).censorUsernameInLogs).toBe(true);
+    const audits = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
+    expect(audits).toHaveLength(operation === 'activity' ? 1 : 0);
+    if (operation === 'activity') {
+      // B used normalized missing-row defaults, not A's uncommitted settings.
+      expect(audits[0]).toMatchObject({ origin: 'server', actorType: 'user', actorId: 'human', entityId: f.issue.id });
+      expect(audits[0].details?.path).toBe(body);
+      expect(audits[0].details?.accessToken).not.toBe('secret-value');
+      expect(publication?.liveEvent.payload?.details).toEqual(audits[0].details);
+    }
+    expect(publishLiveEvent).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('preserves root and transaction comment attribution and username redaction', async () => {

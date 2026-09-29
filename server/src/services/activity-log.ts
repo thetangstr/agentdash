@@ -9,7 +9,7 @@ import { redactCurrentUserValue } from "../log-redaction.js";
 import { sanitizeRecord } from "../redaction.js";
 import { logger } from "../middleware/logger.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
-import { instanceSettingsService } from "./instance-settings.js";
+import { instanceSettingsService, readInstanceGeneralSettings } from "./instance-settings.js";
 
 const PLUGIN_EVENT_SET: ReadonlySet<string> = new Set(PLUGIN_EVENT_TYPES);
 const ACTIVITY_ACTION_TO_PLUGIN_EVENT: Readonly<Record<string, PluginEventType>> = {
@@ -74,9 +74,16 @@ export async function insertActivity(
   executor: Pick<Db, "select" | "insert" | "update">,
   input: LogActivityInput,
 ): Promise<ActivityPublication> {
-  const currentUserRedactionOptions = {
-    enabled: (await instanceSettingsService(executor as Db).getGeneral()).censorUsernameInLogs,
-  };
+  const settings = await readInstanceGeneralSettings(executor);
+  return insertActivityWithRedaction(executor, input, settings.censorUsernameInLogs);
+}
+
+async function insertActivityWithRedaction(
+  executor: Pick<Db, "insert">,
+  input: LogActivityInput,
+  censorUsernameInLogs: boolean,
+): Promise<ActivityPublication> {
+  const currentUserRedactionOptions = { enabled: censorUsernameInLogs };
   const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
   const redactedDetails = sanitizedDetails
     ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
@@ -140,7 +147,10 @@ export function publishActivity(publication: ActivityPublication): void {
 }
 
 export async function logActivity(db: Db, input: LogActivityInput) {
-  publishActivity(await insertActivity(db, input));
+  // Legacy eager calls retain lazy initialization. Transaction composers use
+  // insertActivity, whose settings lookup cannot acquire an initialization lock.
+  const settings = await instanceSettingsService(db).getGeneral();
+  publishActivity(await insertActivityWithRedaction(db, input, settings.censorUsernameInLogs));
 }
 
 /**
