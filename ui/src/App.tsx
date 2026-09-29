@@ -433,6 +433,7 @@ export function App() {
           <Route path="activity" element={<UnprefixedBoardRedirect />} />
           <Route path="activity/*" element={<UnprefixedBoardRedirect />} />
           <Route path="shipped" element={<UnprefixedBoardRedirect />} />
+          <Route path="decisions" element={<UnprefixedBoardRedirect />} />
           <Route path="connect-assistant" element={<UnprefixedBoardRedirect />} />
           {/* Explicit, not a splat. React Router ranks a dynamic+static pair
               (":companyPrefix/settings") above a splat ("company/*"), so the

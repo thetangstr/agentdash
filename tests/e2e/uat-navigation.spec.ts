@@ -48,7 +48,9 @@ const ROUTES = [
   "/agents/all",
   "/issues",
   "/inbox",
+  "/cos",
   "/decisions",
+  "/shipped",
   "/org",
   "/goals",
   "/approvals",
@@ -117,9 +119,17 @@ test.describe("every destination stays reachable", () => {
       await page.goto("/dashboard");
       // Only the links actually rendered for this user — role and profile
       // decide what the shell offers, and clicking a hidden one proves nothing.
-      // The default profile shows "Decisions" where agentdash_mk shows
-      // "Inbox" — the `if (!count)` guard skips whichever isn't offered.
-      const labels = ["Dashboard", "Inbox", "Decisions", "Issues", "Org", "Billing", "Settings", "My Agent"];
+      // MK profile labels plus the default profile's six-item nav (UX-6).
+      const labels = [
+        "Dashboard", "Home", "Ask", "Work", "Decisions", "Shipped", "Team",
+        "Inbox", "Issues", "Org", "Billing", "Settings", "My Agent",
+      ];
+      // Default profile folds secondary destinations under Advanced — expand
+      // it once so those links are clickable too.
+      const advancedToggle = page.getByRole("button", { name: "Advanced", exact: true }).first();
+      if (await advancedToggle.count()) {
+        await advancedToggle.click();
+      }
       for (const label of labels) {
         const link = page.getByRole("link", { name: label, exact: true }).first();
         if (!(await link.count())) {

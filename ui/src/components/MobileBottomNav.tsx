@@ -7,6 +7,7 @@ import {
   Users,
   Inbox,
   ShieldQuestion,
+  MessageSquare,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
@@ -40,36 +41,43 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   const location = useLocation();
   const { selectedCompanyId, selectedCompany } = useCompany();
   const { openNewIssue } = useDialogActions();
-  // AgentDash: UX-7 (GH #788) — default profile's fifth slot is Decisions,
-  // badged by the same main-list length as the sidebar; agentdash_mk keeps
-  // its Inbox.
+  // AgentDash: UX-6/UX-7 (#787/#788) — the default profile's five slots are
+  // Home/Work/Ask/Decisions/Team and the Decisions badge is #817's
+  // useDecisionsBadge (one number everywhere); agentdash_mk keeps its Inbox.
   const isMk = selectedCompany?.productProfile === "agentdash_mk";
   const inboxBadge = useInboxBadge(selectedCompanyId, isMk);
   const decisionsBadge = useDecisionsBadge(selectedCompanyId, !isMk);
 
   const items = useMemo<MobileNavItem[]>(
-    () => [
-      { type: "link", to: "/dashboard", label: "Home", icon: House },
-      { type: "link", to: "/issues", label: "Issues", icon: CircleDot },
-      { type: "action", label: "Create", icon: SquarePen, onClick: () => openNewIssue() },
-      { type: "link", to: "/agents/all", label: "Agents", icon: Users },
+    () =>
       isMk
-        ? {
-            type: "link",
-            to: "/inbox",
-            label: "Inbox",
-            icon: Inbox,
-            badge: inboxBadge.inbox,
-          }
-        : {
-            type: "link",
-            to: "/decisions",
-            label: "Decisions",
-            icon: ShieldQuestion,
-            badge: decisionsBadge,
-          },
-    ],
-    [openNewIssue, inboxBadge.inbox, decisionsBadge, isMk],
+        ? [
+            { type: "link", to: "/dashboard", label: "Home", icon: House },
+            { type: "link", to: "/issues", label: "Issues", icon: CircleDot },
+            { type: "action", label: "Create", icon: SquarePen, onClick: () => openNewIssue() },
+            { type: "link", to: "/agents/all", label: "Agents", icon: Users },
+            {
+              type: "link",
+              to: "/inbox",
+              label: "Inbox",
+              icon: Inbox,
+              badge: inboxBadge.inbox,
+            },
+          ]
+        : [
+            { type: "link", to: "/dashboard", label: "Home", icon: House },
+            { type: "link", to: "/issues", label: "Work", icon: CircleDot },
+            { type: "link", to: "/cos", label: "Ask", icon: MessageSquare },
+            {
+              type: "link",
+              to: "/decisions",
+              label: "Decisions",
+              icon: ShieldQuestion,
+              badge: decisionsBadge,
+            },
+            { type: "link", to: "/agents", label: "Team", icon: Users },
+          ],
+    [isMk, openNewIssue, inboxBadge.inbox, decisionsBadge],
   );
 
   return (

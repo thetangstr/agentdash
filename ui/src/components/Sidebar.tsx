@@ -19,7 +19,20 @@ import {
   Settings,
   CreditCard,
   PackageCheck,
+  MessageSquare,
+  Users,
+  ChevronRight,
+  Clock3,
+  Puzzle,
+  Cpu,
+  FlaskConical,
+  ScrollText,
+  Activity,
+  Monitor,
+  Download,
+  Upload,
 } from "lucide-react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
@@ -33,9 +46,12 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { useCapabilities } from "../hooks/useCapability";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
+import { cn } from "../lib/utils";
 
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
@@ -46,6 +62,7 @@ export function Sidebar() {
   // UX-7 (GH #788): the legacy inbox badge only matters where the Inbox still
   // exists — gating the hook skips its six queries on the default profile.
   const inboxBadge = useInboxBadge(selectedCompanyId, showMyAgentLink);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
     queryFn: () => instanceSettingsApi.getExperimental(),
@@ -72,6 +89,11 @@ export function Sidebar() {
   // issues assigned to you with a manual origin. Same query key as Home, so
   // the sidebar and both pages read one answer.
   const decisionsBadge = useDecisionsBadge(selectedCompanyId, !showMyAgentLink);
+
+  // UX-6 (#787) review: the /instance/settings links are instance-admin only —
+  // the same signal InstanceAccess uses, via the shared capabilities query.
+  const { data: capabilities } = useCapabilities(selectedCompanyId);
+  const isInstanceAdmin = capabilities?.isInstanceAdmin === true;
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -115,30 +137,37 @@ export function Sidebar() {
             liveCount={liveRunCount}
           />
           {showMyAgentLink ? (
-            <SidebarNavItem to="/my-agent" label="My Agent" icon={Bot} />
-          ) : null}
-          <SidebarNavItem to="/guides" label="Guides" icon={BookOpen} />
-          {showOverrideLink ? (
-            <SidebarNavItem to="/inbox/override" label="Override" icon={ShieldAlert} />
-          ) : null}
-          {/* AgentDash: UX-7 (GH #788) — Decisions on the default profile;
-              the tabbed Inbox stays exactly as it was on agentdash_mk. */}
-          {showMyAgentLink ? (
-            <SidebarNavItem
-              to="/inbox"
-              label="Inbox"
-              icon={Inbox}
-              badge={inboxBadge.inbox}
-              badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
-              alert={inboxBadge.failedRuns > 0}
-            />
+            <>
+              <SidebarNavItem to="/my-agent" label="My Agent" icon={Bot} />
+              <SidebarNavItem to="/guides" label="Guides" icon={BookOpen} />
+              {showOverrideLink ? (
+                <SidebarNavItem to="/inbox/override" label="Override" icon={ShieldAlert} />
+              ) : null}
+              <SidebarNavItem
+                to="/inbox"
+                label="Inbox"
+                icon={Inbox}
+                badge={inboxBadge.inbox}
+                badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+                alert={inboxBadge.failedRuns > 0}
+              />
+            </>
           ) : (
-            <SidebarNavItem
-              to="/decisions"
-              label="Decisions"
-              icon={ShieldQuestion}
-              badge={decisionsBadge}
-            />
+            <>
+              {/* AgentDash: UX-6 (#787) — six-item sidebar for the default
+                  profile; the Decisions badge is #817's useDecisionsBadge so
+                  the sidebar, Home and the page read one number. */}
+              <SidebarNavItem to="/cos" label="Ask" icon={MessageSquare} />
+              <SidebarNavItem to="/issues" label="Work" icon={CircleDot} />
+              <SidebarNavItem
+                to="/decisions"
+                label="Decisions"
+                icon={ShieldQuestion}
+                badge={decisionsBadge}
+              />
+              <SidebarNavItem to="/shipped" label="Shipped" icon={PackageCheck} />
+              <SidebarNavItem to="/agents" label="Team" icon={Users} />
+            </>
           )}
           <PluginSlotOutlet
             slotTypes={["sidebar"]}
@@ -149,32 +178,109 @@ export function Sidebar() {
           />
         </div>
 
-        <SidebarSection label="Work">
-          <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
-          {/* AgentDash: UX-2 (#783) — default profile only; MK keeps its sidebar. */}
-          {showMyAgentLink ? null : (
-            <SidebarNavItem to="/shipped" label="Shipped" icon={PackageCheck} />
-          )}
-          <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
-          <SidebarNavItem to="/goals" label="Goals" icon={Target} />
-          {showWorkspacesLink ? (
-            <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
-          ) : null}
-        </SidebarSection>
+        {showMyAgentLink ? (
+          <>
+            <SidebarSection label="Work">
+              <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+              {/* AgentDash: UX-2 (#783) — default profile only; MK keeps its sidebar. */}
+              <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
+              <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+              {showWorkspacesLink ? (
+                <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
+              ) : null}
+            </SidebarSection>
 
-        <SidebarProjects />
+            <SidebarProjects />
 
-        <SidebarAgents />
+            <SidebarAgents />
 
-        <SidebarSection label="Company">
-          <SidebarNavItem to="/org" label="Org" icon={Network} />
-          <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
-          <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
-          <SidebarNavItem to="/evaluation" label="Evaluation" icon={Gauge} />
-          <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
-          <SidebarNavItem to="/activity" label="Activity" icon={History} />
-          <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
-        </SidebarSection>
+            <SidebarSection label="Company">
+              <SidebarNavItem to="/org" label="Org" icon={Network} />
+              <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+              <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+              <SidebarNavItem to="/evaluation" label="Evaluation" icon={Gauge} />
+              <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
+              <SidebarNavItem to="/activity" label="Activity" icon={History} />
+              <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+            </SidebarSection>
+          </>
+        ) : (
+          <>
+            {/* Advanced: everything the six items don't cover, collapsed by
+                default. No "Inbox" entry — on this profile /inbox redirects
+                to /decisions (UX-7), so a second label for it would be noise. */}
+            <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium uppercase tracking-widest font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors">
+                <ChevronRight
+                  className={cn(
+                    "h-3 w-3 transition-transform",
+                    advancedOpen && "rotate-90",
+                  )}
+                />
+                Advanced
+              </CollapsibleTrigger>
+              <CollapsibleContent className="flex flex-col gap-0.5 mt-0.5">
+                <SidebarNavItem to="/guides" label="Guides" icon={BookOpen} />
+                <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
+                <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+                {showWorkspacesLink ? (
+                  <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
+                ) : null}
+                <SidebarNavItem to="/org" label="Org" icon={Network} />
+                <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+                <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+                <SidebarNavItem to="/evaluation" label="Evaluation" icon={Gauge} />
+                <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
+                <SidebarNavItem to="/activity" label="Activity" icon={History} />
+                <SidebarNavItem to="/company/import" label="Import" icon={Upload} />
+                <SidebarNavItem to="/company/export" label="Export" icon={Download} />
+                <SidebarNavItem
+                  to="/company/settings/environments"
+                  label="Environments"
+                  icon={Monitor}
+                />
+                <SidebarNavItem
+                  to="/company/settings/health"
+                  label="Health"
+                  icon={Activity}
+                />
+                {isInstanceAdmin ? (
+                  <>
+                    <SidebarNavItem
+                      to="/instance/settings/heartbeats"
+                      label="Heartbeats"
+                      icon={Clock3}
+                    />
+                    <SidebarNavItem
+                      to="/instance/settings/plugins"
+                      label="Plugins"
+                      icon={Puzzle}
+                    />
+                    <SidebarNavItem
+                      to="/instance/settings/adapters"
+                      label="Adapters"
+                      icon={Cpu}
+                    />
+                    <SidebarNavItem
+                      to="/instance/settings/experimental"
+                      label="Experimental"
+                      icon={FlaskConical}
+                    />
+                    <SidebarNavItem
+                      to="/instance/settings/changelog"
+                      label="Changelog"
+                      icon={ScrollText}
+                    />
+                  </>
+                ) : null}
+              </CollapsibleContent>
+            </Collapsible>
+
+            <div className="mt-auto border-t border-border pt-2">
+              <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+            </div>
+          </>
+        )}
 
         <PluginSlotOutlet
           slotTypes={["sidebarPanel"]}

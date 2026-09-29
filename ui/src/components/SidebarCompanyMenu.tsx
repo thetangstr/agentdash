@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, LogOut, Settings, UserPlus } from "lucide-react";
+import { ChevronDown, LogOut, Plus, Settings, UserPlus } from "lucide-react";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
+import { healthApi } from "@/api/health";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCompany } from "@/context/CompanyContext";
+import { useDialogActions } from "../context/DialogContext";
 import { queryKeys } from "@/lib/queryKeys";
 import { useSidebar } from "../context/SidebarContext";
 
@@ -24,7 +26,8 @@ interface SidebarCompanyMenuProps {
 export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompanyMenuProps = {}) {
   const [internalOpen, setInternalOpen] = useState(false);
   const queryClient = useQueryClient();
-  const { selectedCompany } = useCompany();
+  const { selectedCompany, companies } = useCompany();
+  const { openOnboarding } = useDialogActions();
   const { isMobile, setSidebarOpen } = useSidebar();
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
@@ -33,6 +36,20 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
     queryFn: () => authApi.getSession(),
     retry: false,
   });
+  // AgentDash: UX-6 review (#787) — CompanyRail hides itself for a
+  // single-company default-profile user, which would orphan the rail's "Add
+  // company" button. The menu keeps the path reachable on self-hosted
+  // instances; hosted agentdash.cloud boxes bind exactly one workspace.
+  const { data: health } = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+    staleTime: 60_000,
+  });
+  const showNewCompany =
+    companies.filter((company) => company.status !== "archived").length <= 1 &&
+    selectedCompany?.productProfile !== "agentdash_mk" &&
+    health?.hostedBox !== true;
 
   const signOutMutation = useMutation({
     mutationFn: () => authApi.signOut(),
@@ -90,6 +107,17 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
             <span>Company settings</span>
           </Link>
         </DropdownMenuItem>
+        {showNewCompany ? (
+          <DropdownMenuItem
+            onClick={() => {
+              closeNavigationChrome();
+              openOnboarding();
+            }}
+          >
+            <Plus className="size-4" />
+            <span>New company</span>
+          </DropdownMenuItem>
+        ) : null}
         {session?.session ? (
           <>
             <DropdownMenuSeparator />

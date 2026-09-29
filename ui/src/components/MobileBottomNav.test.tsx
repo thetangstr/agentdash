@@ -28,17 +28,21 @@ vi.mock("@/lib/router", () => ({
   useLocation: () => ({ pathname: "/issues" }),
 }));
 
+const mockCompany = vi.hoisted(() => ({
+  current: {
+    id: "company-1",
+    issuePrefix: "PAP",
+    name: "Paperclip",
+    // The Inbox badge pairing these tests exercise only renders on MK now —
+    // the default profile's five-item nav has no Inbox item (UX-6).
+    productProfile: "agentdash_mk",
+  } as Record<string, unknown>,
+}));
+
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    // AgentDash: UX-7 (GH #788) — the Inbox slot only survives on the
-    // agentdash_mk profile; default shows Decisions.
-    selectedCompany: {
-      id: "company-1",
-      issuePrefix: "PAP",
-      name: "Paperclip",
-      productProfile: "agentdash_mk",
-    },
+    selectedCompany: mockCompany.current,
   }),
 }));
 
@@ -116,5 +120,34 @@ describe("MobileBottomNav Inbox badge", () => {
     const badge = inboxLink?.querySelector("span.rounded-full");
     expect(badge?.className).toContain("text-text-inverse");
     expect(badge?.className).not.toContain("text-primary-foreground");
+  });
+
+  // AgentDash: UX-6 (#787) — the default profile gets the five-item nav.
+  it("renders Home, Work, Ask, Decisions, Team on the default profile", () => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    try {
+      mounted = renderNav(false);
+
+      const links = [...mounted.container.querySelectorAll("a")];
+      const byLabel = (text: string) =>
+        links.find((anchor) => anchor.textContent?.includes(text));
+      expect(byLabel("Home")?.getAttribute("href")).toBe("/dashboard");
+      expect(byLabel("Work")?.getAttribute("href")).toBe("/issues");
+      expect(byLabel("Ask")?.getAttribute("href")).toBe("/cos");
+      expect(byLabel("Decisions")?.getAttribute("href")).toBe("/decisions");
+      expect(byLabel("Team")?.getAttribute("href")).toBe("/agents");
+      // The Decisions badge reads useDecisionsBadge (mocked to 0), not the
+      // inbox badge (7) — no stray "7" on the item.
+      expect(byLabel("Decisions")?.textContent).toBe("Decisions");
+      expect(byLabel("Inbox")).toBeUndefined();
+      expect(byLabel("Create")).toBeUndefined();
+    } finally {
+      mockCompany.current = {
+        id: "company-1",
+        issuePrefix: "PAP",
+        name: "Paperclip",
+        productProfile: "agentdash_mk",
+      };
+    }
   });
 });
