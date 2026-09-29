@@ -52,6 +52,26 @@ describe("paperclip MCP tools", () => {
     );
   });
 
+  // AgentDash: the refined create contract survives the MCP wrapper.
+  it("create_issue forwards a complete ExecOS origin and refuses a half one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "issue-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const tool = getTool("create_issue");
+    expect(tool.schema.shape.originKind).toBeDefined();
+
+    await tool.execute({ title: "ExecOS request", originKind: "execos_request", originId: "req_1" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe(
+      "http://localhost:3100/api/companies/11111111-1111-1111-1111-111111111111/issues",
+    );
+    expect(JSON.parse(String(init.body))).toMatchObject({ originKind: "execos_request", originId: "req_1" });
+
+    const refused = await tool.execute({ title: "ExecOS request", originKind: "execos_request" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(refused.content[0]?.text).toContain("originId is required");
+  });
+
   it("uses default company id for company-scoped list tools", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockJsonResponse([{ id: "issue-1" }]),

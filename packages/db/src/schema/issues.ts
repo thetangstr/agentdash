@@ -78,6 +78,12 @@ export const issues = pgTable(
     parentIdx: index("issues_company_parent_idx").on(table.companyId, table.parentId),
     projectIdx: index("issues_company_project_idx").on(table.companyId, table.projectId),
     originIdx: index("issues_company_origin_idx").on(table.companyId, table.originKind, table.originId),
+    // AgentDash: one ExecOS request is one issue per company, even when
+    // callers race between lookup and create. Migration 0138 (byte-identical
+    // to the ExecOS branch's 0115_clean_havok so existing rows are recognised).
+    execosRequestOriginIdx: uniqueIndex("issues_execos_request_origin_uq")
+      .on(table.companyId, table.originKind, table.originId)
+      .where(sql`${table.originKind} = 'execos_request' and ${table.originId} is not null`),
     projectWorkspaceIdx: index("issues_company_project_workspace_idx").on(table.companyId, table.projectWorkspaceId),
     executionWorkspaceIdx: index("issues_company_execution_workspace_idx").on(table.companyId, table.executionWorkspaceId),
     identifierIdx: uniqueIndex("issues_identifier_idx").on(table.identifier),

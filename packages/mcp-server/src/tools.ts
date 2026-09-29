@@ -100,9 +100,13 @@ const upsertDocumentToolSchema = z.object({
   baseRevisionId: z.string().uuid().nullable().optional(),
 });
 
+// AgentDash: createIssueSchema carries a refinement (ExecOS origin is both or
+// neither), which makes it a ZodEffects. `makeTool` needs a plain ZodObject to
+// advertise `.shape`, so the tool merges the inner object and the create_issue
+// handler re-runs the canonical schema to keep the invariant.
 const createIssueToolSchema = z.object({
   companyId: companyIdOptional,
-}).merge(createIssueSchema);
+}).merge(createIssueSchema.innerType());
 
 const updateIssueToolSchema = z.object({
   issueId: issueIdSchema,
@@ -684,8 +688,11 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       "create_issue",
       "Create a new issue",
       createIssueToolSchema,
-      async ({ companyId, ...body }) =>
-        client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/issues`, { body }),
+      async ({ companyId, ...input }) => {
+        // AgentDash: enforce the refined create contract (see createIssueToolSchema).
+        const body = createIssueSchema.parse(input);
+        return client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/issues`, { body });
+      },
     ),
     makeTool(
       "update_issue",
