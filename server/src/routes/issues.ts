@@ -1,20 +1,19 @@
+import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
 import {
   issueCommentActions,
   IssueCommentPolicyRefusal,
   summarizeIssueRelationForActivity,
   summarizeIssueReferenceActivityDetails,
-  isClosedIssueStatus,
-  shouldImplicitlyMoveCommentedIssueToTodo,
 } from "../services/issue-mutation-actions.js";
 import { dispatchResolvedInteractionContinuation } from "../services/human-control/question-continuation.js";
 import { assertHostExecutionConfigAllowed } from "../services/adapter-host-execution-policy.js";
 import fs from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { issueExecutionDecisions, issues } from "@paperclipai/db";
+import { issues } from "@paperclipai/db";
 import { assertProjectIdVisible, projectScopedVisibilityCondition } from "./visibility.js";
 import { decodeShippedCursor } from "../services/work-products.js";
 import {
@@ -40,7 +39,6 @@ import {
   respondIssueThreadInteractionSchema,
   updateIssueWorkProductSchema,
   upsertIssueDocumentSchema,
-  updateIssueSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
   type ExecutionWorkspace,
@@ -51,12 +49,10 @@ import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import type { StorageService } from "../storage/types.js";
-import { resolveAgentClosingStatus } from "../services/issue-blocked-declaration.js";
 import { validate } from "../middleware/validate.js";
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { featureFlagsService } from "../services/feature-flags.js";
-import { dodGuardService } from "../services/dod-guard.js";
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.js";
 import { cosVerdictOrchestrator } from "../services/cos-verdict-orchestrator.js";
 import * as serviceIndex from "../services/index.js";
@@ -108,16 +104,11 @@ import { feedbackService } from "../services/feedback.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { environmentService } from "../services/environments.js";
 import {
-  applyIssueExecutionPolicyTransition,
   normalizeIssueExecutionPolicy,
-  parseIssueExecutionState,
 } from "../services/issue-execution-policy.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
-const updateIssueRouteSchema = updateIssueSchema.extend({
-  interrupt: z.boolean().optional(),
-});
 
 /**
  * AgentDash (GH #745 review): server-side dedup key for assistant-grant
@@ -147,71 +138,6 @@ function deriveAssistantIssueRequestId(input: {
     .slice(0, 32);
 }
 
-type ParsedExecutionState = NonNullable<ReturnType<typeof parseIssueExecutionState>>;
-type NormalizedExecutionPolicy = NonNullable<ReturnType<typeof normalizeIssueExecutionPolicy>>;
-type ActivityIssueRelationSummary = {
-  id: string;
-  identifier: string | null;
-  title: string;
-};
-type ActivityExecutionParticipant = Pick<
-  NormalizedExecutionPolicy["stages"][number]["participants"][number],
-  "type" | "agentId" | "userId"
->;
-type ExecutionStageWakeContext = {
-  wakeRole: "reviewer" | "approver" | "executor";
-  stageId: string | null;
-  stageType: ParsedExecutionState["currentStageType"];
-  currentParticipant: ParsedExecutionState["currentParticipant"];
-  returnAssignee: ParsedExecutionState["returnAssignee"];
-  reviewRequest: ParsedExecutionState["reviewRequest"];
-  lastDecisionOutcome: ParsedExecutionState["lastDecisionOutcome"];
-  allowedActions: string[];
-};
-
-function executionPrincipalsEqual(
-  left: ParsedExecutionState["currentParticipant"] | null,
-  right: ParsedExecutionState["currentParticipant"] | null,
-) {
-  if (!left || !right || left.type !== right.type) return false;
-  return left.type === "agent" ? left.agentId === right.agentId : left.userId === right.userId;
-}
-
-function buildExecutionStageWakeContext(input: {
-  state: ParsedExecutionState;
-  wakeRole: ExecutionStageWakeContext["wakeRole"];
-  allowedActions: string[];
-}): ExecutionStageWakeContext {
-  return {
-    wakeRole: input.wakeRole,
-    stageId: input.state.currentStageId,
-    stageType: input.state.currentStageType,
-    currentParticipant: input.state.currentParticipant,
-    returnAssignee: input.state.returnAssignee,
-    reviewRequest: input.state.reviewRequest ?? null,
-    lastDecisionOutcome: input.state.lastDecisionOutcome,
-    allowedActions: input.allowedActions,
-  };
-}
-
-function activityExecutionParticipantKey(participant: ActivityExecutionParticipant): string {
-  return participant.type === "agent" ? `agent:${participant.agentId}` : `user:${participant.userId}`;
-}
-
-function summarizeExecutionParticipants(
-  policy: NormalizedExecutionPolicy | null,
-  stageType: NormalizedExecutionPolicy["stages"][number]["type"],
-): ActivityExecutionParticipant[] {
-  const stage = policy?.stages.find((candidate) => candidate.type === stageType);
-  return (
-    stage?.participants.map((participant) => ({
-      type: participant.type,
-      agentId: participant.agentId ?? null,
-      userId: participant.userId ?? null,
-    })) ?? []
-  );
-}
-
 function isExplicitResumeCapableStatus(status: string | null | undefined) {
   return status === "done" || status === "blocked" || status === "todo" || status === "in_progress";
 }
@@ -223,129 +149,8 @@ function queueResolvedInteractionContinuationWakeup(input: Parameters<typeof dis
   }, "failed to wake assignee on issue interaction resolution"));
 }
 
-function diffExecutionParticipants(
-  previousPolicy: NormalizedExecutionPolicy | null,
-  nextPolicy: NormalizedExecutionPolicy | null,
-  stageType: NormalizedExecutionPolicy["stages"][number]["type"],
-) {
-  const previousParticipants = summarizeExecutionParticipants(previousPolicy, stageType);
-  const nextParticipants = summarizeExecutionParticipants(nextPolicy, stageType);
-  const previousByKey = new Map(previousParticipants.map((participant) => [
-    activityExecutionParticipantKey(participant),
-    participant,
-  ]));
-  const nextByKey = new Map(nextParticipants.map((participant) => [
-    activityExecutionParticipantKey(participant),
-    participant,
-  ]));
-
-  return {
-    participants: nextParticipants,
-    addedParticipants: nextParticipants.filter((participant) => !previousByKey.has(activityExecutionParticipantKey(participant))),
-    removedParticipants: previousParticipants.filter((participant) => !nextByKey.has(activityExecutionParticipantKey(participant))),
-  };
-}
-
-function buildExecutionStageWakeup(input: {
-  issueId: string;
-  previousState: ParsedExecutionState | null;
-  nextState: ParsedExecutionState | null;
-  interruptedRunId: string | null;
-  requestedByActorType: "user" | "agent";
-  requestedByActorId: string;
-}) {
-  const { issueId, previousState, nextState, interruptedRunId } = input;
-  if (!nextState) return null;
-
-  if (nextState.status === "pending") {
-    const agentId =
-      nextState.currentParticipant?.type === "agent" ? (nextState.currentParticipant.agentId ?? null) : null;
-    const stageChanged =
-      previousState?.status !== "pending" ||
-      previousState?.currentStageId !== nextState.currentStageId ||
-      !executionPrincipalsEqual(previousState?.currentParticipant ?? null, nextState.currentParticipant ?? null);
-    if (!agentId || !stageChanged) return null;
-
-    const reason =
-      nextState.currentStageType === "approval" ? "execution_approval_requested" : "execution_review_requested";
-    const executionStage = buildExecutionStageWakeContext({
-      state: nextState,
-      wakeRole: nextState.currentStageType === "approval" ? "approver" : "reviewer",
-      allowedActions: ["approve", "request_changes"],
-    });
-
-    return {
-      agentId,
-      wakeup: {
-        source: "assignment" as const,
-        triggerDetail: "system" as const,
-        reason,
-        payload: {
-          issueId,
-          mutation: "update",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-        requestedByActorType: input.requestedByActorType,
-        requestedByActorId: input.requestedByActorId,
-        contextSnapshot: {
-          issueId,
-          taskId: issueId,
-          wakeReason: reason,
-          source: "issue.execution_stage",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-      },
-    };
-  }
-
-  if (nextState.status === "changes_requested") {
-    const agentId = nextState.returnAssignee?.type === "agent" ? (nextState.returnAssignee.agentId ?? null) : null;
-    const becameChangesRequested =
-      previousState?.status !== "changes_requested" ||
-      previousState?.lastDecisionId !== nextState.lastDecisionId ||
-      !executionPrincipalsEqual(previousState?.returnAssignee ?? null, nextState.returnAssignee ?? null);
-    if (!agentId || !becameChangesRequested) return null;
-
-    const executionStage = buildExecutionStageWakeContext({
-      state: nextState,
-      wakeRole: "executor",
-      allowedActions: ["address_changes", "resubmit"],
-    });
-
-    return {
-      agentId,
-      wakeup: {
-        source: "assignment" as const,
-        triggerDetail: "system" as const,
-        reason: "execution_changes_requested",
-        payload: {
-          issueId,
-          mutation: "update",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-        requestedByActorType: input.requestedByActorType,
-        requestedByActorId: input.requestedByActorId,
-        contextSnapshot: {
-          issueId,
-          taskId: issueId,
-          wakeReason: "execution_changes_requested",
-          source: "issue.execution_stage",
-          executionStage,
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-        },
-      },
-    };
-  }
-
-  return null;
-}
-
-// AgentDash (security, #719): an issue's assigneeAdapterOverrides.adapterConfig
-// merges into the assignee's run config, so it carries the same host-execution
-// gate as the agent's own adapterConfig. Compared against the stored override.
+// AgentDash (security, #719): issue override config carries the same host
+// execution gate as the assignee adapter's config.
 function assertIssueOverrideHostExecutionAllowed(req: Request, storedOverrides: unknown) {
   const overrides = (req.body as Record<string, unknown> | undefined)?.assigneeAdapterOverrides;
   if (typeof overrides !== "object" || overrides === null) return;
@@ -396,7 +201,6 @@ export function issueRoutes(
   // AgentDash: goals-eval-hitl
   const verdictsSvc = verdictsService(db);
   const featureFlagsSvc = featureFlagsService(db);
-  const dodGuardSvc = dodGuardService(db, featureFlagsSvc);
   const reviewerAutoHireSvc = cosReviewerAutoHire(db);
   const cosVerdictOrchestratorSvc = cosVerdictOrchestrator(db, {
     verdicts: verdictsSvc,
@@ -521,19 +325,21 @@ export function issueRoutes(
     return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
   }
 
-  async function assertCanAssignTasks(req: Request, companyId: string) {
-    assertCompanyAccess(req, companyId);
+  async function assertCanAssignTasks(req: Request, companyId: string, policyDb?: Db) {
+    // Composed acceptance is already bound to the authenticated source company.
+    // Keep refusal telemetry outside its read-only policy preparation.
+    if (!policyDb) assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-      const allowed = await access.canUser(companyId, req.actor.userId, "tasks:assign");
+      const allowed = await (policyDb ? accessService(policyDb) : access).canUser(companyId, req.actor.userId, "tasks:assign");
       if (!allowed) throw forbidden("Missing permission: tasks:assign");
       return;
     }
     if (req.actor.type === "agent") {
       if (!req.actor.agentId) throw forbidden("Agent authentication required");
-      const allowedByGrant = await access.hasPermission(companyId, "agent", req.actor.agentId, "tasks:assign");
+      const allowedByGrant = await (policyDb ? accessService(policyDb) : access).hasPermission(companyId, "agent", req.actor.agentId, "tasks:assign");
       if (allowedByGrant) return;
-      const actorAgent = await agentsSvc.getById(req.actor.agentId);
+      const actorAgent = await (policyDb ? agentService(policyDb) : agentsSvc).getById(req.actor.agentId);
       if (actorAgent && actorAgent.companyId === companyId && canCreateAgentsLegacy(actorAgent)) return;
       throw forbidden("Missing permission: tasks:assign");
     }
@@ -2161,863 +1967,58 @@ export function issueRoutes(
   });
 
   router.patch("/issues/:id", validate(updateIssueRouteSchema), async (req, res) => {
-    const id = req.params.id as string;
-    const existing = await svc.getById(id);
-    if (!existing) {
-      res.status(404).json({ error: "Issue not found" });
-      return;
-    }
+    const existing = await svc.getById(req.params.id as string);
+    if (!existing) throw notFound("Issue not found");
     assertCompanyAccess(req, existing.companyId);
-    await assertHostWorkspaceCommandAuthority(
-      db,
-      req,
-      existing.companyId,
-      collectIssueWorkspaceCommandPaths(req.body, {
-        executionWorkspaceSettings: existing.executionWorkspaceSettings,
-        assigneeAdapterOverrides: existing.assigneeAdapterOverrides,
-      }),
-    );
-    assertIssueOverrideHostExecutionAllowed(req, existing.assigneeAdapterOverrides);
-    // AGE-113: overrides change which adapter/model runs this issue. Only a
-    // human may set or clear them, on create or update alike.
-    if (req.actor.type === "agent" && req.body.assigneeAdapterOverrides !== undefined) {
-      res.status(403).json({
-        error: "Agent-authenticated callers cannot change assigneeAdapterOverrides; only a human with agent-configuration authority may change adapter or model configuration",
-      });
-      return;
-    }
-    if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
-
-    const actor = getActorInfo(req);
-    const isClosed = isClosedIssueStatus(existing.status);
-    const isBlocked = existing.status === "blocked";
-    const normalizedAssigneeAgentId = await normalizeIssueAssigneeAgentReference(
-      existing.companyId,
-      req.body.assigneeAgentId as string | null | undefined,
-    );
-    const titleOrDescriptionChanged = req.body.title !== undefined || req.body.description !== undefined;
-    const existingRelations =
-      Array.isArray(req.body.blockedByIssueIds)
-        ? await svc.getRelationSummaries(existing.id)
-        : null;
-    const {
-      comment: commentBody,
-      reviewRequest,
-      reopen: reopenRequested,
-      resume: resumeRequested,
-      interrupt: interruptRequested,
-      hiddenAt: hiddenAtRaw,
-      ...updateFields
-    } = req.body;
-    const shouldCancelActiveRunForCancelledStatus =
-      existing.status !== "cancelled" && updateFields.status === "cancelled";
-    if (resumeRequested === true && !commentBody) {
-      res.status(400).json({ error: "Follow-up intent requires a comment" });
-      return;
-    }
-    if (resumeRequested === true && !(await assertExplicitResumeIntentAllowed(req, res, existing))) return;
-    if (resumeRequested !== true && reopenRequested === true && req.actor.type === "agent") {
-      if (!(await assertExplicitResumeIntentAllowed(req, res, existing))) return;
-    }
-    await assertIssueEnvironmentSelection(existing.companyId, updateFields.executionWorkspaceSettings?.environmentId);
-    const requestedAssigneeAgentId =
-      normalizedAssigneeAgentId === undefined ? existing.assigneeAgentId : normalizedAssigneeAgentId;
-    const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
-    const effectiveMoveToTodoRequested =
-      explicitMoveToTodoRequested ||
-      (!!commentBody &&
-        shouldImplicitlyMoveCommentedIssueToTodo({
-          issueStatus: existing.status,
-          assigneeAgentId: requestedAssigneeAgentId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-        }));
-    const updateReferenceSummaryBefore = titleOrDescriptionChanged
-      ? await issueReferencesSvc.listIssueReferenceSummary(existing.id)
-      : null;
-    const hasUnresolvedFirstClassBlockers =
-      isBlocked && effectiveMoveToTodoRequested
-        ? (await svc.getDependencyReadiness(existing.id)).unresolvedBlockerCount > 0
-        : false;
-    if (resumeRequested === true && isBlocked && hasUnresolvedFirstClassBlockers) {
-      res.status(409).json({ error: "Issue follow-up blocked by unresolved blockers" });
-      return;
-    }
-    let interruptedRunId: string | null = null;
-    const closedExecutionWorkspace = await getClosedIssueExecutionWorkspace(existing);
-    const isAgentWorkUpdate =
-      req.actor.type === "agent" && (Object.keys(updateFields).length > 0 || reviewRequest !== undefined);
-
-    if (closedExecutionWorkspace && (commentBody || isAgentWorkUpdate)) {
-      respondClosedIssueExecutionWorkspace(res, closedExecutionWorkspace);
-      return;
-    }
-
-    if (interruptRequested) {
-      if (!commentBody) {
-        res.status(400).json({ error: "Interrupt is only supported when posting a comment" });
-        return;
-      }
-      if (req.actor.type !== "board") {
-        res.status(403).json({ error: "Only board users can interrupt active runs from issue comments" });
-        return;
-      }
-
-      const runToInterrupt = await resolveActiveIssueRun(existing);
-      if (runToInterrupt) {
-        const cancelled = await heartbeat.cancelRun(runToInterrupt.id);
-        if (cancelled) {
-          interruptedRunId = cancelled.id;
-          await logActivity(db, {
-            companyId: cancelled.companyId,
-            actorType: actor.actorType,
-            actorId: actor.actorId,
-            agentId: actor.agentId,
-            runId: actor.runId,
-            action: "heartbeat.cancelled",
-            entityType: "heartbeat_run",
-            entityId: cancelled.id,
-            details: { agentId: cancelled.agentId, source: "issue_comment_interrupt", issueId: existing.id },
-          });
-        }
-      }
-    }
-
-    const runToCancelForCancelledStatus = shouldCancelActiveRunForCancelledStatus
-      ? await resolveActiveIssueRun(existing)
-      : null;
-
-    if (hiddenAtRaw !== undefined) {
-      updateFields.hiddenAt = hiddenAtRaw ? new Date(hiddenAtRaw) : null;
-    }
-    if (
-      commentBody &&
-      effectiveMoveToTodoRequested &&
-      (isClosed || (isBlocked && !hasUnresolvedFirstClassBlockers)) &&
-      updateFields.status === undefined
-    ) {
-      updateFields.status = "todo";
-    }
-    if (req.body.executionPolicy !== undefined) {
-      updateFields.executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
-    }
-    const previousExecutionPolicy = normalizeIssueExecutionPolicy(existing.executionPolicy ?? null);
-    const nextExecutionPolicy =
-      updateFields.executionPolicy !== undefined
-        ? (updateFields.executionPolicy as NormalizedExecutionPolicy | null)
-        : previousExecutionPolicy;
-    if (normalizedAssigneeAgentId !== undefined) {
-      updateFields.assigneeAgentId = normalizedAssigneeAgentId;
-    }
-
-    // An agent that just said "BLOCKED" does not get to also say "done".
-    //
-    // The two arrive as separate calls — comment, then status — so the comment
-    // has to be read back rather than taken from this request. Only an agent
-    // closing an issue is checked; a person closing one an agent called blocked
-    // is overruling it knowingly, which is theirs to do.
-    if (actor.actorType === "agent" && actor.agentId && updateFields.status === "done") {
-      // Optional call, not optional behaviour: this route takes an injected
-      // service, so a caller with a partial one must still be able to update an
-      // issue. The guard degrades to the comment on this request rather than
-      // failing the write it was only meant to correct.
-      const latestOwnCommentBody =
-        typeof svc.latestAgentCommentBody === "function"
-          ? await svc.latestAgentCommentBody(existing.id, actor.agentId).catch(() => null)
-          : null;
-      const resolved = resolveAgentClosingStatus({
-        actorIsAgent: true,
-        requestedStatus: "done",
-        commentBody,
-        latestOwnCommentBody,
-      });
-      if (resolved.overridden) {
-        updateFields.status = "blocked";
-        logger.info(
-          { issueId: existing.id, agentId: actor.agentId },
-          "issue.update: agent declared blocked, refusing to close",
-        );
-      }
-    }
-
-    const transition = applyIssueExecutionPolicyTransition({
-      issue: existing,
-      policy: nextExecutionPolicy,
-      requestedStatus: typeof updateFields.status === "string" ? updateFields.status : undefined,
-      requestedAssigneePatch: {
-        assigneeAgentId: normalizedAssigneeAgentId,
-        assigneeUserId:
-          req.body.assigneeUserId === undefined ? undefined : (req.body.assigneeUserId as string | null),
+    const actions = issuePatchActions(db, heartbeat, {
+      statusChanged: (id, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(id, before, after),
+      completed: async agentId => {
+        const tc = getTelemetryClient();
+        if (!tc) return;
+        const agent = await agentsSvc.getById(agentId);
+        if (agent) trackAgentTaskCompleted(tc, { agentRole: agent.role, agentId: agent.id, adapterType: agent.adapterType,
+          model: typeof agent.adapterConfig?.model === "string" ? agent.adapterConfig.model : undefined });
       },
-      actor: {
-        agentId: actor.agentId ?? null,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      },
-      commentBody,
-      reviewRequest: reviewRequest === undefined ? undefined : reviewRequest,
     });
-    const decisionId = transition.decision ? randomUUID() : null;
-    if (decisionId) {
-      const nextExecutionState = transition.patch.executionState;
-      if (!nextExecutionState || typeof nextExecutionState !== "object") {
-        throw new Error("Execution policy decision patch is missing executionState");
-      }
-      transition.patch.executionState = {
-        ...nextExecutionState,
-        lastDecisionId: decisionId,
-      };
-    }
-    Object.assign(updateFields, transition.patch);
-    if (reviewRequest !== undefined && transition.patch.executionState === undefined) {
-      const existingExecutionState = parseIssueExecutionState(existing.executionState);
-      if (!existingExecutionState || existingExecutionState.status !== "pending") {
-        if (reviewRequest !== null) {
-          res.status(422).json({ error: "reviewRequest requires an active review or approval stage" });
-          return;
-        }
-      } else {
-        updateFields.executionState = {
-          ...existingExecutionState,
-          reviewRequest,
-        };
-      }
-    }
-
-    const nextAssigneeAgentId =
-      updateFields.assigneeAgentId === undefined ? existing.assigneeAgentId : (updateFields.assigneeAgentId as string | null);
-    const nextAssigneeUserId =
-      updateFields.assigneeUserId === undefined ? existing.assigneeUserId : (updateFields.assigneeUserId as string | null);
-    const assigneeWillChange =
-      nextAssigneeAgentId !== existing.assigneeAgentId || nextAssigneeUserId !== existing.assigneeUserId;
-    const isAgentReturningIssueToCreator =
-      req.actor.type === "agent" &&
-      !!req.actor.agentId &&
-      existing.assigneeAgentId === req.actor.agentId &&
-      nextAssigneeAgentId === null &&
-      typeof nextAssigneeUserId === "string" &&
-      !!existing.createdByUserId &&
-      nextAssigneeUserId === existing.createdByUserId;
-
-    if (assigneeWillChange && !transition.workflowControlledAssignment) {
-      if (!isAgentReturningIssueToCreator) {
-        await assertCanAssignTasks(req, existing.companyId);
-      }
-    }
-
-    // AgentDash: goals-eval-hitl
-    // DoD guard: when leaving `backlog`, require Issue.definitionOfDone
-    // (gated per-tenant by feature_flags.dod_guard_enabled).
-    if (
-      typeof updateFields.status === "string" &&
-      existing.status === "backlog" &&
-      updateFields.status !== "backlog"
-    ) {
-      try {
-        await dodGuardSvc.assertDoDOrThrow(
-          existing.companyId,
-          "issue",
-          existing.id,
-          updateFields.status,
-          existing.status,
-        );
-      } catch (err) {
-        if (err instanceof HttpError && err.status === 422) {
-          res.status(422).json({
-            error: err.message,
-            ...(err.details && typeof err.details === "object" ? err.details : {}),
-          });
-          return;
-        }
-        throw err;
-      }
-    }
-
-    let issue;
     try {
-      if (transition.decision && decisionId) {
-        const decision = transition.decision;
-        issue = await db.transaction(async (tx) => {
-          const updated = await svc.update(
-            id,
-            {
-              ...updateFields,
-              actorAgentId: actor.agentId ?? null,
-              actorUserId: actor.actorType === "user" ? actor.actorId : null,
-            },
-            tx,
-          );
-          if (!updated) return null;
-
-          await tx.insert(issueExecutionDecisions).values({
-            id: decisionId,
-            companyId: updated.companyId,
-            issueId: updated.id,
-            stageId: decision.stageId,
-            stageType: decision.stageType,
-            actorAgentId: actor.agentId ?? null,
-            actorUserId: actor.actorType === "user" ? actor.actorId : null,
-            outcome: decision.outcome,
-            body: decision.body,
-            createdByRunId: actor.runId ?? null,
-          });
-
-          return updated;
-        });
-      } else {
-        issue = await svc.update(id, {
-          ...updateFields,
-          actorAgentId: actor.agentId ?? null,
-          actorUserId: actor.actorType === "user" ? actor.actorId : null,
-        });
-      }
-    } catch (err) {
-      if (err instanceof HttpError && err.status === 422) {
-        logger.warn(
-          {
-            issueId: id,
-            companyId: existing.companyId,
-            assigneePatch: {
-              assigneeAgentId: normalizedAssigneeAgentId === undefined ? "__omitted__" : normalizedAssigneeAgentId,
-              assigneeUserId:
-                req.body.assigneeUserId === undefined ? "__omitted__" : req.body.assigneeUserId,
-            },
-            currentAssignee: {
-              assigneeAgentId: existing.assigneeAgentId,
-              assigneeUserId: existing.assigneeUserId,
-            },
-            error: err.message,
-            details: err.details,
-          },
-          "issue update rejected with 422",
-        );
-      }
-      throw err;
-    }
-    if (!issue) {
-      res.status(404).json({ error: "Issue not found" });
-      return;
-    }
-
-    let cancelledStatusRunId: string | null = null;
-    if (runToCancelForCancelledStatus) {
-      try {
-        const cancelled = await heartbeat.cancelRun(runToCancelForCancelledStatus.id);
-        if (cancelled) {
-          cancelledStatusRunId = cancelled.id;
-          await logActivity(db, {
-            companyId: cancelled.companyId,
-            actorType: actor.actorType,
-            actorId: actor.actorId,
-            agentId: actor.agentId,
-            runId: actor.runId,
-            action: "heartbeat.cancelled",
-            entityType: "heartbeat_run",
-            entityId: cancelled.id,
-            details: { agentId: cancelled.agentId, source: "issue_status_cancelled", issueId: existing.id },
-          });
-        }
-      } catch (err) {
-        logger.warn({ err, issueId: existing.id, runId: runToCancelForCancelledStatus.id }, "failed to cancel run for cancelled issue");
-        await logActivity(db, {
-          companyId: existing.companyId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-          agentId: actor.agentId,
-          runId: actor.runId,
-          action: "heartbeat.cancel_failed",
-          entityType: "heartbeat_run",
-          entityId: runToCancelForCancelledStatus.id,
-          details: { source: "issue_status_cancelled", issueId: existing.id },
-        });
-      }
-    }
-
-    // AgentDash: goals-eval-hitl
-    // Fire-and-forget orchestrator hook on status change (non-blocking).
-    if (existing.status !== issue.status) {
-      void cosVerdictOrchestratorSvc
-        .onIssueStatusChanged(issue.id, existing.status, issue.status)
-        .catch((err) => {
-          logger.error(
-            { err, issueId: issue.id, prev: existing.status, next: issue.status },
-            "verdict orchestrator onIssueStatusChanged failed",
-          );
-        });
-    }
-
-    if (titleOrDescriptionChanged) {
-      await issueReferencesSvc.syncIssue(issue.id);
-    }
-    const updateReferenceSummaryAfter = titleOrDescriptionChanged
-      ? await issueReferencesSvc.listIssueReferenceSummary(issue.id)
-      : null;
-    const updateReferenceDiff = updateReferenceSummaryBefore && updateReferenceSummaryAfter
-      ? issueReferencesSvc.diffIssueReferenceSummary(updateReferenceSummaryBefore, updateReferenceSummaryAfter)
-      : null;
-    let issueResponse: typeof issue & {
-      blockedBy?: unknown;
-      blocks?: unknown;
-      relatedWork?: Awaited<ReturnType<typeof issueReferencesSvc.listIssueReferenceSummary>>;
-      referencedIssueIdentifiers?: string[];
-    } = issue;
-    let updatedRelations: Awaited<ReturnType<typeof svc.getRelationSummaries>> | null = null;
-    if (issue && Array.isArray(req.body.blockedByIssueIds)) {
-      updatedRelations = await svc.getRelationSummaries(issue.id);
-      issueResponse = {
-        ...issue,
-        blockedBy: updatedRelations.blockedBy,
-        blocks: updatedRelations.blocks,
-      };
-    }
-    await routinesSvc.syncRunStatusForIssue(issue.id);
-
-    if (actor.runId) {
-      await heartbeat.reportRunActivity(actor.runId).catch((err) =>
-        logger.warn({ err, runId: actor.runId }, "failed to clear detached run warning after issue activity"));
-    }
-
-    // Build activity details with previous values for changed fields
-    const previous: Record<string, unknown> = {};
-    for (const key of Object.keys(updateFields)) {
-      if (key in existing && (existing as Record<string, unknown>)[key] !== (updateFields as Record<string, unknown>)[key]) {
-        previous[key] = (existing as Record<string, unknown>)[key];
-      }
-    }
-    if (Array.isArray(req.body.blockedByIssueIds)) {
-      previous.blockedByIssueIds = existingRelations?.blockedBy.map((relation) => relation.id) ?? [];
-    }
-
-    const hasFieldChanges = Object.keys(previous).length > 0;
-    const reopened =
-      commentBody &&
-      effectiveMoveToTodoRequested &&
-      (isClosed || (isBlocked && !hasUnresolvedFirstClassBlockers)) &&
-      previous.status !== undefined &&
-      issue.status === "todo";
-    const reopenFromStatus = reopened ? existing.status : null;
-    await logActivity(db, {
-      companyId: issue.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "issue.updated",
-      entityType: "issue",
-      entityId: issue.id,
-      details: {
-        ...updateFields,
-        identifier: issue.identifier,
-        // AgentDash (GH #678): provenance when the write came via an assistant grant.
-        ...assistantGrantAttribution(req),
-        ...(commentBody ? { source: "comment" } : {}),
-        ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-        ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
-        ...(interruptedRunId ? { interruptedRunId } : {}),
-        ...(cancelledStatusRunId ? { cancelledStatusRunId } : {}),
-        _previous: hasFieldChanges ? previous : undefined,
-        ...summarizeIssueReferenceActivityDetails(
-          updateReferenceDiff
-            ? {
-                addedReferencedIssues: updateReferenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
-                removedReferencedIssues: updateReferenceDiff.removedReferencedIssues.map(summarizeIssueRelationForActivity),
-                currentReferencedIssues: updateReferenceDiff.currentReferencedIssues.map(summarizeIssueRelationForActivity),
-              }
-            : null,
-        ),
-      },
-    });
-
-    if (Array.isArray(req.body.blockedByIssueIds)) {
-      const previousBlockedByIds = new Set((existingRelations?.blockedBy ?? []).map((relation) => relation.id));
-      const nextBlockedByIds = new Set(req.body.blockedByIssueIds as string[]);
-      const addedBlockedByIssueIds = [...nextBlockedByIds].filter((candidate) => !previousBlockedByIds.has(candidate));
-      const removedBlockedByIssueIds = [...previousBlockedByIds].filter((candidate) => !nextBlockedByIds.has(candidate));
-      const nextBlockedByRelations = updatedRelations?.blockedBy ?? [];
-      const previousBlockedByRelations = existingRelations?.blockedBy ?? [];
-      if (addedBlockedByIssueIds.length > 0 || removedBlockedByIssueIds.length > 0) {
-        await logActivity(db, {
-          companyId: issue.companyId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-          agentId: actor.agentId,
-          runId: actor.runId,
-          action: "issue.blockers_updated",
-          entityType: "issue",
-          entityId: issue.id,
-          details: {
-            identifier: issue.identifier,
-            blockedByIssueIds: req.body.blockedByIssueIds,
-            addedBlockedByIssueIds,
-            removedBlockedByIssueIds,
-            blockedByIssues: nextBlockedByRelations.map(summarizeIssueRelationForActivity),
-            addedBlockedByIssues: nextBlockedByRelations
-              .filter((relation) => addedBlockedByIssueIds.includes(relation.id))
-              .map(summarizeIssueRelationForActivity),
-            removedBlockedByIssues: previousBlockedByRelations
-              .filter((relation) => removedBlockedByIssueIds.includes(relation.id))
-              .map(summarizeIssueRelationForActivity),
-          },
-        });
-      }
-    }
-
-    const reviewerChanges = diffExecutionParticipants(previousExecutionPolicy, nextExecutionPolicy, "review");
-    if (reviewerChanges.addedParticipants.length > 0 || reviewerChanges.removedParticipants.length > 0) {
-      await logActivity(db, {
-        companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.reviewers_updated",
-        entityType: "issue",
-        entityId: issue.id,
-        details: {
-          identifier: issue.identifier,
-          participants: reviewerChanges.participants,
-          addedParticipants: reviewerChanges.addedParticipants,
-          removedParticipants: reviewerChanges.removedParticipants,
+      const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
+        actor: getActorInfo(req), actorKind: req.actor.type, attribution: assistantGrantAttribution(req), intent: req.body,
+        validate: async (executor, current, intent) => {
+          const policyDb = executor as Db;
+          await assertHostWorkspaceCommandAuthority(policyDb, req, current.companyId, collectIssueWorkspaceCommandPaths(intent, {
+            executionWorkspaceSettings: current.executionWorkspaceSettings, assigneeAdapterOverrides: current.assigneeAdapterOverrides }));
+          assertIssueOverrideHostExecutionAllowed(req, current.assigneeAdapterOverrides);
+          if (req.actor.type === "agent" && intent.assigneeAdapterOverrides !== undefined) throw new IssueCommentPolicyRefusal(403, {
+            error: "Agent-authenticated callers cannot change assigneeAdapterOverrides; only a human with agent-configuration authority may change adapter or model configuration" });
+          await assertAgentIssueMutationAllowed(req, res, current, policyDb);
+          if (intent.executionWorkspaceSettings?.environmentId) await assertEnvironmentSelectionForCompany(environmentService(policyDb),
+            current.companyId, intent.executionWorkspaceSettings.environmentId, { allowedDrivers: ["local", "ssh", "sandbox"] });
+          const { comment, reviewRequest, reopen: _reopen, resume: _resume, interrupt: _interrupt, hiddenAt: _hiddenAt, ...fields } = intent;
+          const agentWork = req.actor.type === "agent" && (Object.keys(fields).length > 0 || reviewRequest !== undefined);
+          const workspace = current.executionWorkspaceId ? await executionWorkspaceServiceDirect(policyDb).getById(current.executionWorkspaceId) : null;
+          if (workspace && isClosedIsolatedExecutionWorkspace(workspace) && (comment || agentWork)) throw new IssueCommentPolicyRefusal(409, {
+            error: getClosedIsolatedExecutionWorkspaceMessage(workspace), executionWorkspace: workspace });
         },
-      });
-    }
-
-    const approverChanges = diffExecutionParticipants(previousExecutionPolicy, nextExecutionPolicy, "approval");
-    if (approverChanges.addedParticipants.length > 0 || approverChanges.removedParticipants.length > 0) {
-      await logActivity(db, {
-        companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.approvers_updated",
-        entityType: "issue",
-        entityId: issue.id,
-        details: {
-          identifier: issue.identifier,
-          participants: approverChanges.participants,
-          addedParticipants: approverChanges.addedParticipants,
-          removedParticipants: approverChanges.removedParticipants,
-        },
-      });
-    }
-
-    if (issue.status === "done" && existing.status !== "done") {
-      const tc = getTelemetryClient();
-      if (tc && actor.agentId) {
-        const actorAgent = await agentsSvc.getById(actor.agentId);
-        if (actorAgent) {
-          const model = typeof actorAgent.adapterConfig?.model === "string" ? actorAgent.adapterConfig.model : undefined;
-          trackAgentTaskCompleted(tc, {
-            agentRole: actorAgent.role,
-            agentId: actorAgent.id,
-            adapterType: actorAgent.adapterType,
-            model,
-          });
-        }
-      }
-    }
-
-    let comment = null;
-    if (commentBody) {
-      const commentReferenceSummaryBefore = updateReferenceSummaryAfter
-        ?? await issueReferencesSvc.listIssueReferenceSummary(issue.id);
-      comment = await svc.addComment(id, commentBody, {
-        agentId: actor.agentId ?? undefined,
-        userId: actor.actorType === "user" ? actor.actorId : undefined,
-        runId: actor.runId,
-      });
-      await issueReferencesSvc.syncComment(comment.id);
-      const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
-      const commentReferenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
-        commentReferenceSummaryBefore,
-        commentReferenceSummaryAfter,
-      );
-      issueResponse = {
-        ...issueResponse,
-        relatedWork: commentReferenceSummaryAfter,
-        referencedIssueIdentifiers: commentReferenceSummaryAfter.outbound.map(
-          (item) => item.issue.identifier ?? item.issue.id,
-        ),
+        validateResume: async (executor, current) => { await assertExplicitResumeIntentAllowed(req, res, current, executor as Db); },
+        validateAssignment: (executor, current) => assertCanAssignTasks(req, current.companyId, executor as Db),
       };
-
-      await logActivity(db, {
-        companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.comment_added",
-        entityType: "issue",
-        entityId: issue.id,
-        details: {
-          commentId: comment.id,
-          bodySnippet: comment.body.slice(0, 120),
-          identifier: issue.identifier,
-          issueTitle: issue.title,
-          // AgentDash (GH #678): provenance when the write came via an assistant grant.
-          ...assistantGrantAttribution(req),
-          ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-          ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
-          ...(interruptedRunId ? { interruptedRunId } : {}),
-          ...(hasFieldChanges ? { updated: true } : {}),
-          ...summarizeIssueReferenceActivityDetails({
-            addedReferencedIssues: commentReferenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
-            removedReferencedIssues: commentReferenceDiff.removedReferencedIssues.map(summarizeIssueRelationForActivity),
-            currentReferencedIssues: commentReferenceDiff.currentReferencedIssues.map(summarizeIssueRelationForActivity),
-          }),
-        },
-      });
-
-      const expiredInteractions = await issueThreadInteractionService(db).expireRequestConfirmationsSupersededByComment(
-        issue,
-        comment,
-        {
-          agentId: actor.agentId,
-          userId: actor.actorType === "user" ? actor.actorId : null,
-        },
-      );
-      await logExpiredRequestConfirmations({
-        issue,
-        interactions: expiredInteractions,
-        actor,
-        source: "issue.comment",
-      });
-
-    } else if (updateReferenceSummaryAfter) {
-      issueResponse = {
-        ...issueResponse,
-        relatedWork: updateReferenceSummaryAfter,
-        referencedIssueIdentifiers: updateReferenceSummaryAfter.outbound.map(
-          (item) => item.issue.identifier ?? item.issue.id,
-        ),
-      };
+      const accepted = await actions.accept(context);
+      const effects = await actions.dispatch(accepted);
+      if (effects.unresolved) {
+        logger.warn({ issueId: existing.id, mutationId: accepted.mutationId, effects: effects.outcomes }, "issue update accepted with unresolved effects");
+        res.status(500).json({ error: "Issue update accepted, but follow-up effects are unresolved. Read the issue before retrying." });
+        return;
+      }
+      res.json({ ...accepted.issueResponse, comment: accepted.comment });
+    } catch (error) {
+      if (error instanceof IssueCommentPolicyRefusal) {
+        if (error.body.error === "Agent cannot mutate another agent's issue") reportAuthzRefusal(req, {
+          companyId: existing.companyId, entityType: "issue", entityId: existing.id, reasonCode: "ISSUE_MUTATION_OTHER_AGENT" });
+        res.status(error.status).json(error.body);
+        return;
+      }
+      throw error;
     }
-
-    const assigneeChanged =
-      issue.assigneeAgentId !== existing.assigneeAgentId || issue.assigneeUserId !== existing.assigneeUserId;
-    const statusChangedFromBacklog =
-      existing.status === "backlog" &&
-      issue.status !== "backlog" &&
-      req.body.status !== undefined;
-    const statusChangedFromBlockedToTodo =
-      existing.status === "blocked" &&
-      issue.status === "todo" &&
-      (req.body.status !== undefined || reopened);
-    const statusChangedFromClosedToTodo =
-      isClosedIssueStatus(existing.status) &&
-      issue.status === "todo" &&
-      req.body.status !== undefined;
-    const previousExecutionState = parseIssueExecutionState(existing.executionState);
-    const nextExecutionState = parseIssueExecutionState(issue.executionState);
-    const executionStageWakeup = buildExecutionStageWakeup({
-      issueId: issue.id,
-      previousState: previousExecutionState,
-      nextState: nextExecutionState,
-      interruptedRunId,
-      requestedByActorType: actor.actorType,
-      requestedByActorId: actor.actorId,
-    });
-
-    // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
-    void (async () => {
-      type WakeupRequest = NonNullable<Parameters<typeof heartbeat.wakeup>[1]>;
-      const wakeups = new Map<string, { agentId: string; wakeup: WakeupRequest }>();
-      const addWakeup = (agentId: string, wakeup: WakeupRequest) => {
-        const wakeIssueId =
-          wakeup.payload && typeof wakeup.payload === "object" && typeof wakeup.payload.issueId === "string"
-            ? wakeup.payload.issueId
-            : issue.id;
-        wakeups.set(`${agentId}:${wakeIssueId}`, { agentId, wakeup });
-      };
-
-      if (executionStageWakeup) {
-        addWakeup(executionStageWakeup.agentId, executionStageWakeup.wakeup);
-      } else if (assigneeChanged && issue.assigneeAgentId && issue.status !== "backlog") {
-        addWakeup(issue.assigneeAgentId, {
-          source: "assignment",
-          triggerDetail: "system",
-          reason: "issue_assigned",
-          payload: {
-            issueId: issue.id,
-            ...(comment ? { commentId: comment.id } : {}),
-            mutation: "update",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-            ...(interruptedRunId ? { interruptedRunId } : {}),
-          },
-          requestedByActorType: actor.actorType,
-          requestedByActorId: actor.actorId,
-          contextSnapshot: {
-            issueId: issue.id,
-            ...(comment
-              ? {
-                  taskId: issue.id,
-                  commentId: comment.id,
-                  wakeCommentId: comment.id,
-                }
-              : {}),
-            source: "issue.update",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-            ...(interruptedRunId ? { interruptedRunId } : {}),
-          },
-        });
-      }
-
-      if (
-        !assigneeChanged &&
-        (statusChangedFromBacklog || statusChangedFromBlockedToTodo || statusChangedFromClosedToTodo) &&
-        issue.assigneeAgentId
-      ) {
-        addWakeup(issue.assigneeAgentId, {
-          source: "automation",
-          triggerDetail: "system",
-          reason: "issue_status_changed",
-          payload: {
-            issueId: issue.id,
-            mutation: "update",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-            ...(interruptedRunId ? { interruptedRunId } : {}),
-          },
-          requestedByActorType: actor.actorType,
-          requestedByActorId: actor.actorId,
-          contextSnapshot: {
-            issueId: issue.id,
-            source: "issue.status_change",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-            ...(interruptedRunId ? { interruptedRunId } : {}),
-          },
-        });
-      }
-
-      if (commentBody && comment) {
-        const assigneeId = issue.assigneeAgentId;
-        const actorIsAgent = actor.actorType === "agent";
-        const selfComment = actorIsAgent && actor.actorId === assigneeId;
-        const skipAssigneeCommentWake = selfComment || isClosed;
-
-        if (assigneeId && !assigneeChanged && (reopened || !skipAssigneeCommentWake)) {
-          addWakeup(assigneeId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: reopened ? "issue_reopened_via_comment" : "issue_commented",
-            payload: {
-              issueId: id,
-              commentId: comment.id,
-              mutation: "comment",
-              ...(reopened ? { reopenedFrom: reopenFromStatus } : {}),
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-              ...(interruptedRunId ? { interruptedRunId } : {}),
-            },
-            requestedByActorType: actor.actorType,
-            requestedByActorId: actor.actorId,
-            contextSnapshot: {
-              issueId: id,
-              taskId: id,
-              commentId: comment.id,
-              wakeCommentId: comment.id,
-              source: reopened ? "issue.comment.reopen" : "issue.comment",
-              wakeReason: reopened ? "issue_reopened_via_comment" : "issue_commented",
-              ...(reopened ? { reopenedFrom: reopenFromStatus } : {}),
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-              ...(interruptedRunId ? { interruptedRunId } : {}),
-            },
-          });
-        }
-
-        let mentionedIds: string[] = [];
-        try {
-          mentionedIds = await svc.findMentionedAgents(issue.companyId, commentBody);
-        } catch (err) {
-          logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
-        }
-
-        for (const mentionedId of mentionedIds) {
-          if (actor.actorType === "agent" && actor.actorId === mentionedId) continue;
-          addWakeup(mentionedId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "issue_comment_mentioned",
-            payload: { issueId: id, commentId: comment.id },
-            requestedByActorType: actor.actorType,
-            requestedByActorId: actor.actorId,
-            contextSnapshot: {
-              issueId: id,
-              taskId: id,
-              commentId: comment.id,
-              wakeCommentId: comment.id,
-              wakeReason: "issue_comment_mentioned",
-              source: "comment.mention",
-            },
-          });
-        }
-      }
-
-      const becameDone = existing.status !== "done" && issue.status === "done";
-      if (becameDone) {
-        const dependents = await svc.listWakeableBlockedDependents(issue.id);
-        for (const dependent of dependents) {
-          addWakeup(dependent.assigneeAgentId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "issue_blockers_resolved",
-            payload: {
-              issueId: dependent.id,
-              resolvedBlockerIssueId: issue.id,
-              blockerIssueIds: dependent.blockerIssueIds,
-            },
-            requestedByActorType: actor.actorType,
-            requestedByActorId: actor.actorId,
-            contextSnapshot: {
-              issueId: dependent.id,
-              taskId: dependent.id,
-              wakeReason: "issue_blockers_resolved",
-              source: "issue.blockers_resolved",
-              resolvedBlockerIssueId: issue.id,
-              blockerIssueIds: dependent.blockerIssueIds,
-            },
-          });
-        }
-      }
-
-      const becameTerminal =
-        !["done", "cancelled"].includes(existing.status) && ["done", "cancelled"].includes(issue.status);
-      if (becameTerminal && issue.parentId) {
-        const parent = await svc.getWakeableParentAfterChildCompletion(issue.parentId);
-        if (parent) {
-          addWakeup(parent.assigneeAgentId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "issue_children_completed",
-            payload: {
-              issueId: parent.id,
-              completedChildIssueId: issue.id,
-              childIssueIds: parent.childIssueIds,
-              childIssueSummaries: parent.childIssueSummaries,
-              childIssueSummaryTruncated: parent.childIssueSummaryTruncated,
-            },
-            requestedByActorType: actor.actorType,
-            requestedByActorId: actor.actorId,
-            contextSnapshot: {
-              issueId: parent.id,
-              taskId: parent.id,
-              wakeReason: "issue_children_completed",
-              source: "issue.children_completed",
-              completedChildIssueId: issue.id,
-              childIssueIds: parent.childIssueIds,
-              childIssueSummaries: parent.childIssueSummaries,
-              childIssueSummaryTruncated: parent.childIssueSummaryTruncated,
-            },
-          });
-        }
-      }
-
-      for (const { agentId, wakeup } of wakeups.values()) {
-        heartbeat
-          .wakeup(agentId, wakeup)
-          .catch((err) => logger.warn({ err, issueId: issue.id, agentId }, "failed to wake agent on issue update"));
-      }
-    })();
-
-    res.json({ ...issueResponse, comment });
   });
 
   router.delete("/issues/:id", async (req, res) => {

@@ -1,3 +1,4 @@
+import { installPatchServiceMocks, patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -80,6 +81,7 @@ function registerModuleMocks() {
 }
 
 async function createApp() {
+  await installPatchServiceMocks();
   const [{ errorHandler }, { issueRoutes }] = await Promise.all([
     import("../middleware/index.js"),
     import("../routes/issues.js"),
@@ -96,7 +98,7 @@ async function createApp() {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  app.use("/api", issueRoutes(patchTransactionFixture(() => mockIssueService.getById()) as any, {} as any));
   app.use(errorHandler);
   return app;
 }
@@ -157,6 +159,7 @@ describe("issue execution policy routes", () => {
         actorAgentId: null,
         actorUserId: "local-board",
       }),
+      expect.objectContaining({ select: expect.any(Function) }),
     );
     const updatePatch = mockIssueService.update.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(updatePatch.status).toBeUndefined();

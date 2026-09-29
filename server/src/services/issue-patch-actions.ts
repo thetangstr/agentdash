@@ -1,0 +1,1034 @@
+// AgentDash: canonical PATCH acceptance. Plans are private and confer no authority.
+import { createHash, randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { companies, issues, issueExecutionDecisions, issueThreadInteractions, type Db } from "@paperclipai/db";
+import { updateIssueSchema } from "@paperclipai/shared";
+import { z } from "zod";
+import { conflict, notFound, HttpError } from "../errors.js";
+import { issueService } from "./issues.js";
+import { issueReferenceService } from "./issue-references.js";
+import { issueThreadInteractionService } from "./issue-thread-interactions.js";
+import { routineService } from "./routines.js";
+import { agentService } from "./agents.js";
+import { dodGuardService } from "./dod-guard.js";
+import { featureFlagsService } from "./feature-flags.js";
+import { resolveAgentClosingStatus } from "./issue-blocked-declaration.js";
+import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
+import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
+import {
+  IssueCommentPolicyRefusal, selectActiveIssueRun, isClosedIssueStatus, shouldImplicitlyMoveCommentedIssueToTodo,
+  summarizeIssueReferenceActivityDetails, summarizeIssueRelationForActivity, type IssueCommentExecutor, type IssueCommentContext
+} from "./issue-mutation-actions.js";
+import type { heartbeatService } from "./heartbeat.js";
+
+export const updateIssueRouteSchema = updateIssueSchema.extend({ interrupt: z.boolean().optional() });
+type Issue = typeof issues.$inferSelect;
+type Intent = z.infer<typeof updateIssueRouteSchema>;
+type Runtime = Pick<ReturnType<typeof heartbeatService>, "cancelRun" | "wakeup" | "reportRunActivity">;
+export type IssuePatchSnapshot = {
+  version: number; companyId: string; issueId: string; intentDigest: string; stateDigest: string; policyDigest: string;
+  interruptRunId: string | null; statusCancelRunId: string | null; mentionedIds: string[]; confirmationIds: string[]; blockedByIds: string[]
+};
+export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | "validate" | "expectedSnapshot"> {
+  intent: Intent;
+  decisionId?: string;
+  // Private planner provenance: the same normalized ID is never re-resolved
+  // from a reused name at confirmation. It grants no assignment authority.
+  resolvedAssigneeAgentId?: string | null;
+  expectedSnapshot?: IssuePatchSnapshot;
+  validate(executor: IssueCommentExecutor, issue: Issue, intent: Intent): Promise<void>;
+  validateResume(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
+  validateAssignment(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
+}
+export class IssuePatchAcceptanceUncertain extends IssueCommentPolicyRefusal {
+  constructor(readonly recovery: { mutationId: string; companyId: string; issueId: string; commentId: string | null; decisionId: string | null }) {
+    super(500, { error: "Issue update acceptance is uncertain. Read the issue before retrying." });
+  }
+}
+type ParsedExecutionState = NonNullable<ReturnType<typeof parseIssueExecutionState>>;
+type NormalizedExecutionPolicy = NonNullable<ReturnType<typeof normalizeIssueExecutionPolicy>>;
+type ActivityExecutionParticipant = Pick<
+  NormalizedExecutionPolicy["stages"][number]["participants"][number],
+  "type" | "agentId" | "userId"
+>;
+type ExecutionStageWakeContext = {
+  wakeRole: "reviewer" | "approver" | "executor";
+  stageId: string | null;
+  stageType: ParsedExecutionState["currentStageType"];
+  currentParticipant: ParsedExecutionState["currentParticipant"];
+  returnAssignee: ParsedExecutionState["returnAssignee"];
+  reviewRequest: ParsedExecutionState["reviewRequest"];
+  lastDecisionOutcome: ParsedExecutionState["lastDecisionOutcome"];
+  allowedActions: string[];
+};
+
+function executionPrincipalsEqual(
+  left: ParsedExecutionState["currentParticipant"] | null,
+  right: ParsedExecutionState["currentParticipant"] | null,
+) {
+  if (!left || !right || left.type !== right.type) return false;
+  return left.type === "agent" ? left.agentId === right.agentId : left.userId === right.userId;
+}
+
+function buildExecutionStageWakeContext(input: {
+  state: ParsedExecutionState;
+  wakeRole: ExecutionStageWakeContext["wakeRole"];
+  allowedActions: string[];
+}): ExecutionStageWakeContext {
+  return {
+    wakeRole: input.wakeRole,
+    stageId: input.state.currentStageId,
+    stageType: input.state.currentStageType,
+    currentParticipant: input.state.currentParticipant,
+    returnAssignee: input.state.returnAssignee,
+    reviewRequest: input.state.reviewRequest ?? null,
+    lastDecisionOutcome: input.state.lastDecisionOutcome,
+    allowedActions: input.allowedActions,
+  };
+}
+
+function activityExecutionParticipantKey(participant: ActivityExecutionParticipant): string {
+  return participant.type === "agent" ? `agent:${participant.agentId}` : `user:${participant.userId}`;
+}
+
+function summarizeExecutionParticipants(
+  policy: NormalizedExecutionPolicy | null,
+  stageType: NormalizedExecutionPolicy["stages"][number]["type"],
+): ActivityExecutionParticipant[] {
+  const stage = policy?.stages.find((candidate) => candidate.type === stageType);
+  return (
+    stage?.participants.map((participant) => ({
+      type: participant.type,
+      agentId: participant.agentId ?? null,
+      userId: participant.userId ?? null,
+    })) ?? []
+  );
+}
+
+function diffExecutionParticipants(
+  previousPolicy: NormalizedExecutionPolicy | null,
+  nextPolicy: NormalizedExecutionPolicy | null,
+  stageType: NormalizedExecutionPolicy["stages"][number]["type"],
+) {
+  const previousParticipants = summarizeExecutionParticipants(previousPolicy, stageType);
+  const nextParticipants = summarizeExecutionParticipants(nextPolicy, stageType);
+  const previousByKey = new Map(previousParticipants.map((participant) => [
+    activityExecutionParticipantKey(participant),
+    participant,
+  ]));
+  const nextByKey = new Map(nextParticipants.map((participant) => [
+    activityExecutionParticipantKey(participant),
+    participant,
+  ]));
+
+  return {
+    participants: nextParticipants,
+    addedParticipants: nextParticipants.filter((participant) => !previousByKey.has(activityExecutionParticipantKey(participant))),
+    removedParticipants: previousParticipants.filter((participant) => !nextByKey.has(activityExecutionParticipantKey(participant))),
+  };
+}
+
+function buildExecutionStageWakeup(input: {
+  issueId: string;
+  previousState: ParsedExecutionState | null;
+  nextState: ParsedExecutionState | null;
+  interruptedRunId: string | null;
+  requestedByActorType: "user" | "agent";
+  requestedByActorId: string;
+}) {
+  const { issueId, previousState, nextState, interruptedRunId } = input;
+  if (!nextState) return null;
+
+  if (nextState.status === "pending") {
+    const agentId =
+      nextState.currentParticipant?.type === "agent" ? (nextState.currentParticipant.agentId ?? null) : null;
+    const stageChanged =
+      previousState?.status !== "pending" ||
+      previousState?.currentStageId !== nextState.currentStageId ||
+      !executionPrincipalsEqual(previousState?.currentParticipant ?? null, nextState.currentParticipant ?? null);
+    if (!agentId || !stageChanged) return null;
+
+    const reason =
+      nextState.currentStageType === "approval" ? "execution_approval_requested" : "execution_review_requested";
+    const executionStage = buildExecutionStageWakeContext({
+      state: nextState,
+      wakeRole: nextState.currentStageType === "approval" ? "approver" : "reviewer",
+      allowedActions: ["approve", "request_changes"],
+    });
+
+    return {
+      agentId,
+      wakeup: {
+        source: "assignment" as const,
+        triggerDetail: "system" as const,
+        reason,
+        payload: {
+          issueId,
+          mutation: "update",
+          executionStage,
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+        requestedByActorType: input.requestedByActorType,
+        requestedByActorId: input.requestedByActorId,
+        contextSnapshot: {
+          issueId,
+          taskId: issueId,
+          wakeReason: reason,
+          source: "issue.execution_stage",
+          executionStage,
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+      },
+    };
+  }
+
+  if (nextState.status === "changes_requested") {
+    const agentId = nextState.returnAssignee?.type === "agent" ? (nextState.returnAssignee.agentId ?? null) : null;
+    const becameChangesRequested =
+      previousState?.status !== "changes_requested" ||
+      previousState?.lastDecisionId !== nextState.lastDecisionId ||
+      !executionPrincipalsEqual(previousState?.returnAssignee ?? null, nextState.returnAssignee ?? null);
+    if (!agentId || !becameChangesRequested) return null;
+
+    const executionStage = buildExecutionStageWakeContext({
+      state: nextState,
+      wakeRole: "executor",
+      allowedActions: ["address_changes", "resubmit"],
+    });
+
+    return {
+      agentId,
+      wakeup: {
+        source: "assignment" as const,
+        triggerDetail: "system" as const,
+        reason: "execution_changes_requested",
+        payload: {
+          issueId,
+          mutation: "update",
+          executionStage,
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+        requestedByActorType: input.requestedByActorType,
+        requestedByActorId: input.requestedByActorId,
+        contextSnapshot: {
+          issueId,
+          taskId: issueId,
+          wakeReason: "execution_changes_requested",
+          source: "issue.execution_stage",
+          executionStage,
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+      },
+    };
+  }
+
+  return null;
+}
+
+export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
+  statusChanged?(issueId: string, before: string, after: string): Promise<unknown>;
+  completed?(agentId: string): Promise<unknown>;
+} = {}) {
+  const svc = issueService(db);
+  const issueReferencesSvc = issueReferenceService(db);
+  const routinesSvc = routineService(db);
+  async function normalize(context: IssuePatchContext, executor: IssueCommentExecutor = db): Promise<IssuePatchContext> {
+    const intent = updateIssueRouteSchema.parse(context.intent);
+    if (typeof intent.assigneeAgentId === "string" && intent.assigneeAgentId.trim() && context.resolvedAssigneeAgentId !== intent.assigneeAgentId) {
+      const resolved = await agentService(executor as Db).resolveByReference(context.companyId, intent.assigneeAgentId.trim());
+      if (resolved.ambiguous) throw conflict("Agent shortname is ambiguous in this company. Use the agent ID.");
+      if (!resolved.agent) throw notFound("Agent not found");
+      intent.assigneeAgentId = resolved.agent.id;
+    }
+    if (intent.executionPolicy !== undefined) intent.executionPolicy = normalizeIssueExecutionPolicy(intent.executionPolicy);
+    return { ...context, intent, resolvedAssigneeAgentId: intent.assigneeAgentId, decisionId: context.decisionId ?? randomUUID() };
+  }
+  async function prepare(context: IssuePatchContext, executor: IssueCommentExecutor = db) {
+    let intent = updateIssueRouteSchema.parse(context.intent);
+    const [existing] = await executor.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, context.companyId)));
+    if (!existing) throw notFound("Issue not found");
+    if (intent.resume && !intent.comment) throw new IssueCommentPolicyRefusal(400, { error: "Follow-up intent requires a comment" });
+    if (intent.interrupt && !intent.comment) throw new IssueCommentPolicyRefusal(400, { error: "Interrupt is only supported when posting a comment" });
+    if (intent.interrupt && context.actorKind !== "board") throw new IssueCommentPolicyRefusal(403, { error: "Only board users can interrupt active runs from issue comments" });
+    await context.validate(executor, existing, intent);
+    context = await normalize(context, executor);
+    intent = context.intent;
+    const reads = issueService(executor as Db);
+    const actor = context.actor;
+    const isClosed = isClosedIssueStatus(existing.status);
+    const isBlocked = existing.status === "blocked";
+    const normalizedAssigneeAgentId = intent.assigneeAgentId;
+    const titleOrDescriptionChanged = intent.title !== undefined || intent.description !== undefined;
+    const existingRelations =
+      Array.isArray(intent.blockedByIssueIds)
+        ? await reads.getRelationSummaries(existing.id)
+        : null;
+    const {
+      comment: commentBody,
+      reviewRequest,
+      reopen: reopenRequested,
+      resume: resumeRequested,
+      interrupt: _interruptRequested,
+      hiddenAt: hiddenAtRaw,
+      ...rawUpdateFields
+    } = intent;
+    const updateFields: Parameters<typeof svc.update>[1] = { ...rawUpdateFields };
+    const shouldCancelActiveRunForCancelledStatus =
+      existing.status !== "cancelled" && updateFields.status === "cancelled";
+    if (resumeRequested === true) await context.validateResume(executor, existing);
+    if (resumeRequested !== true && reopenRequested === true && context.actorKind === "agent") {
+      await context.validateResume(executor, existing);
+    }
+
+    const requestedAssigneeAgentId =
+      normalizedAssigneeAgentId === undefined ? existing.assigneeAgentId : normalizedAssigneeAgentId;
+    const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
+    const effectiveMoveToTodoRequested =
+      explicitMoveToTodoRequested ||
+      (!!commentBody &&
+        shouldImplicitlyMoveCommentedIssueToTodo({
+          issueStatus: existing.status,
+          assigneeAgentId: requestedAssigneeAgentId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+        }));
+    const updateReferenceSummaryBefore = titleOrDescriptionChanged
+      ? await issueReferencesSvc.listIssueReferenceSummary(existing.id, executor)
+      : null;
+    const hasUnresolvedFirstClassBlockers =
+      isBlocked && effectiveMoveToTodoRequested
+        ? (await svc.getDependencyReadiness(existing.id, executor)).unresolvedBlockerCount > 0
+        : false;
+    if (resumeRequested === true && isBlocked && hasUnresolvedFirstClassBlockers) {
+      throw new IssueCommentPolicyRefusal(409, { error: "Issue follow-up blocked by unresolved blockers" });
+    }
+    const interruptRun = intent.interrupt ? await selectActiveIssueRun(executor, existing) : null;
+    const runToCancelForCancelledStatus = shouldCancelActiveRunForCancelledStatus
+      ? await selectActiveIssueRun(executor, existing) : null;
+
+    if (hiddenAtRaw !== undefined) {
+      updateFields.hiddenAt = hiddenAtRaw ? new Date(hiddenAtRaw) : null;
+    }
+    if (
+      commentBody &&
+      effectiveMoveToTodoRequested &&
+      (isClosed || (isBlocked && !hasUnresolvedFirstClassBlockers)) &&
+      updateFields.status === undefined
+    ) {
+      updateFields.status = "todo";
+    }
+    if (intent.executionPolicy !== undefined) {
+      updateFields.executionPolicy = intent.executionPolicy ? { ...intent.executionPolicy } : null;
+    }
+    const previousExecutionPolicy = normalizeIssueExecutionPolicy(existing.executionPolicy ?? null);
+    const nextExecutionPolicy =
+      updateFields.executionPolicy !== undefined
+        ? (updateFields.executionPolicy as NormalizedExecutionPolicy | null)
+        : previousExecutionPolicy;
+    if (normalizedAssigneeAgentId !== undefined) {
+      updateFields.assigneeAgentId = normalizedAssigneeAgentId;
+    }
+
+    // An agent that just said "BLOCKED" does not get to also say "done".
+    //
+    // The two arrive as separate calls — comment, then status — so the comment
+    // has to be read back rather than taken from this request. Only an agent
+    // closing an issue is checked; a person closing one an agent called blocked
+    // is overruling it knowingly, which is theirs to do.
+    if (actor.actorType === "agent" && actor.agentId && updateFields.status === "done") {
+      // Partial injected services may omit this method. Production reads the
+      // latest own comment on the actual executor; a read failure must refuse.
+      const latestOwnCommentBody =
+        typeof reads.latestAgentCommentBody === "function"
+          ? await reads.latestAgentCommentBody(existing.id, actor.agentId)
+          : null;
+      const resolved = resolveAgentClosingStatus({
+        actorIsAgent: true,
+        requestedStatus: "done",
+        commentBody,
+        latestOwnCommentBody,
+      });
+      if (resolved.overridden) {
+        updateFields.status = "blocked";
+      }
+    }
+
+    const transition = applyIssueExecutionPolicyTransition({
+      issue: existing,
+      policy: nextExecutionPolicy,
+      requestedStatus: typeof updateFields.status === "string" ? updateFields.status : undefined,
+      requestedAssigneePatch: {
+        assigneeAgentId: normalizedAssigneeAgentId,
+        assigneeUserId:
+          intent.assigneeUserId === undefined ? undefined : (intent.assigneeUserId as string | null),
+      },
+      actor: {
+        agentId: actor.agentId ?? null,
+        userId: actor.actorType === "user" ? actor.actorId : null,
+      },
+      commentBody,
+      reviewRequest: reviewRequest === undefined ? undefined : reviewRequest,
+    });
+    const decisionId = transition.decision ? context.decisionId : null;
+    if (decisionId) {
+      const nextExecutionState = transition.patch.executionState;
+      if (!nextExecutionState || typeof nextExecutionState !== "object") {
+        throw new Error("Execution policy decision patch is missing executionState");
+      }
+      transition.patch.executionState = {
+        ...nextExecutionState,
+        lastDecisionId: decisionId,
+      };
+    }
+    Object.assign(updateFields, transition.patch);
+    if (reviewRequest !== undefined && transition.patch.executionState === undefined) {
+      const existingExecutionState = parseIssueExecutionState(existing.executionState);
+      if (!existingExecutionState || existingExecutionState.status !== "pending") {
+        if (reviewRequest !== null) {
+          throw new IssueCommentPolicyRefusal(422, { error: "reviewRequest requires an active review or approval stage" });
+        }
+      } else {
+        updateFields.executionState = {
+          ...existingExecutionState,
+          reviewRequest,
+        };
+      }
+    }
+
+    const nextAssigneeAgentId =
+      updateFields.assigneeAgentId === undefined ? existing.assigneeAgentId : (updateFields.assigneeAgentId as string | null);
+    const nextAssigneeUserId =
+      updateFields.assigneeUserId === undefined ? existing.assigneeUserId : (updateFields.assigneeUserId as string | null);
+    const assigneeWillChange =
+      nextAssigneeAgentId !== existing.assigneeAgentId || nextAssigneeUserId !== existing.assigneeUserId;
+    const isAgentReturningIssueToCreator =
+      context.actorKind === "agent" &&
+      !!actor.agentId &&
+      existing.assigneeAgentId === actor.agentId &&
+      nextAssigneeAgentId === null &&
+      typeof nextAssigneeUserId === "string" &&
+      !!existing.createdByUserId &&
+      nextAssigneeUserId === existing.createdByUserId;
+
+    if (assigneeWillChange && !transition.workflowControlledAssignment) {
+      if (!isAgentReturningIssueToCreator) {
+        await context.validateAssignment(executor, existing);
+      }
+    }
+
+    // AgentDash: goals-eval-hitl
+    // DoD guard: when leaving `backlog`, require Issue.definitionOfDone
+    // (gated per-tenant by feature_flags.dod_guard_enabled).
+    if (
+      typeof updateFields.status === "string" &&
+      existing.status === "backlog" &&
+      updateFields.status !== "backlog"
+    ) {
+      try {
+        await dodGuardService(executor as Db, featureFlagsService(executor as Db)).assertDoDOrThrow(
+          existing.companyId,
+          "issue",
+          existing.id,
+          updateFields.status,
+          existing.status,
+        );
+      } catch (err) {
+        if (err instanceof HttpError && err.status === 422) {
+          throw new IssueCommentPolicyRefusal(422, {
+            error: err.message,
+            ...(err.details && typeof err.details === "object" ? err.details : {}),
+          });
+        }
+        throw err;
+      }
+    }
+
+    const checkout = actor.actorType === "agent" && existing.status === "in_progress" && existing.assigneeAgentId === actor.agentId
+      ? await svc.evaluateCheckoutOwner(existing.id, actor.agentId!, actor.runId!, executor) : null;
+    const mentionedIds = commentBody ? await reads.findMentionedAgents(existing.companyId, commentBody) : [];
+    const confirmations = commentBody && actor.actorType === "user"
+      ? await executor.select({ id: issueThreadInteractions.id, payload: issueThreadInteractions.payload }).from(issueThreadInteractions)
+        .where(and(eq(issueThreadInteractions.issueId, existing.id), eq(issueThreadInteractions.kind, "request_confirmation"), eq(issueThreadInteractions.status, "pending"))) : [];
+    const confirmationIds = confirmations.filter(row => "supersedeOnUserComment" in row.payload && row.payload.supersedeOnUserComment).map(row => row.id).sort();
+    const snapshot = {
+      version: 1, companyId: existing.companyId, issueId: existing.id,
+      intentDigest: createHash("sha256").update(JSON.stringify(intent)).digest("hex"),
+      // Hash current fields rather than expose private contents in a readback.
+      stateDigest: createHash("sha256").update(JSON.stringify(existing)).digest("hex"),
+      policyDigest: createHash("sha256").update(JSON.stringify({
+        updateFields, checkout,
+        hasUnresolvedFirstClassBlockers, updateReferenceSummaryBefore
+      })).digest("hex"),
+      interruptRunId: interruptRun?.id ?? null,
+      statusCancelRunId: runToCancelForCancelledStatus?.id ?? null,
+      mentionedIds: [...mentionedIds].sort(), confirmationIds,
+      blockedByIds: existingRelations?.blockedBy.map(row => row.id).sort() ?? [],
+    };
+    if (context.expectedSnapshot && JSON.stringify(context.expectedSnapshot) !== JSON.stringify(snapshot)) throw conflict("Issue changed since update preparation");
+    return {
+      context, existing, intent, snapshot, updateFields, transition, decisionId, checkout, interruptRun, runToCancelForCancelledStatus,
+      mentionedIds, titleOrDescriptionChanged, existingRelations, updateReferenceSummaryBefore, commentBody, resumeRequested,
+      effectiveMoveToTodoRequested, isClosed, isBlocked, hasUnresolvedFirstClassBlockers, previousExecutionPolicy, nextExecutionPolicy
+    };
+  }
+  async function accept(context: IssuePatchContext) {
+    const mutationId = randomUUID();
+    const publications: ActivityPublication[] = [];
+    let readyToCommit = false;
+    let commentId: string | null = null;
+    let acceptedDecisionId: string | null = null;
+    try {
+      return await db.transaction(async tx => {
+        const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, context.companyId)).for("update");
+        if (!company) throw notFound("Issue not found");
+        const [target] = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, context.companyId))).for("update");
+        if (!target) throw notFound("Issue not found");
+        const plan = await prepare(context, tx);
+        const { existing, intent, updateFields, transition, decisionId, titleOrDescriptionChanged, existingRelations,
+          updateReferenceSummaryBefore, commentBody, resumeRequested, effectiveMoveToTodoRequested, isClosed, isBlocked,
+          hasUnresolvedFirstClassBlockers, previousExecutionPolicy, nextExecutionPolicy } = plan;
+        const id = existing.id;
+        const actor = context.actor;
+        const reads = issueService(tx as unknown as Db);
+        const audit = async (input: LogActivityInput) => {
+          publications.push(await insertActivity(tx, { ...input, details: { ...input.details, mutationId } }));
+        };
+        if (plan.checkout) {
+          const ownership = await svc.applyCheckoutOwner(plan.checkout, tx);
+          if (ownership.adoptedFromRunId) await audit({
+            companyId: company.id, ...actor,
+            action: "issue.checkout_lock_adopted", entityType: "issue", entityId: id,
+            details: { previousCheckoutRunId: ownership.adoptedFromRunId, checkoutRunId: actor.runId, reason: "stale_checkout_run" }
+          });
+        }
+        const issue = await svc.update(id, {
+          ...updateFields, actorAgentId: actor.agentId ?? null,
+          actorUserId: actor.actorType === "user" ? actor.actorId : null
+        }, tx);
+        if (!issue) throw notFound("Issue not found");
+        if (transition.decision && decisionId) {
+          acceptedDecisionId = decisionId;
+          await tx.insert(issueExecutionDecisions).values({
+            id: decisionId, companyId: issue.companyId, issueId: id,
+            ...transition.decision, actorAgentId: actor.agentId, actorUserId: actor.actorType === "user" ? actor.actorId : null, createdByRunId: actor.runId
+          });
+        }
+        if (titleOrDescriptionChanged) {
+          await issueReferencesSvc.syncIssue(issue.id, tx);
+        }
+        const updateReferenceSummaryAfter = titleOrDescriptionChanged
+          ? await issueReferencesSvc.listIssueReferenceSummary(issue.id, tx)
+          : null;
+        const updateReferenceDiff = updateReferenceSummaryBefore && updateReferenceSummaryAfter
+          ? issueReferencesSvc.diffIssueReferenceSummary(updateReferenceSummaryBefore, updateReferenceSummaryAfter)
+          : null;
+        let issueResponse: typeof issue & {
+          blockedBy?: unknown;
+          blocks?: unknown;
+          relatedWork?: Awaited<ReturnType<typeof issueReferencesSvc.listIssueReferenceSummary>>;
+          referencedIssueIdentifiers?: string[];
+        } = issue;
+        let updatedRelations: Awaited<ReturnType<typeof svc.getRelationSummaries>> | null = null;
+        if (issue && Array.isArray(intent.blockedByIssueIds)) {
+          updatedRelations = await reads.getRelationSummaries(issue.id);
+          issueResponse = {
+            ...issue,
+            blockedBy: updatedRelations.blockedBy,
+            blocks: updatedRelations.blocks,
+          };
+        }
+        await routinesSvc.syncRunStatusForIssue(issue.id, tx);
+
+        // Build activity details with previous values for changed fields
+        const previous: Record<string, unknown> = {};
+        for (const key of Object.keys(updateFields)) {
+          if (key in existing && (existing as Record<string, unknown>)[key] !== (updateFields as Record<string, unknown>)[key]) {
+            previous[key] = (existing as Record<string, unknown>)[key];
+          }
+        }
+        if (Array.isArray(intent.blockedByIssueIds)) {
+          previous.blockedByIssueIds = existingRelations?.blockedBy.map((relation) => relation.id) ?? [];
+        }
+
+        const hasFieldChanges = Object.keys(previous).length > 0;
+        const reopened =
+          commentBody &&
+          effectiveMoveToTodoRequested &&
+          (isClosed || (isBlocked && !hasUnresolvedFirstClassBlockers)) &&
+          previous.status !== undefined &&
+          issue.status === "todo";
+        const reopenFromStatus = reopened ? existing.status : null;
+        await audit({
+          companyId: issue.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.updated",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            ...updateFields,
+            identifier: issue.identifier,
+            // AgentDash (GH #678): provenance when the write came via an assistant grant.
+            ...context.attribution,
+            ...(commentBody ? { source: "comment" } : {}),
+            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+            ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
+            ...(plan.interruptRun ? { requestedInterruptRunId: plan.interruptRun.id } : {}),
+            ...(plan.runToCancelForCancelledStatus ? { requestedStatusCancelRunId: plan.runToCancelForCancelledStatus.id } : {}),
+            _previous: hasFieldChanges ? previous : undefined,
+            ...summarizeIssueReferenceActivityDetails(
+              updateReferenceDiff
+                ? {
+                  addedReferencedIssues: updateReferenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
+                  removedReferencedIssues: updateReferenceDiff.removedReferencedIssues.map(summarizeIssueRelationForActivity),
+                  currentReferencedIssues: updateReferenceDiff.currentReferencedIssues.map(summarizeIssueRelationForActivity),
+                }
+                : null,
+            ),
+          },
+        });
+
+        if (Array.isArray(intent.blockedByIssueIds)) {
+          const previousBlockedByIds = new Set((existingRelations?.blockedBy ?? []).map((relation) => relation.id));
+          const nextBlockedByIds = new Set(intent.blockedByIssueIds as string[]);
+          const addedBlockedByIssueIds = [...nextBlockedByIds].filter((candidate) => !previousBlockedByIds.has(candidate));
+          const removedBlockedByIssueIds = [...previousBlockedByIds].filter((candidate) => !nextBlockedByIds.has(candidate));
+          const nextBlockedByRelations = updatedRelations?.blockedBy ?? [];
+          const previousBlockedByRelations = existingRelations?.blockedBy ?? [];
+          if (addedBlockedByIssueIds.length > 0 || removedBlockedByIssueIds.length > 0) {
+            await audit({
+              companyId: issue.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.blockers_updated",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                identifier: issue.identifier,
+                blockedByIssueIds: intent.blockedByIssueIds,
+                addedBlockedByIssueIds,
+                removedBlockedByIssueIds,
+                blockedByIssues: nextBlockedByRelations.map(summarizeIssueRelationForActivity),
+                addedBlockedByIssues: nextBlockedByRelations
+                  .filter((relation) => addedBlockedByIssueIds.includes(relation.id))
+                  .map(summarizeIssueRelationForActivity),
+                removedBlockedByIssues: previousBlockedByRelations
+                  .filter((relation) => removedBlockedByIssueIds.includes(relation.id))
+                  .map(summarizeIssueRelationForActivity),
+              },
+            });
+          }
+        }
+
+        const reviewerChanges = diffExecutionParticipants(previousExecutionPolicy, nextExecutionPolicy, "review");
+        if (reviewerChanges.addedParticipants.length > 0 || reviewerChanges.removedParticipants.length > 0) {
+          await audit({
+            companyId: issue.companyId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            agentId: actor.agentId,
+            runId: actor.runId,
+            action: "issue.reviewers_updated",
+            entityType: "issue",
+            entityId: issue.id,
+            details: {
+              identifier: issue.identifier,
+              participants: reviewerChanges.participants,
+              addedParticipants: reviewerChanges.addedParticipants,
+              removedParticipants: reviewerChanges.removedParticipants,
+            },
+          });
+        }
+
+        const approverChanges = diffExecutionParticipants(previousExecutionPolicy, nextExecutionPolicy, "approval");
+        if (approverChanges.addedParticipants.length > 0 || approverChanges.removedParticipants.length > 0) {
+          await audit({
+            companyId: issue.companyId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            agentId: actor.agentId,
+            runId: actor.runId,
+            action: "issue.approvers_updated",
+            entityType: "issue",
+            entityId: issue.id,
+            details: {
+              identifier: issue.identifier,
+              participants: approverChanges.participants,
+              addedParticipants: approverChanges.addedParticipants,
+              removedParticipants: approverChanges.removedParticipants,
+            },
+          });
+        }
+
+        let comment = null;
+        if (commentBody) {
+          const commentReferenceSummaryBefore = updateReferenceSummaryAfter
+            ?? await issueReferencesSvc.listIssueReferenceSummary(issue.id, tx);
+          comment = await svc.addComment(id, commentBody, {
+            agentId: actor.agentId ?? undefined,
+            userId: actor.actorType === "user" ? actor.actorId : undefined,
+            runId: actor.runId,
+          }, tx);
+          await issueReferencesSvc.syncComment(comment.id, tx);
+          const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id, tx);
+          const commentReferenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
+            commentReferenceSummaryBefore,
+            commentReferenceSummaryAfter,
+          );
+          issueResponse = {
+            ...issueResponse,
+            relatedWork: commentReferenceSummaryAfter,
+            referencedIssueIdentifiers: commentReferenceSummaryAfter.outbound.map(
+              (item) => item.issue.identifier ?? item.issue.id,
+            ),
+          };
+
+          await audit({
+            companyId: issue.companyId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            agentId: actor.agentId,
+            runId: actor.runId,
+            action: "issue.comment_added",
+            entityType: "issue",
+            entityId: issue.id,
+            details: {
+              commentId: comment.id,
+              bodySnippet: comment.body.slice(0, 120),
+              identifier: issue.identifier,
+              issueTitle: issue.title,
+              // AgentDash (GH #678): provenance when the write came via an assistant grant.
+              ...context.attribution,
+              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+              ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
+              ...(plan.interruptRun ? { requestedInterruptRunId: plan.interruptRun.id } : {}),
+              ...(hasFieldChanges ? { updated: true } : {}),
+              ...summarizeIssueReferenceActivityDetails({
+                addedReferencedIssues: commentReferenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
+                removedReferencedIssues: commentReferenceDiff.removedReferencedIssues.map(summarizeIssueRelationForActivity),
+                currentReferencedIssues: commentReferenceDiff.currentReferencedIssues.map(summarizeIssueRelationForActivity),
+              }),
+            },
+          });
+
+          const expiredInteractions = await issueThreadInteractionService(db).expireRequestConfirmationsSupersededByComment(
+            issue,
+            comment,
+            {
+              agentId: actor.agentId,
+              userId: actor.actorType === "user" ? actor.actorId : null,
+            }, tx,
+          );
+          for (const interaction of expiredInteractions) await audit({
+            companyId: issue.companyId, ...actor,
+            action: "issue.thread_interaction_expired", entityType: "issue", entityId: issue.id,
+            details: {
+              identifier: issue.identifier ?? null, interactionId: interaction.id, interactionKind: interaction.kind,
+              interactionStatus: interaction.status, source: "issue.comment", result: interaction.result ?? null
+            }
+          });
+
+        } else if (updateReferenceSummaryAfter) {
+          issueResponse = {
+            ...issueResponse,
+            relatedWork: updateReferenceSummaryAfter,
+            referencedIssueIdentifiers: updateReferenceSummaryAfter.outbound.map(
+              (item) => item.issue.identifier ?? item.issue.id,
+            ),
+          };
+        }
+
+        commentId = comment?.id ?? null;
+        const dependents = existing.status !== "done" && issue.status === "done" ? await reads.listWakeableBlockedDependents(issue.id) : [];
+        const parent = !["done", "cancelled"].includes(existing.status) && ["done", "cancelled"].includes(issue.status) && issue.parentId
+          ? await reads.getWakeableParentAfterChildCompletion(issue.parentId) : null;
+        readyToCommit = true;
+        return { status: "committed" as const, mutationId, publications, plan, actor, issue, comment, issueResponse, reopened, reopenFromStatus, dependents, parent };
+      });
+    } catch (error) {
+      if (readyToCommit) throw new IssuePatchAcceptanceUncertain({
+        mutationId, companyId: context.companyId,
+        issueId: context.issueId, commentId, decisionId: acceptedDecisionId
+      });
+      throw error;
+    }
+  }
+
+  // A process-local receipt prevents accidental repeat dispatch on this exact
+  // accepted object. It provides no durable replay or crash recovery guarantee.
+  const dispatched = new WeakMap<object, Promise<PatchEffects>>();
+  type PatchEffects = {
+    unresolved: boolean; status: "confirmed" | "partial" | "unknown";
+    outcomes: Array<{ effect: string; targetId?: string; status: "confirmed" | "withheld" | "unknown" }>
+  };
+  async function runEffects(accepted: Awaited<ReturnType<typeof accept>>): Promise<PatchEffects> {
+    const { plan, actor, issue, comment, reopened, reopenFromStatus } = accepted;
+    const { existing, intent, commentBody, resumeRequested, isClosed, mentionedIds } = plan;
+    const id = issue.id;
+    const outcomes: PatchEffects["outcomes"] = [];
+    async function effect(name: string, targetId: string | undefined, run: () => Promise<unknown>) {
+      try { const result = await run(); outcomes.push({ effect: name, targetId, status: result === null ? "withheld" : "confirmed" }); return result; }
+      catch { outcomes.push({ effect: name, targetId, status: "unknown" }); return undefined; }
+    }
+    for (const publication of accepted.publications) await effect("publication", undefined, async () => publishActivity(publication));
+    let interruptedRunId: string | null = null;
+    const cancellations = new Map<string, { run: NonNullable<typeof plan.interruptRun>; source: string }>();
+    if (plan.interruptRun) cancellations.set(plan.interruptRun.id, { run: plan.interruptRun, source: "issue_comment_interrupt" });
+    if (plan.runToCancelForCancelledStatus && !cancellations.has(plan.runToCancelForCancelledStatus.id)) cancellations.set(plan.runToCancelForCancelledStatus.id,
+      { run: plan.runToCancelForCancelledStatus, source: "issue_status_cancelled" });
+    for (const [runId, { run, source }] of cancellations) {
+      const cancelled = await effect("cancel", runId, async () => {
+        const result = await heartbeat.cancelRun(runId);
+        return result?.status === "cancelled" ? result : null;
+      });
+      if (cancelled) {
+        if (plan.interruptRun?.id === runId) interruptedRunId = runId;
+        await effect("cancel_audit", runId, async () => {
+          const publication = await insertActivity(db, {
+            companyId: issue.companyId, ...actor,
+            action: "heartbeat.cancelled", entityType: "heartbeat_run", entityId: runId,
+            details: { agentId: run.agentId, source, issueId: id, mutationId: accepted.mutationId }
+          });
+          publishActivity(publication);
+        });
+      } else if (cancelled === undefined && plan.runToCancelForCancelledStatus?.id === runId) {
+        await effect("cancel_failure_audit", runId, async () => {
+          const publication = await insertActivity(db, {
+            companyId: issue.companyId, ...actor,
+            action: "heartbeat.cancel_failed", entityType: "heartbeat_run", entityId: runId,
+            details: { source: "issue_status_cancelled", issueId: id, mutationId: accepted.mutationId }
+          });
+          publishActivity(publication);
+        });
+      }
+    }
+    if (actor.runId) await effect("run_activity", actor.runId, () => heartbeat.reportRunActivity(actor.runId!));
+    if (existing.status !== issue.status && hooks.statusChanged) await effect("verdict", id, () => hooks.statusChanged!(id, existing.status, issue.status));
+    if (existing.status !== "done" && issue.status === "done" && actor.agentId && hooks.completed) await effect("telemetry", actor.agentId, () => hooks.completed!(actor.agentId!));
+    const assigneeChanged =
+      issue.assigneeAgentId !== existing.assigneeAgentId || issue.assigneeUserId !== existing.assigneeUserId;
+    const statusChangedFromBacklog =
+      existing.status === "backlog" &&
+      issue.status !== "backlog" &&
+      intent.status !== undefined;
+    const statusChangedFromBlockedToTodo =
+      existing.status === "blocked" &&
+      issue.status === "todo" &&
+      (intent.status !== undefined || reopened);
+    const statusChangedFromClosedToTodo =
+      isClosedIssueStatus(existing.status) &&
+      issue.status === "todo" &&
+      intent.status !== undefined;
+    const previousExecutionState = parseIssueExecutionState(existing.executionState);
+    const nextExecutionState = parseIssueExecutionState(issue.executionState);
+    const executionStageWakeup = buildExecutionStageWakeup({
+      issueId: issue.id,
+      previousState: previousExecutionState,
+      nextState: nextExecutionState,
+      interruptedRunId,
+      requestedByActorType: actor.actorType,
+      requestedByActorId: actor.actorId,
+    });
+
+    // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
+
+    type WakeupRequest = NonNullable<Parameters<typeof heartbeat.wakeup>[1]>;
+    const wakeups = new Map<string, { agentId: string; wakeup: WakeupRequest }>();
+    const addWakeup = (agentId: string, wakeup: WakeupRequest) => {
+      const wakeIssueId =
+        wakeup.payload && typeof wakeup.payload === "object" && typeof wakeup.payload.issueId === "string"
+          ? wakeup.payload.issueId
+          : issue.id;
+      wakeups.set(`${agentId}:${wakeIssueId}`, { agentId, wakeup });
+    };
+
+    if (executionStageWakeup) {
+      addWakeup(executionStageWakeup.agentId, executionStageWakeup.wakeup);
+    } else if (assigneeChanged && issue.assigneeAgentId && issue.status !== "backlog") {
+      addWakeup(issue.assigneeAgentId, {
+        source: "assignment",
+        triggerDetail: "system",
+        reason: "issue_assigned",
+        payload: {
+          issueId: issue.id,
+          ...(comment ? { commentId: comment.id } : {}),
+          mutation: "update",
+          ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+        requestedByActorType: actor.actorType,
+        requestedByActorId: actor.actorId,
+        contextSnapshot: {
+          issueId: issue.id,
+          ...(comment
+            ? {
+              taskId: issue.id,
+              commentId: comment.id,
+              wakeCommentId: comment.id,
+            }
+            : {}),
+          source: "issue.update",
+          ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+      });
+    }
+
+    if (
+      !assigneeChanged &&
+      (statusChangedFromBacklog || statusChangedFromBlockedToTodo || statusChangedFromClosedToTodo) &&
+      issue.assigneeAgentId
+    ) {
+      addWakeup(issue.assigneeAgentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_status_changed",
+        payload: {
+          issueId: issue.id,
+          mutation: "update",
+          ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+        requestedByActorType: actor.actorType,
+        requestedByActorId: actor.actorId,
+        contextSnapshot: {
+          issueId: issue.id,
+          source: "issue.status_change",
+          ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+          ...(interruptedRunId ? { interruptedRunId } : {}),
+        },
+      });
+    }
+
+    if (commentBody && comment) {
+      const assigneeId = issue.assigneeAgentId;
+      const actorIsAgent = actor.actorType === "agent";
+      const selfComment = actorIsAgent && actor.actorId === assigneeId;
+      const skipAssigneeCommentWake = selfComment || isClosed;
+
+      if (assigneeId && !assigneeChanged && (reopened || !skipAssigneeCommentWake)) {
+        addWakeup(assigneeId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: reopened ? "issue_reopened_via_comment" : "issue_commented",
+          payload: {
+            issueId: id,
+            commentId: comment.id,
+            mutation: "comment",
+            ...(reopened ? { reopenedFrom: reopenFromStatus } : {}),
+            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+            ...(interruptedRunId ? { interruptedRunId } : {}),
+          },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: id,
+            taskId: id,
+            commentId: comment.id,
+            wakeCommentId: comment.id,
+            source: reopened ? "issue.comment.reopen" : "issue.comment",
+            wakeReason: reopened ? "issue_reopened_via_comment" : "issue_commented",
+            ...(reopened ? { reopenedFrom: reopenFromStatus } : {}),
+            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+            ...(interruptedRunId ? { interruptedRunId } : {}),
+          },
+        });
+      }
+
+      for (const mentionedId of mentionedIds) {
+        if (actor.actorType === "agent" && actor.actorId === mentionedId) continue;
+        addWakeup(mentionedId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_comment_mentioned",
+          payload: { issueId: id, commentId: comment.id },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: id,
+            taskId: id,
+            commentId: comment.id,
+            wakeCommentId: comment.id,
+            wakeReason: "issue_comment_mentioned",
+            source: "comment.mention",
+          },
+        });
+      }
+    }
+
+    const becameDone = existing.status !== "done" && issue.status === "done";
+    if (becameDone) {
+      const dependents = accepted.dependents;
+      for (const dependent of dependents) {
+        addWakeup(dependent.assigneeAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_blockers_resolved",
+          payload: {
+            issueId: dependent.id,
+            resolvedBlockerIssueId: issue.id,
+            blockerIssueIds: dependent.blockerIssueIds,
+          },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: dependent.id,
+            taskId: dependent.id,
+            wakeReason: "issue_blockers_resolved",
+            source: "issue.blockers_resolved",
+            resolvedBlockerIssueId: issue.id,
+            blockerIssueIds: dependent.blockerIssueIds,
+          },
+        });
+      }
+    }
+
+    const becameTerminal =
+      !["done", "cancelled"].includes(existing.status) && ["done", "cancelled"].includes(issue.status);
+    if (becameTerminal && issue.parentId) {
+      const parent = accepted.parent;
+      if (parent) {
+        addWakeup(parent.assigneeAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_children_completed",
+          payload: {
+            issueId: parent.id,
+            completedChildIssueId: issue.id,
+            childIssueIds: parent.childIssueIds,
+            childIssueSummaries: parent.childIssueSummaries,
+            childIssueSummaryTruncated: parent.childIssueSummaryTruncated,
+          },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: parent.id,
+            taskId: parent.id,
+            wakeReason: "issue_children_completed",
+            source: "issue.children_completed",
+            completedChildIssueId: issue.id,
+            childIssueIds: parent.childIssueIds,
+            childIssueSummaries: parent.childIssueSummaries,
+            childIssueSummaryTruncated: parent.childIssueSummaryTruncated,
+          },
+        });
+      }
+    }
+
+    for (const { agentId, wakeup } of wakeups.values()) await effect("wakeup", agentId, () => heartbeat.wakeup(agentId, wakeup));
+    const unresolved = outcomes.some(result => result.status === "unknown");
+    return { unresolved, outcomes, status: !unresolved ? "confirmed" : outcomes.some(result => result.status === "confirmed") ? "partial" : "unknown" };
+  }
+  function dispatch(accepted: Awaited<ReturnType<typeof accept>>) {
+    const prior = dispatched.get(accepted);
+    if (prior) return prior;
+    const result = runEffects(accepted);
+    dispatched.set(accepted, result);
+    return result;
+  }
+  return { prepare, accept, dispatch };
+}

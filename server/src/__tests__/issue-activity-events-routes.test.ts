@@ -1,3 +1,4 @@
+import { installPatchServiceMocks, patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,6 +114,7 @@ function registerModuleMocks() {
 }
 
 async function createApp() {
+  await installPatchServiceMocks();
   const [{ issueRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -129,7 +131,7 @@ async function createApp() {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  app.use("/api", issueRoutes(patchTransactionFixture(() => mockIssueService.getById()) as any, {} as any));
   app.use(errorHandler);
   return app;
 }

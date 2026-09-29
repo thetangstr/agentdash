@@ -53,7 +53,7 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: human fact-review and target-update guidance remains in the canonical bundle.
 // AgentDash: human-control-transport is inherited from the unified default worker,
 // including named-owner questions, private sharing and recovery boundaries.
-// AgentDash: issue-mutation-acceptance recovery/no-blind-retry guidance is
+// AgentDash: issue-mutation-acceptance (comment and PATCH) recovery/no-blind-retry guidance is
 // inherited through this same managed canonical bundle for every hired worker.
 // All named policy blocks, including workforce-learning, are inherited verbatim
 // from onboarding-assets/default/AGENTS.md via the canonical bundle loader.

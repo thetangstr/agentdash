@@ -69,6 +69,10 @@ const mockIssueTreeControlService = vi.hoisted(() => ({
   getActivePauseHoldGate: vi.fn(async () => null),
 }));
 
+// The PATCH dispatcher awaits this runtime boundary; real PG coverage retains
+// the canonical orchestrator, while this suite tests route/wake composition.
+vi.mock("../services/cos-verdict-orchestrator.js", () => ({ cosVerdictOrchestrator: () => ({ onIssueStatusChanged: async () => undefined }) }));
+
 vi.mock("@paperclipai/shared/telemetry", () => ({
   trackAgentTaskCompleted: vi.fn(),
   trackErrorHandlerCrash: vi.fn(),
@@ -223,7 +227,8 @@ async function waitForWakeup(assertion: () => void) {
 describe.sequential("issue comment reopen routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    Object.assign(mockTx, commentTransactionReads(() => mockIssueService.getById(), () => mockHeartbeatService.getRun()));
+    Object.assign(mockDb, commentTransactionReads(() => mockIssueService.getById(), (id) => mockHeartbeatService.getRun(id)));
+    Object.assign(mockTx, commentTransactionReads(() => mockIssueService.getById(), (id) => mockHeartbeatService.getRun(id)));
     mockIssueService.getById.mockReset();
     mockIssueService.assertCheckoutOwner.mockReset();
     mockIssueService.update.mockReset();
@@ -376,6 +381,7 @@ describe.sequential("issue comment reopen routes", () => {
         actorAgentId: null,
         actorUserId: "local-board",
       }),
+      mockTx,
     );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
@@ -408,6 +414,7 @@ describe.sequential("issue comment reopen routes", () => {
       expect.objectContaining({
         assigneeAgentId: "33333333-3333-4333-8333-333333333333",
       }),
+      mockTx,
     );
   });
 
@@ -454,6 +461,7 @@ describe.sequential("issue comment reopen routes", () => {
         actorAgentId: null,
         actorUserId: "local-board",
       }),
+      mockTx,
     );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
@@ -630,6 +638,7 @@ describe.sequential("issue comment reopen routes", () => {
         actorAgentId: null,
         actorUserId: "local-board",
       }),
+      mockTx,
     );
     await waitForWakeup(() => expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
       "22222222-2222-4222-8222-222222222222",
@@ -704,10 +713,12 @@ describe.sequential("issue comment reopen routes", () => {
         actorAgentId: null,
         actorUserId: "local-board",
       }),
+      mockTx,
     );
     expect(mockIssueService.update).not.toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       expect.objectContaining({ status: "todo" }),
+      mockTx,
     );
     await waitForWakeup(() => expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
       "22222222-2222-4222-8222-222222222222",
@@ -800,6 +811,7 @@ describe.sequential("issue comment reopen routes", () => {
         actorAgentId: "22222222-2222-4222-8222-222222222222",
         actorUserId: null,
       }),
+      mockTx,
     );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),

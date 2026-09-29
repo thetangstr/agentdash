@@ -1,4 +1,4 @@
-import { commentTransactionReads } from "./helpers/issue-comment-transaction.js";
+import { commentTransactionReads, installPatchServiceMocks, patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
 import { Readable } from "node:stream";
 import express from "express";
 import request from "supertest";
@@ -13,6 +13,8 @@ const ownerRunId = "55555555-5555-4555-8555-555555555555";
 const mockIssueService = vi.hoisted(() => ({
   addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
+  evaluateCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),
+  applyCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),
   getAttachmentById: vi.fn(),
   getByIdentifier: vi.fn(),
   getById: vi.fn(),
@@ -194,6 +196,7 @@ vi.mock("../services/issue-thread-interactions.js", async () => ({
 }));
 
 async function createApp(actor: Record<string, unknown>) {
+  await installPatchServiceMocks();
   const [{ errorHandler }, { issueRoutes }] = await Promise.all([
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
     vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
@@ -204,7 +207,7 @@ async function createApp(actor: Record<string, unknown>) {
     (req as any).actor = actor;
     next();
   });
-  app.use("/api", issueRoutes({ transaction: async (fn: (tx: unknown) => unknown) => fn(commentTransactionReads(() => mockIssueService.getById())) } as any, mockStorageService as any));
+  app.use("/api", issueRoutes(patchTransactionFixture(() => mockIssueService.getById()) as any, mockStorageService as any));
   app.use(errorHandler);
   return app;
 }

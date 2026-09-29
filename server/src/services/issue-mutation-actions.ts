@@ -117,6 +117,18 @@ export function shouldImplicitlyMoveCommentedIssueToTodo(input: {
   return true;
 }
 
+export async function selectActiveIssueRun(executor: IssueCommentExecutor, issue: Pick<Issue, "id" | "executionRunId" | "assigneeAgentId">) {
+  let run = issue.executionRunId
+    ? (await executor.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, issue.executionRunId)))[0] ?? null : null;
+  if (run?.status !== "running" && issue.assigneeAgentId) {
+    const [active] = await executor.select().from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.agentId, issue.assigneeAgentId), eq(heartbeatRuns.status, "running")))
+      .orderBy(desc(heartbeatRuns.startedAt)).limit(1);
+    if (active?.contextSnapshot?.issueId === issue.id) run = active;
+  }
+  return run?.status === "running" ? run : null;
+}
+
 export function issueCommentActions(db: Db, heartbeat: Runtime) {
   // Keep this root-bound. All composed primitives receive the distinct tx.
   const svc = issueService(db);
@@ -145,18 +157,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
       ? await svc.evaluateCheckoutOwner(issue.id, context.actor.actorId, context.actor.runId!, executor) : null;
     // Select a target from accepted facts, before reopening clears run pointers.
     // The fallback matches the canonical newest active run for this assignee.
-    let interruptRun: typeof heartbeatRuns.$inferSelect | null = null;
-    if (intent.interrupt) {
-      interruptRun = issue.executionRunId
-        ? (await executor.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, issue.executionRunId)))[0] ?? null : null;
-      if (interruptRun?.status !== "running" && issue.assigneeAgentId) {
-        const [active] = await executor.select().from(heartbeatRuns)
-          .where(and(eq(heartbeatRuns.agentId, issue.assigneeAgentId), eq(heartbeatRuns.status, "running")))
-          .orderBy(desc(heartbeatRuns.startedAt)).limit(1);
-        if (active && active.contextSnapshot?.issueId === issue.id) interruptRun = active;
-      }
-      if (interruptRun?.status !== "running") interruptRun = null;
-    }
+    const interruptRun = intent.interrupt ? await selectActiveIssueRun(executor, issue) : null;
     const mentionedIds = await issueService(executor as Db).findMentionedAgents(company.id, intent.body);
     // Only pending confirmations that this human comment can supersede are
     // relevant. No private prompt/result or unrelated interaction is pinned.
