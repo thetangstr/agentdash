@@ -9,6 +9,7 @@ vi.mock("../services/index.js", async (importOriginal) => {
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { and, sql } from "drizzle-orm";
 import { HEARTBEAT_RUN_STATUSES } from "@paperclipai/shared";
 import { createDb, companies, agents, costEvents, financeEvents, heartbeatRuns, issues, projectAccess, projects } from "@paperclipai/db";
 import { costService } from "../services/costs.ts";
@@ -331,6 +332,27 @@ describe("cost routes", () => {
     expect(body, "agent keys pass assertSpendVisibility but must not see restricted-project issues")
       .toContain("projectScopedVisibilityCondition(req, companyId, issuesTable.projectId)");
     expect(body).toContain("parseCostLimit(req.query)");
+  });
+
+  it("wires restricted-project visibility into /costs/by-project and /costs/finance-events", async () => {
+    // AgentDash: same source-level guard as the by-issue one — agent keys and
+    // non-admin members pass assertSpendVisibility, so the restricted-project
+    // filter is the only thing keeping those rows out.
+    const source = await readFile(
+      new URL("../routes/costs.ts", import.meta.url),
+      "utf8",
+    );
+
+    const byProject = source.slice(source.indexOf('router.get("/companies/:companyId/costs/by-project"'));
+    const byProjectBody = byProject.slice(0, byProject.indexOf("});"));
+    expect(byProjectBody, "by-project must not surface restricted project names or spend")
+      .toContain("projectScopedVisibilityCondition(req, companyId, projectsTable.id)");
+
+    const financeEvents = source.slice(source.indexOf('router.get("/companies/:companyId/costs/finance-events"'));
+    const financeBody = financeEvents.slice(0, financeEvents.indexOf("});"));
+    expect(financeBody, "finance events carry raw issueId/projectId — both paths need the filter")
+      .toContain("financeEventsTable.projectId");
+    expect(financeBody).toContain("financeEventsTable.issueId");
   });
 
   it("rejects company budget updates for board users outside the company", async () => {
@@ -976,6 +998,128 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(summary.estimatedDebitCents).toBe(2_000_000_000);
     expect(byKindRow?.debitCents).toBe(4_000_000_000);
     expect(byKindRow?.netCents).toBe(4_000_000_000);
+  });
+
+  it("byProject hides restricted projects from actors off the access list", async () => {
+    const companyId = randomUUID();
+    const openProjectId = randomUUID();
+    const restrictedProjectId = randomUUID();
+    const outsiderAgentId = randomUUID();
+    const listedAgentId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: prefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      { id: outsiderAgentId, companyId, name: "Outsider", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+      { id: listedAgentId, companyId, name: "Listed", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+    ]);
+    await db.insert(projects).values([
+      { id: openProjectId, companyId, name: "Open", visibility: "company", createdByUserId: "owner-1" },
+      { id: restrictedProjectId, companyId, name: "Secret", visibility: "restricted", createdByUserId: "sam-1" },
+    ]);
+    await db.insert(projectAccess).values({
+      projectId: restrictedProjectId,
+      principalType: "agent",
+      principalId: listedAgentId,
+      grantedByUserId: "sam-1",
+    });
+    await db.insert(costEvents).values([
+      { companyId, agentId: outsiderAgentId, projectId: openProjectId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 10, cachedInputTokens: 0, outputTokens: 5, costCents: 100, occurredAt: new Date("2026-04-10T00:00:00.000Z") },
+      { companyId, agentId: listedAgentId, projectId: restrictedProjectId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 10, cachedInputTokens: 0, outputTokens: 5, costCents: 200, occurredAt: new Date("2026-04-10T00:00:00.000Z") },
+    ]);
+
+    const outsiderRows = await costs.byProject(companyId, undefined, {
+      visibleWhere: projectScopedVisibilityCondition(
+        { actor: { type: "agent", agentId: outsiderAgentId } } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0],
+        companyId,
+        projects.id,
+      ),
+    });
+    expect(outsiderRows.map((r) => r.projectId)).toEqual([openProjectId]);
+    expect(outsiderRows[0]?.projectName).toBe("Open");
+
+    const listedRows = await costs.byProject(companyId, undefined, {
+      visibleWhere: projectScopedVisibilityCondition(
+        { actor: { type: "agent", agentId: listedAgentId } } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0],
+        companyId,
+        projects.id,
+      ),
+    });
+    expect(listedRows.map((r) => r.projectId).sort()).toEqual([openProjectId, restrictedProjectId].sort());
+  });
+
+  it("finance.list hides events linked to a restricted project, directly or through their issue", async () => {
+    const companyId = randomUUID();
+    const openProjectId = randomUUID();
+    const restrictedProjectId = randomUUID();
+    const outsiderAgentId = randomUUID();
+    const openIssueId = randomUUID();
+    const secretIssueId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: prefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      { id: outsiderAgentId, companyId, name: "Outsider", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+    ]);
+    await db.insert(projects).values([
+      { id: openProjectId, companyId, name: "Open", visibility: "company", createdByUserId: "owner-1" },
+      { id: restrictedProjectId, companyId, name: "Secret", visibility: "restricted", createdByUserId: "sam-1" },
+    ]);
+    await db.insert(issues).values([
+      { id: openIssueId, companyId, projectId: openProjectId, title: "Open issue", status: "done", priority: "medium", issueNumber: 1, identifier: `${prefix}-1` },
+      { id: secretIssueId, companyId, projectId: restrictedProjectId, title: "Secret issue", status: "done", priority: "medium", issueNumber: 2, identifier: `${prefix}-2` },
+    ]);
+    await db.insert(financeEvents).values([
+      // Directly tagged with the restricted project.
+      { companyId, projectId: restrictedProjectId, biller: "openai", eventKind: "invoice", amountCents: 900, currency: "USD", direction: "debit", occurredAt: new Date("2026-04-10T00:00:00.000Z") },
+      // Tagged with an issue inside the restricted project.
+      { companyId, issueId: secretIssueId, biller: "openai", eventKind: "invoice", amountCents: 800, currency: "USD", direction: "debit", occurredAt: new Date("2026-04-10T00:01:00.000Z") },
+      // Visible controls: open project, open issue, and unattributed.
+      { companyId, projectId: openProjectId, biller: "openai", eventKind: "invoice", amountCents: 700, currency: "USD", direction: "debit", occurredAt: new Date("2026-04-10T00:02:00.000Z") },
+      { companyId, issueId: openIssueId, biller: "openai", eventKind: "invoice", amountCents: 600, currency: "USD", direction: "debit", occurredAt: new Date("2026-04-10T00:03:00.000Z") },
+      { companyId, biller: "openai", eventKind: "invoice", amountCents: 500, currency: "USD", direction: "debit", occurredAt: new Date("2026-04-10T00:04:00.000Z") },
+    ]);
+
+    // Same wiring the route applies: the event must satisfy the visibility
+    // rule on its projectId AND on its issue's project.
+    const outsiderReq = { actor: { type: "agent", agentId: outsiderAgentId } } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0];
+    const outsiderRows = await finance.list(companyId, undefined, 100, {
+      visibleWhere: and(
+        projectScopedVisibilityCondition(outsiderReq, companyId, financeEvents.projectId),
+        projectScopedVisibilityCondition(
+          outsiderReq,
+          companyId,
+          sql`(select ${issues.projectId} from ${issues} where ${issues.id} = ${financeEvents.issueId})`,
+        ),
+      ),
+    });
+    expect(outsiderRows.map((r) => r.amountCents).sort()).toEqual([500, 600, 700]);
+    expect(outsiderRows.map((r) => r.projectId)).not.toContain(restrictedProjectId);
+    expect(outsiderRows.map((r) => r.issueId)).not.toContain(secretIssueId);
+
+    // An admin sees everything — no filter is applied.
+    const adminReq = { actor: { type: "board", userId: "admin-1", isInstanceAdmin: true } } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0];
+    const adminRows = await finance.list(companyId, undefined, 100, {
+      visibleWhere: and(
+        projectScopedVisibilityCondition(adminReq, companyId, financeEvents.projectId),
+        projectScopedVisibilityCondition(
+          adminReq,
+          companyId,
+          sql`(select ${issues.projectId} from ${issues} where ${issues.id} = ${financeEvents.issueId})`,
+        ),
+      ),
+    });
+    expect(adminRows).toHaveLength(5);
   });
 });
 

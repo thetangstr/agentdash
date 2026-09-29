@@ -1,6 +1,11 @@
 import { Router } from "express";
+import { and, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { issues as issuesTable } from "@paperclipai/db";
+import {
+  financeEvents as financeEventsTable,
+  issues as issuesTable,
+  projects as projectsTable,
+} from "@paperclipai/db";
 import {
   createCostEventSchema,
   createFinanceEventSchema,
@@ -313,7 +318,20 @@ export function costRoutes(
     await assertSpendVisibility(req, companyId);
     const range = parseCostDateRange(req.query);
     const limit = parseCostLimit(req.query);
-    const rows = await finance.list(companyId, range, limit);
+    const rows = await finance.list(companyId, range, limit, {
+      // AgentDash: finance events carry raw issueId/projectId. Either column
+      // can point at a restricted project — the issue's through
+      // issues.project_id — so the event must satisfy the visibility rule on
+      // both paths, same as every other issue/project read surface.
+      visibleWhere: and(
+        projectScopedVisibilityCondition(req, companyId, financeEventsTable.projectId),
+        projectScopedVisibilityCondition(
+          req,
+          companyId,
+          sql`(select ${issuesTable.projectId} from ${issuesTable} where ${issuesTable.id} = ${financeEventsTable.issueId})`,
+        ),
+      ),
+    });
     res.json(rows);
   });
 
@@ -414,10 +432,16 @@ export function costRoutes(
     const companyId = req.params.companyId as string;
     await assertSpendVisibility(req, companyId);
     const range = parseCostDateRange(req.query);
-    const rows = await costs.byProject(companyId, range);
+    const rows = await costs.byProject(companyId, range, {
+      // AgentDash: restricted projects stay hidden even though spend is
+      // company-visible — the joined project row carries the rule directly.
+      visibleWhere: projectScopedVisibilityCondition(req, companyId, projectsTable.id),
+    });
     res.json(rows);
   });
 
+  // AgentDash (GH #826): per-issue spend breakdown — restricted-project issues
+  // stay hidden even though spend is company-visible.
   router.get("/companies/:companyId/costs/by-issue", async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertSpendVisibility(req, companyId);
