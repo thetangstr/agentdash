@@ -169,6 +169,9 @@ describe("AGE-83 logger integration", () => {
 
 describe('named-human private transport log boundaries', () => {
   it.each([
+    '/api/HUMAN-CONTROL/PREPARE', '/API/Human-Control/CONFIRM',
+    '/API/Companies/c/Workforce/Brief', '/api/companies/c/WORKFORCE/Proposals/p/Review',
+    '/API/Issues/i/Interactions/q/Respond',
     '/api/human-control/prepare', '/api/human-control/confirm',
     '/api/companies/c/workforce/brief', '/api/companies/c/workforce/proposals/p/review',
     '/api/issues/i/interactions', '/api/issues/i/interactions/q/respond', '/api/issues/i/interactions/q/cancel',

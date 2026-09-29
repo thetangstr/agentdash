@@ -6,13 +6,14 @@ import express from 'express';
 import type { Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { agents, goals, issues, heartbeatRuns, issueThreadInteractions, activityLog, authUsers, boardApiKeys, companies, companyMemberships, createDb, humanActionHandles, instanceUserRoles } from '@paperclipai/db';
+import { agents, goals, issues, projects, agentWakeupRequests, heartbeatRuns, issueThreadInteractions, activityLog, authUsers, boardApiKeys, companies, companyMemberships, createDb, humanActionHandles, instanceUserRoles } from '@paperclipai/db';
 import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/error-handler.js';
 import { hashBearerToken } from '../services/board-auth.js';
 import { issueThreadInteractionService } from '../services/issue-thread-interactions.js';
 import { heartbeatService } from '../services/heartbeat.js';
 import { workforceService } from '../services/workforce.js';
+import * as workforceModule from '../services/workforce.js';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 
 vi.mock('../services/company-skills.js', () => ({ companySkillService: () => ({ getByKey: async () => null, createLocalSkill: async (companyId: string, input: {slug: string; markdown: string}) => ({ key: `company/${companyId}/${input.slug}`, markdown: input.markdown }) }) }));
@@ -48,6 +49,20 @@ describe('human control HTTP contract with current named authority', () => {
   async function call(token: string, path: string, body?: unknown) {
     const res = await fetch(`${base}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: res.status, body: await res.json() };
+  }
+  async function sdk(h: Awaited<ReturnType<typeof human>>) {
+    const mcp = createAgentDashServer({ apiUrl: base.replace('/human-control', ''), apiKey: h.token, companyId: h.company.id, agentId: null, runId: null }, { toolset: 'human' });
+    const client = new Client({ name: 'recovery-access-regression', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await mcp.connect(a);
+    await client.connect(b);
+    return {
+      async confirm(handle: string) {
+        const result = await client.callTool({ name: 'human_confirm', arguments: { target: h.target, handle } });
+        return { error: result.isError, body: JSON.parse((result.content as Array<{ text: string }>)[0].text) };
+      },
+      async close() { await client.close(); await mcp.close(); },
+    };
   }
   const action = (target: unknown) => ({ target, operationId: 'workforce.brief.publish', version: 1, input: { expectedRevision: 0, sources: [{ id: 's', label: 'Approved source', content: 'Full useful source '.repeat(200).trim() }], facts: [{ key: 'offer', value: 'Known company offer', sourceReference: 's' }] } });
   it('exposes an actual distinct board-key bridge with no implicit human identity', async () => {
@@ -246,10 +261,17 @@ describe('human control HTTP contract with current named authority', () => {
       const [job] = await db.select().from(issues).where(eq(issues.companyId, h.company.id));
       expect(handle.status).toBe('recovery_required');
       expect(handle.result).toMatchObject({ reference: { issueId: job.id } });
+      const assertOneWake = async () => {
+        expect(await db.select().from(issues).where(eq(issues.companyId, h.company.id))).toHaveLength(1);
+        expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, worker.id))).toHaveLength(1);
+        expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, worker.id))).toHaveLength(1);
+      };
+      await assertOneWake();
       const replay = await invoke('human_confirm', { target: h.target, handle: p.body.handle });
       expect(replay.body.status).toBe('recovery_required');
       const second = await invoke('human_prepare', { target: h.target, operationId: 'workforce.first_job.start', version: 1, input: { agentId: worker.id } });
       expect((await invoke('human_confirm', { target: h.target, handle: second.body.handle })).body.result.issueId).toBe(job.id);
+      await assertOneWake();
       await db.update(boardApiKeys).set({ revokedAt: new Date() }).where(eq(boardApiKeys.id, h.key.id));
       await expect(client.listTools()).rejects.toThrow();
     } finally { failAfterWake = false; await client.close(); await mcp.close(); }
@@ -331,6 +353,121 @@ describe('human control HTTP contract with current named authority', () => {
     const p = await call(h.token, '/prepare', { target: h.target, operationId: 'human_questions.stewardship.assign', version: 1, input: { agentId: worker.id, userId: member.userId } });
     expect(p.status).toBe(200);
     expect((await call(h.token, '/confirm', { target: h.target, handle: p.body.handle })).status).toBe(200);
+  });
+
+  it('I1 never discloses cached terminal values over HTTP or SDK after membership loss', async () => {
+    const h = await human(), other = await human();
+    const prepared = await call(h.token, '/prepare', action(h.target));
+    expect((await call(h.token, '/confirm', { target: h.target, handle: prepared.body.handle })).status).toBe(200);
+    const bridge = await sdk(h);
+    try {
+      await db.delete(companyMemberships).where(eq(companyMemberships.companyId, h.company.id));
+      const [original] = await db.select().from(humanActionHandles).where(eq(humanActionHandles.id, prepared.body.id));
+      expect(JSON.stringify(original.result)).toContain('Full useful source');
+      for (const status of ['completed', 'denied', 'stale', 'expired', 'recovery_required']) {
+        await db.update(humanActionHandles).set({ status }).where(eq(humanActionHandles.id, original.id));
+        const raw = await call(h.token, '/confirm', { target: h.target, handle: prepared.body.handle });
+        expect(raw.status).toBe(409);
+        expect(raw.body.details).toEqual({ status, actionId: original.id });
+        expect(JSON.stringify(raw.body)).not.toContain('Full useful source');
+        const mcp = await bridge.confirm(prepared.body.handle);
+        expect(mcp.error).toBe(true);
+        expect(mcp.body).not.toHaveProperty('result');
+        const [after] = await db.select().from(humanActionHandles).where(eq(humanActionHandles.id, original.id));
+        expect(after).toEqual({ ...original, status });
+      }
+      expect((await call(other.token, '/confirm', { target: h.target, handle: prepared.body.handle })).status).toBe(404);
+      expect((await call(h.token, '/confirm', { target: other.target, handle: prepared.body.handle })).status).toBe(404);
+      const secondKey = `pcp_board_${randomUUID()}`;
+      await db.insert(boardApiKeys).values({ userId: h.userId, name: 'Different same-human key', keyHash: hashBearerToken(secondKey) });
+      expect((await call(secondKey, '/confirm', { target: h.target, handle: prepared.body.handle })).status).toBe(404);
+      expect((await workforceService(db).getBrief(h.company.id)).revision).toBe(1);
+    } finally { await bridge.close(); }
+  });
+
+  it('I1 rechecks completed question visibility and owner before safe recovery references without pending-only preconditions', async () => {
+    const h = await human('member');
+    const [worker] = await db.insert(agents).values({ companyId: h.company.id, name: 'Private recovery worker', adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: h.userId }).returning();
+    const workforce = workforceService(db);
+    await workforce.enroll(h.company.id, worker.id, { templateId: 'marketing-content' }, { userId: h.userId });
+    const issue = await workforce.startFirstJob(h.company.id, worker.id, { userId: h.userId });
+    const questions = issueThreadInteractionService(db);
+    async function answerQuestion(fail: boolean) {
+      const q = await questions.create(issue, { kind: 'ask_user_questions', continuationPolicy: 'wake_assignee', payload: { version: 1, questions: [{ id: 'private', prompt: 'PRIVATE_QUESTION_SENTINEL', selectionMode: 'text', required: true, options: [] }] } }, { agentId: worker.id });
+      const prepared = await call(h.token, '/prepare', { target: h.target, operationId: 'human_questions.respond', version: 1, input: { issueId: issue.id, interactionId: q.id, answers: [{ questionId: 'private', optionIds: [], text: 'PRIVATE_ANSWER_SENTINEL' }] } });
+      expect(prepared.status).toBe(200);
+      failAfterWake = fail;
+      const result = await call(h.token, '/confirm', { target: h.target, handle: prepared.body.handle });
+      failAfterWake = false;
+      expect(result.status).toBe(fail ? 409 : 200);
+      return { q, prepared };
+    }
+    const completed = await answerQuestion(false);
+    const recovery = await answerQuestion(true);
+    const bridge = await sdk(h);
+    async function check(handle: string, reference?: Record<string, string>) {
+      const raw = await call(h.token, '/confirm', { target: h.target, handle });
+      expect(raw.status).toBe(409);
+      expect(JSON.stringify(raw.body)).not.toContain('PRIVATE_');
+      expect(raw.body.details.result).toEqual(reference ? { reference } : undefined);
+      const mcp = await bridge.confirm(handle);
+      expect(mcp.error).toBe(true);
+      expect(JSON.stringify(mcp.body)).not.toContain('PRIVATE_');
+      expect(mcp.body.result).toEqual(reference ? { reference } : undefined);
+    }
+    try {
+      await check(completed.prepared.body.handle);
+      await check(recovery.prepared.body.handle, { issueId: issue.id, interactionId: recovery.q.id });
+      const before = await db.select().from(humanActionHandles).where(eq(humanActionHandles.actorUserId, h.userId));
+      const [project] = await db.insert(projects).values({ companyId: h.company.id, name: 'Hidden recovery project', visibility: 'restricted', createdByUserId: 'another-person' }).returning();
+      await db.update(issues).set({ projectId: project.id }).where(eq(issues.id, issue.id));
+      await check(completed.prepared.body.handle);
+      await check(recovery.prepared.body.handle);
+      await db.update(projects).set({ visibility: 'company' }).where(eq(projects.id, project.id));
+      await check(recovery.prepared.body.handle, { issueId: issue.id, interactionId: recovery.q.id });
+      await db.update(issueThreadInteractions).set({ payload: { ...recovery.q.payload, answerOwnerUserId: 'different-current-owner' } }).where(eq(issueThreadInteractions.id, recovery.q.id));
+      await check(recovery.prepared.body.handle);
+      expect(await db.select().from(humanActionHandles).where(eq(humanActionHandles.actorUserId, h.userId))).toEqual(before);
+      expect((await questions.getById(recovery.q.id))?.status).toBe('answered');
+    } finally { failAfterWake = false; await bridge.close(); }
+  });
+
+  it('I3 persists the scoped enrollment before skill installation and exposes only an authorized SDK recovery reference', async () => {
+    const h = await human();
+    const [worker] = await db.insert(agents).values({ companyId: h.company.id, name: 'Skill recovery worker', adapterType: 'codex_local' }).returning();
+    const enrollment = await workforceService(db).enroll(h.company.id, worker.id, { templateId: 'marketing-content' }, { userId: h.userId });
+    const prepared = await call(h.token, '/prepare', { target: h.target, operationId: 'workforce.skills.retry', version: 1, input: { agentId: worker.id } });
+    expect(prepared.status).toBe(200);
+    const realFactory = workforceModule.workforceService;
+    let attempts = 0;
+    let persistedBeforeInstall: typeof humanActionHandles.$inferSelect | undefined;
+    const spy = vi.spyOn(workforceModule, 'workforceService').mockImplementation(connection => {
+      const service = realFactory(connection);
+      return { ...service, ensureSkillsInstalled: async (...args) => {
+        attempts += 1;
+        [persistedBeforeInstall] = await db.select().from(humanActionHandles).where(eq(humanActionHandles.id, prepared.body.id));
+        await service.ensureSkillsInstalled(...args);
+        throw new Error('PRIVATE_POST_INSTALL_FAILURE');
+      } };
+    });
+    const bridge = await sdk(h);
+    try {
+      const result = await bridge.confirm(prepared.body.handle);
+      expect(result.error).toBe(true);
+      expect(result.body).toMatchObject({ status: 'recovery_required', result: { reference: { enrollmentId: enrollment.id } } });
+      expect(JSON.stringify(result.body)).not.toContain('PRIVATE_');
+      expect(persistedBeforeInstall).toMatchObject({ status: 'recovery_required', result: { reference: { enrollmentId: enrollment.id } } });
+      expect(persistedBeforeInstall?.consumedAt).not.toBeNull();
+      expect((await realFactory(db).getEnrollment(h.company.id, worker.id))?.installedSkillKeys.length).toBeGreaterThan(0);
+      const replay = await bridge.confirm(prepared.body.handle);
+      expect(replay.body).toMatchObject({ status: 'recovery_required', result: { reference: { enrollmentId: enrollment.id } } });
+      expect(attempts).toBe(1);
+      await db.delete(companyMemberships).where(eq(companyMemberships.companyId, h.company.id));
+      expect((await bridge.confirm(prepared.body.handle)).body).not.toHaveProperty('result');
+      const raw = await call(h.token, '/confirm', { target: h.target, handle: prepared.body.handle });
+      expect(raw.body.details).toEqual({ status: 'recovery_required', actionId: prepared.body.id });
+      expect(attempts).toBe(1);
+    } finally { spy.mockRestore(); await bridge.close(); }
   });
 
 });

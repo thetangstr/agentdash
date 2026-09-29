@@ -28,16 +28,36 @@ function project(q: AskUserQuestionsInteraction) {
 }
 async function visible(ctx: HumanOperationContext, p: Record<string, unknown>, exactOwner = true) {
   const companyId = humanCompany(ctx);
-  const query = ctx.db.select().from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, p.issueId as string)));
+  const query = ctx.db.select().from(issues).where(and(
+    eq(issues.companyId, companyId),
+    eq(issues.id, p.issueId as string),
+  ));
   const [issue] = await (ctx.lock ? query.for('update') : query);
   if (!issue || issue.hiddenAt) throw notFound('Issue not found');
-  const [member] = await ctx.db.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, ctx.req.actor.userId!), eq(companyMemberships.status, 'active')));
+
+  const [member] = await ctx.db.select().from(companyMemberships).where(and(
+    eq(companyMemberships.companyId, companyId),
+    eq(companyMemberships.principalType, 'user'),
+    eq(companyMemberships.principalId, ctx.req.actor.userId!),
+    eq(companyMemberships.status, 'active'),
+  ));
   if (!member) throw forbidden('Active named company membership required');
   await assertProjectIdVisible(ctx.db, ctx.req, companyId, issue.projectId);
-  if (ctx.lock) await ctx.db.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, p.interactionId as string), eq(issueThreadInteractions.issueId, issue.id), eq(issueThreadInteractions.companyId, companyId))).for('update');
+
+  if (ctx.lock) {
+    await ctx.db.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions).where(and(
+      eq(issueThreadInteractions.id, p.interactionId as string),
+      eq(issueThreadInteractions.issueId, issue.id),
+      eq(issueThreadInteractions.companyId, companyId),
+    )).for('update');
+  }
   const q = await issueThreadInteractionService(ctx.db).getById(p.interactionId as string);
-  if (!q || q.companyId !== companyId || q.issueId !== issue.id || q.kind !== 'ask_user_questions') throw notFound('Question not found');
-  if (exactOwner && q.payload.answerOwnerUserId !== ctx.req.actor.userId) throw forbidden('Only the named human answer owner may access this question');
+  if (!q || q.companyId !== companyId || q.issueId !== issue.id || q.kind !== 'ask_user_questions') {
+    throw notFound('Question not found');
+  }
+  if (exactOwner && q.payload.answerOwnerUserId !== ctx.req.actor.userId) {
+    throw forbidden('Only the named human answer owner may access this question');
+  }
   return { issue, q };
 }
 export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartbeatService>, 'wakeup'>): HumanOperation[] {
@@ -45,6 +65,11 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
     return {
       descriptor: { operationId, version: 1, pageId: 'inbox', actionId: operationId.slice('human_questions.'.length), targetKind: 'company', behavior: handler.read ? 'read' : 'prepare_confirm', authority: 'exact_question_owner', confirmation: handler.read ? 'none' : 'human_readback', inputSchema: humanJsonSchema(input), outputSchema: humanJsonSchema(output), content: { fullText: true, pagination: operationId.endsWith('list') ? 'offset' : 'none' } },
       input, output, ...handler, recoveryReference: value => ({ interactionId: (value as {id:string}).id, issueId: (value as {issueId:string}).issueId }), authorize() {},
+      async authorizeRecovery(ctx, p, reference) {
+        const { issue, q } = await visible(ctx, p);
+        if (reference.issueId !== issue.id || reference.interactionId !== q.id) return null;
+        return { issueId: issue.id, interactionId: q.id };
+      },
       async resolve(ctx, p) {
         const { issue, q } = await visible(ctx, p, operationId !== 'human_questions.replace');
         const svc = issueThreadInteractionService(ctx.db), actor = { userId: ctx.req.actor.userId! };

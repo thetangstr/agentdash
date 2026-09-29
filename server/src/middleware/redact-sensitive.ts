@@ -252,7 +252,7 @@ export function redactQueryObject(value: unknown, depth = 0): unknown {
 // AgentDash: these routes carry complete private answers and source material.
 // Key-based secret redaction cannot identify ordinary prose as private.
 export function isPrivateHumanInputRoute(url: unknown): boolean {
-  const pathname = typeof url === 'string' ? url.split('?')[0] : '';
+  const pathname = typeof url === 'string' ? url.split('?')[0].toLowerCase() : '';
   return /(?:^|\/)api\/human-control(?:\/|$)/.test(pathname)
     || /(?:^|\/)api\/companies\/[^/]+\/workforce\/(?:brief|proposals)(?:\/|$)/.test(pathname)
     || /(?:^|\/)api\/issues\/[^/]+\/interactions(?:\/|$)/.test(pathname);

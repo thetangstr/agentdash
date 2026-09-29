@@ -1,8 +1,9 @@
 // AgentDash: canonical workforce actions with full usable source content.
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
-import { agents, goals } from '@paperclipai/db';
+import { agents, goals, issues } from '@paperclipai/db';
 import { WORKFORCE_TEMPLATES, humanJsonSchema, supportsWorkforcePrompt, updateWorkforceBriefSchema, enrollWorkforceSchema, updateWorkforceEnrollmentSchema, reviewWorkforceProposalSchema, type HumanOperationDescriptor } from '@paperclipai/shared';
+import { assertProjectIdVisible } from '../../routes/visibility.js';
 import { assertCanSetCompanyDirection } from '../../routes/authz.js';
 import { conflict, notFound, unprocessable } from '../../errors.js';
 import { workforceService } from '../workforce.js';
@@ -27,6 +28,27 @@ export function workforceHumanOperations(heartbeat: Pick<ReturnType<typeof heart
       descriptor: { operationId, version: 1, pageId: 'workforce', actionId: operationId.slice('workforce.'.length), targetKind: 'company', behavior: handler.read ? 'read' : 'prepare_confirm', authority: direction ? 'company_direction' : 'company_access', confirmation: handler.read ? 'none' : 'human_readback', inputSchema: humanJsonSchema(input), outputSchema: humanJsonSchema(output), content: { fullText: true, pagination: 'none' } },
       input, output, ...handler,
       authorize(ctx) { if (direction) assertCanSetCompanyDirection(ctx.req, humanCompany(ctx)); },
+      async authorizeRecovery(ctx, payload, reference) {
+        if (typeof payload.agentId !== 'string') return null;
+        const companyId = humanCompany(ctx);
+        const current = await workforceService(ctx.db).getEnrollment(companyId, payload.agentId);
+        if (!current) return null;
+        if (operationId === 'workforce.first_job.start') {
+          if (!current.firstJobIssueId || reference.issueId !== current.firstJobIssueId) return null;
+          const [issue] = await ctx.db.select().from(issues).where(and(
+            eq(issues.companyId, companyId),
+            eq(issues.id, current.firstJobIssueId),
+          ));
+          if (!issue || issue.hiddenAt) return null;
+          await assertProjectIdVisible(ctx.db, ctx.req, companyId, issue.projectId);
+          return { issueId: issue.id };
+        }
+        if (['workforce.enrollment.create', 'workforce.skills.retry'].includes(operationId)
+          && reference.enrollmentId === current.id) {
+          return { enrollmentId: current.id };
+        }
+        return null;
+      },
       async resolve(ctx, payload) {
         const companyId = humanCompany(ctx), svc = workforceService(ctx.db);
         const current = await svc.getBrief(companyId);
@@ -84,7 +106,15 @@ export function workforceHumanOperations(heartbeat: Pick<ReturnType<typeof heart
     }),
     operation('workforce.enrollment.update', updateWorkforceEnrollmentSchema.extend({ agentId: id }).strict(), enrollment, true, { execute: (ctx, p) => { const { agentId, ...body } = p; return workforceService(ctx.db).updateEnrollment(humanCompany(ctx), agentId as string, updateWorkforceEnrollmentSchema.parse(body), actor(ctx)); } }),
     operation('workforce.learning.acknowledge', agentInput.extend({ revision }).strict(), enrollment, true, { execute: (ctx, p) => workforceService(ctx.db).acknowledgeLearning(humanCompany(ctx), p.agentId as string, p.revision as number, actor(ctx)) }),
-    operation('workforce.skills.retry', agentInput, enrollment, true, { execute: async () => null, afterCommit: (ctx, p) => workforceService(ctx.db).ensureSkillsInstalled(humanCompany(ctx), p.agentId as string, actor(ctx)) }),
+    operation('workforce.skills.retry', agentInput, enrollment, true, {
+      recoveryReference: value => ({ enrollmentId: (value as { id: string }).id }),
+      async execute(ctx, p) {
+        const current = await workforceService(ctx.db).getEnrollment(humanCompany(ctx), p.agentId as string);
+        if (!current) throw notFound('Workforce enrollment not found');
+        return current;
+      },
+      afterCommit: (ctx, p) => workforceService(ctx.db).ensureSkillsInstalled(humanCompany(ctx), p.agentId as string, actor(ctx)),
+    }),
     operation('workforce.first_job.start', agentInput, job, true, {
       recoveryReference: value => ({ issueId: (value as {issue:{id:string}}).issue.id }),
       execute: (ctx, p) => workforceService(ctx.db).startFirstJobWithCreation(humanCompany(ctx), p.agentId as string, actor(ctx)),

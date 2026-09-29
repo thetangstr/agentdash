@@ -10,6 +10,13 @@ import { assertCompanyAccess } from '../routes/authz.js';
 import { boardAuthService } from './board-auth.js';
 import { humanActionHandleService } from './human-action-handles.js';
 
+const recoveryReferenceSchema = z.object({
+  issueId: z.string().uuid().optional(),
+  interactionId: z.string().uuid().optional(),
+  enrollmentId: z.string().uuid().optional(),
+}).strict().refine(value => Object.keys(value).length > 0);
+export type HumanRecoveryReference = z.infer<typeof recoveryReferenceSchema>;
+
 export interface HumanOperationContext { db: Db; req: Request; target: HumanTarget; lock?: boolean }
 export interface HumanOperation {
   descriptor: HumanOperationDescriptor;
@@ -21,6 +28,9 @@ export interface HumanOperation {
   resolve(context: HumanOperationContext, input: Record<string, unknown>): Promise<{ payload: Record<string, unknown>; preconditions: Record<string, unknown>; readback?: Record<string, unknown> }>;
   read?(context: HumanOperationContext, input: Record<string, unknown>): Promise<unknown>;
   recoveryReference?(value: unknown): Record<string, unknown>;
+  // Read authorization for an already-applied resource, never mutation resolve:
+  // completed questions cannot pass pending-only write preconditions.
+  authorizeRecovery?(context: HumanOperationContext, payload: Record<string, unknown>, reference: Record<string, unknown>): Promise<HumanRecoveryReference | null>;
   afterCommit?(context: HumanOperationContext, payload: Record<string, unknown>, result: unknown): Promise<unknown>;
   execute?(context: HumanOperationContext, payload: Record<string, unknown>, actionId: string): Promise<unknown>;
 }
@@ -32,15 +42,34 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
   }
   const handles = humanActionHandleService(db);
   async function identity(req: Request, connection = db) {
-    if (req.actor.type !== 'board' || req.actor.source !== 'board_key' || !req.actor.userId || !req.actor.keyId) throw forbidden('Named board-key human authentication required');
-    const [key] = await connection.select({ id: boardApiKeys.id }).from(boardApiKeys).where(and(eq(boardApiKeys.id, req.actor.keyId), eq(boardApiKeys.userId, req.actor.userId), isNull(boardApiKeys.revokedAt), or(isNull(boardApiKeys.expiresAt), gt(boardApiKeys.expiresAt, new Date()))));
+    if (req.actor.type !== 'board' || req.actor.source !== 'board_key' || !req.actor.userId || !req.actor.keyId) {
+      throw forbidden('Named board-key human authentication required');
+    }
+    const [key] = await connection.select({ id: boardApiKeys.id }).from(boardApiKeys).where(and(
+      eq(boardApiKeys.id, req.actor.keyId),
+      eq(boardApiKeys.userId, req.actor.userId),
+      isNull(boardApiKeys.revokedAt),
+      or(isNull(boardApiKeys.expiresAt), gt(boardApiKeys.expiresAt, new Date())),
+    ));
     const access = await boardAuthService(connection).resolveBoardAccess(req.actor.userId);
     if (!key || !access.user) throw forbidden('Human connection is no longer authorized');
     // Re-resolve the original authenticated principal; never manufacture another actor.
-    req.actor.companyIds = access.companyIds; req.actor.memberships = access.memberships; req.actor.isInstanceAdmin = access.isInstanceAdmin;
+    req.actor.companyIds = access.companyIds;
+    req.actor.memberships = access.memberships;
+    req.actor.isInstanceAdmin = access.isInstanceAdmin;
     const choices = connection.select({ id: companies.id, name: companies.name }).from(companies);
     const accessibleCompanies = access.isInstanceAdmin ? await choices : access.companyIds.length ? await choices.where(inArray(companies.id, access.companyIds)) : [];
-    return { companies: accessibleCompanies, source: 'board_key', user: access.user, isInstanceAdmin: access.isInstanceAdmin, memberships: access.memberships, targets: [{ kind: 'self' }, { kind: 'instance' }, { kind: 'public' }, ...accessibleCompanies.map(company => ({ kind: 'company', companyId: company.id }))] };
+    return {
+      companies: accessibleCompanies,
+      source: 'board_key',
+      user: access.user,
+      isInstanceAdmin: access.isInstanceAdmin,
+      memberships: access.memberships,
+      targets: [
+        { kind: 'self' }, { kind: 'instance' }, { kind: 'public' },
+        ...accessibleCompanies.map(company => ({ kind: 'company', companyId: company.id })),
+      ],
+    };
   }
   function operation(id: string, version: number) {
     const result = registry.get(id as HumanOperationDescriptor['operationId']);
@@ -52,8 +81,34 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
   }
   async function authorize(op: HumanOperation, ctx: HumanOperationContext) {
     if (op.descriptor.targetKind !== ctx.target.kind) throw badRequest('Operation does not support this target kind');
-    if (ctx.target.kind === 'company' && !(op.companyAccess === 'instance_admin_stewardship' && ctx.req.actor.isInstanceAdmin)) assertCompanyAccess(ctx.req, ctx.target.companyId);
+    const stewardshipAdmin = op.companyAccess === 'instance_admin_stewardship' && ctx.req.actor.isInstanceAdmin;
+    if (ctx.target.kind === 'company' && !stewardshipAdmin) {
+      assertCompanyAccess(ctx.req, ctx.target.companyId);
+    }
     await op.authorize(ctx);
+  }
+  async function terminalDetails(req: Request, target: HumanTarget, row: Awaited<ReturnType<typeof handles.get>>) {
+    const details: { status: string; actionId: string; result?: { reference: HumanRecoveryReference } } = {
+      status: row.status,
+      actionId: row.id,
+    };
+    // A key-bound handle proves which action was attempted, not present access
+    // to cached domain content. Never return result.value, in any terminal state.
+    const reference = row.result?.reference;
+    if (!reference || typeof reference !== 'object' || Array.isArray(reference)) return details;
+    try {
+      await identity(req);
+      const op = operation(row.operationId, row.version);
+      if (!op.authorizeRecovery) return details;
+      const ctx = context(req, target);
+      await authorize(op, ctx);
+      const currentReference = await op.authorizeRecovery(ctx, row.payload, reference as Record<string, unknown>);
+      const parsed = recoveryReferenceSchema.safeParse(currentReference);
+      if (parsed.success) details.result = { reference: parsed.data };
+    } catch {
+      // Refused, missing, or uncertain resource access exposes only action state.
+    }
+    return details;
   }
   return {
     identity,
@@ -92,7 +147,9 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
     async confirm(req: Request, input: { target: HumanTarget; handle: string }) {
       await identity(req);
       const row = await handles.get(input.handle, { userId: req.actor.userId!, keyId: req.actor.keyId!, target: input.target });
-      if (row.status !== 'prepared') throw conflict('Human action is no longer executable', { status: row.status, actionId: row.id, result: row.result });
+      if (row.status !== 'prepared') {
+        throw conflict('Human action is no longer executable', await terminalDetails(req, input.target, row));
+      }
       const op = operation(row.operationId, row.version);
       try {
         await authorize(op, context(req, input.target));
@@ -135,7 +192,7 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
         }
         const recovery = await handles.get(input.handle, { userId: req.actor.userId!, keyId: req.actor.keyId!, target: input.target });
         // No unknown exception/private payload is echoed or mislabeled success.
-        throw conflict('Human action requires recovery; inspect the canonical resource before retrying', { status: 'recovery_required', actionId: row.id, operationId: row.operationId, target: input.target, result: recovery.result });
+        throw conflict('Human action requires recovery; inspect the canonical resource before retrying', await terminalDetails(req, input.target, recovery));
       }
     },
   };

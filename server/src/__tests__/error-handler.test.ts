@@ -1,4 +1,6 @@
-import type { NextFunction, Request, Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
+import { recordServerError } from "../observability/error-sink.js";
+vi.mock("../observability/error-sink.js", () => ({ recordServerError: vi.fn() }));
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../errors.js";
 import { errorHandler } from "../middleware/error-handler.js";
@@ -53,12 +55,30 @@ describe("errorHandler", () => {
 });
 
 describe('private human failure diagnostics', () => {
-  it('keeps private source or answer text out of captured unexpected errors', () => {
-    const req = makeReq(); req.originalUrl = '/api/human-control/prepare';
+  it.each(['/api/human-control/prepare', '/API/Human-Control/PREPARE', '/api/Companies/c/Workforce/Brief', '/API/companies/c/workforce/PROPOSALS/p/review', '/api/Issues/i/Interactions/q/Respond'])('keeps private source and unexpected errors out of the sink at %s', url => {
+    vi.mocked(recordServerError).mockClear();
+    const req = makeReq(); req.originalUrl = url;
     req.body = { input: { sources: [{ content: 'PRIVATE_SOURCE' }] } };
     const res = makeRes() as any;
     errorHandler(new Error('DB rejected PRIVATE_SOURCE'), req, res, vi.fn());
     expect(JSON.stringify(res.__errorContext)).not.toContain('PRIVATE_SOURCE');
     expect(res.err.message).toBe('Private human operation failed');
+    expect(vi.mocked(recordServerError).mock.calls[0][0]).toMatchObject({ message: 'Private human operation failed' });
   });
 });
+
+ it('sanitizes a real mixed-case Express route before its error sink', async () => {
+   vi.mocked(recordServerError).mockClear();
+   const app = express(); app.use(express.json());
+   app.post('/api/human-control/prepare', () => { throw new Error('PRIVATE_ROUTED_SOURCE'); });
+   app.use(errorHandler);
+   const server = app.listen(0, '127.0.0.1');
+   await new Promise<void>(resolve => server.once('listening', resolve));
+   try {
+     const port = (server.address() as { port: number }).port;
+     const response = await fetch(`http://127.0.0.1:${port}/API/HUMAN-CONTROL/PREPARE`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: { source: 'PRIVATE_ROUTED_SOURCE' } }) });
+     expect(response.status).toBe(500);
+     expect(JSON.stringify(await response.json())).not.toContain('PRIVATE_ROUTED_SOURCE');
+     expect(vi.mocked(recordServerError).mock.calls[0][0]).toMatchObject({ message: 'Private human operation failed' });
+   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+ });
