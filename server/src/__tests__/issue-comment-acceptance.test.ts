@@ -9,6 +9,7 @@ import {
   issueReferenceMentions, issueThreadInteractions, issueRelations, issueTreeHolds, executionWorkspaces, projects, issues,
 } from '@paperclipai/db';
 import { issueCommentActions, type IssueCommentContext } from '../services/issue-mutation-actions.js';
+import { heartbeatService } from '../services/heartbeat.js';
 import { publishLiveEvent } from '../services/live-events.js';
 import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/error-handler.js';
@@ -26,6 +27,10 @@ vi.mock('../services/heartbeat.js', () => ({
     getActiveRunForAgent: async () => null,
     cancelRun: async (id: string) => {
       await effects.cancel(id);
+      const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, id));
+      if (!run) throw new Error('Heartbeat run not found');
+      // Match canonical cancelRunInternal: terminal rows return unchanged.
+      if (!['queued', 'running', 'scheduled_retry'].includes(run.status)) return run;
       return (await db.update(heartbeatRuns).set({ status: 'cancelled' }).where(eq(heartbeatRuns.id, id)).returning())[0] ?? null;
     },
     wakeup: effects.wake,
@@ -361,5 +366,54 @@ describe('standalone comment acceptance over HTTP and PostgreSQL', () => {
     expect(publishLiveEvent).not.toHaveBeenCalled();
     expect(effects.cancel).not.toHaveBeenCalled();
   });
+
+  it.each(['succeeded', 'failed', 'cancelled', 'null', 'throw'] as const)(
+    'interprets canonical cancellation result %s after accepting a real comment', async result => {
+      const f = await fixture();
+      const runtime = heartbeatService(db);
+      if (result === 'null' || result === 'throw') {
+        vi.spyOn(runtime, 'cancelRun').mockImplementation(async id => {
+          await effects.cancel(id);
+          if (result === 'throw') throw new Error('Cancellation outcome unavailable');
+          return null;
+        });
+      }
+      const actions = issueCommentActions(db, runtime);
+      const accepted = await actions.accept({ ...context(f), intent: { body: 'Accepted before run completion', interrupt: true } });
+      expect(accepted.plan.interruptRun?.id).toBe(f.run.id);
+      expect((await snapshot(f)).comments).toHaveLength(1);
+      expect(effects.cancel).not.toHaveBeenCalled();
+      expect(publishLiveEvent).not.toHaveBeenCalled();
+      if (result !== 'null' && result !== 'throw') {
+        await db.update(heartbeatRuns).set({ status: result }).where(eq(heartbeatRuns.id, f.run.id));
+      }
+      const [replacement] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.agent.id,
+        status: 'running', contextSnapshot: { issueId: f.issue.id } }).returning();
+      await db.update(issues).set({ executionRunId: replacement.id }).where(eq(issues.id, f.issue.id));
+
+      const dispatched = await actions.dispatch(accepted);
+      const cancelled = result === 'cancelled';
+      const status = cancelled ? 'confirmed' : result === 'throw' ? 'unknown' : 'withheld';
+      expect(dispatched.outcomes).toContainEqual({ effect: 'cancel', targetId: f.run.id, status });
+      expect(dispatched.unresolved).toBe(result === 'throw');
+      expect(effects.cancel.mock.calls).toEqual([[f.run.id]]);
+      expect(effects.wake).toHaveBeenCalledTimes(1);
+      const wake = effects.wake.mock.calls[0][1];
+      if (cancelled) {
+        expect(wake.payload.interruptedRunId).toBe(f.run.id);
+        expect(wake.contextSnapshot.interruptedRunId).toBe(f.run.id);
+      } else {
+        expect(wake.payload).not.toHaveProperty('interruptedRunId');
+        expect(wake.contextSnapshot).not.toHaveProperty('interruptedRunId');
+        expect(dispatched.outcomes.some(outcome => outcome.effect === 'cancel_audit')).toBe(false);
+      }
+      const state = await snapshot(f);
+      expect(state.comments).toHaveLength(1);
+      expect(state.audit.filter(row => row.action === 'heartbeat.cancelled')).toHaveLength(cancelled ? 1 : 0);
+      expect(state.run.status).toBe(result === 'null' || result === 'throw' ? 'running' : result);
+      expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, replacement.id)))[0].status).toBe('running');
+      expect(publishLiveEvent).toHaveBeenCalledTimes(cancelled ? 2 : 1);
+    },
+  );
 
 });

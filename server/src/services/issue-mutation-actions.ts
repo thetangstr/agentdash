@@ -267,8 +267,12 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
     }
     for (const publication of publications) await effect("publication", undefined, async () => publishActivity(publication));
     if (plan.interruptRun) {
-      const cancelled = await effect("cancel", plan.interruptRun.id,
-        () => heartbeat.cancelRun(plan.interruptRun!.id));
+      const cancelled = await effect("cancel", plan.interruptRun.id, async () => {
+        const result = await heartbeat.cancelRun(plan.interruptRun!.id);
+        // Canonical cancellation returns already-terminal runs unchanged. Only
+        // a cancelled result supports interruption metadata and its audit.
+        return result?.status === "cancelled" ? result : null;
+      });
       if (cancelled) {
         interruptedRunId = plan.interruptRun.id;
         await effect("cancel_audit", interruptedRunId, async () => {
