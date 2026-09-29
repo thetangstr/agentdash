@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { agentCreatorFromProposal } from "../services/agent-creator-from-proposal.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverSrc = path.resolve(here, "..");
@@ -17,18 +19,33 @@ const serverSrc = path.resolve(here, "..");
  * steward-centric bundle for every role; see default-agent-instructions.ts),
  * so the sync surface shrank to the one archetype plus the proposal renderer.
  */
-const PROMPT_SURFACES: Array<{ name: string; path: string }> = [
-  { name: "default", path: path.join(serverSrc, "onboarding-assets/default/AGENTS.md") },
-  {
-    name: "agent-creator-from-proposal",
-    path: path.join(serverSrc, "services/agent-creator-from-proposal.ts"),
-  },
+const renderedPromptSurfaces = [
+  { name: "default", content: readFileSync(path.join(serverSrc, "onboarding-assets/default/AGENTS.md"), "utf8") },
+  { name: "agent-creator-from-proposal", content: "" },
 ];
 
-const renderedPromptSurfaces = PROMPT_SURFACES.map((surface) => ({
-  ...surface,
-  content: readFileSync(surface.path, "utf8"),
-}));
+// Exercise the generated prompt rather than searching the renderer's source.
+// Shared named blocks may be composed from the canonical bundle at runtime.
+beforeAll(async () => {
+  await agentCreatorFromProposal({
+    agents: {
+      getById: async () => ({ companyId: "company", adapterType: "codex_local" }),
+      create: async () => ({ id: "new-agent" }),
+      update: async () => ({}),
+      createApiKey: async () => ({}),
+    },
+    instructions: {
+      materializeManagedBundle: async (_agent: unknown, files: Record<string, string>) => {
+        renderedPromptSurfaces[1].content = files["AGENTS.md"];
+        return { adapterConfig: {} };
+      },
+    },
+  }).create({
+    companyId: "company", reportsToAgentId: "leader",
+    proposal: { name: "Sam", role: "Writer", oneLineOkr: "Prepare a campaign", rationale: "Launch support" },
+    transcript: [],
+  });
+});
 
 describe("AgentDash-MK prompt surface synchronization", () => {
   // Integrations are opt-in skills, not standing mandate (2026-09-02).

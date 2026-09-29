@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -71,14 +71,33 @@ describe('workforce hiring entry points', () => {
     expect(legacy.status).toBe(201);
     expect(await workforceService(db).getEnrollment(f.company.id, (legacy.body.agent ?? legacy.body).id)).toBeNull();
   });
-  it('single proposal uses company leader adapter and explicit selection', async () => {
+  it('single proposal preserves the canonical worker bundle and hire context after managed refresh', async () => {
     const f = await fixture();
+    await db.insert(assistantMessages).values({ conversationId: f.conversation.id, role: 'user', content: 'Use the approved launch brief for small retailers.' });
     llm.mockResolvedValue('```json\n' + JSON.stringify({ name: 'Ari', role: 'Writer', oneLineOkr: 'Draft campaign', rationale: 'Demand', workforceTemplateId: 'marketing-content' }) + '\n```');
     const response = await request(f.app()).post('/api/onboarding/agent/confirm').send({ companyId: f.company.id, conversationId: f.conversation.id, reportsToAgentId: f.cos.id });
     expect(response.status, JSON.stringify(response.body)).toBe(201);
-    expect((await agentService(db).getById(response.body.agent.id))!.adapterType).toBe('codex_local');
-    await assertSelected(f.company.id, response.body.agent.id);
-    expect((await agentService(db).getById(response.body.agent.id))!.adapterConfig.instructionsFilePath).toEqual(expect.any(String));
+    const saved = (await agentService(db).getById(response.body.agent.id))!;
+    expect(saved.adapterType).toBe('codex_local');
+    await assertSelected(f.company.id, saved.id);
+    const entryPath = saved.adapterConfig.instructionsFilePath as string;
+    const before = await readFile(entryPath, 'utf8');
+    expect(before).toContain('## Execution Contract');
+    expect(before).toContain('Start actionable work in the same heartbeat.');
+    // Force an actual named-block refresh while retaining the hire supplement.
+    await writeFile(entryPath, before.replace('A failed lookup is not a finding.', 'Stale lookup rule.'));
+    expect((await agentInstructionRefreshService({ db }).refreshIfStale(saved.id)).blocksUpdated).toContain('verify-before-asserting');
+    const refreshed = await readFile(entryPath, 'utf8');
+    const canonical = await readFile(new URL('../onboarding-assets/default/AGENTS.md', import.meta.url), 'utf8');
+    expect(refreshed).toContain(canonical.trim());
+    for (const context of ['Ari', 'Writer', 'Draft campaign', 'Demand', 'Use the approved launch brief for small retailers.']) expect(refreshed).toContain(context);
+    expect(refreshed.match(/<!-- AgentDash: workforce-learning —/g)).toHaveLength(1);
+    for (const file of ['SOUL.md', 'TOOLS.md', 'HEARTBEAT.md']) {
+      expect(await readFile(path.join(path.dirname(entryPath), file), 'utf8')).toBe(await readFile(new URL(`../onboarding-assets/default/${file}`, import.meta.url), 'utf8'));
+    }
+    const runtime = await workforceService(db).getRuntimeContext(f.company.id, saved.id);
+    expect(runtime!.template).toMatchObject({ id: 'marketing-content', version: 1 });
+    expect(runtime!.template.procedures.length).toBeGreaterThan(0);
   });
   it('saved team plan preserves selection and installs after transaction commits', async () => {
     const f = await fixture();
