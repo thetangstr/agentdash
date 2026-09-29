@@ -4,9 +4,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { agents, companies, companyContext, createDb, goals, issues, verdicts, companySkills, issueThreadInteractions, workforceEnrollments } from '@paperclipai/db';
+import { agents, companies, companyContext, createDb, goals, issues, verdicts, companySkills, issueThreadInteractions, workforceEnrollments, activityLog, issueWorkProducts } from '@paperclipai/db';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 import * as service from '../services/workforce.js';
+import { workProductService } from '../services/work-products.js';
 import { documentService } from '../services/documents.js';
 import { readPaperclipSkillSyncPreference } from '@paperclipai/adapter-utils/server-utils';
 import { agentService } from '../services/agents.js';
@@ -79,6 +80,16 @@ describe('workforce persisted contracts', () => {
     expect(a).toMatchObject({ companyId: company.id, assigneeAgentId: agent.id, originKind: 'workforce_onboarding', goalId: goal.id });
     expect(a.definitionOfDone?.criteria.length).toBeGreaterThan(0);
     expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(1);
+    const events = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id),
+      eq(activityLog.entityId, a.id),
+      eq(activityLog.action, 'issue.created'),
+    ));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      actorType: 'user', actorId: 'owner', entityType: 'issue',
+      details: { title: a.title, identifier: a.identifier },
+    });
   });
   it('requires artifact and latest neutral pass, then invalidates learning when approved context changes', async () => {
     const { company, agent, svc } = await fixture();
@@ -175,6 +186,71 @@ describe('workforce persisted contracts', () => {
     await rm(file);
     await svc.ensureSkillsInstalled(company.id, agent.id, owner);
     expect(await readFile(file, 'utf8')).toBe(skill.markdown);
+  });
+
+  it('preserves a concurrent config edit committed immediately before skill assignment', async () => {
+    const { company, agent, svc } = await fixture();
+    await svc.enroll(company.id, agent.id, { templateId: 'sales-support' }, owner);
+    let edited = false;
+    // Delay the actual SQL execution, not its result. All writes and transactions
+    // are real PostgreSQL; this hook fixes the interleaving at the agent UPDATE.
+    function beforeAgentUpdate(query: any): any {
+      return new Proxy(query, {
+        get(target, property) {
+          if (property === 'then') return async (resolve: any, reject: any) => {
+            try {
+              if (!edited) {
+                edited = true;
+                await agentService(db).update(agent.id, { adapterConfig: {
+                  custom: 'new instructions', model: 'new model',
+                  paperclipSkillSync: { customSetting: 'preserve', desiredSkills: ['company/existing-skill'] },
+                } });
+              }
+              return target.then(resolve, reject);
+            } catch (error) { return reject(error); }
+          };
+          const value = Reflect.get(target, property);
+          return typeof value === 'function'
+            ? (...args: unknown[]) => beforeAgentUpdate(value.apply(target, args))
+            : value;
+        },
+      });
+    }
+    const racedDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'transaction') return (fn: any) => target.transaction(tx => fn(new Proxy(tx, {
+          get(transaction, key) {
+            if (key === 'update') return (table: any) => {
+              const query = transaction.update(table);
+              return table === agents ? beforeAgentUpdate(query) : query;
+            };
+            const value = Reflect.get(transaction, key);
+            return typeof value === 'function' ? value.bind(transaction) : value;
+          },
+        })));
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const installed = await service.workforceService(racedDb).ensureSkillsInstalled(company.id, agent.id, owner);
+    expect(installed.skillInstallError).toBeNull();
+    const [current] = await db.select().from(agents).where(eq(agents.id, agent.id));
+    expect(current.adapterConfig).toMatchObject({ custom: 'new instructions', model: 'new model', paperclipSkillSync: { customSetting: 'preserve' } });
+    expect(readPaperclipSkillSyncPreference(current.adapterConfig).desiredSkills).toEqual(expect.arrayContaining(['company/existing-skill', ...installed.installedSkillKeys]));
+  });
+
+  it('accepts a work product without a document and requires new review after it changes', async () => {
+    const { company, agent, svc } = await fixture();
+    await svc.enroll(company.id, agent.id, { templateId: 'sales-support' }, owner);
+    await svc.updateBrief(company.id, { expectedRevision: 0, sources: [], facts: ['offer', 'pricing', 'idealCustomer', 'qualificationRules'].map(key => ({ key, value: 'Approved', sourceReference: 'Owner' })) }, owner);
+    await svc.acknowledgeLearning(company.id, agent.id, 1, owner);
+    const job = await svc.startFirstJob(company.id, agent.id, owner);
+    const product = await workProductService(db).createForIssue(job.id, company.id, { type: 'document', provider: 'local', title: 'Sales brief', url: 'https://example.test/approved-sales-brief', status: 'ready' });
+    expect(await documentService(db).listIssueDocuments(job.id)).toEqual([]);
+    const [pass] = await db.insert(verdicts).values({ companyId: company.id, entityType: 'issue', issueId: job.id, reviewerUserId: 'reviewer', outcome: 'passed' }).returning();
+    expect(await svc.getReadiness(company.id, agent.id)).toMatchObject({ phase: 'ready', acceptedVerdictId: pass.id });
+    await db.update(issueWorkProducts).set({ summary: 'Revised deliverable', updatedAt: new Date(pass.createdAt.getTime() + 1000) }).where(eq(issueWorkProducts.id, product!.id));
+    expect(await svc.getReadiness(company.id, agent.id)).toMatchObject({ phase: 'awaiting_review', acceptedVerdictId: null });
   });
 
 });

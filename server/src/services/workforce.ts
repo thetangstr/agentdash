@@ -31,9 +31,16 @@ export function workforceService(db: Db) {
     if (!row) throw notFound('Agent not found');
     return row;
   }
-  function requireHuman(actor: Actor) { if (!actor.userId || actor.agentId) throw forbidden('Human direction authority required'); }
+  function requireHuman(actor: Actor) {
+    if (!actor.userId || actor.agentId) {
+      throw forbidden('Human direction authority required');
+    }
+  }
   function requireSelfOrHuman(actor: Actor, agentId: string) {
-    if (actor.agentId ? actor.agentId !== agentId : !actor.userId) throw forbidden('Only the enrolled agent or an authorized human may acknowledge learning');
+    const isAuthorizedActor = actor.agentId ? actor.agentId === agentId : Boolean(actor.userId);
+    if (!isAuthorizedActor) {
+      throw forbidden('Only the enrolled agent or an authorized human may acknowledge learning');
+    }
   }
   async function audit(connection: Db, companyId: string, entityId: string, action: string, actor: Actor) {
     await logActivity(connection, { companyId, entityType: 'workforce', entityId, action, actorType: actor.agentId ? 'agent' : actor.userId ? 'user' : 'system', actorId: actor.agentId ?? actor.userId ?? 'workforce', agentId: actor.agentId });
@@ -121,6 +128,15 @@ export function workforceService(db: Db) {
         definitionOfDone: { summary: 'Deliver an evidence-backed first job for neutral review', criteria: template.qualityChecks.map((text, i) => ({ id: `workforce-${i + 1}`, text, done: false })) },
       });
       await tx.update(workforceEnrollments).set({ firstJobIssueId: job.id, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id));
+      await logActivity(connection, {
+        companyId,
+        actorType: 'user',
+        actorId: actor.userId!,
+        action: 'issue.created',
+        entityType: 'issue',
+        entityId: job.id,
+        details: { title: job.title, identifier: job.identifier },
+      });
       await audit(connection, companyId, job.id, 'workforce.first_job_started', actor);
       return job;
     });
@@ -158,13 +174,43 @@ export function workforceService(db: Db) {
       ];
       const history = await verdictsService(db).listForEntity(companyId, 'issue', job.id);
       const latest = history.at(-1);
-      if (job.status !== 'cancelled' && latest?.outcome === 'passed' && latest.reviewerAgentId !== agentId && (!latest.reviewerAgentId || latest.reviewerAgentId !== job.assigneeAgentId) && (!latest.reviewerUserId || latest.reviewerUserId !== job.assigneeUserId) && evidenceDates.length && new Date(latest.createdAt).getTime() >= Math.max(...evidenceDates)) result.acceptedVerdictId = latest.id;
+      const neutralReviewer = latest
+        && latest.reviewerAgentId !== agentId
+        && (!latest.reviewerAgentId || latest.reviewerAgentId !== job.assigneeAgentId)
+        && (!latest.reviewerUserId || latest.reviewerUserId !== job.assigneeUserId);
+      const reviewCoversArtifacts = latest
+        && evidenceDates.length > 0
+        && new Date(latest.createdAt).getTime() >= Math.max(...evidenceDates);
+      if (
+        job.status !== 'cancelled'
+        && latest?.outcome === 'passed'
+        && neutralReviewer
+        && reviewCoversArtifacts
+      ) {
+        result.acceptedVerdictId = latest.id;
+      }
       result.phase = evidenceDates.length ? 'awaiting_review' : 'working';
-      result.reason = job.status === 'cancelled' ? 'The first job was cancelled; reopen it before completing onboarding.' : evidenceDates.length ? 'Artifact available; a current neutral passed verdict is required.' : 'Complete the first job and attach an inspectable artifact.';
+      if (job.status === 'cancelled') {
+        result.reason = 'The first job was cancelled; reopen it before completing onboarding.';
+      } else if (evidenceDates.length) {
+        result.reason = 'Artifact available; a current neutral passed verdict is required.';
+      } else {
+        result.reason = 'Complete the first job and attach an inspectable artifact.';
+      }
     }
-    if (result.pendingQuestionIds.length || missingFactKeys.length) return { ...result, phase: 'needs_input', reason: 'Required company facts or dependent questions still need human input.' };
-    if (enrollment.learnedBriefRevision !== brief.revision) return { ...result, phase: enrollment.learnedBriefRevision === null ? 'learning' : 'refresh_needed', reason: 'Read and acknowledge the current approved company brief.' };
-    if (result.acceptedVerdictId) return { ...result, phase: 'ready', reason: 'First-job evidence has a current neutral passed verdict.' };
+    if (result.pendingQuestionIds.length || missingFactKeys.length) {
+      return { ...result, phase: 'needs_input', reason: 'Required company facts or dependent questions still need human input.' };
+    }
+    if (enrollment.learnedBriefRevision !== brief.revision) {
+      return {
+        ...result,
+        phase: enrollment.learnedBriefRevision === null ? 'learning' : 'refresh_needed',
+        reason: 'Read and acknowledge the current approved company brief.',
+      };
+    }
+    if (result.acceptedVerdictId) {
+      return { ...result, phase: 'ready', reason: 'First-job evidence has a current neutral passed verdict.' };
+    }
     return result;
   }
   async function ensureSkillsInstalled(companyId: string, agentId: string, actor: Actor) {
@@ -196,10 +242,33 @@ export function workforceService(db: Db) {
       return await db.transaction(async tx => {
         const connection = tx as unknown as Db;
         await company(companyId, connection, true);
-        const current = await agent(companyId, agentId, connection);
-        const config = current.adapterConfig as Record<string, unknown>;
-        const requested = readPaperclipSkillSyncPreference(config).desiredSkills;
-        await tx.update(agents).set({ adapterConfig: writePaperclipSkillSyncPreference(config, [...new Set([...requested, ...keys])]), updatedAt: new Date() }).where(eq(agents.id, agentId));
+        // Ordinary agent writers do not take the company lock. Compare the
+        // JSON snapshot when assigning skills so a concurrent config edit is
+        // re-read and merged, never replaced with a stale snapshot.
+        let assigned = false;
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const current = await agent(companyId, agentId, connection);
+          const config = current.adapterConfig;
+          const requested = readPaperclipSkillSyncPreference(config).desiredSkills;
+          const [updatedAgent] = await tx.update(agents)
+            .set({
+              adapterConfig: writePaperclipSkillSyncPreference(config, [...new Set([...requested, ...keys])]),
+              updatedAt: new Date(),
+            })
+            .where(and(
+              eq(agents.id, agentId),
+              eq(agents.companyId, companyId),
+              eq(agents.adapterConfig, config),
+            ))
+            .returning({ id: agents.id });
+          if (updatedAgent) {
+            assigned = true;
+            break;
+          }
+        }
+        if (!assigned) {
+          throw conflict('Agent configuration kept changing; retry workforce skill installation');
+        }
         const [updated] = await tx.update(workforceEnrollments).set({ installedSkillKeys: keys, skillInstallError: null, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id)).returning();
         await audit(connection, companyId, enrollment.id, 'workforce.skills_installed', actor);
         return updated;
