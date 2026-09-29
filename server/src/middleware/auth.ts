@@ -84,6 +84,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
   const bridge = bridgeService(db);
   const assistantOAuth = assistantOAuthService(db);
   return async (req, res, next) => {
+    req.verifiedCredential = undefined;
     req.actor =
       opts.deploymentMode === "local_trusted"
         ? {
@@ -125,7 +126,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             "Failed to resolve auth session from request headers",
           );
         }
-        if (session?.user?.id) {
+        if (session?.user?.id && session.session?.id && session.session.userId === session.user.id) {
           const userId = session.user.id;
           const [roleRow, memberships] = await Promise.all([
             db
@@ -159,6 +160,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             runId: runIdHeader ?? undefined,
             source: "session",
           };
+          req.verifiedCredential = { kind: "session", sessionId: session.session.id, userId };
           next();
           return;
         }
@@ -232,6 +234,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         runId: runIdHeader || undefined,
         source: "assistant_grant",
       };
+      req.verifiedCredential = { kind: "assistant", origin: resolved.origin };
       next();
       return;
     }
@@ -320,6 +323,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         assistantLoopback: true,
         source: "assistant_grant",
       };
+      req.verifiedCredential = { kind: "assistant", origin: resolved.origin,
+        loopback: { expiresAt: resolved.expiresAt, lease: resolved.lease } };
       next();
       return;
     }
@@ -440,6 +445,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         principalKind: jwtPrincipalKind,
         readOnly: jwtPrincipalKind === "evaluator",
       };
+      req.verifiedCredential = { kind: "agent_jwt", expiresAt: claims.exp, agentId: claims.sub,
+        companyId: claims.company_id, signedRunId: claims.run_id };
       if (refuseIfReadOnly(claims.company_id, claims.sub)) return;
       next();
       return;
@@ -456,7 +463,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       .where(eq(agents.id, key.agentId))
       .then((rows) => rows[0] ?? null);
 
-    if (!agentRecord || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
+    if (!agentRecord || agentRecord.companyId !== key.companyId || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
       next();
       return;
     }

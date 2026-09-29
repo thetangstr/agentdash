@@ -25,7 +25,12 @@ import { ASSISTANT_LOOPBACK_TOKEN_PREFIX } from "@paperclipai/shared";
  * a route nobody listed.
  */
 
+export type AssistantCredentialOrigin =
+  | { kind: "oauth"; accessTokenId: string; expiresAt: number; resource: string; scopes: string[] }
+  | { kind: "internal" };
+
 export interface AssistantLoopbackIdentity {
+  origin: AssistantCredentialOrigin;
   userId: string;
   companyId: string;
   membershipRole: string | null;
@@ -40,7 +45,12 @@ export interface AssistantLoopbackIdentity {
 
 interface LoopbackEntry extends AssistantLoopbackIdentity {
   expiresAt: number;
+  lease: AssistantLoopbackLease;
+  live: boolean;
 }
+
+// An opaque entry reference; no raw token leaves the registry.
+export interface AssistantLoopbackLease { readonly isLive: () => boolean; }
 
 /** Long enough for a slow tool call chain, short enough that a leak is useless. */
 const LOOPBACK_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -50,7 +60,7 @@ const tokens = new Map<string, LoopbackEntry>();
 
 function sweepExpired(now: number): void {
   for (const [token, entry] of tokens) {
-    if (entry.expiresAt <= now) tokens.delete(token);
+    if (entry.expiresAt <= now) { entry.live = false; tokens.delete(token); }
   }
 }
 
@@ -58,26 +68,34 @@ export function mintAssistantLoopbackToken(identity: AssistantLoopbackIdentity):
   const now = Date.now();
   if (tokens.size >= MAX_ENTRIES) sweepExpired(now);
   const token = `${ASSISTANT_LOOPBACK_TOKEN_PREFIX}${randomBytes(24).toString("base64url")}`;
-  tokens.set(token, { ...identity, expiresAt: now + LOOPBACK_TOKEN_TTL_MS });
+  if (!identity.origin || !["oauth", "internal"].includes(identity.origin.kind)) throw new Error("Explicit assistant origin required");
+  const entry: LoopbackEntry = { ...identity, origin: identity.origin.kind === "oauth"
+    ? { ...identity.origin, scopes: [...identity.origin.scopes] } : { kind: "internal" }, scopes: [...identity.scopes], expiresAt: now + LOOPBACK_TOKEN_TTL_MS,
+    live: true, lease: { isLive: () => entry.live && entry.expiresAt > Date.now() } };
+  tokens.set(token, entry);
   return token;
 }
 
-export function resolveAssistantLoopbackToken(token: string): AssistantLoopbackIdentity | null {
+export function resolveAssistantLoopbackToken(token: string): (AssistantLoopbackIdentity & { expiresAt: number; lease: AssistantLoopbackLease }) | null {
   const entry = tokens.get(token);
   if (!entry) return null;
   if (entry.expiresAt <= Date.now()) {
+    entry.live = false;
     tokens.delete(token);
     return null;
   }
-  const { expiresAt: _expiresAt, ...identity } = entry;
-  return identity;
+  const { live: _live, ...resolved } = entry;
+  return { ...resolved, scopes: [...entry.scopes] };
 }
 
 export function revokeAssistantLoopbackToken(token: string): void {
+  const entry = tokens.get(token);
+  if (entry) entry.live = false;
   tokens.delete(token);
 }
 
 /** Test isolation — the registry is module-level state. */
 export function resetAssistantLoopbackTokens(): void {
+  for (const entry of tokens.values()) entry.live = false;
   tokens.clear();
 }

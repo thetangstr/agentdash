@@ -503,6 +503,7 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
     // The gate itself, directly: a pcin_ credential carrying only
     // agentdash:read must 403 insufficient_scope on the write route.
     const loopback = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: USER_ID,
       companyId,
       membershipRole: "owner",
@@ -524,6 +525,7 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
   it("the loopback write gate refuses routes outside the five allowlisted ones", async () => {
     const { grant } = await grantToken(["agentdash:read", "agentdash:work"]);
     const loopback = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: USER_ID,
       companyId,
       membershipRole: "owner",
@@ -549,6 +551,7 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
   it("the eleventh new task in an hour is refused, not a 500", async () => {
     const { grant } = await grantToken(["agentdash:read", "agentdash:work"]);
     const loopback = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: USER_ID,
       companyId,
       membershipRole: "owner",
@@ -580,6 +583,7 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
   /** Mint a work-scoped pcin_ directly against the seeded company. */
   function workLoopback(grantId: string, company = companyId) {
     return mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: USER_ID,
       companyId: company,
       membershipRole: "owner",

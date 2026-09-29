@@ -540,6 +540,7 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
   it("a decide-scope-less credential cannot reach the actions routes directly", async () => {
     const { grant } = await grantToken(["agentdash:read", "agentdash:work"]);
     const loopback = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: USER_ID,
       companyId,
       membershipRole: "owner",
@@ -561,6 +562,7 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
   it("an unexpected body field on a gated route is refused in middleware", async () => {
     const { grant } = await grantToken(DECIDE_SCOPES);
     const loopback = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: USER_ID,
       companyId,
       membershipRole: "owner",
@@ -587,6 +589,7 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     // The MCP endpoint pins the grant's company, so exercise the REST layer
     // directly with a company-mismatched loopback identity.
     const foreign = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: USER_ID,
       companyId: otherCompanyId,
       membershipRole: "owner",

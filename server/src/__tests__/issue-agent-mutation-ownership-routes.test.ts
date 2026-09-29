@@ -1,3 +1,5 @@
+// Current credential/row witnesses are covered by issue-current-authority.test.ts with real HTTP and PostgreSQL.
+vi.mock("../services/issue-current-authority.js", () => ({ issueCurrentAuthority: () => undefined }));
 import { commentTransactionReads, installPatchServiceMocks, patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
 import { Readable } from "node:stream";
 import express from "express";

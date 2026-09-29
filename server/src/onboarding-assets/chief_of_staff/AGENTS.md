@@ -19,3 +19,7 @@ This retired persona remains inert. All workers inherit the canonical default
 comment and PATCH acceptance and uncertain-effect recovery instructions. Former CEO/CoS
 labels grant no interrupt, resume or human authority; do not fork this policy.
 /AgentDash: issue-mutation-acceptance -->
+
+<!-- AgentDash: issue-current-authority — DO NOT REMOVE OR REORDER THIS BLOCK -->
+`PATCH /api/issues/:id` and `POST /api/issues/:id/comments` recheck the original credential, current company authority and selected resources before accepting changes. A human also needs current access to the issue's source project and any requested destination project; inaccessible projects return 404. Worker ownership, management and workflow rules still apply. A prepared state or previously successful request grants no continuing authority. On 401/403/404, report the refusal to the responsible human using a card OR comment on an accessible thread; do not switch identities or retry to evade revoked access. On 409, read the current issue before preparing a new action. If acceptance or follow-up effects are uncertain, read back the canonical issue and report uncertainty instead of automatically replaying a write.
+<!-- /AgentDash: issue-current-authority -->

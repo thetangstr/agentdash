@@ -42,6 +42,8 @@ export interface IssueCommentContext {
   // Bound by the route to the actual server-authenticated request, never a
   // synthetic request or a caller-supplied actor/grant.
   validate(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
+  stageAuthority?(executor: IssueCommentExecutor, issue: Issue, resolvePatch: () => Promise<Record<string, unknown>>):
+    Promise<{ validateIssue(issue: Issue): void; beforeWrite(issue: Issue, effectivePatch: Record<string, unknown>): Promise<void> }>;
   expectedSnapshot?: CommentIntentSnapshot;
 }
 
@@ -193,7 +195,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
     if (context.expectedSnapshot && JSON.stringify(snapshot) !== JSON.stringify(context.expectedSnapshot)) {
       throw conflict("Issue changed since comment preparation");
     }
-    return { issue, intent, snapshot, checkout, reopened, isClosed, interruptRun, mentionedIds };
+    return { issue, intent, snapshot, checkout, reopened, isClosed, interruptRun, mentionedIds, domain };
   }
 
   async function accept(context: IssueCommentContext) {
@@ -206,9 +208,13 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
         const [company] = await tx.select({ id: companies.id }).from(companies)
           .where(eq(companies.id, context.companyId)).for("update");
         if (!company) throw notFound("Issue not found");
-        const [target] = await tx.select({ id: issues.id }).from(issues)
+        const [preflight] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id)));
+        if (!preflight) throw notFound("Issue not found");
+        const finalAuthorityGuard = await context.stageAuthority?.(tx, preflight, async () => (await prepare(context, tx)).domain?.patch ?? {});
+        const [target] = await tx.select().from(issues)
           .where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id))).for("update");
         if (!target) throw notFound("Issue not found");
+        finalAuthorityGuard?.validateIssue(target);
         const plan = await prepare(context, tx);
         const { issue, intent, reopened } = plan;
         const actor = context.actor;
@@ -217,6 +223,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
           publications.push(await insertActivity(tx, { companyId: company.id, ...actor, ...input,
             details: { ...input.details, mutationId } }));
         };
+        await finalAuthorityGuard?.beforeWrite(issue, plan.domain?.patch ?? {});
         if (plan.checkout) {
           const ownership = await svc.applyCheckoutOwner(plan.checkout, tx);
           if (ownership.adoptedFromRunId) await audit({ action: "issue.checkout_lock_adopted", entityType: "issue", entityId: issue.id,

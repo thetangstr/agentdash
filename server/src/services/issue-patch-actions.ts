@@ -538,8 +538,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       return await db.transaction(async tx => {
         const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, context.companyId)).for("update");
         if (!company) throw notFound("Issue not found");
-        const [target] = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, context.companyId))).for("update");
+        const [preflight] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id)));
+        if (!preflight) throw notFound("Issue not found");
+        const finalAuthorityGuard = await context.stageAuthority?.(tx, preflight, async () => (await prepare(context, tx)).domain.patch);
+        const [target] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, context.companyId))).for("update");
         if (!target) throw notFound("Issue not found");
+        finalAuthorityGuard?.validateIssue(target);
         const plan = await prepare(context, tx);
         const { existing, intent, updateFields, transition, decisionId, titleOrDescriptionChanged, existingRelations,
           updateReferenceSummaryBefore, commentBody, resumeRequested, effectiveMoveToTodoRequested, isClosed, isBlocked,
@@ -550,6 +554,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         const audit = async (input: LogActivityInput) => {
           publications.push(await insertActivity(tx, { ...input, details: { ...input.details, mutationId } }));
         };
+        await finalAuthorityGuard?.beforeWrite(existing, plan.domain.patch);
         if (plan.checkout) {
           const ownership = await svc.applyCheckoutOwner(plan.checkout, tx);
           if (ownership.adoptedFromRunId) await audit({

@@ -185,7 +185,12 @@ export function mcpRoutes() {
     // never on the caller's `pcpa_` token, which is valid on zero raw REST
     // routes. The loopback actor keeps the grant's company pin and scopes;
     // the token dies when this response does (see assistant-loopback.ts).
+    if (req.verifiedCredential?.kind !== "assistant" || req.verifiedCredential.origin.kind !== "oauth") {
+      res.status(401).json({ error: "invalid_token" });
+      return;
+    }
     const loopbackToken = mintAssistantLoopbackToken({
+      origin: req.verifiedCredential.origin,
       userId: req.actor.userId,
       companyId: req.actor.companyId,
       membershipRole: req.actor.memberships?.[0]?.membershipRole ?? null,

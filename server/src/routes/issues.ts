@@ -1,3 +1,4 @@
+import { issueCurrentAuthority } from "../services/issue-current-authority.js";
 import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
 import {
   issueCommentActions,
@@ -1983,6 +1984,7 @@ export function issueRoutes(
     try {
       const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
         actor: getActorInfo(req), actorKind: req.actor.type, attribution: assistantGrantAttribution(req), intent: req.body,
+        stageAuthority: issueCurrentAuthority(req, req.body.projectId),
         validate: async (executor, current, intent) => {
           const policyDb = executor as Db;
           await assertHostWorkspaceCommandAuthority(policyDb, req, current.companyId, collectIssueWorkspaceCommandPaths(intent, {
@@ -2743,6 +2745,7 @@ export function issueRoutes(
         actorKind: req.actor.type,
         attribution: assistantGrantAttribution(req),
         intent: req.body,
+        stageAuthority: issueCurrentAuthority(req),
         validate: async (executor, current) => {
           // Company access was checked on this authenticated request above;
           // acceptance refreshes existence and enforces that same source binding.
