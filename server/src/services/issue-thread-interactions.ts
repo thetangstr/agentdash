@@ -617,7 +617,7 @@ export function issueThreadInteractionService(db: Db) {
     return hydrateInteraction(updated);
   }
 
-  async function createInteraction(connection: Db,
+  async function resolveCreateInput(connection: Db,
     issue: { id: string; companyId: string },
     input: CreateIssueThreadInteraction,
     actor: InteractionActor,
@@ -672,6 +672,15 @@ export function issueThreadInteractionService(db: Db) {
       }
     }
 
+    return data;
+  }
+
+  async function createInteraction(connection: Db,
+    issue: { id: string; companyId: string },
+    input: CreateIssueThreadInteraction,
+    actor: InteractionActor,
+  ) {
+    const data = await resolveCreateInput(connection, issue, input, actor);
     if (data.idempotencyKey) {
       const existing = await getIdempotentInteraction({
         issueId: issue.id,
@@ -771,6 +780,7 @@ export function issueThreadInteractionService(db: Db) {
     interactionId: string,
     input: RespondIssueThreadInteraction,
     actor: InteractionActor,
+    validationOnly = false,
   ) {
     input = respondIssueThreadInteractionSchema.parse(input);
     const current = await connection
@@ -804,6 +814,7 @@ export function issueThreadInteractionService(db: Db) {
       answers: input.answers,
     });
 
+    let publish: (() => Promise<unknown>) | null = null;
     if (input.shareWithCompany) {
       if (!actor.userId || actor.agentId || !interaction.payload.answerOwnerUserId) throw forbidden('Named human confirmation is required to publish company facts');
       const [job] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
@@ -814,8 +825,10 @@ export function issueThreadInteractionService(db: Db) {
       const facts = interaction.payload.questions.filter(q => q.companyFactKey).map(q => ({ key: q.companyFactKey!, value: normalizedAnswers.find(a => a.questionId === q.id)?.text ?? '', sourceReference: `interaction:${interaction.id}/question:${q.id}` }));
       if (!template || !facts.length || facts.some(f => !template.requiredFactKeys.includes(f.key) || !f.value.trim())) throw unprocessable('Only answered template fact keys may be shared');
       const prior = await svc.getBrief(issue.companyId);
-      await svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId });
+      publish = () => svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId! });
     }
+    if (validationOnly) return interaction;
+    if (publish) await publish();
     const [updated] = await connection
       .update(issueThreadInteractions)
       .set({
@@ -846,6 +859,10 @@ export function issueThreadInteractionService(db: Db) {
   }
 
   return {
+    // AgentDash: read-only preflight uses the canonical validation and owner
+    // resolution. No answer, company fact or interaction row is written.
+    previewCreate: (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor) => resolveCreateInput(db, issue, input, actor),
+    previewAnswer: (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor) => answerQuestions(db, issue, interactionId, input, actor, true),
     listForIssue: async (issueId: string) => {
       const rows = await db
         .select()

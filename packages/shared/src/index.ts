@@ -1406,3 +1406,5 @@ export {
 export * from './types/workforce.js';
 export * from './validators/workforce.js';
 export * from './workforce-templates.js';
+export * from './human-control.js';
+export * from './validators/human-control.js';

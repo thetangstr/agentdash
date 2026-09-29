@@ -1,0 +1,54 @@
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import * as database from '@paperclipai/db';
+import { eq } from 'drizzle-orm';
+import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
+
+describe('durable human confirmation handles', () => {
+  let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
+  let db: ReturnType<typeof database.createDb>;
+  beforeAll(async () => { temp = await startEmbeddedPostgresTestDatabase('human-handles-'); db = database.createDb(temp.connectionString); });
+  afterAll(async () => { await temp?.cleanup(); });
+  it('stores only a hash and pins user, key, target, resolved action; claims once and preserves recovery', async () => {
+    expect((database as Record<string, unknown>).humanActionHandles, 'confirmation records must have their own durable schema').toBeDefined();
+    const { humanActionHandles } = database;
+    const { humanActionHandleService } = await import('../services/human-action-handles.js');
+    const userId = randomUUID();
+    await db.insert(database.authUsers).values({ id: userId, name: 'Human', email: `${userId}@test.invalid`, createdAt: new Date(), updatedAt: new Date() });
+    const [key] = await db.insert(database.boardApiKeys).values({ userId, name: 'test', keyHash: randomUUID() }).returning();
+    const [company] = await db.insert(database.companies).values({ name: 'Handle target' }).returning();
+    const target = { kind: 'company' as const, companyId: company.id };
+    const binding = { userId, keyId: key.id, target };
+    const svc = humanActionHandleService(db);
+    const prepared = await svc.prepare({ ...binding, operationId: 'workforce.brief.publish', version: 1, payload: { facts: [] }, preconditions: { revision: 0 } });
+    const [stored] = await db.select().from(humanActionHandles).where(eq(humanActionHandles.id, prepared.id));
+    expect(JSON.stringify(stored)).not.toContain(prepared.handle);
+    expect(stored.tokenHash).toHaveLength(64);
+    expect(stored.expiresAt.getTime() - stored.createdAt.getTime()).toBeLessThanOrEqual(15 * 60 * 1000);
+    await expect(svc.get(prepared.handle, { ...binding, keyId: randomUUID() })).rejects.toMatchObject({ status: 404 });
+    await expect(svc.get(prepared.handle, { ...binding, userId: 'other' })).rejects.toMatchObject({ status: 404 });
+    await expect(svc.get(prepared.handle, { ...binding, target: { kind: 'self' } })).rejects.toMatchObject({ status: 404 });
+    const attempts = await Promise.all([svc.claim(stored.id), svc.claim(stored.id)]);
+    expect(attempts.filter(Boolean)).toHaveLength(1);
+    expect((await svc.get(prepared.handle, binding)).status).toBe('recovery_required');
+    await svc.finish(stored.id, { result: { reference: 'brief:1' } });
+    expect((await svc.get(prepared.handle, binding)).result).toEqual({ reference: 'brief:1' });
+    expect(await svc.claim(stored.id)).toBeNull();
+  });
+  it('makes expiry and denial terminal and never claims them after a role change', async () => {
+    expect((database as Record<string, unknown>).humanActionHandles).toBeDefined();
+    const { humanActionHandleService } = await import('../services/human-action-handles.js');
+    const userId = randomUUID();
+    await db.insert(database.authUsers).values({ id: userId, name: 'Expiry human', email: `${userId}@test.invalid`, createdAt: new Date(), updatedAt: new Date() });
+    const [key] = await db.insert(database.boardApiKeys).values({ userId, name: 'expiry test', keyHash: randomUUID() }).returning();
+    const binding = { userId: key.userId, keyId: key.id, target: { kind: 'self' as const } };
+    const svc = humanActionHandleService(db);
+    const action = await svc.prepare({ ...binding, operationId: 'workforce.brief.publish', version: 1, payload: {}, preconditions: {} });
+    await svc.reject(action.id, 'denied');
+    expect(await svc.claim(action.id)).toBeNull();
+    const expiring = await svc.prepare({ ...binding, operationId: 'workforce.brief.publish', version: 1, payload: {}, preconditions: {} });
+    await db.update(database.humanActionHandles).set({ expiresAt: new Date(0) }).where(eq(database.humanActionHandles.id, expiring.id));
+    expect((await svc.get(expiring.handle, binding)).status).toBe('expired');
+    expect(await svc.claim(expiring.id)).toBeNull();
+  });
+});

@@ -7,3 +7,9 @@ issue, and first-job acceptance needs inspectable evidence plus neutral review.
 Do not restore a separate persona or fork this shared learning behavior.
 Human proposal review and department target changes are described in the same canonical worker bundle; this inert legacy persona grants no review authority.
 /AgentDash: workforce-learning -->
+
+<!-- AgentDash: human-control-transport — DO NOT REMOVE OR REORDER THIS BLOCK
+This retired persona remains inert. The unified default worker bundle carries the
+human-control transport boundaries; a legacy Chief of Staff label grants no human
+identity, board key, confirmation authority, or right to answer another's questions.
+/AgentDash: human-control-transport -->

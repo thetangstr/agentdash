@@ -1,3 +1,4 @@
+import type { WaitingOnYouQuestion } from '@paperclipai/shared';
 import { z } from "zod";
 import type { PaperclipApiClient } from "../client.js";
 import type { AssistantContext } from "./context.js";
@@ -786,6 +787,8 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           updatedAt: string;
         }>;
         tasksAssignedToYouTotal?: number;
+        pendingQuestions?: WaitingOnYouQuestion[];
+        pendingQuestionsTotal?: number;
         /** Machine-filed open issues (routines, evaluations, escalations) — "other activity", not decisions. */
         otherTasksAssignedToYou?: Array<{
           issueId: string;
@@ -826,6 +829,12 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           link: task.identifier ? await ctx.issueLink(task.identifier) : await ctx.homeLink(),
         })),
       );
+      const questions = await Promise.all((response.pendingQuestions ?? []).slice(0, cap).map(async question => ({
+        ...question, questionSummary: clip(question.questionSummary, FREE_TEXT_LIMIT),
+        link: question.identifier ? await ctx.issueLink(question.identifier) : await ctx.homeLink(),
+      })));
+      const questionTotal = response.pendingQuestionsTotal ?? questions.length;
+      const questionMore = questionTotal - questions.length;
       const taskMore = (response.tasksAssignedToYouTotal ?? tasks.length) - tasks.length;
       const otherTasksTotal = response.otherTasksAssignedToYouTotal ?? otherTasks.length;
       const undecidable = items.filter((d) => !d.canDecide).length;
@@ -844,6 +853,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           `${response.tasksAssignedToYouTotal ?? tasks.length} task${(response.tasksAssignedToYouTotal ?? tasks.length) === 1 ? "" : "s"} assigned to you${taskMore > 0 ? ` (showing ${tasks.length})` : ""}`,
         );
       }
+      if (questionTotal > 0) summaryParts.push(`${questionTotal} question${questionTotal === 1 ? '' : 's'} waiting for your answer`);
       if (otherTasksTotal > 0) {
         summaryParts.push(
           `${otherTasksTotal} machine-filed item${otherTasksTotal === 1 ? "" : "s"} assigned to you are grouped as other activity, not decisions`,
@@ -857,14 +867,16 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         data: redactAssistantValue({
           decisions: items,
           total: decisionTotal,
+          pendingQuestions: questions,
+          pendingQuestionsTotal: questionTotal,
           tasksAssignedToYou: tasks,
           tasksAssignedToYouTotal: response.tasksAssignedToYouTotal ?? tasks.length,
           otherTasksAssignedToYou: otherTasks,
           otherTasksAssignedToYouTotal: otherTasksTotal,
-          truncated: more > 0 || taskMore > 0,
+          truncated: more > 0 || taskMore > 0 || questionMore > 0,
         }),
         links: { primary },
-        truncated: more > 0 || taskMore > 0,
+        truncated: more > 0 || taskMore > 0 || questionMore > 0,
       });
     },
   );

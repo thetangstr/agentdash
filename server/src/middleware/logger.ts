@@ -5,7 +5,7 @@ import { pinoHttp } from "pino-http";
 import { readConfigFile } from "../config-file.js";
 import { resolveDefaultLogsDir, resolveHomeAwarePath } from "../home-paths.js";
 import { shouldSilenceHttpSuccessLog } from "./http-log-policy.js";
-import { redactQueryObject, redactSensitive, redactUrlQuery } from "./redact-sensitive.js";
+import { isPrivateHumanInputRoute, redactQueryObject, redactHumanRequestBody, redactUrlQuery } from "./redact-sensitive.js";
 
 function resolveServerLogDir(): string {
   const envOverride = process.env.PAPERCLIP_LOG_DIR?.trim();
@@ -46,6 +46,7 @@ const sharedOpts = {
 const SECRET_BODY_FIELDS = ["password", "newPassword", "currentPassword", "token"];
 export const LOG_REDACT_PATHS = [
   "req.headers.authorization",
+  'req.headers["x-agent-key"]',
   "req.headers.cookie",
   // AgentDash (#766): the edge gate strips it first; redacted here as well.
   'req.headers["x-agentdash-edge"]',
@@ -99,7 +100,13 @@ export const httpLogger = pinoHttp({
     // lines carry their URL through THIS message — both messages must scrub.
     return `${req.method} ${redactUrlQuery(req.url)} ${res.statusCode}`;
   },
+  customErrorObject(req, _res, _error, object) {
+    return isPrivateHumanInputRoute((req as any).originalUrl ?? req.url)
+      ? { ...object, err: { message: 'Private human operation failed' } }
+      : object;
+  },
   customErrorMessage(req, res, err) {
+    if (isPrivateHumanInputRoute((req as any).originalUrl ?? req.url)) return `${req.method} ${redactUrlQuery(req.url)} ${res.statusCode} — private human operation failed`;
     const ctx = (res as any).__errorContext;
     const errMsg = ctx?.error?.message || err?.message || (res as any).err?.message || "unknown error";
     return `${req.method} ${redactUrlQuery(req.url)} ${res.statusCode} — ${errMsg}`;
@@ -109,8 +116,8 @@ export const httpLogger = pinoHttp({
       const ctx = (res as any).__errorContext;
       if (ctx) {
         return {
-          errorContext: ctx.error,
-          reqBody: redactSensitive(ctx.reqBody),
+          errorContext: isPrivateHumanInputRoute((req as any).originalUrl ?? req.url) ? { message: 'Private human operation failed' } : ctx.error,
+          reqBody: redactHumanRequestBody((req as any).originalUrl ?? req.url, ctx.reqBody),
           // reqParams are URL-derived (path params are part of the request
           // target), so they use the QUERY channel with the broader key
           // list — a `/api/invites/:token/...` 4xx would otherwise log the
@@ -124,7 +131,7 @@ export const httpLogger = pinoHttp({
       const props: Record<string, unknown> = {};
       const { body, params, query } = req as any;
       if (body && typeof body === "object" && Object.keys(body).length > 0) {
-        props.reqBody = redactSensitive(body);
+        props.reqBody = redactHumanRequestBody((req as any).originalUrl ?? req.url, body);
       }
       if (params && typeof params === "object" && Object.keys(params).length > 0) {
         props.reqParams = redactQueryObject(params);

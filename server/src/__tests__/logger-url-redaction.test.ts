@@ -166,3 +166,22 @@ describe("AGE-83 logger integration", () => {
     expect(String(line.reqBody?.password)).toMatch(/^\[(Redacted|REDACTED)\]$/);
   });
 });
+
+describe('named-human private transport log boundaries', () => {
+  it.each([
+    '/api/human-control/prepare', '/api/human-control/confirm',
+    '/api/companies/c/workforce/brief', '/api/companies/c/workforce/proposals/p/review',
+    '/api/issues/i/interactions', '/api/issues/i/interactions/q/respond', '/api/issues/i/interactions/q/cancel',
+  ])('omits private bodies from raw and error-context failures at %s', url => {
+    for (const captureContext of [false, true]) {
+      state.lines.length = 0;
+      const body = { input: { sources: [{ content: 'PRIVATE_SOURCE_SENTINEL' }], answers: [{ text: 'PRIVATE_ANSWER_SENTINEL' }] }, handle: 'PRIVATE_HANDLE_SENTINEL' };
+      const req = makeReq(url, 'POST', { body, headers: { 'x-agent-key': 'PRIVATE_KEY_SENTINEL' } });
+      const res = makeRes(captureContext ? 500 : 400, captureContext ? new Error('PRIVATE_ERROR_SENTINEL') : undefined);
+      if (captureContext) res.__errorContext = { reqBody: body, error: { message: 'PRIVATE_ERROR_SENTINEL', details: body } };
+      const line = emitLine(req, res);
+      expect(JSON.stringify(line)).not.toContain('PRIVATE_');
+      expect(line.reqBody).toBe('[PRIVATE HUMAN INPUT OMITTED]');
+    }
+  });
+});

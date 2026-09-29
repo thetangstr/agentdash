@@ -156,6 +156,8 @@ function seededClient(overrides: Handler = () => null): PaperclipApiClient {
           { issueId: "issue-3", identifier: "ACME-313", title: "Pick the launch date", status: "todo", updatedAt: "2026-09-23T09:00:00Z" },
         ],
         tasksAssignedToYouTotal: 1,
+        pendingQuestions: [{ interactionId: 'question-1', issueId: 'issue-3', identifier: 'ACME-313', issueTitle: 'Pick the launch date', title: 'Input requested', questionSummary: 'When should we launch?', waitingSince: '2026-09-23T09:00:00Z', answerOwnerUserId: 'human-1', answerOwnerName: 'Human' }],
+        pendingQuestionsTotal: 1,
         otherTasksAssignedToYou: [
           { issueId: "issue-4", identifier: "ACME-314", title: "Weekly metrics snapshot", status: "todo", updatedAt: "2026-09-23T08:00:00Z", originKind: "routine_execution" },
         ],
@@ -544,6 +546,15 @@ describe("tool outputs", () => {
     const decisions = data.decisions as Array<Record<string, unknown>>;
     expect(decisions[0].canDecide).toBe(true);
     expect(decisions[0].link).toBe("https://dash.example.test/ACME/approvals/appr-1");
+  });
+
+  it("list_pending_decisions returns exact-owner pending question projection and count", async () => {
+    const { call } = makeTools();
+    const result = await call("list_pending_decisions");
+    const data = (result.structuredContent as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.pendingQuestionsTotal).toBe(1);
+    expect(data.pendingQuestions).toEqual([expect.objectContaining({ interactionId: 'question-1', issueId: 'issue-3', questionSummary: 'When should we launch?' })]);
+    expect(result.content[0].text).toContain('1 question');
   });
 
   it("list_pending_decisions includes tasks assigned to the calling person", async () => {

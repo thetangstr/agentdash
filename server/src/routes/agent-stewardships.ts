@@ -1,3 +1,4 @@
+import { assertOwnershipManagement } from "../services/human-control/ownership.js";
 import { Router } from "express";
 import type { Request } from "express";
 import { and, eq } from "drizzle-orm";
@@ -10,11 +11,10 @@ import {
 } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
-import { accessService } from "../services/access.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { agentService } from "../services/agents.js";
 import { logger } from "../middleware/logger.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertCompanyAccess } from "./authz.js";
 
 /**
  * Memberships created before this instant predate automatic provisioning.
@@ -29,16 +29,9 @@ const PERSONAL_AGENT_PROVISIONING_FROM = new Date("2026-09-01T00:00:00.000Z");
 export function agentStewardshipRoutes(db: Db) {
   const router = Router();
   const stewardships = agentStewardshipService(db);
-  const access = accessService(db);
 
   async function assertCanMutateStewardships(req: Request, companyId: string) {
-    assertBoard(req);
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-    assertCompanyAccess(req, companyId);
-    const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
-    if (!allowed) {
-      throw forbidden("Agent stewardship management requires agent creation permission");
-    }
+    await assertOwnershipManagement(db, req, companyId);
   }
 
   /**

@@ -56,7 +56,7 @@ export function waitingOnYouService(db: Db) {
   const approvals = approvalService(db);
   const issueApprovals = issueApprovalService(db);
 
-  async function pendingQuestions(companyId: string, actor: WaitingOnYouActor) {
+  async function pendingQuestions(companyId: string, actor: WaitingOnYouActor, page: { offset?: number; limit?: number } = {}): Promise<{ items: WaitingOnYouQuestion[]; total: number }> {
     // A memberless local operator has no named answer identity. It does not
     // inherit someone else's questions or become an arbitrary answer owner.
     if (!actor.userId) return { items: [] as WaitingOnYouQuestion[], total: 0 };
@@ -71,9 +71,13 @@ export function waitingOnYouService(db: Db) {
       .innerJoin(companyMemberships, and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, actor.userId), eq(companyMemberships.status, 'active')))
       .leftJoin(authUsers, eq(authUsers.id, actor.userId))
       .where(and(eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.kind, 'ask_user_questions'), eq(issueThreadInteractions.status, 'pending'), eq(ownerId, actor.userId), isNull(issues.hiddenAt), notInArray(issues.status, ['done', 'cancelled']), visibility))
-      .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id)).limit(50);
+      .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id)).limit(page.limit ?? 50).offset(page.offset ?? 0);
+    // An exhausted page still reports the full authorized count.
+    const total = rows[0] ? Number(rows[0].total) : (page.offset ?? 0) > 0
+      ? (await pendingQuestions(companyId, actor, { offset: 0, limit: 1 })).total
+      : 0;
     return {
-      total: Number(rows[0]?.total ?? 0),
+      total,
       items: rows.map(row => ({
         interactionId: row.interactionId, issueId: row.issueId, identifier: row.identifier,
         issueTitle: row.issueTitle, title: row.title ?? 'Input requested',
@@ -84,6 +88,7 @@ export function waitingOnYouService(db: Db) {
   }
 
   return {
+    pendingQuestions,
     /**
      * The pending-decisions payload: approvals with `canDecide` computed per
      * row by probing the one authority service, plus the person's open

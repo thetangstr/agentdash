@@ -1,3 +1,4 @@
+import { agentConfigurationAuthority, resolveAccountabilityPatch, recordAccountabilityChange } from "../services/human-control/ownership.js";
 import { workforceService } from "../services/workforce.js";
 import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
@@ -78,7 +79,6 @@ import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompan
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
-  accountabilityLabel,
   type AgentAccountability,
   agentAccountabilityService,
   assertAgentMayHoldKey,
@@ -842,16 +842,7 @@ export function agentRoutes(
     req: Request,
     targetAgent: { id: string; companyId: string },
   ): Promise<"admin" | "steward"> {
-    assertCompanyAccess(req, targetAgent.companyId);
-    const authority = await governance.resolveConfigurationAuthority(
-      targetAgent.companyId,
-      targetAgent.id,
-      req.actor,
-    );
-    if (authority) return authority;
-    // Preserve the existing error semantics for non-stewards.
-    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
-    return "admin";
+    return agentConfigurationAuthority(db, req, targetAgent);
   }
 
   /** 403 when a steward-authority caller touches a field only an admin may set. */
@@ -3534,46 +3525,7 @@ export function agentRoutes(
     // does not list either field, so a steward patching their own agent is
     // refused by `assertStewardPatchScope` above.
     if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
-      const currentAutonomy = normalizeAgentAutonomy(existing.autonomy);
-      const nextAutonomy = hasOwn(patchData, "autonomy")
-        ? normalizeAgentAutonomy(patchData.autonomy)
-        : currentAutonomy;
-      const requestedAccountable =
-        typeof patchData.accountableUserId === "string" ? patchData.accountableUserId.trim() : null;
-
-      if (nextAutonomy === "autonomous") {
-        const activeSteward = await stewardships.activeByAgent(existing.companyId, existing.id);
-        if (activeSteward) {
-          const steward = await accountability.resolveForAgent(existing.companyId, existing.id);
-          throw conflict(
-            `${existing.name} is stewarded by ${accountabilityLabel(steward) ?? activeSteward.userId}. `
-              + "End that stewardship first if this agent should run without a person; "
-              + "making it autonomous would revoke their connect code and channel binding.",
-          );
-        }
-        const resolved = requestedAccountable
-          ?? existing.accountableUserId
-          ?? (req.actor.type === "board" ? req.actor.userId ?? null : null);
-        if (!resolved) {
-          throw conflict(
-            "An autonomous agent needs a human who is accountable for it. Pass accountableUserId.",
-          );
-        }
-        await accountability.assertAccountableMember(existing.companyId, resolved);
-        patchData.accountableUserId = resolved;
-      } else {
-        if (requestedAccountable) {
-          throw conflict(
-            "A stewarded agent takes its accountable human from its steward, so accountableUserId "
-              + "cannot be set on one. Assign the stewardship instead, or make the agent autonomous.",
-          );
-        }
-        // Clearing it is deliberate: leaving a stale value behind would give the
-        // agent two answers to "who answers for this?" the moment a steward is
-        // assigned, and the stewardship is the one that means anything.
-        patchData.accountableUserId = null;
-      }
-      patchData.autonomy = nextAutonomy;
+      Object.assign(patchData, await resolveAccountabilityPatch(db, req, existing, patchData));
     }
     if (hasOwn(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
@@ -3760,22 +3712,7 @@ export function agentRoutes(
     // actually asks. Recorded separately so it can be found without reading
     // every update to the agent.
     if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
-      await logActivity(db, {
-        companyId: agent.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "agent.accountability_changed",
-        entityType: "agent",
-        entityId: agent.id,
-        details: {
-          fromAutonomy: normalizeAgentAutonomy(existing.autonomy),
-          toAutonomy: normalizeAgentAutonomy(agent.autonomy),
-          fromAccountableUserId: existing.accountableUserId ?? null,
-          toAccountableUserId: agent.accountableUserId ?? null,
-        },
-      });
+      await recordAccountabilityChange(db, req, existing, agent);
     }
 
     res.json(agent);

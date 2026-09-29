@@ -981,6 +981,13 @@
       "when": 1790709572685,
       "tag": "0139_lazy_solo",
       "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1790715836711,
+      "tag": "0140_puzzling_spirit",
+      "breakpoints": true
     }
   ]
 }

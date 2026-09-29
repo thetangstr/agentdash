@@ -51,3 +51,14 @@ describe("errorHandler", () => {
     expect(res.__errorContext?.error?.message).toBe("db exploded");
   });
 });
+
+describe('private human failure diagnostics', () => {
+  it('keeps private source or answer text out of captured unexpected errors', () => {
+    const req = makeReq(); req.originalUrl = '/api/human-control/prepare';
+    req.body = { input: { sources: [{ content: 'PRIVATE_SOURCE' }] } };
+    const res = makeRes() as any;
+    errorHandler(new Error('DB rejected PRIVATE_SOURCE'), req, res, vi.fn());
+    expect(JSON.stringify(res.__errorContext)).not.toContain('PRIVATE_SOURCE');
+    expect(res.err.message).toBe('Private human operation failed');
+  });
+});

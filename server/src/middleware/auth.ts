@@ -104,9 +104,15 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     // header on every request", but the server historically only read Authorization:
     // Bearer — so agents that followed their own instructions 401'd. When no Bearer
     // credential is present, map x-agent-key onto the same token validation path.
-    const agentKeyHeader = req.header("x-agent-key")?.trim();
-    if (agentKeyHeader && !authHeader?.toLowerCase().startsWith("bearer ")) {
-      authHeader = `Bearer ${agentKeyHeader}`;
+    const rawAgentKeyHeader = req.header("x-agent-key");
+    const hasBearer = /^bearer(?:\s|$)/i.test(authHeader ?? "");
+    // AgentDash: explicit credentials never inherit the no-credential local
+    // operator. Empty, revoked and invalid keys must remain unauthenticated.
+    if (hasBearer || rawAgentKeyHeader !== undefined) {
+      req.actor = { type: "none", source: "none" };
+      authHeader = hasBearer
+        ? `Bearer ${(authHeader ?? "").slice("bearer".length).trim()}`
+        : `Bearer ${rawAgentKeyHeader?.trim() ?? ""}`;
     }
     if (!authHeader?.toLowerCase().startsWith("bearer ")) {
       if (opts.deploymentMode === "authenticated" && opts.resolveSession) {
