@@ -4,6 +4,8 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockIssueService = vi.hoisted(() => ({
+  // Domain behavior is covered with PostgreSQL; this route fixture models its explicit result.
+  prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
   getById: vi.fn(),
   assertCheckoutOwner: vi.fn(),
   evaluateCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),

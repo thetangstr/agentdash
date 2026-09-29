@@ -237,6 +237,12 @@ type IssueUserContextInput = {
 };
 type ProjectGoalReader = Pick<Db, "select">;
 type DbReader = Pick<Db, "select">;
+type IssueUpdateData = Partial<typeof issues.$inferInsert> & {
+  labelIds?: string[];
+  blockedByIssueIds?: string[];
+  actorAgentId?: string | null;
+  actorUserId?: string | null;
+};
 type IssueMutationExecutor = Pick<Db, "select" | "insert" | "update" | "delete" | "execute">;
 
 // AgentDash: private acceptance facts, never a caller-authored authority capability.
@@ -2207,6 +2213,18 @@ export function issueService(db: Db) {
     }
   }
 
+  async function assertValidBlockedByIssueIds(
+    issueId: string, companyId: string, blockerIds: string[], executor: DbReader,
+  ) {
+    const deduped = [...new Set(blockerIds)];
+    if (deduped.includes(issueId)) throw unprocessable("Issue cannot be blocked by itself");
+    if (!deduped.length) return;
+    const related = await executor.select({ id: issues.id }).from(issues)
+      .where(and(eq(issues.companyId, companyId), inArray(issues.id, deduped)));
+    if (related.length !== deduped.length) throw unprocessable("Blocked-by issues must belong to the same company");
+    await assertNoBlockingCycles(companyId, issueId, deduped, executor);
+  }
+
   async function syncBlockedByIssueIds(
     issueId: string,
     companyId: string,
@@ -2215,10 +2233,6 @@ export function issueService(db: Db) {
     dbOrTx: any = db,
   ) {
     const deduped = [...new Set(blockedByIssueIds)];
-    if (deduped.some((candidate) => candidate === issueId)) {
-      throw unprocessable("Issue cannot be blocked by itself");
-    }
-
     if (deduped.length > 0) {
       const lockedIssueIds = [issueId, ...deduped].sort();
       await dbOrTx.execute(
@@ -2227,15 +2241,8 @@ export function issueService(db: Db) {
             ORDER BY ${issues.id}
             FOR UPDATE`,
       );
-      const relatedIssues = await dbOrTx
-        .select({ id: issues.id })
-        .from(issues)
-        .where(and(eq(issues.companyId, companyId), inArray(issues.id, deduped)));
-      if (relatedIssues.length !== deduped.length) {
-        throw unprocessable("Blocked-by issues must belong to the same company");
-      }
-      await assertNoBlockingCycles(companyId, issueId, deduped, dbOrTx);
     }
+    await assertValidBlockedByIssueIds(issueId, companyId, deduped, dbOrTx);
 
     await dbOrTx
       .delete(issueRelations)
@@ -2428,8 +2435,129 @@ export function issueService(db: Db) {
     return { ...current, adoptedFromRunId: fresh.adoptedFromRunId };
   }
 
+  // AgentDash: one SELECT-only domain resolver for preparation and canonical writes.
+  // Generated timestamps and lock application are deliberately outside this result.
+  async function resolveUpdate(
+    existing: typeof issues.$inferSelect,
+    data: IssueUpdateData,
+    tx: DbReader,
+    experimentalSettings?: Awaited<ReturnType<typeof readInstanceExperimentalSettings>> | null,
+  ) {
+    const {
+      labelIds: nextLabelIds,
+      blockedByIssueIds,
+      actorAgentId,
+      actorUserId,
+      ...issueData
+    } = data;
+    const isolatedWorkspacesEnabled = (experimentalSettings ?? await readInstanceExperimentalSettings(tx)).enableIsolatedWorkspaces;
+    if (!isolatedWorkspacesEnabled) {
+      delete issueData.executionWorkspaceId;
+      delete issueData.executionWorkspacePreference;
+      delete issueData.executionWorkspaceSettings;
+    }
+
+    if (issueData.status) {
+      assertTransition(existing.status, issueData.status);
+    }
+
+    const patch: Partial<typeof issues.$inferInsert> = {
+      ...issueData,
+    };
+    if (issueData.requestDepth !== undefined) {
+      patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
+    }
+
+    const nextAssigneeAgentId =
+      issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
+    const nextAssigneeUserId =
+      issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
+
+    if (nextAssigneeAgentId && nextAssigneeUserId) {
+      throw unprocessable("Issue can only have one assignee");
+    }
+    if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
+      throw unprocessable("in_progress issues require an assignee");
+    }
+    if (patch.status === "in_progress") {
+      const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
+        ? await listUnresolvedBlockerIssueIds(tx, existing.companyId, blockedByIssueIds)
+        : (
+            await listIssueDependencyReadinessMap(tx, existing.companyId, [existing.id])
+          ).get(existing.id)?.unresolvedBlockerIssueIds ?? [];
+      if (unresolvedBlockerIssueIds.length > 0) {
+        throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+      }
+    }
+    if (issueData.assigneeAgentId) {
+      await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId, tx);
+    }
+    if (issueData.assigneeUserId) {
+      await assertAssignableUser(existing.companyId, issueData.assigneeUserId, tx);
+    }
+    const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
+    const nextProjectWorkspaceId =
+      issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
+    const nextExecutionWorkspaceId =
+      issueData.executionWorkspaceId !== undefined ? issueData.executionWorkspaceId : existing.executionWorkspaceId;
+    const nextExecutionWorkspacePreference =
+      issueData.executionWorkspacePreference !== undefined
+        ? issueData.executionWorkspacePreference
+        : existing.executionWorkspacePreference;
+    const nextExecutionWorkspaceSettings =
+      issueData.executionWorkspaceSettings !== undefined
+        ? parseIssueExecutionWorkspaceSettings(issueData.executionWorkspaceSettings)
+        : parseIssueExecutionWorkspaceSettings(existing.executionWorkspaceSettings);
+    if (nextProjectWorkspaceId) {
+      await assertValidProjectWorkspace(existing.companyId, nextProjectId, nextProjectWorkspaceId, tx);
+    }
+    if (nextExecutionWorkspaceId) {
+      await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId, tx);
+    }
+
+    if (issueData.status === "done") {
+      // SELECT-only in planning; canonical update holds the refreshed target lock.
+      const input = await workforceIssueInputs(tx as Db, existing.companyId, existing.assigneeAgentId, existing.id);
+      if (input.pendingQuestionIds.length || input.missingFactKeys.length) {
+        throw conflict("Required workforce input is unresolved", {
+          pendingQuestionIds: input.pendingQuestionIds,
+          missingFactKeys: input.missingFactKeys,
+        });
+      }
+    }
+    const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
+    const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
+      getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),
+      getProjectDefaultGoalId(
+        tx,
+        existing.companyId,
+        issueData.projectId !== undefined ? issueData.projectId : existing.projectId,
+      ),
+    ]);
+    patch.goalId = resolveNextIssueGoalId({
+      currentProjectId: existing.projectId,
+      currentGoalId: existing.goalId,
+      currentProjectGoalId,
+      projectId: issueData.projectId,
+      goalId: issueData.goalId,
+      projectGoalId: nextProjectGoalId,
+      defaultGoalId: defaultCompanyGoal?.id ?? null,
+    });
+    if (nextLabelIds !== undefined) await assertValidLabelIds(existing.companyId, [...new Set(nextLabelIds)], tx);
+    if (blockedByIssueIds !== undefined) await assertValidBlockedByIssueIds(existing.id, existing.companyId, blockedByIssueIds, tx);
+    return { patch, issueData, nextLabelIds, blockedByIssueIds, actorAgentId, actorUserId,
+      nextExecutionWorkspaceId, nextExecutionWorkspacePreference, nextExecutionWorkspaceSettings };
+  }
+
   return {
     clearExecutionRunIfTerminal,
+
+    // No initialization, FOR UPDATE, cleanup, adoption, or writes on this path.
+    prepareUpdate: async (id: string, data: IssueUpdateData, executor: DbReader = db) => {
+      const [existing] = await executor.select().from(issues).where(eq(issues.id, id));
+      if (!existing) throw notFound("Issue not found");
+      return resolveUpdate(existing, data, executor);
+    },
 
     list: async (companyId: string, filters?: IssueFilters) => {
       const conditions = [eq(issues.companyId, companyId)];
@@ -3355,12 +3483,7 @@ export function issueService(db: Db) {
 
     update: async (
       id: string,
-      data: Partial<typeof issues.$inferInsert> & {
-        labelIds?: string[];
-        blockedByIssueIds?: string[];
-        actorAgentId?: string | null;
-        actorUserId?: string | null;
-      },
+      data: IssueUpdateData,
       dbOrTx: IssueMutationExecutor = db,
     ) => {
       // Existence-only preflight preserves missing-target no-initialization behavior.
@@ -3381,79 +3504,10 @@ export function issueService(db: Db) {
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!existing) return null;
 
-        const {
-          labelIds: nextLabelIds,
-          blockedByIssueIds,
-          actorAgentId,
-          actorUserId,
-          ...issueData
-        } = data;
-        const isolatedWorkspacesEnabled = (experimentalSettings ?? await readInstanceExperimentalSettings(tx)).enableIsolatedWorkspaces;
-        if (!isolatedWorkspacesEnabled) {
-          delete issueData.executionWorkspaceId;
-          delete issueData.executionWorkspacePreference;
-          delete issueData.executionWorkspaceSettings;
-        }
-
-        if (issueData.status) {
-          assertTransition(existing.status, issueData.status);
-        }
-
-        const patch: Partial<typeof issues.$inferInsert> = {
-          ...issueData,
-          updatedAt: new Date(),
-        };
-        if (issueData.requestDepth !== undefined) {
-          patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
-        }
-
-        const nextAssigneeAgentId =
-          issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
-        const nextAssigneeUserId =
-          issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
-
-        if (nextAssigneeAgentId && nextAssigneeUserId) {
-          throw unprocessable("Issue can only have one assignee");
-        }
-        if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
-          throw unprocessable("in_progress issues require an assignee");
-        }
-        if (patch.status === "in_progress") {
-          const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
-            ? await listUnresolvedBlockerIssueIds(tx, existing.companyId, blockedByIssueIds)
-            : (
-                await listIssueDependencyReadinessMap(tx, existing.companyId, [id])
-              ).get(id)?.unresolvedBlockerIssueIds ?? [];
-          if (unresolvedBlockerIssueIds.length > 0) {
-            throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
-          }
-        }
-        if (issueData.assigneeAgentId) {
-          await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId, tx);
-        }
-        if (issueData.assigneeUserId) {
-          await assertAssignableUser(existing.companyId, issueData.assigneeUserId, tx);
-        }
-        const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
-        const nextProjectWorkspaceId =
-          issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
-        const nextExecutionWorkspaceId =
-          issueData.executionWorkspaceId !== undefined ? issueData.executionWorkspaceId : existing.executionWorkspaceId;
-        const nextExecutionWorkspacePreference =
-          issueData.executionWorkspacePreference !== undefined
-            ? issueData.executionWorkspacePreference
-            : existing.executionWorkspacePreference;
-        const nextExecutionWorkspaceSettings =
-          issueData.executionWorkspaceSettings !== undefined
-            ? parseIssueExecutionWorkspaceSettings(issueData.executionWorkspaceSettings)
-            : parseIssueExecutionWorkspaceSettings(existing.executionWorkspaceSettings);
-        if (nextProjectWorkspaceId) {
-          await assertValidProjectWorkspace(existing.companyId, nextProjectId, nextProjectWorkspaceId, tx);
-        }
-        if (nextExecutionWorkspaceId) {
-          await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId, tx);
-        }
-
+        const { patch, issueData, nextLabelIds, blockedByIssueIds, actorAgentId, actorUserId,
+          nextExecutionWorkspaceId, nextExecutionWorkspacePreference, nextExecutionWorkspaceSettings } =
+          await resolveUpdate(existing, data, tx, experimentalSettings);
+        patch.updatedAt = new Date();
         applyStatusSideEffects(issueData.status, patch, existing);
         if (issueData.status && issueData.status !== "done") {
           patch.completedAt = null;
@@ -3479,34 +3533,6 @@ export function issueService(db: Db) {
           patch.executionLockedAt = null;
         }
 
-        if (issueData.status === "done") {
-          // The refreshed target is already locked, matching workforce question creation.
-          const input = await workforceIssueInputs(tx as Db, existing.companyId, existing.assigneeAgentId, id);
-          if (input.pendingQuestionIds.length || input.missingFactKeys.length) {
-            throw conflict("Required workforce input is unresolved", {
-              pendingQuestionIds: input.pendingQuestionIds,
-              missingFactKeys: input.missingFactKeys,
-            });
-          }
-        }
-        const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
-        const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
-          getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),
-          getProjectDefaultGoalId(
-            tx,
-            existing.companyId,
-            issueData.projectId !== undefined ? issueData.projectId : existing.projectId,
-          ),
-        ]);
-        patch.goalId = resolveNextIssueGoalId({
-          currentProjectId: existing.projectId,
-          currentGoalId: existing.goalId,
-          currentProjectGoalId,
-          projectId: issueData.projectId,
-          goalId: issueData.goalId,
-          projectGoalId: nextProjectGoalId,
-          defaultGoalId: defaultCompanyGoal?.id ?? null,
-        });
         const updated = await tx
           .update(issues)
           .set(patch)

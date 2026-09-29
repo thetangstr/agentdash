@@ -1,8 +1,8 @@
 // AgentDash: canonical PATCH acceptance. Plans are private and confer no authority.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { companies, issues, issueExecutionDecisions, issueThreadInteractions, type Db } from "@paperclipai/db";
-import { updateIssueSchema } from "@paperclipai/shared";
+import { extractIssueReferenceMatches, updateIssueSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
 import { issueService } from "./issues.js";
@@ -16,7 +16,7 @@ import { resolveAgentClosingStatus } from "./issue-blocked-declaration.js";
 import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
 import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
 import {
-  IssueCommentPolicyRefusal, selectActiveIssueRun, isClosedIssueStatus, shouldImplicitlyMoveCommentedIssueToTodo,
+  digestIssueIntentFacts, IssueCommentPolicyRefusal, selectActiveIssueRun, isClosedIssueStatus, shouldImplicitlyMoveCommentedIssueToTodo,
   summarizeIssueReferenceActivityDetails, summarizeIssueRelationForActivity, type IssueCommentExecutor, type IssueCommentContext
 } from "./issue-mutation-actions.js";
 import type { heartbeatService } from "./heartbeat.js";
@@ -223,6 +223,14 @@ function buildExecutionStageWakeup(input: {
   }
 
   return null;
+}
+
+// Reference persistence consumes the identifier/first matched spelling, not
+// character offsets, surrounding prose or the order of distinct references.
+function retainedReferenceFacts(text: string | null) {
+  return extractIssueReferenceMatches(text ?? "")
+    .map(({ identifier, matchedText }) => ({ identifier, matchedText }))
+    .sort((left, right) => left.identifier.localeCompare(right.identifier));
 }
 
 export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
@@ -443,6 +451,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       }
     }
 
+    // Resolve exactly the canonical domain update, using SELECT-only reads on
+    // this executor, before snapshot comparison or any checkout application.
+    const domain = await svc.prepareUpdate(existing.id, updateFields, executor);
     const checkout = actor.actorType === "agent" && existing.status === "in_progress" && existing.assigneeAgentId === actor.agentId
       ? await svc.evaluateCheckoutOwner(existing.id, actor.agentId!, actor.runId!, executor) : null;
     const mentionedIds = commentBody ? await reads.findMentionedAgents(existing.companyId, commentBody) : [];
@@ -452,13 +463,59 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     const confirmationIds = confirmations.filter(row => "supersedeOnUserComment" in row.payload && row.payload.supersedeOnUserComment).map(row => row.id).sort();
     const snapshot = {
       version: 1, companyId: existing.companyId, issueId: existing.id,
-      intentDigest: createHash("sha256").update(JSON.stringify(intent)).digest("hex"),
-      // Hash current fields rather than expose private contents in a readback.
-      stateDigest: createHash("sha256").update(JSON.stringify(existing)).digest("hex"),
-      policyDigest: createHash("sha256").update(JSON.stringify({
-        updateFields, checkout,
-        hasUnresolvedFirstClassBlockers, updateReferenceSummaryBefore
-      })).digest("hex"),
+      intentDigest: digestIssueIntentFacts(intent),
+      stateDigest: digestIssueIntentFacts({
+        // Previous values of submitted/derived fields determine audit and lost-edit intent.
+        previous: Object.fromEntries(Object.keys(updateFields).filter(key => key in existing)
+          .map(key => [key, existing[key as keyof Issue]])),
+        // Field-only board edits do not depend on unrelated status/assignment.
+        // Request guards and transition/comment effects re-evaluate on every prepare.
+        ...(commentBody || updateFields.status !== undefined || actor.actorType === "agent" ? { status: existing.status } : {}),
+        ...(commentBody || updateFields.status !== undefined || actor.actorType === "agent" ||
+          updateFields.assigneeAgentId !== undefined || updateFields.assigneeUserId !== undefined ? {
+          assigneeAgentId: existing.assigneeAgentId, assigneeUserId: existing.assigneeUserId,
+        } : {}),
+        ...(assigneeWillChange && context.actorKind === "agent" ? { createdByUserId: existing.createdByUserId } : {}),
+        // Workspace IDs select canonical domain/request guards. Settings matter only
+        // when submitted (above), or when an execution workspace config is propagated.
+        projectWorkspaceId: existing.projectWorkspaceId, executionWorkspaceId: existing.executionWorkspaceId,
+        ...(existing.projectWorkspaceId || existing.executionWorkspaceId ? { projectId: existing.projectId } : {}),
+        ...(domain.patch.executionWorkspaceSettings !== undefined ? {
+          executionWorkspacePreference: existing.executionWorkspacePreference,
+        } : {}),
+        ...(updateFields.status !== undefined ? {
+          ...(["done", "cancelled"].includes(String(updateFields.status)) ? { parentId: existing.parentId } : {}),
+          ...(updateFields.status === existing.status && ["done", "cancelled", "in_progress"].includes(updateFields.status) ? {
+            statusTimestampPresent: Boolean(updateFields.status === "done" ? existing.completedAt :
+              updateFields.status === "cancelled" ? existing.cancelledAt : existing.startedAt),
+          } : {}),
+        } : {}),
+        ...(existing.originKind === "routine_execution" && ["done", "blocked", "cancelled"].includes(domain.patch.status ?? existing.status)
+          ? { routineRunId: existing.originRunId, routineStatus: domain.patch.status ?? existing.status } : {}),
+        ...(assigneeWillChange || (updateFields.status !== undefined && updateFields.status !== "in_progress") ? {
+          checkoutRunId: existing.checkoutRunId, executionRunId: existing.executionRunId,
+        } : {}),
+        // syncIssue reads both text sources. Pin reference matches in the untouched
+        // source, not unrelated prose or incoming reference/source row contents.
+        ...(titleOrDescriptionChanged ? {
+          retainedTitleReferences: intent.title === undefined ? retainedReferenceFacts(existing.title) : undefined,
+          retainedDescriptionReferences: intent.description === undefined ? retainedReferenceFacts(existing.description) : undefined,
+        } : {}),
+      }),
+      policyDigest: digestIssueIntentFacts({
+        updateFields, domainPatch: domain.patch, transition, checkout, hasUnresolvedFirstClassBlockers,
+        // Pin workflow effects, not unrelated stages or arbitrary stored state.
+        executionStageWakeup: buildExecutionStageWakeup({
+          issueId: existing.id, previousState: parseIssueExecutionState(existing.executionState),
+          nextState: parseIssueExecutionState(updateFields.executionState === undefined ? existing.executionState : updateFields.executionState),
+          interruptedRunId: interruptRun?.id ?? null,
+          requestedByActorType: actor.actorType, requestedByActorId: actor.actorId,
+        }),
+        // The audit diff consumes outbound IDs/labels only; inbound rows, status,
+        // priority, mention counts and source text are unrelated dependencies.
+        referencedBefore: updateReferenceSummaryBefore?.outbound
+          .map(row => summarizeIssueRelationForActivity(row.issue)).sort((a, b) => a.id.localeCompare(b.id)),
+      }),
       interruptRunId: interruptRun?.id ?? null,
       statusCancelRunId: runToCancelForCancelledStatus?.id ?? null,
       mentionedIds: [...mentionedIds].sort(), confirmationIds,
@@ -466,7 +523,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     };
     if (context.expectedSnapshot && JSON.stringify(context.expectedSnapshot) !== JSON.stringify(snapshot)) throw conflict("Issue changed since update preparation");
     return {
-      context, existing, intent, snapshot, updateFields, transition, decisionId, checkout, interruptRun, runToCancelForCancelledStatus,
+      context, existing, intent, snapshot, domain, updateFields, transition, decisionId, checkout, interruptRun, runToCancelForCancelledStatus,
       mentionedIds, titleOrDescriptionChanged, existingRelations, updateReferenceSummaryBefore, commentBody, resumeRequested,
       effectiveMoveToTodoRequested, isClosed, isBlocked, hasUnresolvedFirstClassBlockers, previousExecutionPolicy, nextExecutionPolicy
     };

@@ -9,6 +9,8 @@ const nextWorkspaceId = "44444444-4444-4444-8444-444444444444";
 const agentId = "22222222-2222-4222-8222-222222222222";
 
 const mockIssueService = vi.hoisted(() => ({
+  // Domain behavior is covered with PostgreSQL; this route fixture models its explicit result.
+  prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
   getById: vi.fn(),
   update: vi.fn(),
   checkout: vi.fn(),

@@ -5,9 +5,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { eq, sql } from 'drizzle-orm';
 import {
   activityLog, agentApiKeys, agents, authUsers, boardApiKeys, companies, companyMemberships,
-  createDb, featureFlags, heartbeatRuns, issueComments, issueExecutionDecisions,
+  createDb, goals, featureFlags, heartbeatRuns, issueComments, issueExecutionDecisions,
   issueReferenceMentions, issueThreadInteractions, issueRelations, issueLabels, labels, routineRuns, routines, executionWorkspaces, projects, issueTreeHolds, issues,
 } from '@paperclipai/db';
+import { issueCommentActions } from '../services/issue-mutation-actions.js';
+import { issueService } from '../services/issues.js';
 import { issuePatchActions, type IssuePatchContext } from '../services/issue-patch-actions.js';
 import { normalizeIssueExecutionPolicy } from '../services/issue-execution-policy.js';
 import { workforceService } from '../services/workforce.js';
@@ -430,6 +432,163 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: 'Agent not found' });
     expect(await snapshot(f)).toEqual(before);
+  });
+
+  it('prepared title edit tolerates unrelated comment recency and description changes', async () => {
+    const f = await fixture(), actions = issuePatchActions(db, heartbeatService(db));
+    await db.insert(issues).values({ companyId: f.company.id, title: 'Retained reference', identifier: 'KEEP-123' });
+    await db.update(issues).set({ description: 'See KEEP-123' }).where(eq(issues.id, f.issue.id));
+    const plan = await actions.prepare(context(f, { title: 'Prepared title' }));
+    await issueService(db).addComment(f.issue.id, 'Unrelated recency', { userId: f.userId });
+    await db.update(issues).set({ description: 'Unrelated prose before KEEP-123' }).where(eq(issues.id, f.issue.id));
+    const accepted = await actions.accept({ ...plan.context, expectedSnapshot: plan.snapshot });
+    expect(accepted.issue.title).toBe('Prepared title');
+  });
+
+  async function goalFixture() {
+    const f = await fixture();
+    const [first, second] = await db.insert(goals).values([
+      { companyId: f.company.id, title: 'First', level: 'company', status: 'active', createdAt: new Date('2025-01-01') },
+      { companyId: f.company.id, title: 'Second', level: 'company', status: 'active', createdAt: new Date('2025-02-01') },
+    ]).returning();
+    const [project] = await db.insert(projects).values({ companyId: f.company.id, name: 'Fallback project', goalId: first.id }).returning();
+    return { ...f, first, second, project };
+  }
+
+  it.each(['project', 'company'] as const)('pins the effective %s fallback goal before acceptance', async source => {
+    const f = await goalFixture(), actions = issuePatchActions(db, heartbeatService(db));
+    const plan = await actions.prepare(context(f, { projectId: source === 'project' ? f.project.id : null, goalId: null }));
+    if (source === 'project') await db.update(projects).set({ goalId: f.second.id }).where(eq(projects.id, f.project.id));
+    else await db.update(goals).set({ status: 'cancelled' }).where(eq(goals.id, f.first.id));
+    const before = await snapshot(f);
+    await expect(actions.accept({ ...plan.context, expectedSnapshot: plan.snapshot })).rejects.toThrow('Issue changed');
+    expect(await snapshot(f)).toEqual(before);
+    expect(publishLiveEvent).not.toHaveBeenCalled();
+  });
+
+  it('prepares and accepts the same effective fallback without pinning irrelevant goal content', async () => {
+    const f = await goalFixture(), actions = issuePatchActions(db, heartbeatService(db));
+    const plan = await actions.prepare(context(f, { projectId: f.project.id, goalId: null }));
+    expect(plan.domain.patch.goalId).toBe(f.first.id);
+    await db.update(goals).set({ title: 'Unrelated goal title' }).where(eq(goals.id, f.first.id));
+    const accepted = await actions.accept({ ...plan.context, expectedSnapshot: plan.snapshot });
+    expect(accepted.issue.goalId).toBe(plan.domain.patch.goalId);
+  });
+
+  it('an explicit goal does not depend on unused project and company fallback choices', async () => {
+    const f = await goalFixture(), actions = issuePatchActions(db, heartbeatService(db));
+    const plan = await actions.prepare(context(f, { projectId: f.project.id, goalId: f.first.id }));
+    await db.update(projects).set({ goalId: f.second.id }).where(eq(projects.id, f.project.id));
+    await db.update(goals).set({ status: 'cancelled' }).where(eq(goals.id, f.first.id));
+    expect((await actions.accept({ ...plan.context, expectedSnapshot: plan.snapshot })).issue.goalId).toBe(f.first.id);
+  });
+
+  it('read-only preparation rejects workforce completion before any checkout attempt', async () => {
+    const f = await fixture(), actions = issuePatchActions(db, heartbeatService(db));
+    await db.update(agents).set({ adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: f.userId }).where(eq(agents.id, f.agent.id));
+    await workforceService(db).enroll(f.company.id, f.agent.id, { templateId: 'marketing-content' }, { userId: f.userId });
+    const [old] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.agent.id, status: 'succeeded' }).returning();
+    await db.update(issues).set({ status: 'in_progress', checkoutRunId: old.id, executionRunId: old.id }).where(eq(issues.id, f.issue.id));
+    const input = { ...context(f, { status: 'done' }), actorKind: 'agent', actor: { actorType: 'agent' as const, actorId: f.agent.id, agentId: f.agent.id, runId: f.run.id } };
+    const before = await snapshot(f);
+    vi.mocked(publishLiveEvent).mockClear();
+    await expect(actions.prepare(input)).rejects.toThrow('Required workforce input');
+    await db.execute(sql`CREATE SEQUENCE checkout_attempt_probe`);
+    await db.execute(sql`CREATE FUNCTION probe_checkout_attempt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.checkout_run_id IS DISTINCT FROM OLD.checkout_run_id THEN PERFORM nextval('checkout_attempt_probe'); END IF; RETURN NEW; END $$`);
+    await db.execute(sql`CREATE TRIGGER probe_checkout_attempt BEFORE UPDATE ON issues FOR EACH ROW EXECUTE FUNCTION probe_checkout_attempt()`);
+    try {
+      await expect(actions.accept(input)).rejects.toThrow('Required workforce input');
+      const probe = await db.execute(sql`SELECT is_called FROM checkout_attempt_probe`);
+      expect(probe[0].is_called).toBe(false);
+      expect(await snapshot(f)).toEqual(before);
+      expect(publishLiveEvent).not.toHaveBeenCalled();
+      expect(effects.cancel).not.toHaveBeenCalled();
+    } finally {
+      await db.execute(sql`DROP TRIGGER probe_checkout_attempt ON issues`);
+      await db.execute(sql`DROP FUNCTION probe_checkout_attempt()`);
+      await db.execute(sql`DROP SEQUENCE checkout_attempt_probe`);
+    }
+  });
+
+  it.each([false, true])('reopening comments pin their derived goal (changed=%s)', async changed => {
+    const f = await goalFixture(), actions = issueCommentActions(db, heartbeatService(db));
+    await db.update(issues).set({ status: 'done', projectId: f.project.id }).where(eq(issues.id, f.issue.id));
+    const input = { ...context(f), intent: { body: 'Reopen with fallback', reopen: true } };
+    const plan = await actions.prepare(input);
+    if (changed) await db.update(projects).set({ goalId: f.second.id }).where(eq(projects.id, f.project.id));
+    const before = await snapshot(f);
+    if (changed) {
+      await expect(actions.accept({ ...input, expectedSnapshot: plan.snapshot })).rejects.toThrow('Issue changed');
+      expect(await snapshot(f)).toEqual(before);
+    } else {
+      await actions.accept({ ...input, expectedSnapshot: plan.snapshot });
+      expect((await snapshot(f)).issue.goalId).toBe(f.first.id);
+    }
+  });
+
+  it.each(['label', 'self-blocker', 'cycle', 'assignee', 'workspace', 'unassigned-start'] as const)(
+    'SELECT-only domain preparation rejects %s without writes', async guard => {
+      const f = await fixture(), actions = issuePatchActions(db, heartbeatService(db));
+      let intent: IssuePatchContext['intent'];
+      if (guard === 'label') intent = { labelIds: [randomUUID()] };
+      else if (guard === 'self-blocker') intent = { blockedByIssueIds: [f.issue.id] };
+      else if (guard === 'cycle') {
+        const [other] = await db.insert(issues).values({ companyId: f.company.id, title: 'Cycle target' }).returning();
+        await db.insert(issueRelations).values({ companyId: f.company.id, issueId: f.issue.id, relatedIssueId: other.id, type: 'blocks' });
+        intent = { blockedByIssueIds: [other.id] };
+      } else if (guard === 'assignee') {
+        await db.update(agents).set({ status: 'terminated' }).where(eq(agents.id, f.agent.id));
+        intent = { assigneeAgentId: f.agent.id };
+      } else if (guard === 'workspace') intent = { projectWorkspaceId: randomUUID() };
+      else intent = { status: 'in_progress', assigneeAgentId: null };
+      const before = await snapshot(f);
+      await expect(db.transaction(async tx => {
+        await tx.execute(sql`SET TRANSACTION READ ONLY`);
+        return actions.prepare(context(f, intent), tx);
+      })).rejects.toMatchObject({ status: guard === 'workspace' ? 404 : guard === 'assignee' ? 409 : 422 });
+      expect(await snapshot(f)).toEqual(before);
+      expect(publishLiveEvent).not.toHaveBeenCalled();
+      expect(effects.cancel).not.toHaveBeenCalled();
+    },
+  );
+
+  it('domain preparation reads transaction-local fallback state with a SELECT-only executor', async () => {
+    const f = await goalFixture(), actions = issuePatchActions(db, heartbeatService(db));
+    await expect(db.transaction(async tx => {
+      await tx.update(projects).set({ goalId: f.second.id }).where(eq(projects.id, f.project.id));
+      const plan = await actions.prepare(context(f, { projectId: f.project.id, goalId: null }), tx);
+      expect(plan.domain.patch.goalId).toBe(f.second.id);
+      throw new Error('rollback local fallback');
+    })).rejects.toThrow('rollback local fallback');
+    await db.transaction(async tx => {
+      await tx.execute(sql`SET TRANSACTION READ ONLY`);
+      const plan = await actions.prepare(context(f, { projectId: f.project.id, goalId: null }), tx);
+      expect(plan.domain.patch.goalId).toBe(f.first.id);
+    });
+  });
+
+  it('field-only intent ignores unrelated workflow configuration, DoD and non-reference recency', async () => {
+    const f = await fixture(), actions = issuePatchActions(db, heartbeatService(db));
+    const plan = await actions.prepare(context(f, { title: 'Prepared independent field' }));
+    const policy = normalizeIssueExecutionPolicy({ stages: [{ id: randomUUID(), type: 'review', participants: [{ type: 'user', userId: f.userId }] }] })!;
+    await db.update(issues).set({ status: 'todo', description: 'Unrelated prose', executionPolicy: policy,
+      definitionOfDone: { items: [{ id: 'irrelevant', text: 'Unrelated DoD' }] }, updatedAt: new Date() }).where(eq(issues.id, f.issue.id));
+    expect((await actions.accept({ ...plan.context, expectedSnapshot: plan.snapshot })).issue.title).toBe('Prepared independent field');
+  });
+
+  it('body-only comments do not evaluate or apply an unrelated domain update', async () => {
+    const f = await goalFixture(), actions = issueCommentActions(db, heartbeatService(db));
+    // This imported legacy state would fail the domain's single-assignee guard.
+    await db.update(issues).set({ assigneeUserId: f.userId }).where(eq(issues.id, f.issue.id));
+    const input = { ...context(f), intent: { body: 'Communication without reopening' } };
+    const plan = await actions.prepare(input);
+    expect(plan.reopened).toBe(false);
+    await db.update(goals).set({ status: 'cancelled' }).where(eq(goals.id, f.first.id));
+    await actions.accept({ ...input, expectedSnapshot: plan.snapshot });
+    const state = await snapshot(f);
+    expect(state.issue.goalId).toBeNull();
+    expect(state.comments).toHaveLength(1);
   });
 
 });

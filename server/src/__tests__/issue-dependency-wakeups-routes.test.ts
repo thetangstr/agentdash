@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockWakeup = vi.hoisted(() => vi.fn(async () => undefined));
 const mockIssueService = vi.hoisted(() => ({
+  // Domain behavior is covered with PostgreSQL; this route fixture models its explicit result.
+  prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
   getAncestors: vi.fn(),
   getById: vi.fn(),
   getByIdentifier: vi.fn(async () => null),

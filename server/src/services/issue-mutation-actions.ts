@@ -45,9 +45,24 @@ export interface IssueCommentContext {
   expectedSnapshot?: CommentIntentSnapshot;
 }
 
+// Canonical private digests ignore object insertion order, never select fields implicitly.
+export function digestIssueIntentFacts(value: unknown): string {
+  const canonical = (item: unknown): unknown => {
+    if (item instanceof Date) return item.toISOString();
+    if (Array.isArray(item)) return item.map(canonical);
+    if (item && typeof item === "object") return Object.fromEntries(
+      Object.entries(item).filter(([, child]) => child !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonical(child)]),
+    );
+    return item;
+  };
+  return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+}
+
 export type CommentIntentSnapshot = ReturnType<typeof commentIntentSnapshot>;
 function commentIntentSnapshot(issue: Issue, context: Pick<IssueCommentContext, "actor" | "intent">, effects: {
   reopened: boolean;
+  domainPatch: unknown;
   interruptRunId: string | null;
   mentionedIds: string[];
   confirmationIds: string[];
@@ -64,6 +79,7 @@ function commentIntentSnapshot(issue: Issue, context: Pick<IssueCommentContext, 
     ...(context.actor.actorType === "agent" ? { checkoutRunId: issue.checkoutRunId } : {}),
     ...(context.intent.interrupt || context.actor.actorType === "agent" ? { executionRunId: issue.executionRunId } : {}),
     reopened: effects.reopened,
+    domainDigest: effects.reopened ? digestIssueIntentFacts(effects.domainPatch) : null,
     interruptRunId: effects.interruptRunId,
     mentionedIds: [...effects.mentionedIds].sort(),
     confirmationIds: [...effects.confirmationIds].sort(),
@@ -152,6 +168,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
       ? (await svc.getDependencyReadiness(issue.id, executor)).unresolvedBlockerCount > 0 : false;
     if (intent.resume && blocked) throw conflict("Issue follow-up blocked by unresolved blockers");
     const reopened = effectiveMove && (isClosed || (issue.status === "blocked" && !blocked));
+    const domain = reopened ? await svc.prepareUpdate(issue.id, { status: "todo" }, executor) : null;
     const checkout = context.actor.actorType === "agent" && issue.status === "in_progress" &&
       issue.assigneeAgentId === context.actor.agentId
       ? await svc.evaluateCheckoutOwner(issue.id, context.actor.actorId, context.actor.runId!, executor) : null;
@@ -171,7 +188,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
       .filter(row => "supersedeOnUserComment" in row.payload && row.payload.supersedeOnUserComment === true)
       .map(row => row.id);
     const snapshot = commentIntentSnapshot(issue, { ...context, intent }, {
-      reopened, interruptRunId: interruptRun?.id ?? null, mentionedIds, confirmationIds,
+      reopened, domainPatch: domain?.patch, interruptRunId: interruptRun?.id ?? null, mentionedIds, confirmationIds,
     });
     if (context.expectedSnapshot && JSON.stringify(snapshot) !== JSON.stringify(context.expectedSnapshot)) {
       throw conflict("Issue changed since comment preparation");
