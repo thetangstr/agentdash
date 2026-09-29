@@ -2047,7 +2047,9 @@ export function issueRoutes(
     }
     // AgentDash: an assistant-grant write is always recorded under its own
     // assistant_work origin, so an ExecOS origin on the same write would be
-    // silently overwritten. Refuse it instead of dropping it.
+    // silently overwritten. The loopback middleware's body allowlist (GH #745)
+    // already refuses these fields with 403 before the route runs; this is
+    // defence in depth for any assistant_grant actor that reaches the route.
     if (isAssistantGrant && (req.body.originKind !== undefined || req.body.originId != null)) {
       res.status(400).json({ error: "originKind/originId are not accepted on assistant-grant writes" });
       return;

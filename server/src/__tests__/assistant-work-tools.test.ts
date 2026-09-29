@@ -646,13 +646,19 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
     });
 
     // AgentDash: an assistant write is always stamped assistant_work, so an
-    // ExecOS origin on it is refused rather than silently overwritten.
+    // ExecOS origin on it must never be accepted. The middleware body
+    // allowlist (GH #745) refuses the fields before the route runs; the
+    // route's own guard is defence in depth and is covered in
+    // issue-execos-request-origin-routes.test.ts.
     it("an ExecOS origin is refused on assistant-grant writes", async () => {
       const { grant } = await grantToken(["agentdash:read", "agentdash:work"]);
       const loopback = workLoopback(grant.id);
       const title = `ExecOS via assistant ${randomUUID().slice(0, 8)}`;
       const res = await postIssues(loopback, { title, originKind: "execos_request", originId: "req-x" });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error).toBe("assistant_write_field_forbidden");
+      expect(body.fields).toEqual(expect.arrayContaining(["originKind", "originId"]));
       expect(await db.select().from(issues).where(eq(issues.title, title))).toHaveLength(0);
     });
 

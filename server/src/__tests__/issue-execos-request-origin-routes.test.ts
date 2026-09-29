@@ -49,13 +49,14 @@ describeEmbeddedPostgres("ExecOS request origin on issue create", () => {
     await tempDb?.cleanup();
   });
 
-  function app(companyId: string) {
+  function app(companyId: string, source: "session" | "assistant_grant" = "session") {
     const server = express();
     server.use(express.json());
     server.use((req, _res, next) => {
       (req as any).actor = {
         type: "board",
-        source: "session",
+        source,
+        ...(source === "assistant_grant" ? { assistantGrantId: "grant-1" } : {}),
         userId: "owner",
         companyIds: [companyId],
         memberships: [{ companyId, membershipRole: "owner", status: "active" }],
@@ -102,6 +103,22 @@ describeEmbeddedPostgres("ExecOS request origin on issue create", () => {
     expect(idOnly.status).toBe(400);
     const forged = await create(COMPANY, { title: "Forged", originKind: "routine_execution", originId: "r-1" });
     expect(forged.status).toBe(400);
+  });
+
+  // The loopback middleware's body allowlist normally refuses these fields
+  // first (see assistant-work-tools.test.ts); this pins the route's own guard.
+  it("refuses an ExecOS origin on an assistant-grant write instead of overwriting it", async () => {
+    const originId = `req_${randomUUID()}`;
+    const res = await request(app(COMPANY, "assistant_grant"))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "Assistant with ExecOS origin", originKind: "execos_request", originId });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("originKind/originId are not accepted on assistant-grant writes");
+    const rows = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, COMPANY), eq(issues.originId, originId)));
+    expect(rows).toHaveLength(0);
   });
 
   it("leaves issues without an ExecOS origin unaffected", async () => {
