@@ -23,6 +23,7 @@ describe('exact current issue authority over real middleware, HTTP and PostgreSQ
   let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   let db: ReturnType<typeof createDb>, server: Server, base: string;
   let acceptancePid: number | undefined;
+  let beforeFirstPrepare: (() => Promise<void>) | undefined;
   let beforeIssueLock: (() => Promise<void>) | undefined;
   let afterAuthentication: (() => Promise<void>) | undefined;
   beforeAll(async () => {
@@ -32,6 +33,7 @@ describe('exact current issue authority over real middleware, HTTP and PostgreSQ
       if (key !== 'transaction') return Reflect.get(target, key, receiver);
       return (callback: (tx: unknown) => Promise<unknown>) => target.transaction(async tx => {
         acceptancePid = Number((await tx.execute(sql`select pg_backend_pid() as pid`))[0].pid);
+        let issueSelectCount = 0;
         return callback(new Proxy(tx, { get(t, k, r) {
         if (k !== 'select') return Reflect.get(t, k, r);
         return (...args: unknown[]) => {
@@ -39,6 +41,11 @@ describe('exact current issue authority over real middleware, HTTP and PostgreSQ
           const from = query.from.bind(query);
           query.from = (table: unknown) => {
             const builder = from(table), originalFor = builder.for.bind(builder);
+            if (table === issues && ++issueSelectCount === 2 && beforeFirstPrepare) {
+              const barrier = beforeFirstPrepare, then = builder.then.bind(builder);
+              beforeFirstPrepare = undefined;
+              builder.then = (resolve: Function, reject: Function) => barrier().then(() => then(resolve, reject));
+            }
             builder.for = (mode: string) => {
               const result = originalFor(mode);
               if (table !== issues || mode !== 'update' || !beforeIssueLock) return result;
@@ -68,7 +75,7 @@ describe('exact current issue authority over real middleware, HTTP and PostgreSQ
     await new Promise<void>(resolve => server.once('listening', resolve));
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api`;
   });
-  beforeEach(() => { afterAuthentication = undefined; beforeIssueLock = undefined; resetAssistantLoopbackTokens(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+  beforeEach(() => { beforeFirstPrepare = undefined; afterAuthentication = undefined; beforeIssueLock = undefined; resetAssistantLoopbackTokens(); vi.restoreAllMocks(); vi.clearAllMocks(); });
   afterAll(async () => { if (server) await new Promise<void>(resolve => server.close(() => resolve())); await temp?.cleanup(); });
   async function fixture() {
     const userId = randomUUID(), token = `pcp_board_${randomUUID()}`;
@@ -283,7 +290,7 @@ describe('exact current issue authority over real middleware, HTTP and PostgreSQ
   it.each(['patch', 'comment'] as const)('checks %s source company binding before closed workspace projection', async kind => {
     const f = await fixture(), other = await fixture();
     const [workspace] = await db.insert(executionWorkspaces).values({ companyId: other.company.id, projectId: other.project.id,
-      mode: 'isolated', strategyType: 'git_worktree', name: 'Private foreign workspace', status: 'closed', closedAt: new Date() }).returning();
+      mode: 'isolated_workspace', strategyType: 'git_worktree', name: 'Private foreign workspace', status: 'archived', closedAt: new Date() }).returning();
     await db.update(issues).set({ executionWorkspaceId: workspace.id }).where(eq(issues.id, f.issue.id));
     const response = await mutate(f, kind); expect(response.status).toBe(404);
     expect(JSON.stringify(await response.json())).not.toContain('Private foreign workspace'); await noWrites(f);
@@ -337,10 +344,34 @@ describe('exact current issue authority over real middleware, HTTP and PostgreSQ
   it.each(['patch', 'comment'] as const)('rejects changed %s source bindings before private closed-workspace projection', async kind => {
     const f = await fixture(); const [hidden] = await db.insert(projects).values({ companyId: f.company.id, name: 'Private changed project', visibility: 'restricted' }).returning();
     const [workspace] = await db.insert(executionWorkspaces).values({ companyId: f.company.id, projectId: hidden.id,
-      mode: 'isolated', strategyType: 'git_worktree', name: 'Private changed workspace', status: 'closed', closedAt: new Date() }).returning();
+      mode: 'isolated_workspace', strategyType: 'git_worktree', name: 'Private changed workspace', status: 'archived', closedAt: new Date() }).returning();
     beforeIssueLock = async () => { await db.update(issues).set({ projectId: hidden.id, executionWorkspaceId: workspace.id }).where(eq(issues.id, f.issue.id)); };
     const response = await mutate(f, kind); expect(response.status).toBe(409);
     expect(JSON.stringify(await response.json())).not.toContain('Private changed workspace'); await noWrites(f);
+  });
+
+  it.each(['patch', 'comment'] as const)('refuses a private source rebound before first %s preparation without projecting it', async kind => {
+    const f = await fixture();
+    const [hidden] = await db.insert(projects).values({ companyId: f.company.id, name: 'Hidden first-prepare project', visibility: 'restricted' }).returning();
+    const [workspace] = await db.insert(executionWorkspaces).values({ companyId: f.company.id, projectId: hidden.id,
+      mode: 'isolated_workspace', strategyType: 'git_worktree', name: 'Hidden first-prepare workspace', status: 'archived',
+      cwd: '/private/first-prepare-workspace', closedAt: new Date() }).returning();
+    let reached = false;
+    beforeFirstPrepare = async () => {
+      reached = true;
+      await db.transaction(async tx => {
+        const writerPid = Number((await tx.execute(sql`select pg_backend_pid() as pid`))[0].pid);
+        expect(writerPid).not.toBe(acceptancePid);
+        await tx.update(issues).set({ projectId: hidden.id, executionWorkspaceId: workspace.id }).where(eq(issues.id, f.issue.id));
+        console.info(JSON.stringify({ kind, case: 'before-first-prepare-rebind', acceptancePid, writerPid, projectId: hidden.id, workspaceId: workspace.id }));
+      });
+    };
+    const response = await mutate(f, kind), body = await response.json();
+    expect(reached).toBe(true);
+    expect(response.status).toBe(409);
+    await noWrites(f);
+    expect(body).not.toHaveProperty('executionWorkspace');
+    for (const hiddenValue of [hidden.id, workspace.id, workspace.name, workspace.cwd]) expect(JSON.stringify(body)).not.toContain(hiddenValue);
   });
 
   it.each(['patch', 'comment'] as const)('samples the exact named session expiry at final %s guard', async kind => {

@@ -32,6 +32,9 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
   const verified = req.verifiedCredential;
   return async (executor, issue, resolvePatch) => {
     const sourceBindings = bindings(issue);
+    const validateIssue = (current: Issue) => {
+      if (bindings(current) !== sourceBindings) throw conflict("Issue authority resources changed during acceptance");
+    };
     const witnesses = new Map<string, Witness>();
     let collecting = true;
     let credentialDeadline: number | null = null;
@@ -198,7 +201,14 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
     await identity();
     await projectGuards(); // Before preparation can project a closed workspace.
     await sourceWorkspace();
-    const patch = await resolvePatch();
+    const patch = await resolvePatch(async current => {
+      // Preparation independently reads the issue. Refuse a changed source
+      // before its route callbacks can project any newly bound workspace, and
+      // refresh authority for an unchanged source before preliminary policy.
+      // This read-only guard does not replace lock-backed write acceptance.
+      validateIssue(current);
+      await identity(); await projectGuards(); await sourceWorkspace();
+    });
     const selected = await resources(patch);
     // FK parents precede credential children: user→session/board key,
     // environment→agent→agent key, grant→access token. Resource parents
@@ -208,9 +218,6 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
     collecting = false;
     // A deleted/replaced positive row never silently substitutes a new ID.
     await identity(); await projectGuards(); await sourceWorkspace(); await resources(patch);
-    const validateIssue = (current: Issue) => {
-      if (bindings(current) !== sourceBindings) throw conflict("Issue authority resources changed during acceptance");
-    };
     return { validateIssue, beforeWrite: async (current, effectivePatch) => {
       validateIssue(current);
       if (JSON.stringify(selection(current, effectivePatch)) !== selected) {

@@ -42,7 +42,7 @@ export interface IssueCommentContext {
   // Bound by the route to the actual server-authenticated request, never a
   // synthetic request or a caller-supplied actor/grant.
   validate(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
-  stageAuthority?(executor: IssueCommentExecutor, issue: Issue, resolvePatch: () => Promise<Record<string, unknown>>):
+  stageAuthority?(executor: IssueCommentExecutor, issue: Issue, resolvePatch: (beforePolicy: (issue: Issue) => Promise<void>) => Promise<Record<string, unknown>>):
     Promise<{ validateIssue(issue: Issue): void; beforeWrite(issue: Issue, effectivePatch: Record<string, unknown>): Promise<void> }>;
   expectedSnapshot?: CommentIntentSnapshot;
 }
@@ -152,7 +152,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
   const svc = issueService(db);
   const references = issueReferenceService(db);
 
-  async function prepare(context: IssueCommentContext, executor: IssueCommentExecutor = db) {
+  async function prepare(context: IssueCommentContext, executor: IssueCommentExecutor = db, beforePolicy?: (issue: Issue) => Promise<void>) {
     const intent = addIssueCommentSchema.parse(context.intent);
     const [company] = await executor.select({ id: companies.id }).from(companies)
       .where(eq(companies.id, context.companyId));
@@ -161,6 +161,9 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
     if (intent.interrupt && context.actorKind !== "board") {
       throw new IssueCommentPolicyRefusal(403, { error: "Only board users can interrupt active runs from issue comments" });
     }
+    // AgentDash: a fresh preliminary read must be guarded before policy can
+    // project protected workspace facts in a refusal.
+    await beforePolicy?.(issue);
     await context.validate(executor, issue);
     const isClosed = isClosedIssueStatus(issue.status);
     const effectiveMove = intent.reopen === true || intent.resume === true ||
@@ -210,7 +213,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
         if (!company) throw notFound("Issue not found");
         const [preflight] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id)));
         if (!preflight) throw notFound("Issue not found");
-        const finalAuthorityGuard = await context.stageAuthority?.(tx, preflight, async () => (await prepare(context, tx)).domain?.patch ?? {});
+        const finalAuthorityGuard = await context.stageAuthority?.(tx, preflight, async beforePolicy => (await prepare(context, tx, beforePolicy)).domain?.patch ?? {});
         const [target] = await tx.select().from(issues)
           .where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id))).for("update");
         if (!target) throw notFound("Issue not found");

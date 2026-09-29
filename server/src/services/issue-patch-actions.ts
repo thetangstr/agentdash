@@ -251,13 +251,16 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     if (intent.executionPolicy !== undefined) intent.executionPolicy = normalizeIssueExecutionPolicy(intent.executionPolicy);
     return { ...context, intent, resolvedAssigneeAgentId: intent.assigneeAgentId, decisionId: context.decisionId ?? randomUUID() };
   }
-  async function prepare(context: IssuePatchContext, executor: IssueCommentExecutor = db) {
+  async function prepare(context: IssuePatchContext, executor: IssueCommentExecutor = db, beforePolicy?: (issue: Issue) => Promise<void>) {
     let intent = updateIssueRouteSchema.parse(context.intent);
     const [existing] = await executor.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, context.companyId)));
     if (!existing) throw notFound("Issue not found");
     if (intent.resume && !intent.comment) throw new IssueCommentPolicyRefusal(400, { error: "Follow-up intent requires a comment" });
     if (intent.interrupt && !intent.comment) throw new IssueCommentPolicyRefusal(400, { error: "Interrupt is only supported when posting a comment" });
     if (intent.interrupt && context.actorKind !== "board") throw new IssueCommentPolicyRefusal(403, { error: "Only board users can interrupt active runs from issue comments" });
+    // AgentDash: guard this newly selected source before any policy callback
+    // can include protected workspace facts in a refusal.
+    await beforePolicy?.(existing);
     await context.validate(executor, existing, intent);
     context = await normalize(context, executor);
     intent = context.intent;
@@ -540,7 +543,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         if (!company) throw notFound("Issue not found");
         const [preflight] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id)));
         if (!preflight) throw notFound("Issue not found");
-        const finalAuthorityGuard = await context.stageAuthority?.(tx, preflight, async () => (await prepare(context, tx)).domain.patch);
+        const finalAuthorityGuard = await context.stageAuthority?.(tx, preflight, async beforePolicy => (await prepare(context, tx, beforePolicy)).domain.patch);
         const [target] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, context.companyId))).for("update");
         if (!target) throw notFound("Issue not found");
         finalAuthorityGuard?.validateIssue(target);
