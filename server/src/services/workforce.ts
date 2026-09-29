@@ -3,15 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { z } from 'zod';
 import { agents, companies, companyContext, goals, issues, workforceEnrollments, type Db } from '@paperclipai/db';
-import { resolveWorkforceTemplate, updateWorkforceBriefSchema, proposeWorkforceFactsSchema, enrollWorkforceSchema, type WorkforceBrief, type WorkforceReadiness, type WorkforceRuntimeContext } from '@paperclipai/shared';
+import { supportsWorkforcePrompt, resolveWorkforceTemplate, updateWorkforceBriefSchema, proposeWorkforceFactsSchema, enrollWorkforceSchema, type WorkforceBrief, type WorkforceReadiness, type WorkforceRuntimeContext } from '@paperclipai/shared';
 import { readPaperclipSkillSyncPreference, writePaperclipSkillSyncPreference } from '@paperclipai/adapter-utils/server-utils';
 import { isUniqueViolation } from '../lib/pg-error.js';
-import { badRequest, conflict, forbidden, notFound } from '../errors.js';
+import { badRequest, conflict, forbidden, notFound, unprocessable } from '../errors.js';
 import { issueService } from './issues.js';
 import { documentService } from './documents.js';
 import { verdictsService } from './verdicts.js';
 import { workProductService } from './work-products.js';
-import { issueThreadInteractionService } from './issue-thread-interactions.js';
+import { workforceIssueInputs } from './workforce-inputs.js';
 import { companySkillService } from './company-skills.js';
 import { logActivity } from './activity-log.js';
 
@@ -99,6 +99,9 @@ export function workforceService(db: Db) {
     return db.transaction(async tx => {
       const connection = tx as unknown as Db;
       await company(companyId, connection, true);
+      const [runtimeAgent] = await tx.select().from(agents).where(and(eq(agents.id, agentId), eq(agents.companyId, companyId))).for('update');
+      if (!runtimeAgent) throw notFound('Agent not found');
+      if (!supportsWorkforcePrompt(runtimeAgent.adapterType)) throw unprocessable('Unsupported workforce adapter: choose a native runtime with verified workforce prompt delivery');
       const existing = await getEnrollment(companyId, agentId, connection);
       if (existing) {
         if (existing.templateId !== parsed.templateId) throw conflict('Workforce template assignment is immutable');
@@ -110,16 +113,17 @@ export function workforceService(db: Db) {
       return row;
     });
   }
-  async function startFirstJob(companyId: string, agentId: string, actor: Actor) {
+  async function startFirstJobWithCreation(companyId: string, agentId: string, actor: Actor) {
     requireHuman(actor);
     return db.transaction(async tx => {
       const connection = tx as unknown as Db;
       await company(companyId, connection, true);
       const { enrollment, template } = await requiredEnrollment(companyId, agentId, connection);
+      if (!supportsWorkforcePrompt((await agent(companyId, agentId, connection)).adapterType)) throw unprocessable('Unsupported workforce adapter: choose a verified native runtime before starting work');
       if (enrollment.firstJobIssueId) {
         const [existing] = await tx.select().from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, enrollment.firstJobIssueId)));
         if (!existing) throw notFound('First job not found');
-        return existing;
+        return { issue: existing, created: false };
       }
       const job = await issueService(connection).create(companyId, {
         title: template.starterJob.title, description: [template.starterJob.description, enrollment.objective && `Objective: ${enrollment.objective}`, `Declared targets (outcomes unknown until measured): ${enrollment.metrics.join('; ')}`].filter(Boolean).join('\n\n'),
@@ -138,8 +142,11 @@ export function workforceService(db: Db) {
         details: { title: job.title, identifier: job.identifier },
       });
       await audit(connection, companyId, job.id, 'workforce.first_job_started', actor);
-      return job;
+      return { issue: job, created: true };
     });
+  }
+  async function startFirstJob(companyId: string, agentId: string, actor: Actor) {
+    return (await startFirstJobWithCreation(companyId, agentId, actor)).issue;
   }
   async function acknowledgeLearning(companyId: string, agentId: string, revision: number, actor: Actor) {
     requireSelfOrHuman(actor, agentId);
@@ -159,13 +166,14 @@ export function workforceService(db: Db) {
     const template = resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
     if (!template) throw conflict('Pinned workforce template is unavailable');
     const brief = await getBrief(companyId);
-    const missingFactKeys = template.requiredFactKeys.filter(key => !brief.facts.some(f => f.key === key && f.value.trim()));
+    const input = enrollment.firstJobIssueId ? await workforceIssueInputs(db, companyId, agentId, enrollment.firstJobIssueId) : { pendingQuestionIds: [], taskFacts: [] };
+    const missingFactKeys = template.requiredFactKeys.filter(key => !brief.facts.some(f => f.key === key && f.value.trim()) && !input.taskFacts.some(f => f.companyFactKey === key));
     const result: WorkforceReadiness = { phase: 'learning', missingFactKeys, pendingQuestionIds: [], firstJobIssueId: enrollment.firstJobIssueId, acceptedVerdictId: null, briefRevision: brief.revision, learnedBriefRevision: enrollment.learnedBriefRevision, reason: 'Read the approved company brief and acknowledge learning.' };
     if (enrollment.firstJobIssueId) {
       const [job] = await db.select().from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, enrollment.firstJobIssueId)));
       if (!job) throw notFound('First job not found');
-      const questions = await issueThreadInteractionService(db).listForIssue(job.id);
-      result.pendingQuestionIds = questions.filter(q => q.companyId === companyId && q.kind === 'ask_user_questions' && q.status !== 'answered').map(q => q.id);
+      if (job.assigneeAgentId !== agentId) return { ...result, phase: 'needs_input', reason: 'The first job is assigned to another worker; restore its assignment before accepting this enrollment.' };
+      result.pendingQuestionIds = input.pendingQuestionIds;
       const docs = await documentService(db).listIssueDocuments(job.id);
       const products = await workProductService(db).listForIssue(job.id);
       const evidenceDates = [
@@ -279,7 +287,7 @@ export function workforceService(db: Db) {
       return updated;
     }
   }
-  async function getRuntimeContext(companyId: string, agentId: string): Promise<WorkforceRuntimeContext | null> {
+  async function getRuntimeContext(companyId: string, agentId: string, issueId?: string): Promise<WorkforceRuntimeContext | null> {
     const enrollment = await getEnrollment(companyId, agentId);
     if (!enrollment) return null;
     const template = resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
@@ -287,7 +295,8 @@ export function workforceService(db: Db) {
     const brief = await getBrief(companyId);
     // Full authorized sources remain available over the scoped API. Runtime
     // content is bounded independently of the larger storage/input limits.
-    return { enrollment, template, brief: { ...brief, sources: brief.sources.map(s => ({ ...s, content: s.content.slice(0, 500) })), facts: brief.facts.map(f => ({ ...f, value: f.value.slice(0, 500) })) }, readiness: (await getReadiness(companyId, agentId))!, sourceUrl: `/api/companies/${companyId}/workforce/brief` };
+    const taskFacts = issueId ? (await workforceIssueInputs(db, companyId, agentId, issueId)).taskFacts : [];
+    return { enrollment, template, taskFacts: taskFacts.map(f => ({ ...f, value: f.value.slice(0, 500) })), brief: { ...brief, sources: brief.sources.map(s => ({ ...s, content: s.content.slice(0, 500) })), facts: brief.facts.map(f => ({ ...f, value: f.value.slice(0, 500) })) }, readiness: (await getReadiness(companyId, agentId))!, sourceUrl: `/api/companies/${companyId}/workforce/brief` };
   }
-  return { getBrief, updateBrief, proposeFacts, enroll, getEnrollment, getReadiness, startFirstJob, acknowledgeLearning, ensureSkillsInstalled, getRuntimeContext };
+  return { getBrief, updateBrief, proposeFacts, enroll, getEnrollment, getReadiness, startFirstJob, startFirstJobWithCreation, acknowledgeLearning, ensureSkillsInstalled, getRuntimeContext };
 }

@@ -1,3 +1,5 @@
+import { workforceDispatchHold, workforceIssueInputs } from './workforce-inputs.js';
+import { workforceService } from './workforce.js';
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
@@ -4595,6 +4597,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return Number(count ?? 0);
   }
 
+  async function cancelQueuedRunForWorkforceInput(run: typeof heartbeatRuns.$inferSelect, issueId: string) {
+    const now = new Date();
+    const reason = 'Required workforce input is unresolved';
+    // Claim already owns the per-agent start lock. Do not recursively invoke
+    // cancelRunInternal, which attempts to acquire that same lock again.
+    await setRunStatus(run.id, 'cancelled', { finishedAt: now, error: reason, errorCode: 'workforce_input_pending' });
+    await setWakeupStatus(run.wakeupRequestId, 'skipped', { finishedAt: now, error: reason });
+    await db.update(issues).set({ executionRunId: null, executionAgentNameKey: null, executionLockedAt: null }).where(and(eq(issues.companyId, run.companyId), eq(issues.id, issueId), eq(issues.executionRunId, run.id)));
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
@@ -4608,6 +4620,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const context = parseObject(run.contextSnapshot);
+    const workforceIssueId = readNonEmptyString(context.issueId);
+    const workforceHoldIssueId = await workforceDispatchHold(db, run.companyId, run.agentId, workforceIssueId);
+    if (workforceHoldIssueId) {
+      await cancelQueuedRunForWorkforceInput(run, workforceHoldIssueId);
+      return null;
+    }
     const recoveryIssueId = taskRecoveryRunIssueId(run);
     if (recoveryIssueId && await enforceTaskRecoveryBudget(run, recoveryIssueId)) {
       logger.info(
@@ -4715,16 +4733,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const claimedAt = new Date();
-    const claimed = await db
-      .update(heartbeatRuns)
-      .set({
-        status: "running",
-        startedAt: run.startedAt ?? claimedAt,
-        updatedAt: claimedAt,
-      })
-      .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
-      .returning()
-      .then((rows) => rows[0] ?? null);
+    const claim = await db.transaction(async tx => {
+      if (issueId) {
+        await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId))).for('update');
+      } else {
+        await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, run.companyId), eq(issues.assigneeAgentId, run.agentId))).orderBy(asc(issues.id)).for('update');
+      }
+      const blockedIssueId = await workforceDispatchHold(tx as unknown as Db, run.companyId, run.agentId, issueId);
+      if (blockedIssueId) return { blockedIssueId, run: null };
+      const [claimed] = await tx.update(heartbeatRuns).set({ status: 'running', startedAt: run.startedAt ?? claimedAt, updatedAt: claimedAt })
+        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, 'queued'))).returning();
+      return { blockedIssueId: null, run: claimed ?? null };
+    });
+    if (claim.blockedIssueId) { await cancelQueuedRunForWorkforceInput(run, claim.blockedIssueId); return null; }
+    const claimed = claim.run;
     if (!claimed) return null;
 
     publishLiveEvent({
@@ -5893,6 +5915,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // It enters as TEXT, like directives, and nothing downstream reads it for an
     // authorization decision. The agent wrote it, so treating it as a capability
     // input would let an agent widen its own reach by describing it.
+    const workforce = await workforceService(db).getRuntimeContext(agent.companyId, agent.id, issueId ?? undefined);
+    if (workforce) context.paperclipWorkforce = workforce;
+    else delete context.paperclipWorkforce;
     const activeMemory = await agentMemorySvc.activeForRuntime(agent.companyId, agent.id);
     if (activeMemory) {
       context[AGENT_MEMORY_CONTEXT_KEY] = activeMemory;
@@ -7765,6 +7790,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueId;
     }
+    // AgentDash: suppress redundant requests before scheduling/accounting.
+    // The persisted claim gate repeats this check; wake metadata has no authority.
+    if (await workforceDispatchHold(db, agent.companyId, agentId, issueId)) return null;
     const effectiveTaskKey = readNonEmptyString(enrichedContextSnapshot.taskKey) ?? taskKey;
     const sessionBefore =
       explicitResumeSession?.sessionDisplayId ??
@@ -7950,6 +7978,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             finishedAt: new Date(),
           });
           return { kind: "skipped" as const };
+        }
+
+        if ((await workforceIssueInputs(tx as unknown as Db, agent.companyId, agentId, issue.id)).pendingQuestionIds.length) return { kind: 'skipped' as const };
+        if (reason === 'workforce_first_job') {
+          // The issue lock serializes requests across processes. A committed
+          // queue survives a route crash; only a never-started cancellation may
+          // be retried through Start. Finished execution is never restarted here.
+          if (['done', 'cancelled'].includes(issue.status)) return { kind: 'skipped' as const };
+          const prior = await tx.select({ run: heartbeatRuns }).from(heartbeatRuns)
+            .innerJoin(agentWakeupRequests, eq(agentWakeupRequests.id, heartbeatRuns.wakeupRequestId))
+            .where(and(eq(heartbeatRuns.companyId, agent.companyId), eq(heartbeatRuns.agentId, agentId), eq(agentWakeupRequests.idempotencyKey, `workforce-first-job:${issue.id}`)))
+            .orderBy(desc(heartbeatRuns.createdAt));
+          const attempted = prior.find(({ run }) => run.startedAt || ['queued', 'running', 'scheduled_retry', 'succeeded'].includes(run.status));
+          if (attempted) return { kind: 'coalesced' as const, run: attempted.run };
         }
 
         const cancelStaleScheduledRetry = async (scheduledRun: typeof heartbeatRuns.$inferSelect) => {

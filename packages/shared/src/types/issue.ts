@@ -404,13 +404,20 @@ export interface AskUserQuestionsQuestion {
   id: string;
   prompt: string;
   helpText?: string | null;
-  selectionMode: "single" | "multi";
+  selectionMode: "single" | "multi" | "text";
+  companyFactKey?: string;
   required?: boolean;
   options: AskUserQuestionsQuestionOption[];
 }
 
 export interface AskUserQuestionsPayload {
   version: 1;
+  answerOwnerUserId?: string;
+  workforceAgentId?: string;
+  workforceEnrollmentId?: string;
+  workforceTemplateId?: string;
+  workforceTemplateVersion?: 1;
+  replacesInteractionId?: string;
   title?: string | null;
   submitLabel?: string | null;
   questions: AskUserQuestionsQuestion[];
@@ -419,10 +426,12 @@ export interface AskUserQuestionsPayload {
 export interface AskUserQuestionsAnswer {
   questionId: string;
   optionIds: string[];
+  text?: string;
 }
 
 export interface AskUserQuestionsResult {
   version: 1;
+  shareWithCompany?: boolean;
   answers: AskUserQuestionsAnswer[];
   cancelled?: true;
   cancellationReason?: string | null;

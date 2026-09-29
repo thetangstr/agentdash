@@ -7,6 +7,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agents, companies, createDb } from '@paperclipai/db';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
+import { heartbeatService } from '../services/heartbeat.js';
 import * as routes from '../routes/workforce.js';
 import { errorHandler } from '../middleware/index.js';
 
@@ -21,13 +22,13 @@ describe('workforce HTTP authority', () => {
     process.env.PAPERCLIP_HOME = skillHome;
     temp = await startEmbeddedPostgresTestDatabase('agentdash-workforce-routes-'); db = createDb(temp.connectionString);
     [companyId] = (await db.insert(companies).values({ name: 'Route test', issuePrefix: randomUUID().slice(0, 8) }).returning()).map(x => x.id);
-    [agentId, peerId] = (await db.insert(agents).values([{ companyId, name: 'Self' }, { companyId, name: 'Peer' }]).returning()).map(x => x.id);
+    [agentId, peerId] = (await db.insert(agents).values([{ companyId, name: 'Self', adapterType: 'codex_local' }, { companyId, name: 'Peer' }]).returning()).map(x => x.id);
   });
   afterAll(async () => { await temp?.cleanup(); await rm(skillHome, { recursive: true, force: true }); if (previousHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = previousHome; });
   function app(actor: Record<string, unknown>) {
     const app = express(); app.use(express.json());
     app.use((req, _res, next) => { req.actor = actor as typeof req.actor; next(); });
-    app.use('/api', routes.workforceRoutes(db)); app.use(errorHandler); return app;
+    app.use('/api', routes.workforceRoutes(db, { heartbeat: heartbeatService(db, { autoDispatchQueuedRuns: false }) })); app.use(errorHandler); return app;
   }
   const worker = () => ({ type: 'agent', companyId, agentId });
   const board = (membershipRole = 'admin') => ({ type: 'board', source: 'session', userId: 'owner', companyIds: [companyId], memberships: [{ companyId, status: 'active', membershipRole }] });

@@ -27,4 +27,12 @@ export interface WorkforceReadiness {
 export interface WorkforceRuntimeContext {
   template: WorkforceTemplate; enrollment: WorkforceEnrollment; brief: WorkforceBrief;
   readiness: WorkforceReadiness; sourceUrl: string;
+  taskFacts: { companyFactKey?: string; key: string; value: string; issueId: string; sourceReference: string }[];
+}
+
+// Native prompt paths verified on both initial and resumed turns. Custom
+// process/HTTP/plugin runners need an explicit prompt integration before use.
+export const WORKFORCE_PROMPT_ADAPTER_TYPES = ['claude_local', 'codex_local', 'gemini_local', 'cursor', 'opencode_local', 'pi_local', 'acpx_local', 'openclaw_gateway', 'hermes_local'] as const;
+export function supportsWorkforcePrompt(adapterType: string): boolean {
+  return (WORKFORCE_PROMPT_ADAPTER_TYPES as readonly string[]).includes(adapterType);
 }

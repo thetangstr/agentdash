@@ -1,8 +1,13 @@
+import type { Request } from 'express';
+import { assertProjectIdVisible } from '../routes/visibility.js';
 import { isDeepStrictEqual } from "node:util";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   documents,
+  companies,
+  companyMemberships,
+  workforceEnrollments,
   heartbeatRuns,
   issueComments,
   issueDocuments,
@@ -30,14 +35,18 @@ import {
   cancelIssueThreadInteractionSchema,
   createIssueThreadInteractionSchema,
   rejectIssueThreadInteractionSchema,
+  respondIssueThreadInteractionSchema,
+  resolveWorkforceTemplate,
   requestConfirmationPayloadSchema,
   requestConfirmationResultSchema,
   suggestTasksPayloadSchema,
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { issueService } from "./issues.js";
+import { agentAccountabilityService } from "./agent-accountability.js";
+import { workforceService } from "./workforce.js";
 
 type InteractionActor = {
   agentId?: string | null;
@@ -247,6 +256,10 @@ function normalizeQuestionAnswers(args: {
       throw unprocessable(`Duplicate answer for questionId: ${answer.questionId}`);
     }
 
+    const text = answer.text?.trim();
+    if (question.selectionMode === "text" ? answer.optionIds.length > 0 : answer.text !== undefined) {
+      throw unprocessable(`Question ${answer.questionId} requires ${question.selectionMode === "text" ? "text without selected options" : "selected options without text"}`);
+    }
     const uniqueOptionIds = [...new Set(answer.optionIds)];
     const validOptionIds = new Set(question.options.map((option) => option.id));
     for (const optionId of uniqueOptionIds) {
@@ -262,12 +275,13 @@ function normalizeQuestionAnswers(args: {
     answerByQuestionId.set(answer.questionId, {
       questionId: answer.questionId,
       optionIds: uniqueOptionIds,
+      ...(question.selectionMode === "text" ? { text: text ?? "" } : {}),
     });
   }
 
   for (const question of args.questions) {
     const answer = answerByQuestionId.get(question.id);
-    if (question.required && (!answer || answer.optionIds.length === 0)) {
+    if (question.required && (!answer || (question.selectionMode === "text" ? !answer.text : answer.optionIds.length === 0))) {
       throw unprocessable(`Question ${question.id} requires an answer`);
     }
   }
@@ -603,6 +617,234 @@ export function issueThreadInteractionService(db: Db) {
     return hydrateInteraction(updated);
   }
 
+  async function createInteraction(connection: Db,
+    issue: { id: string; companyId: string },
+    input: CreateIssueThreadInteraction,
+    actor: InteractionActor,
+  ) {
+    const data = createIssueThreadInteractionSchema.parse(input);
+    if (data.kind === 'ask_user_questions') {
+      const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for('update');
+      if (!persistedIssue) throw notFound('Issue not found');
+      const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
+      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
+      const accountability = agentAccountabilityService(connection);
+      // The server pins the target, never a body-supplied agent identifier.
+      delete data.payload.workforceAgentId;
+      delete data.payload.workforceEnrollmentId;
+      delete data.payload.workforceTemplateId;
+      delete data.payload.workforceTemplateVersion;
+      if (data.payload.questions.some(q => q.companyFactKey) && !template && !data.payload.replacesInteractionId) throw unprocessable('Assign an enrolled worker before requesting workforce facts');
+      if (template && persistedIssue.assigneeAgentId) {
+        if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
+        if (actor.agentId && actor.agentId !== persistedIssue.assigneeAgentId) throw forbidden('Only the enrolled assignee may request workforce input');
+        if (!actor.agentId && !actor.userId) throw forbidden('An authenticated human or assigned worker is required');
+        if (data.payload.questions.some(q => q.companyFactKey && !template.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Question must reference a known fact key of the assigned workforce template');
+        const owner = await accountability.escalationUserId(issue.companyId, persistedIssue.assigneeAgentId);
+        if (!owner) throw conflict('Assign an active accountable company member before asking workforce questions');
+        if (data.payload.answerOwnerUserId && data.payload.answerOwnerUserId !== owner) throw conflict('Question owner must be the assignee’s current accountable member');
+        data.payload.answerOwnerUserId = owner;
+        data.payload.workforceAgentId = persistedIssue.assigneeAgentId;
+        data.payload.workforceEnrollmentId = enrollment!.id;
+        data.payload.workforceTemplateId = template.id;
+        data.payload.workforceTemplateVersion = template.version;
+      }
+      if (data.payload.answerOwnerUserId) await accountability.assertAccountableMember(issue.companyId, data.payload.answerOwnerUserId);
+      if (data.payload.replacesInteractionId) {
+        const [prior] = await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id)));
+        if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled') throw unprocessable('Replace an explicitly cancelled question on this issue');
+        const previous = askUserQuestionsPayloadSchema.parse(prior.payload);
+        if (previous.workforceAgentId && !data.payload.workforceAgentId) {
+          if (actor.agentId || !actor.userId) throw forbidden('A human must replace a workforce question after reassignment to an unenrolled worker');
+          if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
+          const owner = await accountability.escalationUserId(issue.companyId, previous.workforceAgentId);
+          if (!owner) throw conflict('Assign an active accountable member before replacing this question');
+          await accountability.assertAccountableMember(issue.companyId, owner);
+          data.payload.answerOwnerUserId = owner;
+          data.payload.workforceAgentId = previous.workforceAgentId;
+          data.payload.workforceEnrollmentId = previous.workforceEnrollmentId;
+          data.payload.workforceTemplateId = previous.workforceTemplateId;
+          data.payload.workforceTemplateVersion = previous.workforceTemplateVersion;
+        }
+        const originTemplate = resolveWorkforceTemplate(data.payload.workforceTemplateId ?? '', data.payload.workforceTemplateVersion);
+        if (originTemplate && data.payload.questions.some(q => q.companyFactKey && !originTemplate.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Replacement must use known fact keys of its workforce template');
+        if (previous.questions.some(q => q.required && !data.payload.questions.some(replacement => replacement.id === q.id && replacement.required && replacement.companyFactKey === q.companyFactKey))) throw unprocessable('Replacement must retain every required question and fact key');
+      }
+    }
+
+    if (data.idempotencyKey) {
+      const existing = await getIdempotentInteraction({
+        issueId: issue.id,
+        companyId: issue.companyId,
+        idempotencyKey: data.idempotencyKey,
+      });
+      if (existing) {
+        if (!isEquivalentCreateRequest(existing, data, actor)) {
+          throw conflict("Interaction idempotency key already exists for a different request", {
+            idempotencyKey: data.idempotencyKey,
+          });
+        }
+        return hydrateInteraction(existing);
+      }
+    }
+
+    if (data.sourceCommentId) {
+      const sourceComment = await connection
+        .select({
+          companyId: issueComments.companyId,
+          issueId: issueComments.issueId,
+        })
+        .from(issueComments)
+        .where(eq(issueComments.id, data.sourceCommentId))
+        .then((rows) => rows[0] ?? null);
+      if (!sourceComment || sourceComment.companyId !== issue.companyId || sourceComment.issueId !== issue.id) {
+        throw unprocessable("sourceCommentId must belong to the same issue and company");
+      }
+    }
+
+    if (data.sourceRunId) {
+      const sourceRun = await connection
+        .select({
+          companyId: heartbeatRuns.companyId,
+          agentId: heartbeatRuns.agentId,
+        })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, data.sourceRunId))
+        .then((rows) => rows[0] ?? null);
+      if (!sourceRun || sourceRun.companyId !== issue.companyId || (actor.agentId && sourceRun.agentId !== actor.agentId)) {
+        throw unprocessable("sourceRunId must belong to the same company");
+      }
+    }
+
+    if (data.kind === "request_confirmation") {
+      await assertRequestConfirmationTargetIsCurrent(connection, {
+        companyId: issue.companyId,
+        issueId: issue.id,
+        target: data.payload.target ?? null,
+      });
+    }
+
+    let created: IssueThreadInteractionRow;
+    try {
+      [created] = await connection
+        .insert(issueThreadInteractions)
+        .values({
+          companyId: issue.companyId,
+          issueId: issue.id,
+          kind: data.kind,
+          status: "pending",
+          continuationPolicy: data.continuationPolicy,
+          idempotencyKey: data.idempotencyKey ?? null,
+          sourceCommentId: data.sourceCommentId ?? null,
+          sourceRunId: data.sourceRunId ?? null,
+          title: data.title ?? null,
+          summary: data.summary ?? null,
+          createdByAgentId: actor.agentId ?? null,
+          createdByUserId: actor.userId ?? null,
+          payload: data.payload,
+        })
+        .returning();
+    } catch (error) {
+      if (!data.idempotencyKey || !isIssueThreadInteractionIdempotencyConflict(error)) {
+        throw error;
+      }
+      const existing = await getIdempotentInteraction({
+        issueId: issue.id,
+        companyId: issue.companyId,
+        idempotencyKey: data.idempotencyKey,
+      });
+      if (!existing) throw error;
+      if (!isEquivalentCreateRequest(existing, data, actor)) {
+        throw conflict("Interaction idempotency key already exists for a different request", {
+          idempotencyKey: data.idempotencyKey,
+        });
+      }
+      return hydrateInteraction(existing);
+    }
+
+    await touchIssue(connection, issue.id);
+    return hydrateInteraction(created);
+  }
+
+  async function answerQuestions(connection: Db,
+    issue: { id: string; companyId: string },
+    interactionId: string,
+    input: RespondIssueThreadInteraction,
+    actor: InteractionActor,
+  ) {
+    input = respondIssueThreadInteractionSchema.parse(input);
+    const current = await connection
+      .select()
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.id, interactionId))
+      .then((rows) => rows[0] ?? null);
+
+    if (!current) throw notFound("Interaction not found");
+    if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
+      throw notFound("Interaction not found");
+    }
+    if (current.kind !== "ask_user_questions") {
+      throw unprocessable("Only ask_user_questions interactions can be answered");
+    }
+    if (current.status !== "pending") {
+      throw conflict("Interaction has already been resolved");
+    }
+
+    const interaction = hydrateInteraction(current) as AskUserQuestionsInteraction;
+    if (interaction.payload.answerOwnerUserId) {
+      if (actor.agentId || actor.userId !== interaction.payload.answerOwnerUserId) throw forbidden('Only the named human answer owner may respond');
+      const accountability = agentAccountabilityService(connection);
+      await accountability.assertAccountableMember(issue.companyId, actor.userId!);
+      const [member] = await connection.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, issue.companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, actor.userId!), eq(companyMemberships.status, 'active')));
+      const [job] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+      await assertProjectIdVisible(connection, { actor: { type: 'board', userId: actor.userId, memberships: member ? [member] : [] } } as unknown as Request, issue.companyId, job?.projectId);
+    }
+    const normalizedAnswers = normalizeQuestionAnswers({
+      questions: interaction.payload.questions,
+      answers: input.answers,
+    });
+
+    if (input.shareWithCompany) {
+      if (!actor.userId || actor.agentId || !interaction.payload.answerOwnerUserId) throw forbidden('Named human confirmation is required to publish company facts');
+      const [job] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+      if (!job || job.projectId || !interaction.payload.workforceAgentId) throw unprocessable('Only company-level workforce jobs may share answers with the company');
+      const svc = workforceService(connection);
+      const enrollment = await svc.getEnrollment(issue.companyId, interaction.payload.workforceAgentId!);
+      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
+      const facts = interaction.payload.questions.filter(q => q.companyFactKey).map(q => ({ key: q.companyFactKey!, value: normalizedAnswers.find(a => a.questionId === q.id)?.text ?? '', sourceReference: `interaction:${interaction.id}/question:${q.id}` }));
+      if (!template || !facts.length || facts.some(f => !template.requiredFactKeys.includes(f.key) || !f.value.trim())) throw unprocessable('Only answered template fact keys may be shared');
+      const prior = await svc.getBrief(issue.companyId);
+      await svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId });
+    }
+    const [updated] = await connection
+      .update(issueThreadInteractions)
+      .set({
+        status: "answered",
+        result: {
+          version: 1,
+          answers: normalizedAnswers,
+          ...(input.shareWithCompany !== undefined || interaction.payload.workforceAgentId ? { shareWithCompany: input.shareWithCompany ?? false } : {}),
+          summaryMarkdown: input.summaryMarkdown ?? null,
+        },
+        resolvedByAgentId: actor.agentId ?? null,
+        resolvedByUserId: actor.userId ?? null,
+        resolvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(issueThreadInteractions.id, interactionId),
+        eq(issueThreadInteractions.status, "pending"),
+      ))
+      .returning();
+
+    if (!updated) {
+      throw conflict("Interaction has already been resolved");
+    }
+
+    await touchIssue(connection, issue.id);
+    return hydrateInteraction(updated);
+  }
+
   return {
     listForIssue: async (issueId: string) => {
       const rows = await db
@@ -624,104 +866,9 @@ export function issueThreadInteractionService(db: Db) {
       return row ? hydrateInteraction(row) : null;
     },
 
-    create: async (
-      issue: { id: string; companyId: string },
-      input: CreateIssueThreadInteraction,
-      actor: InteractionActor,
-    ) => {
-      const data = createIssueThreadInteractionSchema.parse(input);
-
-      if (data.idempotencyKey) {
-        const existing = await getIdempotentInteraction({
-          issueId: issue.id,
-          companyId: issue.companyId,
-          idempotencyKey: data.idempotencyKey,
-        });
-        if (existing) {
-          if (!isEquivalentCreateRequest(existing, data, actor)) {
-            throw conflict("Interaction idempotency key already exists for a different request", {
-              idempotencyKey: data.idempotencyKey,
-            });
-          }
-          return hydrateInteraction(existing);
-        }
-      }
-
-      if (data.sourceCommentId) {
-        const sourceComment = await db
-          .select({
-            companyId: issueComments.companyId,
-            issueId: issueComments.issueId,
-          })
-          .from(issueComments)
-          .where(eq(issueComments.id, data.sourceCommentId))
-          .then((rows) => rows[0] ?? null);
-        if (!sourceComment || sourceComment.companyId !== issue.companyId || sourceComment.issueId !== issue.id) {
-          throw unprocessable("sourceCommentId must belong to the same issue and company");
-        }
-      }
-
-      if (data.sourceRunId) {
-        const sourceRun = await db
-          .select({
-            companyId: heartbeatRuns.companyId,
-          })
-          .from(heartbeatRuns)
-          .where(eq(heartbeatRuns.id, data.sourceRunId))
-          .then((rows) => rows[0] ?? null);
-        if (!sourceRun || sourceRun.companyId !== issue.companyId) {
-          throw unprocessable("sourceRunId must belong to the same company");
-        }
-      }
-
-      if (data.kind === "request_confirmation") {
-        await assertRequestConfirmationTargetIsCurrent(db, {
-          companyId: issue.companyId,
-          issueId: issue.id,
-          target: data.payload.target ?? null,
-        });
-      }
-
-      let created: IssueThreadInteractionRow;
-      try {
-        [created] = await db
-          .insert(issueThreadInteractions)
-          .values({
-            companyId: issue.companyId,
-            issueId: issue.id,
-            kind: data.kind,
-            status: "pending",
-            continuationPolicy: data.continuationPolicy,
-            idempotencyKey: data.idempotencyKey ?? null,
-            sourceCommentId: data.sourceCommentId ?? null,
-            sourceRunId: data.sourceRunId ?? null,
-            title: data.title ?? null,
-            summary: data.summary ?? null,
-            createdByAgentId: actor.agentId ?? null,
-            createdByUserId: actor.userId ?? null,
-            payload: data.payload,
-          })
-          .returning();
-      } catch (error) {
-        if (!data.idempotencyKey || !isIssueThreadInteractionIdempotencyConflict(error)) {
-          throw error;
-        }
-        const existing = await getIdempotentInteraction({
-          issueId: issue.id,
-          companyId: issue.companyId,
-          idempotencyKey: data.idempotencyKey,
-        });
-        if (!existing) throw error;
-        if (!isEquivalentCreateRequest(existing, data, actor)) {
-          throw conflict("Interaction idempotency key already exists for a different request", {
-            idempotencyKey: data.idempotencyKey,
-          });
-        }
-        return hydrateInteraction(existing);
-      }
-
-      await touchIssue(db, issue.id);
-      return hydrateInteraction(created);
+    create: async (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor) => {
+      const namedQuestion = input.kind === 'ask_user_questions';
+      return namedQuestion ? db.transaction(tx => createInteraction(tx as unknown as Db, issue, input, actor)) : createInteraction(db, issue, input, actor);
     },
 
     acceptInteraction: async (
@@ -1095,62 +1242,13 @@ export function issueThreadInteractionService(db: Db) {
       return expired;
     },
 
-    answerQuestions: async (
-      issue: { id: string; companyId: string },
-      interactionId: string,
-      input: RespondIssueThreadInteraction,
-      actor: InteractionActor,
-    ) => {
-      const current = await db
-        .select()
-        .from(issueThreadInteractions)
-        .where(eq(issueThreadInteractions.id, interactionId))
-        .then((rows) => rows[0] ?? null);
-
-      if (!current) throw notFound("Interaction not found");
-      if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
-        throw notFound("Interaction not found");
-      }
-      if (current.kind !== "ask_user_questions") {
-        throw unprocessable("Only ask_user_questions interactions can be answered");
-      }
-      if (current.status !== "pending") {
-        throw conflict("Interaction has already been resolved");
-      }
-
-      const interaction = hydrateInteraction(current) as AskUserQuestionsInteraction;
-      const normalizedAnswers = normalizeQuestionAnswers({
-        questions: interaction.payload.questions,
-        answers: input.answers,
-      });
-
-      const [updated] = await db
-        .update(issueThreadInteractions)
-        .set({
-          status: "answered",
-          result: {
-            version: 1,
-            answers: normalizedAnswers,
-            summaryMarkdown: input.summaryMarkdown ?? null,
-          },
-          resolvedByAgentId: actor.agentId ?? null,
-          resolvedByUserId: actor.userId ?? null,
-          resolvedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(issueThreadInteractions.id, interactionId),
-          eq(issueThreadInteractions.status, "pending"),
-        ))
-        .returning();
-
-      if (!updated) {
-        throw conflict("Interaction has already been resolved");
-      }
-
-      await touchIssue(db, issue.id);
-      return hydrateInteraction(updated);
-    },
+    answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor) => db.transaction(async tx => {
+      const connection = tx as unknown as Db;
+      // Lock company before issue, matching brief publication and job creation.
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for('update');
+      await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for('update');
+      return answerQuestions(connection, issue, interactionId, input, actor);
+    }),
 
     cancelQuestions: async (
       issue: { id: string; companyId: string },

@@ -1,5 +1,5 @@
 import { workforceService } from "./workforce.js";
-import { workforceTemplateIdSchema } from "@paperclipai/shared";
+import { supportsWorkforcePrompt, workforceTemplateIdSchema } from "@paperclipai/shared";
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -337,9 +337,17 @@ export function agentService(db: Db) {
     id: string,
     data: Partial<typeof agents.$inferInsert>,
     options?: UpdateAgentOptions,
-  ) {
+    connection: Db = db,
+  ): Promise<ReturnType<typeof normalizeAgentRow> | null> {
+    if (data.adapterType && !supportsWorkforcePrompt(data.adapterType) && connection === db) {
+      return db.transaction(tx => updateAgent(id, data, options, tx as unknown as Db));
+    }
     const existing = await getById(id);
     if (!existing) return null;
+    if (data.adapterType && !supportsWorkforcePrompt(data.adapterType)) {
+      await connection.select({ id: agents.id }).from(agents).where(eq(agents.id, id)).for('update');
+      if (await workforceService(connection).getEnrollment(existing.companyId, id)) throw unprocessable('Enrolled workforce agents require a verified native runtime; custom process/HTTP/plugin runners are unsupported');
+    }
 
     if (existing.status === "terminated" && data.status && data.status !== "terminated") {
       throw conflict("Terminated agents cannot be resumed");
@@ -382,7 +390,7 @@ export function agentService(db: Db) {
     const shouldRecordRevision = Boolean(options?.recordRevision) && hasConfigPatchFields(normalizedPatch);
     const beforeConfig = shouldRecordRevision ? buildConfigSnapshot(existing) : null;
 
-    const updated = await db
+    const updated = await connection
       .update(agents)
       .set({ ...normalizedPatch, updatedAt: new Date() })
       .where(eq(agents.id, id))
@@ -394,7 +402,7 @@ export function agentService(db: Db) {
       const afterConfig = buildConfigSnapshot(normalizedUpdated);
       const changedKeys = diffConfigSnapshot(beforeConfig, afterConfig);
       if (changedKeys.length > 0) {
-        await db.insert(agentConfigRevisions).values({
+        await connection.insert(agentConfigRevisions).values({
           companyId: normalizedUpdated.companyId,
           agentId: normalizedUpdated.id,
           createdByAgentId: options?.recordRevision?.createdByAgentId ?? null,

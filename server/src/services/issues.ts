@@ -1,3 +1,4 @@
+import { workforceIssueInputs } from './workforce-inputs.js';
 import { Buffer } from "node:buffer";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { clearIssueDependents } from "./issue-dependents.js";
@@ -3416,6 +3417,15 @@ export function issueService(db: Db) {
       }
 
       const runUpdate = async (tx: any) => {
+        if (issueData.status === 'done') {
+          // Same issue lock as workforce question creation: a late question
+          // cannot race completion and a waiting job cannot close silently.
+          const [locked] = await tx.select().from(issues).where(eq(issues.id, id)).for('update');
+          if (locked) {
+            const input = await workforceIssueInputs(tx, locked.companyId, locked.assigneeAgentId, id);
+            if (input.pendingQuestionIds.length || input.missingFactKeys.length) throw conflict('Required workforce input is unresolved', { pendingQuestionIds: input.pendingQuestionIds, missingFactKeys: input.missingFactKeys });
+          }
+        }
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
         const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
           getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),

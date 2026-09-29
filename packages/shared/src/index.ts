@@ -496,6 +496,7 @@ export type {
   DashboardRunActivityDay,
   DashboardSummary,
   WaitingOnYou,
+  WaitingOnYouQuestion,
   WaitingOnYouDecision,
   WaitingOnYouTask,
   WorkingNow,

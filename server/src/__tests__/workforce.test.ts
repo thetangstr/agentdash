@@ -29,7 +29,7 @@ describe('workforce persisted contracts', () => {
   afterAll(async () => { await temp?.cleanup(); await rm(skillHome, { recursive: true, force: true }); if (previousHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = previousHome; });
   async function fixture() {
     const [company] = await db.insert(companies).values({ name: 'Workforce test', issuePrefix: randomUUID().slice(0, 8) }).returning();
-    const [agent] = await db.insert(agents).values({ companyId: company.id, name: 'Worker', adapterType: 'process', adapterConfig: { custom: 'preserved' } }).returning();
+    const [agent] = await db.insert(agents).values({ companyId: company.id, name: 'Worker', adapterType: 'codex_local', adapterConfig: { custom: 'preserved' } }).returning();
     return { company, agent, svc: service.workforceService(db) };
   }
   const input = { expectedRevision: 0, sources: [{ id: 'owner-input', label: 'Owner intake', content: 'We provide tax preparation.' }], facts: [{ key: 'offer', value: 'Tax preparation', sourceReference: 'Owner intake' }] };
@@ -119,7 +119,7 @@ describe('workforce persisted contracts', () => {
     const { company, svc } = await fixture();
     const ordinary = await agentService(db).create(company.id, { name: 'Ordinary' });
     expect(await svc.getEnrollment(company.id, ordinary.id)).toBeNull();
-    const templated = await agentService(db).create(company.id, { name: 'Marketing', workforceTemplateId: 'marketing-content' });
+    const templated = await agentService(db).create(company.id, { name: 'Marketing', adapterType: 'codex_local', workforceTemplateId: 'marketing-content' });
     expect(await svc.getEnrollment(company.id, templated.id)).toMatchObject({ templateId: 'marketing-content', templateVersion: 1 });
   });
   it('rejects a goal from another company without creating an enrollment', async () => {
@@ -133,7 +133,7 @@ describe('workforce persisted contracts', () => {
     const { company, agent, svc } = await fixture();
     await svc.enroll(company.id, agent.id, { templateId: 'sales-support' }, owner);
     const job = await svc.startFirstJob(company.id, agent.id, owner);
-    const [question] = await db.insert(issueThreadInteractions).values({ companyId: company.id, issueId: job.id, kind: 'ask_user_questions', status: 'cancelled', payload: { version: 1, questions: [{ id: 'price', prompt: 'What price is approved?', selectionMode: 'single', options: [{ id: 'a', label: '$50' }] }] } }).returning();
+    const [question] = await db.insert(issueThreadInteractions).values({ companyId: company.id, issueId: job.id, kind: 'ask_user_questions', status: 'cancelled', payload: { version: 1, workforceAgentId: agent.id, workforceEnrollmentId: (await svc.getEnrollment(company.id, agent.id))!.id, workforceTemplateId: 'sales-support', workforceTemplateVersion: 1, questions: [{ id: 'price', prompt: 'What price is approved?', required: true, selectionMode: 'single', options: [{ id: 'a', label: '$50' }] }] } }).returning();
     expect(await svc.getReadiness(company.id, agent.id)).toMatchObject({ phase: 'needs_input', pendingQuestionIds: [question.id] });
   });
   it('retries failed local installation, pins actual skill files and preserves existing assignments', async () => {

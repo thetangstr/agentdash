@@ -740,7 +740,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "ask_user_questions",
-      "Create an ask_user_questions interaction on an issue",
+      "Ask focused human questions on an issue. Use selectionMode text with empty options for free text; companyFactKey only for known workforce facts. A workforce question is delivered to the named accountable human. Stop dependent work immediately after asking; arbitrary comments and wake metadata do not answer it.",
       createAskUserQuestionsToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("POST", `/issues/${encodeURIComponent(issueId)}/interactions`, {

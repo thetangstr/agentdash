@@ -4,11 +4,13 @@ import type { Db } from '@paperclipai/db';
 import { WORKFORCE_TEMPLATES, updateWorkforceBriefSchema, proposeWorkforceFactsSchema, enrollWorkforceSchema, acknowledgeWorkforceLearningSchema } from '@paperclipai/shared';
 import { validate } from '../middleware/validate.js';
 import { forbidden } from '../errors.js';
+import { heartbeatService } from '../services/heartbeat.js';
 import { workforceService } from '../services/workforce.js';
 import { assertCompanyAccess, assertCanSetCompanyDirection } from './authz.js';
-export function workforceRoutes(db: Db) {
+export function workforceRoutes(db: Db, options: { heartbeat?: Pick<ReturnType<typeof heartbeatService>, "wakeup"> } = {}) {
   const router = Router();
   const svc = workforceService(db);
+  const heartbeat = options.heartbeat ?? heartbeatService(db);
   const base = '/companies/:companyId/workforce';
   function access(req: Request, agentId?: string) {
     const companyId = req.params.companyId as string;
@@ -66,7 +68,12 @@ export function workforceRoutes(db: Db) {
   });
   router.post(`${base}/agents/:agentId/first-job`, async (req, res) => {
     const { companyId, actor } = human(req);
-    res.json(await svc.startFirstJob(companyId, req.params.agentId as string, actor));
+    const agentId = req.params.agentId as string;
+    const result = await svc.startFirstJobWithCreation(companyId, agentId, actor);
+    // Repeat requests recover a committed job whose initial dispatch was
+    // interrupted. Heartbeat durably deduplicates under the issue lock.
+    await heartbeat.wakeup(agentId, { source: 'assignment', reason: 'workforce_first_job', idempotencyKey: `workforce-first-job:${result.issue.id}`, requestedByActorType: 'user', requestedByActorId: actor.userId, contextSnapshot: { issueId: result.issue.id, forceFreshSession: result.created } });
+    res.json(result.issue);
   });
   router.post(`${base}/agents/:agentId/learned`, validate(acknowledgeWorkforceLearningSchema), async (req, res) => {
     const { companyId, agentId, actor } = selfOrHuman(req);

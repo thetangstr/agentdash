@@ -43,6 +43,14 @@ import type {
   AcpRuntimeTurnResult,
 } from "acpx/runtime";
 
+import { WORKFORCE_TEMPLATES } from '@paperclipai/shared';
+let workforceCase: 'first' | 'resumed' | 'absent' | null = null;
+let hermesAuthenticated = true;
+const workforceContext = {
+  template: WORKFORCE_TEMPLATES[0], enrollment: { objective: 'WORKFORCE_OBJECTIVE', metrics: ['Target: 5 trials'] },
+  brief: { revision: 3, facts: [{ key: 'offer', value: 'WORKFORCE_OFFER {{literal}}', sourceReference: 'human intake' }], sources: [] },
+  taskFacts: [], sourceUrl: '/api/companies/company-1/workforce/brief', readiness: { phase: 'working', missingFactKeys: [], pendingQuestionIds: [] },
+};
 const DIRECTIVE_BODY = "Never contact a client directly. Escalate to your steward instead.";
 
 const PUSHED_DIRECTIVES = {
@@ -139,16 +147,18 @@ function baseContext(
       adapterConfig: {},
     },
     runtime: {
-      sessionId: null,
-      sessionParams: null,
+      sessionId: workforceCase === "resumed" ? "resume-session" : null,
+      sessionParams: workforceCase === "resumed" ? { sessionId: "resume-session", cwd: overrides.config.cwd } : null,
       sessionDisplayId: null,
       taskKey: null,
     },
-    config: overrides.config,
+    config: { bootstrapPromptTemplate: "FIRST_TURN_ONLY", ...overrides.config },
     context: {
       issueId: "issue-1",
       paperclipTaskMarkdown: "Task context",
+      ...(workforceCase ? { paperclipWake: { reason: "issue_interaction_resolved", issue: { id: "issue-1", title: "Assigned work" } } } : {}),
       paperclipAgentDirectives: PUSHED_DIRECTIVES,
+      ...(workforceCase && workforceCase !== "absent" ? { paperclipWorkforce: workforceContext } : {}),
     },
     onLog: async () => {},
   };
@@ -272,19 +282,15 @@ async function runAcpxLocal(): Promise<string> {
         return runtime;
       },
     });
-    await execute(
-      baseContext({
-        adapterType: "acpx_local",
-        config: {
-          agent: "claude",
-          cwd: root,
-          stateDir: path.join(root, "state"),
-          promptTemplate: "Do the assigned work.",
-        },
-      }),
-    );
+    const ctx = baseContext({ adapterType: "acpx_local", config: { agent: "claude", cwd: root, stateDir: path.join(root, "state"), promptTemplate: "Do the assigned work." } });
+    const first = await execute(ctx);
+    if (workforceCase === 'resumed') {
+      // Resume the real session parameters, including the runtime fingerprint.
+      // A synthetic sessionId alone would silently take ACPX's fresh path.
+      await execute({ ...ctx, runtime: { ...ctx.runtime, sessionId: first.sessionId ?? null, sessionParams: first.sessionParams ?? null } });
+    }
     const captured = runtime as CapturingAcpRuntime | null;
-    return captured?.startInputs.map((input) => input.text).join("\n") ?? "";
+    return captured?.startInputs.at(-1)?.text ?? "";
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -470,7 +476,7 @@ async function runHermesLocalBuiltin(): Promise<string> {
     await adapter.execute({
       ...base,
       agent: { ...base.agent, adapterConfig: { hermesCommand: commandPath, cwd: workspace } },
-      authToken: "test-agent-token",
+      ...(hermesAuthenticated ? { authToken: "test-agent-token" } : {}),
     } as never);
     return await readEmittedPrompt(capturePath);
   } finally {
@@ -738,3 +744,38 @@ async function hasTestFile(dir: string): Promise<boolean> {
   }
   return false;
 }
+
+// Exercise actual child argv/stdin, ACP turn text and gateway message, including
+// resumed runtime state; context JSON by itself is not evidence of delivery.
+describe('workforce native prompt delivery', () => {
+  for (const [name, run] of Object.entries({ ...DIRECTIVE_COVERAGE, ...BUILTIN_DIRECTIVE_COVERAGE })) {
+    for (const phase of ['first', 'resumed', 'absent'] as const) {
+      it(`${name} delivers ${phase} workforce context at the runtime boundary`, async () => {
+        workforceCase = phase;
+        try {
+          const emitted = await run();
+          if (phase === 'absent') expect(emitted).not.toContain('Workforce role');
+          else {
+            expect(emitted).toContain('WORKFORCE_OBJECTIVE');
+            expect(emitted).toContain('WORKFORCE_OFFER');
+            expect(emitted).toContain(name === 'hermes_local' ? '{ {literal}}' : '{{literal}}');
+            expect(emitted).toContain('not authorization');
+            expect(emitted).toContain('revision 3');
+            if (phase === 'resumed' && !['hermes_local', 'openclaw-gateway'].includes(name)) {
+              expect(emitted).toContain('Paperclip Resume Delta');
+              expect(emitted).not.toContain('FIRST_TURN_ONLY');
+            }
+          }
+        } finally { workforceCase = null; }
+      }, 30000);
+    }
+  }
+  it('Hermes unauthenticated early path delivers escaped workforce context', async () => {
+    workforceCase = 'first'; hermesAuthenticated = false;
+    try {
+      const emitted = await runHermesLocalBuiltin();
+      expect(emitted).toContain('WORKFORCE_OBJECTIVE');
+      expect(emitted).toContain('WORKFORCE_OFFER { {literal}}');
+    } finally { workforceCase = null; hermesAuthenticated = true; }
+  }, 30000);
+});
