@@ -1,3 +1,4 @@
+import { commentTransactionReads } from "./helpers/issue-comment-transaction.js";
 import { Readable } from "node:stream";
 import express from "express";
 import request from "supertest";
@@ -182,6 +183,16 @@ function makeAgent(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+vi.mock("../services/issues.js", async () => ({
+  issueService: (await import("../services/index.js")).issueService,
+}));
+vi.mock("../services/issue-references.js", async () => ({
+  issueReferenceService: (await import("../services/index.js")).issueReferenceService,
+}));
+vi.mock("../services/issue-thread-interactions.js", async () => ({
+  issueThreadInteractionService: (await import("../services/index.js")).issueThreadInteractionService,
+}));
+
 async function createApp(actor: Record<string, unknown>) {
   const [{ errorHandler }, { issueRoutes }] = await Promise.all([
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -193,7 +204,7 @@ async function createApp(actor: Record<string, unknown>) {
     (req as any).actor = actor;
     next();
   });
-  app.use("/api", issueRoutes({} as any, mockStorageService as any));
+  app.use("/api", issueRoutes({ transaction: async (fn: (tx: unknown) => unknown) => fn(commentTransactionReads(() => mockIssueService.getById())) } as any, mockStorageService as any));
   app.use(errorHandler);
   return app;
 }

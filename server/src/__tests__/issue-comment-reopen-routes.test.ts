@@ -1,3 +1,4 @@
+import { commentTransactionReads } from "./helpers/issue-comment-transaction.js";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   assertCheckoutOwner: vi.fn(),
+  evaluateCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),
+  applyCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),
   update: vi.fn(),
   addComment: vi.fn(),
   getDependencyReadiness: vi.fn(),
@@ -81,6 +84,8 @@ vi.mock("../services/access.js", () => ({
 
 vi.mock("../services/activity-log.js", () => ({
   logActivity: mockLogActivity,
+  insertActivity: vi.fn(async (tx, input) => { await mockLogActivity(tx, input); return {}; }),
+  publishActivity: vi.fn(),
 }));
 
 vi.mock("../services/agents.js", () => ({
@@ -145,6 +150,11 @@ vi.mock("../services/index.js", () => ({
   routineService: () => mockRoutineService,
   workProductService: () => ({}),
 }));
+
+vi.mock("../services/issue-references.js", async () => ({
+  issueReferenceService: (await import("../services/index.js")).issueReferenceService,
+}));
+vi.mock("../services/issue-thread-interactions.js", () => ({ issueThreadInteractionService: () => mockIssueThreadInteractionService }));
 
 function createApp() {
   const app = express();
@@ -213,6 +223,7 @@ async function waitForWakeup(assertion: () => void) {
 describe.sequential("issue comment reopen routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.assign(mockTx, commentTransactionReads(() => mockIssueService.getById(), () => mockHeartbeatService.getRun()));
     mockIssueService.getById.mockReset();
     mockIssueService.assertCheckoutOwner.mockReset();
     mockIssueService.update.mockReset();
@@ -472,6 +483,7 @@ describe.sequential("issue comment reopen routes", () => {
     expect(mockIssueService.update).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       { status: "todo" },
+      mockTx,
     );
     await waitForWakeup(() => expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
       "22222222-2222-4222-8222-222222222222",
@@ -529,6 +541,7 @@ describe.sequential("issue comment reopen routes", () => {
     expect(mockIssueService.update).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       { status: "todo" },
+      mockTx,
     );
     await waitForWakeup(() => expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
       "22222222-2222-4222-8222-222222222222",
@@ -840,6 +853,7 @@ describe.sequential("issue comment reopen routes", () => {
     expect(mockIssueService.update).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       { status: "todo" },
+      mockTx,
     );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),

@@ -13,3 +13,9 @@ This retired persona remains inert. The unified default worker bundle carries th
 human-control transport boundaries; a legacy CEO label grants no human identity,
 board key, confirmation authority, or right to answer another person's questions.
 /AgentDash: human-control-transport -->
+
+<!-- AgentDash: issue-mutation-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK
+This retired persona remains inert. All workers inherit the canonical default
+comment acceptance and uncertain-effect recovery instructions. Former CEO/CoS
+labels grant no interrupt, resume or human authority; do not fork this policy.
+/AgentDash: issue-mutation-acceptance -->

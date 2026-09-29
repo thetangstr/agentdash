@@ -1,3 +1,11 @@
+import {
+  issueCommentActions,
+  IssueCommentPolicyRefusal,
+  summarizeIssueRelationForActivity,
+  summarizeIssueReferenceActivityDetails,
+  isClosedIssueStatus,
+  shouldImplicitlyMoveCommentedIssueToTodo,
+} from "../services/issue-mutation-actions.js";
 import { dispatchResolvedInteractionContinuation } from "../services/human-control/question-continuation.js";
 import { assertHostExecutionConfigAllowed } from "../services/adapter-host-execution-policy.js";
 import fs from "node:fs/promises";
@@ -186,35 +194,6 @@ function buildExecutionStageWakeContext(input: {
   };
 }
 
-function summarizeIssueRelationForActivity(relation: {
-  id: string;
-  identifier: string | null;
-  title: string;
-}): ActivityIssueRelationSummary {
-  return {
-    id: relation.id,
-    identifier: relation.identifier,
-    title: relation.title,
-  };
-}
-
-function summarizeIssueReferenceActivityDetails(input:
-  | {
-      addedReferencedIssues: ActivityIssueRelationSummary[];
-      removedReferencedIssues: ActivityIssueRelationSummary[];
-      currentReferencedIssues: ActivityIssueRelationSummary[];
-    }
-  | null
-  | undefined,
-) {
-  if (!input) return {};
-  return {
-    ...(input.addedReferencedIssues.length > 0 ? { addedReferencedIssues: input.addedReferencedIssues } : {}),
-    ...(input.removedReferencedIssues.length > 0 ? { removedReferencedIssues: input.removedReferencedIssues } : {}),
-    ...(input.currentReferencedIssues.length > 0 ? { currentReferencedIssues: input.currentReferencedIssues } : {}),
-  };
-}
-
 function activityExecutionParticipantKey(participant: ActivityExecutionParticipant): string {
   return participant.type === "agent" ? `agent:${participant.agentId}` : `user:${participant.userId}`;
 }
@@ -231,24 +210,6 @@ function summarizeExecutionParticipants(
       userId: participant.userId ?? null,
     })) ?? []
   );
-}
-
-function isClosedIssueStatus(status: string | null | undefined): status is "done" | "cancelled" {
-  return status === "done" || status === "cancelled";
-}
-
-function shouldImplicitlyMoveCommentedIssueToTodo(input: {
-  issueStatus: string | null | undefined;
-  assigneeAgentId: string | null | undefined;
-  actorType: "agent" | "user";
-  actorId: string;
-}) {
-  // Only human comments should implicitly reopen finished work.
-  // Agent-authored comments remain communicative unless reopen was explicit.
-  if (input.actorType !== "user") return false;
-  if (!isClosedIssueStatus(input.issueStatus) && input.issueStatus !== "blocked") return false;
-  if (typeof input.assigneeAgentId !== "string" || input.assigneeAgentId.length === 0) return false;
-  return true;
 }
 
 function isExplicitResumeCapableStatus(status: string | null | undefined) {
@@ -607,11 +568,16 @@ export function issueRoutes(
     return !input.assigneeAgentId && !input.assigneeUserId && Boolean(issue.assigneeAgentId);
   }
 
-  function requireAgentRunId(req: Request, res: Response) {
+  function respondIssueMutationPolicy(res: Response, policyDb: Db | undefined, status: number, body: Record<string, unknown>) {
+    if (policyDb) throw new IssueCommentPolicyRefusal(status, body);
+    return res.status(status).json(body);
+  }
+
+  function requireAgentRunId(req: Request, res: Response, policyDb?: Db) {
     if (req.actor.type !== "agent") return null;
     const runId = req.actor.runId?.trim();
     if (runId) return runId;
-    res.status(401).json({ error: "Agent run id required" });
+    respondIssueMutationPolicy(res, policyDb, 401, { error: "Agent run id required" });
     return null;
   }
 
@@ -619,8 +585,9 @@ export function issueRoutes(
     actorAgentId: string,
     companyId: string,
     assigneeAgentId: string,
+    policyDb?: Db,
   ) {
-    const allowedByGrant = await access.hasPermission(
+    const allowedByGrant = await (policyDb ? accessService(policyDb) : access).hasPermission(
       companyId,
       "agent",
       actorAgentId,
@@ -628,7 +595,7 @@ export function issueRoutes(
     );
     if (allowedByGrant) return true;
 
-    const companyAgents = await agentsSvc.list(companyId);
+    const companyAgents = await (policyDb ? agentService(policyDb) : agentsSvc).list(companyId);
     const agentsById = new Map(companyAgents.map((agent) => [agent.id, agent]));
     const actorAgent = agentsById.get(actorAgentId);
     if (!actorAgent) return false;
@@ -651,18 +618,19 @@ export function issueRoutes(
     req: Request,
     res: Response,
     issue: { id: string; companyId: string; status: string; assigneeAgentId: string | null },
+    policyDb?: Db,
   ) {
     if (req.actor.type !== "agent") return true;
     const actorAgentId = req.actor.agentId;
     if (!actorAgentId) {
-      res.status(403).json({ error: "Agent authentication required" });
+      respondIssueMutationPolicy(res, policyDb, 403, { error: "Agent authentication required" });
       return false;
     }
     if (issue.assigneeAgentId === null) {
       return true;
     }
     if (issue.assigneeAgentId !== actorAgentId) {
-      if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
+      if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId, policyDb)) {
         return true;
       }
       // AGE-91: an agent mutating another agent's issue is a P6-class authority
@@ -670,7 +638,7 @@ export function issueRoutes(
       // response below is untouched). The 409 on an in_progress issue is
       // checkout contention between agents, a lock conflict rather than a
       // denial of authority, and is deliberately not recorded as a refusal.
-      if (issue.status !== "in_progress") {
+      if (!policyDb && issue.status !== "in_progress") {
         reportAuthzRefusal(req, {
           companyId: issue.companyId,
           entityType: "issue",
@@ -679,7 +647,7 @@ export function issueRoutes(
         });
       }
       if (issue.status === "in_progress") {
-        res.status(409).json({
+        respondIssueMutationPolicy(res, policyDb, 409, {
           error: "Issue is checked out by another agent",
           details: {
             issueId: issue.id,
@@ -688,7 +656,7 @@ export function issueRoutes(
           },
         });
       } else {
-        res.status(403).json({
+        respondIssueMutationPolicy(res, policyDb, 403, {
           error: "Agent cannot mutate another agent's issue",
           details: {
             issueId: issue.id,
@@ -704,8 +672,12 @@ export function issueRoutes(
     if (issue.status !== "in_progress") {
       return true;
     }
-    const runId = requireAgentRunId(req, res);
+    const runId = requireAgentRunId(req, res, policyDb);
     if (!runId) return false;
+    if (policyDb) {
+      await svc.evaluateCheckoutOwner(issue.id, actorAgentId, runId, policyDb);
+      return true;
+    }
     const ownership = await svc.assertCheckoutOwner(issue.id, actorAgentId, runId);
     if (ownership.adoptedFromRunId) {
       const actor = getActorInfo(req);
@@ -732,9 +704,10 @@ export function issueRoutes(
     req: Request,
     res: Response,
     issue: { id: string; companyId: string; status: string; assigneeAgentId: string | null },
+    policyDb?: Db,
   ) {
     if (issue.status === "cancelled") {
-      res.status(409).json({
+      respondIssueMutationPolicy(res, policyDb, 409, {
         error: "Cancelled issues must be restored through the dedicated restore flow",
         details: {
           issueId: issue.id,
@@ -745,16 +718,16 @@ export function issueRoutes(
     }
 
     if (!isExplicitResumeCapableStatus(issue.status)) {
-      res.status(409).json({
+      respondIssueMutationPolicy(res, policyDb, 409, {
         error: "Issue is not resumable through comment follow-up intent",
         details: { issueId: issue.id, status: issue.status },
       });
       return false;
     }
 
-    const activePauseHold = await treeControlSvc.getActivePauseHoldGate(issue.companyId, issue.id);
+    const activePauseHold = await (policyDb ? serviceIndex.issueTreeControlService(policyDb) : treeControlSvc).getActivePauseHoldGate(issue.companyId, issue.id);
     if (activePauseHold) {
-      res.status(409).json({
+      respondIssueMutationPolicy(res, policyDb, 409, {
         error: "Issue follow-up blocked by active subtree pause hold",
         details: {
           issueId: issue.id,
@@ -767,9 +740,9 @@ export function issueRoutes(
     }
 
     if (issue.status === "blocked") {
-      const readiness = await svc.getDependencyReadiness(issue.id);
+      const readiness = await svc.getDependencyReadiness(issue.id, policyDb ?? db);
       if (readiness.unresolvedBlockerCount > 0) {
-        res.status(409).json({
+        respondIssueMutationPolicy(res, policyDb, 409, {
           error: "Issue follow-up blocked by unresolved blockers",
           details: {
             issueId: issue.id,
@@ -784,22 +757,22 @@ export function issueRoutes(
 
     const actorAgentId = req.actor.agentId;
     if (!actorAgentId) {
-      res.status(403).json({ error: "Agent authentication required" });
+      respondIssueMutationPolicy(res, policyDb, 403, { error: "Agent authentication required" });
       return false;
     }
     if (!issue.assigneeAgentId) {
-      res.status(409).json({
+      respondIssueMutationPolicy(res, policyDb, 409, {
         error: "Issue follow-up requires an assigned agent",
         details: { issueId: issue.id, actorAgentId },
       });
       return false;
     }
     if (issue.assigneeAgentId === actorAgentId) return true;
-    if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
+    if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId, policyDb)) {
       return true;
     }
 
-    res.status(403).json({
+    respondIssueMutationPolicy(res, policyDb, 403, {
       error: "Agent cannot request follow-up for another agent's issue",
       details: {
         issueId: issue.id,
@@ -3757,269 +3730,57 @@ export function issueRoutes(
   });
 
   router.post("/issues/:id/comments", validate(addIssueCommentSchema), async (req, res) => {
-    const id = req.params.id as string;
-    const issue = await svc.getById(id);
-    if (!issue) {
-      res.status(404).json({ error: "Issue not found" });
-      return;
-    }
+    const issue = await svc.getById(req.params.id as string);
+    if (!issue) throw notFound("Issue not found");
     assertCompanyAccess(req, issue.companyId);
-    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
-    const closedExecutionWorkspace = await getClosedIssueExecutionWorkspace(issue);
-    if (closedExecutionWorkspace) {
-      respondClosedIssueExecutionWorkspace(res, closedExecutionWorkspace);
-      return;
-    }
-
-    const actor = getActorInfo(req);
-    const reopenRequested = req.body.reopen === true;
-    const resumeRequested = req.body.resume === true;
-    const interruptRequested = req.body.interrupt === true;
-    if (resumeRequested && !(await assertExplicitResumeIntentAllowed(req, res, issue))) return;
-    if (!resumeRequested && reopenRequested && req.actor.type === "agent") {
-      if (!(await assertExplicitResumeIntentAllowed(req, res, issue))) return;
-    }
-    const isClosed = isClosedIssueStatus(issue.status);
-    const isBlocked = issue.status === "blocked";
-    const explicitMoveToTodoRequested = reopenRequested || resumeRequested;
-    const effectiveMoveToTodoRequested =
-      explicitMoveToTodoRequested ||
-      shouldImplicitlyMoveCommentedIssueToTodo({
-        issueStatus: issue.status,
-        assigneeAgentId: issue.assigneeAgentId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-      });
-    const hasUnresolvedFirstClassBlockers =
-      isBlocked && effectiveMoveToTodoRequested
-        ? (await svc.getDependencyReadiness(issue.id)).unresolvedBlockerCount > 0
-        : false;
-    if (resumeRequested && isBlocked && hasUnresolvedFirstClassBlockers) {
-      res.status(409).json({ error: "Issue follow-up blocked by unresolved blockers" });
-      return;
-    }
-    let reopened = false;
-    let reopenFromStatus: string | null = null;
-    let interruptedRunId: string | null = null;
-    let currentIssue = issue;
-    const commentReferenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
-
-    if (effectiveMoveToTodoRequested && (isClosed || (isBlocked && !hasUnresolvedFirstClassBlockers))) {
-      const reopenedIssue = await svc.update(id, { status: "todo" });
-      if (!reopenedIssue) {
-        res.status(404).json({ error: "Issue not found" });
-        return;
-      }
-      reopened = true;
-      reopenFromStatus = issue.status;
-      currentIssue = reopenedIssue;
-
-      await logActivity(db, {
-        companyId: currentIssue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.updated",
-        entityType: "issue",
-        entityId: currentIssue.id,
-        details: {
-          status: "todo",
-          reopened: true,
-          reopenedFrom: reopenFromStatus,
-          source: "comment",
-          // AgentDash (GH #678): provenance when the write came via an assistant grant.
-          ...assistantGrantAttribution(req),
-          ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
-          identifier: currentIssue.identifier,
+    const actions = issueCommentActions(db, heartbeat);
+    try {
+      const accepted = await actions.accept({
+        issueId: issue.id,
+        companyId: issue.companyId,
+        actor: getActorInfo(req),
+        actorKind: req.actor.type,
+        attribution: assistantGrantAttribution(req),
+        intent: req.body,
+        validate: async (executor, current) => {
+          // Company access was checked on this authenticated request above;
+          // acceptance refreshes existence and enforces that same source binding.
+          const policyDb = executor as Db;
+          await assertAgentIssueMutationAllowed(req, res, current, policyDb);
+          const workspace = current.executionWorkspaceId
+            ? await executionWorkspaceService(policyDb).getById(current.executionWorkspaceId)
+            : null;
+          if (workspace && isClosedIsolatedExecutionWorkspace(workspace)) {
+            throw new IssueCommentPolicyRefusal(409, {
+              error: getClosedIsolatedExecutionWorkspaceMessage(workspace), executionWorkspace: workspace,
+            });
+          }
+          if (req.body.resume === true || (req.body.reopen === true && req.actor.type === "agent")) {
+            await assertExplicitResumeIntentAllowed(req, res, current, policyDb);
+          }
         },
       });
-    }
-
-    if (interruptRequested) {
-      if (req.actor.type !== "board") {
-        res.status(403).json({ error: "Only board users can interrupt active runs from issue comments" });
+      const effects = await actions.dispatch(accepted);
+      if (effects.unresolved) {
+        // Deliberately bypass generic exception/request-body logging. Private
+        // accepted IDs/outcomes remain on the server-side result for later transports.
+        logger.warn({ issueId: issue.id, mutationId: accepted.mutationId, effects: effects.outcomes },
+          "issue comment accepted with unresolved effects");
+        res.status(500).json({ error: "Comment accepted, but follow-up effects are unresolved. Read the issue before retrying." });
         return;
       }
-
-      const runToInterrupt = await resolveActiveIssueRun(currentIssue);
-      if (runToInterrupt) {
-        const cancelled = await heartbeat.cancelRun(runToInterrupt.id);
-        if (cancelled) {
-          interruptedRunId = cancelled.id;
-          await logActivity(db, {
-            companyId: cancelled.companyId,
-            actorType: actor.actorType,
-            actorId: actor.actorId,
-            agentId: actor.agentId,
-            runId: actor.runId,
-            action: "heartbeat.cancelled",
-            entityType: "heartbeat_run",
-            entityId: cancelled.id,
-            details: { agentId: cancelled.agentId, source: "issue_comment_interrupt", issueId: currentIssue.id },
-          });
+      res.status(201).json(accepted.comment);
+    } catch (err) {
+      if (err instanceof IssueCommentPolicyRefusal) {
+        if (err.body.error === "Agent cannot mutate another agent's issue") {
+          reportAuthzRefusal(req, { companyId: issue.companyId, entityType: "issue",
+            entityId: issue.id, reasonCode: "ISSUE_MUTATION_OTHER_AGENT" });
         }
+        res.status(err.status).json(err.body);
+        return;
       }
+      throw err;
     }
-
-    const comment = await svc.addComment(id, req.body.body, {
-      agentId: actor.agentId ?? undefined,
-      userId: actor.actorType === "user" ? actor.actorId : undefined,
-      runId: actor.runId,
-    });
-    await issueReferencesSvc.syncComment(comment.id);
-    const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(currentIssue.id);
-    const commentReferenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
-      commentReferenceSummaryBefore,
-      commentReferenceSummaryAfter,
-    );
-
-    if (actor.runId) {
-      await heartbeat.reportRunActivity(actor.runId).catch((err) =>
-        logger.warn({ err, runId: actor.runId }, "failed to clear detached run warning after issue comment"));
-    }
-
-    await logActivity(db, {
-      companyId: currentIssue.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "issue.comment_added",
-      entityType: "issue",
-      entityId: currentIssue.id,
-      details: {
-        commentId: comment.id,
-        bodySnippet: comment.body.slice(0, 120),
-        identifier: currentIssue.identifier,
-        issueTitle: currentIssue.title,
-        // AgentDash (GH #678): provenance when the write came via an assistant grant.
-        ...assistantGrantAttribution(req),
-        ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
-        ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
-        ...(interruptedRunId ? { interruptedRunId } : {}),
-        ...summarizeIssueReferenceActivityDetails({
-          addedReferencedIssues: commentReferenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
-          removedReferencedIssues: commentReferenceDiff.removedReferencedIssues.map(summarizeIssueRelationForActivity),
-          currentReferencedIssues: commentReferenceDiff.currentReferencedIssues.map(summarizeIssueRelationForActivity),
-        }),
-      },
-    });
-
-    const expiredInteractions = await issueThreadInteractionService(db).expireRequestConfirmationsSupersededByComment(
-      currentIssue,
-      comment,
-      {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      },
-    );
-    await logExpiredRequestConfirmations({
-      issue: currentIssue,
-      interactions: expiredInteractions,
-      actor,
-      source: "issue.comment",
-    });
-
-    // Merge all wakeups from this comment into one enqueue per agent to avoid duplicate runs.
-    void (async () => {
-      const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
-      const assigneeId = currentIssue.assigneeAgentId;
-      const actorIsAgent = actor.actorType === "agent";
-      const selfComment = actorIsAgent && actor.actorId === assigneeId;
-      const skipWake = selfComment || isClosed;
-      if (assigneeId && (reopened || !skipWake)) {
-        if (reopened) {
-          wakeups.set(assigneeId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "issue_reopened_via_comment",
-            payload: {
-              issueId: currentIssue.id,
-              commentId: comment.id,
-              reopenedFrom: reopenFromStatus,
-              mutation: "comment",
-              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
-              ...(interruptedRunId ? { interruptedRunId } : {}),
-            },
-            requestedByActorType: actor.actorType,
-            requestedByActorId: actor.actorId,
-            contextSnapshot: {
-              issueId: currentIssue.id,
-              taskId: currentIssue.id,
-              commentId: comment.id,
-              wakeCommentId: comment.id,
-              source: "issue.comment.reopen",
-              wakeReason: "issue_reopened_via_comment",
-              reopenedFrom: reopenFromStatus,
-              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
-              ...(interruptedRunId ? { interruptedRunId } : {}),
-            },
-          });
-        } else {
-          wakeups.set(assigneeId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "issue_commented",
-            payload: {
-              issueId: currentIssue.id,
-              commentId: comment.id,
-              mutation: "comment",
-              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
-              ...(interruptedRunId ? { interruptedRunId } : {}),
-            },
-            requestedByActorType: actor.actorType,
-            requestedByActorId: actor.actorId,
-            contextSnapshot: {
-              issueId: currentIssue.id,
-              taskId: currentIssue.id,
-              commentId: comment.id,
-              wakeCommentId: comment.id,
-              source: "issue.comment",
-              wakeReason: "issue_commented",
-              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
-              ...(interruptedRunId ? { interruptedRunId } : {}),
-            },
-          });
-        }
-      }
-
-      let mentionedIds: string[] = [];
-      try {
-        mentionedIds = await svc.findMentionedAgents(issue.companyId, req.body.body);
-      } catch (err) {
-        logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
-      }
-
-      for (const mentionedId of mentionedIds) {
-        if (wakeups.has(mentionedId)) continue;
-        if (actorIsAgent && actor.actorId === mentionedId) continue;
-        wakeups.set(mentionedId, {
-          source: "automation",
-          triggerDetail: "system",
-          reason: "issue_comment_mentioned",
-          payload: { issueId: id, commentId: comment.id },
-          requestedByActorType: actor.actorType,
-          requestedByActorId: actor.actorId,
-          contextSnapshot: {
-            issueId: id,
-            taskId: id,
-            commentId: comment.id,
-            wakeCommentId: comment.id,
-            wakeReason: "issue_comment_mentioned",
-            source: "comment.mention",
-          },
-        });
-      }
-
-      for (const [agentId, wakeup] of wakeups.entries()) {
-        heartbeat
-          .wakeup(agentId, wakeup)
-          .catch((err) => logger.warn({ err, issueId: currentIssue.id, agentId }, "failed to wake agent on issue comment"));
-      }
-    })();
-
-    res.status(201).json(comment);
   });
 
   router.post("/issues/:id/feedback-votes", validate(upsertIssueFeedbackVoteSchema), async (req, res) => {
