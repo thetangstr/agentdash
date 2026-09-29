@@ -1,6 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="140" height="32" viewBox="0 0 140 32" fill="none">
-  <g stroke-linecap="round" stroke-linejoin="round">
-    <path stroke="#e4e4e7" stroke-width="2" d="m18 4-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="150" height="32" viewBox="0 0 150 32" fill="none">
+  <g transform="scale(0.5)">
+    <path d="M14 4 H42 L60 22 V50 A10 10 0 0 1 50 60 H14 A10 10 0 0 1 4 50 V14 A10 10 0 0 1 14 4 Z" fill="#0d9488"/>
+    <g stroke="#faf9f5" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <line x1="22" y1="42" x2="42" y2="22"/>
+      <polyline points="26,22 42,22 42,38"/>
+    </g>
   </g>
-  <text x="32" y="22" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600" fill="#e4e4e7">Paperclip</text>
+  <text x="40" y="22.5" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600" fill="#e4e4e7">AgentDash</text>
 </svg>

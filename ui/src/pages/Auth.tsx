@@ -11,7 +11,8 @@ import { LiveBriefing } from "../marketing/sections/LiveBriefing";
 // loaded globally from main.tsx; we just need the section's own styles
 // for the brief card itself.
 import "../marketing/sections/LiveBriefing.css";
-import { Sparkles } from "lucide-react";
+// AgentDash: the brand mark next to the wordmark, same as the app rail and favicon.
+import { AgentDashMark } from "@/components/brand/AgentDashMark";
 import { GoogleGlyph, MicrosoftGlyph } from "../components/auth/social-glyphs";
 
 type AuthMode = "sign_in" | "sign_up";
@@ -131,7 +132,7 @@ export function AuthPage() {
       <div className="w-full md:w-1/2 flex flex-col overflow-y-auto">
         <div className="w-full max-w-md mx-auto my-auto px-8 py-12">
           <div className="flex items-center gap-2 mb-8">
-            <Sparkles className="h-4 w-4 text-text-tertiary" />
+            <AgentDashMark size={20} />
             <span className="text-sm font-medium text-text-primary">AgentDash</span>
           </div>
 

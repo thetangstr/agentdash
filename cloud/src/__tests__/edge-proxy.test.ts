@@ -224,6 +224,13 @@ describe("pages", () => {
     }
   });
 
+  it("edge pages carry the AgentDash mark as their favicon and next to the wordmark", async () => {
+    const res = await get("nobody.agentdash.cloud", "/");
+    expect(res.body).toContain('<link rel="icon" href="data:image/svg+xml,');
+    expect(res.body).toMatch(/<div class="brand"><svg[^>]*viewBox="0 0 64 64"/);
+    expect(res.body).toContain('fill="#0d9488"');
+  });
+
   it("a suspended box gets the waking page and one resume request per window", async () => {
     route("sleepy", "suspended");
     const a = await get("sleepy.agentdash.cloud", "/");
