@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CompanyProvider } from '../context/CompanyContext';
 import { WorkforceWorkspace } from './WorkforceOnboarding';
+import { __liveUpdatesTestUtils } from '@/context/LiveUpdatesProvider';
 import { WORKFORCE_TEMPLATES } from '@paperclipai/shared';
 let root: Root;
 let host: HTMLDivElement;
@@ -73,7 +74,7 @@ it('enrolls the selected role, exposes owner and separates review from acceptanc
   await field('Department objective', 'Qualify 20 leads'); await click('Save department targets');
   expect(requests.find(r => r.method === 'PATCH')?.body.objective).toBe('Qualify 20 leads');
   await click('Start first job'); expect(requests.some(r => r.method === 'POST' && r.url.endsWith('/first-job'))).toBe(true);
-  phase = 'ready'; await act(async () => { await client.invalidateQueries(); }); await flush();
+  phase = 'ready'; await activity('issue', 'verdict_recorded', { outcome: 'passed', reviewerUserId: 'neutral-human' });
   expect(host.textContent).toContain('Neutral review accepted');
   expect([...host.querySelectorAll('button')].some(button => /^(Start|Resume) first job$/.test(button.textContent ?? ''))).toBe(false);
   expect(host.textContent).toContain('Open first job, artifacts and review');
@@ -98,4 +99,31 @@ it('previews selected proposed facts and sources, and exposes review conflicts w
   expect(host.textContent).toContain('Company sources changed; request a new proposal');
   expect(requests.find(r => r.url.endsWith('/review'))).toMatchObject({ url: '/api/companies/one/workforce/proposals/proposal-one/review', body: { decision: 'approve', expectedRevision: 1 } });
   conflict = false; await click('Reject proposal'); expect(host.textContent).toContain('rejected'); expect(requests.filter(r => r.method === 'PUT')).toHaveLength(0);
+});
+
+async function activity(entityType: string, action: string, details: Record<string, unknown> | null = null) {
+  await act(async () => { __liveUpdatesTestUtils.invalidateActivityQueries(client, 'one', { entityType, entityId: 'job', action, details }, { userId: null, agentId: null }); });
+  await flush();
+}
+it('follows neutral pass then later failure through the production activity handler', async () => {
+  enrollment = { id: 'e', companyId: 'one', agentId: 'a', templateId: 'marketing-content', templateVersion: 1, metrics: [], firstJobIssueId: 'job' };
+  render(); await flush(); await flush(); expect(host.textContent).toContain('Awaiting review');
+  phase = 'ready'; await activity('issue', 'verdict_recorded', { outcome: 'passed', reviewerUserId: 'neutral-human' });
+  expect(host.textContent).toContain('Ready for work'); expect(host.textContent).toContain('Neutral review accepted');
+  phase = 'awaiting_review'; await activity('issue', 'verdict_recorded', { outcome: 'failed', reviewerUserId: 'neutral-human' });
+  expect(host.textContent).toContain('Awaiting review'); expect(host.textContent).not.toContain('Neutral review accepted');
+});
+it.each([
+  ['workforce', 'workforce.brief_updated', 'refresh_needed', 'Company context needs refresh'],
+  ['workforce', 'workforce.learning_acknowledged', 'ready', 'Ready for work'],
+  ['issue', 'issue.document_updated', 'awaiting_review', 'Awaiting review'],
+  ['issue', 'issue.work_product_deleted', 'working', 'Working on first job'],
+  ['issue', 'issue.updated', 'needs_input', 'Needs human input'],
+])('refreshes mounted readiness for %s %s', async (entity, action, nextPhase, label) => {
+  enrollment = { id: 'e', companyId: 'one', agentId: 'a', templateId: 'marketing-content', templateVersion: 1, metrics: [], firstJobIssueId: 'job' };
+  phase = nextPhase === 'ready' ? 'learning' : 'ready';
+  render(); await flush(); await flush();
+  phase = nextPhase; await activity(entity, action);
+  expect(host.textContent).toContain(label);
+  if (nextPhase !== 'ready') expect(host.textContent).not.toContain('Neutral review accepted');
 });

@@ -82,7 +82,7 @@ function DepartmentTargets({ companyId, enrollment }: { companyId: string; enrol
   const save = useMutation({ mutationFn: () => workforceApi.updateTargets(companyId, enrollment.agentId, { ...(objective.trim() ? { objective } : {}), metrics: metrics.split('\n').map(s => s.trim()).filter(Boolean), goalId: goalId || null }), onSuccess: () => { void client.invalidateQueries({ queryKey: workforceKeys.all(companyId) }); } });
   return <div className="space-y-3">
     <h3 className="font-medium">Department targets</h3>
-    <label className="block text-sm">Objective<Input aria-label="Department objective" value={objective} onChange={e => setObjective(e.target.value)} />
+    <label className="block text-sm">Objective<Input aria-label="Department objective" value={objective} onChange={e => setObjective(e.target.value)} /><span className="text-xs text-muted-foreground">Leave blank to keep the current objective.</span>
     </label>
     <label className="block text-sm">Declared metrics, one per line<Textarea aria-label="Declared metrics" value={metrics} onChange={e => setMetrics(e.target.value)} />
     </label>
@@ -100,7 +100,18 @@ export function WorkforceAccountability({ companyId, agent }: { companyId: strin
   const members = useQuery({ queryKey: ['workforce-members', companyId], queryFn: () => accessApi.listMembers(companyId) });
   const choices = members.data?.members.filter(m => m.status === 'active' && m.principalType === 'user') ?? [];
   const activeOwner = !!agent.accountable && choices.some(m => m.principalId === agent.accountable!.userId);
-  const assign = useMutation({ mutationFn: async () => { await (agent.autonomy === 'autonomous' ? agentsApi.update(agent.id, { accountableUserId: person }, companyId) : agent.accountable?.via === 'steward' ? stewardshipsApi.transfer(companyId, agent.id, { userId: person, transferReason: 'Explicit workforce accountability reassignment' }) : stewardshipsApi.assign(companyId, { agentId: agent.id, userId: person })); }, onSuccess: () => { void client.invalidateQueries({ queryKey: queryKeys.agents.list(companyId) }); void client.invalidateQueries({ queryKey: workforceKeys.all(companyId) }); } });
+  const assign = useMutation({ mutationFn: async () => { await (agent.autonomy === 'autonomous' ? agentsApi.update(agent.id, { accountableUserId: person }, companyId) : agent.accountable?.via === 'steward' ? stewardshipsApi.transfer(companyId, agent.id, { userId: person, transferReason: 'Explicit workforce accountability reassignment' }) : stewardshipsApi.assign(companyId, { agentId: agent.id, userId: person })); }, onSuccess: async () => {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: queryKeys.agents.list(companyId) }),
+      // AgentDetail may be keyed by UUID, urlKey, or a derived short key plus
+      // company. Match the resolved record, not only the mutation's UUID.
+      client.invalidateQueries({ queryKey: ['agents', 'detail'], predicate: query => {
+        const detail = query.state.data as Agent | undefined;
+        return detail?.id === agent.id && detail.companyId === companyId;
+      } }),
+      client.invalidateQueries({ queryKey: workforceKeys.all(companyId) }),
+    ]);
+  } });
   return <div id="workforce-accountability" className="space-y-2 rounded-lg border p-3 text-sm">
     <p>
       <strong>Accountable human:</strong> {accountableLabel(agent) ?? 'Unassigned'}{members.data && !activeOwner ? ' — active assignment required' : ''}</p>

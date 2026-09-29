@@ -696,3 +696,39 @@ describe('workforce question attention invalidation', () => {
     client.clear();
   });
 });
+
+
+describe('workforce readiness activity invalidation', () => {
+  it.each([
+    ['workforce', 'workforce.brief_updated'], ['workforce', 'workforce.learning_acknowledged'],
+    ['workforce', 'workforce.enrolled'], ['workforce', 'workforce.first_job_started'],
+    ['workforce', 'workforce.skills_installed'], ['workforce', 'workforce.skill_install_failed'],
+    ['issue', 'verdict_recorded'], ['issue', 'dod_set'],
+    ['issue', 'issue.document_created'], ['issue', 'issue.document_updated'], ['issue', 'issue.document_restored'], ['issue', 'issue.document_deleted'],
+    ['issue', 'issue.work_product_created'], ['issue', 'issue.work_product_updated'], ['issue', 'issue.work_product_deleted'],
+    ['issue', 'issue.created'], ['issue', 'issue.updated'], ['issue', 'issue.deleted'],
+    ['issue', 'issue.checked_out'], ['issue', 'issue.released'], ['issue', 'issue.admin_force_release'],
+  ])('refreshes only the affected company for %s %s', (entityType, action) => {
+    const client = new QueryClient();
+    for (const company of ['company-1', 'company-2']) {
+      client.setQueryData(['workforce', company, 'a', 'readiness'], { phase: 'ready' });
+      client.setQueryData(['workforce', company, 'a', 'enrollment'], { learnedBriefRevision: 1 });
+      client.setQueryData(['workforce', company, 'brief'], { revision: 1 });
+    }
+    __liveUpdatesTestUtils.invalidateActivityQueries(client, 'company-1', { entityType, entityId: 'issue-1', action, details: null }, { userId: null, agentId: null });
+    for (const suffix of [['a', 'readiness'], ['a', 'enrollment'], ['brief']]) {
+      expect(client.getQueryState(['workforce', 'company-1', ...suffix])?.isInvalidated).toBe(true);
+      expect(client.getQueryState(['workforce', 'company-2', ...suffix])?.isInvalidated).toBe(false);
+    }
+    client.clear();
+  });
+  it('does not refetch workforce on unrelated comments or cost activity', () => {
+    const client = new QueryClient();
+    client.setQueryData(['workforce', 'company-1', 'a', 'readiness'], { phase: 'ready' });
+    for (const [entityType, action] of [['issue', 'issue.comment_added'], ['cost_event', 'cost.created']]) {
+      __liveUpdatesTestUtils.invalidateActivityQueries(client, 'company-1', { entityType, entityId: 'issue-1', action, details: null }, { userId: null, agentId: null });
+    }
+    expect(client.getQueryState(['workforce', 'company-1', 'a', 'readiness'])?.isInvalidated).toBe(false);
+    client.clear();
+  });
+});
