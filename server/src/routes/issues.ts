@@ -2045,6 +2045,13 @@ export function issueRoutes(
       res.status(400).json({ error: "requestId is only accepted on assistant-grant writes" });
       return;
     }
+    // AgentDash: an assistant-grant write is always recorded under its own
+    // assistant_work origin, so an ExecOS origin on the same write would be
+    // silently overwritten. Refuse it instead of dropping it.
+    if (isAssistantGrant && (req.body.originKind !== undefined || req.body.originId != null)) {
+      res.status(400).json({ error: "originKind/originId are not accepted on assistant-grant writes" });
+      return;
+    }
     const requestId =
       typeof rawRequestId === "string" && rawRequestId.trim().length > 0 ? rawRequestId.trim() : null;
     const originId = isAssistantGrant
@@ -2088,6 +2095,19 @@ export function issueRoutes(
           res.status(200).json({ ...existing, replayed: true });
           return;
         }
+      }
+      // AgentDash: ExecOS request identity. The caller owns the retry, so a
+      // duplicate (companyId, execos_request, originId) is an explicit 409,
+      // translated only from its named constraint.
+      if (
+        issueInput.originKind === "execos_request" &&
+        isUniqueViolation(err) &&
+        pgConstraintName(err) === "issues_execos_request_origin_uq"
+      ) {
+        throw conflict("ExecOS request is already recorded", {
+          code: "EXECOS_REQUEST_ALREADY_RECORDED",
+          originId: issueInput.originId,
+        });
       }
       throw err;
     }

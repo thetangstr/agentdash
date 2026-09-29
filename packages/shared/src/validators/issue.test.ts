@@ -29,6 +29,49 @@ describe("issue validators", () => {
       .toBeUndefined();
   });
 
+  // AgentDash: ExecOS request identity (originKind + originId, both or neither).
+  it("preserves the ExecOS request origin used for idempotent AgentDash records", () => {
+    const parsed = createIssueSchema.parse({
+      title: "KiddoQuest read-only proof",
+      originKind: "execos_request",
+      originId: "req_kiddoquest_repo_state",
+    });
+
+    expect(parsed.originKind).toBe("execos_request");
+    expect(parsed.originId).toBe("req_kiddoquest_repo_state");
+    expect(createIssueSchema.safeParse({
+      title: "Malformed ExecOS request",
+      originKind: "execos_request",
+      originId: "",
+    }).success).toBe(false);
+    expect(createIssueSchema.safeParse({
+      title: "Missing ExecOS request identity",
+      originKind: "execos_request",
+    }).success).toBe(false);
+    expect(createIssueSchema.safeParse({
+      title: "Orphaned external identity",
+      originId: "req_kiddoquest_repo_state",
+    }).success).toBe(false);
+    expect(createIssueSchema.safeParse({
+      title: "Forged internal origin",
+      originKind: "routine_execution",
+      originId: "routine-1",
+    }).success).toBe(false);
+  });
+
+  it("leaves issues without an origin unaffected and keeps ExecOS origin off updates", () => {
+    const plain = createIssueSchema.parse({ title: "Plain issue" });
+    expect(plain.originKind).toBeUndefined();
+    expect(plain.originId).toBeUndefined();
+    const update = updateIssueSchema.parse({
+      title: "Renamed",
+      originKind: "execos_request",
+      originId: "req_other",
+    }) as Record<string, unknown>;
+    expect(update.originKind).toBeUndefined();
+    expect(update.originId).toBeUndefined();
+  });
+
   it("normalizes JSON-escaped line breaks in issue descriptions", () => {
     const parsed = createIssueSchema.parse({
       title: "Follow up PR",

@@ -645,6 +645,17 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
       expect(await db.select().from(issues).where(eq(issues.title, body.title))).toHaveLength(1);
     });
 
+    // AgentDash: an assistant write is always stamped assistant_work, so an
+    // ExecOS origin on it is refused rather than silently overwritten.
+    it("an ExecOS origin is refused on assistant-grant writes", async () => {
+      const { grant } = await grantToken(["agentdash:read", "agentdash:work"]);
+      const loopback = workLoopback(grant.id);
+      const title = `ExecOS via assistant ${randomUUID().slice(0, 8)}`;
+      const res = await postIssues(loopback, { title, originKind: "execos_request", originId: "req-x" });
+      expect(res.status).toBe(400);
+      expect(await db.select().from(issues).where(eq(issues.title, title))).toHaveLength(0);
+    });
+
     it("requestId is refused on non-assistant writes and on PATCH/children", async () => {
       const board = await boardToken();
       const direct = await postIssues(board, { title: "Board create", requestId: "squat-1" });
