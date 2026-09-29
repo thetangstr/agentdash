@@ -41,7 +41,9 @@ export async function workforceIssueInputs(db: Db, companyId: string, agentId: s
   const sufficientFact = (key: string) => approvedFacts.some(f => f.key === key && f.value.trim()) || taskFacts.has(`fact:${key}`);
   const pendingQuestionIds = questions.filter(({ row, payload }) => !answered.has(row.id) && payload.questions.some(q => q.required && (!q.companyFactKey || !sufficientFact(q.companyFactKey)))).map(({ row }) => row.id);
   return {
-    pendingQuestionIds: issue.status === 'cancelled' ? [] : pendingQuestionIds,
+    // Cancellation stops work but does not supply an answer. Completion may
+    // transition directly from cancelled to done, so retain unresolved input.
+    pendingQuestionIds,
     missingFactKeys: template?.requiredFactKeys.filter(key => !sufficientFact(key)) ?? [],
     taskFacts: issue.assigneeAgentId === agentId ? [...taskFacts.values()] : [],
   };

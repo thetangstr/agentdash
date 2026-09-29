@@ -103,6 +103,21 @@ describe('workforce question ownership, input and sharing', () => {
     expect(await issueService(db).update(issue.id, { status: 'done' })).toMatchObject({ status: 'done' });
     await expect(questions.create(issue, input('audience'), { agentId: agent.id })).rejects.toMatchObject({ status: 409 });
   });
+  it.each([false, true])('rejects cancelled-to-done with unresolved task input and complete company facts (reassigned: %s)', async (reassigned) => {
+    const { company, issue, agent, questions, svc } = await fixture();
+    await svc.updateBrief(company.id, { expectedRevision: 0, sources: [], facts: ['offer', 'audience', 'brandVoice', 'approvedClaims'].map(key => ({ key, value: 'Approved input', sourceReference: 'human' })) }, { userId: 'owner' });
+    expect((await svc.getReadiness(company.id, agent.id))?.missingFactKeys).toEqual([]);
+    const q = await questions.create(issue, { ...input(), payload: { version: 1, questions: [{ id: 'date', prompt: 'Launch date?', selectionMode: 'text', required: true, options: [] }] } }, { agentId: agent.id });
+    if (reassigned) {
+      const [other] = await db.insert(agents).values({ companyId: company.id, name: 'Unenrolled worker', adapterType: 'codex_local' }).returning();
+      await issueService(db).update(issue.id, { assigneeAgentId: other.id });
+    }
+    expect(await issueService(db).update(issue.id, { status: 'cancelled' })).toMatchObject({ status: 'cancelled' });
+    await expect(issueService(db).update(issue.id, { status: 'done' })).rejects.toMatchObject({ status: 409 });
+    expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0].status).toBe('cancelled');
+    await questions.answerQuestions(issue, q.id, { answers: [{ questionId: 'date', optionIds: [], text: 'October 12' }] }, { userId: 'owner' });
+    expect(await issueService(db).update(issue.id, { status: 'done' })).toMatchObject({ status: 'done' });
+  });
   it('rejects unsupported enrollment without partial state and adapter edits after enrollment', async () => {
     const { company, agent, svc } = await fixture();
     const [ordinary] = await db.insert(agents).values({ companyId: company.id, name: 'Custom', adapterType: 'process' }).returning();
