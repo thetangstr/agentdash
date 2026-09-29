@@ -61,6 +61,7 @@ const ROUTES = [
   "/companies",
   "/company/settings",
   "/company/settings/connections",
+  "/company/settings/model-key",
   "/company/settings/access",
   "/company/settings/invites",
   "/company/settings/health",

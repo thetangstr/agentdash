@@ -14,6 +14,7 @@ import {
   type SetupHermesProviderResponse,
 } from "@/api/onboarding";
 import { Button } from "@/components/ui/button";
+import { ProviderKeyBlocked } from "@/components/onboarding/ProviderKeyBlocked";
 
 export interface HermesProviderStepProps {
   companyId: string;
@@ -40,9 +41,9 @@ export function HermesProviderStep({ companyId, options, canConfigure, onConfigu
       <div className="mx-auto max-w-lg px-6 py-12 text-sm" data-testid="hermes-provider-waiting">
         <h1 className="mb-2 text-lg font-semibold">Waiting for a model provider</h1>
         <p className="text-muted-foreground">
-          This workspace needs an AI model provider before the Chief of Staff can reply. Ask the person who set up
-          the workspace to add a provider key.
+          This workspace needs an AI model provider before the Chief of Staff can reply.
         </p>
+        <ProviderKeyBlocked companyId={companyId} />
       </div>
     );
   }

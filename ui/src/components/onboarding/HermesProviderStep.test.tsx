@@ -2,12 +2,23 @@
 // AgentDash (#725): the Hermes provider step of hosted onboarding.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/api/client";
 
 const mockSetup = vi.hoisted(() => vi.fn());
+const mockAdmins = vi.hoisted(() => vi.fn());
+const mockRequest = vi.hoisted(() => vi.fn());
 vi.mock("@/api/onboarding", () => ({
-  onboardingApi: { setupHermesProvider: mockSetup },
+  onboardingApi: {
+    setupHermesProvider: mockSetup,
+    modelKeyAdmins: mockAdmins,
+    requestModelKey: mockRequest,
+  },
+}));
+
+vi.mock("@/lib/router", () => ({
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
 }));
 
 import { HermesProviderStep } from "./HermesProviderStep";
@@ -37,6 +48,10 @@ describe("HermesProviderStep", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockSetup.mockReset();
+    mockAdmins.mockReset();
+    mockRequest.mockReset();
+    mockAdmins.mockResolvedValue({ admins: [] });
+    mockRequest.mockResolvedValue({ results: [] });
   });
 
   afterEach(() => {
@@ -46,15 +61,18 @@ describe("HermesProviderStep", () => {
 
   function render(props: Partial<Parameters<typeof HermesProviderStep>[0]> = {}) {
     const onConfigured = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     act(() => {
       root.render(
-        <HermesProviderStep
-          companyId="company-1"
-          options={OPTIONS}
-          canConfigure
-          onConfigured={onConfigured}
-          {...props}
-        />,
+        <QueryClientProvider client={queryClient}>
+          <HermesProviderStep
+            companyId="company-1"
+            options={OPTIONS}
+            canConfigure
+            onConfigured={onConfigured}
+            {...props}
+          />
+        </QueryClientProvider>,
       );
     });
     return { onConfigured };
@@ -113,9 +131,24 @@ describe("HermesProviderStep", () => {
     expect(onConfigured).not.toHaveBeenCalled();
   });
 
-  it("tells a teammate who is not the admin to wait, with no form", () => {
+  it("tells a teammate who is not the admin to wait, naming who can fix it", async () => {
+    mockAdmins.mockResolvedValue({
+      admins: [
+        { userId: "u1", name: "Rosa Instance", email: "rosa@x.test", membershipRole: "admin", canFix: true },
+      ],
+    });
     render({ canConfigure: false });
+    // The admins query resolves a couple of event-loop turns after mount;
+    // a single tick raced on CI, so flush several.
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
     expect(container.querySelector("form")).toBeNull();
     expect(container.textContent).toContain("Waiting for a model provider");
+    expect(container.textContent).toContain("Rosa Instance");
+    expect(container.querySelector('[data-testid="provider-key-blocked"]')).not.toBeNull();
+    expect(mockAdmins).toHaveBeenCalledWith("company-1");
   });
 });

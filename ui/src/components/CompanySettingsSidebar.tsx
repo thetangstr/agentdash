@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ChevronLeft, Link2, MailPlus, MonitorCog, Settings, Shield, SlidersHorizontal } from "lucide-react";
+import { Activity, ChevronLeft, KeyRound, Link2, MailPlus, MonitorCog, Settings, Shield, SlidersHorizontal } from "lucide-react";
 import { sidebarBadgesApi } from "@/api/sidebarBadges";
 import { ApiError } from "@/api/client";
 import { Link } from "@/lib/router";
@@ -60,6 +60,15 @@ export function CompanySettingsSidebar() {
               to="/company/settings/connections"
               label="Connections"
               icon={Link2}
+              end
+            />
+          ) : null}
+          {/* AgentDash (GH #794): default profile only — MK runs self-hosted adapters. */}
+          {selectedCompany?.productProfile !== "agentdash_mk" ? (
+            <SidebarNavItem
+              to="/company/settings/model-key"
+              label="Model key"
+              icon={KeyRound}
               end
             />
           ) : null}

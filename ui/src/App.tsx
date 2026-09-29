@@ -40,6 +40,7 @@ import { Inbox } from "./pages/Inbox";
 import { CompanyInbox } from "./pages/CompanyInbox";
 import { CompanySettings } from "./pages/CompanySettings";
 import { CompanyConnections } from "./pages/CompanyConnections";
+import { CompanyModelKey } from "./pages/CompanyModelKey";
 import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
@@ -133,6 +134,7 @@ function boardRoutes() {
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
       <Route path="company/settings/connections" element={<CompanyConnections />} />
+      <Route path="company/settings/model-key" element={<CompanyModelKey />} />
       <Route path="company/settings/environments" element={<CompanyEnvironments />} />
       <Route path="company/settings/access" element={<CompanyAccess />} />
       <Route path="company/settings/invites" element={<CompanyInvites />} />
@@ -443,6 +445,7 @@ export function App() {
           <Route path="company" element={<UnprefixedBoardRedirect />} />
           <Route path="company/settings" element={<UnprefixedBoardRedirect />} />
           <Route path="company/settings/connections" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/model-key" element={<UnprefixedBoardRedirect />} />
           <Route path="company/settings/environments" element={<UnprefixedBoardRedirect />} />
           <Route path="company/settings/access" element={<UnprefixedBoardRedirect />} />
           <Route path="company/settings/invites" element={<UnprefixedBoardRedirect />} />
