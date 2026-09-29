@@ -63,15 +63,25 @@ export interface LogActivityInput {
   details?: Record<string, unknown> | null;
 }
 
-export async function logActivity(db: Db, input: LogActivityInput) {
+// AgentDash: server-private data to publish only after the owning transaction commits.
+export interface ActivityPublication {
+  liveEvent: Parameters<typeof publishLiveEvent>[0];
+  pluginEvent: PluginEvent | null;
+}
+
+/** DB-only insertion. Discard the returned publication if the transaction fails. */
+export async function insertActivity(
+  executor: Pick<Db, "select" | "insert" | "update">,
+  input: LogActivityInput,
+): Promise<ActivityPublication> {
   const currentUserRedactionOptions = {
-    enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
+    enabled: (await instanceSettingsService(executor as Db).getGeneral()).censorUsernameInLogs,
   };
   const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
   const redactedDetails = sanitizedDetails
     ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
     : null;
-  await db.insert(activityLog).values({
+  await executor.insert(activityLog).values({
     companyId: input.companyId,
     actorType: input.actorType,
     actorId: input.actorId,
@@ -81,12 +91,12 @@ export async function logActivity(db: Db, input: LogActivityInput) {
     agentId: input.agentId ?? null,
     runId: input.runId ?? null,
     details: redactedDetails,
-    // AgentDash (consolidation PR-C): logActivity is only called by server
+    // AgentDash (consolidation PR-C): activity insertion is only called by server
     // code with the actor it resolved itself, so these rows are server records.
     origin: "server",
   });
 
-  publishLiveEvent({
+  const liveEvent: ActivityPublication["liveEvent"] = {
     companyId: input.companyId,
     type: "activity.logged",
     payload: {
@@ -99,11 +109,12 @@ export async function logActivity(db: Db, input: LogActivityInput) {
       runId: input.runId ?? null,
       details: redactedDetails,
     },
-  });
+  };
 
+  let pluginEvent: PluginEvent | null = null;
   const pluginEventType = eventTypeForActivityAction(input.action);
   if (pluginEventType) {
-    const event: PluginEvent = {
+    pluginEvent = {
       eventId: randomUUID(),
       eventType: pluginEventType,
       occurredAt: new Date().toISOString(),
@@ -118,8 +129,18 @@ export async function logActivity(db: Db, input: LogActivityInput) {
         runId: input.runId ?? null,
       },
     };
-    publishPluginDomainEvent(event);
   }
+  return { liveEvent, pluginEvent };
+}
+
+/** Caller must invoke this only after a successful commit, once per accepted record. */
+export function publishActivity(publication: ActivityPublication): void {
+  publishLiveEvent(publication.liveEvent);
+  if (publication.pluginEvent) publishPluginDomainEvent(publication.pluginEvent);
+}
+
+export async function logActivity(db: Db, input: LogActivityInput) {
+  publishActivity(await insertActivity(db, input));
 }
 
 /**

@@ -718,7 +718,7 @@ export function routineService(
       .then((rows) => rows[0]?.issues ?? null);
   }
 
-  async function finalizeRun(runId: string, patch: Partial<typeof routineRuns.$inferInsert>, executor: Db = db) {
+  async function finalizeRun(runId: string, patch: Partial<typeof routineRuns.$inferInsert>, executor: Pick<Db, "update"> = db) {
     return executor
       .update(routineRuns)
       .set({
@@ -1698,8 +1698,8 @@ export function routineService(
       return { triggered };
     },
 
-    syncRunStatusForIssue: async (issueId: string) => {
-      const issue = await db
+    syncRunStatusForIssue: async (issueId: string, executor: Pick<Db, "select" | "update"> = db) => {
+      const issue = await executor
         .select({
           id: issues.id,
           status: issues.status,
@@ -1714,14 +1714,14 @@ export function routineService(
         return finalizeRun(issue.originRunId, {
           status: "completed",
           completedAt: new Date(),
-        });
+        }, executor);
       }
       if (issue.status === "blocked" || issue.status === "cancelled") {
         return finalizeRun(issue.originRunId, {
           status: "failed",
           failureReason: `Execution issue moved to ${issue.status}`,
           completedAt: new Date(),
-        });
+        }, executor);
       }
       return null;
     },

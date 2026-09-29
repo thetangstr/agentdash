@@ -1133,10 +1133,11 @@ export function issueThreadInteractionService(db: Db) {
       issue: { id: string; companyId: string },
       comment: { id: string; authorUserId?: string | null },
       actor: InteractionActor,
+      executor: Pick<Db, "select" | "update"> = db,
     ) => {
       if (!comment.authorUserId) return [];
 
-      const rows = await db
+      const rows = await executor
         .select()
         .from(issueThreadInteractions)
         .where(and(
@@ -1156,7 +1157,7 @@ export function issueThreadInteractionService(db: Db) {
       const now = new Date();
       const expired: IssueThreadInteraction[] = [];
       for (const row of superseded) {
-        const [updated] = await db
+        const [updated] = await executor
           .update(issueThreadInteractions)
           .set({
             status: "expired",
@@ -1179,7 +1180,7 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       if (expired.length > 0) {
-        await touchIssue(db, issue.id);
+        await touchIssue(executor, issue.id);
       }
       return expired;
     },

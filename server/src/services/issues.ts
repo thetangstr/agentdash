@@ -237,6 +237,17 @@ type IssueUserContextInput = {
 };
 type ProjectGoalReader = Pick<Db, "select">;
 type DbReader = Pick<Db, "select">;
+type IssueMutationExecutor = Pick<Db, "select" | "insert" | "update" | "delete" | "execute">;
+
+// AgentDash: private acceptance facts, never a caller-authored authority capability.
+export interface CheckoutOwnerEvaluation {
+  current: Pick<typeof issues.$inferSelect, "id" | "status" | "assigneeAgentId" | "checkoutRunId" | "executionRunId">;
+  actorAgentId: string;
+  actorRunId: string | null;
+  clearExecutionRunId: string | null;
+  adopt: boolean;
+  adoptedFromRunId: string | null;
+}
 type IssueCreateInput = Omit<typeof issues.$inferInsert, "companyId"> & {
   labelIds?: string[];
   blockedByIssueIds?: string[];
@@ -1933,8 +1944,8 @@ export function issueService(db: Db) {
     };
   }
 
-  async function assertAssignableAgent(companyId: string, agentId: string) {
-    const assignee = await db
+  async function assertAssignableAgent(companyId: string, agentId: string, executor: DbReader = db) {
+    const assignee = await executor
       .select({
         id: agents.id,
         companyId: agents.companyId,
@@ -1984,8 +1995,8 @@ export function issueService(db: Db) {
     });
   }
 
-  async function assertAssignableUser(companyId: string, userId: string) {
-    const membership = await db
+  async function assertAssignableUser(companyId: string, userId: string, executor: DbReader = db) {
+    const membership = await executor
       .select({ id: companyMemberships.id })
       .from(companyMemberships)
       .where(
@@ -2250,8 +2261,8 @@ export function issueService(db: Db) {
     );
   }
 
-  async function isTerminalOrMissingHeartbeatRun(runId: string) {
-    const run = await db
+  async function isTerminalOrMissingHeartbeatRun(runId: string, executor: DbReader = db) {
+    const run = await executor
       .select({ status: heartbeatRuns.status })
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
@@ -2284,41 +2295,6 @@ export function issueService(db: Db) {
           eq(issues.status, "in_progress"),
           eq(issues.assigneeAgentId, input.actorAgentId),
           eq(issues.checkoutRunId, input.expectedCheckoutRunId),
-        ),
-      )
-      .returning({
-        id: issues.id,
-        status: issues.status,
-        assigneeAgentId: issues.assigneeAgentId,
-        checkoutRunId: issues.checkoutRunId,
-        executionRunId: issues.executionRunId,
-      })
-      .then((rows) => rows[0] ?? null);
-
-    return adopted;
-  }
-
-  async function adoptUnownedCheckoutRun(input: {
-    issueId: string;
-    actorAgentId: string;
-    actorRunId: string;
-  }) {
-    const now = new Date();
-    const adopted = await db
-      .update(issues)
-      .set({
-        checkoutRunId: input.actorRunId,
-        executionRunId: input.actorRunId,
-        executionLockedAt: now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(issues.id, input.issueId),
-          eq(issues.status, "in_progress"),
-          eq(issues.assigneeAgentId, input.actorAgentId),
-          isNull(issues.checkoutRunId),
-          or(isNull(issues.executionRunId), eq(issues.executionRunId, input.actorRunId)),
         ),
       )
       .returning({
@@ -2374,6 +2350,82 @@ export function issueService(db: Db) {
 
       return Boolean(updated);
     });
+  }
+
+  /** Read/check only: no cleanup, adoption, audit or publication. */
+  async function evaluateCheckoutOwner(
+    id: string,
+    actorAgentId: string,
+    actorRunId: string | null,
+    executor: DbReader = db,
+  ): Promise<CheckoutOwnerEvaluation> {
+    const current = await executor.select({
+      id: issues.id,
+      status: issues.status,
+      assigneeAgentId: issues.assigneeAgentId,
+      checkoutRunId: issues.checkoutRunId,
+      executionRunId: issues.executionRunId,
+    }).from(issues).where(eq(issues.id, id)).then((rows) => rows[0] ?? null);
+    if (!current) throw notFound("Issue not found");
+    const clearExecutionRunId = current.executionRunId &&
+      await isTerminalOrMissingHeartbeatRun(current.executionRunId, executor)
+      ? current.executionRunId : null;
+    const effectiveExecutionRunId = clearExecutionRunId ? null : current.executionRunId;
+    const owned = current.status === "in_progress" && current.assigneeAgentId === actorAgentId;
+    const sameRun = owned && sameRunLock(current.checkoutRunId, actorRunId);
+    const adoptUnowned = owned && Boolean(actorRunId) && current.checkoutRunId === null &&
+      (effectiveExecutionRunId === null || effectiveExecutionRunId === actorRunId);
+    const adoptStale = owned && Boolean(actorRunId) && current.checkoutRunId !== null &&
+      current.checkoutRunId !== actorRunId &&
+      await isTerminalOrMissingHeartbeatRun(current.checkoutRunId, executor);
+    if (!sameRun && !adoptUnowned && !adoptStale) {
+      throw conflict("Issue run ownership conflict", {
+        issueId: current.id,
+        status: current.status,
+        assigneeAgentId: current.assigneeAgentId,
+        checkoutRunId: current.checkoutRunId,
+        executionRunId: effectiveExecutionRunId,
+        actorAgentId,
+        actorRunId,
+      });
+    }
+    return {
+      current, actorAgentId, actorRunId, clearExecutionRunId,
+      adopt: !sameRun && (adoptUnowned || adoptStale),
+      adoptedFromRunId: !sameRun && adoptStale ? current.checkoutRunId : null,
+    };
+  }
+
+  /** DB-only accepted application; the caller owns the transaction and adoption audit. */
+  async function applyCheckoutOwner(evaluation: CheckoutOwnerEvaluation, executor: IssueMutationExecutor) {
+    await executor.execute(sql`select ${issues.id} from ${issues} where ${issues.id} = ${evaluation.current.id} for update`);
+    const fresh = await evaluateCheckoutOwner(evaluation.current.id, evaluation.actorAgentId, evaluation.actorRunId, executor);
+    // A plan cannot silently adopt a different run than the one checked by its composer.
+    if (fresh.current.checkoutRunId !== evaluation.current.checkoutRunId ||
+        fresh.current.executionRunId !== evaluation.current.executionRunId ||
+        fresh.clearExecutionRunId !== evaluation.clearExecutionRunId ||
+        fresh.adopt !== evaluation.adopt) {
+      throw conflict("Issue run ownership conflict", {
+        issueId: fresh.current.id, status: fresh.current.status,
+        assigneeAgentId: fresh.current.assigneeAgentId,
+        checkoutRunId: fresh.current.checkoutRunId, executionRunId: fresh.current.executionRunId,
+        actorAgentId: fresh.actorAgentId, actorRunId: fresh.actorRunId,
+      });
+    }
+    let current = fresh.current;
+    if (fresh.clearExecutionRunId || fresh.adopt) {
+      const now = new Date();
+      const [updated] = await executor.update(issues).set({
+        ...(fresh.clearExecutionRunId ? { executionRunId: null, executionAgentNameKey: null, executionLockedAt: null } : {}),
+        ...(fresh.adopt ? { checkoutRunId: fresh.actorRunId, executionRunId: fresh.actorRunId, executionLockedAt: now } : {}),
+        updatedAt: now,
+      }).where(eq(issues.id, current.id)).returning({
+        id: issues.id, status: issues.status, assigneeAgentId: issues.assigneeAgentId,
+        checkoutRunId: issues.checkoutRunId, executionRunId: issues.executionRunId,
+      });
+      current = updated;
+    }
+    return { ...current, adoptedFromRunId: fresh.adoptedFromRunId };
   }
 
   return {
@@ -3309,121 +3361,123 @@ export function issueService(db: Db) {
         actorAgentId?: string | null;
         actorUserId?: string | null;
       },
-      dbOrTx: any = db,
+      dbOrTx: IssueMutationExecutor = db,
     ) => {
-      const existing = await dbOrTx
-        .select()
-        .from(issues)
-        .where(eq(issues.id, id))
-        .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
-      if (!existing) return null;
+      const runUpdate = async (tx: IssueMutationExecutor) => {
+        const existing = await tx
+          .select()
+          .from(issues)
+          .where(eq(issues.id, id))
+          .for("update")
+          .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
+        if (!existing) return null;
 
-      const {
-        labelIds: nextLabelIds,
-        blockedByIssueIds,
-        actorAgentId,
-        actorUserId,
-        ...issueData
-      } = data;
-      const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
-      if (!isolatedWorkspacesEnabled) {
-        delete issueData.executionWorkspaceId;
-        delete issueData.executionWorkspacePreference;
-        delete issueData.executionWorkspaceSettings;
-      }
-
-      if (issueData.status) {
-        assertTransition(existing.status, issueData.status);
-      }
-
-      const patch: Partial<typeof issues.$inferInsert> = {
-        ...issueData,
-        updatedAt: new Date(),
-      };
-      if (issueData.requestDepth !== undefined) {
-        patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
-      }
-
-      const nextAssigneeAgentId =
-        issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
-      const nextAssigneeUserId =
-        issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
-
-      if (nextAssigneeAgentId && nextAssigneeUserId) {
-        throw unprocessable("Issue can only have one assignee");
-      }
-      if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
-        throw unprocessable("in_progress issues require an assignee");
-      }
-      if (patch.status === "in_progress") {
-        const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
-          ? await listUnresolvedBlockerIssueIds(dbOrTx, existing.companyId, blockedByIssueIds)
-          : (
-              await listIssueDependencyReadinessMap(dbOrTx, existing.companyId, [id])
-            ).get(id)?.unresolvedBlockerIssueIds ?? [];
-        if (unresolvedBlockerIssueIds.length > 0) {
-          throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+        const {
+          labelIds: nextLabelIds,
+          blockedByIssueIds,
+          actorAgentId,
+          actorUserId,
+          ...issueData
+        } = data;
+        const isolatedWorkspacesEnabled = (await instanceSettingsService(tx as Db).getExperimental()).enableIsolatedWorkspaces;
+        if (!isolatedWorkspacesEnabled) {
+          delete issueData.executionWorkspaceId;
+          delete issueData.executionWorkspacePreference;
+          delete issueData.executionWorkspaceSettings;
         }
-      }
-      if (issueData.assigneeAgentId) {
-        await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId);
-      }
-      if (issueData.assigneeUserId) {
-        await assertAssignableUser(existing.companyId, issueData.assigneeUserId);
-      }
-      const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
-      const nextProjectWorkspaceId =
-        issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
-      const nextExecutionWorkspaceId =
-        issueData.executionWorkspaceId !== undefined ? issueData.executionWorkspaceId : existing.executionWorkspaceId;
-      const nextExecutionWorkspacePreference =
-        issueData.executionWorkspacePreference !== undefined
-          ? issueData.executionWorkspacePreference
-          : existing.executionWorkspacePreference;
-      const nextExecutionWorkspaceSettings =
-        issueData.executionWorkspaceSettings !== undefined
-          ? parseIssueExecutionWorkspaceSettings(issueData.executionWorkspaceSettings)
-          : parseIssueExecutionWorkspaceSettings(existing.executionWorkspaceSettings);
-      if (nextProjectWorkspaceId) {
-        await assertValidProjectWorkspace(existing.companyId, nextProjectId, nextProjectWorkspaceId);
-      }
-      if (nextExecutionWorkspaceId) {
-        await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
-      }
 
-      applyStatusSideEffects(issueData.status, patch, existing);
-      if (issueData.status && issueData.status !== "done") {
-        patch.completedAt = null;
-      }
-      if (issueData.status && issueData.status !== "cancelled") {
-        patch.cancelledAt = null;
-      }
-      if (issueData.status && issueData.status !== "in_progress") {
-        patch.checkoutRunId = null;
-        // Fix B: also clear the execution lock when leaving in_progress
-        patch.executionRunId = null;
-        patch.executionAgentNameKey = null;
-        patch.executionLockedAt = null;
-      }
-      if (
-        (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
-        (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId)
-      ) {
-        patch.checkoutRunId = null;
-        // Fix B: clear execution lock on reassignment, matching checkoutRunId clear
-        patch.executionRunId = null;
-        patch.executionAgentNameKey = null;
-        patch.executionLockedAt = null;
-      }
+        if (issueData.status) {
+          assertTransition(existing.status, issueData.status);
+        }
 
-      const runUpdate = async (tx: any) => {
-        if (issueData.status === 'done') {
-          // Same issue lock as workforce question creation: a late question
-          // cannot race completion and a waiting job cannot close silently.
-          const [locked] = await tx.select().from(issues).where(eq(issues.id, id)).for('update');
-          if (locked) {
-            const input = await workforceIssueInputs(tx, locked.companyId, locked.assigneeAgentId, id);
-            if (input.pendingQuestionIds.length || input.missingFactKeys.length) throw conflict('Required workforce input is unresolved', { pendingQuestionIds: input.pendingQuestionIds, missingFactKeys: input.missingFactKeys });
+        const patch: Partial<typeof issues.$inferInsert> = {
+          ...issueData,
+          updatedAt: new Date(),
+        };
+        if (issueData.requestDepth !== undefined) {
+          patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
+        }
+
+        const nextAssigneeAgentId =
+          issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
+        const nextAssigneeUserId =
+          issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
+
+        if (nextAssigneeAgentId && nextAssigneeUserId) {
+          throw unprocessable("Issue can only have one assignee");
+        }
+        if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
+          throw unprocessable("in_progress issues require an assignee");
+        }
+        if (patch.status === "in_progress") {
+          const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
+            ? await listUnresolvedBlockerIssueIds(tx, existing.companyId, blockedByIssueIds)
+            : (
+                await listIssueDependencyReadinessMap(tx, existing.companyId, [id])
+              ).get(id)?.unresolvedBlockerIssueIds ?? [];
+          if (unresolvedBlockerIssueIds.length > 0) {
+            throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+          }
+        }
+        if (issueData.assigneeAgentId) {
+          await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId, tx);
+        }
+        if (issueData.assigneeUserId) {
+          await assertAssignableUser(existing.companyId, issueData.assigneeUserId, tx);
+        }
+        const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
+        const nextProjectWorkspaceId =
+          issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
+        const nextExecutionWorkspaceId =
+          issueData.executionWorkspaceId !== undefined ? issueData.executionWorkspaceId : existing.executionWorkspaceId;
+        const nextExecutionWorkspacePreference =
+          issueData.executionWorkspacePreference !== undefined
+            ? issueData.executionWorkspacePreference
+            : existing.executionWorkspacePreference;
+        const nextExecutionWorkspaceSettings =
+          issueData.executionWorkspaceSettings !== undefined
+            ? parseIssueExecutionWorkspaceSettings(issueData.executionWorkspaceSettings)
+            : parseIssueExecutionWorkspaceSettings(existing.executionWorkspaceSettings);
+        if (nextProjectWorkspaceId) {
+          await assertValidProjectWorkspace(existing.companyId, nextProjectId, nextProjectWorkspaceId, tx);
+        }
+        if (nextExecutionWorkspaceId) {
+          await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId, tx);
+        }
+
+        applyStatusSideEffects(issueData.status, patch, existing);
+        if (issueData.status && issueData.status !== "done") {
+          patch.completedAt = null;
+        }
+        if (issueData.status && issueData.status !== "cancelled") {
+          patch.cancelledAt = null;
+        }
+        if (issueData.status && issueData.status !== "in_progress") {
+          patch.checkoutRunId = null;
+          // Fix B: also clear the execution lock when leaving in_progress
+          patch.executionRunId = null;
+          patch.executionAgentNameKey = null;
+          patch.executionLockedAt = null;
+        }
+        if (
+          (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
+          (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId)
+        ) {
+          patch.checkoutRunId = null;
+          // Fix B: clear execution lock on reassignment, matching checkoutRunId clear
+          patch.executionRunId = null;
+          patch.executionAgentNameKey = null;
+          patch.executionLockedAt = null;
+        }
+
+        if (issueData.status === "done") {
+          // The refreshed target is already locked, matching workforce question creation.
+          const input = await workforceIssueInputs(tx as Db, existing.companyId, existing.assigneeAgentId, id);
+          if (input.pendingQuestionIds.length || input.missingFactKeys.length) {
+            throw conflict("Required workforce input is unresolved", {
+              pendingQuestionIds: input.pendingQuestionIds,
+              missingFactKeys: input.missingFactKeys,
+            });
           }
         }
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
@@ -3724,81 +3778,16 @@ export function issueService(db: Db) {
       });
     },
 
+    evaluateCheckoutOwner,
+    applyCheckoutOwner,
+
     assertCheckoutOwner: async (id: string, actorAgentId: string, actorRunId: string | null) => {
+      // Compatibility: legacy callers clear terminal execution locks even on refusal.
+      // Acceptance composers must use evaluate/apply instead of this wrapper.
       await clearExecutionRunIfTerminal(id);
-      const current = await db
-        .select({
-          id: issues.id,
-          status: issues.status,
-          assigneeAgentId: issues.assigneeAgentId,
-          checkoutRunId: issues.checkoutRunId,
-          executionRunId: issues.executionRunId,
-        })
-        .from(issues)
-        .where(eq(issues.id, id))
-        .then((rows) => rows[0] ?? null);
-
-      if (!current) throw notFound("Issue not found");
-
-      if (
-        current.status === "in_progress" &&
-        current.assigneeAgentId === actorAgentId &&
-        sameRunLock(current.checkoutRunId, actorRunId)
-      ) {
-        return { ...current, adoptedFromRunId: null as string | null };
-      }
-
-      if (
-        actorRunId &&
-        current.status === "in_progress" &&
-        current.assigneeAgentId === actorAgentId &&
-        current.checkoutRunId == null &&
-        (current.executionRunId == null || current.executionRunId === actorRunId)
-      ) {
-        const adopted = await adoptUnownedCheckoutRun({
-          issueId: id,
-          actorAgentId,
-          actorRunId,
-        });
-
-        if (adopted) {
-          return {
-            ...adopted,
-            adoptedFromRunId: null as string | null,
-          };
-        }
-      }
-
-      if (
-        actorRunId &&
-        current.status === "in_progress" &&
-        current.assigneeAgentId === actorAgentId &&
-        current.checkoutRunId &&
-        current.checkoutRunId !== actorRunId
-      ) {
-        const adopted = await adoptStaleCheckoutRun({
-          issueId: id,
-          actorAgentId,
-          actorRunId,
-          expectedCheckoutRunId: current.checkoutRunId,
-        });
-
-        if (adopted) {
-          return {
-            ...adopted,
-            adoptedFromRunId: current.checkoutRunId,
-          };
-        }
-      }
-
-      throw conflict("Issue run ownership conflict", {
-        issueId: current.id,
-        status: current.status,
-        assigneeAgentId: current.assigneeAgentId,
-        checkoutRunId: current.checkoutRunId,
-        executionRunId: current.executionRunId,
-        actorAgentId,
-        actorRunId,
+      return db.transaction(async (tx) => {
+        const evaluation = await evaluateCheckoutOwner(id, actorAgentId, actorRunId, tx);
+        return applyCheckoutOwner(evaluation, tx);
       });
     },
 
@@ -4072,38 +4061,42 @@ export function issueService(db: Db) {
       issueId: string,
       body: string,
       actor: { agentId?: string; userId?: string; runId?: string | null },
+      dbOrTx: IssueMutationExecutor = db,
     ) => {
-      const issue = await db
-        .select({ companyId: issues.companyId })
-        .from(issues)
-        .where(eq(issues.id, issueId))
-        .then((rows) => rows[0] ?? null);
+      const insertComment = async (executor: IssueMutationExecutor) => {
+        const issue = await executor
+          .select({ companyId: issues.companyId })
+          .from(issues)
+          .where(eq(issues.id, issueId))
+          .then((rows) => rows[0] ?? null);
+        if (!issue) throw notFound("Issue not found");
 
-      if (!issue) throw notFound("Issue not found");
+        // Settings may lazily initialize a row; keep that write on this executor too.
+        const currentUserRedactionOptions = {
+          enabled: (await instanceSettingsService(executor as Db).getGeneral()).censorUsernameInLogs,
+        };
+        const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+        const [comment] = await executor
+          .insert(issueComments)
+          .values({
+            companyId: issue.companyId,
+            issueId,
+            authorAgentId: actor.agentId ?? null,
+            authorUserId: actor.userId ?? null,
+            createdByRunId: actor.runId ?? null,
+            body: redactedBody,
+          })
+          .returning();
 
-      const currentUserRedactionOptions = {
-        enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
+        // Comment and recency are one accepted DB operation.
+        await executor
+          .update(issues)
+          .set({ updatedAt: new Date() })
+          .where(eq(issues.id, issueId));
+
+        return redactIssueComment(comment, currentUserRedactionOptions.enabled);
       };
-      const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
-      const [comment] = await db
-        .insert(issueComments)
-        .values({
-          companyId: issue.companyId,
-          issueId,
-          authorAgentId: actor.agentId ?? null,
-          authorUserId: actor.userId ?? null,
-          createdByRunId: actor.runId ?? null,
-          body: redactedBody,
-        })
-        .returning();
-
-      // Update issue's updatedAt so comment activity is reflected in recency sorting
-      await db
-        .update(issues)
-        .set({ updatedAt: new Date() })
-        .where(eq(issues.id, issueId));
-
-      return redactIssueComment(comment, currentUserRedactionOptions.enabled);
+      return dbOrTx === db ? db.transaction(insertComment) : insertComment(dbOrTx);
     },
 
     createAttachment: async (input: {
