@@ -1,3 +1,5 @@
+import { notFound } from "../errors.js";
+
 interface BillingConfig {
   proPriceId: string;
   trialDays: number;
@@ -77,8 +79,10 @@ export function billingService(deps: Deps) {
     },
 
     getStatus: async (companyId: string) => {
+      // AgentDash: an instance admin can name any id here — a nonexistent one
+      // must answer 404, not surface as a generic 500 in the UI.
       const c = await deps.companies.getById(companyId);
-      if (!c) throw new Error("Company not found");
+      if (!c) throw notFound("Company not found");
       return {
         tier: c.planTier ?? "free",
         seatsPaid: c.planSeatsPaid ?? 0,

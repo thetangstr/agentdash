@@ -1716,6 +1716,29 @@ describe("POST /api/onboarding/request-model-key (#794)", () => {
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
+  it("serializes a parallel burst — only one nudge leaves", async () => {
+    // The whole check+send+log runs inside one advisory-locked transaction,
+    // so a burst cannot slip several emails past the cooldown at once. The
+    // stub serializes transaction callbacks; the second request's cooldown
+    // select then reads the reservation the first one wrote.
+    const app = buildApp(boardActor({ userId: "u-member" }), [
+      [], // req1: cooldown lookup → clear
+      MEMBERSHIPS,
+      [{ id: "u-member", name: "Member Four" }],
+      [{ name: "Acme" }],
+      [],
+      CONTACT_USERS,
+      [{ createdAt: new Date() }], // req2: cooldown lookup → fresh reservation
+    ]);
+    const [first, second] = await Promise.all([
+      request(app).post("/api/onboarding/request-model-key").send({ companyId: "c1" }),
+      request(app).post("/api/onboarding/request-model-key").send({ companyId: "c1" }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([200, 429]);
+    expect(mockSendEmail).toHaveBeenCalledTimes(3);
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+  });
+
   it("reports honest statuses when the mailer skips or fails", async () => {
     mockSendEmail.mockResolvedValueOnce({ status: "skipped" });
     const app = buildApp(boardActor({ userId: "u-owner" }), [
