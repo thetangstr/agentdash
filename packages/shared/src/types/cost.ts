@@ -144,6 +144,22 @@ export interface CostWindowSpendRow {
   outputTokens: number;
 }
 
+/**
+ * Cost attributed to an issue via `cost_events.issue_id`, falling back to the
+ * producing run's `contextSnapshot.issueId` when the event row has none —
+ * the same attribution path the issue-scoped readers use.
+ */
+export interface CostByIssue {
+  issueId: string;
+  issueIdentifier: string | null;
+  issueTitle: string | null;
+  issueStatus: string | null;
+  costCents: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+}
+
 /** cost attributed to a project via heartbeat run → activity log → issue → project chain */
 export interface CostByProject {
   projectId: string | null;

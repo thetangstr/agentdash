@@ -10,9 +10,10 @@ import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { HEARTBEAT_RUN_STATUSES } from "@paperclipai/shared";
-import { createDb, companies, agents, costEvents, financeEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
+import { createDb, companies, agents, costEvents, financeEvents, heartbeatRuns, issues, projectAccess, projects } from "@paperclipai/db";
 import { costService } from "../services/costs.ts";
 import { financeService } from "../services/finance.ts";
+import { projectScopedVisibilityCondition } from "../routes/visibility.ts";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -316,6 +317,22 @@ describe("cost routes", () => {
       .not.toMatch(/^\s*assertCompanyAccess\(req, companyId\);\s*$/m);
   });
 
+  it("wires restricted-project visibility and a row cap into /costs/by-issue", async () => {
+    // Source-level guard (same style as the run-activity guard above): the
+    // behavioural coverage lives in the embedded-postgres tests below.
+    const source = await readFile(
+      new URL("../routes/costs.ts", import.meta.url),
+      "utf8",
+    );
+    const handler = source.slice(
+      source.indexOf('router.get("/companies/:companyId/costs/by-issue"'),
+    );
+    const body = handler.slice(0, handler.indexOf("});"));
+    expect(body, "agent keys pass assertSpendVisibility but must not see restricted-project issues")
+      .toContain("projectScopedVisibilityCondition(req, companyId, issuesTable.projectId)");
+    expect(body).toContain("parseCostLimit(req.query)");
+  });
+
   it("rejects company budget updates for board users outside the company", async () => {
     const app = await createAppWithActor({
       type: "board",
@@ -456,7 +473,9 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   afterEach(async () => {
     await db.delete(financeEvents);
     await db.delete(costEvents);
+    await db.delete(heartbeatRuns);
     await db.delete(issues);
+    await db.delete(projectAccess);
     await db.delete(projects);
     await db.delete(agents);
     await db.delete(companies);
@@ -676,6 +695,240 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
       cachedInputTokens: 6,
       outputTokens: 12,
     });
+  });
+
+  it("byIssue attributes cost events to their recorded issue_id — aligned with Shipped usage", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runLinkedIssueId = randomUUID();
+    const orphanIssueId = randomUUID();
+    const runId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values([
+      { id: companyId, name: "Paperclip", issuePrefix: prefix, requireBoardApprovalForNewAgents: false },
+      { id: otherCompanyId, name: "Other", issuePrefix: `T${otherCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`, requireBoardApprovalForNewAgents: false },
+    ]);
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Cost Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values([
+      {
+        id: issueId,
+        companyId,
+        title: "Direct cost issue",
+        status: "done",
+        priority: "medium",
+        issueNumber: 1,
+        identifier: `${prefix}-1`,
+      },
+      {
+        id: runLinkedIssueId,
+        companyId,
+        title: "Run-linked issue",
+        status: "done",
+        priority: "medium",
+        issueNumber: 2,
+        identifier: `${prefix}-2`,
+      },
+      {
+        id: orphanIssueId,
+        companyId: otherCompanyId,
+        title: "Other company's issue",
+        status: "done",
+        priority: "medium",
+        issueNumber: 1,
+        identifier: "OTH-1",
+      },
+    ]);
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "succeeded",
+      contextSnapshot: { issueId: runLinkedIssueId },
+      createdAt: new Date("2026-04-10T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-10T00:00:00.000Z"),
+    });
+    await db.insert(costEvents).values([
+      {
+        companyId,
+        agentId,
+        issueId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 50,
+        costCents: 700,
+        occurredAt: new Date("2026-04-10T00:00:00.000Z"),
+      },
+      {
+        // No issue_id on the event: the run's context snapshot is NOT
+        // consulted — write-time resolution (resolveLedgerScopeForRun) is the
+        // only attribution, exactly like the Shipped feed's usageByIssue.
+        companyId,
+        agentId,
+        heartbeatRunId: runId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 200,
+        cachedInputTokens: 0,
+        outputTokens: 60,
+        costCents: 300,
+        occurredAt: new Date("2026-04-10T00:01:00.000Z"),
+      },
+      {
+        // A cost event pointing at another company's issue must not join.
+        companyId,
+        agentId,
+        issueId: orphanIssueId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 9999,
+        occurredAt: new Date("2026-04-10T00:02:00.000Z"),
+      },
+    ]);
+
+    const rows = await costs.byIssue(companyId, {
+      from: new Date("2026-04-01T00:00:00.000Z"),
+      to: new Date("2026-04-15T23:59:59.999Z"),
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      issueId,
+      issueIdentifier: `${prefix}-1`,
+      issueTitle: "Direct cost issue",
+      costCents: 700,
+      inputTokens: 100,
+    });
+    expect(rows.map((r) => r.issueId)).not.toContain(runLinkedIssueId);
+  });
+
+  it("byIssue hides issues in restricted projects from actors off the access list", async () => {
+    const companyId = randomUUID();
+    const openProjectId = randomUUID();
+    const restrictedProjectId = randomUUID();
+    const outsiderAgentId = randomUUID();
+    const listedAgentId = randomUUID();
+    const openIssueId = randomUUID();
+    const secretIssueId = randomUUID();
+    const unscopedIssueId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: prefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      { id: outsiderAgentId, companyId, name: "Outsider", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+      { id: listedAgentId, companyId, name: "Listed", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+    ]);
+    await db.insert(projects).values([
+      { id: openProjectId, companyId, name: "Open", visibility: "company", createdByUserId: "owner-1" },
+      { id: restrictedProjectId, companyId, name: "Secret", visibility: "restricted", createdByUserId: "sam-1" },
+    ]);
+    await db.insert(projectAccess).values({
+      projectId: restrictedProjectId,
+      principalType: "agent",
+      principalId: listedAgentId,
+      grantedByUserId: "sam-1",
+    });
+    await db.insert(issues).values([
+      { id: openIssueId, companyId, projectId: openProjectId, title: "Open issue", status: "done", priority: "medium", issueNumber: 1, identifier: `${prefix}-1` },
+      { id: secretIssueId, companyId, projectId: restrictedProjectId, title: "Secret issue", status: "done", priority: "medium", issueNumber: 2, identifier: `${prefix}-2` },
+      { id: unscopedIssueId, companyId, projectId: null, title: "Company-wide issue", status: "done", priority: "medium", issueNumber: 3, identifier: `${prefix}-3` },
+    ]);
+    for (const [id, cents] of [[openIssueId, 100], [secretIssueId, 200], [unscopedIssueId, 300]] as const) {
+      await db.insert(costEvents).values({
+        companyId,
+        agentId: outsiderAgentId,
+        issueId: id,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 10,
+        cachedInputTokens: 0,
+        outputTokens: 5,
+        costCents: cents,
+        occurredAt: new Date("2026-04-10T00:00:00.000Z"),
+      });
+    }
+
+    // An agent key passes assertSpendVisibility but must not see restricted
+    // projects it is not on the access list for.
+    const outsiderRows = await costs.byIssue(companyId, undefined, {
+      visibleWhere: projectScopedVisibilityCondition(
+        { actor: { type: "agent", agentId: outsiderAgentId } } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0],
+        companyId,
+        issues.projectId,
+      ),
+    });
+    expect(outsiderRows.map((r) => r.issueId).sort()).toEqual([openIssueId, unscopedIssueId].sort());
+
+    // The agent on the restricted project's access list still sees it.
+    const listedRows = await costs.byIssue(companyId, undefined, {
+      visibleWhere: projectScopedVisibilityCondition(
+        { actor: { type: "agent", agentId: listedAgentId } } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0],
+        companyId,
+        issues.projectId,
+      ),
+    });
+    expect(listedRows.map((r) => r.issueId).sort()).toEqual([openIssueId, secretIssueId, unscopedIssueId].sort());
+  });
+
+  it("byIssue honors the server-side limit", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueAId = randomUUID();
+    const issueBId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: prefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId, companyId, name: "Cost Agent", role: "engineer", status: "active",
+      adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {},
+    });
+    await db.insert(issues).values([
+      { id: issueAId, companyId, title: "Cheap", status: "done", priority: "medium", issueNumber: 1, identifier: `${prefix}-1` },
+      { id: issueBId, companyId, title: "Pricey", status: "done", priority: "medium", issueNumber: 2, identifier: `${prefix}-2` },
+    ]);
+    await db.insert(costEvents).values([
+      { companyId, agentId, issueId: issueAId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, costCents: 50, occurredAt: new Date("2026-04-10T00:00:00.000Z") },
+      { companyId, agentId, issueId: issueBId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, costCents: 500, occurredAt: new Date("2026-04-10T00:01:00.000Z") },
+    ]);
+
+    const rows = await costs.byIssue(companyId, undefined, { limit: 1 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.issueId).toBe(issueBId);
   });
 
   it("aggregates finance event sums above int32 without raising Postgres integer overflow", async () => {

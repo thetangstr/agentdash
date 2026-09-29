@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
+import { issues as issuesTable } from "@paperclipai/db";
 import {
   createCostEventSchema,
   createFinanceEventSchema,
@@ -19,7 +20,7 @@ import {
   heartbeatService,
   logActivity,
 } from "../services/index.js";
-import { assertProjectIdVisible } from "./visibility.js";
+import { assertProjectIdVisible, projectScopedVisibilityCondition } from "./visibility.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { accessService } from "../services/access.js";
@@ -414,6 +415,19 @@ export function costRoutes(
     await assertSpendVisibility(req, companyId);
     const range = parseCostDateRange(req.query);
     const rows = await costs.byProject(companyId, range);
+    res.json(rows);
+  });
+
+  router.get("/companies/:companyId/costs/by-issue", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await assertSpendVisibility(req, companyId);
+    const range = parseCostDateRange(req.query);
+    const rows = await costs.byIssue(companyId, range, {
+      // Restricted-project issues stay hidden even though spend is
+      // company-visible — same condition every other issue list applies.
+      visibleWhere: projectScopedVisibilityCondition(req, companyId, issuesTable.projectId),
+      limit: parseCostLimit(req.query),
+    });
     res.json(rows);
   });
 
