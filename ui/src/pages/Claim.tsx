@@ -8,7 +8,8 @@
 // the code only for that email, only while it has no users, and only once.
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Sparkles } from "lucide-react";
+// AgentDash: the brand mark next to the wordmark, same as the app rail and favicon.
+import { AgentDashMark } from "@/components/brand/AgentDashMark";
 import { useNavigate, useSearchParams, Link } from "@/lib/router";
 import { AuthApiError, authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
@@ -94,7 +95,7 @@ export function ClaimPage() {
     <div className="fixed inset-0 flex overflow-y-auto bg-surface-page">
       <div className="w-full max-w-md mx-auto my-auto px-8 py-12">
         <div className="flex items-center gap-2 mb-8">
-          <Sparkles className="h-4 w-4 text-text-tertiary" />
+          <AgentDashMark size={20} />
           <span className="text-sm font-medium text-text-primary">AgentDash</span>
         </div>
         <h1 className="text-2xl font-semibold text-text-primary">Claim your workspace</h1>

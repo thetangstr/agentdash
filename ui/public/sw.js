@@ -1,4 +1,5 @@
-const CACHE_NAME = "paperclip-v2";
+// AgentDash: renamed (and bumped) with the brand icon swap; activate clears every older cache.
+const CACHE_NAME = "agentdash-v3";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
