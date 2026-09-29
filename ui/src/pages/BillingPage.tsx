@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "@/lib/router";
 import { billingApi, type BillingStatus } from "../api/billing";
 import { useToastActions } from "../context/ToastContext";
+import { planLabel, seatsPhrase } from "../lib/billing-copy";
+import { UpgradeCheckoutButton } from "../components/UpgradeCheckoutButton";
 
 const PRO_TIERS: ReadonlyArray<BillingStatus["tier"]> = ["pro_trial", "pro_active"];
 
@@ -17,11 +19,18 @@ export default function BillingPage({ companyId }: { companyId: string }) {
   const navigate = useNavigate();
   const { pushToast } = useToastActions();
   const [status, setStatus] = useState<BillingStatus | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const handledSession = useRef(false);
 
   // Initial status fetch + manual refetch helper.
   function loadStatus() {
-    return billingApi.status(companyId).then(setStatus);
+    return billingApi
+      .status(companyId)
+      .then((s) => {
+        setLoadError(null);
+        setStatus(s);
+      })
+      .catch((err) => setLoadError(err instanceof Error ? err.message : "Couldn't load plan details"));
   }
 
   useEffect(() => {
@@ -99,15 +108,27 @@ export default function BillingPage({ companyId }: { companyId: string }) {
     }
   }, [companyId, location.pathname, location.search, navigate, pushToast]);
 
-  if (!status) return <div className="p-8">Loading…</div>;
+  if (!status) {
+    if (loadError) {
+      return (
+        <div className="p-8 max-w-2xl mx-auto">
+          <h1 className="text-2xl font-semibold text-text-primary mb-4">Billing</h1>
+          <div className="border border-border-soft rounded-lg p-6 bg-surface-raised text-text-primary">
+            {loadError}
+          </div>
+        </div>
+      );
+    }
+    return <div className="p-8">Loading…</div>;
+  }
 
   const isPro = PRO_TIERS.includes(status.tier);
   const isPastDue = status.tier === "pro_past_due";
+  // AgentDash (GH #790): absent flag means an older server — keep showing the
+  // actions. An explicit false means Stripe was never configured and every
+  // button below can only answer 503.
+  const billingConfigured = status.configured !== false;
 
-  async function upgrade() {
-    const r = await billingApi.startCheckout(companyId);
-    window.location.href = r.url;
-  }
   async function manage() {
     const r = await billingApi.openPortal(companyId);
     window.location.href = r.url;
@@ -132,22 +153,21 @@ export default function BillingPage({ companyId }: { companyId: string }) {
       ) : null}
       <div className="border border-border-soft rounded-lg p-6 bg-surface-raised shadow-sm">
         <div className="mb-2 text-text-primary">
-          Plan: <strong className="text-text-primary">{status.tier}</strong>
+          Plan: <strong className="text-text-primary">{planLabel(status.tier, status.periodEnd)}</strong>
         </div>
-        <div className="mb-2 text-text-primary">Seats paid: {status.seatsPaid}</div>
+        <div className="mb-2 text-text-primary">{seatsPhrase(status.seatsPaid)} paid</div>
         {status.periodEnd && (
           <div className="mb-2 text-sm text-text-secondary">
             Renews / ends: {new Date(status.periodEnd).toLocaleDateString()}
           </div>
         )}
         <div className="mt-6">
-          {!isPro && !isPastDue ? (
-            <button
-              className="bg-accent-500 text-text-inverse px-4 py-2 rounded-md font-medium hover:bg-accent-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200"
-              onClick={upgrade}
-            >
-              Start Pro trial (14 days, no card)
-            </button>
+          {!billingConfigured ? (
+            <p className="text-sm text-text-secondary">
+              Billing isn't configured on this instance.
+            </p>
+          ) : !isPro && !isPastDue ? (
+            <UpgradeCheckoutButton companyId={companyId} />
           ) : (
             <button
               className={

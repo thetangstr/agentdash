@@ -5,6 +5,7 @@ const config = {
   proPriceId: "price_test123",
   trialDays: 14,
   publicBaseUrl: "https://app.example.com",
+  configured: true,
 };
 
 function makeStripe(overrides: Record<string, any> = {}) {
@@ -133,7 +134,7 @@ describe("billingService.getStatus", () => {
 
     const result = await svc.getStatus("co-1");
 
-    expect(result).toEqual({ tier: "pro_active", seatsPaid: 5, periodEnd });
+    expect(result).toEqual({ tier: "pro_active", seatsPaid: 5, periodEnd, configured: true });
   });
 
   it("returns defaults for free company", async () => {
@@ -147,7 +148,7 @@ describe("billingService.getStatus", () => {
 
     const result = await svc.getStatus("co-1");
 
-    expect(result).toEqual({ tier: "free", seatsPaid: 0, periodEnd: null });
+    expect(result).toEqual({ tier: "free", seatsPaid: 0, periodEnd: null, configured: true });
   });
 
   it("throws if company not found", async () => {
@@ -155,5 +156,26 @@ describe("billingService.getStatus", () => {
     const svc = billingService({ stripe: makeStripe(), companies, config });
 
     await expect(svc.getStatus("missing")).rejects.toThrow("Company not found");
+  });
+
+  // AgentDash (GH #790): the UI hides checkout/trial when billing is not
+  // wired — the flag must travel on the status response, and an absent flag
+  // in config means not configured.
+  it("reports configured:false when Stripe is not wired", async () => {
+    const companies = makeCompanies({
+      id: "co-1",
+      planTier: "free",
+      planSeatsPaid: 0,
+      planPeriodEnd: null,
+    });
+    const svc = billingService({
+      stripe: makeStripe(),
+      companies,
+      config: { ...config, configured: false },
+    });
+
+    const result = await svc.getStatus("co-1");
+
+    expect(result.configured).toBe(false);
   });
 });
