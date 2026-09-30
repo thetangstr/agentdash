@@ -13,6 +13,7 @@ const peerAgentId = "44444444-4444-4444-8444-444444444444";
 const ownerRunId = "55555555-5555-4555-8555-555555555555";
 
 const mockIssueService = vi.hoisted(() => ({
+  lockBlockerIssues: vi.fn().mockResolvedValue(undefined),
   // Domain behavior is covered with PostgreSQL; this route fixture models its explicit result.
   prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
   addComment: vi.fn(),

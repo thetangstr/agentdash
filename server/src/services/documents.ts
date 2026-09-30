@@ -1,6 +1,6 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
+import { companies, documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
@@ -81,6 +81,18 @@ const issueDocumentSelect = {
 };
 
 export function documentService(db: Db) {
+  // AgentDash: document targets participate in confirmation acceptance ordering.
+  async function lockDocumentIssue(tx: Db, issueId: string, expectedCompanyId?: string) {
+    const [binding] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, issueId));
+    if (!binding) return null;
+    if (expectedCompanyId && binding.companyId !== expectedCompanyId) throw conflict("Issue company changed before document acceptance");
+    await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("update");
+    const [current] = await tx.select({ id: issues.id, companyId: issues.companyId }).from(issues).where(eq(issues.id, issueId)).for("update");
+    if (!current) return null;
+    if (current.companyId !== binding.companyId) throw conflict("Issue company changed before document acceptance");
+    return current;
+  }
+
   const filterSystemDocuments = <T extends { key: string }>(rows: T[], includeSystem: boolean) =>
     includeSystem ? rows : rows.filter((row) => !isSystemIssueDocumentKey(row.key));
 
@@ -188,6 +200,7 @@ export function documentService(db: Db) {
 
       try {
         return await db.transaction(async (tx) => {
+          if (!await lockDocumentIssue(tx as unknown as Db, issue.id, issue.companyId)) throw notFound("Issue not found");
           const now = new Date();
           const existing = await tx
             .select({
@@ -368,6 +381,7 @@ export function documentService(db: Db) {
     }) => {
       const key = normalizeDocumentKey(input.key);
       return db.transaction(async (tx) => {
+        if (!await lockDocumentIssue(tx as unknown as Db, input.issueId)) throw notFound("Document not found");
         const existing = await tx
           .select(issueDocumentSelect)
           .from(issueDocuments)
@@ -456,6 +470,7 @@ export function documentService(db: Db) {
     deleteIssueDocument: async (issueId: string, rawKey: string) => {
       const key = normalizeDocumentKey(rawKey);
       return db.transaction(async (tx) => {
+        if (!await lockDocumentIssue(tx as unknown as Db, issueId)) return null;
         const existing = await tx
           .select(issueDocumentSelect)
           .from(issueDocuments)

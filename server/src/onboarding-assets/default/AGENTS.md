@@ -522,3 +522,7 @@ An onboarding confirmation can accept an agent before its managed instructions o
 
 Incomplete hires remain paused. Restore the canonical worker bundle and original hiring context through authorized `PATCH /api/agents/:id/instructions-bundle` and `PUT /api/agents/:id/instructions-bundle/file` operations, retry the existing workforce skill installation if needed, and use the ordinary authorized resume action only when setup is complete. Instruction refresh alone cannot reconstruct a missing hiring supplement. Do not request or mint a replacement API key by replaying a confirmation. These recovery steps grant no new capability.
 <!-- /AgentDash: accepted-hire-recovery -->
+
+<!-- AgentDash: predicate-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK -->
+<!-- Applicability: canonical issue, question, confirmation, hold, DoD and goal writes serialize current predicates before acceptance. Existing agent endpoints and private answer ownership remain unchanged. An expired confirmation is a recorded outcome; a refused prepared action performs no cleanup or runtime dispatch. Re-read current state after stale or uncertain outcomes before choosing another action. -->
+<!-- /AgentDash: predicate-acceptance -->

@@ -14,12 +14,14 @@
 
 import { and, eq, or } from "drizzle-orm";
 import {
+  companies,
   cosOnboardingStates,
   goals,
   type Db,
   type CosOnboardingGoals,
 } from "@paperclipai/db";
-import { logActivity } from "./activity-log.js";
+import { insertActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
+import { assertActivityAcceptance, type ActivityAcceptance } from "./workforce.js";
 
 export interface MaterializeOnboardingGoalsResult {
   longTermGoalId: string | null;
@@ -67,8 +69,11 @@ export function materializeOnboardingGoals(deps: MaterializeOnboardingGoalsDeps)
 
   return async (
     input: MaterializeOnboardingGoalsInput,
+    acceptance?: ActivityAcceptance,
   ): Promise<MaterializeOnboardingGoalsResult> => {
-    return await db.transaction(async (tx) => {
+    const publications: ActivityPublication[] = acceptance?.publications ?? [];
+    const work = async (tx: Db): Promise<MaterializeOnboardingGoalsResult> => {
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, input.companyId)).for("update");
       // 1. Load the onboarding state row.
       const stateRows = await tx
         .select()
@@ -142,7 +147,7 @@ export function materializeOnboardingGoals(deps: MaterializeOnboardingGoalsDeps)
           })
           .returning();
         longTermGoalId = inserted!.id;
-        await logActivity(tx as unknown as Db, {
+        publications.push(await insertActivity(tx, {
           companyId: input.companyId,
           actorType: "agent",
           actorId: input.ownerAgentId,
@@ -156,7 +161,7 @@ export function materializeOnboardingGoals(deps: MaterializeOnboardingGoalsDeps)
             originalText: longTermText,
             horizon: "long_term",
           },
-        });
+        }));
       }
 
       // 4. Insert short-term goal, parenting to long-term when present.
@@ -175,7 +180,7 @@ export function materializeOnboardingGoals(deps: MaterializeOnboardingGoalsDeps)
           })
           .returning();
         shortTermGoalId = inserted!.id;
-        await logActivity(tx as unknown as Db, {
+        publications.push(await insertActivity(tx, {
           companyId: input.companyId,
           actorType: "agent",
           actorId: input.ownerAgentId,
@@ -190,7 +195,7 @@ export function materializeOnboardingGoals(deps: MaterializeOnboardingGoalsDeps)
             horizon: "short_term",
             parentGoalId: longTermGoalId,
           },
-        });
+        }));
       }
 
       return {
@@ -198,7 +203,11 @@ export function materializeOnboardingGoals(deps: MaterializeOnboardingGoalsDeps)
         shortTermGoalId,
         alreadyMaterialized: false,
       };
-    });
+    };
+    if (acceptance !== undefined) { assertActivityAcceptance(acceptance); return work(acceptance.executor); }
+    const result = await db.transaction(tx => work(tx as unknown as Db));
+    for (const publication of publications) publishActivity(publication);
+    return result;
   };
 }
 

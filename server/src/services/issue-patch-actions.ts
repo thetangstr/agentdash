@@ -544,6 +544,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         const [preflight] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id)));
         if (!preflight) throw notFound("Issue not found");
         const finalAuthorityGuard = await context.stageAuthority?.(tx, preflight, async beforePolicy => (await prepare(context, tx, beforePolicy)).domain.patch);
+        await svc.lockBlockerIssues(context.issueId, company.id, context.intent.blockedByIssueIds ?? [], tx);
         const [target] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, context.companyId))).for("update");
         if (!target) throw notFound("Issue not found");
         finalAuthorityGuard?.validateIssue(target);

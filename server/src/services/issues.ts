@@ -2225,6 +2225,15 @@ export function issueService(db: Db) {
     await assertNoBlockingCycles(companyId, issueId, deduped, executor);
   }
 
+  // AgentDash: caller holds the company mutex before reading this changing set.
+  async function lockBlockerIssues(issueId: string, companyId: string, submitted: string[], executor: IssueMutationExecutor) {
+    const previous = await executor.select({ id: issueRelations.issueId }).from(issueRelations)
+      .where(and(eq(issueRelations.companyId, companyId), eq(issueRelations.relatedIssueId, issueId), eq(issueRelations.type, "blocks")));
+    const ids = [...new Set([issueId, ...submitted, ...previous.map(row => row.id)])].sort();
+    await executor.select({ id: issues.id }).from(issues)
+      .where(and(eq(issues.companyId, companyId), inArray(issues.id, ids))).orderBy(asc(issues.id)).for("update");
+  }
+
   async function syncBlockedByIssueIds(
     issueId: string,
     companyId: string,
@@ -2233,15 +2242,7 @@ export function issueService(db: Db) {
     dbOrTx: any = db,
   ) {
     const deduped = [...new Set(blockedByIssueIds)];
-    if (deduped.length > 0) {
-      const lockedIssueIds = [issueId, ...deduped].sort();
-      await dbOrTx.execute(
-        sql`SELECT ${issues.id} FROM ${issues}
-            WHERE ${and(eq(issues.companyId, companyId), inArray(issues.id, lockedIssueIds))}
-            ORDER BY ${issues.id}
-            FOR UPDATE`,
-      );
-    }
+    await lockBlockerIssues(issueId, companyId, deduped, dbOrTx);
     await assertValidBlockedByIssueIds(issueId, companyId, deduped, dbOrTx);
 
     await dbOrTx
@@ -2551,6 +2552,7 @@ export function issueService(db: Db) {
 
   return {
     clearExecutionRunIfTerminal,
+    lockBlockerIssues,
 
     // No initialization, FOR UPDATE, cleanup, adoption, or writes on this path.
     prepareUpdate: async (id: string, data: IssueUpdateData, executor: DbReader = db) => {
@@ -3273,16 +3275,22 @@ export function issueService(db: Db) {
       });
 
       if (blockParentUntilDone) {
-        const existingBlockers = await db
-          .select({ blockerIssueId: issueRelations.issueId })
-          .from(issueRelations)
-          .where(and(eq(issueRelations.companyId, parent.companyId), eq(issueRelations.relatedIssueId, parent.id), eq(issueRelations.type, "blocks")));
-        await syncBlockedByIssueIds(
-          parent.id,
-          parent.companyId,
-          [...new Set([...existingBlockers.map((row) => row.blockerIssueId), child.id])],
-          { agentId: actorAgentId ?? null, userId: actorUserId ?? null },
-        );
+        await db.transaction(async tx => {
+          await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, parent.companyId)).for("update");
+          const [currentParent] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, parent.id));
+          if (!currentParent || currentParent.companyId !== parent.companyId) throw conflict("Parent issue changed before blocker acceptance");
+          const existingBlockers = await tx
+            .select({ blockerIssueId: issueRelations.issueId })
+            .from(issueRelations)
+            .where(and(eq(issueRelations.companyId, parent.companyId), eq(issueRelations.relatedIssueId, parent.id), eq(issueRelations.type, "blocks")));
+          await syncBlockedByIssueIds(
+            parent.id,
+            parent.companyId,
+            [...new Set([...existingBlockers.map((row) => row.blockerIssueId), child.id])],
+            { agentId: actorAgentId ?? null, userId: actorUserId ?? null },
+            tx,
+          );
+        });
       }
 
       return {
@@ -3330,6 +3338,7 @@ export function issueService(db: Db) {
         throw unprocessable("in_progress issues require an assignee");
       }
       return db.transaction(async (tx) => {
+        await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("update");
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;
@@ -3496,6 +3505,12 @@ export function issueService(db: Db) {
       // A supplied transaction may already hold those locks: use read-only lookup.
       const experimentalSettings = dbOrTx === db ? await instanceSettings.getExperimental() : null;
       const runUpdate = async (tx: IssueMutationExecutor) => {
+        const [binding] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, id));
+        if (!binding) return null;
+        // Serialize predicate writers while allowing incidental company FK KEY SHARE
+        // held by caller-owned comment/activity transactions.
+        await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("no key update");
+        await lockBlockerIssues(id, binding.companyId, data.blockedByIssueIds ?? [], tx);
         const existing = await tx
           .select()
           .from(issues)
@@ -3503,6 +3518,7 @@ export function issueService(db: Db) {
           .for("update")
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!existing) return null;
+        if (existing.companyId !== binding.companyId) throw conflict("Issue company changed before acceptance");
 
         const { patch, issueData, nextLabelIds, blockedByIssueIds, actorAgentId, actorUserId,
           nextExecutionWorkspaceId, nextExecutionWorkspacePreference, nextExecutionWorkspaceSettings } =

@@ -11,7 +11,8 @@ import {
 
 const mockLogActivity = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("../services/activity-log.js", () => ({
-  logActivity: mockLogActivity,
+  insertActivity: mockLogActivity,
+  publishActivity: vi.fn(),
   setPluginEventBus: vi.fn(),
   publishPluginDomainEvent: vi.fn(),
 }));
@@ -57,11 +58,12 @@ function makeDb(opts: DbStubOptions = {}) {
     chain.from = vi.fn(() => chain);
     chain.where = vi.fn(() => chain);
     chain.limit = vi.fn(() => chain);
+    chain.for = vi.fn(() => Promise.resolve([]));
     chain.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => {
       // Call 1: cos_onboarding_states lookup.
       // Call 2+: existing goals lookup for idempotency.
       let rows: unknown[] = [];
-      if (callIdx === 1) {
+      if (callIdx === 2) {
         rows = opts.state ? [opts.state] : [];
       } else {
         rows = goalStore;

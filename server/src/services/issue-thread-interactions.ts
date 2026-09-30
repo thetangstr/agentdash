@@ -348,21 +348,6 @@ function buildIssueDocumentTargetFromSnapshot(args: {
   };
 }
 
-function buildIssueDocumentTargetFromDocument(args: {
-  issueId: string;
-  document: { id: string; key: string; latestRevisionId?: string | null; latestRevisionNumber?: number | null } | null;
-}): RequestConfirmationTarget | null {
-  if (!args.document?.latestRevisionId) return null;
-  return {
-    type: "issue_document",
-    issueId: args.issueId,
-    documentId: args.document.id,
-    key: args.document.key,
-    revisionId: args.document.latestRevisionId,
-    revisionNumber: args.document.latestRevisionNumber ?? null,
-  };
-}
-
 async function assertRequestConfirmationTargetIsCurrent(db: Db | any, args: {
   companyId: string;
   issueId: string;
@@ -443,7 +428,7 @@ async function expireStaleRequestConfirmationTarget(db: Db | any, args: {
 }
 
 export function issueThreadInteractionService(db: Db) {
-  async function acceptQuestion<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db, acceptance: ActivityAcceptance) => Promise<T>): Promise<T> {
+  async function acceptInteractionWrite<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db, acceptance: ActivityAcceptance) => Promise<T>): Promise<T> {
     if (supplied !== undefined) {
       assertActivityAcceptance(supplied);
       return work(supplied.executor, supplied);
@@ -452,6 +437,14 @@ export function issueThreadInteractionService(db: Db) {
     const result = await db.transaction(tx => work(tx as unknown as Db, { executor: tx as unknown as Db, publications }));
     for (const publication of publications) publishActivity(publication);
     return result;
+  }
+
+  // AgentDash: acquire the predicate mutex before any mutable interaction/target read.
+  async function lockInteractionIssue(connection: Pick<Db, "select">, issue: { id: string; companyId: string }) {
+    await connection.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for("update");
+    const [current] = await connection.select({ id: issues.id }).from(issues)
+      .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for("update");
+    if (!current) throw notFound("Issue not found");
   }
 
   async function getIdempotentInteraction(args: {
@@ -473,8 +466,8 @@ export function issueThreadInteractionService(db: Db) {
   async function getPendingInteractionForResolution(args: {
     issue: { id: string; companyId: string };
     interactionId: string;
-  }) {
-    const current = await db
+  }, connection = db) {
+    const current = await connection
       .select()
       .from(issueThreadInteractions)
       .where(eq(issueThreadInteractions.id, args.interactionId))
@@ -494,20 +487,24 @@ export function issueThreadInteractionService(db: Db) {
     issue: { id: string; companyId: string };
     current: IssueThreadInteractionRow;
     actor: InteractionActor;
+    acceptance?: ActivityAcceptance;
   }): Promise<{
     interaction: IssueThreadInteraction;
     continuationIssue: IssueWakeTarget | null;
   }> {
-    const expired = await expireStaleRequestConfirmationTarget(db, {
-      row: args.current,
-      actor: args.actor,
-    });
-    if (expired) {
-      return { interaction: expired, continuationIssue: null };
-    }
+    return acceptInteractionWrite(args.acceptance, async (tx) => {
+      await lockInteractionIssue(tx, args.issue);
+      const current = await getPendingInteractionForResolution({ issue: args.issue, interactionId: args.current.id }, tx);
+      if (current.kind !== "request_confirmation") throw conflict("Interaction kind changed");
+      const expired = await expireStaleRequestConfirmationTarget(tx, {
+        row: current,
+        actor: args.actor,
+      });
+      if (expired) {
+        return { interaction: expired, continuationIssue: null };
+      }
 
-    const now = new Date();
-    return db.transaction(async (tx) => {
+      const now = new Date();
       const [updated] = await tx
         .update(issueThreadInteractions)
         .set({
@@ -522,7 +519,7 @@ export function issueThreadInteractionService(db: Db) {
           updatedAt: now,
         })
         .where(and(
-          eq(issueThreadInteractions.id, args.current.id),
+          eq(issueThreadInteractions.id, current.id),
           eq(issueThreadInteractions.status, "pending"),
         ))
         .returning();
@@ -550,13 +547,13 @@ export function issueThreadInteractionService(db: Db) {
       let continuationIssue: IssueWakeTarget | null = null;
       if (shouldReturnAcceptedConfirmationToCreatorAgent({
         issue: issueContext,
-        current: args.current,
+        current,
         actor: args.actor,
       })) {
         const returnStatus = issueContext.status === "blocked" ? "blocked" : "todo";
         const returnedIssue = await issueService(db).update(args.issue.id, {
           status: returnStatus,
-          assigneeAgentId: args.current.createdByAgentId,
+          assigneeAgentId: current.createdByAgentId,
           assigneeUserId: null,
           actorAgentId: args.actor.agentId ?? null,
           actorUserId: args.actor.userId ?? null,
@@ -586,47 +583,53 @@ export function issueThreadInteractionService(db: Db) {
     current: IssueThreadInteractionRow;
     input: RejectIssueThreadInteraction;
     actor: InteractionActor;
+    acceptance?: ActivityAcceptance;
   }): Promise<IssueThreadInteraction> {
-    const expired = await expireStaleRequestConfirmationTarget(db, {
-      row: args.current,
-      actor: args.actor,
+    return acceptInteractionWrite(args.acceptance, async (tx) => {
+      await lockInteractionIssue(tx, args.issue);
+      const current = await getPendingInteractionForResolution({ issue: args.issue, interactionId: args.current.id }, tx);
+      if (current.kind !== "request_confirmation") throw conflict("Interaction kind changed");
+      const expired = await expireStaleRequestConfirmationTarget(tx, {
+        row: current,
+        actor: args.actor,
+      });
+      if (expired) {
+        return expired;
+      }
+
+      const interaction = hydrateInteraction(current) as RequestConfirmationInteraction;
+      const reason = args.input.reason?.trim() ?? "";
+      if (interaction.payload.rejectRequiresReason === true && reason.length === 0) {
+        throw unprocessable("A decline reason is required for this confirmation");
+      }
+
+      const now = new Date();
+      const [updated] = await tx
+        .update(issueThreadInteractions)
+        .set({
+          status: "rejected",
+          result: {
+            version: 1,
+            outcome: "rejected",
+            reason: reason || null,
+          },
+          resolvedByAgentId: args.actor.agentId ?? null,
+          resolvedByUserId: args.actor.userId ?? null,
+          resolvedAt: now,
+          updatedAt: now,
+        })
+        .where(and(
+          eq(issueThreadInteractions.id, current.id),
+          eq(issueThreadInteractions.status, "pending"),
+        ))
+        .returning();
+
+      if (!updated) {
+        throw conflict("Interaction has already been resolved");
+      }
+      await touchIssue(tx, args.issue.id);
+      return hydrateInteraction(updated);
     });
-    if (expired) {
-      return expired;
-    }
-
-    const interaction = hydrateInteraction(args.current) as RequestConfirmationInteraction;
-    const reason = args.input.reason?.trim() ?? "";
-    if (interaction.payload.rejectRequiresReason === true && reason.length === 0) {
-      throw unprocessable("A decline reason is required for this confirmation");
-    }
-
-    const now = new Date();
-    const [updated] = await db
-      .update(issueThreadInteractions)
-      .set({
-        status: "rejected",
-        result: {
-          version: 1,
-          outcome: "rejected",
-          reason: reason || null,
-        },
-        resolvedByAgentId: args.actor.agentId ?? null,
-        resolvedByUserId: args.actor.userId ?? null,
-        resolvedAt: now,
-        updatedAt: now,
-      })
-      .where(and(
-        eq(issueThreadInteractions.id, args.current.id),
-        eq(issueThreadInteractions.status, "pending"),
-      ))
-      .returning();
-
-    if (!updated) {
-      throw conflict("Interaction has already been resolved");
-    }
-    await touchIssue(db, args.issue.id);
-    return hydrateInteraction(updated);
   }
 
   async function resolveCreateInput(connection: Db,
@@ -897,8 +900,11 @@ export function issueThreadInteractionService(db: Db) {
     },
 
     create: async (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance) => {
-      const namedQuestion = input.kind === 'ask_user_questions';
-      return namedQuestion || acceptance !== undefined ? acceptQuestion(acceptance, connection => createInteraction(connection, issue, input, actor)) : createInteraction(db, issue, input, actor);
+      const participating = input.kind === 'ask_user_questions' || input.kind === 'request_confirmation';
+      return participating || acceptance !== undefined ? acceptInteractionWrite(acceptance, async connection => {
+        await lockInteractionIssue(connection, issue);
+        return createInteraction(connection, issue, input, actor);
+      }) : createInteraction(db, issue, input, actor);
     },
 
     acceptInteraction: async (
@@ -906,9 +912,12 @@ export function issueThreadInteractionService(db: Db) {
       interactionId: string,
       input: AcceptIssueThreadInteraction,
       actor: InteractionActor,
+      acceptance?: ActivityAcceptance,
     ): Promise<ResolvedInteractionResult> => {
       const data = acceptIssueThreadInteractionSchema.parse(input);
-      const current = await getPendingInteractionForResolution({ issue, interactionId });
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      const current = await getPendingInteractionForResolution({ issue, interactionId }, acceptance?.executor ?? db);
+      if (acceptance !== undefined && current.kind !== "request_confirmation") throw unprocessable("Supplied acceptance supports request confirmations only");
       switch (current.kind) {
         case "suggest_tasks":
           return issueThreadInteractionService(db).acceptSuggestedTasks(issue, interactionId, data, actor);
@@ -917,6 +926,7 @@ export function issueThreadInteractionService(db: Db) {
             issue,
             current,
             actor,
+            acceptance,
           });
           return {
             interaction: accepted.interaction,
@@ -1080,9 +1090,12 @@ export function issueThreadInteractionService(db: Db) {
       interactionId: string,
       input: RejectIssueThreadInteraction,
       actor: InteractionActor,
+      acceptance?: ActivityAcceptance,
     ) => {
       const data = rejectIssueThreadInteractionSchema.parse(input);
-      const current = await getPendingInteractionForResolution({ issue, interactionId });
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      const current = await getPendingInteractionForResolution({ issue, interactionId }, acceptance?.executor ?? db);
+      if (acceptance !== undefined && current.kind !== "request_confirmation") throw unprocessable("Supplied acceptance supports request confirmations only");
       switch (current.kind) {
         case "suggest_tasks":
           return issueThreadInteractionService(db).rejectSuggestedTasks(issue, interactionId, data, actor, current);
@@ -1092,6 +1105,7 @@ export function issueThreadInteractionService(db: Db) {
             current,
             input: data,
             actor,
+            acceptance,
           });
         default:
           throw unprocessable(`Interactions of kind ${current.kind} cannot be rejected`);
@@ -1146,134 +1160,88 @@ export function issueThreadInteractionService(db: Db) {
       issue: { id: string; companyId: string },
       comment: { id: string; authorUserId?: string | null },
       actor: InteractionActor,
-      executor: Pick<Db, "select" | "update"> = db,
+      supplied?: Pick<Db, "select" | "update">,
     ) => {
       if (!comment.authorUserId) return [];
-
-      const rows = await executor
-        .select()
-        .from(issueThreadInteractions)
-        .where(and(
-          eq(issueThreadInteractions.companyId, issue.companyId),
-          eq(issueThreadInteractions.issueId, issue.id),
-          eq(issueThreadInteractions.kind, "request_confirmation"),
-          eq(issueThreadInteractions.status, "pending"),
-        ));
-
-      const superseded = rows.filter((row) => {
-        const interaction = hydrateInteraction(row) as RequestConfirmationInteraction;
-        return interaction.payload.supersedeOnUserComment === true;
-      });
-
-      if (superseded.length === 0) return [];
-
-      const now = new Date();
-      const expired: IssueThreadInteraction[] = [];
-      for (const row of superseded) {
-        const [updated] = await executor
-          .update(issueThreadInteractions)
-          .set({
-            status: "expired",
-            result: {
-              version: 1,
-              outcome: "superseded_by_comment",
-              commentId: comment.id,
-            },
-            resolvedByAgentId: actor.agentId ?? null,
-            resolvedByUserId: actor.userId ?? null,
-            resolvedAt: now,
-            updatedAt: now,
-          })
+      const work = async (executor: Pick<Db, "select" | "update">) => {
+        await lockInteractionIssue(executor, issue);
+        const rows = await executor
+          .select()
+          .from(issueThreadInteractions)
           .where(and(
-            eq(issueThreadInteractions.id, row.id),
+            eq(issueThreadInteractions.companyId, issue.companyId),
+            eq(issueThreadInteractions.issueId, issue.id),
+            eq(issueThreadInteractions.kind, "request_confirmation"),
             eq(issueThreadInteractions.status, "pending"),
-          ))
-          .returning();
-        if (updated) expired.push(hydrateInteraction(updated));
-      }
+          ));
 
-      if (expired.length > 0) {
-        await touchIssue(executor, issue.id);
-      }
-      return expired;
+        const superseded = rows.filter((row) => {
+          const interaction = hydrateInteraction(row) as RequestConfirmationInteraction;
+          return interaction.payload.supersedeOnUserComment === true;
+        });
+
+        if (superseded.length === 0) return [];
+
+        const now = new Date();
+        const expired: IssueThreadInteraction[] = [];
+        for (const row of superseded) {
+          const [updated] = await executor
+            .update(issueThreadInteractions)
+            .set({
+              status: "expired",
+              result: {
+                version: 1,
+                outcome: "superseded_by_comment",
+                commentId: comment.id,
+              },
+              resolvedByAgentId: actor.agentId ?? null,
+              resolvedByUserId: actor.userId ?? null,
+              resolvedAt: now,
+              updatedAt: now,
+            })
+            .where(and(
+              eq(issueThreadInteractions.id, row.id),
+              eq(issueThreadInteractions.status, "pending"),
+            ))
+            .returning();
+          if (updated) expired.push(hydrateInteraction(updated));
+        }
+
+        if (expired.length > 0) {
+          await touchIssue(executor, issue.id);
+        }
+        return expired;
+      };
+      return supplied !== undefined ? work(supplied) : db.transaction(work);
     },
 
     expireStaleRequestConfirmationsForIssueDocument: async (
       issue: { id: string; companyId: string },
       document: { id: string; key: string; latestRevisionId?: string | null; latestRevisionNumber?: number | null } | null,
       actor: InteractionActor,
+      acceptance?: ActivityAcceptance,
     ) => {
-      const rows = await db
-        .select()
-        .from(issueThreadInteractions)
-        .where(and(
-          eq(issueThreadInteractions.companyId, issue.companyId),
-          eq(issueThreadInteractions.issueId, issue.id),
-          eq(issueThreadInteractions.kind, "request_confirmation"),
-          eq(issueThreadInteractions.status, "pending"),
+      return acceptInteractionWrite(acceptance, async (connection) => {
+        await lockInteractionIssue(connection, issue);
+        const rows = await connection.select().from(issueThreadInteractions).where(and(
+          eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id),
+          eq(issueThreadInteractions.kind, "request_confirmation"), eq(issueThreadInteractions.status, "pending"),
         ));
-
-      const staleRows = rows.filter((row) => {
-        const interaction = hydrateInteraction(row) as RequestConfirmationInteraction;
-        const target = interaction.payload.target;
-        if (!target || target.type !== "issue_document") return false;
-        const targetIssueId = target.issueId ?? issue.id;
-        if (targetIssueId !== issue.id) return false;
-        if (document && target.documentId && target.documentId !== document.id) return false;
-        if (document && target.key !== document.key) return false;
-        if (!document) return true;
-        return (
-          target.revisionId !== document.latestRevisionId
-          || (target.revisionNumber != null && target.revisionNumber !== document.latestRevisionNumber)
-        );
+        const expired: IssueThreadInteraction[] = [];
+        for (const row of rows) {
+          const target = (hydrateInteraction(row) as RequestConfirmationInteraction).payload.target;
+          if (!target || target.type !== "issue_document" || (target.issueId ?? issue.id) !== issue.id) continue;
+          // The route's document is only a selector. An older route completion
+          // must not expire a confirmation pinned to a newer committed revision.
+          if (document && ((target.documentId && target.documentId !== document.id) || target.key !== document.key)) continue;
+          const updated = await expireStaleRequestConfirmationTarget(connection, { row, actor });
+          if (updated) expired.push(updated);
+        }
+        return expired;
       });
-
-      if (staleRows.length === 0) return [];
-
-      const now = new Date();
-      const expired: IssueThreadInteraction[] = [];
-      for (const row of staleRows) {
-        const interaction = hydrateInteraction(row) as RequestConfirmationInteraction;
-        const target = interaction.payload.target ?? null;
-        const currentTarget = buildIssueDocumentTargetFromDocument({
-          issueId: issue.id,
-          document,
-        });
-        const [updated] = await db
-          .update(issueThreadInteractions)
-          .set({
-            status: "expired",
-            payload: currentTarget
-              ? {
-                  ...interaction.payload,
-                  target: currentTarget,
-                }
-              : interaction.payload,
-            result: {
-              version: 1,
-              outcome: "stale_target",
-              staleTarget: target,
-            },
-            resolvedByAgentId: actor.agentId ?? null,
-            resolvedByUserId: actor.userId ?? null,
-            resolvedAt: now,
-            updatedAt: now,
-          })
-          .where(and(
-            eq(issueThreadInteractions.id, row.id),
-            eq(issueThreadInteractions.status, "pending"),
-          ))
-          .returning();
-        if (updated) expired.push(hydrateInteraction(updated));
-      }
-
-      if (expired.length > 0) {
-        await touchIssue(db, issue.id);
-      }
-      return expired;
     },
 
-    answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance) => acceptQuestion(acceptance, async (tx, accepted) => {
+    answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance) => acceptInteractionWrite(acceptance, async (tx, accepted) => {
       const connection = tx;
       // Lock company before issue, matching brief publication and job creation.
       await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for('update');
@@ -1287,7 +1255,8 @@ export function issueThreadInteractionService(db: Db) {
       input: CancelIssueThreadInteraction,
       actor: InteractionActor,
       acceptance?: ActivityAcceptance,
-    ) => acceptQuestion(acceptance, async (connection) => {
+    ) => acceptInteractionWrite(acceptance, async (connection) => {
+      await lockInteractionIssue(connection, issue);
       const data = cancelIssueThreadInteractionSchema.parse(input);
       const current = await connection
         .select()

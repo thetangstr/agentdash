@@ -89,6 +89,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // Update that source for shared behavior; do not duplicate its mandate here.
 // The unmarked hire supplement survives named-block refresh. SOUL, HEARTBEAT
 // and TOOLS retain the unified worker baseline without role/persona overrides.
+// AgentDash: predicate-acceptance applicability — synthesized workers use the
+// existing endpoints and private-answer rules. Predicate locking is server-side;
+// stale/refused preparation has no cleanup/runtime effects, and an expired
+// confirmation remains a distinct accepted outcome. No new worker call is needed.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

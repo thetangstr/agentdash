@@ -31,3 +31,7 @@ shared creator template. Do not restore a separate persona or fork that policy.
 The default worker bundle owns accepted-hire/incomplete-configuration recovery.
 Do not activate a separate hiring loop or replay confirmations from this surface. -->
 <!-- /AgentDash: accepted-hire-recovery -->
+
+<!-- AgentDash: predicate-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK -->
+<!-- Applicability: canonical issue, question, confirmation, hold, DoD and goal writes serialize current predicates before acceptance. Existing agent endpoints and private answer ownership remain unchanged. An expired confirmation is a recorded outcome; a refused prepared action performs no cleanup or runtime dispatch. Re-read current state after stale or uncertain outcomes before choosing another action. -->
+<!-- /AgentDash: predicate-acceptance -->
