@@ -8,6 +8,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { agentUrl } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "../components/EmptyState";
+import { TeamViewTabs } from "../components/TeamViewTabs";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { AgentIcon } from "../components/AgentIconPicker";
 import { Download, Maximize2, Minus, Network, Plus, Upload } from "lucide-react";
@@ -194,7 +195,7 @@ export function OrgChart() {
   }, [agents]);
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Org Chart" }]);
+    setBreadcrumbs([{ label: "Team", href: "/agents" }, { label: "Org chart" }]);
   }, [setBreadcrumbs]);
 
   // Layout computation
@@ -436,12 +437,19 @@ export function OrgChart() {
     return <PageSkeleton variant="org-chart" />;
   }
 
+  // AgentDash: sidebar IA — /org is the Team page's "Org chart" tab.
   if (orgTree && orgTree.length === 0) {
-    return <EmptyState icon={Network} message="No organizational hierarchy defined." />;
+    return (
+      <div className="space-y-4">
+        <TeamViewTabs active="org" />
+        <EmptyState icon={Network} message="No organizational hierarchy defined." />
+      </div>
+    );
   }
 
   return (
     <div className="flex h-[calc(100dvh-9rem)] min-h-[420px] flex-col md:h-full md:min-h-0">
+      <TeamViewTabs active="org" className="mb-3 shrink-0" />
       <div className="mb-2 flex shrink-0 flex-wrap items-center justify-start gap-2">
         <Link to="/company/import">
           <Button variant="outline" size="sm">

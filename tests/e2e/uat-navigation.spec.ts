@@ -69,6 +69,10 @@ const ROUTES = [
   "/skills",
   "/billing",
   "/costs",
+  "/evaluation",
+  "/company/import",
+  "/company/export",
+  "/guides",
 ];
 
 async function assertHealthy(page: Page, where: string) {
@@ -121,16 +125,16 @@ test.describe("every destination stays reachable", () => {
       // Only the links actually rendered for this user — role decides what
       // the shell offers, and clicking a hidden one proves nothing. One
       // sidebar for every company (doc/plans/2026-09-30-one-ux.md): the six
-      // primary items plus a few Advanced destinations.
+      // primary items, the four under More, and Settings in the footer.
       const labels = [
         "Home", "Ask", "Work", "Decisions", "Shipped", "Team",
-        "Org", "Billing", "Settings", "My Agent",
+        "Goals", "Routines", "Costs", "Activity", "Settings",
       ];
-      // Secondary destinations fold under Advanced — expand it once so those
-      // links are clickable too.
-      const advancedToggle = page.getByRole("button", { name: "Advanced", exact: true }).first();
-      if (await advancedToggle.count()) {
-        await advancedToggle.click();
+      // The secondary destinations fold under More — expand it once so those
+      // links are clickable too (the state is remembered, so only if closed).
+      const moreToggle = page.getByRole("button", { name: "More", exact: true }).first();
+      if ((await moreToggle.count()) && (await moreToggle.getAttribute("aria-expanded")) !== "true") {
+        await moreToggle.click();
       }
       for (const label of labels) {
         const link = page.getByRole("link", { name: label, exact: true }).first();
@@ -141,6 +145,39 @@ test.describe("every destination stays reachable", () => {
         await link.click();
         await assertHealthy(page, `clicked ${label}`);
         process.stdout.write(`  ✓ clicked ${label} → ${new URL(page.url()).pathname}\n`);
+      }
+    });
+
+    await test.step("the sidebar's Help menu", async () => {
+      for (const label of ["Guides", "Changelog", "Health"]) {
+        await page.goto("/dashboard");
+        await page.getByRole("button", { name: "Help", exact: true }).click();
+        await page.getByRole("menuitem", { name: label, exact: true }).click();
+        await assertHealthy(page, `help → ${label}`);
+        process.stdout.write(`  ✓ help → ${label} → ${new URL(page.url()).pathname}\n`);
+      }
+    });
+
+    await test.step("clicked from the Settings navigation", async () => {
+      await page.goto("/company/settings");
+      const settingsNav = page.getByRole("navigation", { name: "Settings" });
+      await expect(settingsNav).toBeVisible();
+      // Only what this user is offered — the Instance section is admin-only.
+      const labels = [
+        "Members & access", "Invites", "Billing", "Model key", "Connections",
+        "Skills", "Environments", "Adapters", "Import", "Export", "Evaluation", "Profile",
+      ];
+      for (const label of labels) {
+        const link = settingsNav.getByRole("link", { name: label }).first();
+        if (!(await link.count())) {
+          process.stdout.write(`  – settings ${label} not offered to this user\n`);
+          continue;
+        }
+        await link.click();
+        await assertHealthy(page, `settings → ${label}`);
+        // The page renders inside the one settings navigation.
+        await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
+        process.stdout.write(`  ✓ settings → ${label} → ${new URL(page.url()).pathname}\n`);
       }
     });
 

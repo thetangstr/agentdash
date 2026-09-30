@@ -16,6 +16,7 @@ import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
+import { TeamViewTabs } from "../components/TeamViewTabs";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Bot, Plus, List, GitBranch, SlidersHorizontal } from "lucide-react";
@@ -164,6 +165,8 @@ export function Agents() {
 
   return (
     <div className="space-y-4">
+      {/* AgentDash: sidebar IA — Team is "List | Org chart"; the org chart moved off the sidebar. */}
+      <TeamViewTabs active="list" />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Tabs value={tab} onValueChange={(v) => navigate(`/agents/${v}`)}>
           <PageTabBar

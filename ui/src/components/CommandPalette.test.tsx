@@ -62,6 +62,14 @@ vi.mock("../api/projects", () => ({
   projectsApi: mockProjectsApi,
 }));
 
+const mockCapabilitiesApi = vi.hoisted(() => ({ get: vi.fn() }));
+const mockAccessApi = vi.hoisted(() => ({ listMembers: vi.fn() }));
+const mockInstanceSettingsApi = vi.hoisted(() => ({ getExperimental: vi.fn() }));
+
+vi.mock("../api/capabilities", () => ({ capabilitiesApi: mockCapabilitiesApi }));
+vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
+vi.mock("../api/instanceSettings", () => ({ instanceSettingsApi: mockInstanceSettingsApi }));
+
 vi.mock("./Identity", () => ({
   Identity: ({ name }: { name: string }) => <span>{name}</span>,
 }));
@@ -156,6 +164,9 @@ describe("CommandPalette", () => {
     mockIssuesApi.list.mockResolvedValue([]);
     mockAgentsApi.list.mockResolvedValue([]);
     mockProjectsApi.list.mockResolvedValue([]);
+    mockCapabilitiesApi.get.mockResolvedValue({ capabilities: {}, membershipRole: "member", isInstanceAdmin: false });
+    mockAccessApi.listMembers.mockResolvedValue({ access: { canManageAgents: false } });
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -184,6 +195,50 @@ describe("CommandPalette", () => {
       });
     });
 
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  // Sidebar IA: the sidebar lost Advanced; every destination stays reachable
+  // by search — primary pages, More, Help and the whole Settings hub.
+  it("lists every navigation destination, with instance pages only for instance admins", async () => {
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Members & access");
+    });
+    const labels = [...container.querySelectorAll("button")].map((b) => b.textContent ?? "");
+    for (const label of [
+      "Home", "Ask", "Work", "Decisions", "Shipped", "Team", "Org chart", "Projects", "My agent",
+      "Goals", "Routines", "Costs", "Activity",
+      "Guides", "Changelog", "Health",
+      "Members & access", "Invites", "Billing", "Model key", "Connections",
+      "Skills", "Environments", "Adapters", "Import", "Export", "Evaluation", "Profile", "About",
+    ]) {
+      expect(labels.some((text) => text.startsWith(label)), `expected "${label}"`).toBe(true);
+    }
+    for (const label of ["Plugins", "Experimental", "Heartbeats", "Override"]) {
+      expect(labels.some((text) => text.startsWith(label)), `unexpected "${label}"`).toBe(false);
+    }
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("adds Heartbeats, Plugins and Experimental for an instance admin", async () => {
+    mockCapabilitiesApi.get.mockResolvedValue({ capabilities: {}, membershipRole: "owner", isInstanceAdmin: true });
+    const { root } = renderWithQueryClient(<CommandPalette />, container);
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    });
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Plugins");
+    });
+    expect(container.textContent).toContain("Heartbeats");
+    expect(container.textContent).toContain("Experimental");
     act(() => {
       root.unmount();
     });
