@@ -1,4 +1,6 @@
 import { conflict } from "../errors.js";
+import { type Db, instanceUserRoles } from "@paperclipai/db";
+import { actorMiddleware } from "../middleware/auth.js";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +11,18 @@ const runtime = vi.hoisted(() => ({ cancelRun: vi.fn(), wakeup: vi.fn() }));
 vi.mock("../services/index.js", () => ({ heartbeatService: () => runtime, issueService: () => ({ getById }), issueTreeControlService: () => service }));
 async function app(actor: Record<string, unknown>) {
   const [{ errorHandler }, { issueTreeControlRoutes }] = await Promise.all([import("../middleware/error-handler.js"), import("../routes/issue-tree-control.js")]);
-  const result = express(); result.use(express.json()); result.use((req, _res, next) => { req.actor = actor as any; next(); });
+  const result = express(); result.use(express.json());
+  if (actor.type === "board") {
+    // This suite mocks route composition, not authority. Let real middleware
+    // capture its session primitives from the fixture's native auth dependencies.
+    const userId = String(actor.userId);
+    const memberships = (actor.companyIds as string[]).map(companyId => ({ companyId, membershipRole: "member", status: "active" }));
+    const authDb = { select: () => ({ from: (table: unknown) => ({ where: async () => table === instanceUserRoles
+      ? (actor.isInstanceAdmin ? [{ id: "fixture-admin" }] : []) : memberships }) }) } as unknown as Db;
+    result.use(actorMiddleware(authDb, { deploymentMode: "authenticated", resolveSession: async () => ({
+      session: { id: "fixture-session", userId }, user: { id: userId, name: "Fixture", email: "fixture@test.invalid" },
+    }) }));
+  } else result.use((req, _res, next) => { req.actor = actor as any; next(); });
   result.use("/api", issueTreeControlRoutes({} as any)); result.use(errorHandler); return result;
 }
 const rootId = "11111111-1111-4111-8111-111111111111", holdId = "33333333-3333-4333-8333-333333333333";
