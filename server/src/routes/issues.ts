@@ -2535,7 +2535,7 @@ export function issueRoutes(
       assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await protectedQuestions(req, authority, issue.companyId, 'human_questions.respond', { issueId: id, interactionId }, async (executor, acceptance, guards) => {
+      const interaction = await protectedQuestions(req, authority, issue.companyId, 'human_questions.respond', { issueId: id, interactionId, shareWithCompany: req.body.shareWithCompany === true }, async (executor, acceptance, guards) => {
         const value = await issueThreadInteractionService(executor).answerQuestions(issue, interactionId, req.body, { agentId: actor.agentId, userId: actor.actorType === 'user' ? actor.actorId : null }, acceptance, guards);
         acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
           action: 'issue.thread_interaction_answered', entityType: 'issue', entityId: issue.id,

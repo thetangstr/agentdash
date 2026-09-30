@@ -1,12 +1,13 @@
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 import express, { type RequestHandler } from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { agents, agentApiKeys, authUsers, boardApiKeys, companies, companyMemberships, companySkills, workforceEnrollments, activityLog, issueThreadInteractions, issues, humanActionHandles, authSessions, instanceUserRoles, projects, projectAccess, principalPermissionGrants, createDb, type Db } from '@paperclipai/db';
+import { agents, agentApiKeys, authUsers, boardApiKeys, companies, companyMemberships, companySkills, workforceEnrollments, activityLog, issueThreadInteractions, issues, humanActionHandles, authSessions, instanceUserRoles, projects, projectAccess, principalPermissionGrants, goals, createDb, type Db } from '@paperclipai/db';
 import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/error-handler.js';
 import { humanControlRoutes } from '../routes/human-control.js';
@@ -17,6 +18,7 @@ import { workforceRoutes } from '../routes/workforce.js';
 import { hashBearerToken } from '../services/board-auth.js';
 import { workforceService } from '../services/workforce.js';
 import { issueThreadInteractionService } from '../services/issue-thread-interactions.js';
+import { subscribeCompanyLiveEvents } from '../services/live-events.js';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 
 const effects = vi.hoisted(() => ({ wakeup: vi.fn(async () => null) }));
@@ -237,6 +239,8 @@ describe('current authority for actual readiness sources', () => {
     const second = await call('post', `/api/issues/${issue.id}/interactions`, input);
     const cancelled = await call('post', `/api/issues/${issue.id}/interactions/${second.body.id}/cancel`, {});
     expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200); expect(cancelled.body.status).toBe('cancelled');
+    const replacement = await call('post', `/api/issues/${issue.id}/interactions`, { ...input, payload: { ...input.payload, replacesInteractionId: second.body.id } });
+    expect(replacement.status).toBe(201); expect(replacement.body.payload.answerOwnerUserId).toBeUndefined();
   });
 
   function afterCommittedWrite(tableToWatch: unknown, after: () => Promise<void>) {
@@ -475,6 +479,150 @@ describe('current authority for actual readiness sources', () => {
     expect(commits).toBe(1); expect(effects.wakeup).not.toHaveBeenCalled();
     const jobs = await db.select().from(issues).where(eq(issues.companyId, f.company.id));
     expect(jobs).toHaveLength(1); expect((await workforceService(db).getEnrollment(f.company.id, f.agent.id))?.firstJobIssueId).toBe(jobs[0].id);
+  });
+
+  it('fix1 refuses a third human replacement before effects and preserves the current-owner cancelled replacement', async () => {
+    const f = await adminWorker(), bob = await credential(), charlie = await credential();
+    await db.insert(companyMemberships).values([bob, charlie].map(person => ({ companyId: f.company.id, principalType: 'user', principalId: person.userId, membershipRole: 'member', status: 'active' })));
+    const job = await workforceService(db).startFirstJob(f.company.id, f.agent.id, { userId: f.owner.userId });
+    const input = { kind: 'ask_user_questions' as const, continuationPolicy: 'wake_assignee' as const, title: 'Private predecessor', summary: 'Keep original summary', payload: { version: 1 as const, questions: [{ id: 'required', prompt: 'Private required input?', required: true, selectionMode: 'text' as const, options: [] }] } };
+    const q = await issueThreadInteractionService(db).create(job, input, { agentId: f.agent.id });
+    await issueThreadInteractionService(db).cancelQuestions(job, q.id, {}, { userId: f.owner.userId });
+    await db.update(agents).set({ accountableUserId: bob.userId }).where(eq(agents.id, f.agent.id));
+    await db.update(companyMemberships).set({ status: 'inactive' }).where(eq(companyMemberships.principalId, f.owner.userId));
+    const beforeQuestions = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, job.id));
+    const beforeAudits = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
+    const published: string[] = [], stop = subscribeCompanyLiveEvents(f.company.id, event => { if (event.type === 'activity.logged') published.push(event.payload.action as string); });
+    const replacement = { ...input, payload: { ...input.payload, replacesInteractionId: q.id } };
+    const application = app(); effects.wakeup.mockClear();
+    try {
+      const denied = await request(application).post(`/api/issues/${job.id}/interactions`).set('authorization', `Bearer ${charlie.token}`).send(replacement);
+      expect(denied.status).toBe(403);
+      expect(await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, job.id))).toEqual(beforeQuestions);
+      expect(await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).toEqual(beforeAudits);
+      expect(published).toEqual([]); expect(effects.wakeup).not.toHaveBeenCalled();
+      const accepted = await request(application).post(`/api/issues/${job.id}/interactions`).set('authorization', `Bearer ${bob.token}`).send(replacement);
+      expect(accepted.status).toBe(201);
+      expect(accepted.body).toMatchObject({ title: input.title, summary: input.summary, continuationPolicy: input.continuationPolicy, status: 'pending', payload: { answerOwnerUserId: bob.userId, replacesInteractionId: q.id, questions: input.payload.questions } });
+      expect(await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, job.id))).toHaveLength(2);
+      expect(published).toEqual(['issue.thread_interaction_created']); expect(effects.wakeup).not.toHaveBeenCalled();
+    } finally { stop(); }
+  });
+
+  type SourceTrace = { transaction: number; sql: string; params: unknown[]; rows?: Array<{ id?: string; objective?: string | null }> };
+  function traceSourceTransactions(events: SourceTrace[], afterEnrollmentLock?: () => Promise<void>) {
+    let sequence = 0;
+    const dialect = new PgDialect();
+    return new Proxy(db, { get(target, property, receiver) {
+      if (property !== 'transaction') return Reflect.get(target, property, receiver);
+      return (callback: (executor: Db) => Promise<unknown>) => {
+        const transaction = ++sequence;
+        return target.transaction(tx => callback(new Proxy(tx, { get(inner, key, receiver) {
+          const value = Reflect.get(inner, key, receiver);
+          if (key === 'execute') return async (query: SQL) => {
+            const result = await inner.execute(query), rendered = dialect.sqlToQuery(query);
+            events.push({ transaction, ...rendered });
+            if (rendered.sql.includes('"workforce_enrollments"') && rendered.sql.endsWith('for share')) await afterEnrollmentLock?.();
+            return result;
+          };
+          if (key === 'select') return (fields?: Record<string, unknown>) => {
+            const query = (inner.select as Function)(fields), from = query.from.bind(query);
+            query.from = (table: unknown) => {
+              const builder = from(table), then = builder.then.bind(builder);
+              builder.then = (resolve: Function, reject: Function) => then((rows: SourceTrace['rows']) => {
+                events.push({ transaction, ...builder.toSQL(), rows }); return rows;
+              }).then(resolve, reject);
+              return builder;
+            };
+            return query;
+          };
+          if (key === 'insert' || key === 'update') return (table: unknown) => {
+            if (table === issueThreadInteractions) events.push({ transaction, sql: 'question write', params: [] });
+            return value.call(inner, table);
+          };
+          return typeof value === 'function' ? value.bind(inner) : value;
+        } }) as unknown as Db));
+      };
+    } });
+  }
+  async function sharingQuestion() {
+    const f = await adminWorker();
+    const job = await workforceService(db).startFirstJob(f.company.id, f.agent.id, { userId: f.owner.userId });
+    const q = await issueThreadInteractionService(db).create(job, { kind: 'ask_user_questions', payload: { version: 1, questions: [{ id: 'offer', prompt: 'Which approved offer?', companyFactKey: 'offer', required: true, selectionMode: 'text', options: [] }] } }, { agentId: f.agent.id });
+    return { ...f, job, q, enrollment: (await workforceService(db).getEnrollment(f.company.id, f.agent.id))! };
+  }
+  it.each(['native', 'foundation'] as const)('fix1 stages and seals the actual sharing enrollment before target locks through %s', async transport => {
+    const f = await sharingQuestion();
+    const [currentAssignee] = await db.insert(agents).values({ companyId: f.company.id, name: 'Reassigned worker', adapterType: 'codex_local' }).returning();
+    await db.update(issues).set({ assigneeAgentId: currentAssignee.id }).where(eq(issues.id, f.job.id));
+    // Sharing uses the question's persisted workforceAgentId, not the current assignee.
+    // These enrollment references are unrelated to this question's native sharing decision.
+    const [foreignCompany] = await db.insert(companies).values({ name: 'Unrelated enrollment references', issuePrefix: randomUUID().slice(0,8) }).returning();
+    const [foreignJob] = await db.insert(issues).values({ companyId: foreignCompany.id, title: 'Unrelated private job' }).returning();
+    const [foreignGoal] = await db.insert(goals).values({ companyId: foreignCompany.id, title: 'Unrelated private goal' }).returning();
+    await db.update(workforceEnrollments).set({ firstJobIssueId: foreignJob.id, goalId: foreignGoal.id }).where(eq(workforceEnrollments.id, f.enrollment.id));
+    const events: SourceTrace[] = [], application = app(undefined, traceSourceTransactions(events));
+    const answers = { shareWithCompany: true, answers: [{ questionId: 'offer', optionIds: [], text: 'Approved public offer' }] };
+    let response;
+    if (transport === 'native') response = await request(application).post(`/api/issues/${f.job.id}/interactions/${f.q.id}/respond`).set('authorization', `Bearer ${f.owner.token}`).send(answers);
+    else {
+      const prepared = await request(application).post('/human/prepare').set('authorization', `Bearer ${f.owner.token}`).send({ target: f.target, operationId: 'human_questions.respond', version: 1, input: { issueId: f.job.id, interactionId: f.q.id, ...answers } });
+      expect(prepared.status).toBe(200);
+      response = await request(application).post('/human/confirm').set('authorization', `Bearer ${f.owner.token}`).send({ target: f.target, handle: prepared.body.handle });
+    }
+    expect(response.status).toBe(200);
+    const mutation = events.find(value => value.sql === 'question write')!;
+    expect(mutation).toBeDefined();
+    const transaction = events.filter(value => value.transaction === mutation.transaction);
+    const enrollmentLock = transaction.findIndex(value => value.sql.includes('"workforce_enrollments"') && value.sql.endsWith('for share') && value.params.includes(f.enrollment.id));
+    expect(enrollmentLock, 'actual sharing enrollment must have a positive SHARE receipt').toBeGreaterThanOrEqual(0);
+    const issueTargetLock = transaction.findIndex(value => value.sql.includes('from "issues"') && value.sql.endsWith('for update'));
+    expect(issueTargetLock).toBeGreaterThan(enrollmentLock);
+    const reselections = transaction.slice(enrollmentLock + 1, issueTargetLock).filter(value => value.sql.includes('from "workforce_enrollments"') && value.rows?.some(row => row.id === f.enrollment.id));
+    expect(reselections.length, 'actual enrollment must be reread under sealed witnesses').toBeGreaterThan(0);
+    expect((await workforceService(db).getBrief(f.company.id)).facts).toMatchObject([{ key: 'offer', value: 'Approved public offer' }]);
+  });
+
+  it.each(['share first', 'enrollment update first'] as const)('fix1 serializes a supported enrollment update with sharing (%s)', async order => {
+    const f = await sharingQuestion(), reached = deferred(), release = deferred(), events: SourceTrace[] = [];
+    let paused = false;
+    const connection = traceSourceTransactions(events, async () => {
+      if (order === 'share first' && !paused) { paused = true; reached.resolve(); await release.promise; }
+    });
+    const update = () => workforceService(db).updateEnrollment(f.company.id, f.agent.id, { objective: 'New supported objective' }, { userId: f.owner.userId });
+    let writer: Promise<unknown>;
+    if (order === 'enrollment update first') {
+      writer = db.transaction(async tx => {
+        const executor = tx as unknown as Db;
+        await workforceService(executor).updateEnrollment(f.company.id, f.agent.id, { objective: 'New supported objective' }, { userId: f.owner.userId }, { executor, publications: [] });
+        reached.resolve(); await release.promise;
+      });
+      await reached.promise;
+    }
+    const response = request(app(undefined, connection)).post(`/api/issues/${f.job.id}/interactions/${f.q.id}/respond`).set('authorization', `Bearer ${f.owner.token}`).send({ shareWithCompany: true, answers: [{ questionId: 'offer', optionIds: [], text: 'Approved offer across native update' }] }).then(value => value);
+    if (order === 'share first') { await reached.promise; writer = update(); }
+    try { await waitForDatabaseLock('companies'); } finally { release.resolve(); }
+    expect((await response).status).toBe(200); await writer!;
+    const firstEnrollmentRead = events.find(value => value.sql.includes('from "workforce_enrollments"') && value.rows?.some(row => row.id === f.enrollment.id));
+    expect(firstEnrollmentRead?.rows?.find(row => row.id === f.enrollment.id)?.objective).toBe(order === 'share first' ? f.enrollment.objective : 'New supported objective');
+    expect(events.some(value => value.sql.includes('"workforce_enrollments"') && value.sql.endsWith('for share') && value.params.includes(f.enrollment.id))).toBe(true);
+    expect((await workforceService(db).getEnrollment(f.company.id, f.agent.id))?.objective).toBe('New supported objective');
+    expect((await workforceService(db).getBrief(f.company.id)).facts).toMatchObject([{ key: 'offer', value: 'Approved offer across native update' }]);
+  });
+  it.each(['native', 'foundation'] as const)('fix1 does not add sharing enrollment sources to a private %s answer', async transport => {
+    const f = await sharingQuestion(), events: SourceTrace[] = [], application = app(undefined, traceSourceTransactions(events));
+    const answer = { shareWithCompany: false, answers: [{ questionId: 'offer', optionIds: [], text: 'Keep this offer private' }] };
+    let response;
+    if (transport === 'native') response = await request(application).post(`/api/issues/${f.job.id}/interactions/${f.q.id}/respond`).set('authorization', `Bearer ${f.owner.token}`).send(answer);
+    else {
+      const prepared = await request(application).post('/human/prepare').set('authorization', `Bearer ${f.owner.token}`).send({ target: f.target, operationId: 'human_questions.respond', version: 1, input: { issueId: f.job.id, interactionId: f.q.id, ...answer } });
+      expect(prepared.status).toBe(200);
+      response = await request(application).post('/human/confirm').set('authorization', `Bearer ${f.owner.token}`).send({ target: f.target, handle: prepared.body.handle });
+    }
+    expect(response.status).toBe(200);
+    expect(events.filter(value => value.sql.includes('"workforce_enrollments"'))).toEqual([]);
+    expect((await workforceService(db).getBrief(f.company.id)).facts).toEqual([]);
+    expect((await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, f.q.id)))[0].status).toBe('answered');
   });
 
 });

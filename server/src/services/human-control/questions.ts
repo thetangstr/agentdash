@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { companyMemberships, issues, issueThreadInteractions } from '@paperclipai/db';
-import { askUserQuestionsPayloadSchema, askUserQuestionsQuestionSchema, askUserQuestionsQuestionOptionSchema, askUserQuestionsAnswerSchema, askUserQuestionsResultSchema, humanJsonSchema, type CreateIssueThreadInteraction, type AskUserQuestionsInteraction, type HumanOperationDescriptor } from '@paperclipai/shared';
+import { askUserQuestionsPayloadSchema, askUserQuestionsQuestionSchema, askUserQuestionsQuestionOptionSchema, askUserQuestionsAnswerSchema, askUserQuestionsResultSchema, humanJsonSchema, type AskUserQuestionsInteraction, type HumanOperationDescriptor } from '@paperclipai/shared';
 import { conflict, forbidden, notFound } from '../../errors.js';
 import { assertProjectIdVisible } from '../../routes/visibility.js';
 import { issueThreadInteractionService } from '../issue-thread-interactions.js';
@@ -13,6 +13,7 @@ import { dispatchResolvedInteractionContinuation } from './question-continuation
 import type { heartbeatService } from '../heartbeat.js';
 import type { HumanOperation, HumanOperationContext } from '../human-control.js';
 import { humanCompany } from './workforce.js';
+import { questionReplacement } from './authority.js';
 const id = z.string().uuid(), text = z.string();
 const reference = z.object({ issueId: id, interactionId: id }).strict();
 const answer = askUserQuestionsAnswerSchema.strict();
@@ -84,7 +85,7 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
           if (q.status !== 'pending') throw conflict('Question is no longer pending');
         } else if (operationId === 'human_questions.replace') {
           if (q.status !== 'cancelled') throw conflict('Only cancelled questions may be replaced');
-          const next = await svc.previewCreate(issue, replacement(q), actor);
+          const next = await svc.previewCreate(issue, questionReplacement(q), actor);
           replacementReadback = next;
           if (next.kind !== 'ask_user_questions' || next.payload.answerOwnerUserId !== actor.userId) throw forbidden('Only the current named answer owner may replace this question');
         }
@@ -92,17 +93,13 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
       },
     };
   }
-  function replacement(q: AskUserQuestionsInteraction): CreateIssueThreadInteraction {
-    const { answerOwnerUserId: _owner, ...payload } = q.payload;
-    return { kind: 'ask_user_questions', continuationPolicy: q.continuationPolicy, title: q.title, summary: q.summary, sourceCommentId: q.sourceCommentId, sourceRunId: q.sourceRunId, payload: { ...payload, replacesInteractionId: q.id } };
-  }
   async function mutate(ctx: HumanOperationContext, p: Record<string, unknown>, actionId: string, kind: 'respond' | 'cancel' | 'replace') {
     const { issue, q } = await visible(ctx, p, kind !== 'replace');
     const svc = issueThreadInteractionService(ctx.db), actor = { userId: ctx.req.actor.userId! };
     const { issueId: _i, interactionId: _q, ...body } = p;
     const updated = kind === 'respond' ? await svc.answerQuestions(issue, q.id, body as Parameters<typeof svc.answerQuestions>[2], actor, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite })
       : kind === 'cancel' ? await svc.cancelQuestions(issue, q.id, body, actor, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite })
-      : await svc.create(issue, { ...replacement(q), idempotencyKey: `human-action:${actionId}` }, actor, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite });
+      : await svc.create(issue, { ...questionReplacement(q), idempotencyKey: `human-action:${actionId}` }, actor, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite });
     ctx.acceptance!.publications.push(await insertActivity(ctx.acceptance!.executor, { companyId: issue.companyId, actorType: 'user', actorId: actor.userId, action: `issue.thread_interaction_${kind === 'respond' ? 'answered' : kind === 'cancel' ? 'cancelled' : 'created'}`, entityType: 'issue', entityId: issue.id, details: { interactionId: updated.id, interactionKind: updated.kind, interactionStatus: updated.status } }, ctx.beforeWrite));
     return updated;
   }

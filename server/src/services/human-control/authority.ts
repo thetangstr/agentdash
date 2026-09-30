@@ -71,11 +71,15 @@ export function foundationAuthority(req: Request) {
       row(state, '02:agent', agents, value.id);
       return value;
     }
-    async function enrollment(agentId: string, references = true) {
+    async function enrollmentRow(agentId: string) {
       await agent(agentId);
       const [value] = await reader.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, companyId), eq(workforceEnrollments.agentId, agentId)));
+      if (value) row(state, '14:enrollment', workforceEnrollments, value.id);
+      return value;
+    }
+    async function enrollment(agentId: string, references = true) {
+      const value = await enrollmentRow(agentId);
       if (value) {
-        row(state, '14:enrollment', workforceEnrollments, value.id);
         if (value.goalId) await goal(value.goalId);
         if (references && value.firstJobIssueId) await issue(value.firstJobIssueId);
       }
@@ -150,7 +154,7 @@ export function foundationAuthority(req: Request) {
       const values = await reader.select().from(companyContext).where(and(eq(companyContext.companyId, companyId), eq(companyContext.contextType, 'workforce_brief'), eq(companyContext.key, 'current')));
       for (const value of values) row(state, '13:context', companyContext, value.id);
     }
-    return { member, agent, enrollment, goal, issue, ownerFacts, creation, question, brief };
+    return { member, agent, enrollment, enrollmentRow, goal, issue, ownerFacts, creation, question, brief };
   }
   async function collect(executor: Db, selection: FoundationSelection, state: Collection) {
     const { companyId, operationId: op, input } = selection;
@@ -222,7 +226,12 @@ export function foundationAuthority(req: Request) {
       const pending = await waitingOnYouService(executor).pendingQuestions(companyId, req.actor, { limit: 2147483647 }, req);
       for (const value of pending.items) await source.question(value.interactionId, value.issueId);
     } else if (op === 'native.question.create') {
-      await source.creation(input.issueId as string, input.body as CreateIssueThreadInteraction);
+      const body = input.body as CreateIssueThreadInteraction;
+      if (body.kind === 'ask_user_questions' && body.payload.replacesInteractionId) {
+        // Eligibility is separate from factual creation, so structural resolution never recurses.
+        await source.question(body.payload.replacesInteractionId, input.issueId as string, true, true);
+      }
+      await source.creation(input.issueId as string, body);
     } else if (op === 'native.question.list') {
       const values = await executor.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.issueId, input.issueId as string), eq(issueThreadInteractions.kind, 'ask_user_questions')));
       for (const value of values) {
@@ -232,6 +241,11 @@ export function foundationAuthority(req: Request) {
     } else if (op.startsWith('human_questions.')) {
       const selected = await source.question(input.interactionId as string, input.issueId as string, op === 'human_questions.replace' && !selection.recovery, selection.native);
       if (op === 'human_questions.replace' && !selection.recovery) await source.creation(selected.issue.id, questionReplacement(selected.q));
+      if (op === 'human_questions.respond' && !selection.recovery && input.shareWithCompany === true
+        && !selected.issue.projectId && selected.q.payload.workforceAgentId) {
+        // Canonical sharing consumes this current enrollment/template, not its goal or first job.
+        await source.enrollmentRow(selected.q.payload.workforceAgentId);
+      }
       if (!selection.recovery && ['human_questions.respond', 'human_questions.cancel', 'human_questions.replace'].includes(op)) await source.brief();
     }
     if (selection.skillKeys?.length) {
