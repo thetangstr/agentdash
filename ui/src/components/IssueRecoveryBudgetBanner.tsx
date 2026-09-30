@@ -4,6 +4,11 @@ import { Button } from "@/components/ui/button";
 // AgentDash (recovery budget remediation): the issue page is where a person can
 // see that automatic recovery for this task stopped, and why, and clear it.
 // Before this, the only trace was one comment, and nothing could clear it.
+//
+// AgentDash (recovery budget, explicit clear — 2026-09-30): the button below is
+// the only clear. Changing the status, commenting or reassigning no longer
+// clears the block, so the banner says so. Interim, until the one-run permit
+// ships: a run a board user's own action starts still goes ahead.
 
 const DIMENSION_LABELS: Record<string, string> = {
   attempts: "automatic retries",
@@ -74,8 +79,12 @@ export function IssueRecoveryBudgetBanner({
           {dimensions.length > 0
             ? `The automatic-retry budget ran out (${dimensions.join(", ")}). `
             : "The automatic-retry budget ran out. "}
-          No further automatic retries start until someone clears the block. Comments still reach the assignee.
+          No automatic retry starts until a board user clears the block with the button below.
         </span>
+      </div>
+      <div className="text-xs text-amber-900/80 dark:text-amber-100/80" data-testid="issue-recovery-budget-explicit-clear">
+        Changing the status, commenting or reassigning does not clear it. A run you start that way can still go
+        ahead, and comments still reach the assignee, but the budget stays exhausted until it is cleared here.
       </div>
       {budget.usage ? (
         <div className="text-xs text-amber-900/80 dark:text-amber-100/80">

@@ -28,6 +28,12 @@ import { logActivity } from "./activity-log.js";
  *
  * Callers decide whether the actor is a human with authority to clear; this
  * module only performs and records the clear.
+ *
+ * AgentDash (2026-09-30 founder decision, permit + explicit clear): the only
+ * caller is the board user's explicit "Clear recovery block & retry" route.
+ * Status changes out of `blocked`, reopen-by-comment and reassignment used to
+ * clear as a side effect (#848/#869); they no longer do. Keep it that way: a
+ * new clear path needs its own named, audited trigger.
  */
 
 export function hasExhaustedRecoveryBudget(executionState: unknown): boolean {
@@ -40,6 +46,37 @@ function withoutRecoveryBudget(executionState: unknown): Record<string, unknown>
   }
   const { recoveryBudget: _removed, ...rest } = executionState as Record<string, unknown>;
   return Object.keys(rest).length > 0 ? rest : null;
+}
+
+export type IssueRecoveryBudgetNotice = {
+  status: "exhausted";
+  exhaustedBy: string[];
+  message: string;
+  /** The only way the marker is removed: POST here as a board user. */
+  clearPath: string;
+};
+
+/**
+ * AgentDash (recovery budget, explicit clear — INTERIM, 2026-09-30): what the
+ * issue PATCH and comment responses say while an exhausted marker is still on
+ * the issue. Status changes, reopen-by-comment and reassignment used to clear
+ * the marker; now they do not, so the caller is told plainly that the budget
+ * is still exhausted and where the clear is. Until the one-run permit ships,
+ * a run a board user's own action starts still goes ahead (see
+ * isRunStartedByPerson in heartbeat.ts); automatic retries do not.
+ */
+export function recoveryBudgetNotice(issueId: string, executionState: unknown): IssueRecoveryBudgetNotice | null {
+  const budget = readIssueRecoveryBudget(executionState);
+  if (!budget) return null;
+  return {
+    status: "exhausted",
+    exhaustedBy: budget.exhaustedBy,
+    message:
+      "This issue's automatic-retry budget is still exhausted. Changing its status, commenting or reassigning it " +
+      "does not clear the block: a run a board user's own action starts may still go ahead, but no automatic retry " +
+      "will. Use \"Clear recovery block & retry\" to clear it.",
+    clearPath: `/api/issues/${issueId}/recovery-budget/clear`,
+  };
 }
 
 type DbOrTx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -150,9 +187,11 @@ function formatUsage(usage: IssueRecoveryBudgetUsage | null, limits: IssueRecove
 /**
  * An issue must never carry an exhausted marker while it looks like live work
  * (`todo` / `in_progress`) with nobody told. That happens when something other
- * than a human clear moved it out of `blocked`: the assignee agent checking it
- * out or PATCHing it, an assistant-grant reopen, or a run a person started
- * that then left the issue in `todo`. Every automatic retry is then refused
+ * than the explicit clear moved it out of `blocked`: a board user's status
+ * change, reopen-by-comment or reassignment (none of which clear the marker
+ * any more), the assignee agent checking it out or PATCHing it, an
+ * assistant-grant reopen, or a run a person started that then left the issue
+ * in `todo`. Every automatic retry is then refused
  * and nothing else ever surfaces it.
  *
  * This moves such an issue back to `blocked` and posts one explanatory comment
@@ -239,8 +278,8 @@ export async function reblockExhaustedIssue(
         body:
           `${RECOVERY_BUDGET_REBLOCK_COMMENT_PREFIX}: this issue's automatic-retry budget is exhausted` +
           `${usage ? ` (${usage})` : ""}, but it was in \`${current.status}\`, where it looked like live work. ` +
-          "Moved it back to `blocked`. No automatic retry will start until a board user clears the recovery block: " +
-          "use \"Clear recovery block & retry\" on this issue, move it out of `blocked`, reopen it with a comment, or reassign it.",
+          "Moved it back to `blocked`. No automatic retry will start until a board user clears the recovery block with " +
+          "\"Clear recovery block & retry\" on this issue; moving it out of `blocked`, commenting or reassigning does not clear it.",
       });
     }
 

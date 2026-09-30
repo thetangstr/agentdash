@@ -51,6 +51,7 @@ import {
   isClosedIsolatedExecutionWorkspace,
   type ExecutionWorkspace,
   ASSISTANT_WORK_ORIGIN_KIND,
+  preserveIssueRecoveryBudget,
 } from "@paperclipai/shared";
 // AgentDash: goals-eval-hitl
 import { definitionOfDoneSchema, isUuidLike } from "@paperclipai/shared";
@@ -111,6 +112,7 @@ import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.
 import {
   clearIssueRecoveryBudget,
   hasExhaustedRecoveryBudget,
+  recoveryBudgetNotice,
 } from "../services/issue-recovery-budget.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { executionWorkspaceService as executionWorkspaceServiceDirect } from "../services/execution-workspaces.js";
@@ -2576,10 +2578,12 @@ export function issueRoutes(
           return;
         }
       } else {
-        updateFields.executionState = {
+        // AgentDash (recovery budget, explicit clear): the parsed stage state
+        // drops unknown keys; keep an exhausted recovery marker.
+        updateFields.executionState = preserveIssueRecoveryBudget(existing.executionState, {
           ...existingExecutionState,
           reviewRequest,
-        };
+        });
       }
     }
 
@@ -2632,51 +2636,12 @@ export function issueRoutes(
       }
     }
 
-    // AgentDash (recovery budget remediation): a person moving the issue out
-    // of `blocked`, reopening it by comment, or reassigning it is the human
-    // remediation the exhaustion message asks for, so it clears the exhausted
-    // automatic-recovery marker. Without this the marker was permanent.
-    //
-    // #848 follow-up: the clear runs in the same transaction as the status
-    // update. Committed separately, the stranded-issue reconciler could see the
-    // issue in `todo` with the marker still set, re-block it, and the clear
-    // would then leave it blocked with no marker. reblockExhaustedIssue locks
-    // the row, so inside one transaction it sees either both changes or none.
-    const clearsRecoveryBudget =
-      isHumanBoardActor(req) && hasExhaustedRecoveryBudget(existing.executionState);
-    async function clearRecoveryBudgetOnHumanRemediation(
-      tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-      updated: NonNullable<Awaited<ReturnType<typeof svc.update>>>,
-    ) {
-      if (!clearsRecoveryBudget || !hasExhaustedRecoveryBudget(updated.executionState)) return updated;
-      const movedToTodoByComment =
-        !!commentBody && effectiveMoveToTodoRequested && existing!.status !== updated.status && updated.status === "todo";
-      const leftBlocked = existing!.status === "blocked" && updated.status !== "blocked";
-      const reassigned =
-        updated.assigneeAgentId !== existing!.assigneeAgentId || updated.assigneeUserId !== existing!.assigneeUserId;
-      const clearTrigger = movedToTodoByComment
-        ? "reopen_comment"
-        : leftBlocked
-          ? "status_change"
-          : reassigned
-            ? "reassign"
-            : null;
-      if (!clearTrigger) return updated;
-      const clearedBudget = await clearIssueRecoveryBudget(tx as unknown as Db, {
-        companyId: updated.companyId,
-        issueId: updated.id,
-        actorUserId: actor.actorId,
-        trigger: clearTrigger,
-        runId: actor.runId,
-        details: { previousStatus: existing!.status },
-      });
-      if (!clearedBudget) return updated;
-      return {
-        ...updated,
-        executionState: clearedBudget.issue.executionState,
-        updatedAt: clearedBudget.issue.updatedAt,
-      };
-    }
+    // AgentDash (recovery budget, explicit clear — 2026-09-30 founder
+    // decision): a person moving the issue out of `blocked`, reopening it by
+    // comment or reassigning it no longer clears an exhausted
+    // automatic-recovery marker (#848/#869 did). Only the audited
+    // POST /issues/:id/recovery-budget/clear does. See recoveryBudgetNotice
+    // for what the response tells the caller instead.
 
     let issue;
     try {
@@ -2707,21 +2672,7 @@ export function issueRoutes(
             createdByRunId: actor.runId ?? null,
           });
 
-          return clearRecoveryBudgetOnHumanRemediation(tx, updated);
-        });
-      } else if (clearsRecoveryBudget) {
-        issue = await db.transaction(async (tx) => {
-          const updated = await svc.update(
-            id,
-            {
-              ...updateFields,
-              actorAgentId: actor.agentId ?? null,
-              actorUserId: actor.actorType === "user" ? actor.actorId : null,
-            },
-            tx,
-          );
-          if (!updated) return null;
-          return clearRecoveryBudgetOnHumanRemediation(tx, updated);
+          return updated;
         });
       } else {
         issue = await svc.update(id, {
@@ -3293,7 +3244,10 @@ export function issueRoutes(
         referencedIssueIdentifiers: visibleRelatedWork.outbound.map((item) => item.issue.identifier ?? item.issue.id),
       };
     }
-    res.json({ ...issueResponse, comment });
+    // AgentDash (recovery budget, explicit clear): say so when the marker
+    // outlives this update, and point at the explicit clear.
+    const budgetNotice = recoveryBudgetNotice(issue.id, issue.executionState);
+    res.json({ ...issueResponse, comment, ...(budgetNotice ? { recoveryBudgetNotice: budgetNotice } : {}) });
   });
 
   router.delete("/issues/:id", async (req, res) => {
@@ -4203,25 +4157,9 @@ export function issueRoutes(
         },
       });
 
-      // AgentDash (recovery budget remediation): a person reopening the issue
-      // by comment clears an exhausted automatic-recovery marker.
-      if (isHumanBoardActor(req) && hasExhaustedRecoveryBudget(currentIssue.executionState)) {
-        const clearedBudget = await clearIssueRecoveryBudget(db, {
-          companyId: currentIssue.companyId,
-          issueId: currentIssue.id,
-          actorUserId: actor.actorId,
-          trigger: "reopen_comment",
-          runId: actor.runId,
-          details: { previousStatus: reopenFromStatus },
-        });
-        if (clearedBudget) {
-          currentIssue = {
-            ...currentIssue,
-            executionState: clearedBudget.issue.executionState,
-            updatedAt: clearedBudget.issue.updatedAt,
-          };
-        }
-      }
+      // AgentDash (recovery budget, explicit clear): reopening by comment no
+      // longer clears an exhausted automatic-recovery marker; only the
+      // explicit clear route does.
     }
 
     if (interruptRequested) {
@@ -4407,7 +4345,10 @@ export function issueRoutes(
       }
     })();
 
-    res.status(201).json(comment);
+    // AgentDash (recovery budget, explicit clear): a comment (reopening or
+    // not) leaves an exhausted marker in place; say so and point at the clear.
+    const budgetNotice = recoveryBudgetNotice(currentIssue.id, currentIssue.executionState);
+    res.status(201).json(budgetNotice ? { ...comment, recoveryBudgetNotice: budgetNotice } : comment);
   });
 
   router.post("/issues/:id/feedback-votes", validate(upsertIssueFeedbackVoteSchema), async (req, res) => {

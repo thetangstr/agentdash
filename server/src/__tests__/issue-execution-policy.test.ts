@@ -1262,3 +1262,152 @@ describe("issue execution policy transitions", () => {
     });
   });
 });
+
+// AgentDash (recovery budget, explicit clear): execution_state also carries
+// the heartbeat's exhausted recovery marker. Stage writes used to null or
+// rebuild the column and strip it with no audit row; they now keep it.
+describe("issue execution policy transitions keep the recovery-budget marker", () => {
+  const recoveryBudget = {
+    status: "exhausted",
+    exhaustedBy: ["attempts"],
+    usage: { automaticRetries: 1, providerTurns: 1, providerTokens: 1, providerCostUsd: 0.01, runtimeMs: 1000 },
+    limits: null,
+    exhaustedAt: "2026-09-30T10:00:00.000Z",
+    sourceRunId: null,
+    refusedRunId: null,
+  };
+  const stageId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const pendingReviewState = {
+    status: "pending",
+    currentStageId: stageId,
+    currentStageIndex: 0,
+    currentStageType: "review",
+    currentParticipant: { type: "agent", agentId: qaAgentId },
+    returnAssignee: { type: "agent", agentId: coderAgentId },
+    completedStageIds: [],
+    lastDecisionId: null,
+    lastDecisionOutcome: null,
+  };
+
+  it("keeps the marker when a removed policy clears the stage state", () => {
+    const result = applyIssueExecutionPolicyTransition({
+      issue: {
+        status: "in_review",
+        assigneeAgentId: qaAgentId,
+        assigneeUserId: null,
+        executionPolicy: null,
+        executionState: { ...pendingReviewState, recoveryBudget },
+      },
+      policy: null,
+      requestedStatus: undefined,
+      requestedAssigneePatch: {},
+      actor: { userId: boardUserId },
+    });
+    expect(result.patch.executionState).toEqual({ recoveryBudget });
+    expect(result.patch.status).toBe("in_progress");
+  });
+
+  it("keeps the marker when a closed issue is reopened", () => {
+    const policy = twoStagePolicy();
+    const result = applyIssueExecutionPolicyTransition({
+      issue: {
+        status: "done",
+        assigneeAgentId: coderAgentId,
+        assigneeUserId: null,
+        executionPolicy: policy,
+        executionState: {
+          status: "completed",
+          currentStageId: null,
+          currentStageIndex: null,
+          currentStageType: null,
+          currentParticipant: null,
+          returnAssignee: { type: "agent", agentId: coderAgentId },
+          completedStageIds: [policy.stages[0].id, policy.stages[1].id],
+          lastDecisionId: null,
+          lastDecisionOutcome: "approved",
+          recoveryBudget,
+        },
+      },
+      policy,
+      requestedStatus: "todo",
+      requestedAssigneePatch: {},
+      actor: { userId: boardUserId },
+    });
+    expect(result.patch.executionState).toEqual({ recoveryBudget });
+  });
+
+  it("keeps the marker when a stale stage id clears the stage state", () => {
+    const policy = reviewOnlyPolicy();
+    const result = applyIssueExecutionPolicyTransition({
+      issue: {
+        status: "in_review",
+        assigneeAgentId: qaAgentId,
+        assigneeUserId: null,
+        executionPolicy: policy,
+        executionState: { ...pendingReviewState, recoveryBudget },
+      },
+      policy,
+      requestedStatus: undefined,
+      requestedAssigneePatch: {},
+      actor: { userId: boardUserId },
+    });
+    expect(result.patch.executionState).toEqual({ recoveryBudget });
+  });
+
+  it("keeps the marker when a status write starts the review workflow", () => {
+    const policy = reviewOnlyPolicy();
+    const result = applyIssueExecutionPolicyTransition({
+      issue: {
+        status: "in_progress",
+        assigneeAgentId: coderAgentId,
+        assigneeUserId: null,
+        executionPolicy: policy,
+        executionState: { recoveryBudget },
+      },
+      policy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: coderAgentId },
+      commentBody: "Done",
+    });
+    expect(result.patch.status).toBe("in_review");
+    expect(result.patch.executionState).toMatchObject({ status: "pending", recoveryBudget });
+  });
+
+  it("keeps the marker through a review decision", () => {
+    const policy = reviewOnlyPolicy();
+    const result = applyIssueExecutionPolicyTransition({
+      issue: {
+        status: "in_review",
+        assigneeAgentId: qaAgentId,
+        assigneeUserId: null,
+        executionPolicy: policy,
+        executionState: { ...pendingReviewState, currentStageId: policy.stages[0].id, recoveryBudget },
+      },
+      policy,
+      requestedStatus: "done",
+      requestedAssigneePatch: {},
+      actor: { agentId: qaAgentId },
+      commentBody: "Approved",
+    });
+    expect(result.decision?.outcome).toBe("approved");
+    expect(result.patch.executionState).toMatchObject({ status: "completed", recoveryBudget });
+  });
+
+  it("leaves transitions without a marker unchanged", () => {
+    const result = applyIssueExecutionPolicyTransition({
+      issue: {
+        status: "in_review",
+        assigneeAgentId: qaAgentId,
+        assigneeUserId: null,
+        executionPolicy: null,
+        executionState: pendingReviewState,
+      },
+      policy: null,
+      requestedStatus: undefined,
+      requestedAssigneePatch: {},
+      actor: { userId: boardUserId },
+    });
+    expect(result.patch.executionState).toBeNull();
+  });
+});

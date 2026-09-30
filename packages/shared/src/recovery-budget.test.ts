@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAgentSchema, readIssueRecoveryBudget, updateAgentSchema } from "./index.js";
+import { createAgentSchema, preserveIssueRecoveryBudget, readIssueRecoveryBudget, updateAgentSchema } from "./index.js";
 
 describe("runtimeConfig.recoveryBudget validation", () => {
   it("accepts partial per-agent overrides", () => {
@@ -60,5 +60,24 @@ describe("readIssueRecoveryBudget", () => {
     expect(readIssueRecoveryBudget(null)).toBeNull();
     expect(readIssueRecoveryBudget({})).toBeNull();
     expect(readIssueRecoveryBudget({ recoveryBudget: { status: "cleared" } })).toBeNull();
+  });
+});
+
+describe("preserveIssueRecoveryBudget", () => {
+  const recoveryBudget = { status: "exhausted", exhaustedBy: ["attempts"] };
+
+  it("carries the marker onto a nulled or rebuilt state", () => {
+    expect(preserveIssueRecoveryBudget({ status: "pending", recoveryBudget }, null)).toEqual({ recoveryBudget });
+    expect(preserveIssueRecoveryBudget({ recoveryBudget }, { status: "completed" })).toEqual({
+      status: "completed",
+      recoveryBudget,
+    });
+  });
+
+  it("returns the next state unchanged without a marker", () => {
+    expect(preserveIssueRecoveryBudget(null, null)).toBeNull();
+    expect(preserveIssueRecoveryBudget({ status: "pending" }, null)).toBeNull();
+    const next = { status: "completed" };
+    expect(preserveIssueRecoveryBudget({}, next)).toBe(next);
   });
 });
