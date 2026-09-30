@@ -208,4 +208,45 @@ describe('routine actual writer acceptance', () => {
     expect((await db.select().from(routineRuns).where(eq(routineRuns.id, original.id)))[0]).toEqual(before);
   });
 
+  it('scheduler refuses new acceptance when pause wins after due selection and claim', async () => {
+    const f = await fixture(), now = new Date();
+    const [trigger] = await db.insert(routineTriggers).values({ companyId: f.company.id, routineId: f.routine.id,
+      kind: 'schedule', cronExpression: '* * * * *', timezone: 'UTC', nextRunAt: new Date(now.getTime() - 60000) }).returning();
+    const ready = gate(), release = gate(); let ownerPid = 0;
+    const pause = db.transaction(async tx => {
+      await tx.execute(sql`select id from companies where id = ${f.company.id} for update`);
+      await tx.update(routines).set({ status: 'paused' }).where(eq(routines.id, f.routine.id));
+      ownerPid = Number((await tx.execute(sql`select pg_backend_pid() pid`))[0].pid);
+      ready.open(); await release.promise;
+    });
+    await Promise.race([ready.promise, pause.then(() => { throw new Error('Pause escaped barrier'); })]);
+    const wakeup = vi.fn(async () => null); vi.mocked(publishLiveEvent).mockClear();
+    const dispatch = routineService(db, { heartbeat: { wakeup } }).tickScheduledTriggers(now);
+    const settled = Promise.allSettled([pause, dispatch]);
+    let blocked: any; let claimed: typeof routineTriggers.$inferSelect | undefined;
+    try {
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);
+        if (row) { blocked = row; break; }
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      [claimed] = await db.select().from(routineTriggers).where(eq(routineTriggers.id, trigger.id));
+    } finally { release.open(); }
+    const outcomes = await settled;
+    expect(blocked).toBeTruthy(); expect(Number(blocked.pid)).not.toBe(ownerPid);
+    expect(blocked.query).toMatch(/companies.*for (?:no key )?update/i);
+    console.log(JSON.stringify({ order: 'pause-before-scheduler-acceptance', ownerPid, waiter: blocked }));
+    expect(outcomes[0].status).toBe('fulfilled');
+    expect(outcomes[1]).toMatchObject({ status: 'rejected', reason: { status: 409, message: 'Routine trigger is not active' } });
+    expect(claimed!.nextRunAt!.getTime()).toBeGreaterThan(now.getTime());
+    expect(await db.select().from(routineTriggers).where(eq(routineTriggers.id, trigger.id))).toEqual([claimed]);
+    expect(await db.select().from(routines).where(eq(routines.id, f.routine.id))).toEqual([{ ...f.routine, status: 'paused' }]);
+    expect(await db.select().from(companies).where(eq(companies.id, f.company.id))).toEqual([f.company]);
+    expect(await db.select().from(routineRuns).where(eq(routineRuns.routineId, f.routine.id))).toEqual([]);
+    expect(await db.select().from(issues).where(eq(issues.companyId, f.company.id))).toEqual([]);
+    expect(await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).toEqual([]);
+    expect(publishLiveEvent).not.toHaveBeenCalled(); expect(wakeup).not.toHaveBeenCalled();
+  });
+
 });

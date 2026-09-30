@@ -852,6 +852,10 @@ export function routineService(
           )).orderBy(desc(routineRuns.createdAt)).limit(1).then(rows => rows[0]);
           if (existing) { acceptedRun = existing; acceptanceCompleted = true; return { run: existing }; }
         }
+        // AgentDash: existing receipts above never dispatch again; only new automatic work requires active status under lock.
+        if ((input.source === "webhook" || input.source === "schedule") && routine.status !== "active") {
+          throw conflict("Routine trigger is not active");
+        }
         const projectId = input.projectId ?? routine.projectId ?? null;
         const assigneeAgentId = input.assigneeAgentId ?? routine.assigneeAgentId ?? null;
         if (!assigneeAgentId) {
