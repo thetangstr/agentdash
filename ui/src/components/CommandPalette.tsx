@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useMemo } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
@@ -21,16 +21,15 @@ import {
   CircleDot,
   Bot,
   Hexagon,
-  Target,
-  LayoutDashboard,
-  Inbox,
-  DollarSign,
-  History,
   SquarePen,
   Plus,
 } from "lucide-react";
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
+import { accessApi } from "../api/access";
+import { instanceSettingsApi } from "../api/instanceSettings";
+import { useCapabilities } from "../hooks/useCapability";
+import { navigationDestinationGroups } from "../lib/navigation-destinations";
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -85,6 +84,25 @@ export function CommandPalette() {
     [allProjects],
   );
 
+  // Who the user is decides which destinations are offered — the same
+  // signals the sidebar and Settings navigation use, never the profile.
+  const { data: capabilities } = useCapabilities(selectedCompanyId);
+  const { data: companyAccess } = useQuery({
+    queryKey: queryKeys.access.companyMembers(selectedCompanyId ?? ""),
+    queryFn: () => accessApi.listMembers(selectedCompanyId!),
+    enabled: !!selectedCompanyId && open,
+  });
+  const { data: experimentalSettings } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+    enabled: open,
+  });
+  const destinationGroups = navigationDestinationGroups({
+    isInstanceAdmin: capabilities?.isInstanceAdmin === true,
+    canManageAgents: companyAccess?.access.canManageAgents === true,
+    workspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
+  });
+
   function go(path: string) {
     setOpen(false);
     navigate(path);
@@ -106,7 +124,7 @@ export function CommandPalette() {
         if (v && isMobile) setSidebarOpen(false);
       }}>
       <CommandInput
-        placeholder="Search issues, agents, projects..."
+        placeholder="Search pages, settings, issues, agents..."
         value={query}
         onValueChange={setQuery}
       />
@@ -141,41 +159,29 @@ export function CommandPalette() {
 
         <CommandSeparator />
 
-        <CommandGroup heading="Pages">
-          <CommandItem onSelect={() => go("/dashboard")}>
-            <LayoutDashboard className="mr-2 h-4 w-4" />
-            Home
-          </CommandItem>
-          {/* AgentDash: UX-7 (GH #788) + one UX — Decisions replaces Inbox for every company. */}
-          <CommandItem onSelect={() => go("/decisions")}>
-            <Inbox className="mr-2 h-4 w-4" />
-            Decisions
-          </CommandItem>
-          <CommandItem onSelect={() => go("/issues")}>
-            <CircleDot className="mr-2 h-4 w-4" />
-            Issues
-          </CommandItem>
-          <CommandItem onSelect={() => go("/projects")}>
-            <Hexagon className="mr-2 h-4 w-4" />
-            Projects
-          </CommandItem>
-          <CommandItem onSelect={() => go("/goals")}>
-            <Target className="mr-2 h-4 w-4" />
-            Goals
-          </CommandItem>
-          <CommandItem onSelect={() => go("/agents")}>
-            <Bot className="mr-2 h-4 w-4" />
-            Agents
-          </CommandItem>
-          <CommandItem onSelect={() => go("/costs")}>
-            <DollarSign className="mr-2 h-4 w-4" />
-            Costs
-          </CommandItem>
-          <CommandItem onSelect={() => go("/activity")}>
-            <History className="mr-2 h-4 w-4" />
-            Activity
-          </CommandItem>
-        </CommandGroup>
+        {/* AgentDash: sidebar IA — every destination stays reachable by
+            search: the primary pages, those that left the sidebar, More,
+            Help and the whole Settings hub. */}
+        {destinationGroups.map((group, index) => (
+          <Fragment key={group.heading}>
+            {index > 0 ? <CommandSeparator /> : null}
+            <CommandGroup heading={group.heading}>
+              {group.items.map((item) => (
+                <CommandItem
+                  key={`${group.heading}:${item.to}`}
+                  value={`${group.heading} ${item.hint ?? ""} ${item.label} ${item.keywords ?? ""}`}
+                  onSelect={() => go(item.to)}
+                >
+                  <item.icon className="mr-2 h-4 w-4" />
+                  {item.label}
+                  {item.hint ? (
+                    <span className="ml-auto text-xs text-muted-foreground">{item.hint}</span>
+                  ) : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </Fragment>
+        ))}
 
         {visibleIssues.length > 0 && (
           <>

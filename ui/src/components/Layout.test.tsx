@@ -35,12 +35,8 @@ vi.mock("./Sidebar", () => ({
   Sidebar: () => <div>Main company nav</div>,
 }));
 
-vi.mock("./InstanceSidebar", () => ({
-  InstanceSidebar: () => <div>Instance sidebar</div>,
-}));
-
-vi.mock("./CompanySettingsSidebar", () => ({
-  CompanySettingsSidebar: () => <div>Company settings sidebar</div>,
+vi.mock("./SettingsSidebar", () => ({
+  SettingsSidebar: () => <div>Settings sidebar</div>,
 }));
 
 vi.mock("./BreadcrumbBar", () => ({
@@ -238,8 +234,19 @@ describe("Layout", () => {
     });
   });
 
-  it("renders the company settings sidebar on company settings routes", async () => {
-    currentPathname = "/PAP/company/settings/access";
+  // AgentDash: sidebar IA — one Settings navigation for company settings,
+  // instance settings and the configuration pages that keep their own URLs.
+  it.each([
+    "/PAP/company/settings/access",
+    "/instance/settings/general",
+    "/PAP/skills",
+    "/PAP/billing",
+    "/PAP/evaluation",
+    "/PAP/company/import",
+    "/PAP/company/export",
+    "/instance/settings/adapters",
+  ])("renders the one settings sidebar on %s", async (pathname) => {
+    currentPathname = pathname;
     const root = createRoot(container);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -255,12 +262,39 @@ describe("Layout", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("Company settings sidebar");
-    expect(container.textContent).not.toContain("Instance sidebar");
+    expect(container.textContent).toContain("Settings sidebar");
     expect(container.textContent).not.toContain("Main company nav");
 
     await act(async () => {
       root.unmount();
     });
   });
+
+  it.each(["/PAP/dashboard", "/PAP/goals", "/PAP/org", "/PAP/guides"])(
+    "keeps the main sidebar on %s",
+    async (pathname) => {
+      currentPathname = pathname;
+      const root = createRoot(container);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <Layout />
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+
+      expect(container.textContent).toContain("Main company nav");
+      expect(container.textContent).not.toContain("Settings sidebar");
+
+      await act(async () => {
+        root.unmount();
+      });
+    },
+  );
 });

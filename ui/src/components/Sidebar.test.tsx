@@ -27,7 +27,15 @@ const mockCapabilitiesApi = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
+const mockLocation = vi.hoisted(() => ({ pathname: "/PAP/dashboard" }));
+
 vi.mock("@/lib/router", () => ({
+  useLocation: () => ({ pathname: mockLocation.pathname, search: "", hash: "", state: null }),
+  Link: ({ to, children, className, ...props }: { to: string; children: ReactNode; className?: string }) => (
+    <a href={to} className={className} {...props}>
+      {children}
+    </a>
+  ),
   NavLink: ({ to, children, className, ...props }: {
     to: string;
     children: ReactNode;
@@ -90,16 +98,20 @@ vi.mock("../api/capabilities", () => ({
   capabilitiesApi: mockCapabilitiesApi,
 }));
 
+const mockAuthApi = vi.hoisted(() => ({
+  getSession: vi.fn(),
+}));
+
+vi.mock("../api/auth", () => ({
+  authApi: mockAuthApi,
+}));
+
 vi.mock("@/plugins/slots", () => ({
   PluginSlotOutlet: () => null,
 }));
 
 vi.mock("./SidebarCompanyMenu", () => ({
   SidebarCompanyMenu: () => <div>Company menu</div>,
-}));
-
-vi.mock("./SidebarProjects", () => ({
-  SidebarProjects: () => <div>Projects list</div>,
 }));
 
 // The row hook is mocked so the default-profile Team list can be driven
@@ -148,6 +160,8 @@ describe("Sidebar", () => {
     mockAgentRows.userId = "user-1";
     container = document.createElement("div");
     document.body.appendChild(container);
+    mockLocation.pathname = "/PAP/dashboard";
+    mockAuthApi.getSession.mockResolvedValue({ session: { userId: "user-1" }, user: { id: "user-1" } });
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
     mockDashboardApi.waitingOnYou.mockResolvedValue({
       decisions: [{ approvalId: "appr-1" }],
@@ -191,12 +205,12 @@ describe("Sidebar", () => {
     return root;
   }
 
-  async function expandAdvanced() {
-    const trigger = [...container.querySelectorAll("button")].find(
-      (b) => b.textContent === "Advanced",
-    );
+  const findMoreTrigger = () =>
+    [...container.querySelectorAll("button")].find((b) => b.textContent === "More");
+
+  async function toggleMore() {
     await act(async () => {
-      trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      findMoreTrigger()!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flushReact();
   }
@@ -207,57 +221,6 @@ describe("Sidebar", () => {
     name: "Paperclip",
     productProfile: "agentdash_mk",
   };
-
-  it("does not flash the Workspaces link while experimental settings are loading", async () => {
-    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-    mockInstanceSettingsApi.getExperimental.mockImplementation(() => new Promise(() => {}));
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <Sidebar />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-    await expandAdvanced();
-
-    expect(container.textContent).not.toContain("Workspaces");
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  it("shows the Workspaces link under Advanced when isolated workspaces are enabled", async () => {
-    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <Sidebar />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-    await expandAdvanced();
-
-    const link = [...container.querySelectorAll("a")].find((anchor) => anchor.textContent === "Workspaces");
-    expect(link?.getAttribute("href")).toBe("/workspaces");
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
 
   it("shows the Shipped link and calls the dashboard Home", async () => {
     mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
@@ -281,7 +244,8 @@ describe("Sidebar", () => {
     const dashboard = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/dashboard");
     expect(dashboard?.textContent).toContain("Home");
     expect(mockDashboardApi.waitingOnYou).toHaveBeenCalledWith("company-1");
-    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Advanced")).toBe(true);
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "More")).toBe(true);
+    expect(container.textContent).not.toContain("Advanced");
     await act(async () => root.unmount());
     mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });
@@ -335,12 +299,12 @@ describe("Sidebar", () => {
       // anchor's textContent ("Decisions2").
       expect(linkTexts.some((text) => text?.includes(label)), `expected "${label}"`).toBe(true);
     }
-    // My Agent, Evaluation and the per-project list live under Advanced
-    // (collapsed), not top-level; there is no Inbox item at all.
+    // My Agent, Evaluation and the per-project list are not in the sidebar
+    // at all (account menu, Settings hub, command palette); no Inbox item.
     expect(linkTexts).not.toContain("My Agent");
     expect(linkTexts).not.toContain("Inbox");
     expect(linkTexts).not.toContain("Evaluation");
-    expect(container.textContent).not.toContain("Projects list");
+    expect(hrefs.some((h) => h?.startsWith("/projects"))).toBe(false);
 
     // The agent list nests under Team, so the primary block's links are still
     // exactly the six primary destinations (Settings sits in the footer).
@@ -431,79 +395,138 @@ describe("Sidebar", () => {
     });
   });
 
-  it("keeps the Advanced group collapsed by default", async () => {
-    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-    const root = await renderSidebar();
-
-    const trigger = [...container.querySelectorAll("button")].find(
-      (b) => b.textContent === "Advanced",
-    );
-    expect(trigger).toBeDefined();
-    expect(trigger?.getAttribute("aria-expanded") ?? trigger?.getAttribute("data-state")).toMatch(/false|closed/);
-    // Advanced destinations exist but their links are not rendered while collapsed.
-    const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-    expect(hrefs).not.toContain("/routines");
-    expect(hrefs).not.toContain("/billing");
-    await act(async () => root.unmount());
-  });
-
-  // UX-6 review: Evaluation stays reachable, folded under Advanced; the
-  // /instance/settings links are instance-admin only.
-  it("keeps Evaluation under Advanced and gates instance links on instance admins", async () => {
-    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-    let root = await renderSidebar();
-
-    await expandAdvanced();
-    let hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-    expect(hrefs).toContain("/evaluation");
-    // Not an instance admin: the /instance/settings group is absent.
-    expect(hrefs.some((h) => h?.startsWith("/instance/settings"))).toBe(false);
-    await act(async () => root.unmount());
-
-    mockCapabilitiesApi.get.mockResolvedValue({
-      capabilities: {},
-      membershipRole: "member",
-      isInstanceAdmin: true,
+  // Sidebar IA: "Advanced" is gone. One collapsed "More" group with exactly
+  // four items; configuration lives in the Settings hub, help behind "?".
+  describe("More group", () => {
+    beforeEach(() => {
+      mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
     });
-    root = await renderSidebar();
-    await expandAdvanced();
-    hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-    expect(hrefs).toContain("/instance/settings/heartbeats");
-    expect(hrefs).toContain("/instance/settings/plugins");
-    await act(async () => root.unmount());
+
+    it("is collapsed by default and there is no Advanced group", async () => {
+      const root = await renderSidebar();
+      const trigger = findMoreTrigger();
+      expect(trigger).toBeDefined();
+      expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+      expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Advanced")).toBe(false);
+      const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+      for (const href of ["/goals", "/routines", "/costs", "/activity"]) {
+        expect(hrefs).not.toContain(href);
+      }
+      await act(async () => root.unmount());
+    });
+
+    it("holds exactly Goals, Routines, Costs and Activity", async () => {
+      const root = await renderSidebar();
+      await toggleMore();
+      const contentId = findMoreTrigger()?.getAttribute("aria-controls");
+      const content = contentId ? document.getElementById(contentId) : null;
+      expect(content).not.toBeNull();
+      const links = [...content!.querySelectorAll("a")];
+      expect(links.map((a) => a.textContent)).toEqual(["Goals", "Routines", "Costs", "Activity"]);
+      expect(links.map((a) => a.getAttribute("href"))).toEqual(["/goals", "/routines", "/costs", "/activity"]);
+      await act(async () => root.unmount());
+    });
+
+    it("remembers the expanded state per user per company", async () => {
+      let root = await renderSidebar();
+      await toggleMore();
+      expect(localStorage.getItem("agentdash.sidebarMoreExpanded:company-1:user-1")).toBe("true");
+      await act(async () => root.unmount());
+
+      root = await renderSidebar();
+      expect(findMoreTrigger()?.getAttribute("aria-expanded")).toBe("true");
+      await toggleMore();
+      expect(findMoreTrigger()?.getAttribute("aria-expanded")).toBe("false");
+      expect(localStorage.getItem("agentdash.sidebarMoreExpanded:company-1:user-1")).toBeNull();
+      await act(async () => root.unmount());
+    });
+
+    it("does not apply another user's remembered state", async () => {
+      localStorage.setItem("agentdash.sidebarMoreExpanded:company-1:user-2", "true");
+      const root = await renderSidebar();
+      expect(findMoreTrigger()?.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => root.unmount());
+    });
+
+    it("falls back to collapsed when storage throws", async () => {
+      const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new Error("blocked");
+      });
+      const root = await renderSidebar();
+      expect(findMoreTrigger()?.getAttribute("aria-expanded")).toBe("false");
+      spy.mockRestore();
+      await act(async () => root.unmount());
+    });
   });
 
-  // One UX: My Agent, Override and the Projects list live under Advanced for
-  // every company. Override is offered by who the user is (canManageAgents),
-  // not by the company's profile.
-  it.each([
-    ["a default-profile company", { id: "company-1", issuePrefix: "PAP", name: "Paperclip" }],
-    ["an MK company", { id: "company-1", issuePrefix: "PAP", name: "Paperclip", productProfile: "agentdash_mk" }],
-  ])("puts My Agent, Override and Projects under Advanced for %s", async (_label, company) => {
-    mockCompany.current = company;
-    const root = await renderSidebar();
-    let hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-    expect(hrefs).not.toContain("/my-agent");
-    expect(container.textContent).not.toContain("Projects list");
-
-    await expandAdvanced();
-    hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-    for (const href of ["/my-agent", "/inbox/override", "/guides", "/routines", "/goals", "/org", "/skills", "/costs", "/evaluation", "/billing", "/activity"]) {
-      expect(hrefs, `expected ${href}`).toContain(href);
-    }
-    expect(container.textContent).toContain("Projects list");
-    await act(async () => root.unmount());
+  // Everything that used to sit under Advanced is out of the sidebar, even
+  // expanded, and for an instance admin.
+  it("offers nothing else: no settings, help, instance or per-project links", async () => {
     mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-  });
-
-  it("hides Override from a member who cannot manage agents", async () => {
-    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-    mockAccessApi.listMembers.mockResolvedValue({ access: { canManageAgents: false } });
+    mockCapabilitiesApi.get.mockResolvedValue({ capabilities: {}, membershipRole: "owner", isInstanceAdmin: true });
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
     const root = await renderSidebar();
-    await expandAdvanced();
+    await toggleMore();
     const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
-    expect(hrefs).toContain("/my-agent");
-    expect(hrefs).not.toContain("/inbox/override");
+    for (const href of [
+      "/my-agent", "/inbox/override", "/guides", "/org", "/skills", "/evaluation", "/billing",
+      "/company/import", "/company/export", "/company/settings/environments", "/company/settings/health",
+      "/workspaces",
+    ]) {
+      expect(hrefs, `unexpected ${href}`).not.toContain(href);
+    }
+    expect(hrefs.some((h) => h?.startsWith("/instance/"))).toBe(false);
+    expect(hrefs.some((h) => h?.startsWith("/projects"))).toBe(false);
+    // Six primary + four More + Settings.
+    expect(hrefs).toEqual([
+      "/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents",
+      "/goals", "/routines", "/costs", "/activity",
+      "/company/settings",
+    ]);
+    await act(async () => root.unmount());
+  });
+
+  describe("footer", () => {
+    beforeEach(() => {
+      mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    });
+
+    it("pins Settings to the Settings hub", async () => {
+      const root = await renderSidebar();
+      const settings = [...container.querySelectorAll("a")].find((a) => a.textContent === "Settings");
+      expect(settings?.getAttribute("href")).toBe("/company/settings");
+      await act(async () => root.unmount());
+    });
+
+    it("opens a Help menu with Guides, Changelog and Health", async () => {
+      const root = await renderSidebar();
+      const help = container.querySelector('button[aria-label="Help"]');
+      expect(help).not.toBeNull();
+      expect(document.body.querySelector('[role="menu"]')).toBeNull();
+      await act(async () => {
+        help!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+      const menu = document.body.querySelector('[role="menu"]');
+      expect(menu).not.toBeNull();
+      const items = [...menu!.querySelectorAll('[role="menuitem"]')];
+      expect(items.map((a) => a.textContent)).toEqual(["Guides", "Changelog", "Health"]);
+      expect(items.map((a) => a.getAttribute("href"))).toEqual([
+        "/guides",
+        "/instance/settings/changelog",
+        "/company/settings/health",
+      ]);
+      await act(async () => root.unmount());
+    });
+  });
+
+  // /org is the Team page's Org chart tab, so Team stays highlighted there.
+  it("highlights Team on the org chart", async () => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    mockLocation.pathname = "/PAP/org";
+    const root = await renderSidebar();
+    const team = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/agents");
+    expect(team?.className).toContain("bg-accent");
     await act(async () => root.unmount());
   });
 });

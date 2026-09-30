@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Users } from "lucide-react";
+import { useLocation } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -18,6 +19,10 @@ import { SidebarNavItem } from "./SidebarNavItem";
 export function SidebarTeamItem() {
   const { selectedCompanyId } = useCompany();
   const rows = useSidebarAgentRows();
+  // Sidebar IA: /org is the Team page's "Org chart" tab, so Team stays lit there.
+  const { pathname } = useLocation();
+  const onOrgChart = pathname.split("/").filter(Boolean)[1] === "org";
+  const activeClass = onOrgChart ? "bg-accent text-foreground" : undefined;
   const storageKey = useMemo(
     () =>
       selectedCompanyId
@@ -34,7 +39,7 @@ export function SidebarTeamItem() {
   }, [storageKey]);
 
   if (rows.orderedAgents.length === 0) {
-    return <SidebarNavItem to="/agents" label="Team" icon={Users} />;
+    return <SidebarNavItem to="/agents" label="Team" icon={Users} className={activeClass} />;
   }
 
   return (
@@ -46,7 +51,7 @@ export function SidebarTeamItem() {
       }}
     >
       <div className="relative">
-        <SidebarNavItem to="/agents" label="Team" icon={Users} className="pr-9" />
+        <SidebarNavItem to="/agents" label="Team" icon={Users} className={cn("pr-9", activeClass)} />
         <CollapsibleTrigger
           aria-label={expanded ? "Hide agents" : "Show agents"}
           className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-muted-foreground/60 hover:text-muted-foreground transition-colors"

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
+  Bot,
   Info,
   LogOut,
   type LucideIcon,
@@ -199,6 +200,15 @@ export function SidebarAccountMenu({
                 description="Update your display name and avatar."
                 icon={UserRoundPen}
                 href={PROFILE_SETTINGS_PATH}
+                onClick={closeNavigationChrome}
+              />
+              {/* AgentDash: sidebar IA — My Agent is personal, so it lives with
+                  the account rather than in the sidebar. */}
+              <MenuAction
+                label="My agent"
+                description="Your personal agent, its channels and connections."
+                icon={Bot}
+                href="/my-agent"
                 onClick={closeNavigationChrome}
               />
               <MenuAction

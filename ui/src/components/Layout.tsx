@@ -3,8 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Outlet, useLocation, useNavigate, useNavigationType, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
 import { Sidebar } from "./Sidebar";
-import { InstanceSidebar } from "./InstanceSidebar";
-import { CompanySettingsSidebar } from "./CompanySettingsSidebar";
+import { SettingsSidebar } from "./SettingsSidebar";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { CommandPalette } from "./CommandPalette";
@@ -41,6 +40,7 @@ import {
   shouldResetScrollOnNavigation,
 } from "../lib/navigation-scroll";
 import { queryKeys } from "../lib/queryKeys";
+import { isSettingsHubPath } from "../lib/settings-hub";
 import { scheduleMainContentFocus } from "../lib/main-content-focus";
 import { cn } from "../lib/utils";
 import { NotFoundPage } from "../pages/NotFound";
@@ -88,7 +88,10 @@ export function Layout() {
   const location = useLocation();
   const navigationType = useNavigationType();
   const isInstanceSettingsRoute = location.pathname.startsWith("/instance/");
-  const isCompanySettingsRoute = location.pathname.includes("/company/settings");
+  // AgentDash: sidebar IA — one Settings navigation for company settings,
+  // instance settings and the configuration pages that keep their own URLs
+  // (Skills, Billing, Evaluation, Import/Export, Adapters).
+  const isSettingsHubRoute = isSettingsHubPath(location.pathname);
   const onboardingTriggered = useRef(false);
   const lastMainScrollTop = useRef(0);
   const previousPathname = useRef<string | null>(null);
@@ -356,13 +359,7 @@ export function Layout() {
           >
             <div className="flex flex-1 min-h-0 overflow-hidden">
               <CompanyRail />
-              {isInstanceSettingsRoute ? (
-                <InstanceSidebar />
-              ) : isCompanySettingsRoute ? (
-                <CompanySettingsSidebar />
-              ) : (
-                <Sidebar />
-              )}
+              {isSettingsHubRoute ? <SettingsSidebar /> : <Sidebar />}
             </div>
             <SidebarAccountMenu
               deploymentMode={health?.deploymentMode}
@@ -380,13 +377,7 @@ export function Layout() {
                   sidebarOpen ? "w-60" : "w-0"
                 )}
               >
-                {isInstanceSettingsRoute ? (
-                  <InstanceSidebar />
-                ) : isCompanySettingsRoute ? (
-                  <CompanySettingsSidebar />
-                ) : (
-                  <Sidebar />
-                )}
+                {isSettingsHubRoute ? <SettingsSidebar /> : <Sidebar />}
               </div>
             </div>
             <SidebarAccountMenu
