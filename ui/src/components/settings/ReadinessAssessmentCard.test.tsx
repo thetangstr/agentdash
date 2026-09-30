@@ -23,15 +23,10 @@ describe("ReadinessAssessmentCard", () => {
     container.remove();
   });
 
-  it("links to the assessment on the default profile", () => {
-    act(() => root.render(<ReadinessAssessmentCard productProfile="default" />));
+  it("links to the assessment for every company", () => {
+    act(() => root.render(<ReadinessAssessmentCard />));
     expect(container.textContent).toContain("Advanced");
     expect(container.textContent).toContain("Optional");
     expect(container.querySelector<HTMLAnchorElement>('a[href="/assess"]')?.textContent).toBe("Run the assessment");
-  });
-
-  it("renders nothing for an agentdash_mk workspace", () => {
-    act(() => root.render(<ReadinessAssessmentCard productProfile="agentdash_mk" />));
-    expect(container.innerHTML).toBe("");
   });
 });

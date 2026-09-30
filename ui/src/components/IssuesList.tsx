@@ -576,10 +576,7 @@ export function IssuesList({
   onUpdateIssue,
 }: IssuesListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const { selectedCompanyId, selectedCompany } = useCompany();
-  // AgentDash: UX-11 — the default profile's empty Work page points at Ask;
-  // agentdash_mk keeps the create-issue wording.
-  const isDefaultProfile = selectedCompany?.productProfile !== "agentdash_mk";
+  const { selectedCompanyId } = useCompany();
   const { openNewIssue } = useDialogActions();
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -1422,7 +1419,7 @@ export function IssuesList({
         </p>
       )}
       {!isLoading && filtered.length === 0 && viewState.viewMode === "list" && (
-        showAskEmptyState && isDefaultProfile && issues.length === 0 && normalizedIssueSearch.length === 0 ? (
+        showAskEmptyState && issues.length === 0 && normalizedIssueSearch.length === 0 ? (
           <EmptyState
             icon={CircleDot}
             message="No issues yet. Everything you or your assistant asks for shows up here."

@@ -11,7 +11,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 const companyState = vi.hoisted(() => ({
   selectedCompanyId: "company-1",
-  selectedCompany: undefined as { id: string; productProfile?: string } | undefined,
+  selectedCompany: undefined as { id: string } | undefined,
 }));
 
 const dialogState = vi.hoisted(() => ({
@@ -1609,7 +1609,7 @@ describe("IssuesList", () => {
     });
   });
 
-  it("points an empty default-profile Work page at Ask (UX-11)", async () => {
+  it("points an empty Work page at Ask for every company (UX-11)", async () => {
     const { root } = renderWithQueryClient(
       <IssuesList
         issues={[]}
@@ -1636,7 +1636,7 @@ describe("IssuesList", () => {
     });
   });
 
-  it("keeps the filtered-empty state on embedded lists on the default profile (UX-11)", async () => {
+  it("keeps the filtered-empty state on embedded lists (UX-11)", async () => {
     // AgentDash: UX-11 follow-up — the Ask empty state belongs to the Issues
     // page only; project/routine/workspace/sub-issue lists get the same
     // component without the flag.
@@ -1659,33 +1659,6 @@ describe("IssuesList", () => {
     act(() => {
       root.unmount();
     });
-  });
-
-  it("keeps the create-issue empty state on agentdash_mk (UX-11)", async () => {
-    companyState.selectedCompany = { id: "company-1", productProfile: "agentdash_mk" };
-    try {
-      const { root } = renderWithQueryClient(
-        <IssuesList
-          issues={[]}
-          agents={[]}
-          projects={[]}
-          viewStateKey="paperclip:test-issues-empty-mk"
-          onUpdateIssue={() => undefined}
-        />,
-        container,
-      );
-
-      await waitForAssertion(() => {
-        expect(container.textContent).toContain("No issues match the current filters or search.");
-      });
-      expect(container.textContent).not.toContain("Everything you or your assistant asks for");
-
-      act(() => {
-        root.unmount();
-      });
-    } finally {
-      delete companyState.selectedCompany;
-    }
   });
 });
 

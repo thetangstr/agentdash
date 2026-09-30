@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockStewardshipsApi = vi.hoisted(() => ({ getOverrideInbox: vi.fn() }));
 const mockApprovalsApi = vi.hoisted(() => ({ override: vi.fn() }));
 const mockCompany = vi.hoisted(() => ({
-  value: { selectedCompanyId: "company-1", selectedCompany: { productProfile: "agentdash_mk" } },
+  value: { selectedCompanyId: "company-1", selectedCompany: { id: "company-1" } },
 }));
 
 vi.mock("react-router-dom", () => ({
@@ -20,6 +20,7 @@ vi.mock("../api/approvals", () => ({ approvalsApi: mockApprovalsApi }));
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: OverrideInbox } = await import("./OverrideInbox");
+const { ApiError } = await import("../api/client");
 
 function item(overrides: Record<string, unknown> = {}) {
   return {
@@ -75,7 +76,7 @@ describe("OverrideInbox", () => {
     vi.clearAllMocks();
     mockCompany.value = {
       selectedCompanyId: "company-1",
-      selectedCompany: { productProfile: "agentdash_mk" },
+      selectedCompany: { id: "company-1" },
     };
     mockApprovalsApi.override.mockResolvedValue({});
   });
@@ -196,14 +197,30 @@ describe("OverrideInbox", () => {
     expect(container.textContent).not.toContain("already active");
   });
 
-  it("does not query the override route off-profile", async () => {
-    mockCompany.value = {
-      selectedCompanyId: "company-1",
-      selectedCompany: { productProfile: "default" },
-    };
+  it("shows the available-on-request state when stewardship is off for the company", async () => {
+    mockStewardshipsApi.getOverrideInbox.mockRejectedValue(
+      new ApiError("Company not found", 404, null),
+    );
 
     await render();
 
-    expect(mockStewardshipsApi.getOverrideInbox).not.toHaveBeenCalled();
+    expect(mockStewardshipsApi.getOverrideInbox).toHaveBeenCalledWith("company-1");
+    expect(container.querySelector('[data-testid="available-on-request"]')).not.toBeNull();
+    expect(container.textContent).toContain("Emergency override");
+    expect(container.textContent).toContain(
+      "Available on request — ask us to turn on stewardship for your workspace.",
+    );
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps a 403 (not an admin) as an error rather than available-on-request", async () => {
+    mockStewardshipsApi.getOverrideInbox.mockRejectedValue(
+      new ApiError("The override view requires company owner or administrator access", 403, null),
+    );
+
+    await render();
+
+    expect(container.querySelector('[data-testid="available-on-request"]')).toBeNull();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("administrator access");
   });
 });

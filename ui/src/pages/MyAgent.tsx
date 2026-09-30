@@ -9,6 +9,7 @@ import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { ConnectYourTerminal } from "../components/agent/ConnectYourTerminal";
 import { DecisionsNeedingYou } from "../components/agent/DecisionsNeedingYou";
 import { QuestionsForYou } from "../components/agent/QuestionsForYou";
+import { AvailableOnRequest, isCapabilityNotFound } from "../components/AvailableOnRequest";
 import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { describeActivity } from "../lib/agent-activity-copy";
@@ -185,33 +186,42 @@ function AgentTroublePanel({ trouble }: { trouble: AgentTrouble }) {
 }
 
 export default function MyAgent() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
-  const isProfileCompany = selectedCompany?.productProfile === "agentdash_mk";
+  const { selectedCompanyId } = useCompany();
+
+  // One UX for every company: stewardship is switched on per workspace by the
+  // SERVER, not by this page. `/me/inbox` is the capability-gated route (404
+  // when stewardship is off), so it is asked first. `/me/agent` is not gated
+  // and provisions a personal agent on first visit, so it must only run once
+  // the inbox has confirmed the capability is on — otherwise opening this page
+  // in a workspace without stewardship would create an agent as a side effect.
+  const inbox = useQuery({
+    queryKey: queryKeys.myAgent.inbox(selectedCompanyId ?? ""),
+    queryFn: () => stewardshipsApi.getMyInbox(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  const capabilityOff = isCapabilityNotFound(inbox.error);
+  // A non-capability inbox failure (a 500, say) still lets the rest of the page
+  // load; the "needs you" count then reports itself as unknown, as before.
+  const stewardshipOn = !!selectedCompanyId && !inbox.isPending && !capabilityOff;
 
   const myAgent = useQuery({
     queryKey: queryKeys.myAgent.detail(selectedCompanyId ?? ""),
     queryFn: () => stewardshipsApi.getMyAgent(selectedCompanyId!),
-    enabled: !!selectedCompanyId && isProfileCompany,
+    enabled: !!selectedCompanyId && stewardshipOn,
   });
 
   const agentId = myAgent.data?.agent?.id ?? null;
 
-  const inbox = useQuery({
-    queryKey: queryKeys.myAgent.inbox(selectedCompanyId ?? ""),
-    queryFn: () => stewardshipsApi.getMyInbox(selectedCompanyId!),
-    enabled: !!selectedCompanyId && isProfileCompany,
-  });
-
   const governance = useQuery({
     queryKey: queryKeys.myAgent.governance(selectedCompanyId ?? "", agentId ?? ""),
     queryFn: () => agentGovernanceApi.get(selectedCompanyId!, agentId!),
-    enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
+    enabled: !!selectedCompanyId && !!agentId && stewardshipOn,
   });
 
   const currentWork = useQuery({
     queryKey: queryKeys.myAgent.currentWork(selectedCompanyId ?? "", agentId ?? ""),
     queryFn: () => issuesApi.list(selectedCompanyId!, { assigneeAgentId: agentId! }),
-    enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
+    enabled: !!selectedCompanyId && !!agentId && stewardshipOn,
   });
 
   // Same key as QuestionsForYou, so this shares that request rather than
@@ -221,7 +231,7 @@ export default function MyAgent() {
   const factRequests = useQuery({
     queryKey: ["me", "fact-requests", selectedCompanyId ?? ""],
     queryFn: () => stewardshipsApi.myFactRequests(selectedCompanyId!),
-    enabled: !!selectedCompanyId && isProfileCompany,
+    enabled: !!selectedCompanyId && stewardshipOn,
   });
 
   /**
@@ -237,27 +247,20 @@ export default function MyAgent() {
   const recentRuns = useQuery({
     queryKey: ["me", "agent-runs", selectedCompanyId ?? "", agentId ?? ""],
     queryFn: () => heartbeatsApi.list(selectedCompanyId!, agentId!, 5),
-    enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
+    enabled: !!selectedCompanyId && !!agentId && stewardshipOn,
   });
 
   const activity = useQuery({
     queryKey: queryKeys.myAgent.activity(selectedCompanyId ?? "", agentId ?? ""),
     queryFn: () => activityApi.list(selectedCompanyId!, { agentId: agentId!, limit: 10 }),
-    enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
+    enabled: !!selectedCompanyId && !!agentId && stewardshipOn,
   });
 
-  if (!isProfileCompany) {
-    return (
-      <div className="p-6">
-        <h1 className="text-lg font-semibold">My Agent</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          This workspace does not use the AgentDash-MK profile.
-        </p>
-      </div>
-    );
+  if (capabilityOff) {
+    return <AvailableOnRequest title="My Agent" capability="stewardship" />;
   }
 
-  if (myAgent.isLoading) {
+  if ((!!selectedCompanyId && inbox.isPending) || myAgent.isLoading) {
     return <div className="p-6 text-sm text-muted-foreground">Loading your agent…</div>;
   }
 

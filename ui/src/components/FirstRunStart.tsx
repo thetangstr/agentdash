@@ -8,8 +8,8 @@ import { Button } from "./ui/button";
  * The screen this replaces said "Create your first company" and offered one
  * button, which was wrong in three ways for an instance claimed from a setup
  * link: it never mentioned the API key the claim had just issued, the button
- * created an ORDINARY workspace (no `agentdash_mk` profile, so every workforce
- * surface 404s afterwards with nothing explaining why), and nothing hinted that
+ * created an ORDINARY workspace (no workspace code, so every workforce
+ * capability stayed off afterwards with nothing explaining why), and nothing hinted that
  * the intended path is to hand the key to a coding agent and describe the
  * company in prose.
  *

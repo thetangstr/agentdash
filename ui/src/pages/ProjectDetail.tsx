@@ -256,10 +256,10 @@ export function ProjectDetail() {
   const canonicalProjectRef = project ? projectRouteRef(project) : routeProjectRef;
   const projectLookupRef = project?.id ?? routeProjectRef;
   const resolvedCompanyId = project?.companyId ?? selectedCompanyId;
-  // AgentDash (GH #782): the GitHub section is default-profile only; an
-  // agentdash_mk company keeps its project settings exactly as before.
+  // AgentDash (GH #782): the GitHub section, for every company once the
+  // project's company is known.
   const resolvedCompany = companies.find((company) => company.id === resolvedCompanyId) ?? null;
-  const showGitHubSection = Boolean(resolvedCompany) && resolvedCompany?.productProfile !== "agentdash_mk";
+  const showGitHubSection = Boolean(resolvedCompany);
 
   /**
    * A project defines a workstream, so changing it is company direction. The

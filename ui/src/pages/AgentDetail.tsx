@@ -270,15 +270,14 @@ function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "budget") return "budget";
   if (value === "mandates") return "mandates";
   if (value === "runs") return value;
-  // AgentDash (GH #795): default profile folds the five detail views under one
-  // Settings tab; the bare /settings URL opens a small section index there.
+  // AgentDash (GH #795): the five detail views fold under one Settings tab; the bare /settings URL opens a small section index there.
   if (value === "settings") return "settings";
   return "dashboard";
 }
 
-// AgentDash (GH #795): default-profile tab grouping. The five config-heavy
-// views stay at their existing URLs so deep links keep working; on
-// agentdash_mk nothing here applies and the seven-tab layout is preserved.
+// AgentDash (GH #795): tab grouping, the same for every company (one UX). The
+// five config-heavy views stay at their existing URLs so deep links keep
+// working.
 const AGENT_DETAIL_SETTINGS_VIEWS: readonly AgentDetailView[] = [
   "instructions",
   "skills",
@@ -295,39 +294,18 @@ const AGENT_DETAIL_SETTINGS_TABS: { value: AgentDetailView; label: string }[] = 
   { value: "mandates", label: "Mandates" },
 ];
 
-// GH #795: "settings" only exists as a grouping on the default profile. On
-// agentdash_mk a typed /settings URL keeps its historic unknown-tab behavior
-// and lands on the dashboard.
-export function resolveAgentDetailView(view: AgentDetailView, isMk: boolean): AgentDetailView {
-  return isMk && view === "settings" ? "dashboard" : view;
+export function agentDetailInSettings(view: AgentDetailView): boolean {
+  return view === "settings" || AGENT_DETAIL_SETTINGS_VIEWS.includes(view);
 }
 
-export function agentDetailInSettings(view: AgentDetailView, isMk: boolean): boolean {
-  return !isMk && (view === "settings" || AGENT_DETAIL_SETTINGS_VIEWS.includes(view));
-}
+export const AGENT_DETAIL_TOP_TABS: { value: AgentDetailView; label: string }[] = [
+  { value: "dashboard", label: "Overview" },
+  { value: "runs", label: "Runs" },
+  { value: "settings", label: "Settings" },
+];
 
-export function agentDetailTopTabs(
-  isMk: boolean,
-): { value: AgentDetailView; label: string }[] {
-  return isMk
-    ? [
-        { value: "dashboard", label: "Dashboard" },
-        { value: "instructions", label: "Instructions" },
-        { value: "skills", label: "Skills" },
-        { value: "configuration", label: "Configuration" },
-        { value: "runs", label: "Runs" },
-        { value: "budget", label: "Budget" },
-        { value: "mandates", label: "Mandates" },
-      ]
-    : [
-        { value: "dashboard", label: "Overview" },
-        { value: "runs", label: "Runs" },
-        { value: "settings", label: "Settings" },
-      ];
-}
-
-export function agentDetailTabValue(view: AgentDetailView, isMk: boolean): AgentDetailView {
-  return agentDetailInSettings(view, isMk) ? "settings" : view;
+export function agentDetailTabValue(view: AgentDetailView): AgentDetailView {
+  return agentDetailInSettings(view) ? "settings" : view;
 }
 
 function usageNumber(usage: Record<string, unknown> | null, ...keys: string[]) {
@@ -736,14 +714,8 @@ export function AgentDetail() {
     return companies.find((company) => company.issuePrefix.toUpperCase() === requestedPrefix)?.id ?? null;
   }, [companies, companyPrefix]);
   const lookupCompanyId = routeCompanyId ?? selectedCompanyId ?? undefined;
-  const routeView = urlRunId ? ("runs" as AgentDetailView) : parseAgentDetailView(urlTab ?? null);
-  const viewedCompany = useMemo(
-    () => companies.find((company) => company.id === lookupCompanyId) ?? null,
-    [companies, lookupCompanyId],
-  );
-  const isMkProfile = viewedCompany?.productProfile === "agentdash_mk";
-  const activeView: AgentDetailView = resolveAgentDetailView(routeView, isMkProfile);
-  const inSettingsGroup = agentDetailInSettings(activeView, isMkProfile);
+  const activeView: AgentDetailView = urlRunId ? "runs" : parseAgentDetailView(urlTab ?? null);
+  const inSettingsGroup = agentDetailInSettings(activeView);
   const needsDashboardData = activeView === "dashboard";
   const needsRunData = activeView === "runs" || Boolean(urlRunId);
   const shouldLoadHeartbeats = needsDashboardData || needsRunData;
@@ -1171,12 +1143,12 @@ export function AgentDetail() {
 
       {!urlRunId && (
         <Tabs
-          value={agentDetailTabValue(activeView, isMkProfile)}
+          value={agentDetailTabValue(activeView)}
           onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
         >
           <PageTabBar
-            items={agentDetailTopTabs(isMkProfile)}
-            value={agentDetailTabValue(activeView, isMkProfile)}
+            items={AGENT_DETAIL_TOP_TABS}
+            value={agentDetailTabValue(activeView)}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
           />
         </Tabs>
@@ -1373,7 +1345,6 @@ export function AgentDetail() {
           runtimeState={runtimeState}
           agentId={agent.id}
           agentRouteId={canonicalAgentRef}
-          isMk={isMkProfile}
         />
       )}
 
@@ -1697,7 +1668,6 @@ function AgentOverview({
   runtimeState,
   agentId,
   agentRouteId,
-  isMk,
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
@@ -1705,7 +1675,6 @@ function AgentOverview({
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
-  isMk: boolean;
 }) {
   // Origin block (AGE-13): resolve the creator's display name/avatar. The
   // steward arrives on the agent payload already resolved (name/email), so
@@ -1730,16 +1699,13 @@ function AgentOverview({
   const accountableName = accountableLabel(agent);
   return (
     <div className="space-y-8">
-      {/* GH #795: the default profile leads with doing/shipped/spend and a
-          health warning when recent runs keep leaving nothing behind.
-          agentdash_mk keeps the overview it had. */}
-      {!isMk && <AgentRunHealthNote runs={runs} />}
-      {!isMk && (
-        <AgentVitalsStrip agent={agent} runs={runs} assignedIssues={assignedIssues} />
-      )}
+      {/* GH #795: the overview leads with doing/shipped/spend and a health
+          warning when recent runs keep leaving nothing behind. */}
+      <AgentRunHealthNote runs={runs} />
+      <AgentVitalsStrip agent={agent} runs={runs} assignedIssues={assignedIssues} />
 
       {/* Latest Run */}
-      <LatestRunCard runs={runs} agentId={agentRouteId} showEmptySummary={!isMk} />
+      <LatestRunCard runs={runs} agentId={agentRouteId} showEmptySummary />
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

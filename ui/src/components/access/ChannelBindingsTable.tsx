@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AvailableOnRequest, isCapabilityNotFound } from "@/components/AvailableOnRequest";
 import { Radio } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { humanChannelsApi } from "@/api/human-channels";
@@ -50,6 +51,17 @@ export function ChannelBindingsTable({ companyId }: { companyId: string }) {
       <section className="space-y-4">
         {header}
         <p className="text-sm text-muted-foreground">Loading channel bindings…</p>
+      </section>
+    );
+  }
+
+  // One UX: every company sees this section; the server's capability gate
+  // answers 404 when chat channels are off for the workspace.
+  if (isCapabilityNotFound(bindingsQuery.error)) {
+    return (
+      <section className="space-y-4">
+        {header}
+        <AvailableOnRequest compact capability="chat channels" />
       </section>
     );
   }

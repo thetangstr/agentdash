@@ -42,7 +42,7 @@ const mockApprovalsApi = vi.hoisted(() => ({ approve: vi.fn(), reject: vi.fn() }
 const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
 
 const mockCompany = vi.hoisted(() => ({
-  value: { selectedCompanyId: "company-1", selectedCompany: { productProfile: "agentdash_mk" } },
+  value: { selectedCompanyId: "company-1", selectedCompany: { id: "company-1" } },
 }));
 
 vi.mock("react-router-dom", () => ({
@@ -65,6 +65,7 @@ vi.mock("../api/steward-webhooks", () => ({ stewardWebhooksApi: mockStewardWebho
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: MyAgent } = await import("./MyAgent");
+const { ApiError } = await import("../api/client");
 
 const UNRESTRICTED = {
   permissions: ["*"],
@@ -104,7 +105,7 @@ describe("MyAgent", () => {
     vi.clearAllMocks();
     mockCompany.value = {
       selectedCompanyId: "company-1",
-      selectedCompany: { productProfile: "agentdash_mk" },
+      selectedCompany: { id: "company-1" },
     };
     mockStewardshipsApi.getMyInbox.mockResolvedValue({ stewardedAgent: null, items: [] });
     mockHumanChannelsApi.listMine.mockResolvedValue({ bindings: [] });
@@ -228,16 +229,21 @@ describe("MyAgent", () => {
     expect(container.querySelector('a[href="/approvals/approval-1"]')).not.toBeNull();
   });
 
-  it("does not query profile-only routes for a default-profile company", async () => {
-    mockCompany.value = {
-      selectedCompanyId: "company-1",
-      selectedCompany: { productProfile: "default" },
-    };
+  it("shows the available-on-request state, and never provisions an agent, when stewardship is off", async () => {
+    // Same page for every company; the server's 404 on the gated inbox route
+    // is what says stewardship is off for this workspace.
+    mockStewardshipsApi.getMyInbox.mockRejectedValue(new ApiError("Company not found", 404, null));
 
     await render();
 
+    // `/me/agent` provisions a personal agent on first visit, so it must not
+    // be called for a workspace without stewardship.
     expect(mockStewardshipsApi.getMyAgent).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("does not use the AgentDash-MK profile");
+    expect(container.querySelector('[data-testid="available-on-request"]')).not.toBeNull();
+    expect(container.textContent).toContain(
+      "Available on request — ask us to turn on stewardship for your workspace.",
+    );
+    expect(container.textContent).not.toContain("Failed to load");
   });
 
   it("shows what the agent is currently working on and what it recently did", async () => {

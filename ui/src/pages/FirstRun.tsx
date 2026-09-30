@@ -5,8 +5,9 @@
 // The step shown is the first incomplete one according to the server
 // (GET /companies/:id/first-run), so leaving mid-flow and coming back resumes
 // where the founder stopped. The CoS interview is not a step: Home offers
-// "Plan with your Chief of Staff". An agentdash_mk workspace keeps its old
-// onboarding and is sent to /cos.
+// "Plan with your Chief of Staff". Whether this flow applies to a company is
+// the server's answer (`applies`); when it does not, the page goes to /cos.
+// The page itself never reads the company's profile (one UX).
 import { useEffect, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useSearchParams } from "react-router-dom";

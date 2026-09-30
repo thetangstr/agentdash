@@ -10,6 +10,8 @@ import { ShieldCheck, Trash2, Users } from "lucide-react";
 import { accessApi, type CompanyMember } from "@/api/access";
 import { ChannelBindingsTable } from "@/components/access/ChannelBindingsTable";
 import { StewardshipAssignments } from "@/components/access/StewardshipAssignments";
+import { AvailableOnRequest } from "@/components/AvailableOnRequest";
+import { useStewardshipCapability } from "@/hooks/useStewardshipCapability";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
 import { issuesApi } from "@/api/issues";
@@ -71,6 +73,7 @@ export function CompanyAccess() {
   const [draftRole, setDraftRole] = useState<CompanyMember["membershipRole"]>(null);
   const [draftStatus, setDraftStatus] = useState<EditableMemberStatus>("active");
   const [draftGrants, setDraftGrants] = useState<Set<PermissionKey>>(new Set());
+  const stewardship = useStewardshipCapability(selectedCompanyId);
 
   useEffect(() => {
     setBreadcrumbs([
@@ -403,13 +406,22 @@ export function CompanyAccess() {
         </div>
       </section>
 
-      {selectedCompany?.productProfile === "agentdash_mk" && selectedCompanyId ? (
+      {/* AgentDash (one UX): stewardship and channel bindings show for every
+          company. The server decides whether each capability is on; when it
+          is off the section says it is available on request. */}
+      {selectedCompanyId ? (
         <>
-          <StewardshipAssignments
-            companyId={selectedCompanyId}
-            members={membersQuery.data?.members ?? []}
-            canManage={membersQuery.data?.access.canManageAgents ?? false}
-          />
+          {stewardship === "off" ? (
+            <section className="space-y-3 rounded-lg border p-4">
+              <AvailableOnRequest compact title="Agent stewardship" capability="stewardship" />
+            </section>
+          ) : stewardship === "on" ? (
+            <StewardshipAssignments
+              companyId={selectedCompanyId}
+              members={membersQuery.data?.members ?? []}
+              canManage={membersQuery.data?.access.canManageAgents ?? false}
+            />
+          ) : null}
           <ChannelBindingsTable companyId={selectedCompanyId} />
         </>
       ) : null}

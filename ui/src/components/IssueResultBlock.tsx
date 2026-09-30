@@ -1,22 +1,18 @@
 // AgentDash: UX-2 (#783) — "Result" on issue detail: what this issue produced.
 import { useQuery } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
-import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
 import { formatShippedUsage } from "../lib/shipped";
 import { ShippedWorkProductRow } from "./ShippedWorkProductRow";
 
 export function IssueResultBlock({ companyId, issueId }: { companyId: string; issueId: string }) {
-  // Default profile only: an agentdash_mk company keeps issue detail as it was.
-  const { selectedCompany } = useCompany();
-  const enabled = selectedCompany?.productProfile !== "agentdash_mk";
+  // Same block for every company (one UX).
   const { data } = useQuery({
     queryKey: queryKeys.shipped(companyId, { issueId }),
     queryFn: () => issuesApi.listShipped(companyId, { issueId }),
-    enabled,
   });
   const items = data?.items ?? [];
-  if (!enabled || items.length === 0) return null;
+  if (items.length === 0) return null;
   const usage = items[0]!.usage;
   return (
     <section

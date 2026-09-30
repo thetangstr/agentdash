@@ -101,8 +101,8 @@ describe("CompanyCreatePage", () => {
     await flushReact();
   }
 
-  it("GH #785/#786: a new default-profile workspace goes straight to the first run (/setup), never /assess", async () => {
-    mockCreate.mockResolvedValue({ id: "company-1", name: "Acme", productProfile: "default" });
+  it("GH #785/#786: every new workspace goes straight to the first run (/setup), never /assess", async () => {
+    mockCreate.mockResolvedValue({ id: "company-1", name: "Acme" });
     await submitName("Acme");
     expect(mockCreate).toHaveBeenCalledWith({ name: "Acme" }, { fromSignup: true });
     expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
@@ -110,13 +110,7 @@ describe("CompanyCreatePage", () => {
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("/assess"), expect.anything());
   });
 
-  it("GH #785: an agentdash_mk workspace keeps the assessment step, unchanged", async () => {
-    mockCreate.mockResolvedValue({ id: "company-2", name: "MK", productProfile: "agentdash_mk" });
-    await submitName("MK");
-    expect(mockNavigate).toHaveBeenCalledWith("/assess?onboarding=1", { replace: true });
-  });
-
-  it("submits to companiesApi.create with fromSignup and navigates to setup when the profile is absent", async () => {
+  it("submits to companiesApi.create with fromSignup and navigates to setup", async () => {
     mockCreate.mockResolvedValue({ id: "company-1", name: "Acme" });
 
     render();

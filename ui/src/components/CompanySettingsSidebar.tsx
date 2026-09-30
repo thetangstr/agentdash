@@ -54,24 +54,19 @@ export function CompanySettingsSidebar() {
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide px-3 py-2">
         <div className="flex flex-col gap-0.5">
           <SidebarNavItem to="/company/settings" label="General" icon={SlidersHorizontal} end />
-          {/* AgentDash (GH #793): default profile only — MK keeps its settings nav. */}
-          {selectedCompany?.productProfile !== "agentdash_mk" ? (
-            <SidebarNavItem
-              to="/company/settings/connections"
-              label="Connections"
-              icon={Link2}
-              end
-            />
-          ) : null}
-          {/* AgentDash (GH #794): default profile only — MK runs self-hosted adapters. */}
-          {selectedCompany?.productProfile !== "agentdash_mk" ? (
-            <SidebarNavItem
-              to="/company/settings/model-key"
-              label="Model key"
-              icon={KeyRound}
-              end
-            />
-          ) : null}
+          {/* AgentDash (GH #793, #794): Connections and Model key, for every company. */}
+          <SidebarNavItem
+            to="/company/settings/connections"
+            label="Connections"
+            icon={Link2}
+            end
+          />
+          <SidebarNavItem
+            to="/company/settings/model-key"
+            label="Model key"
+            icon={KeyRound}
+            end
+          />
           <SidebarNavItem
             to="/company/settings/environments"
             label="Environments"

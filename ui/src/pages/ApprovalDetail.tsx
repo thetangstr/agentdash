@@ -64,8 +64,8 @@ export function ApprovalDetail() {
   }, [agents]);
 
   useEffect(() => {
-    // UX-7 (#788) + one UX: the approvals list is the Decisions page for
-    // every company — the breadcrumb names the page it returns to.
+    // UX-7 (#788): the approvals list is the Decisions page — the breadcrumb
+    // names the page it returns to. Same for every company (one UX).
     setBreadcrumbs([
       { label: "Decisions", href: "/decisions" },
       { label: approval?.id?.slice(0, 8) ?? approvalId ?? "Approval" },

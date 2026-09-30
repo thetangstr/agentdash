@@ -537,8 +537,8 @@ export function CompanySettings() {
         </div>
       </div>
 
-      {/* AgentDash (GH #785): the optional readiness assessment (default profile only) */}
-      <ReadinessAssessmentCard productProfile={selectedCompany.productProfile} />
+      {/* AgentDash (GH #785): the optional readiness assessment, for every company */}
+      <ReadinessAssessmentCard />
 
       {/* Import / Export */}
       <div className="space-y-4">
@@ -620,7 +620,10 @@ export function CompanySettings() {
         </div>
       </div>
 
-      {selectedCompany?.productProfile === "agentdash_mk" && selectedCompany?.id ? (
+      {/* AgentDash (one UX): governance panels render for every company. Each
+          one asks the server and shows "available on request" when its
+          capability is off for this workspace. */}
+      {selectedCompany?.id ? (
         <>
           <AgentCeilingEditor companyId={selectedCompany.id} />
           <NeedsReconciliationPanel companyId={selectedCompany.id} />

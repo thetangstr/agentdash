@@ -6,6 +6,7 @@ import { stewardshipsApi, type InboxItem } from "../api/stewardships";
 import { connectorSendExecutionsApi } from "../api/connector-send-executions";
 import { accessApi } from "../api/access";
 import { timeAgo } from "../lib/timeAgo";
+import { isCapabilityOff } from "../components/AvailableOnRequest";
 
 /**
  * AgentDash: one UX (doc/plans/2026-09-30-one-ux.md) — the item sources the
@@ -14,23 +15,69 @@ import { timeAgo } from "../lib/timeAgo";
  * Each source reads its own server route. Several of those routes are
  * capability-gated on the server (they 404 for a company without the
  * capability) or authority-gated (403 for a member who may not see them).
- * Either way the section is simply absent: a failed source renders nothing
- * and never an error, so a company without the capability sees the plain
- * Decisions page. There is no client-side profile check — the server's
- * answer is the capability check.
+ * Either way the section is simply absent, so a company without the
+ * capability sees the plain Decisions page. There is no client-side profile
+ * check — the server's answer is the capability check. Only those two answers
+ * mean "absent": any other failure (a 500, a dropped connection) is
+ * transient, keeps polling with backoff, and meanwhile renders whatever the
+ * source last loaded — never an error, never a permanently hidden section.
  *
  * Steward and override approvals overlap the main list (waiting-on-you
  * already scopes approvals to the agents a person stewards), so rows already
  * shown above are dropped here rather than listed twice.
  */
 
-/** Resolve to null on any failure — a gated source is absent, not an error. */
-async function orNull<T>(load: () => Promise<T>): Promise<T | null> {
+/** How often a healthy source is polled. */
+export const SOURCE_POLL_MS = 30_000;
+/** The longest a failing source waits between attempts. */
+export const SOURCE_MAX_BACKOFF_MS = 5 * 60_000;
+
+/**
+ * Consecutive transient failures per source query, keyed by the query key.
+ * Module-level so every surface sharing a source (the page, the badges) backs
+ * off together — they share one cache entry and so one fetch.
+ */
+const failureStreaks = new Map<string, number>();
+
+/**
+ * Load one source. The capability gate's 404 and the authority gate's 403
+ * resolve to `null` — the source is absent for this person. Anything else is
+ * rethrown: it is transient, not an answer.
+ */
+export async function loadSource<T>(streakKey: string, load: () => Promise<T>): Promise<T | null> {
   try {
-    return await load();
-  } catch {
-    return null;
+    const result = await load();
+    failureStreaks.delete(streakKey);
+    return result;
+  } catch (error) {
+    if (isCapabilityOff(error)) {
+      failureStreaks.delete(streakKey);
+      return null;
+    }
+    failureStreaks.set(streakKey, (failureStreaks.get(streakKey) ?? 0) + 1);
+    throw error;
   }
+}
+
+/**
+ * The poll interval for a source: stop once the server said it is absent
+ * (`null`), back off exponentially while it is failing, poll normally
+ * otherwise.
+ */
+export function sourceRefetchInterval(
+  state: { data: unknown; status: "pending" | "error" | "success" },
+  failures: number,
+): number | false {
+  if (state.status === "error") {
+    return Math.min(SOURCE_POLL_MS * 2 ** Math.max(0, failures - 1), SOURCE_MAX_BACKOFF_MS);
+  }
+  if (state.data === null) return false;
+  return SOURCE_POLL_MS;
+}
+
+/** Test seam: forget every failure streak. */
+export function resetSourceFailureStreaks() {
+  failureStreaks.clear();
 }
 
 const ASKS: Record<string, string> = {
@@ -113,44 +160,30 @@ export function useDecisionsOtherSources(
   const id = companyId ?? "";
   // A source that answered null (gated off, or not this person's to see) is
   // not polled again on this mount — a company without the capability should
-  // not pay five 404s every 30 seconds.
-  const common = {
-    enabled: !!companyId,
-    retry: false,
-    refetchInterval: (query: { state: { data: unknown } }) =>
-      query.state.data === null ? false : 30_000,
-  } as const;
+  // not pay five 404s every 30 seconds. A source that failed for any other
+  // reason keeps polling, backing off while it keeps failing.
+  const source = <T,>(queryKey: readonly unknown[], load: () => Promise<T>) => {
+    const streakKey = JSON.stringify(queryKey);
+    return {
+      queryKey,
+      queryFn: () => loadSource(streakKey, load),
+      enabled: !!companyId,
+      retry: false,
+      refetchInterval: (query: { state: { data: unknown; status: "pending" | "error" | "success" } }) =>
+        sourceRefetchInterval(query.state, failureStreaks.get(streakKey) ?? 0),
+    };
+  };
   // The approvals this person's own agent is stopped on (steward inbox, open only).
-  const { data: stewardInbox } = useQuery({
-    queryKey: decisionsSourceKeys.stewardInbox(id),
-    queryFn: () => orNull(() => stewardshipsApi.getMyInbox(id)),
-    ...common,
-  });
+  const { data: stewardInbox } = useQuery(source(decisionsSourceKeys.stewardInbox(id), () => stewardshipsApi.getMyInbox(id)));
   // The owner/admin override view. The server answers only for people with
   // that authority, so a successful answer is the entry point's permission.
-  const { data: overrideInbox } = useQuery({
-    queryKey: decisionsSourceKeys.overrideInbox(id),
-    queryFn: () => orNull(() => stewardshipsApi.getOverrideInbox(id)),
-    ...common,
-  });
+  const { data: overrideInbox } = useQuery(source(decisionsSourceKeys.overrideInbox(id), () => stewardshipsApi.getOverrideInbox(id)));
   // Questions the person's agent could not answer without them.
-  const { data: factRequests } = useQuery({
-    queryKey: decisionsSourceKeys.factRequests(id),
-    queryFn: () => orNull(() => stewardshipsApi.myFactRequests(id)),
-    ...common,
-  });
+  const { data: factRequests } = useQuery(source(decisionsSourceKeys.factRequests(id), () => stewardshipsApi.myFactRequests(id)));
   // Outside writes whose outcome is unknown and need a human verdict.
-  const { data: connectorSends } = useQuery({
-    queryKey: decisionsSourceKeys.connectorSends(id),
-    queryFn: () => orNull(() => connectorSendExecutionsApi.listUnresolved(id)),
-    ...common,
-  });
+  const { data: connectorSends } = useQuery(source(decisionsSourceKeys.connectorSends(id), () => connectorSendExecutionsApi.listUnresolved(id)));
   // People waiting to join the company.
-  const { data: joinRequests } = useQuery({
-    queryKey: decisionsSourceKeys.joinRequests(id),
-    queryFn: () => orNull(() => accessApi.listJoinRequests(id, "pending_approval")),
-    ...common,
-  });
+  const { data: joinRequests } = useQuery(source(decisionsSourceKeys.joinRequests(id), () => accessApi.listJoinRequests(id, "pending_approval")));
 
   const stewardItems = (stewardInbox?.items ?? []).filter(
     (item) =>

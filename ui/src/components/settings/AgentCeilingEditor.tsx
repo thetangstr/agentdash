@@ -11,6 +11,7 @@ import { agentsApi } from "@/api/agents";
 import { agentGovernanceApi } from "@/api/agent-governance";
 import { AgentGovernancePanel } from "@/components/agent/AgentGovernancePanel";
 import { DefaultDestructiveActionsNotice } from "@/components/settings/DefaultDestructiveActionsNotice";
+import { AvailableOnRequest, isCapabilityNotFound } from "@/components/AvailableOnRequest";
 import { queryKeys } from "@/lib/queryKeys";
 
 interface Props {
@@ -70,6 +71,20 @@ export function AgentCeilingEditor({ companyId }: Props) {
 
   const policy = governance.data?.policy ?? null;
 
+  // One UX for every company: this panel renders for everyone and the server
+  // says whether agent ceilings are on. The governance route checks the
+  // capability BEFORE authority, so a 404 means "off for this workspace" and
+  // never "you may not read this". Probing the first agent (same cache key a
+  // selection would use) lets the panel say so before anyone picks an agent.
+  const probeAgentId = agents[0]?.id ?? "";
+  const capabilityProbe = useQuery({
+    queryKey: queryKeys.myAgent.governance(companyId, probeAgentId),
+    queryFn: () => agentGovernanceApi.get(companyId, probeAgentId),
+    enabled: !!companyId && !!probeAgentId && !selectedAgentId,
+  });
+  const capabilityOff =
+    isCapabilityNotFound(capabilityProbe.error) || isCapabilityNotFound(governance.error);
+
   useEffect(() => {
     if (policy) setDraft(policy.ownerCeiling);
   }, [policy]);
@@ -105,145 +120,151 @@ export function AgentCeilingEditor({ companyId }: Props) {
         </p>
       </div>
 
-      {/* T5a-3: read-only display of the default destructive-action classes the
-          `destructiveActions` ceiling below applies to. */}
-      <DefaultDestructiveActionsNotice />
+      {capabilityOff ? (
+        <AvailableOnRequest compact capability="agent ceilings" />
+      ) : (
+        <>
+          {/* T5a-3: read-only display of the default destructive-action classes the
+              `destructiveActions` ceiling below applies to. */}
+          <DefaultDestructiveActionsNotice />
 
-      <label className="block text-xs">
-        <span className="font-medium">Agent</span>
-        <select
-          aria-label="Ceiling agent"
-          className="mt-1 rounded border px-2 py-1"
-          value={selectedAgentId}
-          onChange={(event) => {
-            setSelectedAgentId(event.target.value);
-            setError(null);
-            setViolations(undefined);
-          }}
-        >
-          <option value="">Select an agent…</option>
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.name}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {error ? (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      ) : null}
-
-      {policy ? <AgentGovernancePanel policy={policy} violations={violations} /> : null}
-
-      {policy && draft ? (
-        <div className="space-y-2 text-xs">
-          <label className="block">
-            <span className="font-medium">Allowed permissions (comma separated, * for any)</span>
-            <input
-              aria-label="Allowed permissions"
-              className="mt-1 w-full rounded border px-2 py-1"
-              value={draft.permissions.join(", ")}
-              onChange={(event) =>
-                setDraft({ ...draft, permissions: parseList(event.target.value) })
-              }
-            />
-          </label>
-
-          <label className="block">
-            <span className="font-medium">Maximum monthly budget (cents)</span>
-            <input
-              aria-label="Maximum monthly budget"
-              type="number"
-              min={0}
-              max={AGENT_POLICY_UNLIMITED_BUDGET_CENTS}
-              className="mt-1 w-full rounded border px-2 py-1"
-              value={draft.monthlyBudgetCents}
-              onChange={(event) =>
-                setDraft({ ...draft, monthlyBudgetCents: Number(event.target.value) })
-              }
-            />
-          </label>
-
-          <label className="block">
-            <span className="font-medium">Destructive actions</span>
+          <label className="block text-xs">
+            <span className="font-medium">Agent</span>
             <select
-              aria-label="Destructive actions"
+              aria-label="Ceiling agent"
               className="mt-1 rounded border px-2 py-1"
-              value={draft.destructiveActions}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  destructiveActions: event.target.value as AgentGovernancePolicy["destructiveActions"],
-                })
-              }
+              value={selectedAgentId}
+              onChange={(event) => {
+                setSelectedAgentId(event.target.value);
+                setError(null);
+                setViolations(undefined);
+              }}
             >
-              <option value="blocked">blocked</option>
-              <option value="approval_required">approval required</option>
-              <option value="allowed">allowed</option>
+              <option value="">Select an agent…</option>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}
+                </option>
+              ))}
             </select>
           </label>
 
-          <label className="block">
-            <span className="font-medium">Allowed data scopes (comma separated, * for any)</span>
-            <input
-              aria-label="Allowed data scopes"
-              className="mt-1 w-full rounded border px-2 py-1"
-              value={draft.dataScopes.join(", ")}
-              onChange={(event) =>
-                setDraft({ ...draft, dataScopes: parseList(event.target.value) })
-              }
-            />
-          </label>
-
-          <label className="block">
-            <span className="font-medium">Allowed providers (comma separated, * for any)</span>
-            <input
-              aria-label="Allowed providers"
-              className="mt-1 w-full rounded border px-2 py-1"
-              value={draft.providers.join(", ")}
-              onChange={(event) =>
-                setDraft({ ...draft, providers: parseList(event.target.value) })
-              }
-            />
-          </label>
-
-          <label className="block">
-            <span className="font-medium">Minimum approval</span>
-            <select
-              aria-label="Minimum approval"
-              className="mt-1 rounded border px-2 py-1"
-              value={draft.minimumApproval}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  minimumApproval: event.target.value as AgentGovernancePolicy["minimumApproval"],
-                })
-              }
-            >
-              <option value="none">none</option>
-              <option value="steward">steward</option>
-            </select>
-          </label>
-
-          <button
-            type="button"
-            disabled={!canManage || save.isPending}
-            onClick={() => save.mutate()}
-            className="rounded border px-2 py-1 disabled:opacity-50"
-          >
-            Save ceiling
-          </button>
-
-          {!canManage ? (
-            <p className="text-muted-foreground">
-              Only a company owner or administrator can change ceilings.
+          {error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
             </p>
           ) : null}
-        </div>
-      ) : null}
+
+          {policy ? <AgentGovernancePanel policy={policy} violations={violations} /> : null}
+
+          {policy && draft ? (
+            <div className="space-y-2 text-xs">
+              <label className="block">
+                <span className="font-medium">Allowed permissions (comma separated, * for any)</span>
+                <input
+                  aria-label="Allowed permissions"
+                  className="mt-1 w-full rounded border px-2 py-1"
+                  value={draft.permissions.join(", ")}
+                  onChange={(event) =>
+                    setDraft({ ...draft, permissions: parseList(event.target.value) })
+                  }
+                />
+              </label>
+
+              <label className="block">
+                <span className="font-medium">Maximum monthly budget (cents)</span>
+                <input
+                  aria-label="Maximum monthly budget"
+                  type="number"
+                  min={0}
+                  max={AGENT_POLICY_UNLIMITED_BUDGET_CENTS}
+                  className="mt-1 w-full rounded border px-2 py-1"
+                  value={draft.monthlyBudgetCents}
+                  onChange={(event) =>
+                    setDraft({ ...draft, monthlyBudgetCents: Number(event.target.value) })
+                  }
+                />
+              </label>
+
+              <label className="block">
+                <span className="font-medium">Destructive actions</span>
+                <select
+                  aria-label="Destructive actions"
+                  className="mt-1 rounded border px-2 py-1"
+                  value={draft.destructiveActions}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      destructiveActions: event.target.value as AgentGovernancePolicy["destructiveActions"],
+                    })
+                  }
+                >
+                  <option value="blocked">blocked</option>
+                  <option value="approval_required">approval required</option>
+                  <option value="allowed">allowed</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="font-medium">Allowed data scopes (comma separated, * for any)</span>
+                <input
+                  aria-label="Allowed data scopes"
+                  className="mt-1 w-full rounded border px-2 py-1"
+                  value={draft.dataScopes.join(", ")}
+                  onChange={(event) =>
+                    setDraft({ ...draft, dataScopes: parseList(event.target.value) })
+                  }
+                />
+              </label>
+
+              <label className="block">
+                <span className="font-medium">Allowed providers (comma separated, * for any)</span>
+                <input
+                  aria-label="Allowed providers"
+                  className="mt-1 w-full rounded border px-2 py-1"
+                  value={draft.providers.join(", ")}
+                  onChange={(event) =>
+                    setDraft({ ...draft, providers: parseList(event.target.value) })
+                  }
+                />
+              </label>
+
+              <label className="block">
+                <span className="font-medium">Minimum approval</span>
+                <select
+                  aria-label="Minimum approval"
+                  className="mt-1 rounded border px-2 py-1"
+                  value={draft.minimumApproval}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      minimumApproval: event.target.value as AgentGovernancePolicy["minimumApproval"],
+                    })
+                  }
+                >
+                  <option value="none">none</option>
+                  <option value="steward">steward</option>
+                </select>
+              </label>
+
+              <button
+                type="button"
+                disabled={!canManage || save.isPending}
+                onClick={() => save.mutate()}
+                className="rounded border px-2 py-1 disabled:opacity-50"
+              >
+                Save ceiling
+              </button>
+
+              {!canManage ? (
+                <p className="text-muted-foreground">
+                  Only a company owner or administrator can change ceilings.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      )}
     </section>
   );
 }

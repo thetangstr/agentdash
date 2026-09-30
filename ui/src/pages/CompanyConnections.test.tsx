@@ -152,17 +152,6 @@ describe("CompanyConnections", () => {
     expect(container.textContent).not.toContain("Remove connection");
   });
 
-  it("renders the not-found page on agentdash_mk — the route never existed there", async () => {
-    mockCompany.current = {
-      id: "company-1",
-      name: "Paperclip",
-      productProfile: "agentdash_mk",
-    };
-    await render();
-    expect(container.querySelector('[data-testid="company-connections"]')).toBeNull();
-    expect(mockListConnections).not.toHaveBeenCalled();
-  });
-
   it("lists assistant grants and links to the connect page", async () => {
     await render();
     const page = container.querySelector('[data-testid="company-connections"]')!;

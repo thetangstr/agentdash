@@ -28,7 +28,7 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const mockCompany = vi.hoisted(() => ({
-  current: { id: "company-1", name: "Paperclip", productProfile: "default" } as Record<string, unknown>,
+  current: { id: "company-1", name: "Paperclip" } as Record<string, unknown>,
 }));
 
 vi.mock("@/context/CompanyContext", () => ({
@@ -94,7 +94,7 @@ describe("CompanySettingsSidebar", () => {
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
-    mockCompany.current = { id: "company-1", name: "Paperclip", productProfile: "default" };
+    mockCompany.current = { id: "company-1", name: "Paperclip" };
     mockSidebarBadgesApi.get.mockResolvedValue({
       inbox: 0,
       approvals: 0,
@@ -162,50 +162,6 @@ describe("CompanySettingsSidebar", () => {
         label: "Connections",
         end: true,
       }),
-    );
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  it("hides the Connections item on the agentdash_mk profile", async () => {
-    mockCompany.current = {
-      id: "company-1",
-      name: "Paperclip",
-      productProfile: "agentdash_mk",
-    };
-    const root = await renderSidebar(container);
-
-    expect(sidebarNavItemMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ label: "Connections" }),
-    );
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  // AgentDash (GH #794): MK keeps its original nav — no hosted model-key page exists there.
-  it("hides the Model key item on the MK profile", async () => {
-    mockCompany.current = { id: "company-1", name: "Paperclip MK", productProfile: "agentdash_mk" };
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <CompanySettingsSidebar />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-
-    expect(container.textContent).not.toContain("Model key");
-    expect(sidebarNavItemMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ to: "/company/settings/model-key" }),
     );
 
     await act(async () => {

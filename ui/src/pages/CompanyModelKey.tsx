@@ -12,7 +12,6 @@ import { ProviderKeyBlocked } from "@/components/onboarding/ProviderKeyBlocked";
 import { Button } from "@/components/ui/button";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
-import { NotFoundPage } from "@/pages/NotFound";
 
 function checkedLabel(configuredAt: string | null): string {
   if (!configuredAt) return "never checked";
@@ -27,7 +26,6 @@ function errorSentence(error: unknown): string {
 
 export function CompanyModelKey() {
   const { selectedCompany, selectedCompanyId } = useCompany();
-  const isMk = selectedCompany?.productProfile === "agentdash_mk";
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 
@@ -42,18 +40,11 @@ export function CompanyModelKey() {
   const adapterStatus = useQuery({
     queryKey: ["onboarding-adapter-status"],
     queryFn: () => onboardingApi.adapterStatus(),
-    enabled: !isMk,
     retry: false,
   });
 
   if (!selectedCompanyId) {
     return <div className="text-sm text-muted-foreground">Select a company to manage the model key.</div>;
-  }
-
-  // AgentDash (GH #794): default profile only — MK runs self-hosted adapters
-  // and never had this route, so a typed URL gets the same not-found as before.
-  if (isMk) {
-    return <NotFoundPage scope="board" />;
   }
 
   const provider = adapterStatus.data?.hermesProvider;

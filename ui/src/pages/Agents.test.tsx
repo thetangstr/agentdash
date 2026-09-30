@@ -29,7 +29,7 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const companyState = vi.hoisted(() => ({
-  selectedCompany: undefined as { id: string; productProfile?: string } | undefined,
+  selectedCompany: undefined as { id: string } | undefined,
 }));
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompanyId: "company-1", selectedCompany: companyState.selectedCompany }),
@@ -194,7 +194,7 @@ describe("Agents", () => {
     expect(container.textContent).toContain("gpt-5.4");
   });
 
-  it("points an empty default-profile Team page at Ask for a hire (UX-11)", async () => {
+  it("points an empty Team page at Ask for a hire for every company (UX-11)", async () => {
     mockAgentsApi.list.mockResolvedValue([]);
     root = createRoot(container);
     await act(async () => {
@@ -213,27 +213,5 @@ describe("Agents", () => {
     const ask = Array.from(container.querySelectorAll("a")).find((a) => a.textContent === "Ask for a hire");
     expect(ask?.getAttribute("href")).toBe("/cos");
     expect(mockOpenNewAgent).not.toHaveBeenCalled();
-  });
-
-  it("keeps the create-agent empty state on agentdash_mk (UX-11)", async () => {
-    companyState.selectedCompany = { id: "company-1", productProfile: "agentdash_mk" };
-    try {
-      mockAgentsApi.list.mockResolvedValue([]);
-      root = createRoot(container);
-      await act(async () => {
-        root!.render(
-          <QueryClientProvider client={queryClient}>
-            <Agents />
-          </QueryClientProvider>,
-        );
-      });
-      await flushReact();
-      await flushReact();
-
-      expect(container.textContent).toContain("Create your first agent to get started.");
-      expect(container.textContent).not.toContain("Chief of Staff hires agents");
-    } finally {
-      companyState.selectedCompany = undefined;
-    }
   });
 });

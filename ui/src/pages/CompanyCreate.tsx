@@ -14,15 +14,15 @@ import { Sparkles, Building2 } from "lucide-react";
 //
 // AgentDash (GH #785, UX-4; GH #786, UX-5): fresh signups go straight from this
 // page to the first run (/setup: model key, GitHub, first issue). The readiness
-// assessment is optional: it stays at /assess, linked from Settings. An
-// agentdash_mk workspace keeps its old chain (this page → /assess → /cos).
+// assessment is optional: it stays at /assess, linked from Settings. Same chain
+// for every company (one UX); whether the first run applies is the server's
+// call, and /setup sends a company it does not apply to on to /cos.
 //
 // On submit we POST /api/companies. If the user already has a membership the
 // server returns 409 (companies.ts guard); we treat that as "go straight to
 // CoS" so an invitee who navigates back from /cos doesn't double-create.
-/** Where a new workspace goes next. The assessment is no longer a step on the default profile. */
-export function postCreateDestination(company: { id?: string; productProfile?: string | null }): string {
-  if (company.productProfile === "agentdash_mk") return "/assess?onboarding=1";
+/** Where a new workspace goes next. The assessment is no longer an onboarding step. */
+export function postCreateDestination(company: { id?: string }): string {
   return company.id ? `/setup?companyId=${encodeURIComponent(company.id)}` : "/setup";
 }
 
