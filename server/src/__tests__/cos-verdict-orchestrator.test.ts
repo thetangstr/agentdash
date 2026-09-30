@@ -35,6 +35,13 @@ const REVIEWER_AGENT = "33333333-3333-3333-3333-333333333333";
 const APPROVAL_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const VERDICT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 
+/**
+ * runReviewCycle opens with the non-runnable-reviewer sweep (GH #833): one
+ * select for queue items held by a non-runnable reviewer, one for live
+ * assignment rows of terminated reviewers. Both empty in the common case.
+ */
+const NO_STALE_REVIEWERS: unknown[][] = [[], []];
+
 interface DbStub {
   /** Sequence of result rows to return for each .select() call. */
   selectQueue: unknown[][];
@@ -334,8 +341,9 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      // 1st select: assignment sweep finds no unassigned items. 2nd: queue rows.
-      selectQueue: [[], [queueRow]],
+      // Non-runnable-reviewer sweep finds nothing; the assignment sweep
+      // finds no unassigned items; then the queue rows.
+      selectQueue: [...NO_STALE_REVIEWERS, [], [queueRow]],
       inserts: [],
       deletes: [],
     };
@@ -361,7 +369,7 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      selectQueue: [[], [queueRow]],
+      selectQueue: [...NO_STALE_REVIEWERS, [], [queueRow]],
       inserts: [],
       deletes: [],
     };
@@ -384,10 +392,10 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      // 1st select: assignment sweep finds no unassigned items. 2nd: queue
-      // rows. closingVerdictFor inside escalateToHuman is mocked on
-      // deps.verdicts so it never hits db.
-      selectQueue: [[], [queueRow]],
+      // Non-runnable-reviewer sweep finds nothing; the assignment sweep
+      // finds no unassigned items; then the queue rows. closingVerdictFor
+      // inside escalateToHuman is mocked on deps.verdicts so it never hits db.
+      selectQueue: [...NO_STALE_REVIEWERS, [], [queueRow]],
       inserts: [],
       deletes: [],
     };
@@ -438,39 +446,85 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
     });
   });
 
-  it("kicks neutrality_conflict auto-hire when reviewer becomes null between enqueue and tick", async () => {
-    // Simulate the orchestrator finding a queue row but assignedReviewerAgentId
-    // is null (e.g. all reviewers retired between enqueue and tick).
-    const queueRow = {
-      issueId: ISSUE_ID,
-      companyId: C,
-      enqueuedAt: new Date(Date.now() - 60_000),
-      escalateAfter: new Date(Date.now() - 1000),
-      assignedReviewerAgentId: null,
-    };
-    // findEscalatable() / runReviewCycle's main query filters on
-    // `isNotNull(assignedReviewerAgentId)`, so to exercise the neutrality-
-    // fallback path we exercise escalateToHuman() directly with a null
-    // reviewer (the public API exposes it for tests / orchestrator entry).
+  it("GH #701: reviewerless item past SLA escalates to a human and re-triggers auto-hire", async () => {
+    // An item stranded with no reviewer (terminate/remove freed it, or the
+    // hire was rejected / tier-capped) must no longer stall: the orchestrator
+    // escalates directly to a human with the orchestrator as system actor and
+    // re-evaluates auto-hire afterwards.
     const stub: DbStub = {
-      selectQueue: [],
+      // hasOpenVerdict select → [] (no verdict yet); accountableHumanFor
+      // select → [] (no owner/admin membership — escalate without a named
+      // human rather than silently dropping the item).
+      selectQueue: [[], []],
       inserts: [],
       deletes: [],
     };
-    void queueRow;
     const db = makeDb(stub);
     const deps = makeDeps();
     const orch = cosVerdictOrchestrator(db, deps);
 
     await orch.escalateToHuman(C, ISSUE_ID, null);
 
-    expect(deps.autoHire.evaluateAndHireIfNeeded).toHaveBeenCalledWith(
-      C,
-      "neutrality_conflict",
-    );
-    // No verdict / approval written when we bail to neutrality_conflict.
+    // Escalation verdict was written (system-attributed reviewerUserId).
+    expect(deps.verdicts.create).toHaveBeenCalledTimes(1);
+    expect(deps.verdicts.create.mock.calls[0]![0]).toMatchObject({
+      companyId: C,
+      entityType: "issue",
+      issueId: ISSUE_ID,
+      outcome: "escalated_to_human",
+      justification: "SLA expired with no reviewer assigned",
+    });
+    expect(deps.verdicts.create.mock.calls[0]![0].reviewerUserId).toBeTruthy();
+
+    // A verdict_escalation approval was filed and linked for the human.
+    const approvalInsert = stub.inserts.find((i) => i.table === "approvals");
+    expect(approvalInsert).toBeDefined();
+    expect(approvalInsert!.values).toMatchObject({
+      companyId: C,
+      type: "verdict_escalation",
+      status: "pending",
+    });
+    expect(mockIssueApprovalLink).toHaveBeenCalledWith(ISSUE_ID, APPROVAL_ID, {
+      userId: null,
+    });
+
+    // Auto-hire re-evaluation is triggered (the queue has unreviewable work),
+    // through the normal queue-depth gate — GH #833: the neutrality_conflict
+    // trigger bypassed the gate and let every stranded item file a hire.
+    expect(deps.autoHire.evaluateAndHireIfNeeded).toHaveBeenCalledTimes(1);
+    expect(deps.autoHire.evaluateAndHireIfNeeded).toHaveBeenCalledWith(C, "queue_depth");
+  });
+
+  it("GH #833: with deferAutoHire the reviewerless escalation returns the trigger instead of hiring", async () => {
+    const stub: DbStub = { selectQueue: [[], []], inserts: [], deletes: [] };
+    const db = makeDb(stub);
+    const deps = makeDeps();
+    const orch = cosVerdictOrchestrator(db, deps);
+
+    const trigger = await orch.escalateToHuman(C, ISSUE_ID, null, { deferAutoHire: true });
+
+    expect(trigger).toBe("queue_depth");
+    expect(deps.verdicts.create).toHaveBeenCalledTimes(1);
+    expect(deps.autoHire.evaluateAndHireIfNeeded).not.toHaveBeenCalled();
+  });
+
+  it("does not file duplicate escalations when an open verdict already exists", async () => {
+    const stub: DbStub = {
+      // hasOpenVerdict select → one row (open escalation already recorded).
+      selectQueue: [[{ id: VERDICT_ID }]],
+      inserts: [],
+      deletes: [],
+    };
+    const db = makeDb(stub);
+    const deps = makeDeps();
+    const orch = cosVerdictOrchestrator(db, deps);
+
+    await orch.escalateToHuman(C, ISSUE_ID, null);
+
+    // No duplicate verdict, no duplicate approval, no duplicate hire kick.
     expect(deps.verdicts.create).not.toHaveBeenCalled();
     expect(stub.inserts.find((i) => i.table === "approvals")).toBeUndefined();
+    expect(deps.autoHire.evaluateAndHireIfNeeded).not.toHaveBeenCalled();
   });
 
   it("converts NEUTRAL_VALIDATOR_VIOLATION into neutrality_conflict auto-hire trigger", async () => {
@@ -482,7 +536,7 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
       assignedReviewerAgentId: REVIEWER_AGENT,
     };
     const stub: DbStub = {
-      selectQueue: [[], [queueRow]],
+      selectQueue: [...NO_STALE_REVIEWERS, [], [queueRow]],
       inserts: [],
       deletes: [],
     };

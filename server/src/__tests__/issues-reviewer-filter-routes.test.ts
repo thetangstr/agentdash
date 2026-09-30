@@ -165,4 +165,23 @@ describe("GET /companies/:companyId/issues ?reviewerAgentId", () => {
     expect(res.status).toBe(403);
     expect(mockIssueService.list).not.toHaveBeenCalled();
   });
+
+  it("GH #701: a non-UUID literal reviewerAgentId is rejected with 400, not a 500", async () => {
+    // Before the fix the raw string reached the SQL uuid cast and surfaced
+    // as "invalid input syntax for type uuid" → 500.
+    const res = await request(createApp(boardActor))
+      .get(`/api/companies/${companyId}/issues?status=in_review&reviewerAgentId=not-a-uuid`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/reviewerAgentId must be a UUID/);
+    expect(mockIssueService.list).not.toHaveBeenCalled();
+  });
+
+  it("GH #701: reviewerAgentId=me bypasses the UUID check (agent actor)", async () => {
+    const res = await request(createApp(agentActor))
+      .get(`/api/companies/${companyId}/issues?status=in_review&reviewerAgentId=me`);
+
+    expect(res.status).toBe(200);
+    expect(mockIssueService.list).toHaveBeenCalledTimes(1);
+  });
 });
