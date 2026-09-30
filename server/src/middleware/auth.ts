@@ -28,6 +28,23 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// AgentDash: only this middleware can populate original board-key provenance.
+// The bearer remains private to this actual Request and is never an actor flag.
+type VerifiedBoardCredential = Readonly<{
+  userId: string;
+  keyId: string;
+  bearer: string;
+  expiresAt: number | null;
+}>;
+const verifiedBoardCredentials = new WeakMap<Request, VerifiedBoardCredential>();
+
+export function verifiedBoardCredential(req: Request): VerifiedBoardCredential | null {
+  const credential = verifiedBoardCredentials.get(req);
+  return credential && req.actor.type === "board" && req.actor.source === "board_key"
+    && req.actor.userId === credential.userId && req.actor.keyId === credential.keyId
+    ? credential : null;
+}
+
 function normalizeRunId(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return isUuidLike(trimmed) ? trimmed : undefined;
@@ -84,6 +101,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
   const bridge = bridgeService(db);
   const assistantOAuth = assistantOAuthService(db);
   return async (req, res, next) => {
+    verifiedBoardCredentials.delete(req);
     req.verifiedCredential = undefined;
     req.actor =
       opts.deploymentMode === "local_trusted"
@@ -346,6 +364,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           runId: runIdHeader || undefined,
           source: "board_key",
         };
+        verifiedBoardCredentials.set(req, Object.freeze({
+          userId: boardKey.userId,
+          keyId: boardKey.id,
+          bearer: token,
+          expiresAt: boardKey.expiresAt?.getTime() ?? null,
+        }));
         next();
         return;
       }

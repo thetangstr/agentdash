@@ -11,6 +11,7 @@ import { boardAuthService } from './board-auth.js';
 import { publishActivity, type ActivityPublication } from './activity-log.js';
 import type { ActivityAcceptance } from './workforce.js';
 import { humanActionHandleService } from './human-action-handles.js';
+import { verifiedBoardCredential } from '../middleware/auth.js';
 
 const recoveryReferenceSchema = z.object({
   issueId: z.string().uuid().optional(),
@@ -44,16 +45,17 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
   }
   const handles = humanActionHandleService(db);
   async function identity(req: Request, connection = db) {
-    if (req.actor.type !== 'board' || req.actor.source !== 'board_key' || !req.actor.userId || !req.actor.keyId) {
+    const credential = verifiedBoardCredential(req);
+    if (!credential || (credential.expiresAt !== null && credential.expiresAt <= Date.now())) {
       throw forbidden('Named board-key human authentication required');
     }
     const [key] = await connection.select({ id: boardApiKeys.id }).from(boardApiKeys).where(and(
-      eq(boardApiKeys.id, req.actor.keyId),
-      eq(boardApiKeys.userId, req.actor.userId),
+      eq(boardApiKeys.id, credential.keyId),
+      eq(boardApiKeys.userId, credential.userId),
       isNull(boardApiKeys.revokedAt),
       or(isNull(boardApiKeys.expiresAt), gt(boardApiKeys.expiresAt, new Date())),
     ));
-    const access = await boardAuthService(connection).resolveBoardAccess(req.actor.userId);
+    const access = await boardAuthService(connection).resolveBoardAccess(credential.userId);
     if (!key || !access.user) throw forbidden('Human connection is no longer authorized');
     // Re-resolve the original authenticated principal; never manufacture another actor.
     req.actor.companyIds = access.companyIds;
