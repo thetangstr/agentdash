@@ -100,3 +100,6 @@ server/mcp-dist/
 # outside the pnpm workspace, so nothing else ignores these for us.
 sites/*/.next/
 sites/*/out/
+
+# AgentDash: Ross operator scripts are run with python3 -B; ignore bytecode if not
+scripts/ross/__pycache__/
