@@ -5,7 +5,7 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>AGENTDASH_APP_DIR</key>
-		<string>/Users/yang/agentdash</string>
+		<string>/Users/yang/.agentdash/releases/current</string>
 		<key>AGENTDASH_ENV_FILE</key>
 		<string>/Users/yang/.config/agentdash/mkboard.env</string>
 		<key>AGENTDASH_INSTANCE</key>
@@ -17,7 +17,7 @@
 	<string>com.agentdash.mkboard.backup</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/yang/agentdash/deploy/agentdash-backup.sh</string>
+		<string>/Users/yang/.agentdash/releases/current/deploy/agentdash-backup.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>

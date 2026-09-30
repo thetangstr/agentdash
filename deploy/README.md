@@ -59,32 +59,123 @@ return, and leave a receipt under `~/.agentdash/deployments/`.
 # changes nothing else. The daily launchd job runs exactly this.
 node ~/.agentdash/bin/ota-apply.mjs --check
 
-# Apply an approved release by tag.
-node ~/.agentdash/bin/ota-apply.mjs --tag v2026.923.0 \
-  --restart-command "launchctl kickstart -k system/com.agentdash.mkboard.server" \
-  --backup-command "AGENTDASH_INSTANCE=mkboard /bin/sh ~/agentdash/deploy/agentdash-backup.sh"
+# Apply an approved release by tag. With no --restart-command, the restart
+# is verified against launchd first (see below).
+node ~/.agentdash/bin/ota-apply.mjs --tag v2026.929.0 \
+  --backup-command "AGENTDASH_APP_DIR=$HOME/.agentdash/releases/current $HOME/.agentdash/releases/current/deploy/agentdash-backup.sh"
+
+# What would a prune remove? Lists only.
+node ~/.agentdash/bin/ota-apply.mjs --prune --dry-run
 ```
 
-Three things about it are deliberate:
+**Restart.** Do not use `launchctl kickstart -k system/com.agentdash.mkboard.server`
+as the restart command. Kickstarting a system-domain daemon needs root, and
+neither the scheduled job nor an SSH session has it. Passing no restart
+command at all used to be worse: the restart ran `/bin/sh -c undefined`,
+exited 127 after the switch, and the update rolled back.
 
-- **It runs from `~/.agentdash/bin`, not from the checkout.** The updater lives
-  inside the thing it updates; the first live rollback attempt died with
-  `MODULE_NOT_FOUND` because the update before it had checked out a commit where
-  the script did not exist yet. The wrapper installs `ota-apply.mjs` and the
-  `ota-release-layout.mjs` it imports side by side on every run.
+Without `--restart-command`, the apply restarts the server by killing its
+process chain, and launchd's `KeepAlive` starts it again from
+`releases/current`. It verifies that chain first, before the backup and before
+the switch:
+
+- It reads the job's pid from `launchctl print system/<label>`, or
+  `gui/<uid>/<label>`, which needs no root. The label defaults to
+  `com.agentdash.mkboard.server` and can be set with `--service-label`.
+- The listener on the port must descend from that pid. The port comes from
+  `--port`, or from a loopback `--base-url` with an explicit port.
+- The pid must be launchd's direct child.
+- Nothing in the chain may be a terminal, tmux, screen, sshd, login, Caddy or
+  launchd.
+
+It kills only the listener up to and including the job's pid. If it cannot
+verify all of that, the apply refuses and changes nothing, in `--dry-run` too.
+So it refuses a `--base-url` on Caddy's port 3112, and a server started by
+hand in a terminal. It never kills the terminal or tmux. The receipt's
+`restart_command` check lists the exact pids.
+
+A hand-written "kill whatever listens on the port and its parents" script
+walks up to pid 1 without checking. Pass one as `--restart-command` only when
+you have looked at what is listening.
+
+**Rollback.** If health fails, `current` goes back to the previous release and
+the apply restarts again. Then it always checks health again. A rollback
+restart that finds nothing to kill is recorded as skipped, because a release
+that crashed at boot leaves nothing listening and launchd brings the old one
+back on its own. Health decides whether that recovered.
+
+Five things about it are deliberate:
+
+- **It runs from `~/.agentdash/bin`, not from a release or the checkout.** The
+  updater lives inside the thing it updates. The first live rollback attempt
+  died with `MODULE_NOT_FOUND` because the update before it had checked out a
+  commit where the script did not exist yet. A healthy apply installs
+  `agentdash-update.sh`, `ota-apply.mjs` and the `ota-release-layout.mjs` it
+  imports into `~/.agentdash/bin`, from the release it just proved. If a
+  rename fails part-way, the old set is put back. The wrapper also refreshes
+  the two `.mjs` files from `releases/current` on every run. It falls back to
+  the checkout only on a box that has no release yet.
+- **Almost nothing runs from the checkout.** `install-launchdaemons.sh`
+  refuses, and installs nothing, when a plist names a path inside
+  `~/agentdash`. It also refuses when a plist's program does not exist, and
+  when `~/.agentdash/bin` lacks the updater that the update job needs. Two
+  exceptions are documented:
+  - the update job's fetch-only `AGENTDASH_REPO_DIR`;
+  - Postgres (below).
+
+  A job that runs from the checkout drifts behind the serving release,
+  because an apply never updates the checkout. The daily check then runs a
+  retired updater and reports a commit nothing is serving.
 - **A human approves before anything applies.** `--check` only writes the
   offer file (`available-release.json`) that the board's read-only status
-  endpoint renders; the apply path refuses without an approval that names the
+  endpoint renders. The apply path refuses without an approval that names the
   exact tag and commit.
 - **It refuses to update without a backup** unless you pass `--skip-backup`
-  and say so out loud, and it refuses a release that adds migrations unless
-  you pass `--allow-migrations` — automatic rollback restores code, not data.
+  and say so out loud. It also refuses a release that adds migrations unless
+  you pass `--allow-migrations`, because automatic rollback restores code, not
+  data.
+- **Old releases are pruned after a healthy apply, carefully.**
+  - It keeps current and previous.
+  - It keeps anything a running process uses: named on a command line, or
+    held as a working directory or mapped file (`lsof -d cwd,txt`).
+  - It keeps anything an installed `com.agentdash.*` plist names.
+  - It keeps `--keep-releases` more release tags (default 5), newest by
+    version, so `v2026.1001.0` is newer than `v2026.929.0`.
+  - `candidate-*`, `hotfix-*` and other untagged directories are never pruned
+    without `--prune-untagged`.
+  - If `ps` or `lsof` cannot answer, nothing is pruned.
+  - More than 5 removals at once are held. The receipt lists them, and nothing
+    is deleted until `ota-apply.mjs --prune --prune-confirm`.
+
+A rerun after a failed apply reuses the release directory only if it carries
+the completion marker (`.agentdash-release.json`) for the same commit. That
+marker is written after the build and seal. A directory without it is removed
+and exported again. The apply refuses instead, and asks for a person, when
+that directory is the current or previous release or a running process uses
+it.
+
+**Postgres stays on the checkout, on purpose.** `com.agentdash.postgres` runs
+the embedded-postgres binary from `~/agentdash/node_modules`. Pointing it at
+`releases/current` would let an ordinary apply, and the next Postgres restart
+(a reboot, say), change the database binary silently. A release with a
+different embedded-postgres major version would then not start on the
+existing data directory. Moving it is a separate, explicit migration, not part
+of any apply:
+
+1. Copy the embedded-postgres native directory, the one containing `bin/`,
+   `lib/` and `share/`, to a stable, never-pruned path such as
+   `~/.agentdash/postgres/<version>/`.
+2. Check that `$PGDATA/PG_VERSION` matches that binary's major version.
+3. Change `agentdash-postgres.sh` to take that path, for example
+   `AGENTDASH_PGBIN`. It has no such override today.
+4. Repoint the plist, and remove its exception in `install-launchdaemons.sh`.
+5. Restart Postgres in a maintenance window, after a backup.
 
 `deploy/agentdash-update.sh` is the scheduled wrapper, installed by
 `install-launchdaemons.sh` as `com.agentdash.update` (09:15 daily). It is
 **check-only**: it refreshes the offer file and changes nothing else.
 `AGENTDASH_UPDATE_APPLY=1` currently makes the job exit non-zero with a clear
-refusal — unattended apply is unsupported until the `releases/current`
+refusal. Unattended apply is unsupported until the `releases/current`
 bootstrap is decided, because a box that serves straight from its git
 checkout would keep running the old code while a receipt said "applied".
 An operator can still run `ota-apply.mjs --tag ...` by hand on a releases
