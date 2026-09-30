@@ -441,6 +441,49 @@ describeEmbeddedPostgres("agentdash-mk deliverable run", () => {
     expect(openRuns[0]!.status).toBe("collecting");
   });
 
+  it("treats re-opening an open cycle as a no-op, without a failing statement", async () => {
+    const seeded = await seed();
+    workbookReturns([["Hours"], [412]]);
+    const at = new Date("2026-07-30T09:00:00Z");
+
+    const first = await deliverableRunService(db).openRun(seeded.company.id, DELIVERABLE_KEY, { at });
+    expect(first.opened).toBe(true);
+
+    // Inside a transaction, any statement that errors — a caught unique
+    // violation included — aborts it, and the read-back after it then fails.
+    // So this resolving proves the duplicate insert raised nothing in
+    // Postgres, which is what kept an ERROR in postgres.log every tick.
+    const again = await db.transaction((tx) =>
+      deliverableRunService(tx as unknown as TestDb).openRun(seeded.company.id, DELIVERABLE_KEY, {
+        at,
+      }),
+    );
+    expect(again.opened).toBe(false);
+    expect(again.run.id).toBe(first.run.id);
+
+    const concurrent = await Promise.all([
+      deliverableRunService(db).openRun(seeded.company.id, DELIVERABLE_KEY, { at }),
+      deliverableRunService(db).openRun(seeded.company.id, DELIVERABLE_KEY, { at }),
+    ]);
+    expect(concurrent.map((result) => result.opened)).toEqual([false, false]);
+    expect(await runs(db, seeded.company.id)).toHaveLength(1);
+  });
+
+  it("opens a new period exactly once when two openers race for it", async () => {
+    const seeded = await seed();
+    workbookReturns([["Hours"], [412]]);
+    const at = new Date("2026-08-06T09:00:00Z");
+
+    const raced = await Promise.all([
+      deliverableRunService(db).openRun(seeded.company.id, DELIVERABLE_KEY, { at }),
+      deliverableRunService(db).openRun(seeded.company.id, DELIVERABLE_KEY, { at }),
+    ]);
+
+    expect(raced.map((result) => result.opened).sort()).toEqual([false, true]);
+    expect(raced[0]!.run.id).toBe(raced[1]!.run.id);
+    expect(await runs(db, seeded.company.id)).toHaveLength(1);
+  });
+
   it("opens the next cycle's run when the calendar moves on", async () => {
     const seeded = await seed();
     workbookReturns([["Hours"], [412]]);

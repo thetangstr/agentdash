@@ -4,6 +4,26 @@ import { HttpError } from "../errors.js";
 import { trackErrorHandlerCrash } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { recordServerError } from "../observability/error-sink.js";
+import { unwrapPgError } from "../lib/pg-error.js";
+
+/** SQLSTATE invalid_text_representation — a value Postgres could not cast. */
+const PG_INVALID_TEXT_REPRESENTATION = "22P02";
+
+/**
+ * AgentDash: a malformed id that reached a uuid column is the caller's error.
+ * Routes should validate ids before querying; this is the backstop for the
+ * ones that do not. Only the uuid cast is mapped: 22P02 also covers enum and
+ * json casts, where the bad value is more often the server's own bug and
+ * should stay a recorded 500.
+ */
+function isInvalidUuidInput(err: unknown): boolean {
+  const pg = unwrapPgError(err);
+  return (
+    pg.code === PG_INVALID_TEXT_REPRESENTATION &&
+    typeof pg.message === "string" &&
+    /invalid input syntax for type uuid/i.test(pg.message)
+  );
+}
 
 export interface ErrorContext {
   error: { message: string; stack?: string; name?: string; details?: unknown; raw?: unknown };
@@ -61,6 +81,11 @@ export function errorHandler(
 
   if (err instanceof ZodError) {
     res.status(400).json({ error: "Validation error", details: err.errors });
+    return;
+  }
+
+  if (isInvalidUuidInput(err)) {
+    res.status(400).json({ error: "Invalid identifier" });
     return;
   }
 

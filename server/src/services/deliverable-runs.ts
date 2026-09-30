@@ -10,7 +10,6 @@ import {
 } from "@paperclipai/db";
 import type { DeliverableCadence } from "@paperclipai/shared";
 import { conflict, notFound } from "../errors.js";
-import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentFactRequestService } from "./agent-fact-requests.js";
 import { deliverableReviewService } from "./deliverable-review.js";
@@ -416,28 +415,31 @@ export function deliverableRunService(db: Db) {
     const deliverable = await definitions.getByKey(companyId, deliverableKey);
     const runKey = runKeyFor(deliverable.cadence as DeliverableCadence, opts.at ?? new Date());
 
-    let run: DeliverableRow;
-    try {
-      run = await db
-        .insert(deliverableRuns)
-        .values({ companyId, deliverableId: deliverable.id, runKey })
-        .returning()
-        .then((rows) => rows[0]!);
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        const existing = await db
-          .select()
-          .from(deliverableRuns)
-          .where(
-            and(
-              eq(deliverableRuns.deliverableId, deliverable.id),
-              eq(deliverableRuns.runKey, runKey),
-            ),
-          )
-          .then((rows) => rows[0] ?? null);
-        if (existing) return { run: existing, opened: false };
-      }
-      throw error;
+    // ON CONFLICT DO NOTHING rather than catching the unique violation: the
+    // scheduler re-opens an already-open period on every tick, and a caught
+    // violation still logs an ERROR plus its STATEMENT in postgres.log each
+    // time. Nothing is returned when the period is already open.
+    const run = await db
+      .insert(deliverableRuns)
+      .values({ companyId, deliverableId: deliverable.id, runKey })
+      .onConflictDoNothing({ target: [deliverableRuns.deliverableId, deliverableRuns.runKey] })
+      .returning()
+      .then((rows) => rows[0] ?? null);
+    if (!run) {
+      const existing = await db
+        .select()
+        .from(deliverableRuns)
+        .where(
+          and(
+            eq(deliverableRuns.deliverableId, deliverable.id),
+            eq(deliverableRuns.runKey, runKey),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      if (existing) return { run: existing, opened: false };
+      // Only reachable if the conflicting row vanished between the two
+      // statements; the caller's next tick opens it afresh.
+      throw conflict("The run for this period could not be opened");
     }
 
     await collect(companyId, run.id);
