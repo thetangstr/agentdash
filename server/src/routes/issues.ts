@@ -6,7 +6,12 @@ import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { issueExecutionDecisions, issues } from "@paperclipai/db";
-import { assertProjectIdVisible, projectScopedVisibilityCondition } from "./visibility.js";
+import {
+  assertIssueIdVisible,
+  assertProjectIdVisible,
+  assertWorkspaceIdsVisible,
+  projectScopedVisibilityCondition,
+} from "./visibility.js";
 import { decodeShippedCursor } from "../services/work-products.js";
 import {
   addIssueCommentSchema,
@@ -1000,25 +1005,66 @@ export function issueRoutes(
     return { project, goal: null };
   }
 
-  // Resolve issue identifiers (e.g. "PAP-39") to UUIDs for all /issues/:id routes
+  // Resolve issue identifiers (e.g. "PAP-39") to UUIDs for all /issues/:id routes,
+  // then apply the A5 project rule once for the whole surface (GH #830): an
+  // issue in a restricted project is 404 — never 403 — on every sub-route
+  // (comments, documents, heartbeat-context, PATCH, attachments, ...) for an
+  // actor off the project's access list. `/work-products/:id` shares the
+  // param name but not the meaning; its handlers check the owning issue.
   router.param("id", async (req, res, next, rawId) => {
     try {
       req.params.id = await normalizeIssueIdentifier(rawId);
+      const routePath: unknown = req.route?.path;
+      if (typeof routePath === "string" && routePath.startsWith("/issues/:id")) {
+        await assertIssueIdVisible(db, req, req.params.id);
+      }
       next();
     } catch (err) {
       next(err);
     }
   });
 
-  // Resolve issue identifiers (e.g. "PAP-39") to UUIDs for company-scoped attachment routes.
+  // Resolve issue identifiers (e.g. "PAP-39") to UUIDs for company-scoped attachment routes,
+  // under the same A5 project rule as /issues/:id.
   router.param("issueId", async (req, res, next, rawId) => {
     try {
       req.params.issueId = await normalizeIssueIdentifier(rawId);
+      await assertIssueIdVisible(db, req, req.params.issueId);
       next();
     } catch (err) {
       next(err);
     }
   });
+
+  /**
+   * A5 on writes (GH #830): an issue may only be created in, or moved into,
+   * a project the actor can see, and only under a parent it can see. 404,
+   * matching the read side — a refusal naming the project would confirm it.
+   * A workspace id names its project too: without `projectId` the service
+   * does not match the workspace to a project, so check it here.
+   */
+  async function assertIssueWriteTargetsVisible(
+    req: Request,
+    companyId: string,
+    body: {
+      projectId?: unknown;
+      parentId?: unknown;
+      inheritExecutionWorkspaceFromIssueId?: unknown;
+      projectWorkspaceId?: unknown;
+      executionWorkspaceId?: unknown;
+    },
+  ) {
+    if (typeof body.projectId === "string") {
+      await assertProjectIdVisible(db, req, companyId, body.projectId, "Project");
+    }
+    if (typeof body.parentId === "string") {
+      await assertIssueIdVisible(db, req, body.parentId, "Parent issue");
+    }
+    if (typeof body.inheritExecutionWorkspaceFromIssueId === "string") {
+      await assertIssueIdVisible(db, req, body.inheritExecutionWorkspaceFromIssueId);
+    }
+    await assertWorkspaceIdsVisible(db, req, body);
+  }
 
   // Common malformed path when companyId is empty in "/api/companies/{companyId}/issues".
   router.get("/issues", (_req, res) => {
@@ -1776,6 +1822,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    await assertIssueIdVisible(db, req, existing.issueId, "Work product");
     const issue = await svc.getById(existing.issueId);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
@@ -1810,6 +1857,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    await assertIssueIdVisible(db, req, existing.issueId, "Work product");
     const issue = await svc.getById(existing.issueId);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
@@ -2042,6 +2090,7 @@ export function issueRoutes(
   router.post("/companies/:companyId/issues", validate(createIssueSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    await assertIssueWriteTargetsVisible(req, companyId, req.body);
     await assertHostWorkspaceCommandAuthority(db, req, companyId, collectIssueWorkspaceCommandPaths(req.body));
     assertIssueOverrideHostExecutionAllowed(req, undefined);
     // AGE-113: assignee adapter overrides change which adapter/model runs an
@@ -2194,6 +2243,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, parent.companyId);
+    await assertIssueWriteTargetsVisible(req, parent.companyId, req.body);
     await assertHostWorkspaceCommandAuthority(db, req, parent.companyId, collectIssueWorkspaceCommandPaths(req.body));
     assertIssueOverrideHostExecutionAllowed(req, undefined);
     // AGE-113: same gate as issue create — overrides are agent configuration.
@@ -2271,6 +2321,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    await assertIssueWriteTargetsVisible(req, existing.companyId, req.body);
     await assertHostWorkspaceCommandAuthority(
       db,
       req,
@@ -4614,6 +4665,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, attachment.companyId);
+    await assertIssueIdVisible(db, req, attachment.issueId, "Attachment");
 
     const object = await storage.getObject(attachment.companyId, attachment.objectKey);
     const responseContentType = normalizeContentType(attachment.contentType || object.contentType);
@@ -4642,6 +4694,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, attachment.companyId);
+    await assertIssueIdVisible(db, req, attachment.issueId, "Attachment");
     const issue = await svc.getById(attachment.issueId);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });

@@ -2,6 +2,20 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// GH #830: issue, run and workspace routes run the A5 project-visibility
+// guards against the db. They are exercised against a real database in
+// project-visibility.test.ts; this suite's stub db cannot answer them.
+vi.mock("../routes/visibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routes/visibility.js")>()),
+  assertIssueIdVisible: vi.fn(async () => undefined),
+  assertWorkspaceIdsVisible: vi.fn(async () => undefined),
+  filterVisibleByProject: vi.fn(async (_db: unknown, _req: unknown, rows: unknown[]) => rows),
+  activityVisibilityCondition: () => undefined,
+  runVisibilityCondition: () => undefined,
+  issueVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  runVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
@@ -258,7 +272,7 @@ describe("agent live run routes", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(mockHeartbeatService.list).toHaveBeenCalledWith("company-1", undefined, 100, 200);
+    expect(mockHeartbeatService.list).toHaveBeenCalledWith("company-1", undefined, 100, 200, { visibleWhere: undefined });
   });
 
   it("defaults offset to zero on the company heartbeat run list", async () => {
@@ -270,7 +284,7 @@ describe("agent live run routes", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(mockHeartbeatService.list).toHaveBeenCalledWith("company-1", undefined, undefined, 0);
+    expect(mockHeartbeatService.list).toHaveBeenCalledWith("company-1", undefined, undefined, 0, { visibleWhere: undefined });
   });
 
   it("rejects invalid offset on the company heartbeat run list", async () => {

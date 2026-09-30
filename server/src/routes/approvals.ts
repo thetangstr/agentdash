@@ -34,6 +34,7 @@ import {
   secretService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertIssueIdVisible, filterVisibleByProject } from "./visibility.js";
 import { badRequest, forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { approvalUrl } from "../lib/public-base-url.js";
@@ -301,6 +302,11 @@ export function approvalRoutes(
       ? rawIssueIds.filter((value: unknown): value is string => typeof value === "string")
       : [];
     const uniqueIssueIds = Array.from(new Set(issueIds));
+    // A5 (GH #830): an approval cannot be linked to an issue the requester
+    // cannot see — 404, as POST /issues/:id/approvals answers.
+    for (const issueId of uniqueIssueIds) {
+      await assertIssueIdVisible(db, req, issueId);
+    }
     const { issueIds: _issueIds, ...approvalInput } = req.body;
     if (approvalInput.type === "hire_agent") {
       assertHirePayloadHasNoHostCommands(approvalInput.payload);
@@ -378,7 +384,8 @@ export function approvalRoutes(
       return;
     }
     assertCompanyAccess(req, approval.companyId);
-    const issues = await issueApprovalsSvc.listIssuesForApproval(id);
+    // A5 (GH #830): linked issues in a project the actor cannot see are absent.
+    const issues = await filterVisibleByProject(db, req, await issueApprovalsSvc.listIssuesForApproval(id));
     res.json(issues);
   });
 

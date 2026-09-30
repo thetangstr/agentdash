@@ -9,6 +9,7 @@ import {
 import { validate } from "../middleware/validate.js";
 import { heartbeatService, issueService, issueTreeControlService, logActivity } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { issueVisibilityParam } from "./visibility.js";
 
 const TREE_RUN_CANCELLATION_RESPONSE_WAIT_MS = 1_000;
 
@@ -35,6 +36,10 @@ export function issueTreeControlRoutes(db: Db) {
   const issuesSvc = issueService(db);
   const treeControlSvc = issueTreeControlService(db);
   const heartbeat = heartbeatService(db);
+
+  // A5 (GH #830): an issue in a restricted project is 404 on every
+  // /issues/:id route here for an actor off the project's access list.
+  router.param("id", issueVisibilityParam(db));
 
   async function resolveRootIssue(req: Request) {
     const rootIssueId = req.params.id as string;

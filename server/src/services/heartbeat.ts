@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { emitSignal } from "../observability/signals.js";
 import { preRunChecks } from "../observability/pre-run-checks.js";
-import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -8961,7 +8961,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   return {
-    list: async (companyId: string, agentId?: string, limit?: number, offset = 0) => {
+    list: async (
+      companyId: string,
+      agentId?: string,
+      limit?: number,
+      offset = 0,
+      opts: { visibleWhere?: SQL } = {},
+    ) => {
       const safeForLegacyEncoding = await hasUnsafeTextProjectionDatabase();
       const query = db
         .select(
@@ -8979,9 +8985,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         )
         .from(heartbeatRuns)
         .where(
-          agentId
-            ? and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId))
-            : eq(heartbeatRuns.companyId, companyId),
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            ...(agentId ? [eq(heartbeatRuns.agentId, agentId)] : []),
+            // The caller's A5 visibility condition over heartbeat_runs.
+            ...(opts.visibleWhere ? [opts.visibleWhere] : []),
+          ),
         )
         .orderBy(desc(heartbeatRuns.createdAt));
 
