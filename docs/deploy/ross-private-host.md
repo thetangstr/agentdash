@@ -30,7 +30,7 @@ Exit code is 0 only when **every gate passes**. Any `unproven` or `fail` gate ex
 |---|---|
 | `host_identity` | `host.expected.hostname` declared; `identity.observedAt`, `via` (trusted channel), observed `hostname` matching the selection, `trusted: true`, and at least one strong field (`hardwareUuid`, `tailscaleNodeId`, `hostKeyFingerprintSha256`). |
 | `disk_headroom` | `disk.availableBytes` ≥ `--min-free-bytes` (default 32 GiB); `capacityPercent` ≤ 95 when present. |
-| `private_listener` | `listener.allocated.{port,bind,allocatedBy}` — an *explicitly allocated* port, integer 1024–65535, not in the shared denylist (3100, 4777, 443, 8443 + `--shared-port`), not already in `observedListeners`, bound to loopback/tailnet/RFC1918 only, and `funnelExposed` not `true`. |
+| `private_listener` | `listener.allocated.{port,bind,allocatedBy}` — an *explicitly allocated* port, integer 1024–65535, not in the shared denylist (3100, 4777, 443, 8443, 3199 local execos, 3102/3112 MKThink app + Caddy, + `--shared-port`), not already in `observedListeners`, bound to loopback/tailnet/RFC1918 only, and `funnelExposed` not `true`. Deny-listed ports are never probed — they are refused on allocation only. |
 | `authenticated_reachability` | `issuer.{ok,url,observedAt,observedFrom}` and `client.{status=ok,deploymentMode=authenticated,deploymentExposure=private,authReady,bootstrapStatus=ready}` — both `observedFrom` a non-loopback vantage (e.g. `tailnet:<device>`). Loopback-only health is unproven. |
 | `service_identity` | `serviceIdentity.{label,runsAs}`, `envFile.mode=600`, `envFile.secretsPresent` = names only. Evidence carrying secret *values* fails. |
 | `filevault_volume_at_boot` | `boot.fileVaultEnabled=true`, `boot.volumeMountedAtBoot=true`. |
@@ -69,6 +69,14 @@ node scripts/ross/host-readiness.mjs render-drafts \
   --paperclip-port <allocated-port> \
   --out-dir ./drafts/ross-host
 ```
+
+`--paperclip-port` is required and has no default: the fallback 3100 is itself a
+deny-listed shared listener. Pass only an explicitly allocated port.
+
+Note on layout: production Mac minis use the **OTA release layout**
+(`scripts/deploy/ota-apply.mjs`, `releases/current`), not the source-checkout
+generator. `render-drafts` produces the source-launchd bundle as the reviewed
+fallback path; the draft manifest records this explicitly.
 
 Renders the env file, supervisor, backup runner, readiness, update, rollback, plist and
 runbook from `scripts/deploy/agentdash-mac-mini-source-launchd.mjs` into `--out-dir` as

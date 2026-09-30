@@ -152,6 +152,14 @@ test("shared-listener and wildcard binds fail; missing allocation stays unproven
   });
   assert.equal(funnel.status, "fail");
 
+  for (const shared of [3199, 3102, 3112]) {
+    const denied = evaluatePrivateListener({
+      allocated: { port: shared, bind: "100.64.0.14", allocatedBy: "op" },
+      observedListeners: [],
+    });
+    assert.equal(denied.status, "fail", `deny-listed shared port ${shared} must fail`);
+  }
+
   const missing = evaluatePrivateListener({ allocated: { bind: "100.64.0.14" } });
   assert.equal(missing.status, "unproven");
 
@@ -320,7 +328,7 @@ test("render-drafts writes inert mode-600 artifacts with placeholder secrets", (
 
 test("render-drafts is idempotent and refuses silent overwrites", () => {
   const outDir = mkdtempSync(path.join(tmpdir(), "ross-host-drafts-"));
-  const input = { outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:3114" };
+  const input = { outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:3114", paperclipPort: "3114" };
   const first = writeDraftBundle(input);
   const second = writeDraftBundle(input);
   assert.deepEqual(
@@ -335,9 +343,21 @@ test("render-drafts is idempotent and refuses silent overwrites", () => {
 test("render-drafts requires an exact pinned sha", () => {
   const outDir = mkdtempSync(path.join(tmpdir(), "ross-host-drafts-"));
   assert.throws(
-    () => writeDraftBundle({ outDir, targetSha: "latest", publicUrl: "http://100.64.0.14:3114" }),
+    () => writeDraftBundle({ outDir, targetSha: "latest", publicUrl: "http://100.64.0.14:3114", paperclipPort: "3114" }),
     /pinned/,
   );
+});
+
+test("render-drafts requires an explicitly allocated port and records the OTA layout note", () => {
+  const outDir = mkdtempSync(path.join(tmpdir(), "ross-host-drafts-"));
+  assert.throws(
+    () => writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:3114" }),
+    /--paperclip-port/,
+  );
+  writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:3114", paperclipPort: "3114" });
+  const manifest = JSON.parse(readFileSync(path.join(outDir, "draft-manifest.json"), "utf8"));
+  assert.match(manifest.layout, /OTA release layout/);
+  assert.match(manifest.layout, /ota-apply\.mjs/);
 });
 
 test("evaluate CLI exits nonzero on incomplete evidence and prints the scorecard", () => {

@@ -41,9 +41,11 @@ import {
 
 export const EVIDENCE_KIND = "ross-private-host-evidence";
 export const DRAFT_KIND = "ross-private-host-draft-bundle";
-/** Ports already owned by shared/live AgentDash listeners; a private Ross
- * listener may never collide with them. Extend with --shared-port. */
-export const SHARED_LISTENER_PORTS = [3100, 4777, 443, 8443];
+/** Ports already owned by shared/live listeners; a private Ross listener may
+ * never collide with them. Deny-list only — these ports are never probed.
+ * 3100/4777 shared AgentDash, 443/8443 Funnel/Serve, 3199 local execos
+ * instance, 3102/3112 MKThink app + Caddy. Extend with --shared-port. */
+export const SHARED_LISTENER_PORTS = [3100, 4777, 443, 8443, 3199, 3102, 3112];
 export const DEFAULT_MIN_FREE_BYTES = 32 * 1024 * 1024 * 1024;
 const SHA256_RE = /^[0-9a-f]{64}$/i;
 const FULL_SHA_RE = /^[0-9a-f]{40}$/i;
@@ -653,6 +655,9 @@ export function observeLocalHost(observePath = process.cwd()) {
 const DRAFT_SECRET_PLACEHOLDER = "REPLACE_ON_HOST_generate_mode600_secret";
 
 export function renderDraftBundle(input = {}) {
+  if (!nonEmptyString(input.paperclipPort)) {
+    throw new Error("render-drafts requires an explicitly allocated --paperclip-port (the default 3100 is a shared listener port and is deny-listed)");
+  }
   const plan = buildMacMiniSourceLaunchdPlan({
     ...input,
     betterAuthSecret: input.betterAuthSecret ?? DRAFT_SECRET_PLACEHOLDER,
@@ -687,6 +692,7 @@ export function writeDraftBundle(input = {}) {
     label: plan.label,
     inert: true,
     secrets: "placeholder only — no generated or live secret material is present",
+    layout: "production Mac minis use the OTA release layout (scripts/deploy/ota-apply.mjs, releases/current); this source-launchd draft bundle is the source-checkout fallback for review",
     effects: "drafts are mode-600 review artifacts; nothing is installed, loaded, or executed",
     planPaths: plan.paths,
     artifacts: [],
@@ -766,13 +772,16 @@ render-drafts options:
   --public-url <url>       Private/tailnet URL the deployed instance will answer on (required).
   --out-dir <dir>          Scratch directory for the inert draft bundle (required).
   --label <label>          launchd label (default ai.agentdash.agent).
-  --paperclip-port <port>  Allocated private listener port (default 3100).
+  --paperclip-port <port>  Explicitly allocated private listener port (required;
+                           no default — 3100 is a deny-listed shared listener).
   --repo-dir/--agentdash-home/--config-dir/--launch-agent-dir/--paperclip-home/--log-dir/--backup-dir/--state-dir/--runtime-env-file
                            Synthetic target paths rendered into the drafts; nothing is created there.
   --json                   Print the JSON write summary.
 
-This tool performs no remote access, no trust changes and no service, boot or
-power mutations. Missing evidence is always "unproven", never "pass".
+Production Mac minis use the OTA release layout (scripts/deploy/ota-apply.mjs,
+releases/current); render-drafts produces the source-checkout fallback for
+review. This tool performs no remote access, no trust changes and no service,
+boot or power mutations. Missing evidence is always "unproven", never "pass".
 `);
 }
 
