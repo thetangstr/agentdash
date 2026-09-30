@@ -69,5 +69,11 @@ test.describe("Home (UX-3)", () => {
     };
     await expect(page.getByTestId("home-subline")).toContainText(`${summary.tasks.open} open issue`);
     await expect(page.getByTestId("home-plan-with-cos")).toHaveAttribute("href", /\/cos$/);
+
+    // One-UX: the control-plane panels sit under the three blocks, for every company.
+    await expect(page.getByTestId("dashboard-control-plane")).toBeVisible();
+    await expect(page.getByTestId("dashboard-stat-issues-value")).toHaveText(String(summary.tasks.open));
+    await expect(page.getByTestId("dashboard-fleet")).toBeVisible();
+    await expect(page.getByTestId("dashboard-activity")).toBeVisible();
   });
 });
