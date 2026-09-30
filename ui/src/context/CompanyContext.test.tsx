@@ -12,6 +12,7 @@ import {
   shouldClearStoredCompanySelection,
   useCompany,
 } from "./CompanyContext";
+import { useIssuePrefixes } from "./IssuePrefixesContext";
 
 const mockCompaniesApi = vi.hoisted(() => ({
   list: vi.fn(),
@@ -247,5 +248,68 @@ describe("CompanyProvider", () => {
 
     expect(seen).toEqual([null, "company-1"]);
     expect(localStorage.getItem("agentdash.selectedCompanyId")).toBe("company-1");
+  });
+
+  // AgentDash: markdown scopes bare `PREFIX-123` links to these prefixes.
+  describe("issue prefixes for markdown links", () => {
+    function PrefixProbe({ onPrefixes }: { onPrefixes: (prefixes: readonly string[] | null) => void }) {
+      const prefixes = useIssuePrefixes();
+      useEffect(() => {
+        onPrefixes(prefixes);
+      }, [onPrefixes, prefixes]);
+      return null;
+    }
+
+    it("supplies an empty list while companies load, so no bare identifier links yet", async () => {
+      mockCompaniesApi.list.mockImplementation(() => new Promise(() => {}));
+      const seen: Array<readonly string[] | null> = [];
+
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <CompanyProvider>
+              <PrefixProbe onPrefixes={(prefixes) => seen.push(prefixes)} />
+            </CompanyProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      expect(seen).toEqual([[]]);
+    });
+
+    it("supplies every loaded company's prefix, archived companies included", async () => {
+      queryClient.setQueryData(queryKeys.companies.all, {
+        companies: [
+          { ...makeCompany("company-1"), issuePrefix: "ACME" },
+          { ...makeCompany("company-2"), issuePrefix: "PAP" },
+          { ...makeCompany("archived-company"), issuePrefix: "ARC", status: "archived" },
+        ],
+        unauthorized: false,
+      });
+      mockCompaniesApi.list.mockImplementation(() => new Promise(() => {}));
+      const seen: Array<readonly string[] | null> = [];
+
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <CompanyProvider>
+              <PrefixProbe onPrefixes={(prefixes) => seen.push(prefixes)} />
+            </CompanyProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      expect(seen.at(-1)).toEqual(["ACME", "PAP", "ARC"]);
+    });
+
+    it("is null outside a CompanyProvider", async () => {
+      const seen: Array<readonly string[] | null> = [];
+
+      await act(async () => {
+        root.render(<PrefixProbe onPrefixes={(prefixes) => seen.push(prefixes)} />);
+      });
+
+      expect(seen).toEqual([null]);
+    });
   });
 });

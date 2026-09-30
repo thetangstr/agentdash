@@ -83,8 +83,17 @@ export const heartbeatsApi = {
     api.get<HeartbeatRunEvent[]>(
       `/heartbeat-runs/${runId}/events?afterSeq=${encodeURIComponent(String(afterSeq))}&limit=${encodeURIComponent(String(limit))}`,
     ),
+  // `missing: true` (store/logRef null, empty content) means the run has no log yet,
+  // e.g. it never started.
   log: (runId: string, offset = 0, limitBytes = 256000) =>
-    api.get<{ runId: string; store: string; logRef: string; content: string; nextOffset?: number }>(
+    api.get<{
+      runId: string;
+      store: string | null;
+      logRef: string | null;
+      content: string;
+      nextOffset?: number;
+      missing?: boolean;
+    }>(
       `/heartbeat-runs/${runId}/log?offset=${encodeURIComponent(String(offset))}&limitBytes=${encodeURIComponent(String(limitBytes))}`,
     ),
   workspaceOperations: (runId: string) =>

@@ -9,7 +9,12 @@ import { useTheme } from "../context/ThemeContext";
 import { mentionChipInlineStyle, parseMentionChipHref } from "../lib/mention-chips";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
-import { parseIssueReferenceFromHref, remarkLinkIssueReferences } from "../lib/issue-reference";
+import {
+  parseIssueReferenceFromHref,
+  remarkLinkIssueReferences,
+  type IssueReferenceOptions,
+} from "../lib/issue-reference";
+import { useIssuePrefixes } from "../context/IssuePrefixesContext";
 import { remarkSoftBreaks } from "../lib/remark-soft-breaks";
 import { StatusIcon } from "./StatusIcon";
 
@@ -325,9 +330,11 @@ export function MarkdownBody({
   onImageClick,
 }: MarkdownBodyProps) {
   const { theme } = useTheme();
+  const issuePrefixes = useIssuePrefixes();
+  const issueReferenceOptions: IssueReferenceOptions = { issuePrefixes };
   const remarkPlugins: NonNullable<Options["remarkPlugins"]> = [remarkGfm];
   if (linkIssueReferences) {
-    remarkPlugins.push(remarkLinkIssueReferences);
+    remarkPlugins.push([remarkLinkIssueReferences, issueReferenceOptions]);
   }
   if (softBreaks) {
     remarkPlugins.push(remarkSoftBreaks);
@@ -371,7 +378,7 @@ export function MarkdownBody({
       </code>
     ),
     a: ({ href, style: linkStyle, children: linkChildren }) => {
-      const issueRef = linkIssueReferences ? parseIssueReferenceFromHref(href) : null;
+      const issueRef = linkIssueReferences ? parseIssueReferenceFromHref(href, issueReferenceOptions) : null;
       if (issueRef) {
         return (
           <MarkdownIssueLink issuePathId={issueRef.issuePathId}>

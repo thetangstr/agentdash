@@ -415,111 +415,119 @@ export function CompanyAccess() {
       ) : null}
 
       <Dialog open={!!editingMember} onOpenChange={(open) => !open && setEditingMemberId(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+        {/* AgentDash (#845): cap the dialog to the viewport and scroll only the body, so
+            Save and the last grant stay reachable on short or narrow screens. Same
+            structure as the IssueDetail tree-control dialog. */}
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="border-b border-border/60 px-6 pb-4 pr-12 pt-6">
             <DialogTitle>Edit member</DialogTitle>
             <DialogDescription>
               Update company role, membership status, and explicit grants for {editingMember?.user?.name || editingMember?.user?.email || editingMember?.principalId}.
             </DialogDescription>
           </DialogHeader>
-          {editingMember && (
-            <div className="space-y-5">
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2 text-sm">
-                  <span className="font-medium">Company role</span>
-                  <select
-                    className="w-full rounded-md border border-border bg-background px-3 py-2"
-                    value={draftRole ?? ""}
-                    onChange={(event) =>
-                      setDraftRole((event.target.value || null) as CompanyMember["membershipRole"])
-                    }
-                  >
-                    <option value="">Unset</option>
-                    {Object.entries(HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-2 text-sm">
-                  <span className="font-medium">Membership status</span>
-                  <select
-                    className="w-full rounded-md border border-border bg-background px-3 py-2"
-                    value={draftStatus}
-                    onChange={(event) =>
-                      setDraftStatus(event.target.value as EditableMemberStatus)
-                    }
-                  >
-                    <option value="active">Active</option>
-                    <option value="pending">Pending</option>
-                    <option value="suspended">Suspended</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <h3 className="text-sm font-medium">Grants</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Roles provide implicit grants automatically. Explicit grants below are only for overrides and extra access that should persist even if the role changes.
-                  </p>
-                </div>
-                <div className="rounded-lg border border-border px-3 py-3">
-                  <div className="text-sm font-medium">Implicit grants from role</div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {draftRole
-                      ? `${HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[draftRole]} currently includes these permissions automatically.`
-                      : "No role is selected, so this member has no implicit grants right now."}
-                  </p>
-                  {implicitGrantKeys.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {implicitGrantKeys.map((permissionKey) => (
-                        <Badge key={permissionKey} variant="outline">
-                          {permissionLabels[permissionKey]}
-                        </Badge>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  {PERMISSION_KEYS.map((permissionKey) => (
-                    <label
-                      key={permissionKey}
-                      className="flex items-start gap-3 rounded-lg border border-border px-3 py-2"
+          <div
+            data-testid="edit-member-dialog-body"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4"
+          >
+            {editingMember && (
+              <div className="space-y-5">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="space-y-2 text-sm">
+                    <span className="font-medium">Company role</span>
+                    <select
+                      className="w-full rounded-md border border-border bg-background px-3 py-2"
+                      value={draftRole ?? ""}
+                      onChange={(event) =>
+                        setDraftRole((event.target.value || null) as CompanyMember["membershipRole"])
+                      }
                     >
-                      <Checkbox
-                        checked={draftGrants.has(permissionKey)}
-                        onCheckedChange={(checked) => {
-                          setDraftGrants((current) => {
-                            const next = new Set(current);
-                            if (checked) next.add(permissionKey);
-                            else next.delete(permissionKey);
-                            return next;
-                          });
-                        }}
-                      />
-                      <span className="space-y-1">
-                        <span className="block text-sm font-medium">{permissionLabels[permissionKey]}</span>
-                        <span className="block text-xs text-muted-foreground">{permissionKey}</span>
-                        {implicitGrantSet.has(permissionKey) ? (
-                          <span className="block text-xs text-muted-foreground">
-                            Included implicitly by the {draftRole ? HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[draftRole] : "selected"} role. Add an explicit grant only if it should stay after the role changes.
-                          </span>
-                        ) : null}
-                        {draftGrants.has(permissionKey) ? (
-                          <span className="block text-xs text-muted-foreground">
-                            Stored explicitly for this member.
-                          </span>
-                        ) : null}
-                      </span>
-                    </label>
-                  ))}
+                      <option value="">Unset</option>
+                      {Object.entries(HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-2 text-sm">
+                    <span className="font-medium">Membership status</span>
+                    <select
+                      className="w-full rounded-md border border-border bg-background px-3 py-2"
+                      value={draftStatus}
+                      onChange={(event) =>
+                        setDraftStatus(event.target.value as EditableMemberStatus)
+                      }
+                    >
+                      <option value="active">Active</option>
+                      <option value="pending">Pending</option>
+                      <option value="suspended">Suspended</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="text-sm font-medium">Grants</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Roles provide implicit grants automatically. Explicit grants below are only for overrides and extra access that should persist even if the role changes.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border px-3 py-3">
+                    <div className="text-sm font-medium">Implicit grants from role</div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {draftRole
+                        ? `${HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[draftRole]} currently includes these permissions automatically.`
+                        : "No role is selected, so this member has no implicit grants right now."}
+                    </p>
+                    {implicitGrantKeys.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {implicitGrantKeys.map((permissionKey) => (
+                          <Badge key={permissionKey} variant="outline">
+                            {permissionLabels[permissionKey]}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {PERMISSION_KEYS.map((permissionKey) => (
+                      <label
+                        key={permissionKey}
+                        className="flex items-start gap-3 rounded-lg border border-border px-3 py-2"
+                      >
+                        <Checkbox
+                          checked={draftGrants.has(permissionKey)}
+                          onCheckedChange={(checked) => {
+                            setDraftGrants((current) => {
+                              const next = new Set(current);
+                              if (checked) next.add(permissionKey);
+                              else next.delete(permissionKey);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="space-y-1">
+                          <span className="block text-sm font-medium">{permissionLabels[permissionKey]}</span>
+                          <span className="block text-xs text-muted-foreground">{permissionKey}</span>
+                          {implicitGrantSet.has(permissionKey) ? (
+                            <span className="block text-xs text-muted-foreground">
+                              Included implicitly by the {draftRole ? HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[draftRole] : "selected"} role. Add an explicit grant only if it should stay after the role changes.
+                            </span>
+                          ) : null}
+                          {draftGrants.has(permissionKey) ? (
+                            <span className="block text-xs text-muted-foreground">
+                              Stored explicitly for this member.
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-          <DialogFooter>
+            )}
+          </div>
+          <DialogFooter className="border-t border-border/60 bg-background px-6 py-4">
             <Button variant="outline" onClick={() => setEditingMemberId(null)}>
               Cancel
             </Button>

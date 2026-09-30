@@ -13,6 +13,7 @@ import { companiesApi } from "../api/companies";
 import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import type { CompanySelectionSource } from "../lib/company-selection";
+import { IssuePrefixesContext } from "./IssuePrefixesContext";
 type CompanySelectionOptions = { source?: CompanySelectionSource };
 type CompanyListResult = { companies: Company[]; unauthorized: boolean };
 
@@ -193,6 +194,15 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     [companies, selectedCompanyId],
   );
 
+  // AgentDash: every visible company's prefix (archived included, their issues still
+  // resolve), so markdown only links `PREFIX-123` tokens that can name an issue.
+  // An empty list while companies load means "link no bare identifiers yet", so a
+  // hard reload does not fetch `GPT-4` before the prefixes arrive.
+  const issuePrefixes = useMemo(
+    () => companies.map((company) => company.issuePrefix),
+    [companies],
+  );
+
   const value = useMemo(
     () => ({
       companies,
@@ -218,7 +228,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
+  return (
+    <CompanyContext.Provider value={value}>
+      <IssuePrefixesContext.Provider value={issuePrefixes}>{children}</IssuePrefixesContext.Provider>
+    </CompanyContext.Provider>
+  );
 }
 
 export function useCompany() {

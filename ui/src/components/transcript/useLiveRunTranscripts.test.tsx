@@ -4,11 +4,14 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
+import type { heartbeatsApi } from "../../api/heartbeats";
 import { useLiveRunTranscripts } from "./useLiveRunTranscripts";
+
+type RunLogResponse = Awaited<ReturnType<typeof heartbeatsApi.log>>;
 
 const { useQueryMock, logMock, buildTranscriptMock } = vi.hoisted(() => ({
   useQueryMock: vi.fn(() => ({ data: { censorUsernameInLogs: false } })),
-  logMock: vi.fn(async () => ({ runId: "run-1", store: "memory", logRef: "log-1", content: "", nextOffset: 0 })),
+  logMock: vi.fn(async (): Promise<RunLogResponse> => ({ runId: "run-1", store: "memory", logRef: "log-1", content: "", nextOffset: 0 })),
   buildTranscriptMock: vi.fn((chunks: unknown[]) => chunks),
 }));
 
@@ -218,6 +221,45 @@ describe("useLiveRunTranscripts", () => {
 
     await act(async () => {
       root.render(<Harness />);
+      await Promise.resolve();
+    });
+
+    expect(logMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  // AgentDash: the server answers 200 `missing: true` (not 404) for runs that never
+  // started, so the hook must stop asking on that signal too.
+  it("stops retrying terminal runs the server reports as having no log", async () => {
+    logMock.mockReset();
+    logMock.mockResolvedValue({ runId: "run-missing", store: null, logRef: null, content: "", missing: true });
+
+    function Harness({ lastOutputBytes }: { lastOutputBytes: number | null }) {
+      useLiveRunTranscripts({
+        companyId: "company-1",
+        runs: [{ id: "run-missing", status: "cancelled", adapterType: "codex_local", lastOutputBytes }],
+      });
+      return null;
+    }
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(<Harness lastOutputBytes={null} />);
+      await Promise.resolve();
+    });
+
+    expect(logMock).toHaveBeenCalledTimes(1);
+
+    // A changed run summary re-runs the fetch effect; the run is still skipped.
+    await act(async () => {
+      root.render(<Harness lastOutputBytes={0} />);
       await Promise.resolve();
     });
 
