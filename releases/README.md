@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.930.1](v2026.930.1.md) | 2026-09-30 | Patch: restricted projects stay restricted in live updates, related issues, blocker ids and feedback traces; review queue can't stall; released creators can't mint connect codes; single-use OTA approvals and a served-release check | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.930.1) |
 | [v2026.930.0](v2026.930.0.md) | 2026-09-30 | Stewards connect their own agent; termination frees the steward; human-clearable recovery budget; review escalations fire once; project access on every issue route; safer OTA updater; opt-in declared origins | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.930.0) |
 | [v2026.929.0](v2026.929.0.md) | 2026-09-29 | Assigned work starts on To do; unowned To do goes to the CoS; company default status; 1.0 navigation on the default profile | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.929.0) |
 | [v2026.927.0](v2026.927.0.md) | 2026-09-27 | Assistant work tools; connect GitHub; Shipped and Home; hosted first run and claim links; first release image | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.927.0) |
