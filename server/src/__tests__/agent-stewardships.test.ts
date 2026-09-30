@@ -432,7 +432,7 @@ describeEmbeddedPostgres("agent stewardships", () => {
       expect(await companyRows(company.id)).toEqual({ agents: 1, stewardships: 1 });
     });
 
-    it("assign, transfer and release answer 404 for a company without stewardship and write nothing", async () => {
+    it("assign answers 404 for a company without stewardship and writes nothing", async () => {
       const company = await createCompany(db, "Plain", "default");
       const owner = await createMember(db, company.id, { role: "owner" });
       const user = await createMember(db, company.id);
@@ -445,22 +445,61 @@ describeEmbeddedPostgres("agent stewardships", () => {
           .send({ agentId: agent.id, userId: user.principalId }),
       );
       expect(assign.status).toBe(404);
+      expect(await companyRows(company.id)).toEqual({ agents: 1, stewardships: 0 });
+    });
+
+    it("an existing pairing on a company without stewardship can still be transferred and released", async () => {
+      // Pairings made before the gate (for example by agent creation) must be
+      // unwindable, or the agent could never leave `stewarded`.
+      const company = await createCompany(db, "Plain", "default");
+      const owner = await createMember(db, company.id, { role: "owner" });
+      const first = await createMember(db, company.id);
+      const second = await createMember(db, company.id);
+      const agent = await createAgent(db, company.id);
+      await agentStewardshipService(db).assign(company.id, {
+        agentId: agent.id,
+        userId: first.principalId,
+        assignedByUserId: owner.principalId,
+      });
+      const app = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
 
       const transfer = await requestApp(app, (baseUrl) =>
         request(baseUrl)
           .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/transfer`)
-          .send({ userId: user.principalId, transferReason: "handing over" }),
+          .send({ userId: second.principalId, transferReason: "handing over" }),
       );
-      expect(transfer.status).toBe(404);
+      expect(transfer.status).toBe(200);
+      expect(transfer.body.stewardship.userId).toBe(second.principalId);
 
       const release = await requestApp(app, (baseUrl) =>
         request(baseUrl)
           .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/release`)
-          .send({ releaseReason: "not needed" }),
+          .send({ releaseReason: "workspace has no stewardship" }),
       );
-      expect(release.status).toBe(404);
+      expect(release.status).toBe(200);
+      expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).toBeNull();
+    });
 
-      expect(await companyRows(company.id)).toEqual({ agents: 1, stewardships: 0 });
+    it("release on a company without stewardship still needs the usual authority", async () => {
+      const company = await createCompany(db, "Plain", "default");
+      const owner = await createMember(db, company.id, { role: "owner" });
+      const viewer = await createMember(db, company.id, { role: "viewer" });
+      const steward = await createMember(db, company.id);
+      const agent = await createAgent(db, company.id);
+      await agentStewardshipService(db).assign(company.id, {
+        agentId: agent.id,
+        userId: steward.principalId,
+        assignedByUserId: owner.principalId,
+      });
+      const app = await createApp(db, makeBoardActor(company.id, viewer.principalId, "viewer"));
+
+      const release = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/release`)
+          .send({ releaseReason: "trying" }),
+      );
+      expect(release.status).toBe(403);
+      expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).not.toBeNull();
     });
 
     it("the instance admin gets the same 404 on a company without stewardship", async () => {

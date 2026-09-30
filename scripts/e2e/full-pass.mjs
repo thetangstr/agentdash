@@ -120,16 +120,33 @@ const adminUserId = signup.body?.user?.id;
 const session = await call("GET", "/api/auth/get-session");
 ok("the session resolves to that person", session.body?.user?.id === adminUserId);
 
-const company = await call("POST", "/api/companies", {
-  name: `E2E Co ${stamp}`,
-  issuePrefix: `E${String(stamp).slice(-5)}`,
+// Stewardship (pairing a person with an agent) is a per-workspace capability,
+// gated on the server: only agentdash_mk workspaces have it. Ask for one; an
+// authenticated managed instance grants it only with an MK invite code
+// (E2E_MK_INVITE_CODE), so without one the pass continues on a default
+// workspace and checks the stewardship routes stay closed there instead.
+const companyInput = { name: `E2E Co ${stamp}`, issuePrefix: `E${String(stamp).slice(-5)}` };
+let company = await call("POST", "/api/companies", {
+  ...companyInput,
+  productProfile: "agentdash_mk",
+  ...(process.env.E2E_MK_INVITE_CODE ? { inviteCode: process.env.E2E_MK_INVITE_CODE } : {}),
 });
+if (company.status === 403 && company.body?.code === "mk_invite_code_required") {
+  console.log("  (no MK invite code for this instance; continuing on a default workspace)");
+  company = await call("POST", "/api/companies", companyInput);
+}
 ok("company is created", [200, 201].includes(company.status), `status=${company.status}`);
 const companyId = company.body?.id ?? company.body?.company?.id;
 ok("company has an id", !!companyId);
+const stewardshipOn = (company.body?.productProfile ?? company.body?.company?.productProfile) === "agentdash_mk";
+console.log(`  stewardship is ${stewardshipOn ? "on (agentdash_mk)" : "off (default)"} for this workspace`);
 
 // ---------------------------------------------------------------- 3. personal agent
-section("3. A personal agent is paired with its creator and holds credentials");
+section(
+  stewardshipOn
+    ? "3. A personal agent is paired with its creator and holds credentials"
+    : "3. A personal agent holds credentials; with stewardship off nobody is paired",
+);
 const personal = await call("POST", `/api/companies/${companyId}/agents`, {
   name: "Personal Agent",
   role: "engineer",
@@ -141,16 +158,20 @@ ok("defaults to stewarded", personal.body?.autonomy === "stewarded", personal.bo
 ok("carries no accountable column of its own", personal.body?.accountableUserId === null);
 
 const myAgent = await call("GET", `/api/companies/${companyId}/me/agent`);
-ok("the creator is paired with it, so they can run it", myAgent.body?.agent?.id === personalId);
-
 const listed = await call("GET", `/api/companies/${companyId}/agents`);
 const personalRow = (listed.body ?? []).find((a) => a.id === personalId);
-ok("reads back with a steward", personalRow?.steward?.userId === adminUserId);
-ok(
-  "and an accountable party resolved from that steward",
-  personalRow?.accountable?.userId === adminUserId && personalRow?.accountable?.via === "steward",
-  JSON.stringify(personalRow?.accountable),
-);
+if (stewardshipOn) {
+  ok("the creator is paired with it, so they can run it", myAgent.body?.agent?.id === personalId);
+  ok("reads back with a steward", personalRow?.steward?.userId === adminUserId);
+  ok(
+    "and an accountable party resolved from that steward",
+    personalRow?.accountable?.userId === adminUserId && personalRow?.accountable?.via === "steward",
+    JSON.stringify(personalRow?.accountable),
+  );
+} else {
+  ok("/me/agent is closed and provisions nothing", myAgent.status === 404, `status=${myAgent.status}`);
+  ok("reads back with no steward", personalRow?.steward === null, JSON.stringify(personalRow?.steward));
+}
 
 const code = await call("POST", `/api/agents/${personalId}/connect-codes`, {});
 ok("a connect code can be minted", code.status === 201 && !!code.body?.code, `status=${code.status}`);
@@ -186,14 +207,14 @@ ok(
   (await call("POST", `/api/agents/${autoId}/connect-codes`, {})).status === 409,
 );
 ok("refuses a key", (await call("POST", `/api/agents/${autoId}/keys`, { name: "no" })).status === 409);
+const pairAuto = await call("POST", `/api/companies/${companyId}/agent-stewardships`, {
+  agentId: autoId,
+  userId: adminUserId,
+});
 ok(
-  "refuses to pair a human with it",
-  (
-    await call("POST", `/api/companies/${companyId}/agent-stewardships`, {
-      agentId: autoId,
-      userId: adminUserId,
-    })
-  ).status === 409,
+  stewardshipOn ? "refuses to pair a human with it" : "pairing is closed on a workspace without stewardship",
+  pairAuto.status === (stewardshipOn ? 409 : 404),
+  `status=${pairAuto.status}`,
 );
 
 // ---------------------------------------------------------------- 5. one human, many agents
@@ -208,40 +229,56 @@ ok("a second autonomous agent is created", second.status === 201, `status=${seco
 const accountableFor = (await call("GET", `/api/companies/${companyId}/agents`)).body.filter(
   (a) => a.accountable?.userId === adminUserId,
 );
-ok("the same person answers for three at once", accountableFor.length === 3, `count=${accountableFor.length}`);
+// With stewardship on, the personal agent answers to its steward too.
+const expectedAccountable = stewardshipOn ? 3 : 2;
+ok(
+  `the same person answers for ${expectedAccountable} at once`,
+  accountableFor.length === expectedAccountable,
+  `count=${accountableFor.length}`,
+);
 
 // ---------------------------------------------------------------- 6. release, then re-kind
-section("6. Release a pairing, then make that agent autonomous");
-const blocked = await call("PATCH", `/api/agents/${personalId}`, { autonomy: "autonomous" });
-ok("refused while the pairing is live", blocked.status === 409, `status=${blocked.status}`);
-ok(
-  "and the refusal names the steward",
-  typeof blocked.body?.error === "string" && blocked.body.error.includes("stewarded by"),
-  blocked.body?.error,
+section(
+  stewardshipOn
+    ? "6. Release a pairing, then make that agent autonomous"
+    : "6. An unpaired agent can be made autonomous directly",
 );
+if (stewardshipOn) {
+  const blocked = await call("PATCH", `/api/agents/${personalId}`, { autonomy: "autonomous" });
+  ok("refused while the pairing is live", blocked.status === 409, `status=${blocked.status}`);
+  ok(
+    "and the refusal names the steward",
+    typeof blocked.body?.error === "string" && blocked.body.error.includes("stewarded by"),
+    blocked.body?.error,
+  );
 
-const released = await call(
-  "POST",
-  `/api/companies/${companyId}/agents/${personalId}/stewardship/release`,
-  { releaseReason: "moving it to the autonomous team" },
-);
-ok("release succeeds", released.status === 200, `status=${released.status}`);
-ok(
-  "the person now stewards nothing",
-  !(await call("GET", `/api/companies/${companyId}/me/agent`)).body?.agent,
-);
+  const released = await call(
+    "POST",
+    `/api/companies/${companyId}/agents/${personalId}/stewardship/release`,
+    { releaseReason: "moving it to the autonomous team" },
+  );
+  ok("release succeeds", released.status === 200, `status=${released.status}`);
+  ok(
+    "the person now stewards nothing",
+    !(await call("GET", `/api/companies/${companyId}/me/agent`)).body?.agent,
+  );
 
-const unpaired = (await call("GET", `/api/companies/${companyId}/agents`)).body.find(
-  (a) => a.id === personalId,
-);
-ok(
-  "the agent reads as unpaired, which is distinguishable from autonomous",
-  unpaired?.autonomy === "stewarded" && unpaired?.accountable === null,
-  `${unpaired?.autonomy} / ${JSON.stringify(unpaired?.accountable)}`,
-);
+  const unpaired = (await call("GET", `/api/companies/${companyId}/agents`)).body.find(
+    (a) => a.id === personalId,
+  );
+  ok(
+    "the agent reads as unpaired, which is distinguishable from autonomous",
+    unpaired?.autonomy === "stewarded" && unpaired?.accountable === null,
+    `${unpaired?.autonomy} / ${JSON.stringify(unpaired?.accountable)}`,
+  );
+}
 
 const nowAuto = await call("PATCH", `/api/agents/${personalId}`, { autonomy: "autonomous" });
-ok("the same edit now succeeds", nowAuto.status === 200, `status=${nowAuto.status}`);
+ok(
+  stewardshipOn ? "the same edit now succeeds" : "the edit succeeds",
+  nowAuto.status === 200,
+  `status=${nowAuto.status}`,
+);
 ok("accountability defaults to whoever did it", nowAuto.body?.accountableUserId === adminUserId);
 
 // ---------------------------------------------------------------- 7. invite

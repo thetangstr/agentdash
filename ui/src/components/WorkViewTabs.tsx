@@ -1,5 +1,5 @@
 import type { Issue } from "@paperclipai/shared";
-import { Link } from "@/lib/router";
+import { Link, useLocation } from "@/lib/router";
 import { cn } from "../lib/utils";
 
 /**
@@ -37,7 +37,20 @@ export function filterIssuesForWorkView(issues: Issue[], view: WorkView): Issue[
   return view === "unread" ? issues.filter((issue) => issue.isUnreadForMe !== false) : issues;
 }
 
+/**
+ * The Work URL for a view, keeping every other query parameter (search,
+ * assignee, workspace, participant agent) as it is.
+ */
+export function workViewHref(view: WorkView, currentSearch: string): string {
+  const params = new URLSearchParams(currentSearch);
+  if (view === "all") params.delete("view");
+  else params.set("view", view);
+  const query = params.toString();
+  return query ? `/issues?${query}` : "/issues";
+}
+
 export function WorkViewTabs({ view }: { view: WorkView }) {
+  const { search } = useLocation();
   return (
     <nav aria-label="Work views" className="flex flex-wrap items-center gap-1" data-testid="work-view-tabs">
       {WORK_VIEWS.map((option) => {
@@ -45,7 +58,7 @@ export function WorkViewTabs({ view }: { view: WorkView }) {
         return (
           <Link
             key={option}
-            to={option === "all" ? "/issues" : `/issues?view=${option}`}
+            to={workViewHref(option, search)}
             aria-current={active ? "page" : undefined}
             data-testid={`work-view-${option}`}
             className={cn(

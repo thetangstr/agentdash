@@ -38,7 +38,8 @@ export function agentStewardshipRoutes(db: Db) {
    * the same "Company not found" the other capability routes send, so the
    * UI's capability check is the server's answer and nothing on this router
    * can create an agent or a pairing for a company that does not have
-   * stewardship. Reads of an agent's (empty) stewardship stay open.
+   * stewardship. Reads, transfer and release stay open (see
+   * assertCanMutateStewardships).
    */
   async function requireStewardshipCompany(companyId: string) {
     const company = await db
@@ -49,14 +50,22 @@ export function agentStewardshipRoutes(db: Db) {
     return requireProductProfile(company, "agentdash_mk");
   }
 
-  async function assertCanMutateStewardships(req: Request, companyId: string) {
+  /**
+   * Authority to change stewardships. `creates` is true for the routes that
+   * make a new pairing (assign): those are capability-gated. Transfer and
+   * release act on a pairing that already exists and stay open everywhere, so
+   * a pairing made before the gate (or on a workspace whose capability was
+   * later switched off) can always be unwound -- otherwise an agent could be
+   * stuck stewarded forever, since autonomy cannot change while paired.
+   */
+  async function assertCanMutateStewardships(req: Request, companyId: string, creates = false) {
     assertBoard(req);
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
-      await requireStewardshipCompany(companyId);
+      if (creates) await requireStewardshipCompany(companyId);
       return;
     }
     assertCompanyAccess(req, companyId);
-    await requireStewardshipCompany(companyId);
+    if (creates) await requireStewardshipCompany(companyId);
     const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
     if (!allowed) {
       throw forbidden("Agent stewardship management requires agent creation permission");
@@ -187,7 +196,7 @@ export function agentStewardshipRoutes(db: Db) {
     validate(assignAgentStewardshipSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      await assertCanMutateStewardships(req, companyId);
+      await assertCanMutateStewardships(req, companyId, true);
       const stewardship = await stewardships.assign(companyId, {
         agentId: req.body.agentId,
         userId: req.body.userId,

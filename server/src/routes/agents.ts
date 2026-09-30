@@ -2989,10 +2989,19 @@ export function agentRoutes(
     //
     // Skipped entirely for an autonomous agent: it has no steward by
     // definition, and `assign` now refuses one anyway.
+    //
+    // AgentDash (one UX): and only where stewardship is on. It is a
+    // per-workspace capability gated on the server; a company without it must
+    // not collect pairings as a side effect of creating agents.
     if (requestedAutonomy === "stewarded" && req.actor.type === "board" && req.actor.userId) {
       try {
-        const existing = await stewardships.activeByUser(companyId, req.actor.userId);
-        if (!existing) {
+        const stewardshipOn = await db
+          .select({ productProfile: companies.productProfile })
+          .from(companies)
+          .where(eq(companies.id, companyId))
+          .then((rows) => rows[0]?.productProfile === "agentdash_mk");
+        const existing = stewardshipOn ? await stewardships.activeByUser(companyId, req.actor.userId) : null;
+        if (stewardshipOn && !existing) {
           await stewardships.assign(companyId, {
             agentId: agent.id,
             userId: req.actor.userId,
@@ -3546,10 +3555,18 @@ export function agentRoutes(
       hasOwn(req.body as object, "steward") ||
       hasOwn(req.body as object, "stewardUserId")
     ) {
+      // Name the stewardship routes only where they answer: in a company
+      // without the capability, assigning is a 404.
+      const stewardshipOn = await db
+        .select({ productProfile: companies.productProfile })
+        .from(companies)
+        .where(eq(companies.id, existing.companyId))
+        .then((rows) => rows[0]?.productProfile === "agentdash_mk");
       res.status(422).json({
-        error:
-          "Stewardship is not set here. Use POST /api/companies/:companyId/agent-stewardships " +
-          "to assign one, or POST /api/companies/:companyId/agents/:agentId/stewardship/transfer to move it.",
+        error: stewardshipOn
+          ? "Stewardship is not set here. Use POST /api/companies/:companyId/agent-stewardships " +
+            "to assign one, or POST /api/companies/:companyId/agents/:agentId/stewardship/transfer to move it."
+          : "Stewardship is not set here, and it is not enabled for this workspace.",
       });
       return;
     }

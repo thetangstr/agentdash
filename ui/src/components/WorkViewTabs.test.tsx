@@ -7,7 +7,9 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Issue } from "@paperclipai/shared";
 
+const mockLocation = vi.hoisted(() => ({ search: "" }));
 vi.mock("@/lib/router", () => ({
+  useLocation: () => ({ pathname: "/PAP/issues", search: mockLocation.search, hash: "", state: null }),
   Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
     <a href={to} {...rest}>
       {children}
@@ -15,7 +17,9 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-const { WorkViewTabs, filterIssuesForWorkView, parseWorkView, workViewFilters } = await import("./WorkViewTabs");
+const { WorkViewTabs, filterIssuesForWorkView, parseWorkView, workViewFilters, workViewHref } = await import(
+  "./WorkViewTabs"
+);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -45,6 +49,14 @@ describe("Work views", () => {
     expect(filterIssuesForWorkView(issues, "all")).toHaveLength(3);
   });
 
+  it("keeps the other query parameters when switching views", () => {
+    const current = "?q=launch&assignee=__me&view=touched&workspace=w-1";
+    expect(workViewHref("unread", current)).toBe("/issues?q=launch&assignee=__me&view=unread&workspace=w-1");
+    expect(workViewHref("all", current)).toBe("/issues?q=launch&assignee=__me&workspace=w-1");
+    expect(workViewHref("touched", "")).toBe("/issues?view=touched");
+    expect(workViewHref("all", "")).toBe("/issues");
+  });
+
   describe("tabs", () => {
     let container: HTMLDivElement;
     let root: ReturnType<typeof createRoot>;
@@ -58,6 +70,15 @@ describe("Work views", () => {
     afterEach(async () => {
       await act(async () => root.unmount());
       container.remove();
+    });
+
+    it("links each view with the current filters kept", async () => {
+      mockLocation.search = "?q=deploy&view=unread";
+      await act(async () => root.render(<WorkViewTabs view="unread" />));
+      const link = (id: string) => container.querySelector(`[data-testid="${id}"]`);
+      expect(link("work-view-all")?.getAttribute("href")).toBe("/issues?q=deploy");
+      expect(link("work-view-touched")?.getAttribute("href")).toBe("/issues?q=deploy&view=touched");
+      mockLocation.search = "";
     });
 
     it("links each view and marks the current one", async () => {
