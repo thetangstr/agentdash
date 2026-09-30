@@ -73,6 +73,7 @@ import { IssueReferenceActivitySummary } from "../components/IssueReferenceActiv
 import { IssueRelatedWorkPanel } from "../components/IssueRelatedWorkPanel";
 import { IssueProperties } from "../components/IssueProperties";
 import { IssueRunLedger } from "../components/IssueRunLedger";
+import { IssueRecoveryBudgetBanner, recoveryBudgetClearedToastBody } from "../components/IssueRecoveryBudgetBanner";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 // AgentDash: goals-eval-hitl
 import { VerdictTimeline } from "../components/VerdictTimeline";
@@ -1617,6 +1618,35 @@ export function IssueDetail() {
       }
     },
   });
+  // AgentDash (recovery budget remediation): "Clear recovery block & retry".
+  const clearRecoveryBudget = useMutation({
+    mutationFn: () => issuesApi.clearRecoveryBudget(issueId!),
+    onSuccess: ({ issue: nextIssue, retryQueued, stillBlockedByIssues }) => {
+      const issueRefs = new Set<string>([issueId!, nextIssue.id]);
+      if (nextIssue.identifier) issueRefs.add(nextIssue.identifier);
+      mergeIssueResponseIntoCaches(issueRefs, nextIssue);
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issueId!) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId!) });
+      invalidateIssueCollections();
+      pushToast({
+        title: "Recovery block cleared",
+        body: recoveryBudgetClearedToastBody({
+          retryQueued,
+          stillBlockedByIssues: stillBlockedByIssues === true,
+          status: nextIssue.status,
+          hasAgentAssignee: Boolean(nextIssue.assigneeAgentId),
+        }),
+        tone: "success",
+      });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Could not clear the recovery block",
+        body: err instanceof Error ? err.message : "Unable to clear the recovery block",
+        tone: "error",
+      });
+    },
+  });
   const executeTreeControl = useMutation({
     mutationFn: async () => {
       if (treeControlMode === "resume") {
@@ -3000,6 +3030,11 @@ export function IssueDetail() {
           This issue is hidden
         </div>
       )}
+      <IssueRecoveryBudgetBanner
+        executionState={issue.executionState}
+        isClearing={clearRecoveryBudget.isPending}
+        onClear={() => clearRecoveryBudget.mutate()}
+      />
       {activePauseHold && (
         <div className="rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
           {activePauseHold.isRoot ? (

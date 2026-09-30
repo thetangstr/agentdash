@@ -1,0 +1,267 @@
+import { and, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import type { Db } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issueComments, issues } from "@paperclipai/db";
+import {
+  ISSUE_RECOVERY_BUDGET_CLEARED_ACTION,
+  readIssueRecoveryBudget,
+  type IssueRecoveryBudgetClearTrigger,
+  type IssueRecoveryBudgetState,
+  type IssueRecoveryBudgetUsage,
+} from "@paperclipai/shared";
+import { logActivity } from "./activity-log.js";
+
+/**
+ * AgentDash (recovery budget remediation): human remediation for an issue
+ * whose automatic-recovery budget is exhausted.
+ *
+ * The heartbeat writes `execution_state.recoveryBudget = { status: "exhausted" }`
+ * when automatic retries for a task run out, and while it is set refuses every
+ * run a person did not start. Before this module nothing removed it, although
+ * the exhaustion message promised human remediation.
+ *
+ * Clearing removes the marker and logs `issue.recovery_budget_cleared` in the
+ * same transaction. That activity row is also the ledger reset point: the
+ * heartbeat counts only automatic retries recorded after the latest clear, so
+ * remediation opens a fresh retry window rather than re-tripping on the
+ * history it forgave. Writing both together means there is never a cleared
+ * marker without its reset point.
+ *
+ * Callers decide whether the actor is a human with authority to clear; this
+ * module only performs and records the clear.
+ */
+
+export function hasExhaustedRecoveryBudget(executionState: unknown): boolean {
+  return readIssueRecoveryBudget(executionState) !== null;
+}
+
+function withoutRecoveryBudget(executionState: unknown): Record<string, unknown> | null {
+  if (typeof executionState !== "object" || executionState === null || Array.isArray(executionState)) {
+    return null;
+  }
+  const { recoveryBudget: _removed, ...rest } = executionState as Record<string, unknown>;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
+type DbOrTx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/**
+ * When a human last cleared this issue's recovery budget. Only server-written
+ * rows by a user actor qualify: the activity table also holds manual rows
+ * posted through the activity API, and an agent must not be able to reset its
+ * own allowance.
+ */
+export async function latestRecoveryBudgetClearAt(db: DbOrTx, companyId: string, issueId: string) {
+  return db
+    .select({ createdAt: activityLog.createdAt })
+    .from(activityLog)
+    .where(
+      and(
+        eq(activityLog.companyId, companyId),
+        eq(activityLog.entityType, "issue"),
+        eq(activityLog.entityId, issueId),
+        eq(activityLog.action, ISSUE_RECOVERY_BUDGET_CLEARED_ACTION),
+        eq(activityLog.actorType, "user"),
+        eq(activityLog.origin, "server"),
+      ),
+    )
+    .orderBy(desc(activityLog.createdAt))
+    .limit(1)
+    .then((rows) => rows[0]?.createdAt ?? null);
+}
+
+export async function clearIssueRecoveryBudget(
+  db: Db,
+  input: {
+    companyId: string;
+    issueId: string;
+    actorUserId: string;
+    trigger: IssueRecoveryBudgetClearTrigger;
+    runId?: string | null;
+    details?: Record<string, unknown>;
+  },
+): Promise<{ issue: typeof issues.$inferSelect; cleared: IssueRecoveryBudgetState } | null> {
+  return db.transaction(async (tx) => {
+    const current = await tx
+      .select()
+      .from(issues)
+      .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)))
+      .for("update")
+      .then((rows) => rows[0] ?? null);
+    if (!current) return null;
+    const cleared = readIssueRecoveryBudget(current.executionState);
+    if (!cleared) return null;
+
+    const [updated] = await tx
+      .update(issues)
+      .set({
+        executionState: withoutRecoveryBudget(current.executionState),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)))
+      .returning();
+    if (!updated) return null;
+
+    await logActivity(tx as unknown as Db, {
+      companyId: input.companyId,
+      actorType: "user",
+      actorId: input.actorUserId,
+      agentId: null,
+      runId: input.runId ?? null,
+      action: ISSUE_RECOVERY_BUDGET_CLEARED_ACTION,
+      entityType: "issue",
+      entityId: input.issueId,
+      details: {
+        identifier: updated.identifier,
+        trigger: input.trigger,
+        status: updated.status,
+        clearedRecoveryBudget: {
+          exhaustedBy: cleared.exhaustedBy,
+          usage: cleared.usage,
+          limits: cleared.limits,
+          exhaustedAt: cleared.exhaustedAt,
+          sourceRunId: cleared.sourceRunId,
+          refusedRunId: cleared.refusedRunId,
+        },
+        ...input.details,
+      },
+    });
+
+    return { issue: updated, cleared };
+  });
+}
+
+/** Statuses that read as live work, where a silent exhausted marker misleads. */
+const LIVE_WORK_STATUSES = ["todo", "in_progress"] as const;
+const ACTIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+export const RECOVERY_BUDGET_REBLOCK_COMMENT_PREFIX = "Automatic recovery is still blocked";
+
+function formatUsage(usage: IssueRecoveryBudgetUsage | null, limits: IssueRecoveryBudgetUsage | null) {
+  if (!usage) return null;
+  const limit = (value: number | undefined) => (limits && value !== undefined ? `/${value}` : "");
+  return [
+    `attempts=${usage.automaticRetries}${limit(limits?.automaticRetries)}`,
+    `turns=${usage.providerTurns}${limit(limits?.providerTurns)}`,
+    `tokens=${usage.providerTokens}${limit(limits?.providerTokens)}`,
+    `costUsd=${usage.providerCostUsd.toFixed(6)}${limits ? `/${limits.providerCostUsd.toFixed(2)}` : ""}`,
+    `runtimeMs=${usage.runtimeMs}${limit(limits?.runtimeMs)}`,
+  ].join(", ");
+}
+
+/**
+ * An issue must never carry an exhausted marker while it looks like live work
+ * (`todo` / `in_progress`) with nobody told. That happens when something other
+ * than a human clear moved it out of `blocked`: the assignee agent checking it
+ * out or PATCHing it, an assistant-grant reopen, or a run a person started
+ * that then left the issue in `todo`. Every automatic retry is then refused
+ * and nothing else ever surfaces it.
+ *
+ * This moves such an issue back to `blocked` and posts one explanatory comment
+ * per clear window (deduped on the comment prefix since the latest clear). It
+ * does nothing while another run on the issue is queued or running, so it
+ * never pulls the issue out from under a run a person started.
+ * `excludeRunId` is the run being refused, which is not live work.
+ */
+export async function reblockExhaustedIssue(
+  db: Db,
+  input: {
+    companyId: string;
+    issueId: string;
+    source: string;
+    excludeRunId?: string | null;
+    commentAuthorAgentId?: string | null;
+  },
+): Promise<typeof issues.$inferSelect | null> {
+  return db.transaction(async (tx) => {
+    const current = await tx
+      .select()
+      .from(issues)
+      .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)))
+      .for("update")
+      .then((rows) => rows[0] ?? null);
+    if (!current) return null;
+    const budget = readIssueRecoveryBudget(current.executionState);
+    if (!budget) return null;
+    if (!(LIVE_WORK_STATUSES as readonly string[]).includes(current.status)) return null;
+
+    const activeRun = await tx
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, input.companyId),
+          inArray(heartbeatRuns.status, [...ACTIVE_RUN_STATUSES]),
+          input.excludeRunId ? sql`${heartbeatRuns.id} <> ${input.excludeRunId}` : undefined,
+          or(
+            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${input.issueId}`,
+            sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${input.issueId}`,
+          ),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (activeRun) return null;
+
+    const now = new Date();
+    const [updated] = await tx
+      .update(issues)
+      .set({
+        status: "blocked",
+        checkoutRunId: null,
+        executionRunId: null,
+        executionAgentNameKey: null,
+        executionLockedAt: null,
+        updatedAt: now,
+      })
+      .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)))
+      .returning();
+    if (!updated) return null;
+
+    const clearedAt = await latestRecoveryBudgetClearAt(tx, input.companyId, input.issueId);
+    const existingComment = await tx
+      .select({ id: issueComments.id })
+      .from(issueComments)
+      .where(
+        and(
+          eq(issueComments.companyId, input.companyId),
+          eq(issueComments.issueId, input.issueId),
+          sql`${issueComments.body} like ${`${RECOVERY_BUDGET_REBLOCK_COMMENT_PREFIX}%`}`,
+          clearedAt ? gt(issueComments.createdAt, clearedAt) : undefined,
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (!existingComment) {
+      const usage = formatUsage(budget.usage, budget.limits);
+      await tx.insert(issueComments).values({
+        companyId: input.companyId,
+        issueId: input.issueId,
+        authorAgentId: input.commentAuthorAgentId ?? null,
+        body:
+          `${RECOVERY_BUDGET_REBLOCK_COMMENT_PREFIX}: this issue's automatic-retry budget is exhausted` +
+          `${usage ? ` (${usage})` : ""}, but it was in \`${current.status}\`, where it looked like live work. ` +
+          "Moved it back to `blocked`. No automatic retry will start until a board user clears the recovery block: " +
+          "use \"Clear recovery block & retry\" on this issue, move it out of `blocked`, reopen it with a comment, or reassign it.",
+      });
+    }
+
+    await logActivity(tx as unknown as Db, {
+      companyId: input.companyId,
+      actorType: "system",
+      actorId: "system",
+      agentId: null,
+      runId: null,
+      action: "issue.updated",
+      entityType: "issue",
+      entityId: input.issueId,
+      details: {
+        identifier: updated.identifier,
+        status: "blocked",
+        previousStatus: current.status,
+        source: input.source,
+        reason: "recovery_budget_exhausted",
+      },
+    });
+
+    return updated;
+  });
+}

@@ -13,6 +13,7 @@ import {
   AGENT_MEMORY_CONTEXT_KEY,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
   MODEL_PROFILE_KEYS,
+  readIssueRecoveryBudget,
   isEnvironmentDriverSupportedForAdapter,
   type BillingType,
   type EnvironmentLeaseStatus,
@@ -88,6 +89,7 @@ import {
 import {
   buildHeartbeatRunStopMetadata,
   mergeHeartbeatRunStopMetadata,
+  resolveHeartbeatRunTimeoutPolicy,
 } from "./heartbeat-stop-metadata.js";
 // AgentDash (OBS-5, #698): first-output deadline for zero-turn hangs.
 import {
@@ -168,10 +170,11 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-
 import { recoveryService } from "./recovery/service.js";
 import { productivityReviewService } from "./productivity-review.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
+import { latestRecoveryBudgetClearAt, reblockExhaustedIssue } from "./issue-recovery-budget.js";
 import {
   evaluateTaskRecoveryBudget,
   formatTaskRecoveryBudgetUsage,
-  TASK_RECOVERY_BUDGET_LIMITS,
+  resolveTaskRecoveryBudgetLimits,
   TASK_RECOVERY_SCOPE_SCAN_CAP,
 } from "./task-recovery-budget.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
@@ -3230,19 +3233,45 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return readNonEmptyString(context.issueId) ?? readNonEmptyString(context.taskId);
   }
 
-  async function taskRecoveryAncestors(
+  /**
+   * AgentDash (recovery budget remediation): while an issue's recovery budget
+   * is exhausted, only a run a person started may proceed — a human comment,
+   * reopen, status change, assignment, review decision or the explicit clear
+   * action. Everything else is refused, linked or not: children completed and
+   * blockers resolved by an agent, wakes another agent started, promoted
+   * deferred wakes an agent or the system queued, timer and system wakes.
+   * Without this an agent could keep itself running on an exhausted issue by
+   * filing and closing child issues assigned to itself. The wake request's
+   * requestedByActorType is the record of who started it.
+   */
+  async function isRunStartedByPerson(run: typeof heartbeatRuns.$inferSelect) {
+    if (taskRecoveryParentRunId(run)) return false;
+    if (!run.wakeupRequestId) return false;
+    const wake = await db
+      .select({ requestedByActorType: agentWakeupRequests.requestedByActorType })
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.id, run.wakeupRequestId))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return wake?.requestedByActorType === "user";
+  }
+
+  async function taskRecoveryLedgerRuns(
     run: typeof heartbeatRuns.$inferSelect,
     issueId: string,
   ) {
     // AGE-142 (S3): attempts are a property of the task, not of the retry
-    // chain. The old walk followed retryOfRunId / continuation links and
-    // missed every run the chain never linked — exactly the refused and
-    // cancelled retry dispatches whose absence read attempts=0/1 on AGE-104
-    // while three dispatch attempts existed. All terminal runs recorded for
-    // the same issue+agent scope are the attempt ledger now, newest-first and
-    // capped the way the walk capped its depth.
-    const ancestors: Array<typeof heartbeatRuns.$inferSelect> = [];
-    const seen = new Set<string>([run.id]);
+    // chain, so the ledger is a scope query over every terminal run recorded
+    // for the same issue+agent — refused and cancelled included — newest-first
+    // and capped the way the old chain walk capped its depth.
+    //
+    // Recovery budget remediation: the ledger holds automatic recovery runs
+    // only. The source run (assignment, human comment, any unlinked dispatch)
+    // is excluded, which is what let one long first run exhaust the budget
+    // before the first retry ever ran. Linked runs from
+    // before the last human clear are excluded too, so remediation opens a
+    // fresh window instead of re-tripping on the history it just forgave.
+    const clearedAt = await latestRecoveryBudgetClearAt(db, run.companyId, issueId);
     const rows = await db
       .select()
       .from(heartbeatRuns)
@@ -3251,10 +3280,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           eq(heartbeatRuns.companyId, run.companyId),
           eq(heartbeatRuns.agentId, run.agentId),
           inArray(heartbeatRuns.status, HEARTBEAT_RUN_TERMINAL_STATUSES),
+          sql`${heartbeatRuns.id} <> ${run.id}`,
           or(
             sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
             sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issueId}`,
           ),
+          // Mirrors taskRecoveryParentRunId: a run is automatic recovery when
+          // it is linked to a predecessor.
+          or(
+            sql`${heartbeatRuns.retryOfRunId} is not null`,
+            sql`coalesce(btrim(${heartbeatRuns.contextSnapshot} ->> 'retryOfRunId'), '') <> ''`,
+            sql`coalesce(btrim(${heartbeatRuns.contextSnapshot} ->> 'livenessContinuationSourceRunId'), '') <> ''`,
+            sql`coalesce(btrim(${heartbeatRuns.contextSnapshot} ->> 'missingIssueCommentForRunId'), '') <> ''`,
+          ),
+          clearedAt ? gt(heartbeatRuns.createdAt, clearedAt) : undefined,
         ),
       )
       // createdAt, not startedAt: refused runs never get claimed, so their
@@ -3262,15 +3301,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // would crowd real history out of the cap with unclaimed refusals.
       .orderBy(desc(heartbeatRuns.createdAt))
       .limit(TASK_RECOVERY_SCOPE_SCAN_CAP);
-    for (const row of rows) {
-      if (!seen.has(row.id)) {
-        seen.add(row.id);
-        ancestors.push(row);
-      }
-      if (ancestors.length >= TASK_RECOVERY_SCOPE_SCAN_CAP) break;
-    }
+    return rows;
+  }
 
-    return ancestors;
+  function taskRecoveryBudgetLimitsForAgent(agent: typeof agents.$inferSelect) {
+    const timeoutPolicy = resolveHeartbeatRunTimeoutPolicy(agent.adapterType, parseObject(agent.adapterConfig));
+    const adapterTimeoutMs = timeoutPolicy.timeoutConfigured
+      ? timeoutPolicy.effectiveTimeoutMs ?? (timeoutPolicy.effectiveTimeoutSec ?? 0) * 1_000
+      : null;
+    const resolved = resolveTaskRecoveryBudgetLimits({
+      runtimeConfig: agent.runtimeConfig,
+      adapterTimeoutMs,
+    });
+    if (resolved.invalidOverride) {
+      logger.warn(
+        { agentId: agent.id },
+        "ignoring invalid runtimeConfig.recoveryBudget override; using default recovery budget limits",
+      );
+    }
+    return resolved.limits;
   }
 
   async function cancelQueuedRunForRecoveryBudget(
@@ -3299,8 +3348,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const dimensions = input.exhaustedBy.length > 0
       ? input.exhaustedBy.join(", ")
       : "persisted aggregate limit";
-    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. Further automatic wakeups and provider calls are suppressed until human remediation.`;
+    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. Further automatic retries are suppressed until a board user clears the recovery block: use "Clear recovery block & retry" on this issue, move it out of \`blocked\`, reopen it with a comment, or reassign it. Human comments still reach the assignee.`;
 
+    // One visible comment per exhaustion: a comment from before the last
+    // human clear belongs to the window that clear closed.
+    const clearedAt = await latestRecoveryBudgetClearAt(db, input.run.companyId, input.issueId);
     await db.transaction(async (tx) => {
       const issue = await tx
         .select({ id: issues.id })
@@ -3318,6 +3370,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             eq(issueComments.companyId, input.run.companyId),
             eq(issueComments.issueId, input.issueId),
             sql`${issueComments.body} like 'Automatic recovery budget exhausted%'`,
+            clearedAt ? gt(issueComments.createdAt, clearedAt) : undefined,
           ),
         )
         .limit(1)
@@ -3341,7 +3394,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   async function enforceTaskRecoveryBudget(
     run: typeof heartbeatRuns.$inferSelect,
     issueId: string,
+    agent: typeof agents.$inferSelect,
   ): Promise<boolean> {
+    const linked = Boolean(taskRecoveryParentRunId(run));
     const issue = await db
       .select()
       .from(issues)
@@ -3351,58 +3406,67 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (!issue) return false;
 
     const executionState = parseObject(issue.executionState);
-    const existingBudget = parseObject(executionState.recoveryBudget);
-    if (existingBudget.status === "exhausted") {
-      const usage = parseObject(existingBudget.usage);
-      const usageSummary = formatTaskRecoveryBudgetUsage({
-        automaticRetries: asNumber(usage.automaticRetries, 0),
-        providerTurns: asNumber(usage.providerTurns, 0),
-        providerTokens: asNumber(usage.providerTokens, 0),
-        providerCostUsd: asNumber(usage.providerCostUsd, 0),
-        runtimeMs: asNumber(usage.runtimeMs, 0),
-      });
-      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Human remediation must clear the exhausted recovery state before another run can start.`;
+    const existingBudget = readIssueRecoveryBudget(issue.executionState);
+    if (existingBudget) {
+      // Exhausted: a run a person started is the remediation window the
+      // exhaustion message promises and goes ahead; every other run — linked
+      // retries and unlinked automatic or agent-started wakes alike — is
+      // refused (see isRunStartedByPerson).
+      if (await isRunStartedByPerson(run)) return false;
+      const usage = existingBudget.usage ?? {
+        automaticRetries: 0,
+        providerTurns: 0,
+        providerTokens: 0,
+        providerCostUsd: 0,
+        runtimeMs: 0,
+      };
+      const usageSummary = formatTaskRecoveryBudgetUsage(
+        usage,
+        existingBudget.limits ?? taskRecoveryBudgetLimitsForAgent(agent),
+      );
+      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Only runs a person starts can proceed until a board user clears the recovery block (the issue's "Clear recovery block & retry" action, or moving it out of blocked).`;
       await cancelQueuedRunForRecoveryBudget(run, reason);
       await ensureTaskRecoveryBudgetCommentOnce({
         run,
         issueId,
         usageSummary,
-        exhaustedBy: Array.isArray(existingBudget.exhaustedBy)
-          ? existingBudget.exhaustedBy.filter((value): value is string => typeof value === "string")
-          : [],
+        exhaustedBy: existingBudget.exhaustedBy,
+      });
+      // The marker can outlive `blocked` without a clear (an agent checkout,
+      // an assistant-grant reopen, a person-started run that left it in
+      // `todo`). Never leave it looking like live work with nobody told.
+      await reblockExhaustedIssue(db, {
+        companyId: run.companyId,
+        issueId,
+        source: "heartbeat.recovery_budget_refusal",
+        excludeRunId: run.id,
+        commentAuthorAgentId: run.agentId,
       });
       return true;
     }
 
-    // AGE-142 (S3): the budget binds automatic recovery — a dispatch linked to
-    // its predecessor by retryOfRunId / continuation. Unlinked dispatches (a
-    // human-triggered remediation, or the very first dispatch of a task) are
-    // not automatic recovery and keep bypassing this check: that exemption is
-    // the remediation window the exhaustion message promises. What changes is
-    // the ledger a linked retry is judged against: the old chain walk saw only
-    // runs the retry chain linked, which is exactly how AGE-104 read
-    // attempts=0/1 while refused and cancelled dispatches piled up unlinked.
-    // The scope query counts every terminal run recorded for the same
-    // issue+agent — refused and cancelled included — so the ledger reflects
-    // observed attempts rather than chain shape.
-    if (!taskRecoveryParentRunId(run)) return false;
-    const priorRuns = await taskRecoveryAncestors(run, issueId);
-    if (priorRuns.length === 0) return false;
+    // AGE-142 (S3): with budget left, the budget binds automatic recovery — a
+    // dispatch linked to its predecessor by retryOfRunId / continuation.
+    // Unlinked dispatches (the first dispatch of a task, a human action) are
+    // not automatic recovery and are not judged against the ledger.
+    if (!linked) return false;
 
-    const decision = evaluateTaskRecoveryBudget(priorRuns);
+    const limits = taskRecoveryBudgetLimitsForAgent(agent);
+    const priorRuns = await taskRecoveryLedgerRuns(run, issueId);
+    const decision = evaluateTaskRecoveryBudget(priorRuns, limits);
     const exhaustedBy = decision.exhaustedBy;
     if (exhaustedBy.length === 0) return false;
 
     const now = new Date();
-    const usageSummary = formatTaskRecoveryBudgetUsage(decision.usage);
-    const reason = `Automatic recovery budget exhausted (${exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further provider run will start until human remediation clears the exhausted recovery state.`;
+    const usageSummary = formatTaskRecoveryBudgetUsage(decision.usage, limits);
+    const reason = `Automatic recovery budget exhausted (${exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further automatic retry will start until a board user clears the recovery block.`;
     const recoveryBudget = {
       status: "exhausted",
       exhaustedBy,
       usage: decision.usage,
-      limits: TASK_RECOVERY_BUDGET_LIMITS,
+      limits,
       exhaustedAt: now.toISOString(),
-      sourceRunId: priorRuns[0]?.id ?? null,
+      sourceRunId: taskRecoveryParentRunId(run) ?? priorRuns[0]?.id ?? null,
       refusedRunId: run.id,
     };
 
@@ -3438,6 +3502,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         ),
       );
     for (const sibling of siblingRuns) {
+      // A queued run a person started survives the trip: the exhausted issue
+      // would let it through at claim time anyway, and cancelling it would
+      // drop a human's comment or reopen on the floor.
+      if (await isRunStartedByPerson(sibling)) continue;
       await cancelQueuedRunForRecoveryBudget(sibling, reason);
     }
 
@@ -4609,7 +4677,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const context = parseObject(run.contextSnapshot);
     const recoveryIssueId = taskRecoveryRunIssueId(run);
-    if (recoveryIssueId && await enforceTaskRecoveryBudget(run, recoveryIssueId)) {
+    if (recoveryIssueId && await enforceTaskRecoveryBudget(run, recoveryIssueId, agent)) {
       logger.info(
         { runId: run.id, issueId: recoveryIssueId, errorCode: TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE },
         "claimQueuedRun: cancelled by aggregate task recovery budget",

@@ -1305,6 +1305,25 @@ export function agentRoutes(
     return entries;
   }
 
+  /**
+   * AgentDash (recovery budget remediation): `runtimeConfig.recoveryBudget`
+   * loosens or tightens the spend guard on automatic retries, so only a board
+   * actor may set or change it. An agent-authored hire, create or peer PATCH
+   * that carries a different value is refused; resending the stored value
+   * unchanged passes.
+   */
+  function assertNoAgentRecoveryBudgetMutation(req: Request, before: unknown, after: unknown) {
+    if (req.actor.type === "board") return;
+    const read = (runtimeConfig: unknown) =>
+      typeof runtimeConfig === "object" && runtimeConfig !== null && !Array.isArray(runtimeConfig)
+        ? (runtimeConfig as Record<string, unknown>).recoveryBudget ?? null
+        : null;
+    if (JSON.stringify(read(before)) === JSON.stringify(read(after))) return;
+    throw forbidden(
+      "Only a board user may set runtimeConfig.recoveryBudget; agent-authored hires and updates cannot change the automatic-recovery budget",
+    );
+  }
+
   async function assertNoAgentRuntimeConfigAdapterConfigMutation(
     req: Request,
     companyId: string,
@@ -2572,6 +2591,7 @@ export function agentRoutes(
     );
     await assertNoAgentAdapterConfigMutation(req, companyId, rawHireAdapterConfig);
     await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, hireInput.runtimeConfig);
+    assertNoAgentRecoveryBudgetMutation(req, null, hireInput.runtimeConfig);
     // AgentDash (security, #719): the binary, argv, env and cwd an agent runs
     // with are instance-admin only; see services/adapter-host-execution-policy.ts.
     assertHostExecutionConfigAllowed(req.actor, [
@@ -2801,6 +2821,7 @@ export function agentRoutes(
     );
     await assertNoAgentAdapterConfigMutation(req, companyId, rawCreateAdapterConfig);
     await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, createInput.runtimeConfig);
+    assertNoAgentRecoveryBudgetMutation(req, null, createInput.runtimeConfig);
     // AgentDash (security, #719): the binary, argv, env and cwd an agent runs
     // with are instance-admin only; see services/adapter-host-execution-policy.ts.
     assertHostExecutionConfigAllowed(req.actor, [
@@ -3648,6 +3669,7 @@ export function agentRoutes(
         }
       }
       await assertNoAgentRuntimeConfigAdapterConfigMutation(req, existing.companyId, runtimeConfig);
+      assertNoAgentRecoveryBudgetMutation(req, existing.runtimeConfig, runtimeConfig);
       requestedRuntimeConfig = runtimeConfig;
     }
     // AgentDash (security, #719): changing the binary, argv, env or cwd is

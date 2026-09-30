@@ -93,6 +93,10 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import {
+  clearIssueRecoveryBudget,
+  hasExhaustedRecoveryBudget,
+} from "../services/issue-recovery-budget.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { executionWorkspaceService as executionWorkspaceServiceDirect } from "../services/execution-workspaces.js";
 import { feedbackService } from "../services/feedback.js";
@@ -248,6 +252,16 @@ function shouldImplicitlyMoveCommentedIssueToTodo(input: {
   if (!isClosedIssueStatus(input.issueStatus) && input.issueStatus !== "blocked") return false;
   if (typeof input.assigneeAgentId !== "string" || input.assigneeAgentId.length === 0) return false;
   return true;
+}
+
+/**
+ * AgentDash (recovery budget remediation): only a person may clear an exhausted
+ * automatic-recovery budget. Agent keys never qualify, and neither do
+ * assistant grants: the clear lifts a spend guard, so it takes a human at the
+ * board, not an assistant acting with their token.
+ */
+function isHumanBoardActor(req: Request) {
+  return req.actor.type === "board" && req.actor.source !== "assistant_grant";
 }
 
 function isExplicitResumeCapableStatus(status: string | null | undefined) {
@@ -2587,6 +2601,42 @@ export function issueRoutes(
       return;
     }
 
+    // AgentDash (recovery budget remediation): a person moving the issue out
+    // of `blocked`, reopening it by comment, or reassigning it is the human
+    // remediation the exhaustion message asks for, so it clears the exhausted
+    // automatic-recovery marker. Without this the marker was permanent.
+    if (isHumanBoardActor(req) && hasExhaustedRecoveryBudget(issue.executionState)) {
+      const movedToTodoByComment =
+        !!commentBody && effectiveMoveToTodoRequested && existing.status !== issue.status && issue.status === "todo";
+      const leftBlocked = existing.status === "blocked" && issue.status !== "blocked";
+      const reassigned =
+        issue.assigneeAgentId !== existing.assigneeAgentId || issue.assigneeUserId !== existing.assigneeUserId;
+      const clearTrigger = movedToTodoByComment
+        ? "reopen_comment"
+        : leftBlocked
+          ? "status_change"
+          : reassigned
+            ? "reassign"
+            : null;
+      if (clearTrigger) {
+        const clearedBudget = await clearIssueRecoveryBudget(db, {
+          companyId: issue.companyId,
+          issueId: issue.id,
+          actorUserId: actor.actorId,
+          trigger: clearTrigger,
+          runId: actor.runId,
+          details: { previousStatus: existing.status },
+        });
+        if (clearedBudget) {
+          issue = {
+            ...issue,
+            executionState: clearedBudget.issue.executionState,
+            updatedAt: clearedBudget.issue.updatedAt,
+          };
+        }
+      }
+    }
+
     let cancelledStatusRunId: string | null = null;
     if (runToCancelForCancelledStatus) {
       try {
@@ -3306,6 +3356,113 @@ export function issueRoutes(
     res.json(result);
   });
 
+  // AgentDash (recovery budget remediation): "Clear recovery block & retry".
+  // Removes an exhausted automatic-recovery marker, moves a budget-blocked
+  // issue back to `todo` when nothing else blocks it, and wakes the assignee.
+  // The clear resets the retry ledger (see services/issue-recovery-budget.ts),
+  // so the agent gets a fresh automatic-retry window, not an unlimited one.
+  router.post("/issues/:id/recovery-budget/clear", async (req, res) => {
+    if (!isHumanBoardActor(req)) {
+      res.status(403).json({ error: "Only a board user can clear an issue's recovery block" });
+      return;
+    }
+    if (!req.actor.userId) {
+      throw forbidden("Board user context required");
+    }
+
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, existing.companyId);
+    await assertProjectIdVisible(db, req, existing.companyId, existing.projectId);
+    if (!hasExhaustedRecoveryBudget(existing.executionState)) {
+      res.status(409).json({ error: "Issue has no exhausted recovery budget to clear" });
+      return;
+    }
+
+    const actor = getActorInfo(req);
+    const hasUnresolvedBlockers =
+      existing.status === "blocked"
+        ? (await svc.getDependencyReadiness(existing.id)).unresolvedBlockerCount > 0
+        : false;
+    const moveToTodo = existing.status === "blocked" && !hasUnresolvedBlockers;
+
+    const cleared = await clearIssueRecoveryBudget(db, {
+      companyId: existing.companyId,
+      issueId: existing.id,
+      actorUserId: actor.actorId,
+      trigger: "explicit_action",
+      runId: actor.runId,
+      details: {
+        previousStatus: existing.status,
+        ...(moveToTodo ? { nextStatus: "todo" } : {}),
+        ...(hasUnresolvedBlockers ? { unresolvedBlockers: true } : {}),
+      },
+    });
+    if (!cleared) {
+      res.status(409).json({ error: "Issue has no exhausted recovery budget to clear" });
+      return;
+    }
+
+    let issue = cleared.issue;
+    if (moveToTodo) {
+      const reopened = await svc.update(existing.id, { status: "todo", actorUserId: actor.actorId });
+      if (reopened) {
+        issue = reopened;
+        await logActivity(db, {
+          companyId: issue.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.updated",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            status: "todo",
+            identifier: issue.identifier,
+            source: "recovery_budget_clear",
+            _previous: { status: existing.status },
+          },
+        });
+      }
+    }
+
+    let retryQueued = false;
+    if (issue.assigneeAgentId && (issue.status === "todo" || issue.status === "in_progress")) {
+      const wake = await heartbeat
+        .wakeup(issue.assigneeAgentId, {
+          source: "on_demand",
+          triggerDetail: "manual",
+          reason: "issue_recovery_budget_cleared",
+          payload: { issueId: issue.id, mutation: "recovery_budget_clear" },
+          requestedByActorType: "user",
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: issue.id,
+            taskId: issue.id,
+            source: "issue.recovery_budget_clear",
+            wakeReason: "issue_recovery_budget_cleared",
+          },
+        })
+        .catch((err) => {
+          logger.warn({ err, issueId: issue.id }, "failed to wake assignee after clearing recovery budget");
+          return null;
+        });
+      retryQueued = Boolean(wake);
+    }
+
+    res.json({
+      issue,
+      cleared: true,
+      retryQueued,
+      ...(hasUnresolvedBlockers ? { stillBlockedByIssues: true } : {}),
+    });
+  });
+
   router.get("/issues/:id/comments", async (req, res) => {
     const id = req.params.id as string;
     const issue = await svc.getById(id);
@@ -3896,6 +4053,26 @@ export function issueRoutes(
           identifier: currentIssue.identifier,
         },
       });
+
+      // AgentDash (recovery budget remediation): a person reopening the issue
+      // by comment clears an exhausted automatic-recovery marker.
+      if (isHumanBoardActor(req) && hasExhaustedRecoveryBudget(currentIssue.executionState)) {
+        const clearedBudget = await clearIssueRecoveryBudget(db, {
+          companyId: currentIssue.companyId,
+          issueId: currentIssue.id,
+          actorUserId: actor.actorId,
+          trigger: "reopen_comment",
+          runId: actor.runId,
+          details: { previousStatus: reopenFromStatus },
+        });
+        if (clearedBudget) {
+          currentIssue = {
+            ...currentIssue,
+            executionState: clearedBudget.issue.executionState,
+            updatedAt: clearedBudget.issue.updatedAt,
+          };
+        }
+      }
     }
 
     if (interruptRequested) {

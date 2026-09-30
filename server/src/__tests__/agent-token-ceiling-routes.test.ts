@@ -1,7 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { updateAgentTokenCeilingSchema } from "@paperclipai/shared";
+import { updateAgentSchema, updateAgentTokenCeilingSchema } from "@paperclipai/shared";
 
 const agentId = "11111111-1111-4111-8111-111111111111";
 const companyId = "22222222-2222-4222-8222-222222222222";
@@ -409,6 +409,63 @@ describe.sequential("agent token-ceiling route", () => {
 
     expect(res.status).toBe(403);
     expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
+  // AgentDash (recovery budget remediation): the automatic-recovery budget is
+  // a spend guard, so an agent-authored hire or peer PATCH may not set it.
+  it("refuses runtimeConfig.recoveryBudget on an agent-authored hire", async () => {
+    const hirerId = "33333333-3333-4333-8333-333333333333";
+    mockAgentService.getById.mockImplementation(async (id: string) =>
+      id === hirerId ? { ...baseAgent, id: hirerId, role: "ceo", permissions: { canCreateAgents: true } } : baseAgent);
+    const app = await createApp({
+      type: "agent",
+      agentId: hirerId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${companyId}/agent-hires`)
+        .send({
+          name: "Retry forever",
+          adapterType: "process",
+          adapterConfig: { command: "echo" },
+          runtimeConfig: { recoveryBudget: { automaticRetries: 10 } },
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(JSON.stringify(res.body)).toContain("recoveryBudget");
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a peer agent PATCH that changes another agent's recoveryBudget", async () => {
+    const peerId = "44444444-4444-4444-8444-444444444444";
+    mockAgentService.getById.mockImplementation(async (id: string) =>
+      id === peerId ? { ...baseAgent, id: peerId, role: "ceo", permissions: { canCreateAgents: true } } : baseAgent);
+    const app = await createApp({
+      type: "agent",
+      agentId: peerId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ runtimeConfig: { ...baseAgent.runtimeConfig, recoveryBudget: { automaticRetries: 10 } } }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a recoveryBudget above the sanity ceilings", () => {
+    expect(() => updateAgentSchema.parse({ runtimeConfig: { recoveryBudget: { automaticRetries: 11 } } })).toThrow();
+    expect(() => updateAgentSchema.parse({ runtimeConfig: { recoveryBudget: { providerCostUsd: 1_000 } } })).toThrow();
   });
 
   it("returns 404 for an unknown agent", async () => {
