@@ -49,6 +49,10 @@ interface DbStub {
   deletes: Array<{ table: string }>;
   /** Optional override for the row returned by .insert(approvals).returning(). */
   approvalReturning?: () => unknown[];
+  /** onConflictDoUpdate configs seen by the queue upsert. */
+  upserts?: Array<Record<string, unknown>>;
+  /** Raw SQL passed to db.execute (the escalation advisory lock). */
+  executes?: unknown[];
 }
 
 function makeDb(stub: DbStub) {
@@ -83,6 +87,10 @@ function makeDb(stub: DbStub) {
     return {
       returning: insertReturning,
       onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn((config: Record<string, unknown>) => {
+        stub.upserts?.push(config);
+        return Promise.resolve(undefined);
+      }),
     };
   };
 
@@ -122,7 +130,15 @@ function makeDb(stub: DbStub) {
     return chain;
   });
 
-  return { select, insert, delete: del, update } as any;
+  // #849 follow-up: escalations run in a transaction under an advisory lock.
+  // The stub runs the callback against itself and records the lock SQL.
+  const execute = vi.fn(async (query: unknown) => {
+    stub.executes?.push(query);
+    return [];
+  });
+  const dbStub: any = { select, insert, delete: del, update, execute };
+  dbStub.transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(dbStub));
+  return dbStub;
 }
 
 function makeDeps(over: Partial<{
@@ -139,11 +155,14 @@ function makeDeps(over: Partial<{
   } else {
     createMock.mockResolvedValue(over.createReturns ?? { id: VERDICT_ID });
   }
+  const verdicts = {
+    closingVerdictFor,
+    create: createMock,
+  } as any;
   return {
-    verdicts: {
-      closingVerdictFor,
-      create: createMock,
-    } as any,
+    verdicts,
+    // The escalation transaction's verdicts service is the same mock.
+    verdictsFor: () => verdicts,
     featureFlags: {
       isEnabled: vi.fn().mockResolvedValue(true),
       set: vi.fn(),
@@ -525,6 +544,69 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
     expect(deps.verdicts.create).not.toHaveBeenCalled();
     expect(stub.inserts.find((i) => i.table === "approvals")).toBeUndefined();
     expect(deps.autoHire.evaluateAndHireIfNeeded).not.toHaveBeenCalled();
+  });
+
+  it("#849 follow-up: one item that throws does not stop the rest of the queue or the auto-hire check", async () => {
+    const OTHER_ISSUE = "44444444-4444-4444-4444-444444444444";
+    const expired = {
+      companyId: C,
+      enqueuedAt: new Date(Date.now() - 60_000),
+      escalateAfter: new Date(Date.now() - 1000),
+      assignedReviewerAgentId: REVIEWER_AGENT,
+    };
+    const stub: DbStub = {
+      // Sweeps, then two expired queue rows; each escalation's
+      // hasOpenVerdict select finds nothing.
+      selectQueue: [
+        ...NO_STALE_REVIEWERS,
+        [],
+        [
+          { ...expired, issueId: ISSUE_ID },
+          { ...expired, issueId: OTHER_ISSUE },
+        ],
+        [],
+        [],
+      ],
+      inserts: [],
+      deletes: [],
+      executes: [],
+    };
+    const db = makeDb(stub);
+    const deps = makeDeps();
+    // First item: an unexpected failure. Second: a neutrality conflict,
+    // which must still reach the once-per-cycle auto-hire evaluation.
+    deps.verdicts.create
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockRejectedValueOnce(new Error("reviewer must not be the assignee"));
+    const orch = cosVerdictOrchestrator(db, deps);
+
+    await expect(orch.runReviewCycle(C)).resolves.toBeUndefined();
+
+    expect(deps.verdicts.create).toHaveBeenCalledTimes(2);
+    expect(deps.verdicts.create.mock.calls[1]![0]).toMatchObject({ issueId: OTHER_ISSUE });
+    expect(deps.autoHire.evaluateAndHireIfNeeded).toHaveBeenCalledTimes(1);
+    expect(deps.autoHire.evaluateAndHireIfNeeded).toHaveBeenCalledWith(C, "neutrality_conflict");
+    // Each escalation took its per-issue advisory lock inside a transaction.
+    expect(db.transaction).toHaveBeenCalledTimes(2);
+    expect(stub.executes).toHaveLength(2);
+  });
+
+  it("#849 follow-up: re-entering in_review resets the round's enqueuedAt and SLA", async () => {
+    const stub: DbStub = {
+      selectQueue: [[{ id: ISSUE_ID, companyId: C }], [{ reviewerAgentId: REVIEWER_AGENT }]],
+      inserts: [],
+      deletes: [],
+      upserts: [],
+    };
+    const db = makeDb(stub);
+    const orch = cosVerdictOrchestrator(db, makeDeps());
+
+    await orch.onIssueStatusChanged(ISSUE_ID, "in_progress", "in_review");
+
+    expect(stub.upserts).toHaveLength(1);
+    const set = stub.upserts![0]!.set as Record<string, unknown>;
+    expect(set.enqueuedAt).toBeInstanceOf(Date);
+    expect(set.escalateAfter).toBeInstanceOf(Date);
   });
 
   it("converts NEUTRAL_VALIDATOR_VIOLATION into neutrality_conflict auto-hire trigger", async () => {
