@@ -2,6 +2,20 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// GH #830: issue, run and workspace routes run the A5 project-visibility
+// guards against the db. They are exercised against a real database in
+// project-visibility.test.ts; this suite's stub db cannot answer them.
+vi.mock("../routes/visibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routes/visibility.js")>()),
+  assertIssueIdVisible: vi.fn(async () => undefined),
+  assertWorkspaceIdsVisible: vi.fn(async () => undefined),
+  filterVisibleByProject: vi.fn(async (_db: unknown, _req: unknown, rows: unknown[]) => rows),
+  activityVisibilityCondition: () => undefined,
+  runVisibilityCondition: () => undefined,
+  issueVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  runVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 const issueId = "11111111-1111-4111-8111-111111111111";
 const companyId = "22222222-2222-4222-8222-222222222222";
 

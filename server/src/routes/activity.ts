@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
+import { issues } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import {
   activityService,
@@ -14,6 +15,12 @@ import {
   assistantGrantAttribution,
   getActorInfo,
 } from "./authz.js";
+import {
+  activityVisibilityCondition,
+  issueVisibilityParam,
+  projectScopedVisibilityCondition,
+  runVisibilityParam,
+} from "./visibility.js";
 import { heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 
@@ -37,6 +44,12 @@ export function activityRoutes(db: Db) {
   const svc = activityService(db);
   const heartbeat = heartbeatService(db);
   const issueSvc = issueService(db);
+
+  // A5 (GH #830): an issue in a restricted project is 404 on every
+  // /issues/:id route here for an actor off the project's access list.
+  router.param("id", issueVisibilityParam(db));
+  // ...and a run on such an issue is 404 too: its issue list names it.
+  router.param("runId", runVisibilityParam(db));
 
   async function resolveIssueByRef(rawId: string) {
     if (/^[A-Z]+-\d+$/i.test(rawId)) {
@@ -70,6 +83,10 @@ export function activityRoutes(db: Db) {
       entityId: req.query.entityId as string | undefined,
       since,
       limit: normalizeActivityLimit(Number(req.query.limit)),
+      // A5 (GH #830): rows about an issue or project the actor cannot see
+      // are absent, so `?entityType=issue&entityId=` cannot read around the
+      // guarded /issues/:id/activity.
+      visibleWhere: activityVisibilityCondition(req, companyId),
     };
     const result = await svc.list(filters);
     res.json(result);
@@ -147,7 +164,9 @@ export function activityRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, run.companyId);
-    const result = await svc.issuesForRun(runId);
+    const result = await svc.issuesForRun(runId, {
+      visibleWhere: projectScopedVisibilityCondition(req, run.companyId, issues.projectId),
+    });
     res.json(result);
   });
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -27,6 +27,11 @@ export interface ActivityFilters {
   /** Inclusive lower bound on `created_at` (assistant MCP `since`). */
   since?: Date;
   limit?: number;
+  /**
+   * The caller's visibility condition (A5). Composed with the left-joined
+   * `issues` row, so it may reference `issues.project_id`.
+   */
+  visibleWhere?: SQL;
 }
 
 export interface IssueRunsFilters {
@@ -357,6 +362,9 @@ export function activityService(db: Db) {
       if (filters.since) {
         conditions.push(gte(activityLog.createdAt, filters.since));
       }
+      if (filters.visibleWhere) {
+        conditions.push(filters.visibleWhere);
+      }
 
       return db
         .select({ activityLog })
@@ -540,7 +548,7 @@ export function activityService(db: Db) {
       });
     },
 
-    issuesForRun: async (runId: string) => {
+    issuesForRun: async (runId: string, opts: { visibleWhere?: SQL } = {}) => {
       const run = await db
         .select({
           companyId: heartbeatRuns.companyId,
@@ -567,6 +575,7 @@ export function activityService(db: Db) {
             eq(activityLog.runId, runId),
             eq(activityLog.entityType, "issue"),
             isNull(issues.hiddenAt),
+            ...(opts.visibleWhere ? [opts.visibleWhere] : []),
           ),
         )
         .orderBy(issueIdAsText);
@@ -593,6 +602,7 @@ export function activityService(db: Db) {
             eq(issues.companyId, run.companyId),
             eq(issues.id, contextIssueId),
             isNull(issues.hiddenAt),
+            ...(opts.visibleWhere ? [opts.visibleWhere] : []),
           ),
         )
         .then((rows) => rows[0] ?? null);

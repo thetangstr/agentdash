@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { executionWorkspaces, issues, projects, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import type {
@@ -402,6 +402,8 @@ export function executionWorkspaceService(db: Db) {
       issueId?: string;
       status?: string;
       reuseEligible?: boolean;
+      /** The caller's A5 visibility condition over execution_workspaces. */
+      visibleWhere?: SQL;
     },
   ) {
     const conditions = [eq(executionWorkspaces.companyId, companyId)];
@@ -418,6 +420,7 @@ export function executionWorkspaceService(db: Db) {
     if (filters?.reuseEligible) {
       conditions.push(inArray(executionWorkspaces.status, ["active", "idle", "in_review"]));
     }
+    if (filters?.visibleWhere) conditions.push(filters.visibleWhere);
     return conditions;
   }
 
@@ -428,6 +431,8 @@ export function executionWorkspaceService(db: Db) {
       issueId?: string;
       status?: string;
       reuseEligible?: boolean;
+      /** The caller's A5 visibility condition over execution_workspaces. */
+      visibleWhere?: SQL;
     }) => {
       const conditions = buildListConditions(companyId, filters);
       const rows = await db
@@ -450,6 +455,8 @@ export function executionWorkspaceService(db: Db) {
       issueId?: string;
       status?: string;
       reuseEligible?: boolean;
+      /** The caller's A5 visibility condition over execution_workspaces. */
+      visibleWhere?: SQL;
     }) => {
       const conditions = buildListConditions(companyId, filters);
       const rows = await db

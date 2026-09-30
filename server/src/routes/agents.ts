@@ -74,6 +74,7 @@ import {
   findProtectedHostDirectoryOverlap,
 } from "../services/instructions-root-confinement.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
+import { assertIssueIdVisible, issueVisibilityParam, runVisibilityCondition, runVisibilityParam } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
@@ -1803,6 +1804,13 @@ export function agentRoutes(
     }
   });
 
+  // A5 (GH #830): an issue in a restricted project is 404 on the
+  // /issues/:issueId run routes for an actor off the project's access list.
+  router.param("issueId", issueVisibilityParam(db));
+  // A run's detail, events, log and workspace operations carry its issue's
+  // content: a run on an invisible issue is 404 as well.
+  router.param("runId", runVisibilityParam(db));
+
   router.get("/companies/:companyId/adapters/:type/models", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -2523,6 +2531,10 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
     const sourceIssueIds = parseSourceIssueIds(req.body);
+    // A5 (GH #830): the hire approval links these issues; they must be visible.
+    for (const issueId of sourceIssueIds) {
+      await assertIssueIdVisible(db, req, issueId);
+    }
     const {
       desiredSkills: requestedDesiredSkills,
       instructionsBundle,
@@ -4260,7 +4272,9 @@ export function agentRoutes(
       res.status(400).json({ error: "offset must be a non-negative integer" });
       return;
     }
-    const runs = await heartbeat.list(companyId, agentId, limit, parsedOffset ?? 0);
+    const runs = await heartbeat.list(companyId, agentId, limit, parsedOffset ?? 0, {
+      visibleWhere: runVisibilityCondition(req, companyId),
+    });
     res.json(runs);
   });
 
@@ -4274,6 +4288,8 @@ export function agentRoutes(
     // every caller with no minCount param gets up to 50 historical runs
     // padded in and renders bogus "live" counts.
     const minCount = readLiveRunsQueryInt(req.query.minCount, 50, 0);
+    // A5 (GH #830): runs on an issue in a restricted project are absent.
+    const runsVisibleWhere = runVisibilityCondition(req, companyId);
     const limit = readLiveRunsQueryInt(req.query.limit, 50, 50);
 
     const columns = {
@@ -4312,6 +4328,7 @@ export function agentRoutes(
         and(
           eq(heartbeatRuns.companyId, companyId),
           inArray(heartbeatRuns.status, ["queued", "running"]),
+          ...(runsVisibleWhere ? [runsVisibleWhere] : []),
         ),
       )
       .orderBy(desc(heartbeatRuns.createdAt));
@@ -4330,6 +4347,7 @@ export function agentRoutes(
             eq(heartbeatRuns.companyId, companyId),
             not(inArray(heartbeatRuns.status, ["queued", "running"])),
             ...(activeIds.length > 0 ? [not(inArray(heartbeatRuns.id, activeIds))] : []),
+            ...(runsVisibleWhere ? [runsVisibleWhere] : []),
           ),
         )
         .orderBy(desc(heartbeatRuns.createdAt))

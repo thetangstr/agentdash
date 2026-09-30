@@ -11,6 +11,7 @@ import { approvalService } from "../services/approvals.js";
 import { issueApprovalService } from "../services/issue-approvals.js";
 import { verdictsService } from "../services/verdicts.js";
 import { assertCompanyAccess } from "./authz.js";
+import { issueVisibilityParam } from "./visibility.js";
 
 /**
  * Verdict HTTP routes — Phase D1.
@@ -30,6 +31,10 @@ export function verdictRoutes(db: Db) {
     approvalsService: approvalService(db),
     issueApprovalsService: issueApprovalService(db),
   });
+
+  // A5 (GH #830): an issue in a restricted project is 404 on
+  // /issues/:issueId routes for an actor off the project's access list.
+  router.param("issueId", issueVisibilityParam(db));
 
   router.post("/companies/:companyId/verdicts", async (req, res, next) => {
     try {

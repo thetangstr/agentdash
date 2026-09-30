@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { Router, type Request, type Response } from "express";
 import type { Db } from "@paperclipai/db";
-import { issues, projects, projectWorkspaces } from "@paperclipai/db";
+import { executionWorkspaces, issues, projects, projectWorkspaces } from "@paperclipai/db";
 import {
   findWorkspaceCommandDefinition,
   matchWorkspaceRuntimeServiceToCommand,
@@ -24,6 +24,12 @@ import {
   stopRuntimeServicesForExecutionWorkspace,
 } from "../services/workspace-runtime.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import {
+  assertIssueIdVisible,
+  assertProjectIdVisible,
+  assertWorkspaceIdsVisible,
+  projectScopedVisibilityCondition,
+} from "./visibility.js";
 import {
   assertHostWorkspaceCommandAuthority,
   collectExecutionWorkspaceCommandPaths,
@@ -58,15 +64,35 @@ export function executionWorkspaceRoutes(db: Db) {
   const svc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
 
+  // A5 (GH #830): an execution workspace belongs to a project; in a
+  // restricted project it is 404 on every /execution-workspaces/:id route
+  // for an actor off the project's access list.
+  router.param("id", async (req, _res, next, rawId) => {
+    try {
+      await assertWorkspaceIdsVisible(db, req, { executionWorkspaceId: String(rawId) });
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get("/companies/:companyId/execution-workspaces", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    // A5 (GH #830): a filter naming an invisible issue, project or project
+    // workspace is 404, and rows in invisible projects are absent.
+    if (typeof req.query.issueId === "string") await assertIssueIdVisible(db, req, req.query.issueId);
+    if (typeof req.query.projectId === "string") {
+      await assertProjectIdVisible(db, req, companyId, req.query.projectId, "Project");
+    }
+    await assertWorkspaceIdsVisible(db, req, { projectWorkspaceId: req.query.projectWorkspaceId });
     const filters = {
       projectId: req.query.projectId as string | undefined,
       projectWorkspaceId: req.query.projectWorkspaceId as string | undefined,
       issueId: req.query.issueId as string | undefined,
       status: req.query.status as string | undefined,
       reuseEligible: req.query.reuseEligible === "true",
+      visibleWhere: projectScopedVisibilityCondition(req, companyId, executionWorkspaces.projectId),
     };
     const workspaces = req.query.summary === "true"
       ? await svc.listSummaries(companyId, filters)
