@@ -9,10 +9,11 @@ import { useCompany } from "../context/CompanyContext";
 const DASHBOARD_LIVE_RUN_LIMIT = 50;
 
 export function DashboardLive() {
-  const { selectedCompanyId, selectedCompany, companies } = useCompany();
+  const { selectedCompanyId, companies } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   // AgentDash: UX-3 (#784) — the live grid now sits behind Home's Working now.
-  const homeLabel = selectedCompany?.productProfile === "agentdash_mk" ? "Dashboard" : "Home";
+  // One-UX: every company's /dashboard is titled "Home", like the sidebar item.
+  const homeLabel = "Home";
 
   useEffect(() => {
     setBreadcrumbs([

@@ -1,9 +1,13 @@
-// AgentDash: UX-3 (#784) — an honest Home for the default profile.
+// AgentDash: one-UX (doc/plans/2026-09-30-one-ux.md) — the one Dashboard every
+// company lands on at /dashboard, titled "Home" to match the sidebar.
 //
-// Three blocks, in this order: Waiting on you, Working now, Shipped this week.
+// Top half, UX-3 (#784): Waiting on you, Working now, Shipped this week, with
+// the hosted first-run nudges (#786) above them. Bottom half: the control-plane
+// panels (components/dashboard/ControlPlanePanels) — agents, open issues,
+// spend, the agent fleet and recent activity. It never branches on the profile.
 // Every number is rendered directly from the list it counts — no count-up
 // animation, so a tab that was in the background shows the real numbers the
-// moment it is looked at. The MK profile keeps the Overview dashboard.
+// moment it is looked at.
 import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CircleCheck, MessageSquare, PackageCheck, RadioTower, ShieldQuestion } from "lucide-react";
@@ -19,11 +23,9 @@ import { queryKeys } from "../lib/queryKeys";
 import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
-import { PageSkeleton } from "../components/PageSkeleton";
-import { useResolvedProductProfile } from "../components/ProfileRouteSwitch";
 import { decisionsListLength } from "../hooks/useDecisionsBadge";
-import { Overview } from "./Overview";
 import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
+import { ControlPlanePanels } from "../components/dashboard/ControlPlanePanels";
 
 export const HOME_LIST_LIMIT = 6;
 export const WAITING_EMPTY_TEXT = "Nothing needs you right now. Decisions and issues assigned to you show up here.";
@@ -63,16 +65,6 @@ export function waitingCount(data: WaitingOnYou | undefined): number {
   return decisionsListLength(data);
 }
 
-/** Default profile gets Home; agentdash_mk keeps the Overview dashboard. */
-export function DashboardHome() {
-  // ProfileRouteSwitch's hook: while the profile resolves there is no
-  // answer — rendering Home here would flash the wrong surface to MK.
-  const { resolving, isMk } = useResolvedProductProfile();
-  if (resolving) return <PageSkeleton variant="dashboard" />;
-  if (isMk) return <Overview />;
-  return <Home />;
-}
-
 function Block({
   title,
   count,
@@ -107,6 +99,14 @@ function Block({
   );
 }
 
+function ErrorLine({ what }: { what: string }) {
+  return (
+    <div role="alert" className="px-4 py-5 text-sm text-destructive" data-testid="home-block-error">
+      Couldn't load {what}. It retries on its own; refresh to try now.
+    </div>
+  );
+}
+
 function EmptyLine({ icon: Icon, text, action }: { icon: typeof CircleCheck; text: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-start gap-3 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:items-center">
@@ -126,7 +126,7 @@ function MoreLine({ count, to, noun }: { count: number; to: string; noun: string
   );
 }
 
-function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
+function WaitingOnYouBlock({ data, failed }: { data: WaitingOnYou | undefined; failed: boolean }) {
   const decisions = data?.decisions ?? [];
   const tasks = data?.tasksAssignedToYou ?? [];
   const shownDecisions = decisions.slice(0, HOME_LIST_LIMIT);
@@ -136,6 +136,7 @@ function WaitingOnYouBlock({ data }: { data: WaitingOnYou | undefined }) {
   const count = waitingCount(data);
   return (
     <Block title="Waiting on you" count={data ? count : null} testId="home-waiting">
+      {failed && !data ? <ErrorLine what="what is waiting on you" /> : null}
       {data && count === 0 ? <EmptyLine icon={CircleCheck} text={WAITING_EMPTY_TEXT} /> : null}
       <ul className="divide-y divide-border">
         {shownDecisions.map((decision) => (
@@ -251,13 +252,13 @@ export function Home() {
     queryFn: () => dashboardApi.summary(selectedCompanyId!),
     enabled,
   });
-  const { data: waiting } = useQuery({
+  const { data: waiting, isError: waitingFailed } = useQuery({
     queryKey: queryKeys.home.waitingOnYou(selectedCompanyId ?? ""),
     queryFn: () => dashboardApi.waitingOnYou(selectedCompanyId!),
     enabled,
     refetchInterval: 30_000,
   });
-  const { data: working } = useQuery({
+  const { data: working, isError: workingFailed } = useQuery({
     queryKey: queryKeys.home.workingNow(selectedCompanyId ?? ""),
     queryFn: () => dashboardApi.workingNow(selectedCompanyId!),
     enabled,
@@ -265,7 +266,7 @@ export function Home() {
   });
   // "This week" rounded down to the hour, so the query key is stable across renders.
   const weekAgo = new Date(Math.floor((Date.now() - WEEK_MS) / 3_600_000) * 3_600_000).toISOString();
-  const { data: shipped } = useQuery({
+  const { data: shipped, isError: shippedFailed } = useQuery({
     queryKey: queryKeys.shipped(selectedCompanyId ?? "", { since: weekAgo }),
     queryFn: () => issuesApi.listShipped(selectedCompanyId!, { since: weekAgo, limit: HOME_LIST_LIMIT }),
     enabled,
@@ -277,9 +278,6 @@ export function Home() {
   }
 
   const firstName = firstNameFor(session?.user);
-  const agentCount = summary
-    ? summary.agents.active + summary.agents.running + summary.agents.paused + summary.agents.error
-    : null;
   const openIssues = summary?.tasks.open ?? null;
   const workingItems = working?.items ?? [];
   const shippedItems = shipped?.items ?? [];
@@ -296,9 +294,8 @@ export function Home() {
             {firstName ? `, ${firstName}` : ""}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground" data-testid="home-subline">
+            {/* Agents and open issues are counted once, in the stat tiles below. */}
             {selectedCompany?.name ?? "Your workspace"}
-            {agentCount !== null ? ` · ${agentCount} agent${agentCount === 1 ? "" : "s"}` : ""}
-            {openIssues !== null ? ` · ${openIssues} open issue${openIssues === 1 ? "" : "s"}` : ""}
           </p>
         </div>
         <Button asChild variant="outline" size="sm" className="shrink-0">
@@ -312,7 +309,7 @@ export function Home() {
       {/* AgentDash (GH #786): finish setup, then connect an assistant */}
       <FirstRunHomeNudges companyId={selectedCompanyId} />
 
-      <WaitingOnYouBlock data={waiting} />
+      <WaitingOnYouBlock data={waiting} failed={waitingFailed} />
 
       <Block
         title="Working now"
@@ -324,6 +321,7 @@ export function Home() {
           </Link>
         }
       >
+        {workingFailed && !working ? <ErrorLine what="the runs in progress" /> : null}
         {working && working.total === 0 ? (
           openIssues === 0 ? (
             <EmptyLine
@@ -357,6 +355,7 @@ export function Home() {
           </Link>
         }
       >
+        {shippedFailed && !shipped ? <ErrorLine what="what shipped this week" /> : null}
         {shipped && shipped.total === 0 ? <EmptyLine icon={PackageCheck} text={SHIPPED_WEEK_EMPTY_TEXT} /> : null}
         <div className="divide-y divide-border">
           {shippedItems.map((product) => (
@@ -365,6 +364,11 @@ export function Home() {
         </div>
         <MoreLine count={(shipped?.total ?? 0) - shippedItems.length} to="/shipped" noun="shipped" />
       </Block>
+
+      <ControlPlanePanels companyId={selectedCompanyId} />
     </div>
   );
 }
+
+/** The /dashboard route element (App.tsx). One page for every company. */
+export const DashboardHome = Home;

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// AgentDash: UX-3 (#784) — the honest Home.
+// AgentDash: UX-3 (#784) — the honest Home; one-UX — the one Dashboard for
+// every company (Home's blocks over the control-plane panels).
 
 import { act } from "react";
 import type { ReactNode } from "react";
@@ -11,6 +12,11 @@ import type { ShippedFeed, WaitingOnYou, WorkingNow } from "@paperclipai/shared"
 const mockDashboardApi = vi.hoisted(() => ({ summary: vi.fn(), waitingOnYou: vi.fn(), workingNow: vi.fn() }));
 const mockIssuesApi = vi.hoisted(() => ({ listShipped: vi.fn() }));
 const mockAuthApi = vi.hoisted(() => ({ getSession: vi.fn() }));
+const mockAgentsApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockAccessApi = vi.hoisted(() => ({ listUserDirectory: vi.fn() }));
+const mockFirstRunApi = vi.hoisted(() => ({ status: vi.fn() }));
+const mockAssistantGrantsApi = vi.hoisted(() => ({ listMine: vi.fn() }));
 const mockCompany = vi.hoisted(() => ({
   current: { id: "company-1", name: "Acme Robotics", productProfile: "default" } as Record<string, unknown>,
 }));
@@ -18,17 +24,20 @@ const mockCompany = vi.hoisted(() => ({
 vi.mock("../api/dashboard", () => ({ dashboardApi: mockDashboardApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/auth", () => ({ authApi: mockAuthApi }));
+vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
+vi.mock("../api/activity", () => ({ activityApi: mockActivityApi }));
+vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
+vi.mock("../api/firstRun", () => ({ firstRunApi: mockFirstRunApi }));
+vi.mock("../api/assistant-grants", () => ({ assistantGrantsApi: mockAssistantGrantsApi }));
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
     selectedCompany: mockCompany.current,
-    // DashboardHome waits on the profile resolving before it picks a page.
     companies: mockCompany.current ? [mockCompany.current] : [],
     loading: false,
   }),
 }));
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }) }));
-vi.mock("./Overview", () => ({ Overview: () => <div data-testid="mk-overview">MK dashboard</div> }));
 vi.mock("@/lib/router", () => ({
   Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
     <a href={to} {...rest}>
@@ -49,6 +58,20 @@ const summary = {
   tasks: { open: 92, inProgress: 2, blocked: 1, done: 2 },
   costs: { monthSpendCents: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 },
   pendingApprovals: 1,
+  budgets: { activeIncidents: 0, pendingApprovals: 0, pausedAgents: 0, pausedProjects: 0 },
+};
+
+const agentList = [
+  { id: "a-1", name: "Maya", role: "engineer", status: "running", lastHeartbeatAt: null },
+  { id: "a-2", name: "Priya", role: "general", status: "idle", lastHeartbeatAt: null },
+];
+
+const firstRunNotApplicable = {
+  applies: false,
+  showHomeNudge: false,
+  nextStep: "done",
+  canManage: true,
+  canConfigureModel: true,
 };
 
 const waiting: WaitingOnYou = {
@@ -157,6 +180,11 @@ describe("Home", () => {
     mockDashboardApi.waitingOnYou.mockResolvedValue(waiting);
     mockDashboardApi.workingNow.mockResolvedValue(working);
     mockIssuesApi.listShipped.mockResolvedValue(shippedFeed(1));
+    mockAgentsApi.list.mockResolvedValue(agentList);
+    mockActivityApi.list.mockResolvedValue([]);
+    mockAccessApi.listUserDirectory.mockResolvedValue({ users: [] });
+    mockFirstRunApi.status.mockResolvedValue(firstRunNotApplicable);
+    mockAssistantGrantsApi.listMine.mockResolvedValue({ grants: [] });
   });
 
   afterEach(async () => {
@@ -180,7 +208,11 @@ describe("Home", () => {
     // A frame never comes, as in a background tab: numbers must not depend on one.
     const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
     await render();
-    expect(q("home-subline")?.textContent).toBe("Acme Robotics · 6 agents · 92 open issues");
+    // Agents and open issues are counted once, in the stat tiles — not repeated
+    // in the subline. Fleet size = max(summary total, live agent list).
+    expect(q("home-subline")?.textContent).toBe("Acme Robotics");
+    expect(q("dashboard-stat-agents-value")?.textContent).toBe("6");
+    expect(q("dashboard-stat-issues-value")?.textContent).toBe("92");
     expect(q("home-waiting-count")?.textContent).toBe("3");
     expect(rows("home-waiting-row")).toHaveLength(3);
     expect(q("home-working-count")?.textContent).toBe("2");
@@ -258,18 +290,64 @@ describe("Home", () => {
     expect(Date.now() - since).toBeLessThan(7 * 24 * 3_600_000 + 3_600_000);
   });
 
-  it("keeps the current dashboard for agentdash_mk companies", async () => {
-    mockCompany.current = { id: "company-1", name: "MKThink", productProfile: "agentdash_mk" };
+  it.each([
+    ["a default company", "default"],
+    ["an agentdash_mk company", "agentdash_mk"],
+  ])("gives %s the same Dashboard: the three blocks, then the control-plane panels", async (_label, productProfile) => {
+    mockCompany.current = { id: "company-1", name: "Acme Robotics", productProfile };
     await render(<DashboardHome />);
-    expect(q("mk-overview")).not.toBeNull();
-    expect(q("home")).toBeNull();
-    expect(mockDashboardApi.waitingOnYou).not.toHaveBeenCalled();
+    const page = q("home")!;
+    expect(page).not.toBeNull();
+    const order = ["home-waiting", "home-working", "home-shipped", "dashboard-control-plane"].map((id) => q(id));
+    for (const node of order) expect(node).not.toBeNull();
+    // In document order: blocks first, panels after.
+    for (let i = 1; i < order.length; i += 1) {
+      expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(q("dashboard-stats")).not.toBeNull();
+    expect(q("dashboard-fleet")).not.toBeNull();
+    expect(q("dashboard-activity")).not.toBeNull();
+    expect(mockDashboardApi.waitingOnYou).toHaveBeenCalled();
   });
 
-  it("gives the default profile the new Home", async () => {
+  it("does not repeat the top half in the panels: no second greeting, approvals list or live-runs grid", async () => {
+    await render();
+    const panels = q("dashboard-control-plane")!;
+    expect(panels.textContent).not.toMatch(/good (morning|afternoon|evening)/i);
+    expect(panels.textContent).not.toMatch(/needs your call|awaiting you/i);
+    expect(container.querySelectorAll("h1")).toHaveLength(1);
+    // The dashboard summary is shared between the halves: one fetch.
+    expect(mockDashboardApi.summary).toHaveBeenCalledTimes(1);
+    expect(mockAgentsApi.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the first-run nudge on a hosted new company", async () => {
+    mockFirstRunApi.status.mockResolvedValue({
+      ...firstRunNotApplicable,
+      applies: true,
+      showHomeNudge: true,
+      nextStep: "repo",
+    });
     await render(<DashboardHome />);
-    expect(q("home")).not.toBeNull();
-    expect(q("mk-overview")).toBeNull();
+    const nudge = q("first-run-home-resume");
+    expect(nudge).not.toBeNull();
+    expect(nudge?.textContent).toContain("Connect a repo so your agents have somewhere to work.");
+    // Above the blocks.
+    expect(nudge!.compareDocumentPosition(q("home-waiting")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows no first-run nudge where the server says it does not apply", async () => {
+    await render(<DashboardHome />);
+    expect(q("first-run-home-resume")).toBeNull();
+    expect(q("connect-muse")).toBeNull();
+  });
+
+  it("shows an error in the block whose query failed and keeps the rest of the page", async () => {
+    mockDashboardApi.workingNow.mockRejectedValue(new Error("boom"));
+    await render();
+    expect(q("home-working")?.querySelector('[data-testid="home-block-error"]')).not.toBeNull();
+    expect(q("home-waiting-count")?.textContent).toBe("3");
+    expect(q("dashboard-stats")).not.toBeNull();
   });
 });
 
