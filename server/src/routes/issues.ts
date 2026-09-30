@@ -2632,6 +2632,52 @@ export function issueRoutes(
       }
     }
 
+    // AgentDash (recovery budget remediation): a person moving the issue out
+    // of `blocked`, reopening it by comment, or reassigning it is the human
+    // remediation the exhaustion message asks for, so it clears the exhausted
+    // automatic-recovery marker. Without this the marker was permanent.
+    //
+    // #848 follow-up: the clear runs in the same transaction as the status
+    // update. Committed separately, the stranded-issue reconciler could see the
+    // issue in `todo` with the marker still set, re-block it, and the clear
+    // would then leave it blocked with no marker. reblockExhaustedIssue locks
+    // the row, so inside one transaction it sees either both changes or none.
+    const clearsRecoveryBudget =
+      isHumanBoardActor(req) && hasExhaustedRecoveryBudget(existing.executionState);
+    async function clearRecoveryBudgetOnHumanRemediation(
+      tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+      updated: NonNullable<Awaited<ReturnType<typeof svc.update>>>,
+    ) {
+      if (!clearsRecoveryBudget || !hasExhaustedRecoveryBudget(updated.executionState)) return updated;
+      const movedToTodoByComment =
+        !!commentBody && effectiveMoveToTodoRequested && existing!.status !== updated.status && updated.status === "todo";
+      const leftBlocked = existing!.status === "blocked" && updated.status !== "blocked";
+      const reassigned =
+        updated.assigneeAgentId !== existing!.assigneeAgentId || updated.assigneeUserId !== existing!.assigneeUserId;
+      const clearTrigger = movedToTodoByComment
+        ? "reopen_comment"
+        : leftBlocked
+          ? "status_change"
+          : reassigned
+            ? "reassign"
+            : null;
+      if (!clearTrigger) return updated;
+      const clearedBudget = await clearIssueRecoveryBudget(tx as unknown as Db, {
+        companyId: updated.companyId,
+        issueId: updated.id,
+        actorUserId: actor.actorId,
+        trigger: clearTrigger,
+        runId: actor.runId,
+        details: { previousStatus: existing!.status },
+      });
+      if (!clearedBudget) return updated;
+      return {
+        ...updated,
+        executionState: clearedBudget.issue.executionState,
+        updatedAt: clearedBudget.issue.updatedAt,
+      };
+    }
+
     let issue;
     try {
       if (transition.decision && decisionId) {
@@ -2661,7 +2707,21 @@ export function issueRoutes(
             createdByRunId: actor.runId ?? null,
           });
 
-          return updated;
+          return clearRecoveryBudgetOnHumanRemediation(tx, updated);
+        });
+      } else if (clearsRecoveryBudget) {
+        issue = await db.transaction(async (tx) => {
+          const updated = await svc.update(
+            id,
+            {
+              ...updateFields,
+              actorAgentId: actor.agentId ?? null,
+              actorUserId: actor.actorType === "user" ? actor.actorId : null,
+            },
+            tx,
+          );
+          if (!updated) return null;
+          return clearRecoveryBudgetOnHumanRemediation(tx, updated);
         });
       } else {
         issue = await svc.update(id, {
@@ -2696,42 +2756,6 @@ export function issueRoutes(
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
       return;
-    }
-
-    // AgentDash (recovery budget remediation): a person moving the issue out
-    // of `blocked`, reopening it by comment, or reassigning it is the human
-    // remediation the exhaustion message asks for, so it clears the exhausted
-    // automatic-recovery marker. Without this the marker was permanent.
-    if (isHumanBoardActor(req) && hasExhaustedRecoveryBudget(issue.executionState)) {
-      const movedToTodoByComment =
-        !!commentBody && effectiveMoveToTodoRequested && existing.status !== issue.status && issue.status === "todo";
-      const leftBlocked = existing.status === "blocked" && issue.status !== "blocked";
-      const reassigned =
-        issue.assigneeAgentId !== existing.assigneeAgentId || issue.assigneeUserId !== existing.assigneeUserId;
-      const clearTrigger = movedToTodoByComment
-        ? "reopen_comment"
-        : leftBlocked
-          ? "status_change"
-          : reassigned
-            ? "reassign"
-            : null;
-      if (clearTrigger) {
-        const clearedBudget = await clearIssueRecoveryBudget(db, {
-          companyId: issue.companyId,
-          issueId: issue.id,
-          actorUserId: actor.actorId,
-          trigger: clearTrigger,
-          runId: actor.runId,
-          details: { previousStatus: existing.status },
-        });
-        if (clearedBudget) {
-          issue = {
-            ...issue,
-            executionState: clearedBudget.issue.executionState,
-            updatedAt: clearedBudget.issue.updatedAt,
-          };
-        }
-      }
     }
 
     let cancelledStatusRunId: string | null = null;

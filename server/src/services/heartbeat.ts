@@ -194,6 +194,7 @@ import { environmentRuntimeService } from "./environment-runtime.js";
 import { filterExecutionAffectingEnv } from "./adapter-host-execution-policy.js";
 import { environmentRunOrchestrator } from "./environment-run-orchestrator.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import { currentRequestActorSource } from "../lib/request-actor-source.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -965,8 +966,20 @@ interface WakeupOptions {
   idempotencyKey?: string | null;
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
+  /**
+   * AgentDash (#848 follow-up): the credential behind a "user" wake. Defaults
+   * to the current request's actor source (see lib/request-actor-source.ts).
+   */
+  requestedByActorSource?: string | null;
   contextSnapshot?: Record<string, unknown>;
 }
+
+/**
+ * AgentDash (#848 follow-up): run-context key recording that the wake which
+ * started the run was queued by an assistant grant. It describes the run's
+ * originator, so coalescing keeps the existing run's value.
+ */
+export const WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY = "requestedByActorSource";
 
 type UsageTotals = {
   inputTokens: number;
@@ -1922,6 +1935,13 @@ export function mergeCoalescedContextSnapshot(
     ...existing,
     ...incoming,
   };
+  // AgentDash (#848 follow-up): who started the run does not change because a
+  // later wake coalesced into it.
+  if (existing[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY] !== undefined) {
+    merged[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY] = existing[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
+  } else {
+    delete merged[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
+  }
   if (existing.forceFreshSession === true || incoming.forceFreshSession === true) {
     merged.forceFreshSession = true;
   }
@@ -3254,6 +3274,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   async function isRunStartedByPerson(run: typeof heartbeatRuns.$inferSelect) {
     if (taskRecoveryParentRunId(run)) return false;
     if (!run.wakeupRequestId) return false;
+    // #848 follow-up: an assistant grant acts with a person's token but is
+    // automation, the same line isHumanBoardActor draws for the clear action.
+    if (parseObject(run.contextSnapshot)[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY] === "assistant_grant") {
+      return false;
+    }
     const wake = await db
       .select({ requestedByActorType: agentWakeupRequests.requestedByActorType })
       .from(agentWakeupRequests)
@@ -7805,6 +7830,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
+    // AgentDash (#848 follow-up): record an assistant-grant origin on the run so
+    // the exhausted recovery budget treats it as automatic, not as a person.
+    // Never trusted from the caller's context: only the wake's own actor.
+    delete contextSnapshot[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
+    if (opts.requestedByActorType === "user") {
+      const actorSource = opts.requestedByActorSource !== undefined
+        ? opts.requestedByActorSource
+        : currentRequestActorSource();
+      if (actorSource === "assistant_grant") {
+        contextSnapshot[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY] = actorSource;
+      }
+    }
     const reason = opts.reason ?? null;
     const payload = opts.payload ?? null;
     const {

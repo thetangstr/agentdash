@@ -9,6 +9,7 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { configuredEdgeSecret, configuredEdgeSecrets, edgeGate } from "./middleware/edge-gate.js";
 import { actorMiddleware } from "./middleware/auth.js";
+import { requestActorSourceMiddleware } from "./lib/request-actor-source.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { requireLicense } from "./middleware/require-license.js";
 import { mcpRoutes } from "./routes/mcp.js";
@@ -339,6 +340,9 @@ export async function createApp(
       resolveSession: opts.resolveSession,
     }),
   );
+  // AgentDash (#848 follow-up): lets wake requests record whether an assistant
+  // grant queued them, so an exhausted recovery budget treats them as automatic.
+  app.use(requestActorSourceMiddleware());
   // AgentDash (#160): tighter rate limit on /api/auth/* (brute-force vector).
   app.use("/api/auth", createAuthRateLimiter({ deploymentMode: opts.deploymentMode }), authRoutes(db));
   if (opts.betterAuthHandler) {

@@ -250,6 +250,29 @@ describeEmbeddedPostgres("steward lifecycle and steward-scoped connect codes", (
       expect(res.status).toBe(403);
     });
 
+    it("refuses the creator once an administrator releases their stewardship", async () => {
+      // A release ends the pairing without handing the agent to anyone. The
+      // creator fallback is for a never-stewarded agent, not a way back in.
+      const company = await createCompany(db);
+      const admin = await createMember(db, company.id, "admin");
+      const creator = await createMember(db, company.id, "member");
+      const agent = await createAgent(db, company.id, { createdByUserId: creator });
+      const svc = agentStewardshipService(db);
+      await svc.assign(company.id, { agentId: agent.id, userId: creator, assignedByUserId: creator });
+      expect((await mintCode(createApp(db, boardActor(company.id, creator, "member")), agent.id)).status).toBe(201);
+
+      await svc.releaseForAgent(company.id, agent.id, {
+        releasedByUserId: admin,
+        releaseReason: "stepping back",
+      });
+
+      const creatorRes = await mintCode(createApp(db, boardActor(company.id, creator, "member")), agent.id);
+      expect(creatorRes.status).toBe(403);
+      expect(creatorRes.body.error).toMatch(/released/);
+      const adminRes = await mintCode(createApp(db, boardActor(company.id, admin, "admin")), agent.id);
+      expect(adminRes.status, JSON.stringify(adminRes.body)).toBe(201);
+    });
+
     it("refuses a member of another company, even one who stewards an agent there", async () => {
       const { agent } = await stewarded();
       const other = await stewarded();
