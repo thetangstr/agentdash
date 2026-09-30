@@ -301,6 +301,7 @@ export function workforceService(db: Db) {
     // Filesystem work deliberately precedes the short assignment transaction.
     // This method must be called after hiring commits, never from its DB transaction.
     const publications: ActivityPublication[] = [];
+    let assignmentCallbackCompleted = false;
     let result: Enrollment;
     try {
       const skills = companySkillService(db);
@@ -355,10 +356,18 @@ export function workforceService(db: Db) {
         }
         const [updated] = await tx.update(workforceEnrollments).set({ installedSkillKeys: keys, skillInstallError: null, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id)).returning();
         await audit(connection, companyId, enrollment.id, 'workforce.skills_installed', actor, publications);
+        assignmentCallbackCompleted = true;
         return updated;
       });
     } catch (error) {
       publications.length = 0;
+      // AgentDash: a completed callback can commit before its acknowledgement is
+      // lost. Do not overwrite that assignment with guessed failure or replay it.
+      if (assignmentCallbackCompleted) {
+        throw conflict('Skill assignment outcome is unknown; inspect the existing enrollment and agent configuration before retrying', {
+          outcome: 'unknown', enrollmentId: enrollment.id, agentId,
+        });
+      }
       result = await db.transaction(async tx => {
         const [updated] = await tx.update(workforceEnrollments).set({ skillInstallError: error instanceof Error ? error.message : 'Skill installation failed', updatedAt: new Date() }).where(and(eq(workforceEnrollments.companyId, companyId), eq(workforceEnrollments.id, enrollment.id))).returning();
         await audit(tx as unknown as Db, companyId, enrollment.id, 'workforce.skill_install_failed', actor, publications);

@@ -92,6 +92,45 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     expect(await db.select().from(agentApiKeys).where(eq(agentApiKeys.agentId,accepted.id))).toEqual([]);
     expect((await confirm(f)).status).toBe(409); expect(await hires(f)).toHaveLength(1);
   });
+  it('keeps an accepted hire paused after a committed skill assignment loses its acknowledgement', async () => {
+    const f = await fixture();
+    boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+    let lostAcknowledgements = 0;
+    const uncertainAssignmentDb = new Proxy(db, { get(target, key, receiver) {
+      if (key === 'transaction') return async (work: (tx: any) => Promise<any>) => {
+        const result = await target.transaction(work);
+        if (Array.isArray(result?.installedSkillKeys)) {
+          lostAcknowledgements++;
+          throw new Error('PRIVATE_SYNTHETIC_SKILL_ACK_LOSS');
+        }
+        return result;
+      };
+      return Reflect.get(target, key, receiver);
+    } });
+    const events: string[] = [];
+    const stop = subscribeCompanyLiveEvents(f.company.id, event => {
+      if (event.type === 'activity.logged') events.push(event.payload.action as string);
+    });
+    try {
+      const response = await confirm(f, application(uncertainAssignmentDb));
+      expect(response.status).toBe(409);
+      const [accepted] = await hires(f);
+      expect(accepted).toMatchObject({ status: 'paused', pauseReason: 'system', adapterConfig: { nativeBundle: true } });
+      const [enrollment] = await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.agentId, accepted.id));
+      expect(enrollment.installedSkillKeys).toHaveLength(1);
+      expect(enrollment.skillInstallError).toBeNull();
+      expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).map(row => row.action)).toEqual(['workforce.enrolled', 'workforce.skills_installed']);
+      expect(events).toEqual(['workforce.enrolled']);
+      expect(lostAcknowledgements).toBe(1);
+      expect(JSON.stringify(response.body)).toContain(accepted.id);
+      expect(JSON.stringify(response.body)).not.toMatch(/PRIVATE_SYNTHETIC|pcp_/);
+      expect(await db.select().from(agentApiKeys).where(eq(agentApiKeys.agentId, accepted.id))).toEqual([]);
+      expect(await db.select().from(assistantMessages).where(eq(assistantMessages.conversationId, f.conversation.id))).toEqual([]);
+      expect((await confirm(f)).status).toBe(409);
+      expect(await hires(f)).toHaveLength(1);
+      expect(events).toEqual(['workforce.enrolled']);
+    } finally { stop(); }
+  });
   it.each(['paused','patch_paused','terminated'])('completion preserves intervening human %s', async status => {
     const f = await fixture(); let pauseAdvanced = false; boundary.materialize = async agent => { if(status === 'paused') await agentService(other).pause(agent.id); else if (status === 'patch_paused') { const now = vi.spyOn(Date, 'now').mockReturnValue(agent.pausedAt.getTime()); try { const paused = await agentService(other).update(agent.id, { status: 'paused' }); pauseAdvanced = Boolean(paused?.pausedAt && paused.pausedAt.getTime() > agent.pausedAt.getTime()); } finally { now.mockRestore(); } } else await other.update(agents).set({ status: 'terminated' }).where(eq(agents.id,agent.id)); return { adapterConfig: { nativeBundle: true } }; };
     expect((await confirm(f)).status).toBe(409); expect((await hires(f))[0].status).toBe(status === 'patch_paused' ? 'paused' : status); if (status === 'patch_paused') expect(pauseAdvanced).toBe(true);

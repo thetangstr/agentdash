@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { agents, companies, companyContext, createDb, goals, issues, verdicts, companySkills, issueThreadInteractions, workforceEnrollments, activityLog, issueWorkProducts } from '@paperclipai/db';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 import * as service from '../services/workforce.js';
@@ -11,6 +11,7 @@ import { workProductService } from '../services/work-products.js';
 import { documentService } from '../services/documents.js';
 import { readPaperclipSkillSyncPreference } from '@paperclipai/adapter-utils/server-utils';
 import { subscribeCompanyLiveEvents } from '../services/live-events.js';
+import { setPluginEventBus } from '../services/activity-log.js';
 import { agentService } from '../services/agents.js';
 
 // These tests catch lost updates, cross-company association leaks, duplicate jobs,
@@ -116,6 +117,81 @@ describe('workforce persisted contracts', () => {
     expect((await svc.getReadiness(company.id, agent.id))?.phase).not.toBe('ready');
     await svc.updateBrief(company.id, { ...input, facts, expectedRevision: 1 }, owner);
     expect((await svc.getReadiness(company.id, agent.id))?.phase).toBe('refresh_needed');
+  });
+  it('retains the exact committed skill assignment without publishing or writing failure after lost acknowledgement', async () => {
+    const { company, agent, svc } = await fixture();
+    const enrollment = await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, owner);
+    const liveEvents: unknown[] = [], pluginEvents: unknown[] = [];
+    const stop = subscribeCompanyLiveEvents(company.id, event => liveEvents.push(event));
+    setPluginEventBus({ emit: async (event: { companyId: string }) => {
+      if (event.companyId === company.id) pluginEvents.push(event);
+      return { errors: [] };
+    } } as never);
+    const persisted = async () => ({
+      enrollment: (await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.id, enrollment.id)))[0],
+      agent: (await db.select().from(agents).where(eq(agents.id, agent.id)))[0],
+      audits: await db.select().from(activityLog).where(eq(activityLog.companyId, company.id)),
+    });
+    let committed: Awaited<ReturnType<typeof persisted>> | undefined;
+    let transactionCalls = 0;
+    const lostAckDb = new Proxy(db, { get(target, key, receiver) {
+      if (key === 'transaction') return async (work: Parameters<typeof db.transaction>[0]) => {
+        transactionCalls++;
+        const result = await target.transaction(work);
+        if (transactionCalls === 1) {
+          committed = await persisted();
+          throw new Error('PRIVATE_SYNTHETIC_ASSIGNMENT_ACK_LOSS');
+        }
+        return result;
+      };
+      return Reflect.get(target, key, receiver);
+    } });
+    try {
+      const outcome = await service.workforceService(lostAckDb).ensureSkillsInstalled(company.id, agent.id, owner)
+        .then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+      expect(committed?.enrollment.installedSkillKeys).toHaveLength(1);
+      expect(committed?.enrollment.skillInstallError).toBeNull();
+      expect(readPaperclipSkillSyncPreference(committed!.agent.adapterConfig).desiredSkills).toEqual(committed!.enrollment.installedSkillKeys);
+      expect(committed?.audits.map(row => row.action)).toEqual(['workforce.enrolled', 'workforce.skills_installed']);
+      expect(await persisted()).toEqual(committed);
+      expect(transactionCalls).toBe(1);
+      expect(liveEvents).toEqual([]);
+      expect(pluginEvents).toEqual([]);
+      expect(outcome.value).toBeUndefined();
+      expect(outcome.error).toMatchObject({ status: 409, details: { outcome: 'unknown', enrollmentId: enrollment.id, agentId: agent.id } });
+      expect(outcome.error.message).not.toContain('PRIVATE_SYNTHETIC');
+    } finally { stop(); }
+  });
+  it('records an actual assignment callback rollback as installation failure without retaining assignment writes', async () => {
+    const { company, agent, svc } = await fixture();
+    const enrollment = await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, owner);
+    // Fail the audit INSERT inside the real assignment transaction, after config/enrollment writes.
+    await db.execute(sql`create function reject_test_skill_assignment() returns trigger language plpgsql as $$
+      begin
+        if new.action = 'workforce.skills_installed' then raise exception 'synthetic known assignment rollback'; end if;
+        return new;
+      end;
+    $$`);
+    await db.execute(sql`create trigger reject_test_skill_assignment before insert on activity_log for each row execute function reject_test_skill_assignment()`);
+    const liveEvents: string[] = [];
+    const stop = subscribeCompanyLiveEvents(company.id, event => liveEvents.push(event.payload.action as string));
+    try {
+      const result = await svc.ensureSkillsInstalled(company.id, agent.id, owner);
+      expect(result.skillInstallError).toBeTruthy();
+      expect(result.installedSkillKeys).toEqual([]);
+      const current = (await db.select().from(agents).where(eq(agents.id, agent.id)))[0];
+      expect(current.adapterConfig).toEqual(agent.adapterConfig);
+      const saved = (await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.id, enrollment.id)))[0];
+      expect(saved.installedSkillKeys).toEqual([]);
+      expect(saved.skillInstallError).toBe(result.skillInstallError);
+      const audits = await db.select().from(activityLog).where(eq(activityLog.companyId, company.id));
+      expect(audits.map(row => row.action)).toEqual(['workforce.enrolled', 'workforce.skill_install_failed']);
+      expect(liveEvents).toEqual(['workforce.skill_install_failed']);
+    } finally {
+      stop();
+      await db.execute(sql`drop trigger reject_test_skill_assignment on activity_log`);
+      await db.execute(sql`drop function reject_test_skill_assignment()`);
+    }
   });
   it('does not turn an accepted assignment publication failure into a failed skill installation', async () => {
     const { company, agent, svc } = await fixture();
