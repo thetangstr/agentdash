@@ -13,6 +13,12 @@ vi.mock("../dev-server-status.js", () => ({
   toDevServerHealthStatus: vi.fn(),
 }));
 
+const mockServedRelease = vi.hoisted(() => vi.fn());
+
+vi.mock("../lib/served-release.js", () => ({
+  servedRelease: mockServedRelease,
+}));
+
 function createApp(db?: Db) {
   const app = express();
   app.use("/health", healthRoutes(db));
@@ -23,6 +29,7 @@ describe("GET /health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReadPersistedDevServerStatus.mockReturnValue(undefined);
+    mockServedRelease.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -388,6 +395,49 @@ describe("GET /health", () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ version: serverVersion, releaseTag: "v2026.925.0" });
+    });
+  });
+
+  // AgentDash: ota-apply.mjs waits for the served release's commit to match
+  // the release it switched to (the served-release check), so it must be on
+  // every response shape, including the redacted one.
+  describe("releaseCommit", () => {
+    const COMMIT = "4637abd727dfe98b4865bec30a39cd772c484749";
+
+    it("is absent outside a release layout", async () => {
+      const res = await request(createApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty("releaseCommit");
+    });
+
+    it("reports the served release's commit on the public (redacted) response", async () => {
+      mockServedRelease.mockReturnValue({ tag: "v2026.930.0", commit: COMMIT });
+      const app = express();
+      app.use(
+        "/health",
+        healthRoutes(undefined, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ status: "ok", version: serverVersion, releaseCommit: COMMIT });
+    });
+
+    it("reports the served release's commit on the full-details response with a db", async () => {
+      mockServedRelease.mockReturnValue({ tag: "v2026.930.0", commit: COMMIT });
+      const db = {
+        execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ count: 0 }]) })),
+        })),
+      } as unknown as Db;
+      const res = await request(createApp(db)).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ version: serverVersion, releaseCommit: COMMIT });
     });
   });
 });

@@ -98,11 +98,28 @@ A hand-written "kill whatever listens on the port and its parents" script
 walks up to pid 1 without checking. Pass one as `--restart-command` only when
 you have looked at what is listening.
 
+**Health means the new release is serving.** A healthy `/api/health` is not
+enough on its own: a restart that did nothing leaves the old process
+answering, healthy, from the old release. The server reports `releaseCommit`,
+the commit in the completion marker (`.agentdash-release.json`) of the release
+directory its code was loaded from. After the restart the apply polls until
+health is ok and `releaseCommit` equals the target commit. If the old commit,
+or no `releaseCommit`, is still being reported when `--health-timeout` runs
+out, the update has failed and rolls back. Two consequences:
+
+- A target release whose server predates `releaseCommit` is refused before
+  the backup (check `served_release`), because it could never pass.
+- The marker is now required: if it cannot be written after the build, the
+  apply fails before the switch instead of rolling back after it.
+
 **Rollback.** If health fails, `current` goes back to the previous release and
 the apply restarts again. Then it always checks health again. A rollback
 restart that finds nothing to kill is recorded as skipped, because a release
 that crashed at boot leaves nothing listening and launchd brings the old one
-back on its own. Health decides whether that recovered.
+back on its own. Health decides whether that recovered. When the previous
+release reports `releaseCommit`, rollback health must report its commit too.
+When it predates the field, health ok is accepted without it, and the
+receipt's `rollback_health` check says `served release NOT verified`.
 
 Five things about it are deliberate:
 
@@ -114,7 +131,13 @@ Five things about it are deliberate:
   imports into `~/.agentdash/bin`, from the release it just proved. If a
   rename fails part-way, the old set is put back. The wrapper also refreshes
   the two `.mjs` files from `releases/current` on every run. It falls back to
-  the checkout only on a box that has no release yet.
+  the checkout only on a box that has no release yet. Neither path ever
+  downgrades the installed updater: `ota-apply.mjs` declares
+  `UPDATER_VERSION`, and when the release's is older than the installed one
+  (a rollback to a release that predates an updater fix) the installed copies
+  are kept and the receipt or the job log says so. The wrapper replaces the
+  two files together or not at all. Bump `UPDATER_VERSION` whenever the
+  updater's behaviour changes.
 - **Almost nothing runs from the checkout.** `install-launchdaemons.sh`
   refuses, and installs nothing, when a plist names a path inside
   `~/agentdash`. It also refuses when a plist's program does not exist, and
@@ -129,7 +152,15 @@ Five things about it are deliberate:
 - **A human approves before anything applies.** `--check` only writes the
   offer file (`available-release.json`) that the board's read-only status
   endpoint renders. The apply path refuses without an approval that names the
-  exact tag and commit.
+  exact tag and commit. An approval is single-use: once an apply completes,
+  whether `applied` or `rolled_back`, `deployments/pending-approval.json` is
+  moved to `deployments/used-approvals/<receipt>-<id>.json`, annotated with
+  `consumedAt`, `consumedByReceipt` and `consumedOutcome`, and the receipt
+  records `approvalConsumed`. Applying the same tag again, or retrying after a
+  rollback, needs a fresh approval. A run that stops before completing (a
+  refused gate, a failed build, a rollback that did not recover) keeps the
+  approval for a retry. An approval may carry an optional `expiresAt`; after
+  that time both the board and the apply refuse it.
 - **It refuses to update without a backup** unless you pass `--skip-backup`
   and say so out loud. It also refuses a release that adds migrations unless
   you pass `--allow-migrations`, because automatic rollback restores code, not
@@ -151,8 +182,9 @@ A rerun after a failed apply reuses the release directory only if it carries
 the completion marker (`.agentdash-release.json`) for the same commit. That
 marker is written after the build and seal. A directory without it is removed
 and exported again. The apply refuses instead, and asks for a person, when
-that directory is the current or previous release or a running process uses
-it.
+that directory is the current or previous release, a running process uses
+it, or an installed `com.agentdash.*` plist names it (the same protections
+pruning applies).
 
 **Postgres stays on the checkout, on purpose.** `com.agentdash.postgres` runs
 the embedded-postgres binary from `~/agentdash/node_modules`. Pointing it at

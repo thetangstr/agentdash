@@ -220,11 +220,23 @@ export function approvalAuthorizes(input: {
   approval: OtaApproval | null;
   release: OtaRelease;
   currentVerdict: OtaCompatibilityVerdict;
+  now?: Date;
 }): { ok: true } | { ok: false; reason: string } {
   const { approval, release } = input;
   if (!approval) return { ok: false, reason: "No approval on record for this release." };
   if (approval.status !== "approved") {
     return { ok: false, reason: `Approval is '${approval.status}', not 'approved'.` };
+  }
+  // AgentDash: an optional expiry, mirrored from ota-apply.mjs so the board
+  // does not offer an apply the updater would refuse.
+  if (approval.expiresAt !== undefined && approval.expiresAt !== null) {
+    const expires = Date.parse(approval.expiresAt);
+    if (!Number.isFinite(expires)) {
+      return { ok: false, reason: `The approval's expiresAt '${approval.expiresAt}' is not a date. Re-approve.` };
+    }
+    if ((input.now ?? new Date()).getTime() >= expires) {
+      return { ok: false, reason: `The approval expired at ${approval.expiresAt}. Re-approve.` };
+    }
   }
   if (approval.commit !== release.commit) {
     return {

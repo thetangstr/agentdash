@@ -226,6 +226,17 @@ describe("approvalAuthorizes", () => {
     ).toEqual({ ok: true });
   });
 
+  // Mirrors ota-apply.mjs: an optional expiry, absent in the original shape.
+  it("honours an optional expiresAt", () => {
+    const now = new Date("2026-09-30T00:00:00Z");
+    const at = (expiresAt: string | null) =>
+      approvalAuthorizes({ approval: approvalFor(RELEASE, { expiresAt }), release: RELEASE, currentVerdict: "compatible", now });
+    expect(at(null)).toEqual({ ok: true });
+    expect(at("2026-10-01T00:00:00Z")).toEqual({ ok: true });
+    expect(at("2026-09-29T00:00:00Z")).toMatchObject({ ok: false, reason: expect.stringContaining("expired") });
+    expect(at("soon")).toMatchObject({ ok: false, reason: expect.stringContaining("not a date") });
+  });
+
   it("refuses when there is no approval", () => {
     expect(approvalAuthorizes({ approval: null, release: RELEASE, currentVerdict: "compatible" }).ok).toBe(false);
   });

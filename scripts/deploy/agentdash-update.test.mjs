@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +95,62 @@ test("a box with no release yet still refreshes the updater from the checkout", 
   try {
     const { updater } = runWrapper(box);
     assert.equal(updater.from, "clone");
+  } finally {
+    rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+/** An installed ota-apply.mjs stub declaring `version`, printing where it came from. */
+function installedUpdater(box, version, from) {
+  mkdirSync(box.binDir, { recursive: true });
+  writeFileSync(
+    path.join(box.binDir, "ota-apply.mjs"),
+    `export const UPDATER_VERSION = ${version};\nconsole.log(JSON.stringify({ from: ${JSON.stringify(from)}, argv: process.argv.slice(2) }));\n`,
+  );
+  writeFileSync(path.join(box.binDir, "ota-release-layout.mjs"), `// ${from}\n`);
+}
+
+test("a rollback to a release with an older updater does not downgrade the installed one", () => {
+  // releases/current's updater declares no UPDATER_VERSION (0): a pre-#853 release.
+  const box = makeBox({ withCurrent: true });
+  try {
+    installedUpdater(box, 1, "installed");
+    const { out, updater } = runWrapper(box);
+    assert.equal(updater.from, "installed");
+    assert.equal(readFileSync(path.join(box.binDir, "ota-release-layout.mjs"), "utf8"), "// installed\n");
+    assert.match(out, /kept the installed updater \(version 1\)/);
+  } finally {
+    rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("a release with the same or a newer updater version replaces both files, leaving no temp files", () => {
+  const box = makeBox({ withCurrent: true });
+  try {
+    const current = path.join(box.releasesRoot, "current", "scripts", "deploy");
+    writeFileSync(
+      path.join(current, "ota-apply.mjs"),
+      `export const UPDATER_VERSION = 2;\nconsole.log(JSON.stringify({ from: "release", argv: process.argv.slice(2) }));\n`,
+    );
+    installedUpdater(box, 1, "installed");
+    const { updater } = runWrapper(box);
+    assert.equal(updater.from, "release");
+    assert.equal(readFileSync(path.join(box.binDir, "ota-release-layout.mjs"), "utf8"), "// release\n");
+    assert.deepEqual(readdirSync(box.binDir).sort(), ["ota-apply.mjs", "ota-release-layout.mjs"]);
+  } finally {
+    rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("a release missing the layout file leaves the installed pair untouched and fails loudly", () => {
+  const box = makeBox({ withCurrent: false });
+  try {
+    installedUpdater(box, 0, "installed");
+    rmSync(path.join(box.clone, "scripts", "deploy", "ota-release-layout.mjs"));
+    assert.throws(() => runWrapper(box));
+    assert.match(readFileSync(path.join(box.binDir, "ota-apply.mjs"), "utf8"), /"installed"/);
+    assert.equal(readFileSync(path.join(box.binDir, "ota-release-layout.mjs"), "utf8"), "// installed\n");
+    assert.deepEqual(readdirSync(box.binDir).sort(), ["ota-apply.mjs", "ota-release-layout.mjs"]);
   } finally {
     rmSync(box.root, { recursive: true, force: true });
   }
