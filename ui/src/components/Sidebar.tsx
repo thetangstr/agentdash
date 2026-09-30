@@ -20,7 +20,6 @@ import {
   CreditCard,
   PackageCheck,
   MessageSquare,
-  Users,
   ChevronRight,
   Clock3,
   Puzzle,
@@ -38,6 +37,7 @@ import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { SidebarProjects } from "./SidebarProjects";
 import { SidebarAgents } from "./SidebarAgents";
+import { SidebarTeamItem } from "./SidebarTeamItem";
 import { useDialogActions } from "../context/DialogContext";
 import { accessApi } from "@/api/access";
 import { useCompany } from "../context/CompanyContext";
@@ -166,7 +166,9 @@ export function Sidebar() {
                 badge={decisionsBadge}
               />
               <SidebarNavItem to="/shipped" label="Shipped" icon={PackageCheck} />
-              <SidebarNavItem to="/agents" label="Team" icon={Users} />
+              {/* Team → /agents, with the per-agent list nested under it
+                  (collapsed by default) — still one primary item. */}
+              <SidebarTeamItem />
             </>
           )}
           <PluginSlotOutlet

@@ -106,8 +106,29 @@ vi.mock("./SidebarProjects", () => ({
   SidebarProjects: () => <div>Projects list</div>,
 }));
 
+// The row hook is mocked so the default-profile Team list can be driven
+// without the agents/session/mutation plumbing; the row renderer emits one
+// link per agent, like the real SidebarAgentItem.
+const mockAgentRows = vi.hoisted(() => ({
+  agents: [] as Array<{ id: string; name: string; urlKey: string }>,
+  userId: "user-1" as string | null,
+}));
+
 vi.mock("./SidebarAgents", () => ({
   SidebarAgents: () => <div>Agents list</div>,
+  useSidebarAgentRows: () => ({
+    orderedAgents: mockAgentRows.agents,
+    currentUserId: mockAgentRows.userId,
+  }),
+  SidebarAgentRows: ({ orderedAgents }: { orderedAgents: Array<{ id: string; name: string; urlKey: string }> }) => (
+    <div>
+      {orderedAgents.map((agent) => (
+        <a key={agent.id} href={`/agents/${agent.urlKey}`}>
+          {agent.name}
+        </a>
+      ))}
+    </div>
+  ),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -124,6 +145,12 @@ describe("Sidebar", () => {
   let container: HTMLDivElement;
 
   beforeEach(() => {
+    localStorage.clear();
+    mockAgentRows.agents = [
+      { id: "agent-1", name: "Maya", urlKey: "maya" },
+      { id: "agent-2", name: "Priya", urlKey: "priya" },
+    ];
+    mockAgentRows.userId = "user-1";
     container = document.createElement("div");
     document.body.appendChild(container);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
@@ -313,7 +340,94 @@ describe("Sidebar", () => {
     expect(linkTexts).not.toContain("Evaluation");
     expect(container.textContent).not.toContain("Projects list");
     expect(container.textContent).not.toContain("Agents list");
+
+    // The agent list nests under Team, so the primary block's links are still
+    // exactly the six primary destinations (Settings sits in the footer).
+    const primaryBlock = container.querySelector("nav > div");
+    const primaryHrefs = [...primaryBlock!.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(primaryHrefs).toEqual(["/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents"]);
     await act(async () => root.unmount());
+  });
+
+  // UX-6 follow-up: the per-agent list returns under Team, collapsed by default.
+  describe("Agents list under Team (default profile)", () => {
+    const findToggle = () =>
+      [...container.querySelectorAll("button")].find((b) =>
+        /^(Show|Hide) agents$/.test(b.getAttribute("aria-label") ?? ""),
+      );
+    const agentHrefs = () =>
+      [...container.querySelectorAll("a")]
+        .map((a) => a.getAttribute("href"))
+        .filter((h) => h?.startsWith("/agents/"));
+    const clickToggle = async () => {
+      await act(async () => {
+        findToggle()!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+    };
+
+    beforeEach(() => {
+      mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    });
+
+    it("hides the agent list by default behind an accessible toggle", async () => {
+      const root = await renderSidebar();
+      const toggle = findToggle();
+      expect(toggle).toBeDefined();
+      expect(toggle?.getAttribute("type")).toBe("button");
+      expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle?.getAttribute("aria-controls")).toBeTruthy();
+      // The chevron is a sibling of the Team link, never inside it, so
+      // clicking it cannot navigate.
+      expect(toggle?.closest("a")).toBeNull();
+      expect(agentHrefs()).toEqual([]);
+      const team = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/agents");
+      expect(team?.textContent).toContain("Team");
+      await act(async () => root.unmount());
+    });
+
+    it("shows the agents when toggled and remembers it per user per company", async () => {
+      let root = await renderSidebar();
+      await clickToggle();
+
+      const toggle = findToggle();
+      expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+      expect(toggle?.getAttribute("aria-label")).toBe("Hide agents");
+      expect(agentHrefs()).toEqual(["/agents/maya", "/agents/priya"]);
+      const contentId = toggle?.getAttribute("aria-controls");
+      expect(contentId && document.getElementById(contentId)?.textContent).toContain("Maya");
+      expect(localStorage.getItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1")).toBe("true");
+      await act(async () => root.unmount());
+
+      // Re-mount: the remembered state is honoured.
+      root = await renderSidebar();
+      expect(findToggle()?.getAttribute("aria-expanded")).toBe("true");
+      expect(agentHrefs()).toEqual(["/agents/maya", "/agents/priya"]);
+
+      // Collapsing forgets it again.
+      await clickToggle();
+      expect(agentHrefs()).toEqual([]);
+      expect(localStorage.getItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1")).toBeNull();
+      await act(async () => root.unmount());
+    });
+
+    it("does not apply another user's remembered state", async () => {
+      localStorage.setItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-2", "true");
+      localStorage.setItem("agentdash.sidebarTeamAgentsExpanded:company-2:user-1", "true");
+      const root = await renderSidebar();
+      expect(findToggle()?.getAttribute("aria-expanded")).toBe("false");
+      expect(agentHrefs()).toEqual([]);
+      await act(async () => root.unmount());
+    });
+
+    it("hides the toggle when the company has no agents", async () => {
+      mockAgentRows.agents = [];
+      const root = await renderSidebar();
+      expect(findToggle()).toBeUndefined();
+      const team = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/agents");
+      expect(team?.textContent).toContain("Team");
+      await act(async () => root.unmount());
+    });
   });
 
   it("keeps the Advanced group collapsed by default on the default profile", async () => {
@@ -389,6 +503,11 @@ describe("Sidebar", () => {
     expect(container.textContent).toContain("Agents list");
     // No Advanced group on MK.
     expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Advanced")).toBe(false);
+    // No Team item or nested agent toggle on MK; its Agents section is unchanged.
+    expect([...container.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/agents")).toBe(false);
+    expect(
+      [...container.querySelectorAll("button")].some((b) => /^(Show|Hide) agents$/.test(b.getAttribute("aria-label") ?? "")),
+    ).toBe(false);
     await act(async () => root.unmount());
     mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });
