@@ -1,3 +1,10 @@
+import { agentRecoveryBudgetConfigSchema } from "@paperclipai/shared";
+
+/**
+ * Default automatic-recovery limits. An agent may override any of them through
+ * `runtimeConfig.recoveryBudget` (validated by agentRecoveryBudgetConfigSchema);
+ * see resolveTaskRecoveryBudgetLimits.
+ */
 export const TASK_RECOVERY_BUDGET_LIMITS = {
   automaticRetries: 1,
   providerTurns: 12,
@@ -5,6 +12,14 @@ export const TASK_RECOVERY_BUDGET_LIMITS = {
   providerCostUsd: 0.25,
   runtimeMs: 5 * 60 * 1_000,
 } as const;
+
+export type TaskRecoveryBudgetLimits = {
+  automaticRetries: number;
+  providerTurns: number;
+  providerTokens: number;
+  providerCostUsd: number;
+  runtimeMs: number;
+};
 
 /**
  * Upper bound on how many prior task runs feed the recovery budget.
@@ -44,12 +59,15 @@ function number(value: unknown): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+// Cached input tokens are deliberately left out: a resumed session re-reads
+// its whole context from cache on every turn, so counting cache reads made a
+// single long run (mostly cache reads) look like a
+// runaway. Fresh input plus output is the spend a retry adds.
 function tokenTotal(value: unknown): number {
   const usage = object(value);
   const input = number(usage.rawInputTokens ?? usage.inputTokens);
-  const cached = number(usage.rawCachedInputTokens ?? usage.cachedInputTokens);
   const output = number(usage.rawOutputTokens ?? usage.outputTokens);
-  return Math.floor(input + cached + output);
+  return Math.floor(input + output);
 }
 
 function runCost(value: unknown, usageValue: unknown): number {
@@ -75,27 +93,62 @@ function runRuntimeMs(run: TaskRecoveryBudgetRun): number {
 }
 
 /**
+ * Effective limits for one agent: the defaults, overridden field by field by
+ * `runtimeConfig.recoveryBudget`, with the runtime ceiling raised to at least
+ * the adapter's configured per-run timeout. A retry the adapter is allowed to
+ * run to its own timeout must not be refused for having done so; the adapter
+ * timeout stays the per-run ceiling.
+ *
+ * An override that fails validation (written before the schema existed, or
+ * straight to the database) is ignored as a whole rather than half-applied.
+ */
+export function resolveTaskRecoveryBudgetLimits(input: {
+  runtimeConfig: unknown;
+  adapterTimeoutMs?: number | null;
+}): { limits: TaskRecoveryBudgetLimits; invalidOverride: boolean } {
+  const limits: TaskRecoveryBudgetLimits = { ...TASK_RECOVERY_BUDGET_LIMITS };
+  let invalidOverride = false;
+  const rawOverride = object(input.runtimeConfig).recoveryBudget;
+  if (rawOverride !== undefined && rawOverride !== null) {
+    const parsed = agentRecoveryBudgetConfigSchema.safeParse(rawOverride);
+    if (parsed.success) {
+      for (const [key, value] of Object.entries(parsed.data)) {
+        if (typeof value === "number") limits[key as keyof TaskRecoveryBudgetLimits] = value;
+      }
+    } else {
+      invalidOverride = true;
+    }
+  }
+  const adapterTimeoutMs = input.adapterTimeoutMs ?? 0;
+  if (Number.isFinite(adapterTimeoutMs) && adapterTimeoutMs > limits.runtimeMs) {
+    limits.runtimeMs = Math.floor(adapterTimeoutMs);
+  }
+  return { limits, invalidOverride };
+}
+
+/**
  * Automatic-retry budget for one task (an issue assigned to one agent).
  *
- * AGE-142 (S3 of the AGE-112 dispatch plan): attempts are counted by task
- * scope, not by retry-chain shape. Every terminal run recorded for the same
- * issue+agent is an attempt — including the first, refused dispatch — because
- * the AGE-104 failure showed runs the chain walk never linked (refused and
- * cancelled retries) while the ledger read attempts=0/1. Callers scope the
- * input by context issueId+agent and cap the scan the way the chain walk
- * capped its walk; a budget is about recent history, not archaeology.
+ * The ledger is the task's automatic recovery runs only: dispatches linked to
+ * a predecessor by retryOfRunId / a continuation link. The source run (the
+ * assignment, a human comment, any unlinked dispatch) is not recovery and is
+ * not counted, so one long first run no longer exhausts the budget before the
+ * first retry runs. Callers scope the input by context
+ * issueId+agent, keep only linked runs recorded since the last human clear,
+ * and cap the scan (AGE-142: counting by task scope, not chain shape, so
+ * refused and cancelled linked retries still count as attempts).
  *
- * The counter is the observed attempts, so a single prior run already hits the
- * limit of one automatic retry: the source run spent the allowance, and the
- * next dispatch is the retry it buys. Expiry is therefore strict `>`: one
- * prior run refuses the NEXT dispatch without labelling the last allowed one
- * exhausted, matching the chain rule this replaced (ancestorRuns.length - 1 >=
- * limit) boundary for boundary on a pure retry chain.
+ * `automaticRetries` is the number of automatic retries already spent, so the
+ * dispatch being judged is retry number `automaticRetries + 1`; it is refused
+ * once the spent count reaches the limit. With the default limit of 1 the
+ * first retry runs and the second is refused, the same boundary as before on
+ * a pure retry chain.
  */
 export function evaluateTaskRecoveryBudget(
-  priorTaskRuns: TaskRecoveryBudgetRun[],
+  priorAutomaticRuns: TaskRecoveryBudgetRun[],
+  limits: TaskRecoveryBudgetLimits = TASK_RECOVERY_BUDGET_LIMITS,
 ): { usage: TaskRecoveryBudgetUsage; exhaustedBy: TaskRecoveryBudgetDimension[] } {
-  const usage = priorTaskRuns.reduce<TaskRecoveryBudgetUsage>((total, run) => {
+  const usage = priorAutomaticRuns.reduce<TaskRecoveryBudgetUsage>((total, run) => {
     const result = object(run.resultJson);
     total.providerTurns += Math.floor(number(result.num_turns ?? result.numTurns));
     total.providerTokens += tokenTotal(run.usageJson);
@@ -103,7 +156,7 @@ export function evaluateTaskRecoveryBudget(
     total.runtimeMs += runRuntimeMs(run);
     return total;
   }, {
-    automaticRetries: Math.max(0, priorTaskRuns.length),
+    automaticRetries: Math.max(0, priorAutomaticRuns.length),
     providerTurns: 0,
     providerTokens: 0,
     providerCostUsd: 0,
@@ -112,21 +165,24 @@ export function evaluateTaskRecoveryBudget(
   usage.providerCostUsd = Number(usage.providerCostUsd.toFixed(8));
 
   const exhaustedBy: TaskRecoveryBudgetDimension[] = [];
-  if (usage.automaticRetries > TASK_RECOVERY_BUDGET_LIMITS.automaticRetries) exhaustedBy.push("attempts");
-  if (usage.providerTurns >= TASK_RECOVERY_BUDGET_LIMITS.providerTurns) exhaustedBy.push("turns");
-  if (usage.providerTokens >= TASK_RECOVERY_BUDGET_LIMITS.providerTokens) exhaustedBy.push("tokens");
-  if (usage.providerCostUsd >= TASK_RECOVERY_BUDGET_LIMITS.providerCostUsd) exhaustedBy.push("cost");
-  if (usage.runtimeMs >= TASK_RECOVERY_BUDGET_LIMITS.runtimeMs) exhaustedBy.push("time");
+  if (usage.automaticRetries >= limits.automaticRetries) exhaustedBy.push("attempts");
+  if (usage.providerTurns >= limits.providerTurns) exhaustedBy.push("turns");
+  if (usage.providerTokens >= limits.providerTokens) exhaustedBy.push("tokens");
+  if (usage.providerCostUsd >= limits.providerCostUsd) exhaustedBy.push("cost");
+  if (usage.runtimeMs >= limits.runtimeMs) exhaustedBy.push("time");
 
   return { usage, exhaustedBy };
 }
 
-export function formatTaskRecoveryBudgetUsage(usage: TaskRecoveryBudgetUsage): string {
+export function formatTaskRecoveryBudgetUsage(
+  usage: TaskRecoveryBudgetUsage,
+  limits: TaskRecoveryBudgetLimits = TASK_RECOVERY_BUDGET_LIMITS,
+): string {
   return [
-    `attempts=${usage.automaticRetries}/${TASK_RECOVERY_BUDGET_LIMITS.automaticRetries}`,
-    `turns=${usage.providerTurns}/${TASK_RECOVERY_BUDGET_LIMITS.providerTurns}`,
-    `tokens=${usage.providerTokens}/${TASK_RECOVERY_BUDGET_LIMITS.providerTokens}`,
-    `costUsd=${usage.providerCostUsd.toFixed(6)}/${TASK_RECOVERY_BUDGET_LIMITS.providerCostUsd.toFixed(2)}`,
-    `runtimeMs=${usage.runtimeMs}/${TASK_RECOVERY_BUDGET_LIMITS.runtimeMs}`,
+    `attempts=${usage.automaticRetries}/${limits.automaticRetries}`,
+    `turns=${usage.providerTurns}/${limits.providerTurns}`,
+    `tokens=${usage.providerTokens}/${limits.providerTokens}`,
+    `costUsd=${usage.providerCostUsd.toFixed(6)}/${limits.providerCostUsd.toFixed(2)}`,
+    `runtimeMs=${usage.runtimeMs}/${limits.runtimeMs}`,
   ].join(", ");
 }

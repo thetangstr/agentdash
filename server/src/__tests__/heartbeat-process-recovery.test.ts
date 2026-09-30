@@ -73,6 +73,10 @@ vi.mock("../adapters/index.ts", async () => {
 });
 
 import { heartbeatService } from "../services/heartbeat.ts";
+import express from "express";
+import request from "supertest";
+import { errorHandler } from "../middleware/index.js";
+import { issueRoutes } from "../routes/issues.js";
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
@@ -656,74 +660,80 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       runErrorCode: "adapter_failed",
       runError: "provider run failed before persisting a comment",
     });
-    const startedAt = new Date("2026-03-19T00:00:00.000Z");
-    const finishedAt = new Date(
-      dimension === "time"
-        ? "2026-03-19T00:05:00.000Z"
-        : "2026-03-19T00:00:01.000Z",
-    );
-
+    // The source run is an ordinary, unlinked dispatch: it is not automatic
+    // recovery, so it never counts against the recovery budget.
     await db
       .update(heartbeatRuns)
       .set({
-        startedAt,
-        finishedAt,
-        usageJson: {
-          inputTokens: dimension === "tokens" ? 500_000 : 1,
-          cachedInputTokens: 0,
-          outputTokens: 0,
-        },
-        resultJson: {
-          num_turns: dimension === "turns" ? 12 : 1,
-          total_cost_usd: dimension === "cost" ? 0.25 : 0.01,
-        },
+        startedAt: new Date("2026-03-19T00:00:00.000Z"),
+        finishedAt: new Date("2026-03-19T00:00:01.000Z"),
+        usageJson: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 0 },
+        resultJson: { num_turns: 1, total_cost_usd: 0.01 },
       })
       .where(eq(heartbeatRuns.id, fixture.runId));
 
-    let parentRunId = fixture.runId;
-    if (dimension === "attempts") {
-      const retryRunId = randomUUID();
-      const retryWakeupId = randomUUID();
-      await db.insert(agentWakeupRequests).values({
-        id: retryWakeupId,
-        companyId: fixture.companyId,
-        agentId: fixture.agentId,
-        source: "automation",
-        triggerDetail: "system",
-        reason: "missing_issue_comment",
-        payload: { issueId: fixture.issueId, retryOfRunId: fixture.runId },
-        status: "failed",
-        runId: retryRunId,
-        claimedAt: new Date("2026-03-19T00:00:02.000Z"),
-        finishedAt: new Date("2026-03-19T00:00:03.000Z"),
-        error: "retry failed",
-      });
-      await db.insert(heartbeatRuns).values({
-        id: retryRunId,
-        companyId: fixture.companyId,
-        agentId: fixture.agentId,
-        invocationSource: "automation",
-        triggerDetail: "system",
-        status: "failed",
-        wakeupRequestId: retryWakeupId,
-        contextSnapshot: {
-          issueId: fixture.issueId,
-          taskId: fixture.issueId,
-          retryReason: "missing_issue_comment",
-          retryOfRunId: fixture.runId,
-        },
-        retryOfRunId: fixture.runId,
-        startedAt: new Date("2026-03-19T00:00:02.000Z"),
-        finishedAt: new Date("2026-03-19T00:00:03.000Z"),
-        usageJson: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 0 },
-        resultJson: { num_turns: 1, total_cost_usd: 0.01 },
-        errorCode: "adapter_failed",
-        error: "retry failed",
-      });
-      parentRunId = retryRunId;
+    // The automatic retry the source run bought. It carries the spend under
+    // test; for the non-attempt dimensions the agent allows more retries, so
+    // only that dimension can be what exhausts the budget.
+    if (dimension !== "attempts") {
+      await db
+        .update(agents)
+        .set({ runtimeConfig: { recoveryBudget: { automaticRetries: 3 } } })
+        .where(eq(agents.id, fixture.agentId));
     }
+    const retryRunId = randomUUID();
+    const retryWakeupId = randomUUID();
+    const retryStartedAt = new Date("2026-03-19T00:00:02.000Z");
+    const retryFinishedAt = new Date(
+      dimension === "time"
+        ? "2026-03-19T00:05:02.000Z"
+        : "2026-03-19T00:00:03.000Z",
+    );
+    await db.insert(agentWakeupRequests).values({
+      id: retryWakeupId,
+      companyId: fixture.companyId,
+      agentId: fixture.agentId,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "missing_issue_comment",
+      payload: { issueId: fixture.issueId, retryOfRunId: fixture.runId },
+      status: "failed",
+      runId: retryRunId,
+      claimedAt: retryStartedAt,
+      finishedAt: retryFinishedAt,
+      error: "retry failed",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: retryRunId,
+      companyId: fixture.companyId,
+      agentId: fixture.agentId,
+      invocationSource: "automation",
+      triggerDetail: "system",
+      status: "failed",
+      wakeupRequestId: retryWakeupId,
+      contextSnapshot: {
+        issueId: fixture.issueId,
+        taskId: fixture.issueId,
+        retryReason: "missing_issue_comment",
+        retryOfRunId: fixture.runId,
+      },
+      retryOfRunId: fixture.runId,
+      startedAt: retryStartedAt,
+      finishedAt: retryFinishedAt,
+      usageJson: {
+        inputTokens: dimension === "tokens" ? 500_000 : 1,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+      },
+      resultJson: {
+        num_turns: dimension === "turns" ? 12 : 1,
+        total_cost_usd: dimension === "cost" ? 0.25 : 0.01,
+      },
+      errorCode: "adapter_failed",
+      error: "retry failed",
+    });
 
-    return { ...fixture, parentRunId };
+    return { ...fixture, sourceRunId: fixture.runId, parentRunId: retryRunId };
   }
 
   async function seedAssignedTodoNoRunFixture(input?: {
@@ -1078,6 +1088,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
 
       const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
       expect(issue?.status).toBe("blocked");
+      const recordedBudget = (issue?.executionState as { recoveryBudget?: { exhaustedBy?: string[] } } | null)
+        ?.recoveryBudget;
+      expect(recordedBudget?.exhaustedBy).toEqual([dimension]);
       expect(issue?.executionState).toMatchObject({
         recoveryBudget: {
           status: "exhausted",
@@ -1254,7 +1267,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
   });
 
   it("serializes concurrent exhaustion comment repair across agent start locks", async () => {
-    const { companyId, agentId, issueId } = await seedExhaustedRecoveryBudgetFixture("cost");
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("cost");
     const secondAgentId = randomUUID();
     await db.insert(agents).values({
       id: secondAgentId,
@@ -1294,7 +1307,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         source: "automation",
         triggerDetail: "system",
         reason: "issue_continuation_needed",
-        contextSnapshot: { taskId: issueId },
+        contextSnapshot: { taskId: issueId, retryOfRunId: parentRunId },
         requestedByActorType: "system",
         requestedByActorId: "heartbeat",
       }),
@@ -1302,7 +1315,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         source: "automation",
         triggerDetail: "system",
         reason: "issue_continuation_needed",
-        contextSnapshot: { taskId: issueId },
+        contextSnapshot: { taskId: issueId, retryOfRunId: parentRunId },
         requestedByActorType: "system",
         requestedByActorId: "heartbeat",
       }),
@@ -1311,6 +1324,578 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
     expect(comments).toHaveLength(1);
     expect(comments[0]?.body).toContain("Automatic recovery budget exhausted");
+  });
+
+  // AgentDash (recovery budget remediation): human remediation clears the
+  // exhausted marker, only linked retries are gated, the ledger counts only
+  // automatic retries, and the stranded reconciler leaves exhausted issues to
+  // the human who has to clear them.
+  function recoveryBudgetBoardActor(companyId: string): Express.Request["actor"] {
+    return {
+      type: "board",
+      userId: "board-user",
+      companyIds: [companyId],
+      memberships: [{ companyId, membershipRole: "admin", status: "active" }],
+      isInstanceAdmin: true,
+      source: "session",
+    };
+  }
+
+  function createRecoveryBudgetIssueApp(actor: Express.Request["actor"]) {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.actor = actor;
+      next();
+    });
+    app.use("/api", issueRoutes(db, {} as any));
+    app.use(errorHandler);
+    return app;
+  }
+
+  async function exhaustRecoveryBudgetThroughLinkedRetry(input: {
+    agentId: string;
+    issueId: string;
+    parentRunId: string;
+  }) {
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+    const refused = await heartbeat.wakeup(input.agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_continuation_needed",
+      payload: { issueId: input.issueId, retryOfRunId: input.parentRunId },
+      contextSnapshot: {
+        issueId: input.issueId,
+        taskId: input.issueId,
+        retryReason: "issue_continuation_needed",
+        retryOfRunId: input.parentRunId,
+      },
+      requestedByActorType: "system",
+      requestedByActorId: "heartbeat",
+    });
+    const refusedRun = refused
+      ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, refused.id)).then((rows) => rows[0] ?? null)
+      : null;
+    expect(refusedRun?.errorCode).toBe("task_recovery_budget_exhausted");
+    const issue = await db.select().from(issues).where(eq(issues.id, input.issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("blocked");
+    expect(issue?.executionState).toMatchObject({ recoveryBudget: { status: "exhausted" } });
+    mockAdapterExecute.mockClear();
+    return refusedRun!;
+  }
+
+  async function waitForAdapterRunOnIssue(agentId: string, issueId: string, knownRunIds: Set<string>) {
+    const run = await waitForValue(async () => {
+      const rows = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "succeeded")));
+      return rows.find((row) =>
+        !knownRunIds.has(row.id) &&
+        (row.contextSnapshot as Record<string, unknown> | null)?.issueId === issueId
+      ) ?? null;
+    }, 5_000);
+    return run;
+  }
+
+  async function expectRecoveryBudgetCleared(issueId: string, trigger: string) {
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect((issue?.executionState as Record<string, unknown> | null)?.recoveryBudget).toBeUndefined();
+    const cleared = await db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.entityId, issueId), eq(activityLog.action, "issue.recovery_budget_cleared")));
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0]).toMatchObject({ actorType: "user", actorId: "board-user", origin: "server" });
+    expect(cleared[0]?.details).toMatchObject({
+      trigger,
+      clearedRecoveryBudget: { exhaustedBy: expect.arrayContaining(["attempts"]) },
+    });
+    return issue!;
+  }
+
+  async function knownRunIdsForAgent(agentId: string) {
+    const rows = await db.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    return new Set(rows.map((row) => row.id));
+  }
+
+  it("clears the exhausted recovery budget when a board user moves the issue out of blocked, and starts a run", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    const knownRunIds = await knownRunIdsForAgent(agentId);
+
+    const res = await request(createRecoveryBudgetIssueApp(recoveryBudgetBoardActor(companyId)))
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "todo" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.executionState?.recoveryBudget).toBeUndefined();
+
+    const issue = await expectRecoveryBudgetCleared(issueId, "status_change");
+    expect(issue.status).not.toBe("blocked");
+
+    const humanRun = await waitForAdapterRunOnIssue(agentId, issueId, knownRunIds);
+    expect(humanRun?.status).toBe("succeeded");
+    await waitForHeartbeatIdle(db, 5_000);
+    expect(mockAdapterExecute).toHaveBeenCalled();
+
+    // The clear opened a fresh window: the automatic retry spent before it no
+    // longer counts, so the next linked continuation is allowed.
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+    const continuation = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_continuation_needed",
+      payload: { issueId, retryOfRunId: humanRun!.id },
+      contextSnapshot: { issueId, taskId: issueId, retryReason: "issue_continuation_needed", retryOfRunId: humanRun!.id },
+      requestedByActorType: "system",
+      requestedByActorId: "heartbeat",
+    });
+    const continuationRun = continuation
+      ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, continuation.id)).then((rows) => rows[0] ?? null)
+      : null;
+    expect(continuationRun?.status).not.toBe("cancelled");
+    expect(continuationRun?.errorCode).toBeNull();
+  });
+
+  it("clears the exhausted recovery budget when a board user reopens the issue by comment, and starts a run", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    const knownRunIds = await knownRunIdsForAgent(agentId);
+
+    const res = await request(createRecoveryBudgetIssueApp(recoveryBudgetBoardActor(companyId)))
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "Here is the revenue target you asked for; please continue." });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const issue = await expectRecoveryBudgetCleared(issueId, "reopen_comment");
+    expect(issue.status).toBe("todo");
+
+    const humanRun = await waitForAdapterRunOnIssue(agentId, issueId, knownRunIds);
+    expect(humanRun?.status).toBe("succeeded");
+    await waitForHeartbeatIdle(db, 5_000);
+    expect(mockAdapterExecute).toHaveBeenCalled();
+  });
+
+  it("clears the exhausted recovery budget when a board user reassigns the issue", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issueId));
+    const nextAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: nextAgentId,
+      companyId,
+      name: "NextOwner",
+      role: "engineer",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const res = await request(createRecoveryBudgetIssueApp(recoveryBudgetBoardActor(companyId)))
+      .patch(`/api/issues/${issueId}`)
+      .send({ assigneeAgentId: nextAgentId });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    await expectRecoveryBudgetCleared(issueId, "reassign");
+    await waitForHeartbeatIdle(db, 5_000);
+  });
+
+  it("clears the recovery block and retries through the explicit board action", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    const knownRunIds = await knownRunIdsForAgent(agentId);
+
+    const agentRes = await request(createRecoveryBudgetIssueApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: parentRunId,
+      source: "agent_jwt",
+    }))
+      .post(`/api/issues/${issueId}/recovery-budget/clear`)
+      .send({});
+    expect(agentRes.status).toBe(403);
+
+    const app = createRecoveryBudgetIssueApp(recoveryBudgetBoardActor(companyId));
+    const res = await request(app).post(`/api/issues/${issueId}/recovery-budget/clear`).send({});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toMatchObject({ cleared: true, retryQueued: true, issue: { status: "todo" } });
+
+    await expectRecoveryBudgetCleared(issueId, "explicit_action");
+    const humanRun = await waitForAdapterRunOnIssue(agentId, issueId, knownRunIds);
+    expect(humanRun?.status).toBe("succeeded");
+    await waitForHeartbeatIdle(db, 5_000);
+    expect(humanRun?.contextSnapshot).toMatchObject({ wakeReason: "issue_recovery_budget_cleared" });
+
+    const again = await request(app).post(`/api/issues/${issueId}/recovery-budget/clear`).send({});
+    expect(again.status).toBe(409);
+  });
+
+  it("still refuses a system linked retry on an exhausted issue while a human wake runs", async () => {
+    const { agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const linked = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_assignment_recovery",
+      payload: { issueId, retryOfRunId: parentRunId },
+      contextSnapshot: { issueId, taskId: issueId, retryReason: "assignment_recovery", retryOfRunId: parentRunId },
+      requestedByActorType: "system",
+      requestedByActorId: "recovery",
+    });
+    const linkedRun = linked
+      ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, linked.id)).then((rows) => rows[0] ?? null)
+      : null;
+    expect(linkedRun?.status).toBe("cancelled");
+    expect(linkedRun?.errorCode).toBe("task_recovery_budget_exhausted");
+    expect(linkedRun?.error).toContain("Clear recovery block & retry");
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+
+    // An unlinked, human-originated wake is not automatic recovery: it is not
+    // cancelled by the exhausted marker (it used to be).
+    const human = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_commented",
+      payload: { issueId, mutation: "comment" },
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_commented", source: "issue.comment" },
+      requestedByActorType: "user",
+      requestedByActorId: "board-user",
+    });
+    const humanRun = human
+      ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, human.id)).then((rows) => rows[0] ?? null)
+      : null;
+    expect(humanRun?.status).not.toBe("cancelled");
+    expect(humanRun?.errorCode).toBeNull();
+
+    // A wake is not a clear: the marker stays until a board user clears it.
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.executionState).toMatchObject({ recoveryBudget: { status: "exhausted" } });
+  });
+
+  it("refuses the parent wake when an agent closes a child issue it filed for itself on an exhausted issue", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    // An agent allowed to assign work (CEO-like): it can file a child for itself.
+    await db.update(agents).set({ permissions: { canCreateAgents: true } }).where(eq(agents.id, agentId));
+    const knownRunIds = await knownRunIdsForAgent(agentId);
+    const agentApp = createRecoveryBudgetIssueApp({
+      type: "agent",
+      agentId,
+      companyId,
+      runId: parentRunId,
+      source: "agent_jwt",
+    });
+
+    const child = await request(agentApp)
+      .post(`/api/issues/${issueId}/children`)
+      .send({ title: "Self-assigned child", status: "todo", assigneeAgentId: agentId });
+    expect(child.status, JSON.stringify(child.body)).toBe(201);
+    await waitForHeartbeatIdle(db, 5_000);
+    const closed = await request(agentApp)
+      .patch(`/api/issues/${child.body.id}`)
+      .send({ status: "done" });
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+
+    const parentWake = await waitForValue(async () => {
+      const rows = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.agentId, agentId));
+      return rows.find((row) =>
+        !knownRunIds.has(row.id) &&
+        (row.contextSnapshot as Record<string, unknown> | null)?.issueId === issueId &&
+        (row.contextSnapshot as Record<string, unknown> | null)?.wakeReason === "issue_children_completed" &&
+        row.status !== "queued" && row.status !== "running"
+      ) ?? null;
+    }, 5_000);
+    expect(parentWake?.status).toBe("cancelled");
+    expect(parentWake?.errorCode).toBe("task_recovery_budget_exhausted");
+    await waitForHeartbeatIdle(db, 5_000);
+    const parentRuns = (await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId)))
+      .filter((row) =>
+        !knownRunIds.has(row.id) &&
+        (row.contextSnapshot as Record<string, unknown> | null)?.issueId === issueId);
+    expect(parentRuns.every((row) => row.status === "cancelled")).toBe(true);
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("blocked");
+    expect(issue?.executionState).toMatchObject({ recoveryBudget: { status: "exhausted" } });
+  });
+
+  it("refuses unlinked system- and agent-started wakes on an exhausted issue", async () => {
+    const { agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    for (const wake of [
+      { reason: "issue_blockers_resolved", requestedByActorType: "system" as const, requestedByActorId: "system" },
+      { reason: "issue_comment_mentioned", requestedByActorType: "agent" as const, requestedByActorId: randomUUID() },
+      { reason: "issue_assigned", requestedByActorType: "agent" as const, requestedByActorId: randomUUID() },
+    ]) {
+      const queued = await heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: wake.reason,
+        payload: { issueId },
+        contextSnapshot: { issueId, taskId: issueId, wakeReason: wake.reason },
+        requestedByActorType: wake.requestedByActorType,
+        requestedByActorId: wake.requestedByActorId,
+      });
+      const run = queued
+        ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queued.id)).then((rows) => rows[0] ?? null)
+        : null;
+      expect(run?.status, wake.reason).toBe("cancelled");
+      expect(run?.errorCode, wake.reason).toBe("task_recovery_budget_exhausted");
+    }
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+  });
+
+  it("moves an exhausted issue an agent pulled out of blocked back to blocked when its retry is refused", async () => {
+    const { agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    // No clear: the assignee agent moved it on (checkout or PATCH).
+    await db.update(issues).set({ status: "in_progress" }).where(eq(issues.id, issueId));
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const retry = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_continuation_needed",
+      payload: { issueId, retryOfRunId: parentRunId },
+      contextSnapshot: { issueId, taskId: issueId, retryReason: "issue_continuation_needed", retryOfRunId: parentRunId },
+      requestedByActorType: "system",
+      requestedByActorId: "heartbeat",
+    });
+    const retryRun = retry
+      ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, retry.id)).then((rows) => rows[0] ?? null)
+      : null;
+    expect(retryRun?.errorCode).toBe("task_recovery_budget_exhausted");
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("blocked");
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
+    expect(comments.map((comment) => comment.body.split(":")[0]).sort()).toEqual([
+      "Automatic recovery budget exhausted. attempts=1/1, turns=1/12, tokens=1/500000, costUsd=0.010000/0.25, runtimeMs=1000/300000. Exhausted dimensions",
+      "Automatic recovery is still blocked",
+    ].sort());
+  });
+
+  it("keeps a queued person-started wake when the budget first trips", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    const humanWakeId = randomUUID();
+    const humanRunId = randomUUID();
+    const trippingRunId = randomUUID();
+    const automaticSiblingId = randomUUID();
+    await db.insert(agentWakeupRequests).values({
+      id: humanWakeId,
+      companyId,
+      agentId,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_commented",
+      payload: { issueId },
+      status: "queued",
+      runId: humanRunId,
+      requestedByActorType: "user",
+      requestedByActorId: "board-user",
+    });
+    await db.insert(heartbeatRuns).values([
+      {
+        id: humanRunId,
+        companyId,
+        agentId,
+        invocationSource: "automation",
+        triggerDetail: "system",
+        status: "scheduled_retry",
+        wakeupRequestId: humanWakeId,
+        contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_commented" },
+      },
+      {
+        id: automaticSiblingId,
+        companyId,
+        agentId,
+        invocationSource: "automation",
+        triggerDetail: "system",
+        status: "scheduled_retry",
+        contextSnapshot: { issueId, taskId: issueId, retryOfRunId: parentRunId },
+        retryOfRunId: parentRunId,
+      },
+      {
+        // The second automatic retry: claiming it trips the budget.
+        id: trippingRunId,
+        companyId,
+        agentId,
+        invocationSource: "automation",
+        triggerDetail: "system",
+        status: "queued",
+        contextSnapshot: { issueId, taskId: issueId, retryReason: "issue_continuation_needed", retryOfRunId: parentRunId },
+        retryOfRunId: parentRunId,
+      },
+    ]);
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    await heartbeat.resumeQueuedRuns();
+    const tripped = await waitForValue(async () =>
+      db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, trippingRunId)).then((rows) => {
+        const row = rows[0] ?? null;
+        return row && row.status !== "queued" ? row : null;
+      }), 5_000);
+    expect(tripped?.errorCode).toBe("task_recovery_budget_exhausted");
+
+    const [humanRun, automaticSibling] = await Promise.all([
+      db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, humanRunId)).then((rows) => rows[0] ?? null),
+      db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, automaticSiblingId)).then((rows) => rows[0] ?? null),
+    ]);
+    expect(humanRun?.status).toBe("scheduled_retry");
+    expect(humanRun?.errorCode).toBeNull();
+    expect(automaticSibling?.status).toBe("cancelled");
+    expect(automaticSibling?.errorCode).toBe("task_recovery_budget_exhausted");
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+  });
+
+  it("does not exhaust the budget on the first continuation after a long first run", async () => {
+    // A long ordinary first run: 7 minutes and 20 turns, reading 732k tokens,
+    // 690k of them from cache. That run is not recovery.
+    const { agentId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "succeeded",
+    });
+    await db
+      .update(heartbeatRuns)
+      .set({
+        startedAt: new Date("2026-03-19T00:00:00.000Z"),
+        finishedAt: new Date("2026-03-19T00:07:00.000Z"),
+        usageJson: { inputTokens: 30_000, cachedInputTokens: 690_000, outputTokens: 12_000 },
+        resultJson: { num_turns: 20, total_cost_usd: 0 },
+      })
+      .where(eq(heartbeatRuns.id, runId));
+    const heartbeat = heartbeatService(db);
+
+    const continuation = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_continuation_needed",
+      payload: { issueId, retryOfRunId: runId },
+      contextSnapshot: { issueId, taskId: issueId, retryReason: "issue_continuation_needed", retryOfRunId: runId },
+      requestedByActorType: "system",
+      requestedByActorId: "heartbeat",
+    });
+    expect(continuation).not.toBeNull();
+    const settled = await waitForRunToSettle(heartbeat, continuation!.id, 5_000);
+    expect(settled?.status).toBe("succeeded");
+    expect(settled?.errorCode).toBeNull();
+    expect(mockAdapterExecute).toHaveBeenCalledTimes(1);
+
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).not.toBe("blocked");
+    expect((issue?.executionState as Record<string, unknown> | null)?.recoveryBudget).toBeUndefined();
+    await waitForHeartbeatIdle(db, 5_000);
+  });
+
+  it("the stranded reconciler re-blocks an exhausted issue left in todo and creates no repeat recovery issue", async () => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "todo",
+      runStatus: "cancelled",
+      retryReason: "assignment_recovery",
+      runErrorCode: "task_recovery_budget_exhausted",
+      runError: "Automatic recovery remains blocked after task recovery budget exhaustion (attempts=1/1, turns=20/12, tokens=720000/500000, costUsd=0.000000/0.25, runtimeMs=480000/300000).",
+    });
+    await db
+      .update(issues)
+      .set({
+        executionState: {
+          recoveryBudget: {
+            status: "exhausted",
+            exhaustedBy: ["attempts"],
+            usage: { automaticRetries: 1, providerTurns: 20, providerTokens: 72_000, providerCostUsd: 0, runtimeMs: 480_000 },
+          },
+        },
+      })
+      .where(eq(issues.id, issueId));
+    // The recovery issue an earlier round already produced, now done.
+    await db.insert(issues).values({
+      id: randomUUID(),
+      companyId,
+      title: "Recover stalled issue (earlier round)",
+      status: "done",
+      priority: "medium",
+      parentId: issueId,
+      assigneeAgentId: agentId,
+      originKind: "stranded_issue_recovery",
+      originId: issueId,
+      originRunId: runId,
+      issueNumber: 50,
+      identifier: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}-50`,
+    });
+    const runsBefore = await knownRunIdsForAgent(agentId);
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.escalated).toBe(0);
+    expect(result.dispatchRequeued).toBe(0);
+    expect(result.recoveryBudgetReblocked).toBe(1);
+
+    const recoveryIssues = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.originKind, "stranded_issue_recovery"), eq(issues.originId, issueId)));
+    expect(recoveryIssues).toHaveLength(1);
+    const runsAfter = await knownRunIdsForAgent(agentId);
+    expect(runsAfter.size).toBe(runsBefore.size);
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("blocked");
+    expect(issue?.executionState).toMatchObject({ recoveryBudget: { status: "exhausted" } });
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
+    expect(comments).toHaveLength(1);
+    expect(comments[0]?.body).toContain("Automatic recovery is still blocked");
+    expect(comments[0]?.body).toContain("attempts=1");
+    expect(comments[0]?.body).toContain("Clear recovery block & retry");
+
+    // Moved out of blocked again without a clear (an agent, say): re-blocked,
+    // but the explanatory comment is not repeated within the same window.
+    await db.update(issues).set({ status: "todo" }).where(eq(issues.id, issueId));
+    const again = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(again.recoveryBudgetReblocked).toBe(1);
+    const reblocked = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(reblocked?.status).toBe("blocked");
+    expect(await db.select().from(issueComments).where(eq(issueComments.issueId, issueId))).toHaveLength(1);
+    const reblockActivity = await db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.entityId, issueId), eq(activityLog.action, "issue.updated")));
+    expect(reblockActivity.map((row) => (row.details as Record<string, unknown>)?.source))
+      .toEqual(["recovery.reconcile_stranded_assigned_issue", "recovery.reconcile_stranded_assigned_issue"]);
+  });
+
+  it("names the recovery budget, with usage, when a budget-refused retry is escalated", async () => {
+    const { companyId, issueId } = await seedStrandedIssueFixture({
+      status: "todo",
+      runStatus: "cancelled",
+      retryReason: "assignment_recovery",
+      runErrorCode: "task_recovery_budget_exhausted",
+      runError: "Automatic recovery remains blocked after task recovery budget exhaustion (attempts=1/1, turns=20/12, tokens=720000/500000, costUsd=0.000000/0.25, runtimeMs=480000/300000).",
+    });
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.escalated).toBe(1);
+
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
+    expect(comments).toHaveLength(1);
+    expect(comments[0]?.body).toContain("automatic recovery budget for this issue is exhausted");
+    expect(comments[0]?.body).toContain("attempts=1/1, turns=20/12, tokens=720000/500000");
+    expect(comments[0]?.body).toContain("Clear recovery block & retry");
+    expect(comments[0]?.body).not.toContain("lost wake/run");
+
+    const recovery = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stranded_issue_recovery"), eq(issues.originId, issueId)))
+      .then((rows) => rows[0] ?? null);
+    expect(recovery?.description).toContain("Cause: the automatic recovery budget for this issue is exhausted");
   });
 
   it("does not spend an exhausted-only agent sweep on a generic provider wake", async () => {
@@ -1419,6 +2004,26 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       processPid: 999_999_999,
       processLossRetryCount: 1,
     });
+    // The lost run is itself the automatic process-loss retry of an earlier
+    // source run, so it is on the automatic-recovery ledger.
+    const sourceRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: sourceRunId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      status: "failed",
+      contextSnapshot: { issueId },
+      startedAt: new Date("2026-03-18T23:59:00.000Z"),
+      finishedAt: new Date("2026-03-18T23:59:01.000Z"),
+      errorCode: "process_lost",
+      error: "process lost",
+    });
+    await db
+      .update(heartbeatRuns)
+      .set({ retryOfRunId: sourceRunId, contextSnapshot: { issueId, retryOfRunId: sourceRunId } })
+      .where(eq(heartbeatRuns.id, runId));
     const resolvedBlockerId = randomUUID();
     const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
     await db.insert(issues).values({
@@ -1446,9 +2051,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .select()
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.agentId, agentId));
-    expect(runs).toHaveLength(2);
+    expect(runs).toHaveLength(3);
     expect(runs.find((row) => row.id === runId)?.status).toBe("failed");
-    const continuationRun = runs.find((row) => row.id !== runId);
+    const continuationRun = runs.find((row) => row.id !== runId && row.id !== sourceRunId);
     expect(continuationRun?.contextSnapshot as Record<string, unknown> | undefined).toMatchObject({
       retryReason: "issue_continuation_needed",
       retryOfRunId: runId,

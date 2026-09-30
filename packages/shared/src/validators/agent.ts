@@ -74,6 +74,38 @@ const agentModelProfileConfigSchema = z.object({
   adapterConfig: adapterConfigSchema,
 }).strict();
 
+/**
+ * AgentDash (recovery budget remediation): per-agent overrides for the
+ * automatic-recovery budget (server/src/services/task-recovery-budget.ts).
+ * Every field is optional; an absent field keeps the server default. The
+ * budget binds automatic retries only, so these numbers bound what the
+ * control plane may spend retrying on its own, not what a task may spend.
+ */
+/**
+ * Sanity ceilings on those overrides. They are not recommended values: they
+ * stop a typo or a runaway write from turning the guard off. Overrides are
+ * board-only (agent-authored hires and creates may not carry them); a value
+ * above a ceiling fails validation, and the heartbeat ignores an invalid
+ * stored override and uses the defaults.
+ */
+export const AGENT_RECOVERY_BUDGET_MAXIMUMS = {
+  automaticRetries: 10,
+  providerTurns: 500,
+  providerTokens: 50_000_000,
+  providerCostUsd: 100,
+  runtimeMs: 24 * 60 * 60 * 1_000,
+} as const;
+
+export const agentRecoveryBudgetConfigSchema = z.object({
+  automaticRetries: z.number().int().nonnegative().max(AGENT_RECOVERY_BUDGET_MAXIMUMS.automaticRetries).optional(),
+  providerTurns: z.number().int().positive().max(AGENT_RECOVERY_BUDGET_MAXIMUMS.providerTurns).optional(),
+  providerTokens: z.number().int().positive().max(AGENT_RECOVERY_BUDGET_MAXIMUMS.providerTokens).optional(),
+  providerCostUsd: z.number().positive().finite().max(AGENT_RECOVERY_BUDGET_MAXIMUMS.providerCostUsd).optional(),
+  runtimeMs: z.number().int().positive().max(AGENT_RECOVERY_BUDGET_MAXIMUMS.runtimeMs).optional(),
+}).strict();
+
+export type AgentRecoveryBudgetConfig = z.infer<typeof agentRecoveryBudgetConfigSchema>;
+
 export const agentRuntimeConfigSchema = z.object({
   modelProfiles: z.object({
     cheap: agentModelProfileConfigSchema.optional(),
@@ -82,6 +114,7 @@ export const agentRuntimeConfigSchema = z.object({
     // OBS-2: `0`/`null` disables the daily ceiling; absent applies the default.
     maxDailyTokens: z.number().int().nonnegative().nullable().optional(),
   }).catchall(z.unknown()).optional(),
+  recoveryBudget: agentRecoveryBudgetConfigSchema.optional(),
 }).catchall(z.unknown());
 
 const createAgentBaseSchema = z.object({

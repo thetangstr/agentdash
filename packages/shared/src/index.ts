@@ -898,6 +898,9 @@ export {
   createAgentHireSchema,
   updateAgentSchema,
   agentAdapterConfigCompletenessError,
+  agentRecoveryBudgetConfigSchema,
+  AGENT_RECOVERY_BUDGET_MAXIMUMS,
+  type AgentRecoveryBudgetConfig,
   agentInstructionsBundleModeSchema,
   updateAgentInstructionsBundleSchema,
   upsertAgentInstructionsFileSchema,
@@ -1388,6 +1391,8 @@ export {
   type OtaReceipt,
 } from "./types/ota.js";
 export * from "./assistant-oauth.js";
+// AgentDash (recovery budget remediation): the issue-level exhausted marker.
+export * from "./recovery-budget.js";
 
 // AgentDash assistant MCP (M4, GH #679): the gated-action request bodies.
 export {

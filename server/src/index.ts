@@ -841,7 +841,8 @@ export async function startServer(): Promise<StartedServer> {
           reconciled.assignmentDispatched > 0 ||
           reconciled.dispatchRequeued > 0 ||
           reconciled.continuationRequeued > 0 ||
-          reconciled.escalated > 0
+          reconciled.escalated > 0 ||
+          reconciled.recoveryBudgetReblocked > 0
         ) {
           logger.warn(
             { promotedScheduledRetries: promotion.promoted, promotedScheduledRetryRunIds: promotion.runIds, ...reconciled },
@@ -906,7 +907,8 @@ export async function startServer(): Promise<StartedServer> {
             reconciled.assignmentDispatched > 0 ||
             reconciled.dispatchRequeued > 0 ||
             reconciled.continuationRequeued > 0 ||
-            reconciled.escalated > 0
+            reconciled.escalated > 0 ||
+            reconciled.recoveryBudgetReblocked > 0
           ) {
             logger.warn(
               { promotedScheduledRetries: promotion.promoted, promotedScheduledRetryRunIds: promotion.runIds, ...reconciled },

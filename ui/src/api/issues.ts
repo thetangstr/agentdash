@@ -92,6 +92,12 @@ export const issuesApi = {
     api.post<Issue>(`/companies/${companyId}/issues`, data),
   update: (id: string, data: Record<string, unknown>) =>
     api.patch<IssueUpdateResponse>(`/issues/${id}`, data),
+  // AgentDash (recovery budget remediation): "Clear recovery block & retry".
+  clearRecoveryBudget: (id: string) =>
+    api.post<{ issue: Issue; cleared: true; retryQueued: boolean; stillBlockedByIssues?: boolean }>(
+      `/issues/${id}/recovery-budget/clear`,
+      {},
+    ),
   previewTreeControl: (id: string, data: PreviewIssueTreeControl) =>
     api.post<IssueTreeControlPreview>(`/issues/${id}/tree-control/preview`, data),
   createTreeHold: (id: string, data: CreateIssueTreeHold) =>

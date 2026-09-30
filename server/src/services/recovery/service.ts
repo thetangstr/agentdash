@@ -4,6 +4,7 @@ import {
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
+  readIssueRecoveryBudget,
   type IssueGraphLivenessAutoRecoveryPreview,
   type IssueGraphLivenessAutoRecoveryPreviewItem,
 } from "@paperclipai/shared";
@@ -33,6 +34,8 @@ import { instanceSettingsService } from "../instance-settings.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
 import { issueService } from "../issues.js";
 import { getRunLogStore } from "../run-log-store.js";
+import { formatTaskRecoveryBudgetUsage } from "../task-recovery-budget.js";
+import { reblockExhaustedIssue } from "../issue-recovery-budget.js";
 import {
   RECOVERY_ORIGIN_KINDS,
   buildIssueGraphLivenessLeafKey,
@@ -115,6 +118,43 @@ function summarizeRunFailureForIssueComment(run: LatestIssueRun) {
   }
   return null;
 }
+
+const TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE = "task_recovery_budget_exhausted";
+const TASK_RECOVERY_BUDGET_USAGE_PATTERN =
+  /attempts=\d+\/\d+, turns=\d+\/\d+, tokens=\d+\/\d+, costUsd=[\d.]+\/[\d.]+, runtimeMs=\d+\/\d+/;
+
+/**
+ * AgentDash (recovery budget remediation): when the reason an issue has no
+ * live execution path is the automatic-recovery budget, say so, with the
+ * usage that tripped it. The old text blamed "a lost wake/run", which
+ * sent recovery owners hunting for an adapter fault that did not exist.
+ * Returns null when the budget is not the cause; `usage` is null when the
+ * cause is known but the numbers are not.
+ */
+function describeRecoveryBudgetCause(
+  issue: Pick<typeof issues.$inferSelect, "executionState">,
+  latestRun: LatestIssueRun,
+): { usage: string | null } | null {
+  const budget = readIssueRecoveryBudget(issue.executionState);
+  if (budget) {
+    return {
+      usage: budget.usage ? formatTaskRecoveryBudgetUsage(budget.usage, budget.limits ?? undefined) : null,
+    };
+  }
+  if (latestRun?.errorCode === TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE) {
+    return { usage: TASK_RECOVERY_BUDGET_USAGE_PATTERN.exec(latestRun.error ?? "")?.[0] ?? null };
+  }
+  return null;
+}
+
+function formatRecoveryBudgetCause(cause: { usage: string | null }) {
+  return cause.usage
+    ? `the automatic recovery budget for this issue is exhausted (${cause.usage})`
+    : "the automatic recovery budget for this issue is exhausted";
+}
+
+const RECOVERY_BUDGET_CLEAR_HINT =
+  "A board user can clear it with \"Clear recovery block & retry\" on this issue, or by moving it out of `blocked`, reopening it with a comment, or reassigning it.";
 
 function didAutomaticRecoveryFail(
   latestRun: LatestIssueRun,
@@ -1358,9 +1398,16 @@ export function recoveryService(
       : "none";
     const retryReason = readNonEmptyString(parseObject(input.latestRun?.contextSnapshot)?.retryReason) ?? "unknown";
     const failureSummary = summarizeRunFailureForIssueComment(input.latestRun);
+    const budgetCause = describeRecoveryBudgetCause(input.issue, input.latestRun);
 
     return [
       "Paperclip exhausted automatic recovery for an assigned issue and created this explicit recovery task.",
+      ...(budgetCause
+        ? [
+          "",
+          `Cause: ${formatRecoveryBudgetCause(budgetCause)}. The retry was refused before any provider run started; this is a spend guard, not an adapter or runtime fault. ${RECOVERY_BUDGET_CLEAR_HINT}`,
+        ]
+        : []),
       "",
       "## Source",
       "",
@@ -1654,6 +1701,7 @@ export function recoveryService(
       successfulContinuationObserved: 0,
       orphanBlockersAssigned: 0,
       escalated: 0,
+      recoveryBudgetReblocked: 0,
       skipped: 0,
       issueIds: [] as string[],
     };
@@ -1662,6 +1710,30 @@ export function recoveryService(
       const agentId = issue.assigneeAgentId;
       if (!agentId) {
         result.skipped += 1;
+        continue;
+      }
+
+      // AgentDash (recovery budget remediation): an issue whose automatic
+      // recovery budget is exhausted needs a human to clear it. Re-dispatching
+      // only produced a refused retry, an escalation and a fresh "Recover
+      // stalled issue" task (one per human attempt to unblock it) for an agent
+      // that cannot clear the block. It is never left silently in live-work
+      // status either: with no run in flight it goes back to `blocked` with
+      // one explanatory comment, and a human is the next step.
+      if (readIssueRecoveryBudget(issue.executionState)) {
+        const reblocked = await hasActiveExecutionPath(issue.companyId, issue.id)
+          ? null
+          : await reblockExhaustedIssue(db, {
+            companyId: issue.companyId,
+            issueId: issue.id,
+            source: "recovery.reconcile_stranded_assigned_issue",
+          });
+        if (reblocked) {
+          result.recoveryBudgetReblocked += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
         continue;
       }
 
@@ -1726,14 +1798,18 @@ export function recoveryService(
 
         if (didAutomaticRecoveryFail(latestRun, "assignment_recovery")) {
           const failureSummary = summarizeRunFailureForIssueComment(latestRun);
+          const budgetCause = describeRecoveryBudgetCause(issue, latestRun);
           const updated = await escalateStrandedAssignedIssue({
             issue,
             previousStatus: "todo",
             latestRun,
-            comment:
-              "Paperclip automatically retried dispatch for this assigned `todo` issue after a lost wake/run, " +
-              `but it still has no live execution path.${failureSummary ?? ""} ` +
-              "Moving it to `blocked` so it is visible for intervention.",
+            comment: budgetCause
+              ? `Paperclip's automatic dispatch retry for this assigned \`todo\` issue was refused because ${formatRecoveryBudgetCause(budgetCause)}. ` +
+                "No provider run started. Moving it to `blocked` so it is visible for intervention. " +
+                RECOVERY_BUDGET_CLEAR_HINT
+              : "Paperclip automatically retried dispatch for this assigned `todo` issue after a lost wake/run, " +
+                `but it still has no live execution path.${failureSummary ?? ""} ` +
+                "Moving it to `blocked` so it is visible for intervention.",
           });
           if (updated) {
             result.escalated += 1;
@@ -1820,14 +1896,18 @@ export function recoveryService(
       }
       if (didAutomaticRecoveryFail(latestRun, "issue_continuation_needed")) {
         const failureSummary = summarizeRunFailureForIssueComment(latestRun);
+        const budgetCause = describeRecoveryBudgetCause(issue, latestRun);
         const updated = await escalateStrandedAssignedIssue({
           issue,
           previousStatus: "in_progress",
           latestRun,
-          comment:
-            "Paperclip automatically retried continuation for this assigned `in_progress` issue after its live " +
-            `execution disappeared, but it still has no live execution path.${failureSummary ?? ""} ` +
-            "Moving it to `blocked` so it is visible for intervention.",
+          comment: budgetCause
+            ? `Paperclip's automatic continuation retry for this assigned \`in_progress\` issue was refused because ${formatRecoveryBudgetCause(budgetCause)}. ` +
+              "No provider run started. Moving it to `blocked` so it is visible for intervention. " +
+              RECOVERY_BUDGET_CLEAR_HINT
+            : "Paperclip automatically retried continuation for this assigned `in_progress` issue after its live " +
+              `execution disappeared, but it still has no live execution path.${failureSummary ?? ""} ` +
+              "Moving it to `blocked` so it is visible for intervention.",
         });
         if (updated) {
           result.escalated += 1;
