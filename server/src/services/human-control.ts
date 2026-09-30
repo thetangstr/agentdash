@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { badRequest, conflict, forbidden } from '../errors.js';
 import { assertCompanyAccess } from '../routes/authz.js';
 import { boardAuthService } from './board-auth.js';
+import { publishActivity, type ActivityPublication } from './activity-log.js';
+import type { ActivityAcceptance } from './workforce.js';
 import { humanActionHandleService } from './human-action-handles.js';
 
 const recoveryReferenceSchema = z.object({
@@ -17,7 +19,7 @@ const recoveryReferenceSchema = z.object({
 }).strict().refine(value => Object.keys(value).length > 0);
 export type HumanRecoveryReference = z.infer<typeof recoveryReferenceSchema>;
 
-export interface HumanOperationContext { db: Db; req: Request; target: HumanTarget; lock?: boolean }
+export interface HumanOperationContext { db: Db; req: Request; target: HumanTarget; lock?: boolean; acceptance?: ActivityAcceptance }
 export interface HumanOperation {
   descriptor: HumanOperationDescriptor;
   // Omitted policy always retains canonical membership access.
@@ -161,6 +163,7 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
       }
       if (!await handles.claim(row.id)) throw conflict('Human action already claimed');
       let committed = false;
+      const publications: ActivityPublication[] = [];
       try {
         let result = await db.transaction(async tx => {
           const connection = tx as unknown as Db;
@@ -170,7 +173,7 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
           await authorize(op, ctx);
           const current = await op.resolve(ctx, op.input.parse(row.payload));
           if (!isDeepStrictEqual(current.preconditions, row.preconditions)) throw conflict('Human action preconditions changed');
-          const value = await op.execute!(ctx, row.payload, row.id);
+          const value = await op.execute!({ ...ctx, acceptance: { executor: connection, publications } }, row.payload, row.id);
           if (!op.afterCommit) {
             const output = op.output.parse(JSON.parse(JSON.stringify(value)));
             await humanActionHandleService(connection).finish(row.id, { result: { value: output } });
@@ -180,6 +183,7 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
           return value;
         });
         committed = true;
+        for (const publication of publications) publishActivity(publication);
         if (op.afterCommit) {
           result = op.output.parse(JSON.parse(JSON.stringify(await op.afterCommit(context(req, input.target), row.payload, result))));
           await handles.finish(row.id, { result: { value: result } });

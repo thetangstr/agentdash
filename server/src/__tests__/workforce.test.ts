@@ -10,6 +10,7 @@ import * as service from '../services/workforce.js';
 import { workProductService } from '../services/work-products.js';
 import { documentService } from '../services/documents.js';
 import { readPaperclipSkillSyncPreference } from '@paperclipai/adapter-utils/server-utils';
+import { subscribeCompanyLiveEvents } from '../services/live-events.js';
 import { agentService } from '../services/agents.js';
 
 // These tests catch lost updates, cross-company association leaks, duplicate jobs,
@@ -115,6 +116,17 @@ describe('workforce persisted contracts', () => {
     expect((await svc.getReadiness(company.id, agent.id))?.phase).not.toBe('ready');
     await svc.updateBrief(company.id, { ...input, facts, expectedRevision: 1 }, owner);
     expect((await svc.getReadiness(company.id, agent.id))?.phase).toBe('refresh_needed');
+  });
+  it('does not turn an accepted assignment publication failure into a failed skill installation', async () => {
+    const { company, agent, svc } = await fixture();
+    await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, owner);
+    const stop = subscribeCompanyLiveEvents(company.id, event => { if (event.payload.action === 'workforce.skills_installed') throw new Error('Synthetic publication failure'); });
+    try { await expect(svc.ensureSkillsInstalled(company.id, agent.id, owner)).rejects.toThrow('Synthetic publication failure'); }
+    finally { stop(); }
+    const saved = await svc.getEnrollment(company.id, agent.id);
+    expect(saved?.skillInstallError).toBeNull(); expect(saved?.installedSkillKeys).toHaveLength(1);
+    const events = await db.select().from(activityLog).where(eq(activityLog.companyId, company.id));
+    expect(events.map(row => row.action)).toEqual(['workforce.enrolled', 'workforce.skills_installed']);
   });
   it('core creation records a chosen template without mutating ordinary creation', async () => {
     const { company, svc } = await fixture();

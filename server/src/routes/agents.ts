@@ -1,5 +1,7 @@
+import { publishActivity, type ActivityPublication } from "../services/activity-log.js";
+import { isBillingDisabled } from "../services/tier-policy.js";
 import { agentConfigurationAuthority, resolveAccountabilityPatch, recordAccountabilityChange } from "../services/human-control/ownership.js";
-import { workforceService } from "../services/workforce.js";
+import { workforceService, type ActivityAcceptance } from "../services/workforce.js";
 import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -216,16 +218,20 @@ export function agentRoutes(
   async function createAgentWithinTierCapacity<T>(
     companyId: string,
     res: Response,
-    create: (dbOrTx: Db) => Promise<T>,
+    create: (dbOrTx: Db, acceptance?: ActivityAcceptance) => Promise<T>,
   ): Promise<T | null> {
-    return withCompanyTierCapacityGuard(
+    const publications: ActivityPublication[] = [];
+    const disabled = isBillingDisabled();
+    const result = await withCompanyTierCapacityGuard(
       db,
       companyId,
       { agents: 1 },
       buildRequireTierDeps,
       (action) => res.status(402).json(freeTierCapExceededPayload(action)),
-      create,
+      executor => create(executor, disabled ? undefined : { executor, publications }),
     );
+    for (const publication of publications) publishActivity(publication);
+    return result;
   }
 
   /**
@@ -2600,7 +2606,7 @@ export function agentRoutes(
 
     const requiresApproval = company.requireBoardApprovalForNewAgents;
     const status = requiresApproval ? "pending_approval" : "idle";
-    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
+    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx, acceptance) =>
       agentService(dbOrTx).create(companyId, {
         ...normalizedHireInput,
         metadata: withHarnessPreflightMetadata(normalizedHireInput.metadata, {
@@ -2616,7 +2622,7 @@ export function agentRoutes(
         // agent (chief-of-staff hires) records no human creator; the hire
         // approval trail is its provenance.
         createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
-      }),
+      }, acceptance),
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
@@ -2848,7 +2854,7 @@ export function agentRoutes(
         })
       : null;
 
-    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
+    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx, acceptance) =>
       agentService(dbOrTx).create(companyId, {
         ...createInput,
         adapterConfig: normalizedAdapterConfig,
@@ -2870,7 +2876,7 @@ export function agentRoutes(
         // agent (chief-of-staff hires) records no human creator; the hire
         // approval trail is its provenance.
         createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
-      }),
+      }, acceptance),
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);

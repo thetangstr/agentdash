@@ -1,4 +1,7 @@
-import { workforceService } from "../services/workforce.js";
+import { randomUUID } from "node:crypto";
+import { publishActivity, type ActivityPublication } from "../services/activity-log.js";
+import { acceptedHireNeedsRepair, completeManagedHire, onboardingMaterializationPause } from "../services/agent-creator-from-proposal.js";
+import { workforceService, type ActivityAcceptance } from "../services/workforce.js";
 import { loadDefaultAgentInstructionsBundle } from "../services/default-agent-instructions.js";
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
@@ -24,11 +27,12 @@ import {
   MEMBER_ONBOARDING_STEPS,
   type MemberOnboardingStep,
 } from "../services/member-onboarding.js";
-import { HttpError, unauthorized, badRequest, forbidden, notFound } from "../errors.js";
+import { HttpError, unauthorized, badRequest, forbidden, notFound, conflict } from "../errors.js";
 import { assertCompanyAccess, assertCanSetCompanyDirection, assertInstanceAdmin } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { actorMayApplyAdapterPreset } from "../services/adapter-host-execution-policy.js";
 import {
+  isBillingDisabled,
   exceededFreeTierCapacityAction,
   freeTierCapExceededPayload,
   type TierCapacityAdds,
@@ -143,6 +147,81 @@ function initialAssessmentGoals(input: Record<string, unknown>, markdown: string
 }
 
 export function onboardingV2Routes(db: Db) {
+  // AgentDash: private receipts consume a company-bound interview or exact plan card.
+  const hireReceiptKey = 'agentdashAcceptedHires';
+  type HireReceipt = { attemptId: string; agentIds: string[] };
+  function receiptFrom(metadata: unknown, key: string): HireReceipt | undefined {
+    const value = (metadata as Record<string, any> | null)?.[hireReceiptKey]?.[key];
+    if (value === undefined) return undefined;
+    if (!value || typeof value.attemptId !== 'string' || !Array.isArray(value.agentIds)
+      || !value.agentIds.every((id: unknown) => typeof id === 'string')) throw conflict('Hire receipt requires inspection before another attempt');
+    return value;
+  }
+  async function readHireReceipt(companyId: string, conversationId: string, key: string) {
+    const [row] = await db.select().from(assistantConversations).where(and(eq(assistantConversations.id, conversationId), eq(assistantConversations.companyId, companyId)));
+    if (!row) throw notFound('Conversation not found');
+    return receiptFrom(row.metadata, key);
+  }
+  function consumedHire(receipt: HireReceipt) {
+    return conflict('Hire already accepted; inspect the existing agents instead of hiring again', { accepted: true, agentIds: receipt.agentIds });
+  }
+  async function acceptOnboardingHires<T extends { created: { id: string } }>(
+    companyId: string, conversationId: string, key: string, count: number, res: import('express').Response,
+    create: (acceptance: ActivityAcceptance, index: number) => Promise<T>,
+  ): Promise<T[] | null> {
+    const attemptId = randomUUID(), publications: ActivityPublication[] = [];
+    const disabled = isBillingDisabled();
+    let blockedAction: Parameters<typeof freeTierCapExceededPayload>[0] | undefined;
+    const step = async (acceptance: ActivityAcceptance, index: number) => {
+      const executor = acceptance.executor;
+      await executor.select({ id: companiesTable.id }).from(companiesTable).where(eq(companiesTable.id, companyId)).for('update');
+      const [conversation] = await executor.select().from(assistantConversations).where(and(eq(assistantConversations.id, conversationId), eq(assistantConversations.companyId, companyId))).for('update');
+      if (!conversation) throw notFound('Conversation not found');
+      const prior = receiptFrom(conversation.metadata, key);
+      if (prior && prior.attemptId !== attemptId) throw consumedHire(prior);
+      if ((prior?.agentIds.length ?? 0) !== index) throw conflict('Hire receipt changed; inspect existing agents');
+      const accepted = await create(acceptance, index);
+      const metadata = (conversation.metadata ?? {}) as Record<string, any>;
+      await executor.update(assistantConversations).set({
+        metadata: { ...metadata, [hireReceiptKey]: { ...(metadata[hireReceiptKey] ?? {}), [key]: { attemptId, agentIds: [...(prior?.agentIds ?? []), accepted.created.id] } } },
+        updatedAt: new Date(),
+      }).where(eq(assistantConversations.id, conversationId));
+      return accepted;
+    };
+    try {
+      const accepted = await withCompanyTierCapacityGuard(db, companyId, { agents: count },
+        executor => onboardingTierCapacityDeps(tierCapacityServices(executor)),
+        action => { blockedAction = action; }, async executor => {
+          const result: T[] = [];
+          for (let index = 0; index < count; index++) {
+            if (disabled) {
+              const local: ActivityPublication[] = [];
+              const row = await db.transaction(tx => step({ executor: tx as unknown as Db, publications: local }, index));
+              // Each disabled-billing hire is already durable even if a later one fails.
+              for (const publication of local) publishActivity(publication);
+              result.push(row);
+            } else result.push(await step({ executor, publications }, index));
+          }
+          return result;
+        });
+      if (!accepted && blockedAction) {
+        const receipt = await readHireReceipt(companyId, conversationId, key);
+        if (receipt) throw consumedHire(receipt);
+        res.status(402).json(freeTierCapExceededPayload(blockedAction));
+      }
+      for (const publication of publications) publishActivity(publication);
+      return accepted;
+    } catch (error) {
+      // A lost commit acknowledgement never causes a callback replay or publication flush.
+      const receipt = await readHireReceipt(companyId, conversationId, key).catch(() => undefined);
+      if (receipt?.agentIds.length) {
+        if (receipt.attemptId !== attemptId) throw consumedHire(receipt);
+        throw acceptedHireNeedsRepair(receipt.agentIds);
+      }
+      throw error;
+    }
+  }
+
   // AgentDash (#725)
   const hermesProviderSetup = createHermesProviderSetupHandler(db);
   const router = Router();
@@ -490,6 +569,8 @@ export function onboardingV2Routes(db: Db) {
     if (!convoRows[0] || convoRows[0].companyId !== companyId) {
       throw notFound("Conversation not found");
     }
+    const priorHire = await readHireReceipt(companyId, conversationId, 'interview');
+    if (priorHire) throw consumedHire(priorHire);
     if (!(await enforceFreeTierCapacity(companyId, { agents: 1 }, res))) return;
     const transcript = await loadInterviewTranscript(db, conversationId);
     const proposal = await agentProposer({ llm: realProposerLlm }).propose(
@@ -501,32 +582,20 @@ export function onboardingV2Routes(db: Db) {
       proposal.workforceTemplateId = selected.data;
     }
     if (proposal.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
-    const result = await withCompanyTierCapacityGuard(
-      db,
-      companyId,
-      { agents: 1 },
-      (dbOrTx) => onboardingTierCapacityDeps(tierCapacityServices(dbOrTx)),
-      (action) => res.status(402).json(freeTierCapExceededPayload(action)),
-      async (tx) => {
-        const txAgents = agentService(tx);
-        const created = await agentCreatorFromProposal({
-          agents: txAgents,
-          instructions: agentInstructionsService(),
-        }).create({ companyId, reportsToAgentId, proposal, transcript });
-        // Append a CoS message announcing the hire as a proposal_card_v1.
-        await conversationService(tx).postMessage({
-          conversationId,
-          authorKind: "agent",
-          authorId: reportsToAgentId,
-          body: `${proposal.name} (${proposal.role}) is on your team. ${proposal.oneLineOkr}.`,
-          cardKind: "proposal_card_v1",
-          cardPayload: proposal as unknown as Record<string, unknown>,
-        });
-        return created;
-      },
-    );
-    if (!result) return;
-    if (proposal.workforceTemplateId) await workforceService(db).ensureSkillsInstalled(companyId, result.agentId, { userId: req.actor.userId });
+    const accepted = await acceptOnboardingHires(companyId, conversationId, 'interview', 1, res,
+      async acceptance => agentCreatorFromProposal({
+        agents: agentService(acceptance.executor), instructions: agentInstructionsService(),
+      }).accept({ companyId, reportsToAgentId, proposal, transcript }, acceptance));
+    if (!accepted) return;
+    let result: Awaited<ReturnType<ReturnType<typeof agentCreatorFromProposal>['complete']>>;
+    try {
+      result = await agentCreatorFromProposal({ db, agents: agentService(db), instructions: agentInstructionsService() }).complete(accepted[0], req.actor.userId);
+      await conversations.postMessage({
+        conversationId, authorKind: 'agent', authorId: reportsToAgentId,
+        body: `${proposal.name} (${proposal.role}) is on your team. ${proposal.oneLineOkr}.`,
+        cardKind: 'proposal_card_v1', cardPayload: proposal as unknown as Record<string, unknown>,
+      });
+    } catch { throw acceptedHireNeedsRepair(accepted.map(item => item.created.id)); }
     res.status(201).json({
       agent: { id: result.agentId, name: proposal.name, title: proposal.role },
       apiKey: result.apiKey,
@@ -619,40 +688,28 @@ export function onboardingV2Routes(db: Db) {
       throw badRequest("Plan card has no agents to materialize");
     }
     if (payload.agents.some(agent => agent.workforceTemplateId !== undefined)) assertCanSetCompanyDirection(req, companyId);
+
+    const receiptKey = `plan:${planMsg.id}`;
+    const previousHire = await readHireReceipt(companyId, conversationId, receiptKey);
+    if (previousHire) throw consumedHire(previousHire);
     if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
-
-    const materialized = await withCompanyTierCapacityGuard(
-      db,
-      companyId,
-      { agents: payload.agents.length },
-      (dbOrTx) => onboardingTierCapacityDeps(tierCapacityServices(dbOrTx)),
-      (action) => res.status(402).json(freeTierCapExceededPayload(action)),
-      async (tx) => {
-        const txAgents = agentService(tx);
-        const txCosState = cosOnboardingStateService(tx);
-        const txConversations = conversationService(tx);
-        await txCosState.advancePhase(conversationId, "materializing");
-
-        // Find the CoS agent for this company so the new hires reportTo it.
-        const allAgents = await txAgents.list(companyId);
-        const cos = allAgents.find((a: any) => a.role === "chief_of_staff") ?? null;
-        const reportsToAgentId = cos?.id ?? null;
-
-        const instructions = agentInstructionsService();
-        const createdAgentIds: string[] = [];
-        for (const planAgent of payload.agents) {
-          const created = await txAgents.create(companyId, {
-            name: planAgent.name,
-            role: "general",
-            title: planAgent.role,
-            adapterType: planAgent.adapterType,
-            workforceTemplateId: planAgent.workforceTemplateId,
-            adapterConfig: {},
-            reportsTo: reportsToAgentId,
-            status: "idle",
-            spentMonthlyCents: 0,
-            lastHeartbeatAt: null,
-          });
+    const accepted = await acceptOnboardingHires(companyId, conversationId, receiptKey, payload.agents.length, res, async (acceptance, index) => {
+      const txAgents = agentService(acceptance.executor);
+      if (index === 0) await cosOnboardingStateService(acceptance.executor).advancePhase(conversationId, 'materializing');
+      const cos = (await txAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
+      const planAgent = payload.agents[index];
+      const created = await txAgents.create(companyId, {
+        name: planAgent.name, role: 'general', title: planAgent.role, adapterType: planAgent.adapterType,
+        workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: {}, reportsTo: cos?.id ?? null,
+        ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
+      }, acceptance);
+      return { created, planAgent, cosAgentId: cos?.id ?? null };
+    });
+    if (!accepted) return;
+    const materialized = { createdAgentIds: accepted.map(item => item.created.id), cosAgentId: accepted[0]?.cosAgentId ?? null };
+    try {
+      for (const { created, planAgent } of accepted) {
+        await completeManagedHire({ db, agents: agentService(db), instructions: agentInstructionsService() }, created, async () => {
           const responsibilities = (planAgent.responsibilities ?? []).map((r) => `- ${r}`).join("\n");
           const kpis = (planAgent.kpis ?? []).map((k) => `- ${k}`).join("\n");
           const agentsMd = `# AGENTS.md — ${planAgent.name}
@@ -677,35 +734,16 @@ ${kpis || "- (none captured)"}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 `;
-          const defaultBundle = await loadDefaultAgentInstructionsBundle("default");
-          const bundle = await instructions.materializeManagedBundle(
-            created,
-            { ...defaultBundle, "AGENTS.md": `${defaultBundle["AGENTS.md"]}\n\n${agentsMd}` },
-            { entryFile: "AGENTS.md", replaceExisting: false },
-          );
-          await txAgents.update(created.id, { adapterConfig: bundle.adapterConfig });
-          createdAgentIds.push(created.id);
-        }
-
-        if (cos) {
-          await txConversations.postMessage({
-            conversationId,
-            authorKind: "agent",
-            authorId: cos.id,
-            body: "Done — your team has been created. You can talk to any of them via @mention, or stay here and route through me.",
-          });
-        }
-
-        await txCosState.advancePhase(conversationId, "ready");
-        return { createdAgentIds, cosAgentId: cos?.id ?? null };
-      },
-    );
-    if (!materialized) return;
-    for (let i = 0; i < payload.agents.length; i++) {
-      if (payload.agents[i].workforceTemplateId) {
-        await workforceService(db).ensureSkillsInstalled(companyId, materialized.createdAgentIds[i], { userId: req.actor.userId });
+          const defaultBundle = await loadDefaultAgentInstructionsBundle('default');
+          return { ...defaultBundle, 'AGENTS.md': `${defaultBundle['AGENTS.md']}\n\n${agentsMd}` };
+        }, planAgent.workforceTemplateId, req.actor.userId);
       }
-    }
+      if (materialized.cosAgentId) await conversations.postMessage({
+        conversationId, authorKind: 'agent', authorId: materialized.cosAgentId,
+        body: 'Done — your team has been created. You can talk to any of them via @mention, or stay here and route through me.',
+      });
+      await cosOnboardingStateService(db).advancePhase(conversationId, 'ready');
+    } catch { throw acceptedHireNeedsRepair(materialized.createdAgentIds); }
 
     // AgentDash (issue #174): materialize the captured onboarding goals
     // ({shortTerm, longTerm}) into the goals table so the user sees them on

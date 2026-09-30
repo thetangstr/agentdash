@@ -1,3 +1,4 @@
+import { publishActivity, type ActivityPublication } from './activity-log.js';
 import type { Request } from 'express';
 import { assertProjectIdVisible } from '../routes/visibility.js';
 import { isDeepStrictEqual } from "node:util";
@@ -46,7 +47,7 @@ import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { issueService } from "./issues.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
-import { workforceService } from "./workforce.js";
+import { workforceService, assertActivityAcceptance, type ActivityAcceptance } from "./workforce.js";
 
 type InteractionActor = {
   agentId?: string | null;
@@ -442,12 +443,23 @@ async function expireStaleRequestConfirmationTarget(db: Db | any, args: {
 }
 
 export function issueThreadInteractionService(db: Db) {
+  async function acceptQuestion<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db, acceptance: ActivityAcceptance) => Promise<T>): Promise<T> {
+    if (supplied !== undefined) {
+      assertActivityAcceptance(supplied);
+      return work(supplied.executor, supplied);
+    }
+    const publications: ActivityPublication[] = [];
+    const result = await db.transaction(tx => work(tx as unknown as Db, { executor: tx as unknown as Db, publications }));
+    for (const publication of publications) publishActivity(publication);
+    return result;
+  }
+
   async function getIdempotentInteraction(args: {
     issueId: string;
     companyId: string;
     idempotencyKey: string;
-  }) {
-    return db
+  }, connection = db) {
+    return connection
       .select()
       .from(issueThreadInteractions)
       .where(and(
@@ -686,7 +698,7 @@ export function issueThreadInteractionService(db: Db) {
         issueId: issue.id,
         companyId: issue.companyId,
         idempotencyKey: data.idempotencyKey,
-      });
+      }, connection);
       if (existing) {
         if (!isEquivalentCreateRequest(existing, data, actor)) {
           throw conflict("Interaction idempotency key already exists for a different request", {
@@ -761,7 +773,7 @@ export function issueThreadInteractionService(db: Db) {
         issueId: issue.id,
         companyId: issue.companyId,
         idempotencyKey: data.idempotencyKey,
-      });
+      }, connection);
       if (!existing) throw error;
       if (!isEquivalentCreateRequest(existing, data, actor)) {
         throw conflict("Interaction idempotency key already exists for a different request", {
@@ -781,6 +793,7 @@ export function issueThreadInteractionService(db: Db) {
     input: RespondIssueThreadInteraction,
     actor: InteractionActor,
     validationOnly = false,
+    acceptance?: ActivityAcceptance,
   ) {
     input = respondIssueThreadInteractionSchema.parse(input);
     const current = await connection
@@ -825,7 +838,7 @@ export function issueThreadInteractionService(db: Db) {
       const facts = interaction.payload.questions.filter(q => q.companyFactKey).map(q => ({ key: q.companyFactKey!, value: normalizedAnswers.find(a => a.questionId === q.id)?.text ?? '', sourceReference: `interaction:${interaction.id}/question:${q.id}` }));
       if (!template || !facts.length || facts.some(f => !template.requiredFactKeys.includes(f.key) || !f.value.trim())) throw unprocessable('Only answered template fact keys may be shared');
       const prior = await svc.getBrief(issue.companyId);
-      publish = () => svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId! });
+      publish = () => svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId! }, acceptance);
     }
     if (validationOnly) return interaction;
     if (publish) await publish();
@@ -883,9 +896,9 @@ export function issueThreadInteractionService(db: Db) {
       return row ? hydrateInteraction(row) : null;
     },
 
-    create: async (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor) => {
+    create: async (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance) => {
       const namedQuestion = input.kind === 'ask_user_questions';
-      return namedQuestion ? db.transaction(tx => createInteraction(tx as unknown as Db, issue, input, actor)) : createInteraction(db, issue, input, actor);
+      return namedQuestion || acceptance !== undefined ? acceptQuestion(acceptance, connection => createInteraction(connection, issue, input, actor)) : createInteraction(db, issue, input, actor);
     },
 
     acceptInteraction: async (
@@ -1260,12 +1273,12 @@ export function issueThreadInteractionService(db: Db) {
       return expired;
     },
 
-    answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor) => db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance) => acceptQuestion(acceptance, async (tx, accepted) => {
+      const connection = tx;
       // Lock company before issue, matching brief publication and job creation.
       await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for('update');
       await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for('update');
-      return answerQuestions(connection, issue, interactionId, input, actor);
+      return answerQuestions(connection, issue, interactionId, input, actor, false, accepted);
     }),
 
     cancelQuestions: async (
@@ -1273,9 +1286,10 @@ export function issueThreadInteractionService(db: Db) {
       interactionId: string,
       input: CancelIssueThreadInteraction,
       actor: InteractionActor,
-    ) => {
+      acceptance?: ActivityAcceptance,
+    ) => acceptQuestion(acceptance, async (connection) => {
       const data = cancelIssueThreadInteractionSchema.parse(input);
-      const current = await db
+      const current = await connection
         .select()
         .from(issueThreadInteractions)
         .where(eq(issueThreadInteractions.id, interactionId))
@@ -1293,7 +1307,7 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       const reason = data.reason?.trim() || null;
-      const [updated] = await db
+      const [updated] = await connection
         .update(issueThreadInteractions)
         .set({
           status: "cancelled",
@@ -1319,8 +1333,8 @@ export function issueThreadInteractionService(db: Db) {
         throw conflict("Interaction has already been resolved");
       }
 
-      await touchIssue(db, issue.id);
+      await touchIssue(connection, issue.id);
       return hydrateInteraction(updated);
-    },
+    }),
   };
 }

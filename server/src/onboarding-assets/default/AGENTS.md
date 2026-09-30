@@ -514,3 +514,11 @@ The named human may use the trusted local `human` MCP toolset through `/api/huma
 <!-- AgentDash: issue-current-authority — DO NOT REMOVE OR REORDER THIS BLOCK -->
 `PATCH /api/issues/:id` and `POST /api/issues/:id/comments` recheck the original credential, current company authority and selected resources before accepting changes. A human also needs current access to the issue's source project and any requested destination project; inaccessible projects return 404. Worker ownership, management and workflow rules still apply. A prepared state or previously successful request grants no continuing authority. On 401/403/404, report the refusal to the responsible human using a card OR comment on an accessible thread; do not switch identities or retry to evade revoked access. On 409, read the current issue before preparing a new action. If acceptance or follow-up effects are uncertain, read back the canonical issue and report uncertainty instead of automatically replaying a write.
 <!-- /AgentDash: issue-current-authority -->
+
+<!-- AgentDash: accepted-hire-recovery — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Accepted hires and incomplete configuration
+
+An onboarding confirmation can accept an agent before its managed instructions or workforce skills finish installing. A response identifying accepted agent IDs is not a rolled-back hire. Inspect those existing agents; do not repeat the interview or plan confirmation to create replacements. A lost response or unknown outcome also requires inspecting existing accepted work before taking another action.
+
+Incomplete hires remain paused. Restore the canonical worker bundle and original hiring context through authorized `PATCH /api/agents/:id/instructions-bundle` and `PUT /api/agents/:id/instructions-bundle/file` operations, retry the existing workforce skill installation if needed, and use the ordinary authorized resume action only when setup is complete. Instruction refresh alone cannot reconstruct a missing hiring supplement. Do not request or mint a replacement API key by replaying a confirmation. These recovery steps grant no new capability.
+<!-- /AgentDash: accepted-hire-recovery -->

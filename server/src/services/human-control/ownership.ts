@@ -11,8 +11,9 @@ import { agentService } from '../agents.js';
 import { agentAccountabilityService, normalizeAgentAutonomy, accountabilityLabel } from '../agent-accountability.js';
 import { agentStewardshipService } from '../agent-stewardships.js';
 import { agentGovernanceService } from '../agent-governance.js';
-import { logActivity } from '../activity-log.js';
+import { logActivity, insertActivity } from '../activity-log.js';
 import type { HumanOperation } from '../human-control.js';
+import { assertActivityAcceptance, type ActivityAcceptance } from '../workforce.js';
 import { humanCompany } from './workforce.js';
 
 export async function assertOwnershipManagement(db: Db, req: Request, companyId: string, deniedMessage = 'Agent stewardship management requires agent creation permission') {
@@ -47,9 +48,12 @@ export async function resolveAccountabilityPatch(db: Db, req: Request, existing:
   if (requestedAccountable) throw conflict('A stewarded agent takes its accountable human from its steward, so accountableUserId cannot be set on one. Assign the stewardship instead, or make the agent autonomous.');
   return { autonomy: nextAutonomy, accountableUserId: null };
 }
-export async function recordAccountabilityChange(db: Db, req: Request, existing: typeof agents.$inferSelect, agent: typeof agents.$inferSelect) {
+export async function recordAccountabilityChange(db: Db, req: Request, existing: typeof agents.$inferSelect, agent: typeof agents.$inferSelect, acceptance?: ActivityAcceptance) {
   const actor = getActorInfo(req);
-  await logActivity(db, { companyId: agent.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId, action: 'agent.accountability_changed', entityType: 'agent', entityId: agent.id, details: { fromAutonomy: normalizeAgentAutonomy(existing.autonomy), toAutonomy: normalizeAgentAutonomy(agent.autonomy), fromAccountableUserId: existing.accountableUserId ?? null, toAccountableUserId: agent.accountableUserId ?? null } });
+  if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+  const input = { companyId: agent.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId, action: 'agent.accountability_changed', entityType: 'agent', entityId: agent.id, details: { fromAutonomy: normalizeAgentAutonomy(existing.autonomy), toAutonomy: normalizeAgentAutonomy(agent.autonomy), fromAccountableUserId: existing.accountableUserId ?? null, toAccountableUserId: agent.accountableUserId ?? null } };
+  if (acceptance) acceptance.publications.push(await insertActivity(acceptance.executor, input));
+  else await logActivity(db, input);
 }
 export function ownershipHumanOperations(): HumanOperation[] {
   const id = z.string().uuid(), userId = z.string().trim().min(1).max(256);
@@ -87,7 +91,7 @@ export function ownershipHumanOperations(): HumanOperation[] {
     async execute(ctx, p) {
       const companyId = humanCompany(ctx), svc = agentStewardshipService(ctx.db);
       if (operationId !== 'human_questions.owner.assign') {
-        const row = operationId.endsWith('.assign') ? await svc.assign(companyId, { agentId: p.agentId as string, userId: p.userId as string, assignedByUserId: ctx.req.actor.userId! }) : await svc.transfer(companyId, p.agentId as string, { userId: p.userId as string, transferReason: p.transferReason as string, transferredByUserId: ctx.req.actor.userId! });
+        const row = operationId.endsWith('.assign') ? await svc.assign(companyId, { agentId: p.agentId as string, userId: p.userId as string, assignedByUserId: ctx.req.actor.userId! }, ctx.acceptance) : await svc.transfer(companyId, p.agentId as string, { userId: p.userId as string, transferReason: p.transferReason as string, transferredByUserId: ctx.req.actor.userId! }, ctx.acceptance);
         return { agentId: row.agentId, userId: row.userId, stewardshipId: row.id };
       }
       const [existing] = await ctx.db.select().from(agents).where(and(eq(agents.id, p.agentId as string), eq(agents.companyId, companyId))).for('update');
@@ -95,8 +99,8 @@ export function ownershipHumanOperations(): HumanOperation[] {
       const patch = await resolveAccountabilityPatch(ctx.db, ctx.req, existing, { accountableUserId: p.accountableUserId });
       const updated = await agentService(ctx.db).update(existing.id, patch, { recordRevision: { createdByAgentId: null, createdByUserId: ctx.req.actor.userId!, source: 'patch' } });
       if (!updated) throw notFound('Agent not found');
-      await logActivity(ctx.db, { companyId, actorType: 'user', actorId: ctx.req.actor.userId!, action: 'agent.updated', entityType: 'agent', entityId: updated.id, details: { changedTopLevelKeys: Object.keys(patch).sort() } });
-      await recordAccountabilityChange(ctx.db, ctx.req, existing, updated);
+      ctx.acceptance!.publications.push(await insertActivity(ctx.acceptance!.executor, { companyId, actorType: 'user', actorId: ctx.req.actor.userId!, action: 'agent.updated', entityType: 'agent', entityId: updated.id, details: { changedTopLevelKeys: Object.keys(patch).sort() } }));
+      await recordAccountabilityChange(ctx.db, ctx.req, existing, updated, ctx.acceptance);
       return { agentId: updated.id, userId: updated.accountableUserId!, stewardshipId: null };
     },
   }));

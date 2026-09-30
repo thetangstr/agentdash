@@ -25,3 +25,9 @@ This retired persona remains inert. All workers inherit current issue-authority
 and refusal recovery instructions from canonical default/AGENTS.md through the
 shared creator template. Do not restore a separate persona or fork that policy.
 /AgentDash: issue-current-authority -->
+
+<!-- AgentDash: accepted-hire-recovery — DO NOT REMOVE OR REORDER THIS BLOCK -->
+<!-- Applicability: this legacy leadership surface remains inert for workforce onboarding.
+The default worker bundle owns accepted-hire/incomplete-configuration recovery.
+Do not activate a separate hiring loop or replay confirmations from this surface. -->
+<!-- /AgentDash: accepted-hire-recovery -->

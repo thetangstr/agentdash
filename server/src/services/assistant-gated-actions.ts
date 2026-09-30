@@ -1,4 +1,4 @@
-import { workforceService } from "./workforce.js";
+import { workforceService, type ActivityAcceptance } from "./workforce.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, gt, isNotNull, isNull, lt } from "drizzle-orm";
@@ -17,7 +17,7 @@ import { approvalAuthorityService, type ApprovalDecisionActor } from "./approval
 import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
 import { agentService } from "./agents.js";
 import { approvalService } from "./approvals.js";
-import { logActivity } from "./activity-log.js";
+import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import { DECIDABLE_STATUSES } from "./steward-inbox.js";
 import { effectsFor, hireApprovalCreatesAgent } from "./waiting-on-you-rules.js";
 import type { AssistantDecision } from "./waiting-on-you-rules.js";
@@ -948,8 +948,9 @@ export function assistantGatedActionsService(
       .then((rows) => rows[0] ?? null);
     const requiresApproval = company?.requireBoardApprovalForNewAgents === true;
 
+    const publications: ActivityPublication[] = [];
     const created = await (async () => {
-      const create = (txDb: Db) =>
+      const create = (txDb: Db, acceptance?: ActivityAcceptance) =>
         agentService(txDb).create(companyId, {
           workforceTemplateId: payload.workforceTemplateId,
           name: payload.name,
@@ -973,7 +974,7 @@ export function assistantGatedActionsService(
             projectId: payload.projectId,
           },
           createdByUserId: actor.userId,
-        });
+        }, acceptance);
       if (isBillingDisabled()) return create(db);
       return withCompanyTierCapacityLock(db, companyId, async (txDb) => {
         const blocked = await exceededFreeTierCapacityAction(
@@ -982,9 +983,11 @@ export function assistantGatedActionsService(
           { agents: 1 },
         );
         if (blocked) return { blocked };
-        return create(txDb);
+        return create(txDb, { executor: txDb, publications });
       });
     })();
+
+    for (const publication of publications) publishActivity(publication);
 
     if ("blocked" in (created as { blocked?: unknown })) {
       const cap = freeTierCapExceededPayload((created as { blocked: "invite" | "hire" }).blocked);

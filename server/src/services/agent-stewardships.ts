@@ -1,3 +1,4 @@
+import { assertActivityAcceptance, type ActivityAcceptance } from './workforce.js';
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -12,7 +13,7 @@ import {
 import { conflict, notFound } from "../errors.js";
 import { normalizeAgentAutonomy } from "./agent-accountability.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
-import { logActivity } from "./activity-log.js";
+import { logActivity, insertActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 
 type AgentStewardshipRow = typeof agentStewardships.$inferSelect;
 
@@ -182,9 +183,14 @@ async function auditRevocations(
     bindings: Array<{ id: string; agentId: string; provider: string }>;
     endpoints: Array<{ id: string; label: string }>;
   },
+  publications?: ActivityPublication[],
 ) {
+  const audit = async (input: Parameters<typeof logActivity>[1]) => {
+    if (publications) publications.push(await insertActivity(database, input));
+    else await logActivity(database as unknown as Db, input);
+  };
   for (const binding of input.bindings) {
-    await logActivity(database as unknown as Db, {
+    await audit({
       companyId: input.companyId,
       actorType: "user",
       actorId: input.actorUserId ?? "board",
@@ -196,7 +202,7 @@ async function auditRevocations(
     });
   }
   for (const endpoint of input.endpoints) {
-    await logActivity(database as unknown as Db, {
+    await audit({
       companyId: input.companyId,
       actorType: "user",
       actorId: input.actorUserId ?? "board",
@@ -209,6 +215,17 @@ async function auditRevocations(
 }
 
 export function agentStewardshipService(db: Db) {
+  async function accept<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db, publications: ActivityPublication[]) => Promise<T>): Promise<T> {
+    if (supplied !== undefined) {
+      assertActivityAcceptance(supplied);
+      return work(supplied.executor, supplied.publications);
+    }
+    const publications: ActivityPublication[] = [];
+    const result = await db.transaction(tx => work(tx as unknown as Db, publications));
+    for (const publication of publications) publishActivity(publication);
+    return result;
+  }
+
 
   async function activeByUser(companyId: string, userId: string) {
     return db
@@ -318,11 +335,11 @@ export function agentStewardshipService(db: Db) {
       .orderBy(desc(agentStewardships.startedAt));
   }
 
-  async function assign(companyId: string, input: AssignInput): Promise<AgentStewardshipRow> {
+  async function assign(companyId: string, input: AssignInput, acceptance?: ActivityAcceptance): Promise<AgentStewardshipRow> {
     const now = new Date();
 
     try {
-      return await db.transaction(async (tx) => {
+      return await accept(acceptance, async (tx, publications) => {
         await lockActiveUserMember(tx, companyId, input.userId);
         await lockAssignableCompanyAgent(tx, companyId, input.agentId);
 
@@ -340,7 +357,7 @@ export function agentStewardshipService(db: Db) {
           .returning()
           .then((rows) => rows[0]!);
 
-        await logActivity(tx as unknown as Db, {
+        publications.push(await insertActivity(tx, {
           companyId,
           actorType: "user",
           actorId: input.assignedByUserId ?? "board",
@@ -352,7 +369,7 @@ export function agentStewardshipService(db: Db) {
             userId: input.userId,
             agentId: input.agentId,
           },
-        });
+        }));
 
         return row;
       });
@@ -364,12 +381,12 @@ export function agentStewardshipService(db: Db) {
     }
   }
 
-  async function transfer(companyId: string, agentId: string, input: TransferInput): Promise<AgentStewardshipRow> {
+  async function transfer(companyId: string, agentId: string, input: TransferInput, acceptance?: ActivityAcceptance): Promise<AgentStewardshipRow> {
     const transferReason = normalizeReason(input.transferReason);
     const now = new Date();
 
     try {
-      return await db.transaction(async (tx) => {
+      return await accept(acceptance, async (tx, publications) => {
         const lockResult = await tx.execute(sql`
           select pg_try_advisory_xact_lock(hashtextextended(${`${companyId}:${agentId}`}, 0)) as locked
         `);
@@ -484,9 +501,9 @@ export function agentStewardshipService(db: Db) {
           reason: "stewardship_transferred",
           bindings: revokedBindings,
           endpoints: revokedEndpoints,
-        });
+        }, publications);
 
-        await logActivity(tx as unknown as Db, {
+        publications.push(await insertActivity(tx, {
           companyId,
           actorType: "user",
           actorId: input.transferredByUserId ?? "board",
@@ -500,7 +517,7 @@ export function agentStewardshipService(db: Db) {
             previousStewardshipId: active.id,
             transferReason,
           },
-        });
+        }));
 
         return next;
       });

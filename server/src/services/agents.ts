@@ -1,4 +1,5 @@
-import { workforceService } from "./workforce.js";
+import { publishActivity, type ActivityPublication } from "./activity-log.js";
+import { workforceService, assertActivityAcceptance, type ActivityAcceptance } from "./workforce.js";
 import { supportsWorkforcePrompt, workforceTemplateIdSchema } from "@paperclipai/shared";
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
@@ -383,6 +384,13 @@ export function agentService(db: Db) {
     }
 
     const normalizedPatch = { ...data } as Partial<typeof agents.$inferInsert>;
+    // AgentDash: an explicit PATCH pause supersedes a pending onboarding pause,
+    // even if both requests occur in the same millisecond.
+    if (data.status === 'paused' && isPlainRecord(existing.metadata)
+      && existing.metadata.onboardingMaterialization === 'pending') {
+      normalizedPatch.pauseReason = 'manual';
+      normalizedPatch.pausedAt = new Date(Math.max(Date.now(), (existing.pausedAt?.getTime() ?? 0) + 1));
+    }
     if (data.permissions !== undefined) {
       const role = (data.role ?? existing.role) as string;
       normalizedPatch.permissions = normalizeAgentPermissions(data.permissions, role);
@@ -433,18 +441,24 @@ export function agentService(db: Db) {
 
     getById,
 
-    create: async (companyId: string, input: Omit<typeof agents.$inferInsert, "companyId"> & { workforceTemplateId?: string }): Promise<ReturnType<typeof normalizeAgentRow>> => {
-      // AgentDash: enrollment is part of creation; filesystem installation runs after hiring commits.
+    create: async (companyId: string, input: Omit<typeof agents.$inferInsert, "companyId"> & { workforceTemplateId?: string }, acceptance?: ActivityAcceptance): Promise<ReturnType<typeof normalizeAgentRow>> => {
+      // AgentDash: enrollment shares the actual caller acceptance; root calls own commit.
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
       const { workforceTemplateId, ...data } = input;
       if (workforceTemplateId !== undefined) {
         workforceTemplateIdSchema.parse(workforceTemplateId);
-        return db.transaction(async (tx) => {
-          const connection = tx as unknown as Db;
-          const created = await agentService(connection).create(companyId, data);
-          await workforceService(connection).enroll(companyId, created.id, { templateId: workforceTemplateId as "marketing-content" | "sales-support" }, {});
+        const create = async (accepted: ActivityAcceptance) => {
+          const created = await agentService(accepted.executor).create(companyId, data);
+          await workforceService(accepted.executor).enroll(companyId, created.id, { templateId: workforceTemplateId as "marketing-content" | "sales-support" }, {}, accepted);
           return created;
-        });
+        };
+        if (acceptance) return create(acceptance);
+        const publications: ActivityPublication[] = [];
+        const created = await db.transaction(tx => create({ executor: tx as unknown as Db, publications }));
+        for (const publication of publications) publishActivity(publication);
+        return created;
       }
+      if (acceptance) return agentService(acceptance.executor).create(companyId, data);
       if (data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
       }
@@ -468,6 +482,20 @@ export function agentService(db: Db) {
     },
 
     update: updateAgent,
+
+    // AgentDash: only the onboarding pause instance may be completed/released.
+    completeMaterialization: async (id: string, pausedAt: Date, adapterConfig?: Record<string, unknown>, release = false) => db.transaction(async tx => {
+      const [current] = await tx.select().from(agents).where(eq(agents.id, id)).for('update');
+      const metadata = current && isPlainRecord(current.metadata) ? current.metadata : {};
+      if (!current || current.status !== 'paused' || current.pauseReason !== 'system'
+        || current.pausedAt?.getTime() !== pausedAt.getTime() || metadata.onboardingMaterialization !== 'pending') {
+        throw conflict('Hire configuration requires review; the original materialization pause changed');
+      }
+      return agentService(tx as unknown as Db).update(id, {
+        ...(adapterConfig ? { adapterConfig: { ...current.adapterConfig, ...adapterConfig } } : {}),
+        ...(release ? { status: 'idle', pauseReason: null, pausedAt: null, metadata: { ...metadata, onboardingMaterialization: 'complete' } } : {}),
+      });
+    }),
 
     pause: async (id: string, reason: "manual" | "budget" | "system" | "mandate" = "manual") => {
       const existing = await getById(id);

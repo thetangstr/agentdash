@@ -13,13 +13,31 @@ import { verdictsService } from './verdicts.js';
 import { workProductService } from './work-products.js';
 import { workforceIssueInputs } from './workforce-inputs.js';
 import { companySkillService } from './company-skills.js';
-import { logActivity } from './activity-log.js';
+import { insertActivity, publishActivity, type ActivityPublication } from './activity-log.js';
+
+// AgentDash: private caller-owned acceptance; never infer a transaction from a DB object.
+export interface ActivityAcceptance { executor: Db; publications: ActivityPublication[] }
+export function assertActivityAcceptance(acceptance: ActivityAcceptance): void {
+  if (!acceptance?.executor || typeof acceptance.executor.select !== 'function'
+    || typeof acceptance.executor.insert !== 'function' || typeof acceptance.executor.update !== 'function'
+    || !Array.isArray(acceptance.publications)) throw new Error('An executor and publication collector are required');
+}
 
 type Actor = { userId?: string | null; agentId?: string | null };
 type Enrollment = typeof workforceEnrollments.$inferSelect;
 const emptyBrief = (): WorkforceBrief => ({ revision: 0, sources: [], facts: [], confirmedByUserId: null, updatedAt: null });
 
 export function workforceService(db: Db) {
+  async function accept<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db, publications: ActivityPublication[]) => Promise<T>): Promise<T> {
+    if (supplied !== undefined) {
+      assertActivityAcceptance(supplied);
+      return work(supplied.executor, supplied.publications);
+    }
+    const publications: ActivityPublication[] = [];
+    const result = await db.transaction(tx => work(tx as unknown as Db, publications));
+    for (const publication of publications) publishActivity(publication);
+    return result;
+  }
   async function company(companyId: string, connection = db, lock = false) {
     const query = connection.select().from(companies).where(eq(companies.id, companyId));
     const [row] = await (lock ? query.for('update') : query);
@@ -42,8 +60,8 @@ export function workforceService(db: Db) {
       throw forbidden('Only the enrolled agent or an authorized human may acknowledge learning');
     }
   }
-  async function audit(connection: Db, companyId: string, entityId: string, action: string, actor: Actor) {
-    await logActivity(connection, { companyId, entityType: 'workforce', entityId, action, actorType: actor.agentId ? 'agent' : actor.userId ? 'user' : 'system', actorId: actor.agentId ?? actor.userId ?? 'workforce', agentId: actor.agentId });
+  async function audit(connection: Db, companyId: string, entityId: string, action: string, actor: Actor, publications: ActivityPublication[]) {
+    publications.push(await insertActivity(connection, { companyId, entityType: 'workforce', entityId, action, actorType: actor.agentId ? 'agent' : actor.userId ? 'user' : 'system', actorId: actor.agentId ?? actor.userId ?? 'workforce', agentId: actor.agentId }));
   }
   async function readBrief(companyId: string, connection = db): Promise<WorkforceBrief> {
     const [row] = await connection.select().from(companyContext).where(and(eq(companyContext.companyId, companyId), eq(companyContext.contextType, 'workforce_brief'), eq(companyContext.key, 'current')));
@@ -62,23 +80,23 @@ export function workforceService(db: Db) {
     if (!template) throw conflict('Pinned workforce template is unavailable');
     return { enrollment, template };
   }
-  async function updateBrief(companyId: string, input: z.infer<typeof updateWorkforceBriefSchema>, actor: { userId: string }) {
+  async function updateBrief(companyId: string, input: z.infer<typeof updateWorkforceBriefSchema>, actor: { userId: string }, acceptance?: ActivityAcceptance) {
     requireHuman(actor);
     const parsed = updateWorkforceBriefSchema.parse(input);
-    return db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    return accept(acceptance, async (tx, publications) => {
+      const connection = tx;
       await company(companyId, connection, true);
       const prior = await readBrief(companyId, connection);
       if (prior.revision !== parsed.expectedRevision) throw conflict('Company brief revision changed');
-      return publishBrief(connection, companyId, prior.revision, { sources: parsed.sources, facts: parsed.facts }, actor);
+      return publishBrief(connection, companyId, prior.revision, { sources: parsed.sources, facts: parsed.facts }, actor, publications);
     });
   }
-  async function publishBrief(connection: Db, companyId: string, revision: number, input: Pick<WorkforceBrief, 'sources' | 'facts'>, actor: { userId: string }) {
+  async function publishBrief(connection: Db, companyId: string, revision: number, input: Pick<WorkforceBrief, 'sources' | 'facts'>, actor: { userId: string }, publications: ActivityPublication[]) {
     const brief: WorkforceBrief = { revision: revision + 1, ...input, confirmedByUserId: actor.userId, updatedAt: new Date().toISOString() };
     const values = { companyId, value: JSON.stringify(brief), confidence: '1.00', verifiedByUserId: actor.userId };
     await connection.insert(companyContext).values({ ...values, contextType: 'workforce_brief_revision', key: String(brief.revision) });
     await connection.insert(companyContext).values({ ...values, contextType: 'workforce_brief', key: 'current' }).onConflictDoUpdate({ target: [companyContext.companyId, companyContext.contextType, companyContext.key], set: { value: values.value, verifiedByUserId: actor.userId, updatedAt: new Date() } });
-    await audit(connection, companyId, companyId, 'workforce.brief_updated', actor);
+    await audit(connection, companyId, companyId, 'workforce.brief_updated', actor, publications);
     return brief;
   }
   async function listProposals(companyId: string, actor: Actor): Promise<WorkforceFactProposal[]> {
@@ -86,11 +104,11 @@ export function workforceService(db: Db) {
     const rows = await db.select().from(companyContext).where(and(eq(companyContext.companyId, companyId), eq(companyContext.contextType, 'workforce_fact_proposal')));
     return rows.map(row => JSON.parse(row.value) as WorkforceFactProposal);
   }
-  async function reviewProposal(companyId: string, proposalId: string, input: z.infer<typeof reviewWorkforceProposalSchema>, actor: Actor) {
+  async function reviewProposal(companyId: string, proposalId: string, input: z.infer<typeof reviewWorkforceProposalSchema>, actor: Actor, acceptance?: ActivityAcceptance) {
     requireHuman(actor);
     const parsed = reviewWorkforceProposalSchema.parse(input);
-    return db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    return accept(acceptance, async (tx, publications) => {
+      const connection = tx;
       await company(companyId, connection, true);
       const [row] = await tx.select().from(companyContext).where(and(eq(companyContext.companyId, companyId), eq(companyContext.contextType, 'workforce_fact_proposal'), eq(companyContext.key, proposalId)));
       if (!row) throw notFound('Company proposal not found');
@@ -105,31 +123,31 @@ export function workforceService(db: Db) {
         const facts = new Map(brief.facts.map(fact => [fact.key, fact]));
         for (const fact of proposal.facts) facts.set(fact.key, fact);
         const merged = updateWorkforceBriefSchema.parse({ expectedRevision: brief.revision, sources: brief.sources, facts: [...facts.values()] });
-        await publishBrief(connection, companyId, brief.revision, { sources: merged.sources, facts: merged.facts }, { userId: actor.userId! });
+        await publishBrief(connection, companyId, brief.revision, { sources: merged.sources, facts: merged.facts }, { userId: actor.userId! }, publications);
       }
       const reviewed: WorkforceFactProposal = { ...proposal, status: parsed.decision === 'approve' ? 'approved' : 'rejected', reviewedByUserId: actor.userId!, reviewedAt: new Date().toISOString() };
       await tx.update(companyContext).set({ value: JSON.stringify(reviewed), verifiedByUserId: actor.userId!, updatedAt: new Date() }).where(eq(companyContext.id, row.id));
-      await audit(connection, companyId, proposal.id, `workforce.proposal_${reviewed.status}`, actor);
+      await audit(connection, companyId, proposal.id, `workforce.proposal_${reviewed.status}`, actor, publications);
       return reviewed;
     });
   }
-  async function updateEnrollment(companyId: string, agentId: string, input: z.infer<typeof updateWorkforceEnrollmentSchema>, actor: Actor) {
+  async function updateEnrollment(companyId: string, agentId: string, input: z.infer<typeof updateWorkforceEnrollmentSchema>, actor: Actor, acceptance?: ActivityAcceptance) {
     requireHuman(actor);
     const parsed = updateWorkforceEnrollmentSchema.parse(input);
-    return db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    return accept(acceptance, async (tx, publications) => {
+      const connection = tx;
       await company(companyId, connection, true);
       const { enrollment } = await requiredEnrollment(companyId, agentId, connection);
       if (parsed.goalId && !(await tx.select().from(goals).where(and(eq(goals.companyId, companyId), eq(goals.id, parsed.goalId))))[0]) throw notFound('Company goal not found');
       const [updated] = await tx.update(workforceEnrollments).set({ ...parsed, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id)).returning();
-      await audit(connection, companyId, enrollment.id, 'workforce.targets_updated', actor);
+      await audit(connection, companyId, enrollment.id, 'workforce.targets_updated', actor, publications);
       return updated;
     });
   }
-  async function proposeFacts(companyId: string, agentId: string, input: z.infer<typeof proposeWorkforceFactsSchema>) {
+  async function proposeFacts(companyId: string, agentId: string, input: z.infer<typeof proposeWorkforceFactsSchema>, acceptance?: ActivityAcceptance) {
     const parsed = proposeWorkforceFactsSchema.parse(input);
-    return db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    return accept(acceptance, async (tx, publications) => {
+      const connection = tx;
       await company(companyId, connection, true); await agent(companyId, agentId, connection);
       const brief = await readBrief(companyId, connection);
       if (parsed.sourceReferences.some(id => !brief.sources.some(source => source.id === id))) throw badRequest('Proposals must reference explicitly shared company sources');
@@ -137,15 +155,15 @@ export function workforceService(db: Db) {
       if (parsed.facts.some(fact => !permittedSources.some(source => source.id === fact.sourceReference || source.label === fact.sourceReference))) throw badRequest('Each proposed fact must cite a declared company source');
       const proposal: WorkforceFactProposal = { id: randomUUID(), companyId, agentId, status: 'proposed', briefRevision: brief.revision, ...parsed, sources: permittedSources, createdAt: new Date().toISOString(), reviewedByUserId: null, reviewedAt: null };
       await tx.insert(companyContext).values({ companyId, contextType: 'workforce_fact_proposal', key: proposal.id, value: JSON.stringify(proposal), confidence: '0.00' });
-      await audit(connection, companyId, proposal.id, 'workforce.facts_proposed', { agentId });
+      await audit(connection, companyId, proposal.id, 'workforce.facts_proposed', { agentId }, publications);
       return proposal;
     });
   }
-  async function enroll(companyId: string, agentId: string, input: z.infer<typeof enrollWorkforceSchema>, actor: Actor) {
+  async function enroll(companyId: string, agentId: string, input: z.infer<typeof enrollWorkforceSchema>, actor: Actor, acceptance?: ActivityAcceptance) {
     const parsed = enrollWorkforceSchema.parse(input);
     const template = resolveWorkforceTemplate(parsed.templateId)!;
-    return db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    return accept(acceptance, async (tx, publications) => {
+      const connection = tx;
       await company(companyId, connection, true);
       const [runtimeAgent] = await tx.select().from(agents).where(and(eq(agents.id, agentId), eq(agents.companyId, companyId))).for('update');
       if (!runtimeAgent) throw notFound('Agent not found');
@@ -157,14 +175,14 @@ export function workforceService(db: Db) {
       }
       if (parsed.goalId && !(await tx.select().from(goals).where(and(eq(goals.companyId, companyId), eq(goals.id, parsed.goalId))))[0]) throw notFound('Company goal not found');
       const [row] = await tx.insert(workforceEnrollments).values({ companyId, agentId, templateId: template.id, templateVersion: template.version, objective: parsed.objective ?? null, metrics: parsed.metrics ?? template.suggestedMetrics, goalId: parsed.goalId ?? null }).returning();
-      await audit(connection, companyId, row.id, 'workforce.enrolled', actor);
+      await audit(connection, companyId, row.id, 'workforce.enrolled', actor, publications);
       return row;
     });
   }
-  async function startFirstJobWithCreation(companyId: string, agentId: string, actor: Actor) {
+  async function startFirstJobWithCreation(companyId: string, agentId: string, actor: Actor, acceptance?: ActivityAcceptance) {
     requireHuman(actor);
-    return db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    return accept(acceptance, async (tx, publications) => {
+      const connection = tx;
       await company(companyId, connection, true);
       const { enrollment, template } = await requiredEnrollment(companyId, agentId, connection);
       if (!supportsWorkforcePrompt((await agent(companyId, agentId, connection)).adapterType)) throw unprocessable('Unsupported workforce adapter: choose a verified native runtime before starting work');
@@ -180,7 +198,7 @@ export function workforceService(db: Db) {
         definitionOfDone: { summary: 'Deliver an evidence-backed first job for neutral review', criteria: template.qualityChecks.map((text, i) => ({ id: `workforce-${i + 1}`, text, done: false })) },
       });
       await tx.update(workforceEnrollments).set({ firstJobIssueId: job.id, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id));
-      await logActivity(connection, {
+      publications.push(await insertActivity(connection, {
         companyId,
         actorType: 'user',
         actorId: actor.userId!,
@@ -188,23 +206,23 @@ export function workforceService(db: Db) {
         entityType: 'issue',
         entityId: job.id,
         details: { title: job.title, identifier: job.identifier },
-      });
-      await audit(connection, companyId, job.id, 'workforce.first_job_started', actor);
+      }));
+      await audit(connection, companyId, job.id, 'workforce.first_job_started', actor, publications);
       return { issue: job, created: true };
     });
   }
-  async function startFirstJob(companyId: string, agentId: string, actor: Actor) {
-    return (await startFirstJobWithCreation(companyId, agentId, actor)).issue;
+  async function startFirstJob(companyId: string, agentId: string, actor: Actor, acceptance?: ActivityAcceptance) {
+    return (await startFirstJobWithCreation(companyId, agentId, actor, acceptance)).issue;
   }
-  async function acknowledgeLearning(companyId: string, agentId: string, revision: number, actor: Actor) {
+  async function acknowledgeLearning(companyId: string, agentId: string, revision: number, actor: Actor, acceptance?: ActivityAcceptance) {
     requireSelfOrHuman(actor, agentId);
-    return db.transaction(async tx => {
-      const connection = tx as unknown as Db;
+    return accept(acceptance, async (tx, publications) => {
+      const connection = tx;
       await company(companyId, connection, true);
       const { enrollment } = await requiredEnrollment(companyId, agentId, connection);
       if (revision !== (await readBrief(companyId, connection)).revision) throw conflict('Acknowledge the current company brief revision');
       const [updated] = await tx.update(workforceEnrollments).set({ learnedBriefRevision: revision, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id)).returning();
-      await audit(connection, companyId, enrollment.id, 'workforce.learning_acknowledged', actor);
+      await audit(connection, companyId, enrollment.id, 'workforce.learning_acknowledged', actor, publications);
       return updated;
     });
   }
@@ -282,6 +300,8 @@ export function workforceService(db: Db) {
     const { enrollment, template } = await requiredEnrollment(companyId, agentId);
     // Filesystem work deliberately precedes the short assignment transaction.
     // This method must be called after hiring commits, never from its DB transaction.
+    const publications: ActivityPublication[] = [];
+    let result: Enrollment;
     try {
       const skills = companySkillService(db);
       const keys: string[] = [];
@@ -303,7 +323,7 @@ export function workforceService(db: Db) {
         }
         keys.push(installed.key);
       }
-      return await db.transaction(async tx => {
+      result = await db.transaction(async tx => {
         const connection = tx as unknown as Db;
         await company(companyId, connection, true);
         // Ordinary agent writers do not take the company lock. Compare the
@@ -334,14 +354,19 @@ export function workforceService(db: Db) {
           throw conflict('Agent configuration kept changing; retry workforce skill installation');
         }
         const [updated] = await tx.update(workforceEnrollments).set({ installedSkillKeys: keys, skillInstallError: null, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id)).returning();
-        await audit(connection, companyId, enrollment.id, 'workforce.skills_installed', actor);
+        await audit(connection, companyId, enrollment.id, 'workforce.skills_installed', actor, publications);
         return updated;
       });
     } catch (error) {
-      const [updated] = await db.update(workforceEnrollments).set({ skillInstallError: error instanceof Error ? error.message : 'Skill installation failed', updatedAt: new Date() }).where(and(eq(workforceEnrollments.companyId, companyId), eq(workforceEnrollments.id, enrollment.id))).returning();
-      await audit(db, companyId, enrollment.id, 'workforce.skill_install_failed', actor);
-      return updated;
+      publications.length = 0;
+      result = await db.transaction(async tx => {
+        const [updated] = await tx.update(workforceEnrollments).set({ skillInstallError: error instanceof Error ? error.message : 'Skill installation failed', updatedAt: new Date() }).where(and(eq(workforceEnrollments.companyId, companyId), eq(workforceEnrollments.id, enrollment.id))).returning();
+        await audit(tx as unknown as Db, companyId, enrollment.id, 'workforce.skill_install_failed', actor, publications);
+        return updated;
+      });
     }
+    for (const publication of publications) publishActivity(publication);
+    return result;
   }
   async function getRuntimeContext(companyId: string, agentId: string, issueId?: string): Promise<WorkforceRuntimeContext | null> {
     const enrollment = await getEnrollment(companyId, agentId);

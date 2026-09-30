@@ -6,9 +6,10 @@ import type { AgentProposal, InterviewTurn } from "@paperclipai/shared";
 describe("agentCreatorFromProposal", () => {
   it("creates an agent with the canonical worker bundle plus proposal context", async () => {
     const agents = {
+      completeMaterialization: vi.fn().mockResolvedValue({}),
       update: vi.fn().mockResolvedValue({}),
       getById: vi.fn().mockResolvedValue({ id: "cos-1", companyId: "c1", adapterType: "claude_local" }),
-      create: vi.fn().mockResolvedValue({ id: "agent-2", role: "general", adapterType: "claude_local", adapterConfig: {} }),
+      create: vi.fn().mockResolvedValue({ id: "agent-2", pausedAt: new Date(), role: "general", adapterType: "claude_local", adapterConfig: {} }),
       createApiKey: vi.fn().mockResolvedValue({ id: "k", token: "agk_x" }),
     };
     const instructions = { materializeManagedBundle: vi.fn(async (_agent: unknown, _files: Record<string, string>, _options: unknown) => ({ adapterConfig: {} })) };

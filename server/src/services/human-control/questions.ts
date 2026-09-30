@@ -7,7 +7,7 @@ import { conflict, forbidden, notFound } from '../../errors.js';
 import { assertProjectIdVisible } from '../../routes/visibility.js';
 import { issueThreadInteractionService } from '../issue-thread-interactions.js';
 import { waitingOnYouService } from '../waiting-on-you.js';
-import { logActivity } from '../activity-log.js';
+import { insertActivity } from '../activity-log.js';
 import { workforceService } from '../workforce.js';
 import { dispatchResolvedInteractionContinuation } from './question-continuation.js';
 import type { heartbeatService } from '../heartbeat.js';
@@ -99,10 +99,10 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
     const { issue, q } = await visible(ctx, p, kind !== 'replace');
     const svc = issueThreadInteractionService(ctx.db), actor = { userId: ctx.req.actor.userId! };
     const { issueId: _i, interactionId: _q, ...body } = p;
-    const updated = kind === 'respond' ? await svc.answerQuestions(issue, q.id, body as Parameters<typeof svc.answerQuestions>[2], actor)
-      : kind === 'cancel' ? await svc.cancelQuestions(issue, q.id, body, actor)
-      : await svc.create(issue, { ...replacement(q), idempotencyKey: `human-action:${actionId}` }, actor);
-    await logActivity(ctx.db, { companyId: issue.companyId, actorType: 'user', actorId: actor.userId, action: `issue.thread_interaction_${kind === 'respond' ? 'answered' : kind === 'cancel' ? 'cancelled' : 'created'}`, entityType: 'issue', entityId: issue.id, details: { interactionId: updated.id, interactionKind: updated.kind, interactionStatus: updated.status } });
+    const updated = kind === 'respond' ? await svc.answerQuestions(issue, q.id, body as Parameters<typeof svc.answerQuestions>[2], actor, ctx.acceptance)
+      : kind === 'cancel' ? await svc.cancelQuestions(issue, q.id, body, actor, ctx.acceptance)
+      : await svc.create(issue, { ...replacement(q), idempotencyKey: `human-action:${actionId}` }, actor, ctx.acceptance);
+    ctx.acceptance!.publications.push(await insertActivity(ctx.acceptance!.executor, { companyId: issue.companyId, actorType: 'user', actorId: actor.userId, action: `issue.thread_interaction_${kind === 'respond' ? 'answered' : kind === 'cancel' ? 'cancelled' : 'created'}`, entityType: 'issue', entityId: issue.id, details: { interactionId: updated.id, interactionKind: updated.kind, interactionStatus: updated.status } }));
     return updated;
   }
   async function afterCommit(ctx: HumanOperationContext, p: Record<string, unknown>, value: unknown) {

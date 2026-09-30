@@ -30,8 +30,8 @@ beforeAll(async () => {
   await agentCreatorFromProposal({
     agents: {
       getById: async () => ({ companyId: "company", adapterType: "codex_local" }),
-      create: async () => ({ id: "new-agent" }),
-      update: async () => ({}),
+      create: async () => ({ id: "new-agent", pausedAt: new Date() }),
+      completeMaterialization: async () => ({}),
       createApiKey: async () => ({}),
     },
     instructions: {

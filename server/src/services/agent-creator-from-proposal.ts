@@ -1,10 +1,15 @@
+import { agentService } from './agents.js';
+import type { agentInstructionsService } from './agent-instructions.js';
+import { workforceService, assertActivityAcceptance, type ActivityAcceptance } from './workforce.js';
+import type { Db } from '@paperclipai/db';
 import type { AgentProposal, InterviewTurn } from "@paperclipai/shared";
-import { notFound } from "../errors.js";
+import { conflict, notFound } from "../errors.js";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 
 interface Deps {
-  agents: any;
-  instructions: any;
+  agents: Pick<ReturnType<typeof agentService>, 'getById' | 'create' | 'createApiKey' | 'completeMaterialization'>;
+  instructions: Pick<ReturnType<typeof agentInstructionsService>, 'materializeManagedBundle'>;
+  db?: Db;
 }
 
 interface CreateInput {
@@ -14,41 +19,65 @@ interface CreateInput {
   transcript: InterviewTurn[];
 }
 
+// AgentDash: accepted identity is durable before managed file work begins.
+export function onboardingMaterializationPause() {
+  return { status: 'paused' as const, pauseReason: 'system', pausedAt: new Date(), metadata: { onboardingMaterialization: 'pending' } };
+}
+export function acceptedHireNeedsRepair(agentIds: string[]) {
+  return conflict('Hire accepted but configuration needs repair; use the existing agents, do not hire again', {
+    accepted: true, agentIds,
+    repair: 'Use authorized instructions-bundle PATCH and instructions-bundle/file PUT to restore the canonical worker bundle and hiring context; retry workforce skills if selected, then resume the existing agent. Refresh alone cannot recreate missing hiring context.',
+  });
+}
+export async function completeManagedHire(deps: Deps, created: Awaited<ReturnType<ReturnType<typeof agentService>['create']>>, files: () => Promise<Record<string, string>>, workforceTemplateId?: string, userId?: string, mintKey = false) {
+  if (!created.pausedAt) throw conflict('Hire materialization pause is missing');
+  const materialized = await deps.instructions.materializeManagedBundle(created, await files(), { entryFile: 'AGENTS.md', replaceExisting: false });
+  await deps.agents.completeMaterialization(created.id, created.pausedAt, materialized.adapterConfig);
+  // Legacy root creators leave skill installation to their existing caller.
+  // Split production onboarding supplies db and retains the pause through skills.
+  if (workforceTemplateId && deps.db) {
+    const enrollment = await workforceService(deps.db).ensureSkillsInstalled(created.companyId, created.id, { userId: userId ?? 'board' });
+    if (enrollment.skillInstallError) throw acceptedHireNeedsRepair([created.id]);
+  }
+  const apiKey = mintKey ? await deps.agents.createApiKey(created.id, 'default', { source: 'agent_creation' }) : undefined;
+  await deps.agents.completeMaterialization(created.id, created.pausedAt, undefined, true);
+  return { agentId: created.id, apiKey };
+}
 export function agentCreatorFromProposal(deps: Deps) {
+  async function accept(input: CreateInput, acceptance?: ActivityAcceptance) {
+    if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+    const agents = acceptance ? agentService(acceptance.executor) : deps.agents;
+    const { companyId, reportsToAgentId, proposal } = input;
+    const leader = await agents.getById(reportsToAgentId);
+    if (!leader || leader.companyId !== companyId) throw notFound('Reporting agent not found');
+    const data = {
+      name: proposal.name, role: 'general' as const, title: proposal.role,
+      adapterType: leader.adapterType, workforceTemplateId: proposal.workforceTemplateId,
+      adapterConfig: {}, reportsTo: reportsToAgentId,
+      ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
+    };
+    const created = acceptance ? await agents.create(companyId, data, acceptance) : await agents.create(companyId, data);
+    return { created, input };
+  }
+  async function complete(accepted: Awaited<ReturnType<typeof accept>>, userId?: string) {
+    const { created, input: { proposal, transcript } } = accepted;
+    return completeManagedHire(deps, created, async () => {
+      const defaultBundle = await loadDefaultAgentInstructionsBundle('default');
+      return { ...defaultBundle, 'AGENTS.md': renderAgents(defaultBundle['AGENTS.md'], proposal, transcript) };
+    }, proposal.workforceTemplateId, userId, true);
+  }
   return {
+    accept, complete,
     create: async (input: CreateInput) => {
-      const { companyId, reportsToAgentId, proposal, transcript } = input;
-      const leader = await deps.agents.getById(reportsToAgentId);
-      if (!leader || leader.companyId !== companyId) throw notFound("Reporting agent not found");
-      const created = await deps.agents.create(companyId, {
-        name: proposal.name,
-        role: "general", // role-string mapping reserved for future expansion
-        title: proposal.role,
-        // AgentDash: inherit the company's configured runtime, never a fixed provider.
-        adapterType: leader.adapterType,
-        workforceTemplateId: proposal.workforceTemplateId,
-        adapterConfig: {},
-        reportsTo: reportsToAgentId,
-        status: "idle",
-        spentMonthlyCents: 0,
-        lastHeartbeatAt: null,
-      });
-      const defaultBundle = await loadDefaultAgentInstructionsBundle("default");
-      const files = {
-        ...defaultBundle,
-        "AGENTS.md": renderAgents(defaultBundle["AGENTS.md"], proposal, transcript),
-      };
-      const materialized = await deps.instructions.materializeManagedBundle(created, files, {
-        entryFile: "AGENTS.md",
-        replaceExisting: false,
-      });
-      await deps.agents.update(created.id, { adapterConfig: materialized.adapterConfig });
-      const apiKey = await deps.agents.createApiKey(created.id, "default", { source: "agent_creation" });
-      return { agentId: created.id, apiKey };
+      const accepted = await accept(input);
+      try { return await complete(accepted); }
+      catch { throw acceptedHireNeedsRepair([accepted.created.id]); }
     },
   };
 }
 
+// AgentDash: accepted-hire-recovery is inherited verbatim from the canonical default
+// bundle: repair accepted IDs without replaying interview/plan confirmations.
 // AgentDash: this remains the proposal creator's agent-facing prompt surface.
 // AgentDash: human fact-review and target-update guidance remains in the canonical bundle.
 // AgentDash: human-control-transport is inherited from the unified default worker,
