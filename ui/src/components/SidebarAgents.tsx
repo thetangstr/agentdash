@@ -153,12 +153,13 @@ function SidebarAgentItem({
   );
 }
 
-export function SidebarAgents() {
-  const [open, setOpen] = useState(true);
+// AgentDash: the row data behind the agent list, shared by the MK "Agents"
+// section (SidebarAgents) and the default profile's collapsible list under
+// Team (SidebarTeamItem). One hook so both render identical rows.
+export function useSidebarAgentRows() {
   const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(() => new Set());
   const queryClient = useQueryClient();
   const { selectedCompanyId } = useCompany();
-  const { openNewAgent } = useDialogActions();
   const { isMobile, setSidebarOpen } = useSidebar();
   const { pushToast } = useToastActions();
   const location = useLocation();
@@ -251,6 +252,59 @@ export function SidebarAgents() {
     },
   });
 
+  return {
+    activeAgentId,
+    activeTab,
+    currentUserId,
+    isMobile,
+    liveCountByAgent,
+    orderedAgents,
+    pendingAgentIds,
+    pauseResume: (agent: Agent, action: "pause" | "resume") =>
+      pauseResumeAgent.mutate({ agent, action }),
+    setSidebarOpen,
+  };
+}
+
+export type SidebarAgentRowsState = ReturnType<typeof useSidebarAgentRows>;
+
+export function SidebarAgentRows({
+  activeAgentId,
+  activeTab,
+  isMobile,
+  liveCountByAgent,
+  orderedAgents,
+  pendingAgentIds,
+  pauseResume,
+  setSidebarOpen,
+}: SidebarAgentRowsState) {
+  return (
+    <div className="flex flex-col gap-0.5 mt-0.5">
+      {orderedAgents.map((agent: Agent) => {
+        const runCount = liveCountByAgent.get(agent.id) ?? 0;
+        return (
+          <SidebarAgentItem
+            key={agent.id}
+            activeAgentId={activeAgentId}
+            activeTab={activeTab}
+            agent={agent}
+            disabled={pendingAgentIds.has(agent.id)}
+            isMobile={isMobile}
+            onPauseResume={pauseResume}
+            runCount={runCount}
+            setSidebarOpen={setSidebarOpen}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+export function SidebarAgents() {
+  const [open, setOpen] = useState(true);
+  const { openNewAgent } = useDialogActions();
+  const rows = useSidebarAgentRows();
+
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <div className="group">
@@ -280,24 +334,7 @@ export function SidebarAgents() {
       </div>
 
       <CollapsibleContent>
-        <div className="flex flex-col gap-0.5 mt-0.5">
-          {orderedAgents.map((agent: Agent) => {
-            const runCount = liveCountByAgent.get(agent.id) ?? 0;
-            return (
-              <SidebarAgentItem
-                key={agent.id}
-                activeAgentId={activeAgentId}
-                activeTab={activeTab}
-                agent={agent}
-                disabled={pendingAgentIds.has(agent.id)}
-                isMobile={isMobile}
-                onPauseResume={(targetAgent, action) => pauseResumeAgent.mutate({ agent: targetAgent, action })}
-                runCount={runCount}
-                setSidebarOpen={setSidebarOpen}
-              />
-            );
-          })}
-        </div>
+        <SidebarAgentRows {...rows} />
       </CollapsibleContent>
     </Collapsible>
   );
