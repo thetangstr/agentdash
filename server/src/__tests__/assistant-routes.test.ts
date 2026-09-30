@@ -36,6 +36,14 @@ vi.mock("../services/approval-risk.js", () => ({
   summarizeApprovalRisk: mockSummarizeApprovalRisk,
 }));
 
+// GH #830 follow-up: pending-decisions drops a related issue the caller
+// cannot see. That rule runs against a real database in
+// project-visibility-relations.test.ts; this suite's stub db cannot answer it.
+vi.mock("../routes/visibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routes/visibility.js")>()),
+  listVisibleIssueIds: vi.fn(async (_db: unknown, _req: unknown, _companyId: unknown, ids: Iterable<string>) => new Set(ids)),
+}));
+
 vi.mock("../services/index.js", () => ({
   approvalService: () => mockApprovalService,
   issueApprovalService: () => mockIssueApprovalService,
