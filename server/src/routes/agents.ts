@@ -4111,6 +4111,18 @@ export function agentRoutes(
           "This agent has another steward. Only its steward or an administrator can connect a terminal to it.",
         );
       }
+      // AgentDash: a release takes an agent away just as a transfer does, it
+      // only leaves nobody in the seat. So the creator's fallback applies to
+      // an agent that has never been stewarded; once any pairing has existed
+      // and ended, only a current steward or an administrator can mint.
+      if (!active) {
+        const history = await stewardships.historyForAgent(agent.companyId, agent.id);
+        if (history.length > 0) {
+          throw forbidden(
+            "This agent's stewardship was released. Only a current steward or an administrator can connect a terminal to it.",
+          );
+        }
+      }
     }
 
     if (agent.status === "terminated" || agent.status === "pending_approval") {

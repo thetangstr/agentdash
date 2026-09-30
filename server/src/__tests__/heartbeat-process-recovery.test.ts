@@ -61,6 +61,27 @@ vi.mock("@paperclipai/shared/telemetry", async () => {
   };
 });
 
+// #848 follow-up: lets a test run code at the moment a route clears an
+// exhausted recovery budget, to reproduce the reconciler racing the unblock.
+const recoveryBudgetClearHook = vi.hoisted(() => ({
+  beforeClear: null as null | (() => Promise<void>),
+}));
+
+vi.mock("../services/issue-recovery-budget.ts", async () => {
+  const actual = await vi.importActual<typeof import("../services/issue-recovery-budget.ts")>(
+    "../services/issue-recovery-budget.ts",
+  );
+  return {
+    ...actual,
+    clearIssueRecoveryBudget: async (...args: Parameters<typeof actual.clearIssueRecoveryBudget>) => {
+      const hook = recoveryBudgetClearHook.beforeClear;
+      recoveryBudgetClearHook.beforeClear = null;
+      if (hook) await hook();
+      return actual.clearIssueRecoveryBudget(...args);
+    },
+  };
+});
+
 vi.mock("../adapters/index.ts", async () => {
   const actual = await vi.importActual<typeof import("../adapters/index.ts")>("../adapters/index.ts");
   return {
@@ -77,6 +98,8 @@ import express from "express";
 import request from "supertest";
 import { errorHandler } from "../middleware/index.js";
 import { issueRoutes } from "../routes/issues.js";
+import { reblockExhaustedIssue } from "../services/issue-recovery-budget.ts";
+import { requestActorSourceMiddleware, runWithRequestActorSource } from "../lib/request-actor-source.ts";
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
@@ -1348,6 +1371,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       req.actor = actor;
       next();
     });
+    app.use(requestActorSourceMiddleware());
     app.use("/api", issueRoutes(db, {} as any));
     app.use(errorHandler);
     return app;
@@ -1455,6 +1479,101 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       : null;
     expect(continuationRun?.status).not.toBe("cancelled");
     expect(continuationRun?.errorCode).toBeNull();
+  });
+
+  it("does not let the stranded reconciler re-block the issue between the unblock and the clear", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+
+    // The reconciler fires at the moment the route clears the marker. When the
+    // status change was already committed on its own, it sees `todo` with the
+    // marker still set and re-blocks; the clear then strands the issue blocked
+    // with no marker. Inside one transaction it waits on the row lock instead.
+    let reconciler: Promise<unknown> | null = null;
+    recoveryBudgetClearHook.beforeClear = async () => {
+      reconciler = reblockExhaustedIssue(db, { companyId, issueId, source: "stranded_issue_reconciler" });
+      await Promise.race([reconciler, new Promise((resolve) => setTimeout(resolve, 500))]);
+    };
+
+    const res = await request(createRecoveryBudgetIssueApp(recoveryBudgetBoardActor(companyId)))
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "todo" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(reconciler).not.toBeNull();
+    expect(await reconciler).toBeNull();
+
+    const issue = await expectRecoveryBudgetCleared(issueId, "status_change");
+    expect(issue.status).not.toBe("blocked");
+    await waitForHeartbeatIdle(db, 5_000);
+  });
+
+  it("refuses a wake an assistant grant queued on an exhausted issue, as it refuses automatic ones", async () => {
+    const { agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const wakeAs = (explicitSource?: string) => {
+      const wake = () =>
+        heartbeat.wakeup(agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_commented",
+          payload: { issueId },
+          contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_commented" },
+          requestedByActorType: "user",
+          requestedByActorId: "board-user",
+          ...(explicitSource ? { requestedByActorSource: explicitSource } : {}),
+        });
+      // Without an explicit source the wake reads the request's credential.
+      return explicitSource ? wake() : runWithRequestActorSource("assistant_grant", wake);
+    };
+
+    for (const queued of [await wakeAs(), await wakeAs("assistant_grant")]) {
+      const run = queued
+        ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queued.id)).then((rows) => rows[0] ?? null)
+        : null;
+      expect(run?.status).toBe("cancelled");
+      expect(run?.errorCode).toBe("task_recovery_budget_exhausted");
+      expect((run?.contextSnapshot as Record<string, unknown> | null)?.requestedByActorSource).toBe("assistant_grant");
+    }
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+  });
+
+  it("refuses the run an assistant grant's comment starts on an exhausted issue, and keeps the marker", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+    await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
+    const knownRunIds = await knownRunIdsForAgent(agentId);
+
+    const res = await request(
+      createRecoveryBudgetIssueApp({
+        ...recoveryBudgetBoardActor(companyId),
+        isInstanceAdmin: false,
+        source: "assistant_grant",
+        assistantGrantId: randomUUID(),
+        assistantClientName: "Test assistant",
+      } as Express.Request["actor"]),
+    )
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "Keep going on this, please." });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    // The comment reopens the issue and wakes the assignee after responding.
+    const readNewRuns = () =>
+      db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.agentId, agentId))
+        .then((rows) => rows.filter((row) => !knownRunIds.has(row.id)));
+    await waitForValue(async () => ((await readNewRuns()).length > 0 ? true : null), 5_000);
+    await waitForHeartbeatIdle(db, 5_000);
+    const newRuns = await readNewRuns();
+    expect(newRuns.length).toBeGreaterThan(0);
+    for (const run of newRuns) {
+      expect(run.errorCode).toBe("task_recovery_budget_exhausted");
+    }
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.executionState).toMatchObject({ recoveryBudget: { status: "exhausted" } });
   });
 
   it("clears the exhausted recovery budget when a board user reopens the issue by comment, and starts a run", async () => {
