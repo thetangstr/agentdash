@@ -7,6 +7,8 @@ import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
   addApprovalCommentSchema,
+  checkConnectorSendPayload,
+  CONNECTOR_SEND_PROVIDERS,
   createApprovalSchema,
   overrideApprovalSchema,
   requestApprovalRevisionSchema,
@@ -35,7 +37,7 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { assertIssueIdVisible, filterVisibleByProject } from "./visibility.js";
-import { badRequest, forbidden } from "../errors.js";
+import { badRequest, forbidden, unprocessable } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { approvalUrl } from "../lib/public-base-url.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -214,6 +216,23 @@ export function approvalRoutes(
     }
   }
 
+  /**
+   * AgentDash-MK: a `connector_send` must name a connector that can execute it.
+   *
+   * The payload schema is an open record, so without this an agent could file
+   * `{ to, body, channel: "teams" }`: a steward approves it, no executor exists
+   * for it, and nobody is told nothing was sent. Refused here, where the agent
+   * that wrote it is still the one reading the answer.
+   */
+  function assertConnectorSendPayloadExecutable(payload: unknown) {
+    const check = checkConnectorSendPayload(payload);
+    if (check.ok) return;
+    throw unprocessable(check.message, {
+      code: `connector_send_${check.problem}`,
+      supportedProviders: [...CONNECTOR_SEND_PROVIDERS],
+    });
+  }
+
   async function requireApprovalAccess(req: Request, id: string) {
     const approval = await svc.getById(id);
     if (!approval) {
@@ -308,6 +327,9 @@ export function approvalRoutes(
       await assertIssueIdVisible(db, req, issueId);
     }
     const { issueIds: _issueIds, ...approvalInput } = req.body;
+    if (approvalInput.type === "connector_send") {
+      assertConnectorSendPayloadExecutable(approvalInput.payload);
+    }
     if (approvalInput.type === "hire_agent") {
       assertHirePayloadHasNoHostCommands(approvalInput.payload);
       assertHirePayloadOmitsInternalFlags(approvalInput.payload);
@@ -591,6 +613,11 @@ export function approvalRoutes(
       await authority.requireDecisionActor(existing, req.actor);
     }
 
+    // Resubmitting without a payload re-opens the stored one, so that is what
+    // must be executable.
+    if (existing.type === "connector_send") {
+      assertConnectorSendPayloadExecutable(req.body.payload ?? existing.payload);
+    }
     if (existing.type === "hire_agent" && req.body.payload) {
       assertHirePayloadHasNoHostCommands(req.body.payload);
       assertHirePayloadOmitsInternalFlags(req.body.payload);

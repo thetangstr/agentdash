@@ -114,6 +114,18 @@ describe("renderStewardWebhookMessage", () => {
     expect(text).toContain("Decide on your AgentDash page: https://mk.example/MKT/approvals");
     expect(text).toContain("never the evidence");
   });
+
+  it("leads with approved sends that did not go out", () => {
+    const text = renderStewardWebhookMessage({
+      ownerName: "Jordan Lee",
+      approvalsUrl: null,
+      digest: digest() as never,
+      undelivered: ["Agent A: an approved send was not delivered (teams_not_supported)"],
+    });
+    expect(text).toContain(
+      "Approved but not delivered (1):\n  - Agent A: an approved send was not delivered (teams_not_supported)",
+    );
+  });
 });
 
 describeEmbeddedPostgres("steward webhooks", () => {
@@ -265,6 +277,36 @@ describeEmbeddedPostgres("steward webhooks", () => {
     // implementation minted callback tokens against the webhook id and the
     // foreign key refused it. Zero rows is the specification.
     expect(await db.select().from(channelCallbackTokens)).toHaveLength(0);
+  });
+
+  it("posts an approved send that did not go out, by agent and reason only", async () => {
+    const { company, stewardId, agent } = await seed();
+    const calls: Array<{ url: string; body: string }> = [];
+    const svc = stewardWebhooksService(db, { fetchImpl: okFetch(calls) });
+    await svc.register({ companyId: company.id, userId: stewardId, url: "https://x.example/hook", label: "chan" });
+
+    await stewardInboxService(db).appendEvent({
+      companyId: company.id,
+      stewardUserId: stewardId,
+      kind: "connector_send.failed",
+      refType: "approval",
+      refId: randomUUID(),
+      agentId: agent.id,
+      dedupeKey: `connector_send:${randomUUID()}:undelivered`,
+      payload: { agentName: "Agent A", reason: "teams_not_supported", message: "long agent-facing text" },
+    });
+    const swept = await svc.sweep();
+    expect(swept.delivered).toBe(1);
+
+    const payload = JSON.parse(calls[1]!.body) as { text: string };
+    expect(payload.text).toContain("Approved but not delivered (1):");
+    expect(payload.text).toContain("Agent A: an approved send was not delivered (teams_not_supported)");
+    expect(payload.text).not.toContain("long agent-facing text");
+
+    // Delivered once: the next sweep's window no longer contains it.
+    await openApproval(company.id, agent.id);
+    await svc.sweep();
+    expect(JSON.parse(calls[2]!.body).text).not.toContain("Approved but not delivered");
   });
 
   it("keeps the window on failure and retries it on the next sweep", async () => {

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { connections } from "@paperclipai/db";
+import { HUBSPOT_WRITE_OBJECT_TYPES, type HubspotWriteObjectType } from "@paperclipai/shared";
 import { badRequest, conflict, forbidden, serviceUnavailable } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
@@ -49,8 +50,10 @@ const AUTH_FAILURE_THRESHOLD = 3;
  */
 const CONNECTOR_SEND_TTL_MS = 24 * 60 * 60 * 1000;
 
-export const HUBSPOT_WRITE_OBJECT_TYPES = ["contacts", "companies", "deals"] as const;
-export type HubspotWriteObjectType = (typeof HUBSPOT_WRITE_OBJECT_TYPES)[number];
+// One list for the request route, the approval-create validator and the
+// executor, so a payload the executor cannot run is refused before a steward
+// spends attention on it.
+export { HUBSPOT_WRITE_OBJECT_TYPES, type HubspotWriteObjectType };
 
 /**
  * Digest the properties exactly as approved.
@@ -97,6 +100,23 @@ const authFailures = new Map<string, number>();
 export function __resetHubspotLimiterState() {
   rateBuckets.clear();
   authFailures.clear();
+  writeTimeoutMs = DEFAULT_WRITE_TIMEOUT_MS;
+}
+
+/**
+ * How long an approved write may wait for HubSpot before it is abandoned.
+ *
+ * The requester's wake and the decision's HTTP response both wait on this
+ * call, so a stalled socket must not hold them for undici's minutes-long
+ * defaults. An abort is the ambiguous case (the write may have landed), so it
+ * ends as `outcome_unknown` and is never retried.
+ */
+const DEFAULT_WRITE_TIMEOUT_MS = 15_000;
+let writeTimeoutMs = DEFAULT_WRITE_TIMEOUT_MS;
+
+/** Test hook: shorten the write timeout. Reset by `__resetHubspotLimiterState`. */
+export function __setHubspotWriteTimeoutMs(ms: number) {
+  writeTimeoutMs = ms;
 }
 
 function consumeRateBudget(connectionId: string): boolean {
@@ -531,15 +551,23 @@ export function hubspotConnectorService(db: Db) {
         ? `/crm/v3/objects/${input.objectType}`
         : `/crm/v3/objects/${input.objectType}/${input.objectId}`;
 
+    // One signal for the request and the body read, so neither can stall.
+    const signal = AbortSignal.timeout(writeTimeoutMs);
     let response: Response;
     try {
       response = await hubspotFetch(path, token.accessToken, {
         method: input.operation === "create" ? "POST" : "PATCH",
         body: JSON.stringify({ properties: input.properties }),
+        signal,
       });
     } catch (error) {
       // A transport failure is the ambiguous case in its purest form: the
       // request may have been received and answered after we stopped listening.
+      // A timeout is the same case, named so a steward knows which it was.
+      if (signal.aborted) {
+        logger.warn({ connectionId: input.connectionId, timeoutMs: writeTimeoutMs }, "hubspot write timed out");
+        return { outcome: "outcome_unknown", reason: "provider_timeout" };
+      }
       logger.warn({ err: error, connectionId: input.connectionId }, "hubspot write transport failed");
       return { outcome: "outcome_unknown", reason: "transport_failure" };
     }

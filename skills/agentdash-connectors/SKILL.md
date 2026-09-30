@@ -100,3 +100,13 @@ Always reply in the originating thread (`threadTs`) when responding to an inboun
 ### Revoking
 
 When a Slack connection is revoked (`POST /api/connections/:id/revoke`), all posting and reading stops immediately. If your outbound call returns a connection-revoked error, stop retrying and comment on the Issue.
+
+## `connector_send` approvals, and why there is no Teams send
+
+A `connector_send` approval is executed by the server after a steward approves it, and only for a provider that has an executor. Today that is HubSpot alone: `provider: "hubspot"` with `objectType` (`contacts`, `companies`, `deals`), `operation` (`create`, or `update` with `objectId`) and a `properties` object. File it with `POST /api/companies/:companyId/hubspot/:objectType/write` rather than building the approval by hand.
+
+There is no Teams send connector. A `connector_send` with no `provider`, or naming Teams (`channel: "teams"`), is refused at creation with `422` and a `details.code` starting `connector_send_`. Such requests used to be accepted, approved, and then delivered nothing.
+
+To reach a person in Teams, go through their inbox instead: comment on the issue and set it to `blocked`, or open a `request_board_approval` linked to it. That reaches your steward (or the accountable human) through the steward inbox on their machine (the `agentdash-inbox` tools) and, if they registered one, their steward webhook ("Get told in Teams" on My Agent), which posts the inbox digest to their Teams channel. The digest lists what is waiting, never your message text. To reach anyone else, ask your steward to relay it.
+
+If an approved send is refused or fails, you are woken with `PAPERCLIP_WAKE_REASON=connector_send_failed` (or `connector_send_outcome_unknown`), and the outcome is posted on the approval and each linked issue. Report it; do not refile the same request.

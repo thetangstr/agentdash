@@ -155,6 +155,25 @@ describe("AgentDash-MK prompt surface synchronization", () => {
     }
   });
 
+  it("tells every agent there is no Teams send and how a person is actually reached", () => {
+    // Agents filed `connector_send` with `channel: "teams"` and no provider.
+    // Those were approved and delivered nothing; the prompt must stop agents
+    // emitting them and name the paths that do reach a person.
+    for (const surface of renderedPromptSurfaces) {
+      expect(surface.content, `${surface.name} omits the messaging section`).toContain(
+        "Reaching a person outside AgentDash",
+      );
+      expect(surface.content, `${surface.name} does not say Teams sends are refused`).toMatch(
+        /channel: "teams".*is refused with \W{0,2}422/s,
+      );
+      expect(surface.content, `${surface.name} omits the steward webhook path`).toMatch(/steward webhook/);
+      expect(surface.content, `${surface.name} omits the harness inbox path`).toMatch(/agentdash-inbox/);
+      expect(surface.content, `${surface.name} omits the failure wake reason`).toContain(
+        "connector_send_failed",
+      );
+    }
+  });
+
   it("tells every agent that a steward may decide from a chat channel", () => {
     // Telegram decisions are indistinguishable from dashboard decisions at the
     // service layer. An agent whose prompt does not say so will poll the

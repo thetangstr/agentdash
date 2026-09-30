@@ -8,6 +8,7 @@ import {
   agentGovernancePolicies,
   agentStewardships,
   agents,
+  approvalComments,
   approvals,
   companies,
   companyMemberships,
@@ -82,6 +83,8 @@ describeEmbeddedPostgres("hubspot steward-approved writes", () => {
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(connectorSendExecutions);
+    // An approved send that does not deliver posts its outcome on the approval.
+    await db.delete(approvalComments);
     await db.delete(approvals);
     await db.delete(connections);
     await db.delete(agentGovernancePolicies);

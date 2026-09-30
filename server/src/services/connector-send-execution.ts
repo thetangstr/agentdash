@@ -7,7 +7,7 @@ import {
   connectorSendExecutions,
   workflowEvents,
 } from "@paperclipai/db";
-import { classifyAction } from "@paperclipai/shared";
+import { checkConnectorSendPayload, classifyAction, CONNECTOR_SEND_PROVIDERS } from "@paperclipai/shared";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentGovernanceService } from "./agent-governance.js";
@@ -29,6 +29,103 @@ const RECONCILE_PIPELINE_ID = "connector_send:reconcile";
 const RECONCILE_STEP_KEY = "reconcile";
 
 export type ReconcileVerdict = "confirmed_delivered" | "confirmed_failed";
+
+/**
+ * What happened when an approved `connector_send` was run, for the caller that
+ * must tell the requester and the steward. `null` from the executor means
+ * nothing was attempted (not a connector_send, off-profile, or already run by
+ * another attempt), so there is nothing new to report.
+ */
+export interface ConnectorSendExecutionReport {
+  outcome: "succeeded" | "failed" | "outcome_unknown";
+  /** True when a check refused the send before any provider call was made. */
+  refused: boolean;
+  /** Machine-readable reason, as recorded on the execution row. */
+  reason: string | null;
+  /**
+   * The provider the payload named, sanitized and truncated (see
+   * `recordedProvider`), or null when it named none. Agent-written, so text
+   * for a person shows it only when it is a known connector.
+   */
+  provider: string | null;
+  /**
+   * The agent-facing explanation of a payload refusal (the same text the 422
+   * gives at creation). For the requesting agent only: it is instructions
+   * written to an agent, and never goes into text a person reads.
+   */
+  detail: string | null;
+}
+
+/** Plain-language text for the refusal and failure reasons the executor records. */
+const REASON_TEXT: Record<string, string> = {
+  approval_expired: "the approval had expired before it was decided",
+  no_requesting_agent: "the approval has no requesting agent to act for",
+  destructive_action_blocked: "this agent's policy blocks destructive actions, and this write counts as one",
+  no_active_steward: "the requesting agent no longer has an active steward",
+  no_connection: "there is no usable connection for this provider",
+  provider_not_allowed: "this agent's ceiling does not allow this provider",
+  data_scope_not_allowed: "this agent's ceiling does not allow this data scope",
+  connection_changed: "the connection changed after the request was filed",
+  connection_unavailable: "the connection is revoked or not active",
+  connection_unreadable: "the connection's credential could not be read",
+  executor_error: "the executor hit an internal error; check the execution record before retrying",
+  transport_failure: "the connection to the provider dropped before it answered",
+  provider_timeout: "the provider did not answer in time",
+  // Payload refusals (checkConnectorSendPayload problems), worded for the
+  // person reading them rather than for the agent that wrote the payload.
+  teams_not_supported: "it asked for a Teams message, and AgentDash has no connector that sends to Teams",
+  provider_missing: "the request did not say which connector should send it",
+  provider_unsupported: "the request named a connector that cannot send",
+  object_type_invalid: "the request was missing details the connector needs",
+  operation_invalid: "the request was missing details the connector needs",
+  object_id_required: "the request was missing details the connector needs",
+  properties_invalid: "the request was missing details the connector needs",
+};
+
+function reasonText(reason: string): string {
+  const known = REASON_TEXT[reason];
+  if (known) return known;
+  const http = /^provider_(\d{3})$/.exec(reason);
+  if (http) return `the provider answered HTTP ${http[1]}`;
+  return `reason: ${reason}`;
+}
+
+/**
+ * One line a person can act on: what happened to the send and why.
+ * Reference-and-reason only — never the payload being sent, never the
+ * agent-facing `detail`, and never an agent-written provider string: a
+ * provider is named only when it is a connector AgentDash actually has.
+ */
+export function describeConnectorSendOutcome(report: ConnectorSendExecutionReport): string {
+  const why = report.reason ? reasonText(report.reason) : null;
+  const known =
+    report.provider && (CONNECTOR_SEND_PROVIDERS as readonly string[]).includes(report.provider);
+  const provider = known ? ` through ${report.provider}` : "";
+  if (report.outcome === "succeeded") return `The approved send${provider} was delivered.`;
+  if (report.outcome === "outcome_unknown") {
+    return (
+      `The approved send${provider} may or may not have been delivered${why ? ` (${why})` : ""}. ` +
+      "Do not retry it: a steward must reconcile the outcome first."
+    );
+  }
+  const verb = report.refused ? "was refused before anything was sent" : "failed";
+  return `The approved send${provider} ${verb}${why ? `: ${why}` : ""}. Nothing was delivered.`;
+}
+
+/**
+ * The provider string an execution row records. A payload that named none
+ * records "unspecified" — never a guessed provider, which is how a Teams
+ * request used to be filed as a failed HubSpot write.
+ */
+function recordedProvider(payload: Record<string, unknown>): string {
+  // Agent-written text lands in a table other surfaces render, so it is kept
+  // to identifier characters and a bounded length.
+  const cleaned =
+    typeof payload.provider === "string"
+      ? payload.provider.replace(/[^A-Za-z0-9_.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40)
+      : "";
+  return cleaned.length > 0 ? cleaned : "unspecified";
+}
 
 /**
  * The result of a reconcile attempt. `not_found` is a missing/wrong-company
@@ -69,14 +166,15 @@ export function connectorSendExecutionService(db: Db) {
     approval: typeof approvals.$inferSelect,
     payload: Record<string, unknown>,
     reason: string,
-  ) {
+    detail: string | null = null,
+  ): Promise<ConnectorSendExecutionReport | null> {
     try {
       await db.insert(connectorSendExecutions).values({
         companyId: approval.companyId,
         approvalId: approval.id,
         connectionId: (payload.connectionId as string | undefined) ?? null,
         requestedByAgentId: approval.requestedByAgentId,
-        provider: String(payload.provider ?? "hubspot"),
+        provider: recordedProvider(payload),
         objectType: String(payload.objectType ?? "unknown"),
         operation: String(payload.operation ?? "unknown"),
         payloadDigest: String(payload.payloadDigest ?? ""),
@@ -85,8 +183,9 @@ export function connectorSendExecutionService(db: Db) {
       });
     } catch (error) {
       // Already claimed: another attempt got there first, which is the
-      // behaviour we want. Nothing to add.
+      // behaviour we want. Nothing to add, and nothing new to report.
       if (!isUniqueViolation(error)) throw error;
+      return null;
     }
     await logActivity(db, {
       companyId: approval.companyId,
@@ -96,31 +195,48 @@ export function connectorSendExecutionService(db: Db) {
       action: "connector_send.refused",
       entityType: "approval",
       entityId: approval.id,
-      details: { reason },
+      details: { reason, provider: recordedProvider(payload) },
     });
+    return {
+      outcome: "failed",
+      refused: true,
+      reason,
+      provider: recordedProvider(payload) === "unspecified" ? null : recordedProvider(payload),
+      detail,
+    };
   }
 
   /**
    * Run an approved connector_send. Never throws: it is a side effect of
    * deciding an approval, and a provider outage must not turn a recorded human
    * decision into a failed request.
+   *
+   * Returns what happened so the caller can tell the requester and the
+   * steward; `null` when nothing was attempted.
    */
-  async function executeForApproval(approvalId: string): Promise<void> {
+  async function executeForApproval(approvalId: string): Promise<ConnectorSendExecutionReport | null> {
+    // Set once the provider has answered, so an error after that point cannot
+    // be reported as a send that never happened.
+    let report: ConnectorSendExecutionReport | null = null;
+    let attemptedProvider: string | null = null;
+    // Set once this call owns the attempt (no execution row existed), so an
+    // error before then reports nothing rather than a duplicate outcome.
+    let attempted = false;
     try {
       const approval = await db
         .select()
         .from(approvals)
         .where(eq(approvals.id, approvalId))
         .then((rows) => rows[0] ?? null);
-      if (!approval || approval.type !== "connector_send") return;
-      if (approval.status !== "approved") return;
+      if (!approval || approval.type !== "connector_send") return null;
+      if (approval.status !== "approved") return null;
 
       const company = await db
         .select({ productProfile: companies.productProfile })
         .from(companies)
         .where(eq(companies.id, approval.companyId))
         .then((rows) => rows[0] ?? null);
-      if (company?.productProfile !== "agentdash_mk") return;
+      if (company?.productProfile !== "agentdash_mk") return null;
 
       const payload = (approval.payload ?? {}) as Record<string, unknown>;
 
@@ -131,19 +247,30 @@ export function connectorSendExecutionService(db: Db) {
         .from(connectorSendExecutions)
         .where(eq(connectorSendExecutions.approvalId, approval.id))
         .then((rows) => rows[0] ?? null);
-      if (existing) return;
+      if (existing) return null;
+      attempted = true;
+
+      // --- the payload must name something an executor can run -------------
+      //
+      // Checked at creation too, but approvals filed before that check existed
+      // are still in the table. A payload with no provider is refused as what
+      // it is; it is never executed as a guess at one.
+      const shape = checkConnectorSendPayload(payload);
+      if (!shape.ok) {
+        return await recordRefusal(approval, payload, shape.problem, shape.message);
+      }
+      const provider = shape.provider;
+      attemptedProvider = provider;
 
       // --- re-resolution, all against CURRENT state ------------------------
 
       if (approval.expiresAt && approval.expiresAt.getTime() < Date.now()) {
-        await recordRefusal(approval, payload, "approval_expired");
-        return;
+        return await recordRefusal(approval, payload, "approval_expired");
       }
 
       const agentId = approval.requestedByAgentId;
       if (!agentId) {
-        await recordRefusal(approval, payload, "no_requesting_agent");
-        return;
+        return await recordRefusal(approval, payload, "no_requesting_agent");
       }
 
       /**
@@ -160,17 +287,18 @@ export function connectorSendExecutionService(db: Db) {
        * `resolveAgentPolicy` returns null off-profile, but this path is already
        * gated to `agentdash_mk` above, so on any real call it is non-null.
        */
-      const provider = String(payload.provider ?? "hubspot");
+      const operation = payload.operation === "update" ? "update" : "create";
+      const objectType = String(payload.objectType);
       const policy = await governance.resolveAgentPolicy(approval.companyId, agentId);
       if (policy) {
         const classification = classifyAction({
           kind: "connector",
           provider,
-          operation: String(payload.operation ?? "unknown"),
+          operation,
         });
         const mode = policy.destructiveActions;
         if (classification.destructive && mode === "blocked") {
-          await recordRefusal(approval, payload, "destructive_action_blocked");
+          const refused = await recordRefusal(approval, payload, "destructive_action_blocked");
           await workflow.emit({
             companyId: approval.companyId,
             pipelineId: `connector_send:${provider}`,
@@ -185,7 +313,7 @@ export function connectorSendExecutionService(db: Db) {
               decision: "refused",
             },
           });
-          return;
+          return refused;
         }
         // Not refused: the send proceeds. Record the verdict as an audit row on
         // the same run before the work happens.
@@ -209,29 +337,21 @@ export function connectorSendExecutionService(db: Db) {
       // who approved may no longer hold authority over this agent.
       const steward = await stewardships.activeByAgent(approval.companyId, agentId);
       if (!steward) {
-        await recordRefusal(approval, payload, "no_active_steward");
-        return;
+        return await recordRefusal(approval, payload, "no_active_steward");
       }
 
       // The ceiling, again. This is the check the whole native-connector
       // argument rests on, so it runs at the moment of the act, not before it.
-      const acting = await connectors.resolveActingAs(
-        approval.companyId,
-        agentId,
-        "send",
-        String(payload.provider ?? "hubspot"),
-      );
+      const acting = await connectors.resolveActingAs(approval.companyId, agentId, "send", provider);
       if (!acting.ok) {
-        await recordRefusal(approval, payload, acting.blocked.reason);
-        return;
+        return await recordRefusal(approval, payload, acting.blocked.reason);
       }
 
       // The connection must still be the one that was approved. A different
       // connection is a different credential acting under an old decision.
       const approvedConnectionId = payload.connectionId as string | undefined;
       if (approvedConnectionId && approvedConnectionId !== acting.resolution.connectionId) {
-        await recordRefusal(approval, payload, "connection_changed");
-        return;
+        return await recordRefusal(approval, payload, "connection_changed");
       }
 
       const connection = await db
@@ -240,8 +360,7 @@ export function connectorSendExecutionService(db: Db) {
         .where(eq(connections.id, acting.resolution.connectionId))
         .then((rows) => rows[0] ?? null);
       if (!connection || connection.revokedAt || connection.status !== "active") {
-        await recordRefusal(approval, payload, "connection_unavailable");
-        return;
+        return await recordRefusal(approval, payload, "connection_unavailable");
       }
 
       // --- claim, then act -------------------------------------------------
@@ -255,9 +374,9 @@ export function connectorSendExecutionService(db: Db) {
             approvalId: approval.id,
             connectionId: acting.resolution.connectionId,
             requestedByAgentId: agentId,
-            provider: String(payload.provider ?? "hubspot"),
-            objectType: String(payload.objectType ?? "unknown"),
-            operation: String(payload.operation ?? "unknown"),
+            provider,
+            objectType,
+            operation,
             payloadDigest: String(payload.payloadDigest ?? ""),
             // The honest pre-call state. If this process dies mid-flight, this
             // is what the record should say and it already says it.
@@ -267,19 +386,26 @@ export function connectorSendExecutionService(db: Db) {
           .returning({ id: connectorSendExecutions.id })
           .then((rows) => rows[0] ?? null);
       } catch (error) {
-        if (isUniqueViolation(error)) return;
+        if (isUniqueViolation(error)) return null;
         throw error;
       }
-      if (!claimed) return;
+      if (!claimed) return null;
 
       const properties = (payload.properties ?? {}) as Record<string, unknown>;
       const result = await hubspot.executeWrite({
         connectionId: acting.resolution.connectionId,
-        objectType: String(payload.objectType),
-        operation: payload.operation === "update" ? "update" : "create",
+        objectType,
+        operation,
         objectId: (payload.objectId as string | null) ?? null,
         properties,
       });
+      report = {
+        outcome: result.outcome,
+        refused: false,
+        reason: result.outcome === "succeeded" ? null : result.reason,
+        provider,
+        detail: null,
+      };
 
       await db
         .update(connectorSendExecutions)
@@ -303,16 +429,31 @@ export function connectorSendExecutionService(db: Db) {
         entityType: "approval",
         entityId: approval.id,
         details: {
-          provider: payload.provider,
-          objectType: payload.objectType,
-          operation: payload.operation,
+          provider,
+          objectType,
+          operation,
           connectionId: acting.resolution.connectionId,
           payloadDigest: payload.payloadDigest,
           externalId: result.outcome === "succeeded" ? result.externalId : null,
         },
       });
+      return report;
     } catch (error) {
       logger.warn({ err: error, approvalId }, "connector send execution failed");
+      // Before the provider answered, an error means we cannot say the send
+      // happened, and the requester must not be left believing it did.
+      if (report) return report;
+      // Before this call owned the attempt (the approval or company read
+      // failed), nothing was tried and there is no execution row, so there is
+      // no outcome to report and the wake stays a plain approval.
+      if (!attempted) return null;
+      return {
+        outcome: "outcome_unknown",
+        refused: false,
+        reason: "executor_error",
+        provider: attemptedProvider,
+        detail: null,
+      };
     }
   }
 

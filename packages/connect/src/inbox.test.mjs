@@ -91,6 +91,27 @@ describe("renderInbox", () => {
     expect(unseenApprovalCount(response)).toBe(1);
     expect(renderInbox(response, NOW)).toContain("1 other update(s) already dealt with");
   });
+
+  it("shows an approved send that did not go out, and does not count it as decided elsewhere", () => {
+    const response = {
+      events: [
+        {
+          seq: 9,
+          kind: "connector_send.failed",
+          refType: "approval",
+          refId: "a9",
+          payload: { message: "The approved send was refused before anything was sent. Nothing was delivered." },
+          createdAt: "",
+        },
+      ],
+      digest: digest(),
+    };
+    expect(unseenApprovalCount(response)).toBe(0);
+    const text = renderInbox(response, NOW);
+    expect(text).toContain("Approved but not delivered (1):");
+    expect(text).toContain("  - The approved send was refused before anything was sent. Nothing was delivered.");
+    expect(text).not.toContain("nothing waiting on you");
+  });
 });
 
 describe("storeBridgeToken", () => {

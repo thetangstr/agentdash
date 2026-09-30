@@ -1,10 +1,16 @@
+import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvals } from "@paperclipai/db";
+import { agents, approvals } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { agentFactRequestService } from "./agent-fact-requests.js";
 import { bridgeService } from "./bridge.js";
-import { connectorSendExecutionService } from "./connector-send-execution.js";
+import {
+  connectorSendExecutionService,
+  describeConnectorSendOutcome,
+  type ConnectorSendExecutionReport,
+} from "./connector-send-execution.js";
+import { agentAccountabilityService } from "./agent-accountability.js";
 import { deliverableReviewService } from "./deliverable-review.js";
 // Imported from the barrel, exactly as the board route imports them. Not a
 // style preference: existing route tests substitute this module, and a
@@ -12,8 +18,10 @@ import { deliverableReviewService } from "./deliverable-review.js";
 // implementation with a stub database.
 import {
   agentService,
+  approvalService,
   heartbeatService,
   issueApprovalService,
+  issueService,
   logActivity,
 } from "./index.js";
 import { stewardInboxService } from "./steward-inbox.js";
@@ -76,10 +84,118 @@ export function approvalDecisionEffectsService(
   const deliverableReview = deliverableReviewService(db);
   const recommendations = workflowRecommendationService(db);
   const connectorSend = connectorSendExecutionService(db);
+  const accountability = agentAccountabilityService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
   });
+
+  /**
+   * AgentDash-MK: an approved connector_send that did not deliver.
+   *
+   * Approving one used to be the end of the story for everyone watching: the
+   * requester was woken with `approval_approved`, the steward saw a decided
+   * card, and the refusal lived only in `connector_send_executions`. So every
+   * surface a person or the requester actually reads gets the outcome — the
+   * approval thread, each linked issue, the steward inbox — and the requester
+   * is woken with a reason that says the send did not go out (see the wake
+   * below). Each step is logged, never thrown: the decision is committed.
+   */
+  async function reportUndeliveredConnectorSend(
+    approval: ApprovalRow,
+    report: ConnectorSendExecutionReport,
+    linkedIssueIds: string[],
+  ): Promise<void> {
+    const summary = describeConnectorSendOutcome(report);
+    const body = [
+      "**Approved connector send was not delivered.**",
+      "",
+      summary,
+      "",
+      `- Approval: \`${approval.id}\``,
+      `- Outcome: \`${report.outcome}\`${report.reason ? ` (reason \`${report.reason}\`)` : ""}`,
+      "",
+      // One pointer for the requesting agent, who reads this thread too. The
+      // agent-facing detail stays out of text written for a person.
+      report.outcome === "outcome_unknown"
+        ? "Requesting agent: do not refile this request; a steward must reconcile it first."
+        : "Requesting agent: do not refile this request as-is; see \"Reaching a person outside AgentDash\" in your mandate.",
+    ].join("\n");
+
+    try {
+      await approvalService(db).addComment(approval.id, body, {});
+    } catch (err) {
+      logger.error({ err, approvalId: approval.id }, "connector send outcome comment on approval failed");
+    }
+
+    const issues = issueService(db);
+    for (const issueId of linkedIssueIds) {
+      try {
+        await issues.addComment(issueId, body, {});
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id, issueId },
+          "connector send outcome comment on linked issue failed",
+        );
+      }
+    }
+
+    let notifiedUserId: string | null = null;
+    if (approval.requestedByAgentId) {
+      try {
+        notifiedUserId = await accountability.escalationUserId(
+          approval.companyId,
+          approval.requestedByAgentId,
+        );
+        if (notifiedUserId) {
+          const agentName = await db
+            .select({ name: agents.name })
+            .from(agents)
+            .where(eq(agents.id, approval.requestedByAgentId))
+            .then((rows) => rows[0]?.name ?? null);
+          await stewardInbox.appendEvent({
+            companyId: approval.companyId,
+            stewardUserId: notifiedUserId,
+            kind: "connector_send.failed",
+            refType: "approval",
+            refId: approval.id,
+            agentId: approval.requestedByAgentId,
+            // One per approval: an execution runs at most once.
+            dedupeKey: `connector_send:${approval.id}:undelivered`,
+            // Reference and reason only, never the payload that was to be sent.
+            payload: {
+              approvalId: approval.id,
+              agentName,
+              outcome: report.outcome,
+              reason: report.reason,
+              provider: report.provider,
+              message: summary,
+              issueIds: linkedIssueIds,
+            },
+          });
+        }
+      } catch (err) {
+        logger.error({ err, approvalId: approval.id }, "connector send outcome inbox event failed");
+      }
+    }
+
+    await logActivity(db, {
+      companyId: approval.companyId,
+      actorType: "system",
+      actorId: "connector-send",
+      agentId: approval.requestedByAgentId,
+      action: "connector_send.undelivered_reported",
+      entityType: "approval",
+      entityId: approval.id,
+      details: {
+        outcome: report.outcome,
+        reason: report.reason,
+        provider: report.provider,
+        linkedIssueIds,
+        notifiedUserId,
+      },
+    });
+  }
 
   async function afterApprove(
     approval: ApprovalRow,
@@ -116,17 +232,48 @@ export function approvalDecisionEffectsService(
       }
     }
 
+    // AgentDash-MK: run an approved connector_send BEFORE waking the
+    // requester, so the one wake it gets carries the real outcome. Waking
+    // first told it "approved", which it read as "sent". Executed here rather
+    // than inside the approval service, so the service stays the decision
+    // boundary and nothing else; the executor swallows every failure
+    // internally, so an unreachable provider cannot fail this call.
+    let connectorSendReport: ConnectorSendExecutionReport | null = null;
+    if (approval.type === "connector_send") {
+      connectorSendReport = await connectorSend.executeForApproval(approval.id);
+      if (connectorSendReport && connectorSendReport.outcome !== "succeeded") {
+        try {
+          await reportUndeliveredConnectorSend(approval, connectorSendReport, linkedIssueIds);
+        } catch (err) {
+          logger.error(
+            { err, approvalId: approval.id },
+            "connector send outcome was not reported; the requester may believe it was sent",
+          );
+        }
+      }
+    }
+    const wakeReason =
+      connectorSendReport?.outcome === "failed"
+        ? "connector_send_failed"
+        : connectorSendReport?.outcome === "outcome_unknown"
+          ? "connector_send_outcome_unknown"
+          : "approval_approved";
+    const connectorSendOutcome = connectorSendReport
+      ? { outcome: connectorSendReport.outcome, reason: connectorSendReport.reason }
+      : null;
+
     if (approval.requestedByAgentId && wakeRequester) {
       try {
         const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
           source: "automation",
           triggerDetail: "system",
-          reason: "approval_approved",
+          reason: wakeReason,
           payload: {
             approvalId: approval.id,
             approvalStatus: approval.status,
             issueId: primaryIssueId,
             issueIds: linkedIssueIds,
+            ...(connectorSendOutcome ? { connectorSend: connectorSendOutcome } : {}),
           },
           requestedByActorType: "user",
           requestedByActorId: actorUserId,
@@ -137,7 +284,13 @@ export function approvalDecisionEffectsService(
             issueId: primaryIssueId,
             issueIds: linkedIssueIds,
             taskId: primaryIssueId,
-            wakeReason: "approval_approved",
+            wakeReason,
+            ...(connectorSendOutcome
+              ? {
+                  connectorSendOutcome: connectorSendOutcome.outcome,
+                  connectorSendReason: connectorSendOutcome.reason,
+                }
+              : {}),
           },
         });
 
@@ -151,6 +304,7 @@ export function approvalDecisionEffectsService(
           details: {
             requesterAgentId: approval.requestedByAgentId,
             wakeRunId: wakeRun?.id ?? null,
+            wakeReason,
             linkedIssueIds,
           },
         });
@@ -232,13 +386,6 @@ export function approvalDecisionEffectsService(
     }
   }
 
-  if (applied && approval.type === "connector_send") {
-    // Executed here rather than inside the approval service, so the service
-    // stays the decision boundary and nothing else. Awaited so the response
-    // does not outlive its own side effect; the executor swallows every
-    // failure internally, so an unreachable provider cannot fail this call.
-    await connectorSend.executeForApproval(approval.id);
-  }
   }
 
   async function afterReject(
