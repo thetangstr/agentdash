@@ -21,6 +21,49 @@ AGENT_DIR="${AGENTDASH_LAUNCHAGENT_DIR:-/Users/yang/Library/LaunchAgents}"
 LAUNCHCTL="${AGENTDASH_LAUNCHCTL:-launchctl}"
 INSTALL_OWNER_ARGS="${AGENTDASH_INSTALL_OWNER_ARGS--o root -g wheel}"
 
+# The git clone that developers work in and the updater fetches tags from.
+# No daemon may run anything from it. A clone is not updated by an apply, so a
+# job that runs scripts out of it drifts behind the serving release: the daily
+# update check ends up running a retired updater and reporting a commit nothing
+# is serving, and nothing an apply ships ever reaches that job. Services run from
+# ~/.agentdash/releases/current (what an apply switches) or ~/.agentdash/bin
+# (the updater's standalone copies).
+#
+# Two documented exceptions, each tied to one label:
+#   - com.agentdash.update may name the clone as AGENTDASH_REPO_DIR, its
+#     fetch-only source of release tags.
+#   - com.agentdash.postgres still runs from the clone. Its binary must not
+#     change as a side effect of an apply, a prune or a reinstall: a release
+#     with a different embedded-postgres major would not start on the existing
+#     data directory. Moving it is a separate, explicit migration (README).
+SOURCE_CLONE="${AGENTDASH_SOURCE_CLONE:-/Users/yang/agentdash}"
+# Prefix for the existence checks below, so a test can lay the expected files
+# out under a temp dir. Empty in real use.
+CHECK_ROOT="${AGENTDASH_CHECK_ROOT:-}"
+
+# Prints `key=value` for every plist string inside the source clone. Strings
+# inside an array (ProgramArguments) are attributed to the array's key.
+points_into_source_clone() {
+  awk -v clone="$SOURCE_CLONE" -v label="$2" '
+    /<key>/ { k = $0; sub(/.*<key>/, "", k); sub(/<\/key>.*/, "", k); key = k }
+    /<string>/ {
+      v = $0; sub(/.*<string>/, "", v); sub(/<\/string>.*/, "", v)
+      if (!(v == clone || index(v, clone "/") > 0)) next
+      if (label == "com.agentdash.postgres") next
+      if (label == "com.agentdash.update" && key == "AGENTDASH_REPO_DIR") next
+      print "    " key "=" v
+    }
+  ' "$1"
+}
+
+# The program a plist runs: the first ProgramArguments string, or nothing.
+program_of() {
+  awk '
+    /<key>ProgramArguments<\/key>/ { want = 1; next }
+    want && /<string>/ { v = $0; sub(/.*<string>/, "", v); sub(/<\/string>.*/, "", v); print v; exit }
+  ' "$1"
+}
+
 if [[ "${1:-}" == "--rollback" ]]; then
   for f in "$STAGED"/com.agentdash.*.plist; do
     label=$(basename "$f" .plist)
@@ -32,6 +75,46 @@ if [[ "${1:-}" == "--rollback" ]]; then
     echo "rolled back $label"
   done
   exit 0
+fi
+
+# Checked for every plist before any is installed, so a refusal leaves the
+# machine exactly as it was rather than half-migrated.
+refused=""
+for f in "$STAGED"/com.agentdash.*.plist; do
+  label=$(basename "$f" .plist)
+  offending=$(points_into_source_clone "$f" "$label")
+  if [ -n "$offending" ]; then
+    echo "  $label runs from the source clone $SOURCE_CLONE:" >&2
+    echo "$offending" >&2
+    refused="$refused $label"
+    continue
+  fi
+  # A daemon whose program is missing fails at its first run, silently, in a
+  # log nobody reads. The new update job runs ~/.agentdash/bin, which only a
+  # healthy apply (or the one-time install in the README) populates.
+  program=$(program_of "$f")
+  if [ -n "$program" ] && [ ! -x "$CHECK_ROOT$program" ]; then
+    echo "  $label runs $program, which does not exist or is not executable" >&2
+    refused="$refused $label"
+    continue
+  fi
+  if [ "$label" = "com.agentdash.update" ] && [ -n "$program" ]; then
+    bin=$(dirname "$program")
+    for needed in ota-apply.mjs ota-release-layout.mjs; do
+      if [ ! -f "$CHECK_ROOT$bin/$needed" ]; then
+        echo "  $label needs $bin/$needed beside its wrapper, and it is missing" >&2
+        refused="$refused $label"
+        continue 2
+      fi
+    done
+  fi
+done
+if [ -n "$refused" ]; then
+  echo >&2
+  echo "REFUSED, nothing installed:$refused" >&2
+  echo "Point daemons at ~/.agentdash/releases/current or ~/.agentdash/bin, and install the" >&2
+  echo "updater into ~/.agentdash/bin first (see deploy/README.md, 'Updating over the air')." >&2
+  exit 1
 fi
 
 for f in "$STAGED"/com.agentdash.*.plist; do

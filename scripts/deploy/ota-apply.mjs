@@ -9,8 +9,10 @@
 //
 // The stage order is the safety property, and it is not arbitrary:
 //
-//   provenance → approval → compatibility → backup → materialize → switch
-//   → restart → health → (rollback on failure) → receipt
+//   provenance → approval → restart command → compatibility → backup
+//   → materialize → switch → restart → health
+//   → (rollback on failure | refresh the updater copies and prune on success)
+//   → receipt
 //
 // Everything that can refuse does so BEFORE anything is mutated. Materializing
 // happens before the switch, so a build failure costs a directory and not an
@@ -30,23 +32,33 @@
 //      plan and taken a backup they intend to use.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
+  DEFAULT_KEEP_RELEASES,
   assertAuthoritativeReleaseSource,
+  compareReleaseTags,
   exportRelease as defaultExportRelease,
   buildRelease as defaultBuildRelease,
   sealRelease as defaultSealRelease,
+  writeReleaseMarker as defaultWriteReleaseMarker,
+  readReleaseMarker as defaultReadReleaseMarker,
+  removeReleaseDir as defaultRemoveReleaseDir,
   swapCurrent as defaultSwapCurrent,
   readCurrent as defaultReadCurrent,
+  pruneReleases as defaultPruneReleases,
+  releasesInUse as defaultReleasesInUse,
+  releasesInPlists as defaultReleasesInPlists,
+  PRUNE_CONFIRM_THRESHOLD,
   resolveTagCommit,
   isReleaseTag,
 } from "./ota-release-layout.mjs";
 
+export const DEFAULT_BASE_URL = "http://127.0.0.1:3102";
 export const DEFAULT_HEALTH_TIMEOUT_SEC = 120;
 export const DEFAULT_HEALTH_INTERVAL_MS = 2_000;
 export const APPROVAL_FILENAME = "pending-approval.json";
@@ -214,6 +226,292 @@ export function assessUpdateDirection(repoDir, installedCommit, targetCommit) {
   };
 }
 
+export const DEFAULT_SERVICE_LABEL = "com.agentdash.mkboard.server";
+
+/**
+ * Processes the default restart refuses to kill, whatever tree they appear in.
+ * Each has been, or would be, the "ancestor" of a server started by hand or a
+ * port someone pointed --base-url at: a terminal, a multiplexer, an SSH
+ * session, the proxy in front of the server, or launchd itself.
+ */
+const NEVER_KILL = /^(Terminal|iTerm2|tmux|screen|sshd|sshd-session|login|launchd|caddy|WindowServer)$/i;
+
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+/**
+ * Which restart this apply will use, or why there is none.
+ *
+ * Settled before anything is exported or backed up, so a run that could never
+ * restart the service refuses up front — including in --dry-run — instead of
+ * switching `current`, failing the restart, and rolling back.
+ *
+ * An explicit --restart-command is run as given. Otherwise the restart is the
+ * verified launchd restart (see planServiceRestart), on the listener port from
+ * `--port` or the explicit port of a loopback `--base-url`.
+ */
+export function resolveRestartCommand({ restartCommand, port, baseUrl, serviceLabel }) {
+  if (restartCommand !== undefined && restartCommand !== null) {
+    if (typeof restartCommand !== "string" || !restartCommand.trim()) {
+      return { ok: false, reason: "--restart-command was given but is empty." };
+    }
+    return { ok: true, kind: "command", command: restartCommand, detail: "--restart-command as given" };
+  }
+  let listenerPort = port;
+  let from = "--port";
+  if (listenerPort === undefined || listenerPort === null || listenerPort === "") {
+    let url;
+    try {
+      url = new URL(String(baseUrl ?? DEFAULT_BASE_URL));
+    } catch {
+      return { ok: false, reason: `No --restart-command, and --base-url '${baseUrl}' is not a URL to derive one from.` };
+    }
+    if (!LOOPBACK_HOSTNAMES.has(url.hostname) || !url.port) {
+      return {
+        ok: false,
+        reason:
+          `No --restart-command, and --base-url ${url.origin} does not name a local listener port (it needs a loopback host `
+          + "and an explicit port). Pass --port <server port> or --restart-command.",
+      };
+    }
+    listenerPort = url.port;
+    from = "--base-url";
+  }
+  const n = Number(listenerPort);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    return { ok: false, reason: `No --restart-command, and ${from} gives '${listenerPort}', which is not a port.` };
+  }
+  return { ok: true, kind: "service", port: n, label: serviceLabel || DEFAULT_SERVICE_LABEL, from };
+}
+
+/** The pid of a running launchd job from `launchctl print` output, or null. */
+export function parseLaunchctlPid(output) {
+  const match = /^\s*pid = (\d+)\s*$/m.exec(output ?? "");
+  return match ? Number(match[1]) : null;
+}
+
+function capture(command, args) {
+  const result = spawnSync(command, args, { encoding: "utf8", timeout: 10_000 });
+  if (result.error) return { ok: false, stdout: "", error: result.error.message };
+  return { ok: result.status === 0, status: result.status, stdout: result.stdout ?? "", error: (result.stderr ?? "").trim() };
+}
+
+/**
+ * What the default restart reads from the machine. Injectable so the
+ * verification can be tested on invented process trees; nothing in a test
+ * inspects or signals a real process.
+ */
+export const defaultProcessProbe = {
+  /** Pids listening on a TCP port, or null when `lsof` cannot answer. */
+  listeners(port) {
+    const out = capture("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]);
+    // lsof exits 1 with no output when nothing listens; that is an answer, not a failure.
+    if (!out.ok && (out.stdout.trim() || out.status !== 1)) return null;
+    return [...new Set(out.stdout.split("\n").map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0))];
+  },
+  parentOf(pid) {
+    const out = capture("ps", ["-o", "ppid=", "-p", String(pid)]);
+    const n = Number(out.stdout.trim());
+    return out.ok && Number.isInteger(n) ? n : null;
+  },
+  commandOf(pid) {
+    const out = capture("ps", ["-o", "comm=", "-p", String(pid)]);
+    return out.ok ? out.stdout.trim() : "";
+  },
+  /**
+   * The job as launchd reports it, from the system domain first and then the
+   * user's GUI domain — whichever the service was installed in. `launchctl
+   * print` is readable without root.
+   */
+  launchdJob(label) {
+    const uid = typeof process.getuid === "function" ? process.getuid() : null;
+    const targets = [`system/${label}`, ...(uid === null ? [] : [`gui/${uid}/${label}`])];
+    for (const target of targets) {
+      const out = capture("launchctl", ["print", target]);
+      if (out.ok) return { target, pid: parseLaunchctlPid(out.stdout) };
+    }
+    return null;
+  },
+};
+
+/**
+ * Work out exactly which processes the default restart would kill, or refuse.
+ *
+ * `launchctl kickstart -k system/...` needs root, which neither the scheduled
+ * job nor an SSH session has. The services carry `KeepAlive`, so killing the
+ * server's process chain is a complete restart: launchd sees the job exit and
+ * starts it again from `releases/current`. The hand-written recipe for this
+ * had no idea WHAT it was killing:
+ * it walked from whatever listened on the port up to pid 1. For a server
+ * started by hand that walk reaches the terminal or the tmux server; for
+ * `--base-url` on Caddy's port it kills Caddy, the old server keeps answering
+ * health, and the receipt says "applied".
+ *
+ * So the chain is verified against launchd before anything is killed:
+ *   - the service's launchd job must be loaded and running, with a pid;
+ *   - every listener on the port must descend from that pid;
+ *   - the job's pid must be a direct child of launchd (pid 1);
+ *   - nothing in the kill list may be a terminal, multiplexer, SSH session,
+ *     proxy or launchd itself.
+ * The kill list is the listener up to and including the job's own pid, and
+ * never anything above it. Any doubt is a refusal.
+ */
+export function planServiceRestart({ port, label, probe = defaultProcessProbe }) {
+  const job = probe.launchdJob(label);
+  if (!job) {
+    return { ok: false, reason: `The launchd job ${label} is not loaded (checked system/ and gui/<uid>/), so this restart cannot be verified.` };
+  }
+  if (!job.pid) {
+    return { ok: false, reason: `The launchd job ${job.target} is loaded but not running, so there is nothing verified to restart.`, nothingRunning: true };
+  }
+  const listeners = probe.listeners(port);
+  if (listeners === null) return { ok: false, reason: `Could not list the listeners on port ${port} (lsof failed).` };
+  if (listeners.length === 0) {
+    return { ok: false, reason: `Nothing listens on port ${port}, so the restart cannot be verified against ${job.target}.`, nothingRunning: true };
+  }
+  if (probe.parentOf(job.pid) !== 1) {
+    return { ok: false, reason: `${job.target} reports pid ${job.pid}, which is not a direct child of launchd; refusing to guess.` };
+  }
+  const kill = [];
+  for (const listener of listeners) {
+    const chain = [];
+    let pid = listener;
+    for (let depth = 0; depth < 64 && pid && pid !== 1; depth += 1) {
+      chain.push(pid);
+      if (pid === job.pid) break;
+      pid = probe.parentOf(pid);
+    }
+    if (chain[chain.length - 1] !== job.pid) {
+      const cmd = path.basename(probe.commandOf(listener) || "?");
+      return {
+        ok: false,
+        reason:
+          `The listener on port ${port} is pid ${listener} (${cmd}), which is not part of ${job.target} (pid ${job.pid}). `
+          + "Is --base-url pointing at a proxy, or is a server running outside launchd? Nothing was killed.",
+      };
+    }
+    for (const p of chain) if (!kill.includes(p)) kill.push(p);
+  }
+  const named = kill.map((pid) => ({ pid, command: path.basename(probe.commandOf(pid) || "") }));
+  const forbidden = named.find((entry) => NEVER_KILL.test(entry.command));
+  if (forbidden) {
+    return { ok: false, reason: `Refusing: the chain to ${job.target} includes pid ${forbidden.pid} (${forbidden.command}), which this restart never kills.` };
+  }
+  return {
+    ok: true,
+    target: job.target,
+    kill,
+    detail:
+      `kill ${named.map((e) => `${e.pid} (${e.command || "?"})`).join(", ")}: the listener on port ${port} up to ${job.target}; `
+      + "KeepAlive restarts it from current",
+  };
+}
+
+/**
+ * The default restart: re-verify (pids change between the preflight and now),
+ * then SIGKILL the verified chain. `allowNothingRunning` is for the rollback,
+ * where a new release that crashed at boot has left nothing to kill and
+ * launchd is already bringing the job back — the health check decides.
+ */
+export function restartService({ port, label, allowNothingRunning = false, probe = defaultProcessProbe, kill = process.kill }) {
+  const plan = planServiceRestart({ port, label, probe });
+  if (!plan.ok) {
+    if (allowNothingRunning && plan.nothingRunning) return { restarted: false, detail: `${plan.reason} Leaving it to launchd.` };
+    throw new Error(plan.reason);
+  }
+  for (const pid of plan.kill) {
+    try {
+      kill(pid, "SIGKILL");
+    } catch (error) {
+      // Already gone is the goal; anything else is a real failure.
+      if (error?.code !== "ESRCH") throw error;
+    }
+  }
+  return { restarted: true, detail: plan.detail };
+}
+
+/**
+ * The files the daily job runs, as installed into `~/.agentdash/bin`.
+ *
+ * The scheduled wrapper and the updater it calls are copies OUTSIDE any release
+ * — an update that changes the updater must not be able to take away the tool
+ * that repairs it. Until now those copies were refreshed only from the source
+ * clone, which an apply never updates and which drifts behind the serving
+ * release: the daily `--check` ran a legacy updater and reported a commit
+ * nothing was serving. A healthy apply
+ * now installs the copies from the release it just proved.
+ */
+export const UPDATER_TOOL_FILES = [
+  { from: path.join("deploy", "agentdash-update.sh"), to: "agentdash-update.sh" },
+  { from: path.join("scripts", "deploy", "ota-apply.mjs"), to: "ota-apply.mjs" },
+  { from: path.join("scripts", "deploy", "ota-release-layout.mjs"), to: "ota-release-layout.mjs" },
+];
+
+/**
+ * Install the updater tools from a release into a bin directory.
+ *
+ * All or nothing: `ota-apply.mjs` imports `ota-release-layout.mjs`, so a pair
+ * from two different releases is a broken tool. Every file is staged beside its
+ * destination first and only then renamed into place.
+ */
+export function installUpdaterTools({ releaseDir, binDir }) {
+  const missing = UPDATER_TOOL_FILES.filter((file) => !existsSync(path.join(releaseDir, file.from)));
+  if (missing.length > 0) {
+    throw new Error(
+      `the release has no ${missing.map((file) => file.from).join(", ")}; ${binDir} was left as it was`,
+    );
+  }
+  mkdirSync(binDir, { recursive: true });
+  const staged = [];
+  try {
+    for (const file of UPDATER_TOOL_FILES) {
+      const temp = path.join(binDir, `.${file.to}.${process.pid}.tmp`);
+      copyFileSync(path.join(releaseDir, file.from), temp);
+      // The source is sealed read-only; the installed copy must stay replaceable and executable.
+      chmodSync(temp, 0o755);
+      staged.push({ temp, dest: path.join(binDir, file.to) });
+    }
+  } catch (error) {
+    for (const { temp } of staged) rmSync(temp, { force: true });
+    throw error;
+  }
+  // Keep the copies being replaced until every rename has landed, so a failure
+  // part-way puts the old set back rather than leaving a mixed one.
+  const replaced = [];
+  try {
+    for (const entry of staged) {
+      if (existsSync(entry.dest)) {
+        const backup = `${entry.dest}.${process.pid}.prev`;
+        renameSync(entry.dest, backup);
+        entry.backup = backup;
+      }
+      renameSync(entry.temp, entry.dest);
+      replaced.push(entry);
+    }
+  } catch (error) {
+    for (const entry of [...replaced].reverse()) rmSync(entry.dest, { force: true });
+    for (const entry of staged) {
+      rmSync(entry.temp, { force: true });
+      if (entry.backup && existsSync(entry.backup)) renameSync(entry.backup, entry.dest);
+    }
+    throw error;
+  }
+  for (const entry of staged) if (entry.backup) rmSync(entry.backup, { force: true });
+  return { binDir, installed: UPDATER_TOOL_FILES.map((file) => file.to) };
+}
+
+/** Do two paths name the same directory? Resolves symlinks when they exist. */
+function samePath(a, b) {
+  if (!a || !b) return false;
+  const real = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return real(a) === real(b);
+}
+
 async function defaultCheckHealth(url, timeoutSec, intervalMs, log) {
   const deadline = Date.now() + timeoutSec * 1000;
   let lastError = "never responded";
@@ -245,8 +543,17 @@ export const defaultDeps = {
   exportRelease: defaultExportRelease,
   buildRelease: defaultBuildRelease,
   sealRelease: defaultSealRelease,
+  writeReleaseMarker: defaultWriteReleaseMarker,
+  readReleaseMarker: defaultReadReleaseMarker,
+  removeRelease: defaultRemoveReleaseDir,
   swapCurrent: defaultSwapCurrent,
   readCurrent: defaultReadCurrent,
+  pruneReleases: defaultPruneReleases,
+  releasesInUse: defaultReleasesInUse,
+  releasesInPlists: defaultReleasesInPlists,
+  installUpdaterTools,
+  planServiceRestart: (args) => planServiceRestart(args),
+  restartService: (args) => restartService(args),
   resolveTagCommit,
   commitIsOnMain,
   checkHealth: defaultCheckHealth,
@@ -329,20 +636,100 @@ export async function runApply(input, overrides = {}) {
     record("approval", "skipped", "approval gate explicitly disabled for this run");
   }
 
+  // ---- 2b. Restart command --------------------------------------------------
+  // Settled before anything is exported, backed up or switched. Without it the
+  // restart used to run `/bin/sh -c undefined` (exit 127) AFTER the switch, and
+  // the only thing that went right was the rollback.
+  const restart = resolveRestartCommand({
+    restartCommand: input.restartCommand,
+    port: input.port,
+    baseUrl: input.baseUrl,
+    serviceLabel: input.serviceLabel,
+  });
+  if (!restart.ok) return fail("restart_command", `${restart.reason} Nothing was changed.`);
+  if (restart.kind === "service") {
+    // Preflight: the same verification the restart itself repeats, run now so
+    // a restart that would refuse later refuses before backup and switch.
+    const plan = deps.planServiceRestart({ port: restart.port, label: restart.label });
+    if (!plan.ok) return fail("restart_command", `${plan.reason} Pass --restart-command to restart some other way. Nothing was changed.`);
+    record("restart_command", "passed", `default restart (port from ${restart.from}): ${plan.detail}`);
+  } else {
+    record("restart_command", "passed", restart.detail);
+  }
+  const runRestart = ({ rollback = false } = {}) => (restart.kind === "service"
+    ? deps.restartService({ port: restart.port, label: restart.label, allowNothingRunning: rollback })
+    : deps.runCommand(restart.command, "restart"));
+
   // ---- 3. Compatibility -----------------------------------------------------
   const installedRoot = input.installedRoot ?? deps.readCurrent(input.releasesRoot) ?? input.repoDir;
+  const exportTarget = () => deps.exportRelease({
+    repoDir: input.repoDir,
+    tag: input.tag,
+    commit,
+    releasesRoot: input.releasesRoot,
+  });
   // The target's journal has to be read from the exported tree, so the export
   // happens first — it mutates nothing that is serving.
   let materialized;
   try {
-    materialized = deps.exportRelease({
-      repoDir: input.repoDir,
-      tag: input.tag,
-      commit,
-      releasesRoot: input.releasesRoot,
-    });
+    materialized = exportTarget();
   } catch (error) {
     return fail("materialize", `Export failed: ${error.message}`);
+  }
+
+  // ---- 3a. A directory left by an earlier run -------------------------------
+  // The export reuses an existing directory for the same tag and commit. That
+  // is right only for a finished release: one left by a run that failed before
+  // completing was sealed read-only mid-way, and building into it fails with
+  // EACCES. The completion marker, written after sealing, tells the two apart.
+  let prebuilt = false;
+  if (materialized.reused) {
+    const marker = deps.readReleaseMarker(materialized.releaseDir);
+    if (marker && marker.complete === true && marker.commit === commit) {
+      prebuilt = true;
+      record("reuse", "passed", `${materialized.releaseDir} was completed at ${marker.completedAt ?? "an unknown time"}; build skipped`);
+    } else {
+      const serving = [
+        deps.readCurrent(input.releasesRoot),
+        installedState?.current?.releaseDir,
+        installedState?.previous?.releaseDir,
+      ];
+      let inUse;
+      try {
+        inUse = deps.releasesInUse(input.releasesRoot);
+      } catch (error) {
+        return fail(
+          "materialize",
+          `${materialized.releaseDir} has no completion marker, and whether a process still uses it cannot be checked `
+          + `(${error.message}). It was not removed; nothing was changed.`,
+        );
+      }
+      if (inUse.includes(path.basename(materialized.releaseDir))) {
+        return fail(
+          "materialize",
+          `${materialized.releaseDir} has no completion marker, but a running process still uses it, so it will not be removed. Nothing was changed.`,
+        );
+      }
+      if (serving.some((dir) => samePath(dir, materialized.releaseDir))) {
+        return fail(
+          "materialize",
+          `${materialized.releaseDir} has no completion marker for ${commit.slice(0, 12)}, but it is the current or previous `
+          + "release, so it will not be removed. Nothing was changed; recover it by hand.",
+        );
+      }
+      if (input.dryRun) {
+        record("reuse", "passed", `${materialized.releaseDir} has no completion marker; a real run removes and re-exports it`);
+      } else {
+        try {
+          deps.removeRelease(materialized.releaseDir);
+          materialized = exportTarget();
+          if (materialized.reused) throw new Error(`${materialized.releaseDir} was still there after removing it`);
+        } catch (error) {
+          return fail("materialize", `Could not replace the incomplete ${materialized.releaseDir}: ${error.message}`);
+        }
+        record("reuse", "passed", "an earlier run left this directory without a completion marker; removed and re-exported");
+      }
+    }
   }
 
   const pending = pendingMigrationsBetween(installedRoot, materialized.releaseDir);
@@ -386,13 +773,25 @@ export async function runApply(input, overrides = {}) {
   }
 
   // ---- 5. Build -------------------------------------------------------------
-  try {
-    deps.buildRelease({ releaseDir: materialized.releaseDir });
-    deps.sealRelease(materialized.releaseDir);
-    record("materialize", "passed", materialized.releaseDir);
-  } catch (error) {
-    // Nothing has been switched yet, so the running instance is untouched.
-    return fail("materialize", `Build failed (nothing was switched): ${error.message}`);
+  if (prebuilt) {
+    record("materialize", "passed", `${materialized.releaseDir} (reused; already built and sealed)`);
+  } else {
+    try {
+      deps.buildRelease({ releaseDir: materialized.releaseDir });
+      deps.sealRelease(materialized.releaseDir);
+    } catch (error) {
+      // Nothing has been switched yet, so the running instance is untouched.
+      return fail("materialize", `Build failed (nothing was switched): ${error.message}`);
+    }
+    // Last, so its presence means every step before it finished. Not fatal:
+    // without it a rerun rebuilds this directory, which is slower, not wrong.
+    let marker = "completion marker written";
+    try {
+      deps.writeReleaseMarker(materialized.releaseDir, { tag: input.tag, commit, now: deps.now() });
+    } catch (error) {
+      marker = `completion marker NOT written (${error.message}); a rerun will rebuild this directory`;
+    }
+    record("materialize", "passed", `${materialized.releaseDir}; ${marker}`);
   }
 
   // ---- 6. Switch ------------------------------------------------------------
@@ -411,8 +810,8 @@ export async function runApply(input, overrides = {}) {
 
   let healthy = { ok: false, detail: "restart not attempted" };
   try {
-    deps.runCommand(input.restartCommand, "restart");
-    record("restart", "passed");
+    const restarted = runRestart();
+    record("restart", "passed", restarted?.detail);
     healthy = await deps.checkHealth(healthUrl, timeoutSec, input.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS, deps.log);
   } catch (error) {
     healthy = { ok: false, detail: `restart failed: ${error.message}` };
@@ -421,6 +820,7 @@ export async function runApply(input, overrides = {}) {
 
   if (healthy.ok) {
     record("health", "passed", healthy.detail);
+    housekeepAfterApply({ input, deps, record, releaseDir: materialized.releaseDir, previousReleaseDir });
     return {
       outcome: "applied",
       tag: input.tag,
@@ -452,10 +852,21 @@ export async function runApply(input, overrides = {}) {
   try {
     deps.swapCurrent({ releasesRoot: input.releasesRoot, releaseDir: previousReleaseDir });
     record("rollback_switch", "passed", `current -> ${previousReleaseDir}`);
-    deps.runCommand(input.restartCommand, "restart");
-    record("rollback_restart", "passed");
   } catch (error) {
     return fail("rollback", `Rollback failed: ${error.message}`, { backupPath });
+  }
+  // A failed rollback restart is recorded, not fatal. The usual cause is a new
+  // release that crashed at boot: nothing is listening, launchd is already
+  // restarting the job from the restored `current`, and the old release comes
+  // back on its own. Only the health check can say whether the box recovered;
+  // reporting "Manual recovery required" before asking it was wrong.
+  let rollbackRestart = null;
+  try {
+    const restarted = runRestart({ rollback: true });
+    record("rollback_restart", restarted?.restarted === false ? "skipped" : "passed", restarted?.detail);
+  } catch (error) {
+    rollbackRestart = error.message;
+    record("rollback_restart", "failed", `${error.message}; checking health anyway`);
   }
 
   const recovered = await deps.checkHealth(healthUrl, timeoutSec, input.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS, deps.log);
@@ -476,7 +887,88 @@ export async function runApply(input, overrides = {}) {
     signatureVerified: false,
     error: recovered.ok
       ? `Update failed health (${healthy.detail}); rolled back to the previous release.`
-      : `Update failed health (${healthy.detail}) AND rollback did not recover (${recovered.detail}). Manual recovery required.`,
+      : `Update failed health (${healthy.detail}) AND rollback did not recover (${recovered.detail}`
+        + `${rollbackRestart ? `; the rollback restart also failed: ${rollbackRestart}` : ""}). Manual recovery required.`,
+  };
+}
+
+/**
+ * What a healthy apply does after the fact. Each step is recorded in the
+ * receipt, and none of them changes the outcome: the instance is already
+ * serving the new release and has proved it, so a full disk or a missing file
+ * here is something to report, not a reason to call the update failed.
+ */
+function housekeepAfterApply({ input, deps, record, releaseDir, previousReleaseDir }) {
+  // The daily job's copies of the updater, from the release just proved.
+  if (input.binDir) {
+    try {
+      const installed = deps.installUpdaterTools({ releaseDir, binDir: input.binDir });
+      record("install_updater", "passed", `${installed.installed.join(", ")} -> ${installed.binDir}`);
+    } catch (error) {
+      record("install_updater", "failed", `(non-fatal) ${error.message}`);
+    }
+  } else {
+    record("install_updater", "skipped", "no bin dir configured");
+  }
+
+  // Old releases. Current and the rollback target are always kept, and so is
+  // anything a live process or an installed launchd job still uses.
+  const pruned = runPrune({ ...input, protectedDirs: [releaseDir, previousReleaseDir] }, deps);
+  record("prune", pruned.status, pruned.detail);
+}
+
+/**
+ * One prune, with every protection, as a receipt check: `{ status, detail }`.
+ *
+ * Fails safe. If what is in use cannot be determined, nothing is deleted and
+ * the check says so. More than PRUNE_CONFIRM_THRESHOLD removals at once are
+ * held unless `pruneConfirm`, with the exact list in the detail.
+ */
+export function runPrune(input, overrides = {}) {
+  const deps = { ...defaultDeps, ...overrides };
+  const keep = input.keepReleases ?? DEFAULT_KEEP_RELEASES;
+  let inUse;
+  let configured;
+  try {
+    inUse = deps.releasesInUse(input.releasesRoot);
+    configured = deps.releasesInPlists(input.releasesRoot, input.launchdPlistDirs ?? []);
+  } catch (error) {
+    return { status: "failed", detail: `(non-fatal) nothing was pruned: ${error.message}` };
+  }
+  const protectedNames = (input.protectedDirs ?? []).filter(Boolean).map((dir) => path.basename(dir));
+  let result;
+  try {
+    result = deps.pruneReleases({
+      releasesRoot: input.releasesRoot,
+      keep,
+      protectedNames,
+      inUseNames: [...inUse, ...configured],
+      includeUntagged: Boolean(input.pruneUntagged),
+      maxRemovals: PRUNE_CONFIRM_THRESHOLD,
+      confirmed: Boolean(input.pruneConfirm),
+      dryRun: Boolean(input.pruneDryRun),
+    });
+  } catch (error) {
+    return { status: "failed", detail: `(non-fatal) ${error.message}` };
+  }
+  const extra = [...new Set([...inUse, ...configured])].filter((name) => !protectedNames.includes(name));
+  const kept = `kept ${protectedNames.length > 0 ? `${protectedNames.join(", ")}, ` : ""}`
+    + `${extra.length > 0 ? `in use or configured (${extra.join(", ")}), ` : ""}`
+    + `and up to ${keep} more release tags${input.pruneUntagged ? " (untagged directories included)" : "; untagged directories are never pruned without --prune-untagged"}`;
+  if (result.dryRun) {
+    return { status: "skipped", detail: `dry run; would remove ${result.planned.length}: ${result.planned.join(", ") || "nothing"}; ${kept}` };
+  }
+  if (result.held) {
+    return {
+      status: "skipped",
+      detail:
+        `held: ${result.planned.length} directories would be removed at once (more than ${PRUNE_CONFIRM_THRESHOLD}), so none were: `
+        + `${result.planned.join(", ")}. Review the list, then run ota-apply.mjs --prune --prune-confirm. ${kept}`,
+    };
+  }
+  return {
+    status: "passed",
+    detail: result.removed.length > 0 ? `removed ${result.removed.join(", ")}; ${kept}` : `nothing to remove; ${kept}`,
   };
 }
 
@@ -561,19 +1053,6 @@ export function persistOutcome({ stateDir, result, mode = "source-release", chan
     written.error = error instanceof Error ? error.message : String(error);
   }
   return written;
-}
-
-/**
- * Compare release tags by version, not by name: v2026.901.10 > v2026.901.2.
- */
-function compareReleaseTags(a, b) {
-  const pa = a.replace(/^v/, "").split(".").map(Number);
-  const pb = b.replace(/^v/, "").split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
 }
 
 /**
@@ -812,7 +1291,26 @@ function usage() {
   --state-dir <path>         Deployment state and approval directory
   --tag <vYYYY.MDD.N>        Release tag to apply (must be on origin/main)
   --base-url <url>           Instance base URL for the health check
-  --restart-command <cmd>    Shell command that restarts the service
+                             (default ${DEFAULT_BASE_URL})
+  --restart-command <cmd>    Shell command that restarts the service. Default:
+                             kill the server's process chain, verified against
+                             its launchd job, which KeepAlive restarts from
+                             releases/current. Refused before anything changes
+                             when the chain cannot be verified.
+  --service-label <label>    launchd job of the server (default
+                             ${DEFAULT_SERVICE_LABEL}); looked up in
+                             system/ and then gui/<uid>/
+  --port <n>                 Server port for the default restart (default: the
+                             port of a loopback --base-url)
+  --keep-releases <n>        Release tags kept besides current and previous
+                             when pruning (default ${DEFAULT_KEEP_RELEASES})
+  --prune                    Prune releases and exit (with --dry-run: only list)
+  --prune-confirm            Allow more than ${PRUNE_CONFIRM_THRESHOLD} removals in one prune
+  --prune-untagged           Also prune candidate-*, hotfix-* and other
+                             directories that are not release tags
+  --bin-dir <path>           Where the daily job's updater copies live; a
+                             healthy apply refreshes them from the new release
+                             (default ~/.agentdash/bin)
   --backup-command <cmd>     Shell command that takes a database backup
   --skip-backup              Proceed without a backup, deliberately
   --allow-migrations         Permit a release that adds migrations (see below)
@@ -835,6 +1333,13 @@ export async function main(argv = process.argv) {
       tag: { type: "string" },
       "base-url": { type: "string" },
       "restart-command": { type: "string" },
+      "service-label": { type: "string" },
+      port: { type: "string" },
+      prune: { type: "boolean" },
+      "prune-confirm": { type: "boolean" },
+      "prune-untagged": { type: "boolean" },
+      "keep-releases": { type: "string" },
+      "bin-dir": { type: "string" },
       "backup-command": { type: "string" },
       "backup-path-hint": { type: "string" },
       "skip-backup": { type: "boolean" },
@@ -866,6 +1371,37 @@ export async function main(argv = process.argv) {
     return 0;
   }
 
+  let keepReleases;
+  if (values["keep-releases"] !== undefined) {
+    keepReleases = Number(values["keep-releases"]);
+    if (!Number.isInteger(keepReleases) || keepReleases < 0) {
+      console.error(`--keep-releases must be a whole number, got '${values["keep-releases"]}'.`);
+      return 1;
+    }
+  }
+  const releasesRoot = values["releases-root"] ?? path.join(home, ".agentdash", "releases");
+  const stateDir = values["state-dir"] ?? path.join(home, ".agentdash", "deployments");
+  // Every installed launchd job's configured paths protect the releases they name.
+  const launchdPlistDirs = ["/Library/LaunchDaemons", path.join(home, "Library", "LaunchAgents")];
+  const pruneOptions = {
+    releasesRoot,
+    keepReleases,
+    launchdPlistDirs,
+    pruneConfirm: Boolean(values["prune-confirm"]),
+    pruneUntagged: Boolean(values["prune-untagged"]),
+  };
+
+  if (values.prune) {
+    const state = readJsonFile(path.join(stateDir, CANONICAL_STATE_FILENAME));
+    const result = runPrune({
+      ...pruneOptions,
+      pruneDryRun: Boolean(values["dry-run"]),
+      protectedDirs: [defaultReadCurrent(releasesRoot), state?.current?.releaseDir, state?.previous?.releaseDir],
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return result.status === "failed" ? 1 : 0;
+  }
+
   if (!values.tag) {
     console.log(usage());
     return 1;
@@ -875,8 +1411,12 @@ export async function main(argv = process.argv) {
     releasesRoot: values["releases-root"] ?? path.join(home, ".agentdash", "releases"),
     stateDir: values["state-dir"] ?? path.join(home, ".agentdash", "deployments"),
     tag: values.tag,
-    baseUrl: values["base-url"] ?? "http://127.0.0.1:3102",
+    baseUrl: values["base-url"] ?? DEFAULT_BASE_URL,
     restartCommand: values["restart-command"],
+    serviceLabel: values["service-label"],
+    port: values.port,
+    ...pruneOptions,
+    binDir: values["bin-dir"] ?? path.join(home, ".agentdash", "bin"),
     backupCommand: values["backup-command"],
     backupPathHint: values["backup-path-hint"],
     skipBackup: Boolean(values["skip-backup"]),
@@ -914,4 +1454,17 @@ if (invokedDirectly) {
   main().then((code) => process.exit(code));
 }
 
-export default { runApply, persistOutcome, assessUpdateDirection, evaluateMigrationPolicy, pendingMigrationsBetween, approvalAuthorizes, readJournalTags };
+export default {
+  runApply,
+  persistOutcome,
+  assessUpdateDirection,
+  evaluateMigrationPolicy,
+  pendingMigrationsBetween,
+  approvalAuthorizes,
+  readJournalTags,
+  resolveRestartCommand,
+  planServiceRestart,
+  restartService,
+  runPrune,
+  installUpdaterTools,
+};

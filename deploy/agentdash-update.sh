@@ -2,11 +2,23 @@
 # Scheduled over-the-air update for a source deployment.
 #
 # Runs the STANDALONE copy of the OTA apply tool under ~/.agentdash/bin, never
-# the one in the checkout: an update that changes the updater must not be able
-# to take the tool that repairs it away. The copy is refreshed from the
-# checkout on every run — it is two files (ota-apply.mjs plus the
-# ota-release-layout.mjs it imports), installed side by side so the relative
-# import resolves.
+# the one in a release or the checkout: an update that changes the updater must
+# not be able to take the tool that repairs it away. The copy is two files
+# (ota-apply.mjs plus the ota-release-layout.mjs it imports), installed side by
+# side so the relative import resolves.
+#
+# The copy is refreshed on every run from the release that is SERVING
+# (releases/current), and falls back to the checkout only on a box that has no
+# release yet. It used to come from the checkout unconditionally, and an apply
+# never updates the checkout, so it drifts behind the serving release: the
+# daily check ran a legacy updater and reported a commit nothing was serving. A
+# healthy `ota-apply.mjs --tag` also installs this wrapper and both tools into
+# ~/.agentdash/bin, which is where com.agentdash.update runs this file from.
+#
+# The git clone is only a source of releases here (`--repo-dir`): the check
+# fetches tags from it and reads nothing else. AGENTDASH_REPO_DIR names it;
+# it defaults to AGENTDASH_APP_DIR for plists written before the two were
+# separated.
 #
 # Default posture is CHECK ONLY. `--check` resolves the newest release tag on
 # origin/main, measures the diff, and writes available-release.json into the
@@ -29,6 +41,7 @@ set -eu
 INSTANCE="${AGENTDASH_INSTANCE:-mkboard}"
 ENV_FILE="${AGENTDASH_ENV_FILE:-$HOME/.config/agentdash/${INSTANCE}.env}"
 APP_DIR="${AGENTDASH_APP_DIR:-$HOME/agentdash}"
+REPO_DIR="${AGENTDASH_REPO_DIR:-$APP_DIR}"
 BIN_DIR="${AGENTDASH_BIN_DIR:-$HOME/.agentdash/bin}"
 UPDATER="$BIN_DIR/ota-apply.mjs"
 STATE_DIR="${AGENTDASH_OTA_STATE_DIR:-$HOME/.agentdash/deployments}"
@@ -42,11 +55,16 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-mkdir -p "$BIN_DIR"
-install -m 755 "$APP_DIR/scripts/deploy/ota-apply.mjs" "$UPDATER"
-install -m 755 "$APP_DIR/scripts/deploy/ota-release-layout.mjs" "$BIN_DIR/ota-release-layout.mjs"
+TOOLS_DIR="$APP_DIR"
+if [ -f "$RELEASES_ROOT/current/scripts/deploy/ota-apply.mjs" ] && [ -f "$RELEASES_ROOT/current/scripts/deploy/ota-release-layout.mjs" ]; then
+  TOOLS_DIR="$RELEASES_ROOT/current"
+fi
 
-echo "[update] $(date -u +%Y-%m-%dT%H:%M:%SZ) instance=$INSTANCE apply=${AGENTDASH_UPDATE_APPLY:-0}"
+mkdir -p "$BIN_DIR"
+install -m 755 "$TOOLS_DIR/scripts/deploy/ota-apply.mjs" "$UPDATER"
+install -m 755 "$TOOLS_DIR/scripts/deploy/ota-release-layout.mjs" "$BIN_DIR/ota-release-layout.mjs"
+
+echo "[update] $(date -u +%Y-%m-%dT%H:%M:%SZ) instance=$INSTANCE apply=${AGENTDASH_UPDATE_APPLY:-0} tools=$TOOLS_DIR repo=$REPO_DIR"
 
 if [ "${AGENTDASH_UPDATE_APPLY:-0}" = "1" ]; then
   # Apply is unsupported until the releases/current bootstrap is decided and
@@ -63,7 +81,7 @@ if [ "${AGENTDASH_UPDATE_APPLY:-0}" = "1" ]; then
 fi
 
 exec node "$UPDATER" \
-  --repo-dir "$APP_DIR" \
+  --repo-dir "$REPO_DIR" \
   --releases-root "$RELEASES_ROOT" \
   --state-dir "$STATE_DIR" \
   --check

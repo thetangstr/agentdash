@@ -13,7 +13,7 @@
 	<string>com.agentdash.rotate-logs</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/yang/agentdash/deploy/agentdash-rotate-logs.sh</string>
+		<string>/Users/yang/.agentdash/releases/current/deploy/agentdash-rotate-logs.sh</string>
 	</array>
 	<key>StandardErrorPath</key>
 	<string>/Users/yang/Library/Logs/agentdash/rotate.log</string>
