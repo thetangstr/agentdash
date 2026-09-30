@@ -32,25 +32,19 @@ export function issueTreeControlRoutes(db: Db) {
     res.status(result.hold.mode === "restore" || result.hold.mode === "resume" ? 200 : 201).json(result);
   });
   router.get("/issues/:id/tree-control/state", async (req, res) => {
-    const ctx = await context(req), activePauseHold = await tree.getActivePauseHoldGate(ctx.companyId, ctx.rootIssueId);
-    await tree.authorizeRead(ctx, activePauseHold ? [activePauseHold.holdId] : []);
-    res.json({ activePauseHold });
+    res.json(await tree.readAction(await context(req), { kind: "state" }));
   });
   router.get("/issues/:id/tree-holds", async (req, res) => {
-    const ctx = await context(req), status = req.query.status, mode = req.query.mode;
-    const holds = await tree.listHolds(ctx.companyId, ctx.rootIssueId, {
+    const status = req.query.status, mode = req.query.mode;
+    res.json(await tree.readAction(await context(req), {
+      kind: "list",
       status: status === "active" || status === "released" ? status : undefined,
       mode: mode === "pause" || mode === "resume" || mode === "cancel" || mode === "restore" ? mode : undefined,
       includeMembers: req.query.includeMembers === "true",
-    });
-    await tree.authorizeRead(ctx, holds.map(hold => hold.id));
-    res.json(holds);
+    }));
   });
   router.get("/issues/:id/tree-holds/:holdId", async (req, res) => {
-    const ctx = await context(req), hold = await tree.getHold(ctx.companyId, req.params.holdId as string);
-    if (!hold || hold.rootIssueId !== ctx.rootIssueId) throw notFound("Issue tree hold not found");
-    await tree.authorizeRead(ctx, [hold.id]);
-    res.json(hold);
+    res.json(await tree.readAction(await context(req), { kind: "detail", holdId: req.params.holdId as string }));
   });
   router.post("/issues/:id/tree-holds/:holdId/release", validate(releaseIssueTreeHoldSchema), async (req, res) => {
     const accepted = await tree.acceptAction(await context(req), { kind: "release", holdId: req.params.holdId as string, input: req.body });

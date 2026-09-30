@@ -3,7 +3,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const service = vi.hoisted(() => ({ acceptAction: vi.fn(), dispatchTreeEffects: vi.fn(), authorizeRead: vi.fn(), getHold: vi.fn(), listHolds: vi.fn(), getActivePauseHoldGate: vi.fn() }));
+const service = vi.hoisted(() => ({ acceptAction: vi.fn(), readAction: vi.fn(), dispatchTreeEffects: vi.fn(), authorizeRead: vi.fn(), getHold: vi.fn(), listHolds: vi.fn(), getActivePauseHoldGate: vi.fn() }));
 const getById = vi.hoisted(() => vi.fn());
 const runtime = vi.hoisted(() => ({ cancelRun: vi.fn(), wakeup: vi.fn() }));
 vi.mock("../services/index.js", () => ({ heartbeatService: () => runtime, issueService: () => ({ getById }), issueTreeControlService: () => service }));
@@ -33,6 +33,21 @@ describe("tree routes delegate one accepted composition and postcommit effects",
     expect(service.acceptAction.mock.calls[0][1]).toEqual({ kind: "create", input: { mode, metadata: { wakeAgents: true } } });
     expect(service.dispatchTreeEffects).toHaveBeenCalledWith(accepted, runtime);
     expect(runtime.cancelRun).not.toHaveBeenCalled(); expect(runtime.wakeup).not.toHaveBeenCalled();
+  });
+  it.each([
+    { endpoint: "tree-control/state", selection: { kind: "state" }, result: { activePauseHold: null } },
+    { endpoint: "tree-holds", selection: { kind: "list", includeMembers: false }, result: [] },
+    { endpoint: "tree-holds?includeMembers=true&status=active&mode=pause", selection: { kind: "list", includeMembers: true, status: "active", mode: "pause" }, result: [{ id: holdId, members: [] }] },
+    { endpoint: `tree-holds/${holdId}`, selection: { kind: "detail", holdId }, result: { id: holdId, members: [] } },
+  ])("returns only the coordinated read result for $endpoint", async ({ endpoint, selection, result }) => {
+    service.readAction.mockResolvedValue(result);
+    const response = await request(await app(board)).get(`/api/issues/${rootId}/${endpoint}`);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(result);
+    expect(service.readAction).toHaveBeenCalledWith(expect.objectContaining({ companyId: "company-2", rootIssueId: rootId }), expect.objectContaining(selection));
+    expect(service.getHold).not.toHaveBeenCalled();
+    expect(service.listHolds).not.toHaveBeenCalled();
+    expect(service.authorizeRead).not.toHaveBeenCalled();
   });
   it("does not compensate or dispatch after failed atomic restoration", async () => {
     service.acceptAction.mockRejectedValue(conflict("Restore refused"));

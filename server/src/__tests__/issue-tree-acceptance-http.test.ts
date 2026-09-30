@@ -38,6 +38,15 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
   let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   let db: ReturnType<typeof createDb>, server: Server, base: string;
   let actualRequest: Request, routeExecutor: Db;
+  let beforeReadAuthority: (() => Promise<void>) | undefined;
+  let readHoldQueries = 0;
+  function readProjectionBarrier(builder: any, table: unknown) {
+    if (table !== issueTreeHolds || !beforeReadAuthority || ++readHoldQueries !== 2) return builder;
+    const barrier = beforeReadAuthority, then = builder.then.bind(builder);
+    beforeReadAuthority = undefined;
+    builder.then = (resolve: Function, reject: Function) => barrier().then(() => then(resolve, reject));
+    return builder;
+  }
   let beforeSettingsRead: (() => void) | undefined;
   let acceptancePid: number | undefined;
   let beforeFirstPrepare: (() => Promise<void>) | undefined;
@@ -47,6 +56,11 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
     temp = await startEmbeddedPostgresTestDatabase('issue-current-authority-');
     db = createDb(temp.connectionString);
     const routeDb = new Proxy(db, { get(target, key, receiver) {
+      if (key === 'select') return (...args: unknown[]) => {
+        const query = (target.select as Function)(...args), from = query.from.bind(query);
+        query.from = (table: unknown) => readProjectionBarrier(from(table), table);
+        return query;
+      };
       if (key !== 'transaction') return Reflect.get(target, key, receiver);
       return (callback: (tx: unknown) => Promise<unknown>) => target.transaction(async tx => {
         acceptancePid = Number((await tx.execute(sql`select pg_backend_pid() as pid`))[0].pid);
@@ -57,7 +71,7 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
           const query = (t.select as Function)(...args);
           const from = query.from.bind(query);
           query.from = (table: unknown) => {
-            const builder = from(table), originalFor = builder.for.bind(builder);
+            const builder = readProjectionBarrier(from(table), table), originalFor = builder.for.bind(builder);
             if (table === issues && ++issueSelectCount === 2 && beforeFirstPrepare) {
               const barrier = beforeFirstPrepare, then = builder.then.bind(builder);
               beforeFirstPrepare = undefined;
@@ -97,7 +111,7 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
     await new Promise<void>(resolve => server.once('listening', resolve));
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api`;
   });
-  beforeEach(() => { beforeSettingsRead = undefined; beforeFirstPrepare = undefined; afterAuthentication = undefined; beforeIssueLock = undefined; resetAssistantLoopbackTokens(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+  beforeEach(() => { beforeReadAuthority = undefined; readHoldQueries = 0; beforeSettingsRead = undefined; beforeFirstPrepare = undefined; afterAuthentication = undefined; beforeIssueLock = undefined; resetAssistantLoopbackTokens(); vi.restoreAllMocks(); vi.clearAllMocks(); });
   afterAll(async () => { if (server) await new Promise<void>(resolve => server.close(() => resolve())); await temp?.cleanup(); });
   async function fixture() {
     const userId = randomUUID(), token = `pcp_board_${randomUUID()}`;
@@ -132,6 +146,59 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
     const response = await request(f, path, kind === 'release' ? {} : kind === 'resume' ? { mode: 'resume' } : undefined);
     expect(response.status).toBe(404); expect(await response.text()).not.toContain('Private history');
     expect((await db.select().from(issueTreeHolds).where(eq(issueTreeHolds.id, held.hold.id)))[0].status).toBe('active');
+  });
+  it.each(['detail', 'members', 'summary', 'state', 'descendant-summary', 'descendant-state'] as const)('never returns an old private %s projection after its source is deleted', async kind => {
+    const f = await fixture(), svc = issueTreeControlService(db);
+    const [child] = await db.insert(issues).values({ companyId: f.company.id, parentId: f.issue.id, title: 'Secret retained snapshot', identifier: `SECRET-HISTORY-${randomUUID()}` }).returning();
+    const held = await svc.createHold(f.company.id, f.issue.id, { mode: 'pause', actor: { actorType: 'user', actorId: f.userId } });
+    const [privateProject] = await db.insert(projects).values({ companyId: f.company.id, name: 'Restricted history', visibility: 'restricted' }).returning();
+    await issueService(db).update(child.id, { parentId: kind.startsWith('descendant-') ? f.issue.id : null, projectId: privateProject.id });
+    const projected = gate(), continueRead = gate(), deletionStarted = gate();
+    let deletionPid = 0;
+    const deletionDb = new Proxy(db, { get(target, key, receiver) {
+      if (key !== 'transaction') return Reflect.get(target, key, receiver);
+      return (work: (tx: unknown) => Promise<unknown>) => target.transaction(async tx => {
+        deletionPid = Number((await tx.execute(sql`select pg_backend_pid() pid`))[0].pid);
+        deletionStarted.open();
+        return work(tx);
+      });
+    } });
+    beforeReadAuthority = async () => { projected.open(); await continueRead.promise; };
+    const endpoint = kind === 'detail' ? `tree-holds/${held.hold.id}` : kind === 'members' ? 'tree-holds?includeMembers=true' : kind.endsWith('state') ? 'tree-control/state' : 'tree-holds';
+    const pendingRead = request(f, endpoint);
+    await projected.promise;
+    const deletion = issueService(deletionDb).remove(child.id);
+    await deletionStarted.promise;
+    // Before the fix the actual deletion completes in this projection window.
+    // A coordinated reader instead holds the company row; release the read
+    // only after observing that distinct backend's company-lock wait.
+    let deleted = false;
+    void deletion.then(() => { deleted = true; });
+    let first: 'deleted' | 'blocked' = 'deleted';
+    try {
+      const deadline = Date.now() + 4000;
+      while (!deleted) {
+        const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where pid = ${deletionPid} and cardinality(pg_blocking_pids(pid)) > 0`);
+        if (row) {
+          expect(Number(row.pid)).not.toBe(acceptancePid);
+          expect(row.blockers).toContain(acceptancePid);
+          expect(String(row.query)).toMatch(/companies.*for no key update/i);
+          console.log(JSON.stringify({ label: `read-${kind}-deletion`, readerPid: acceptancePid, waiter: row }));
+          first = 'blocked';
+          break;
+        }
+        if (Date.now() >= deadline) throw new Error('Deletion neither completed nor waited on company');
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    } finally { continueRead.open(); }
+    const response = await pendingRead, body = await response.text();
+    await deletion;
+    expect(response.status).toBe(404);
+    expect(body).not.toContain('Secret retained snapshot');
+    expect(body).not.toContain('SECRET-HISTORY');
+    expect(body).not.toContain(child.id);
+    expect((await request(f, endpoint)).status).toBe(200);
+    expect(first).toBe('blocked');
   });
   it('refuses audited preview when credential expires during audit settings read', async () => {
     const f = await fixture();
@@ -182,6 +249,55 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
     expect(await db.select().from(issueTreeHolds).where(eq(issueTreeHolds.companyId,f.company.id))).toEqual([]);
     expect(await db.select().from(activityLog).where(eq(activityLog.companyId,f.company.id))).toEqual([]);
     expect(effects.cancelRun).not.toHaveBeenCalled(); expect(publishLiveEvent).not.toHaveBeenCalled();
+  });
+  it.each(['canonical', 'root', 'supplied'] as const)('preserves snapshot, release and exact queue behavior for %s callers', async caller => {
+    for (const releasePolicy of [undefined, null]) {
+      const f = await fixture(), svc = issueTreeControlService(db), ctx = await serviceContext(f);
+      const [agent] = await db.insert(agents).values({ companyId: f.company.id, name: 'Snapshot assignee' }).returning();
+      const [run] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: agent.id, status: 'running', contextSnapshot: { issueId: f.issue.id } }).returning();
+      await db.update(issues).set({ status: 'in_progress', assigneeAgentId: agent.id, executionRunId: run.id }).where(eq(issues.id, f.issue.id));
+      const [child] = await db.insert(issues).values({ companyId: f.company.id, parentId: f.issue.id, title: 'Terminal snapshot', status: 'done' }).returning();
+      const queued = await db.insert(agentWakeupRequests).values(['queued', 'deferred_issue_execution', 'queued', 'claimed'].map((status, index) => ({
+        companyId: f.company.id, agentId: agent.id, source: 'assignment', status,
+        runId: index === 2 ? run.id : null, payload: { issueId: f.issue.id },
+      }))).returning();
+      const policy = { strategy: 'manual' as const, note: 'Preserve stored policy' };
+      const input = { mode: 'pause' as const, reason: 'Human pause', releasePolicy: policy };
+      const releaseInput = { reason: 'Human release', releasePolicy, metadata: { disposition: 'reviewed' } };
+      const expectedQueueIds = queued.slice(0, 2).map(row => row.id).sort();
+      let holdId = '';
+      if (caller === 'canonical') {
+        const accepted = await svc.acceptAction(ctx, { kind: 'create', input });
+        if (!('hold' in accepted.result)) throw new Error('Expected hold result');
+        holdId = accepted.result.hold.id;
+        expect(accepted.cancelledWakeupIds.sort()).toEqual(expectedQueueIds);
+        await svc.acceptAction(ctx, { kind: 'release', holdId, input: releaseInput });
+      } else {
+        const work = async (acceptance?: { executor: Db; publications: ActivityPublication[] }) => {
+          const created = await svc.createHold(f.company.id, f.issue.id, { ...input, actor: ctx.actor }, acceptance);
+          holdId = created.hold.id;
+          const changed = await svc.cancelUnclaimedWakeupsForTree(f.company.id, f.issue.id, 'Human pause', acceptance);
+          expect(changed.map(row => row.id).sort()).toEqual(expectedQueueIds);
+          await svc.releaseHold(f.company.id, f.issue.id, holdId, { ...releaseInput, actor: ctx.actor }, acceptance);
+        };
+        if (caller === 'supplied') await db.transaction(tx => work({ executor: tx as unknown as Db, publications: [] }));
+        else await work();
+      }
+      const [hold] = await db.select().from(issueTreeHolds).where(eq(issueTreeHolds.id, holdId));
+      expect(hold).toMatchObject({ companyId: f.company.id, rootIssueId: f.issue.id, mode: 'pause', status: 'released', reason: 'Human pause',
+        createdByActorType: 'user', createdByUserId: f.userId, createdByAgentId: null, createdByRunId: null,
+        releasedByActorType: 'user', releasedByUserId: f.userId, releasedByAgentId: null, releasedByRunId: null,
+        releaseReason: 'Human release', releasePolicy: policy, releaseMetadata: { disposition: 'reviewed' } });
+      const members = await db.select().from(issueTreeHoldMembers).where(eq(issueTreeHoldMembers.holdId, holdId));
+      expect(members).toEqual(expect.arrayContaining([
+        expect.objectContaining({ companyId: f.company.id, issueId: f.issue.id, parentIssueId: null, depth: 0, issueTitle: f.issue.title, issueStatus: 'in_progress', assigneeAgentId: agent.id, activeRunId: run.id, activeRunStatus: 'running', skipped: false, skipReason: null }),
+        expect.objectContaining({ issueId: child.id, parentIssueId: f.issue.id, depth: 1, issueTitle: child.title, issueStatus: 'done', skipped: true }),
+      ]));
+      const after = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, f.company.id));
+      expect(after.filter(row => row.status === 'cancelled').map(row => row.id).sort()).toEqual(expectedQueueIds);
+      expect(after.find(row => row.id === queued[2].id)?.status).toBe('queued');
+      expect(after.find(row => row.id === queued[3].id)?.status).toBe('claimed');
+    }
   });
   it('atomically cancels statuses and exact unclaimed queues, retaining linked requests and skipped runs as exact effects', async () => {
     const f = await fixture(), ctx = await serviceContext(f), svc = issueTreeControlService(db);
