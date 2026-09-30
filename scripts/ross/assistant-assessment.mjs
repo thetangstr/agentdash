@@ -87,6 +87,13 @@ function assertIssue(issue,{companyId,projectId,issueId}) {
   return issue;
 }
 
+// heartbeat.ts writes executionState.recoveryBudget.status='exhausted' when the
+// task recovery budget is spent: comments still post, but no wake or provider
+// run can start until human remediation clears it.
+function isRecoveryExhausted(issue) {
+  return issue?.executionState?.recoveryBudget?.status==='exhausted';
+}
+
 // `transport.request(path, body?, method?)` throws with statusCode/status on
 // non-2xx, exactly like createGovernedRequest in governed-invocation.mjs.
 export function createAssistantAssessment({transport,actor,companyId,projectId=null,now=()=>Date.now()}) {
@@ -119,14 +126,15 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
     if(!uuid.test(issueId))throw Error('bounded UUID issueId required');
     try {
       const issue=await readIssue(issueId);
+      const recoveryExhausted=isRecoveryExhausted(issue);
       const advertised=(issue.documentSummaries??[]).some(summary=>summary.key==='ross-review');
-      if(!advertised)return {status:'unavailable',reason:'no-stored-assessment',issueId,observedAt:new Date(now()).toISOString()};
+      if(!advertised)return {status:'unavailable',reason:'no-stored-assessment',issueId,recoveryExhausted,observedAt:new Date(now()).toISOString()};
       const document=await readDocument(issueId,'ross-review');
-      if(!document)return {status:'unavailable',reason:'no-stored-assessment',issueId,observedAt:new Date(now()).toISOString()};
+      if(!document)return {status:'unavailable',reason:'no-stored-assessment',issueId,recoveryExhausted,observedAt:new Date(now()).toISOString()};
       // A ross-review answers only when authored by the issue's assigned agent;
       // a review by anyone else is present but unattributed, never an answer.
       if(!issue.assigneeAgentId||document.updatedByAgentId!==issue.assigneeAgentId) {
-        return {status:'unattributed',reason:'review-author-not-assigned-agent',issueId,
+        return {status:'unattributed',reason:'review-author-not-assigned-agent',issueId,recoveryExhausted,
           expectedAuthorAgentId:issue.assigneeAgentId??null,
           review:projectReview(document),observedAt:new Date(now()).toISOString()};
       }
@@ -135,7 +143,7 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
       return {
         status:freshness.state==='current'?'fresh':'stale',
         reason:freshness.state==='current'?null:`stored-assessment-${freshness.state}`,
-        issueId,freshness,review,
+        issueId,freshness,review,recoveryExhausted,
         observedAt:new Date(now()).toISOString(),
         businessOutcomeVerified:false,independentlyRechecked:false,
         qualification:'Stored ross-review is attributed source content. This read performs no model call, does not recheck its claims, and cannot grant capability.',
@@ -179,6 +187,13 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
       throw error;
     }
     if(!issue.assigneeAgentId)return {status:'unavailable',reason:'no-assigned-agent',requestKey,issueId};
+    // An exhausted recovery budget suppresses the wake: reporting 'requested'
+    // or 'pending' would fake work that cannot start. Refuse before writing so
+    // the requestKey stays usable after human remediation.
+    if(isRecoveryExhausted(issue)) {
+      return {status:'refused',reason:'recovery-exhausted',requestKey,issueId,
+        detail:'task recovery budget exhausted; a comment would record but no wake or run can start until human remediation'};
+    }
 
     let prior;
     try {prior=await markedCommentState(issueId,requestKey);}
@@ -241,6 +256,12 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
     const recordedAfter=requestedAt?Date.parse(stored.review.recordedAt)>=Date.parse(requestedAt):false;
     if(!baselineRevisionId&&!requestedAt)return {...stored,status:'answered',reason:null};
     if(revisionChanged||recordedAfter)return {...stored,status:'answered',reason:null};
+    // An exhausted recovery budget means no wake can actuate: report refused
+    // rather than a pending that can never resolve without human remediation.
+    if(stored.recoveryExhausted) {
+      return {...stored,status:'refused',reason:'recovery-exhausted',
+        gate:{state:'recovery-budget-exhausted'}};
+    }
     // Pending stays honest about why: surface the newest run row when the
     // transport can read it (e.g. a quota/hold-blocked claim shows stopReason).
     let lastRun=null;

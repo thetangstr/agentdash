@@ -218,6 +218,25 @@ test('denied, missing and unassigned targets return honest statuses and never st
   }
 });
 
+test('an exhausted recovery budget reports refused, not pending, and never writes',async()=>{
+  const exhausted=issue({status:'blocked',executionState:{recoveryBudget:{status:'exhausted',exhaustedBy:['runs']}}});
+  const {service,posts}=bound(path=>{
+    if(path===`/issues/${issueId}`)return exhausted;
+    if(path.endsWith('/documents/ross-review'))return reviewDoc();
+    return {__error:httpError(500)};
+  });
+  const request=await service.requestAssessment({issueId,question:'Assess this?',requestKey:'req-000001'});
+  assert.equal(request.status,'refused');
+  assert.equal(request.reason,'recovery-exhausted');
+  assert.equal(posts().length,0);
+  // A stored fresh-but-not-newer review would otherwise read as pending.
+  const status=await service.assessmentStatus({issueId,baselineRevisionId:'rev-1'});
+  assert.equal(status.status,'refused');
+  assert.equal(status.reason,'recovery-exhausted');
+  assert.equal(status.gate.state,'recovery-budget-exhausted');
+  assert.equal(posts().length,0);
+});
+
 test('an uncertain write is reported once and never reposted',async()=>{
   let attempted=0;
   const {service,posts}=bound(path=>{
