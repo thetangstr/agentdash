@@ -11,7 +11,7 @@ import { issueService } from './issues.js';
 import { documentService } from './documents.js';
 import { verdictsService } from './verdicts.js';
 import { workProductService } from './work-products.js';
-import { workforceIssueInputs } from './workforce-inputs.js';
+import { workforceIssueInputs, type WorkforceInputObservation, type WorkforceQuestionSource, type WorkforceQuestionDependency, type WorkforceSourceRole } from './workforce-inputs.js';
 import { companySkillService } from './company-skills.js';
 import { insertActivity, publishActivity, type ActivityPublication } from './activity-log.js';
 
@@ -226,20 +226,39 @@ export function workforceService(db: Db) {
       return updated;
     });
   }
-  async function getReadiness(companyId: string, agentId: string): Promise<WorkforceReadiness | null> {
+  async function getReadiness(companyId: string, agentId: string, options?: { observeSources: (sources: WorkforceQuestionDependency[]) => void }): Promise<WorkforceReadiness | null> {
+    // AgentDash: buffer native identities; publish only dependencies of returned fields.
+    const sources = new Map<string, WorkforceQuestionDependency>();
+    const dependOn = (source: WorkforceQuestionSource, roles: WorkforceSourceRole[]) => {
+      const existing = sources.get(source.interactionId);
+      if (!existing) sources.set(source.interactionId, { ...source, roles: [...roles] });
+      else for (const role of roles) if (!existing.roles.includes(role)) existing.roles.push(role);
+    };
+    const finish = (value: WorkforceReadiness | null) => { options?.observeSources([...sources.values()]); return value; };
     const enrollment = await getEnrollment(companyId, agentId);
-    if (!enrollment) return null;
+    if (!enrollment) return finish(null);
     const template = resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
     if (!template) throw conflict('Pinned workforce template is unavailable');
     const brief = await getBrief(companyId);
-    const input = enrollment.firstJobIssueId ? await workforceIssueInputs(db, companyId, agentId, enrollment.firstJobIssueId) : { pendingQuestionIds: [], taskFacts: [] };
-    const missingFactKeys = template.requiredFactKeys.filter(key => !brief.facts.some(f => f.key === key && f.value.trim()) && !input.taskFacts.some(f => f.companyFactKey === key));
+    let inputSources: WorkforceInputObservation | undefined;
+    const input = enrollment.firstJobIssueId ? await workforceIssueInputs(db, companyId, agentId, enrollment.firstJobIssueId, options ? { observeSources: observation => { inputSources = observation; } } : undefined) : { pendingQuestionIds: [], taskFacts: [] };
+    const missingFactKeys: string[] = [];
+    for (const key of template.requiredFactKeys) {
+      if (brief.facts.some(f => f.key === key && f.value.trim())) continue;
+      const fact = input.taskFacts.find(f => f.companyFactKey === key);
+      if (!fact) missingFactKeys.push(key);
+      else if (inputSources) {
+        const source = inputSources.taskFactSources.find(candidate => candidate.companyFactKey === key && candidate.sourceReference === fact.sourceReference)!.source;
+        dependOn(source, ['task_fact']);
+      }
+    }
     const result: WorkforceReadiness = { phase: 'learning', missingFactKeys, pendingQuestionIds: [], firstJobIssueId: enrollment.firstJobIssueId, acceptedVerdictId: null, briefRevision: brief.revision, learnedBriefRevision: enrollment.learnedBriefRevision, reason: 'Read the approved company brief and acknowledge learning.' };
     if (enrollment.firstJobIssueId) {
       const [job] = await db.select().from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, enrollment.firstJobIssueId)));
       if (!job) throw notFound('First job not found');
-      if (job.assigneeAgentId !== agentId) return { ...result, phase: 'needs_input', reason: 'The first job is assigned to another worker; restore its assignment before accepting this enrollment.' };
+      if (job.assigneeAgentId !== agentId) return finish({ ...result, phase: 'needs_input', reason: 'The first job is assigned to another worker; restore its assignment before accepting this enrollment.' });
       result.pendingQuestionIds = input.pendingQuestionIds;
+      for (const source of inputSources?.pendingSources ?? []) dependOn(source, source.roles);
       const docs = await documentService(db).listIssueDocuments(job.id);
       const products = await workProductService(db).listForIssue(job.id);
       const evidenceDates = [
@@ -273,27 +292,27 @@ export function workforceService(db: Db) {
       }
     }
     if (result.pendingQuestionIds.length || missingFactKeys.length) {
-      return { ...result, phase: 'needs_input', reason: 'Required company facts or dependent questions still need human input.' };
+      return finish({ ...result, phase: 'needs_input', reason: 'Required company facts or dependent questions still need human input.' });
     }
     if (enrollment.learnedBriefRevision !== brief.revision) {
-      return {
+      return finish({
         ...result,
         phase: enrollment.learnedBriefRevision === null ? 'learning' : 'refresh_needed',
         reason: 'Read and acknowledge the current approved company brief.',
-      };
+      });
     }
     // AgentDash: accepted work remains evidence, but setup is incomplete until
     // every pinned skill is installed and the most recent install succeeded.
     const missingSkills = template.skills.some(skill => !enrollment.installedSkillKeys.includes(`company/${companyId}/${skill.key}`));
     if (enrollment.skillInstallError || missingSkills) {
-      return { ...result, phase: 'learning', reason: enrollment.skillInstallError
+      return finish({ ...result, phase: 'learning', reason: enrollment.skillInstallError
         ? 'Workforce skill installation failed; retry installation before marking this worker ready.'
-        : 'Install the pinned workforce skills before marking this worker ready.' };
+        : 'Install the pinned workforce skills before marking this worker ready.' });
     }
     if (result.acceptedVerdictId) {
-      return { ...result, phase: 'ready', reason: 'First-job evidence has a current neutral passed verdict.' };
+      return finish({ ...result, phase: 'ready', reason: 'First-job evidence has a current neutral passed verdict.' });
     }
-    return result;
+    return finish(result);
   }
   async function ensureSkillsInstalled(companyId: string, agentId: string, actor: Actor) {
     requireSelfOrHuman(actor, agentId);

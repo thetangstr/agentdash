@@ -82,14 +82,22 @@ describe('foundation authority on an actual authenticated HTTP request', () => {
     const original = await credential();
     const expiresAt = new Date(Date.now() + 1500);
     await db.update(boardApiKeys).set({ expiresAt }).where(eq(boardApiKeys.id, original.key.id));
-    const application = app(async (_req, _res, next) => {
-      await db.update(boardApiKeys).set({ expiresAt: new Date(Date.now() + 60000) }).where(eq(boardApiKeys.id, original.key.id));
+    let extensionExecuted = false;
+    const extendedExpiresAt = new Date(Date.now() + 60000);
+    const application = app(async (req, _res, next) => {
+      expect(req.actor).toMatchObject({ type: 'board', source: 'board_key', userId: original.userId, keyId: original.key.id });
+      await db.update(boardApiKeys).set({ expiresAt: extendedExpiresAt }).where(eq(boardApiKeys.id, original.key.id));
+      extensionExecuted = true;
       await new Promise(resolve => setTimeout(resolve, Math.max(0, expiresAt.getTime() - Date.now() + 10)));
       next();
     });
     const response = await request(application).get('/human/identity').set('authorization', `Bearer ${original.token}`);
     expect(response.status).toBe(403);
     expect(response.body).not.toHaveProperty('user');
+    expect(extensionExecuted).toBe(true);
+    const [persisted] = await db.select().from(boardApiKeys).where(eq(boardApiKeys.id, original.key.id));
+    expect(persisted.expiresAt).toEqual(extendedExpiresAt);
+    expect(persisted.expiresAt!.getTime()).toBeGreaterThan(expiresAt.getTime());
   });
 
   it('clears original credential provenance when middleware is re-entered on the same request', async () => {
