@@ -658,6 +658,18 @@ export function renderDraftBundle(input = {}) {
   if (!nonEmptyString(input.paperclipPort)) {
     throw new Error("render-drafts requires an explicitly allocated --paperclip-port (the default 3100 is a shared listener port and is deny-listed)");
   }
+  const port = Number(input.paperclipPort);
+  const extraShared = (Array.isArray(input.sharedPorts) ? input.sharedPorts : []).map(Number);
+  if (extraShared.some((p) => !Number.isInteger(p) || p < 1 || p > 65535)) {
+    throw new Error("--shared-port values must be integers 1-65535");
+  }
+  const deniedPorts = [...SHARED_LISTENER_PORTS, ...extraShared];
+  if (deniedPorts.includes(port)) {
+    throw new Error(`--paperclip-port ${port} is a deny-listed shared listener port; allocate a noncolliding private port`);
+  }
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`--paperclip-port must be an integer 1024-65535; got ${input.paperclipPort}`);
+  }
   const plan = buildMacMiniSourceLaunchdPlan({
     ...input,
     betterAuthSecret: input.betterAuthSecret ?? DRAFT_SECRET_PLACEHOLDER,
@@ -850,6 +862,7 @@ async function main(argv) {
       publicUrl: values["public-url"],
       label: values.label,
       paperclipPort: values["paperclip-port"],
+      sharedPorts: values["shared-port"],
       repoDir: values["repo-dir"],
       agentdashHome: values["agentdash-home"],
       configDir: values["config-dir"],

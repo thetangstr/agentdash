@@ -360,6 +360,25 @@ test("render-drafts requires an explicitly allocated port and records the OTA la
   assert.match(manifest.layout, /ota-apply\.mjs/);
 });
 
+test("render-drafts rejects deny-listed shared ports like evaluate does", () => {
+  const outDir = mkdtempSync(path.join(tmpdir(), "ross-host-drafts-"));
+  for (const port of ["3100", "3199", "3102", "3112", "443", "8443", "4777"]) {
+    assert.throws(
+      () => writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: `http://100.64.0.14:${port}`, paperclipPort: port }),
+      new RegExp(`deny-listed`),
+      `port ${port} must be refused`,
+    );
+  }
+  assert.throws(
+    () => writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:9999", paperclipPort: "9999", sharedPorts: ["9999"] }),
+    /deny-listed/,
+  );
+  assert.throws(
+    () => writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:3114", paperclipPort: "abc" }),
+    /integer/,
+  );
+});
+
 test("evaluate CLI exits nonzero on incomplete evidence and prints the scorecard", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "host-readiness-cli-"));
   const bundle = buildEvidenceTemplate();
