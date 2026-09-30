@@ -316,6 +316,7 @@ describe("§5 envelope", () => {
     expect(structured.summary).toBe(result.content[0].text);
     expect(structured.asOf).toEqual(expect.any(String));
     const data = structured.data as Record<string, unknown>;
+    expect((data.company as Record<string, unknown>).id).toBe(COMPANY.id);
     expect((data.company as Record<string, unknown>).prefix).toBe("ACME");
     expect((data.links as Record<string, unknown>).home).toBe(
       "https://dash.example.test/ACME/dashboard",

@@ -12,6 +12,7 @@ import {
 } from "./envelope.js";
 import { itemCard, type ItemCard } from "./cards.js";
 import { redactAssistantValue } from "./redact.js";
+import { collectRossEvidenceForWorkItem } from "./ross-evidence.js";
 import {
   agentMap,
   durationMs,
@@ -217,7 +218,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       // whoami exists to tell them who they are connected as.
       const data = redactAssistantValue({
         user: { name: me.user?.name ?? null, email: me.user?.email ?? null, userId: me.userId ?? null },
-        company: { name: company.name, prefix: company.issuePrefix },
+        company: { id: company.id, name: company.name, prefix: company.issuePrefix },
         scopes,
         grant: { client: me.source ?? "stdio", keyId: me.keyId ?? null, createdAt: null },
         links: { home },
@@ -545,6 +546,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         client.requestJson<IssueRow & {
           project?: ProjectRow | null;
           workProducts?: WorkProductRow[];
+          documentSummaries?: Array<{ key: string; latestRevisionId?: string | null }>;
           blockedBy?: Array<{ identifier?: string | null; title?: string }>;
         }>("GET", `/issues/${found.id}`),
         client.requestJson<CommentRow[]>("GET", `/issues/${found.id}/comments?limit=3`).catch(() => [] as CommentRow[]),
@@ -555,6 +557,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         userMap(client, companyId()),
       ]);
 
+      const rossEvidence = await collectRossEvidenceForWorkItem(client, companyId(), detail);
       const card = await cardFor(detail, agents, projects, users);
       // The newest comment gets room to actually answer — 280 chars truncated
       // real updates mid-sentence in the client run. Older ones stay terse.
@@ -594,6 +597,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         data: redactAssistantValue({
           item: card,
           latestComments,
+          ...(rossEvidence ? { rossEvidence } : {}),
           workProducts: workProducts.map((wp) => ({
             agentWrote: true,
             type: wp.type, provider: wp.provider, title: clip(wp.title, 120), url: wp.url ?? null,
@@ -611,6 +615,7 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           pendingDecisions: pendingDecisions.map((a) => ({ approvalId: a.id, kind: a.type, status: a.status })),
         }),
         links: { primary: card.link },
+        truncated: rossEvidence?.truncated ?? false,
       });
     },
   );

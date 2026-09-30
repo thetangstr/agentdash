@@ -1,0 +1,19 @@
+# Ross restored model-session acceptance
+
+Continue the original executive OS goal by proving an actual model resume from the validated private archive. Scratch row equality alone did not prove inference recovery. Preserve the original runtime/stores and AgentDash shipping lane.
+
+Stage a separate private runtime from the already verified archive, using only restored ledger/projections plus freshly generated exact Node22 runtime configuration and existing reviewed compiled profiles. No whole-profile copy or new credential. Scope remains the existing company/project/Ross actor. Record archive/source hashes, full expected task session, prior message watermark and original pilot configuration before any mutation.
+
+Use the existing native Hermes adapter and <review task> task with forceFreshSession:false. Keep budget/quota/JWT/checkout gates and concurrency unchanged. The owned paused pilot alone can select the restored wrapper/home; keep outer workspace selection unchanged to preserve the native task association. Preflight must pass before dispatch. Reserve exactly one wake and inspect its real handle until terminal; never retry an ambiguous wake.
+
+Acceptance: full same session ID as the archived <review task> session; actual newer assistant message after locked resume watermark; issued read of current <acknowledgment task> sources and durable open commitment; correct freshness/reported-versus-verified distinctions; exact run-attributed publication and comment; restored-session metering selected; original database hashes unchanged. Independent review measures usefulness, source honesty and observed latency/usage. A word limit or unit suite alone is not quality acceptance.
+
+On success leave the existing pilot paused/off on the recovered runtime so its latest native task-session reference and model history agree. Keep the original runtime and saved configuration as rollback, without overwriting live files. On failure inspect terminal state and preserve receipts; restore prior configuration only after the owned run/process exits. No shared package installation/restart/migration, new live company, recurring wake, boot service, Tailscale change or push.
+
+This remains one supervised company-scoped recovery run. Actual assistant consent/delivery, fulfilled business commitment, GLM outage, continuous reporting, dedicated-host recovery, portfolio inference and voice remain independent requirements.
+
+Observed acceptance: native run <run> succeeded in 76,191 ms, resuming full session `<session>` after archived message 79. New messages 80–85 include two actually issued current-source reads and the new 159-word GLM-5.3-flash answer. Exact Ross-authored review revision 4 (<id>) and run-attributed full comment match the private receipt. Native metering selects the recovered ledger and records session-delta usage; USD cost remains unknown. Original stores remain unchanged.
+
+Quality limits: the answer correctly flags stale lead/operator sources and retains the accepted commitment as open/unverified. Its historical <id> validation wording needs a clearer stale-record qualification; it does not prove the actual ad334207a candidate head. The lead may reconcile evidence and recommend closure but cannot change board/operator acceptance criteria. This passes bounded inference recovery, not complete executive OS or business acceptance.
+
+Fresh status inspection at 2026-09-30T10:50:52.676Z confirms both pilots paused, timer/demand disabled, and <review task>/<acknowledgment task> in_review without checkout or execution locks. Ross's canonical private runtime is now an operator-private runtime directory; its original outer adapter cwd remains unchanged to preserve native task association. Original runtime/configuration remain rollback evidence. See actual proof (operator-private evidence) and checkpoint (operator-private evidence). No production code changes or shared deployment were made in this phase.
