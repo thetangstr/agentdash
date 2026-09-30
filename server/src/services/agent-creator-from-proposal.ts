@@ -96,6 +96,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: issue-topology-acceptance is inherited from the canonical bundle:
 // same-company parents, private unsafe-deletion refusal, atomic child/suggestion
 // acceptance and no replay or quarantine resolution after uncertain persistence.
+// AgentDash: routine-dispatch-acceptance is inherited from the canonical worker:
+// accepted pending/failed runs retain their linked issue; read back uncertainty,
+// never replay a wake or delete to compensate, and escalate without widening authority.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

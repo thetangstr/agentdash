@@ -12,6 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -247,6 +248,9 @@ function resolveWorktreeStartPoint(explicit?: string): string | undefined {
 }
 
 type ConfiguredStorage = {
+  readonly provider: "local_disk" | "s3";
+  readonly identity: string;
+  createObjectIfAbsent(companyId: string, objectKey: string, body: Buffer, contentType: string): Promise<"created" | "exists">;
   getObject(companyId: string, objectKey: string): Promise<Buffer>;
   putObject(companyId: string, objectKey: string, body: Buffer, contentType: string): Promise<void>;
 };
@@ -322,10 +326,19 @@ function buildS3ObjectKey(prefix: string, objectKey: string): string {
 
 const dynamicImport = new Function("specifier", "return import(specifier);") as (specifier: string) => Promise<any>;
 
-function createConfiguredStorageFromPaperclipConfig(config: PaperclipConfig): ConfiguredStorage {
+export function createConfiguredStorageFromPaperclipConfig(config: PaperclipConfig, loadS3 = dynamicImport): ConfiguredStorage {
   if (config.storage.provider === "local_disk") {
-    const baseDir = expandHomePrefix(config.storage.localDisk.baseDir);
-    return {
+    const baseDir = path.resolve(expandHomePrefix(config.storage.localDisk.baseDir));
+    return Object.freeze({
+      provider: "local_disk" as const,
+      identity: createHash("sha256").update(JSON.stringify(["local_disk", path.resolve(baseDir)])).digest("hex"),
+      async createObjectIfAbsent(companyId: string, objectKey: string, body: Buffer) {
+        assertStorageCompanyPrefix(companyId, objectKey);
+        const filePath = resolveLocalStoragePath(baseDir, objectKey);
+        await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
+        try { await fsPromises.writeFile(filePath, body, { flag: "wx" }); return "created" as const; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return "exists" as const; throw error; }
+      },
       async getObject(companyId: string, objectKey: string) {
         assertStorageCompanyPrefix(companyId, objectKey);
         return await fsPromises.readFile(resolveLocalStoragePath(baseDir, objectKey));
@@ -336,29 +349,46 @@ function createConfiguredStorageFromPaperclipConfig(config: PaperclipConfig): Co
         await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
         await fsPromises.writeFile(filePath, body);
       },
-    };
+    });
   }
 
-  const prefix = normalizeS3Prefix(config.storage.s3.prefix);
+  const s3 = { ...config.storage.s3 };
+  const prefix = normalizeS3Prefix(s3.prefix);
   let s3ClientPromise: Promise<any> | null = null;
   async function getS3Client() {
     if (!s3ClientPromise) {
       s3ClientPromise = (async () => {
-        const sdk = await dynamicImport("@aws-sdk/client-s3");
+        const sdk = await loadS3("@aws-sdk/client-s3");
         return {
           sdk,
           client: new sdk.S3Client({
-            region: config.storage.s3.region,
-            endpoint: config.storage.s3.endpoint,
-            forcePathStyle: config.storage.s3.forcePathStyle,
+            region: s3.region,
+            endpoint: s3.endpoint,
+            forcePathStyle: s3.forcePathStyle,
           }),
         };
       })();
     }
     return await s3ClientPromise;
   }
-  const bucket = config.storage.s3.bucket;
-  return {
+  const bucket = s3.bucket;
+  return Object.freeze({
+    provider: "s3" as const,
+    identity: createHash("sha256").update(JSON.stringify(["s3", s3.region, s3.endpoint, s3.forcePathStyle, bucket, prefix])).digest("hex"),
+    async createObjectIfAbsent(companyId: string, objectKey: string, body: Buffer, contentType: string) {
+      assertStorageCompanyPrefix(companyId, objectKey);
+      const { sdk, client } = await getS3Client();
+      try {
+        await client.send(new sdk.PutObjectCommand({ Bucket: bucket, Key: buildS3ObjectKey(prefix, objectKey),
+          Body: body, ContentType: contentType, ContentLength: body.length, IfNoneMatch: "*" }));
+        return "created" as const;
+      } catch (error) {
+        const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+        if (failure.name === "PreconditionFailed" || failure.$metadata?.httpStatusCode === 412) return "exists" as const;
+        // Unsupported conditional writes and unknown/409 results never fall back to overwrite.
+        throw new Error("Conditional storage creation was not acknowledged; retain the attempted object and inspect storage");
+      }
+    },
     async getObject(companyId: string, objectKey: string) {
       assertStorageCompanyPrefix(companyId, objectKey);
       const { sdk, client } = await getS3Client();
@@ -383,7 +413,7 @@ function createConfiguredStorageFromPaperclipConfig(config: PaperclipConfig): Co
         }),
       );
     },
-  };
+  });
 }
 
 function openConfiguredStorage(configPath: string): ConfiguredStorage {
@@ -2562,258 +2592,333 @@ async function promptForSourceEndpoint(excludeWorktreePath?: string): Promise<Re
   return resolveWorktreeEndpointFromSelector(selection, { allowCurrent: true });
 }
 
-async function applyMergePlan(input: {
-  sourceStorages: ConfiguredStorage[];
-  targetStorage: ConfiguredStorage;
-  targetDb: ClosableDb;
-  company: ResolvedMergeCompany;
-  plan: Awaited<ReturnType<typeof collectMergePlan>>["plan"];
-}) {
-  const companyId = input.company.id;
+type MergePlan = Awaited<ReturnType<typeof collectMergePlan>>["plan"];
+type StagedAttachment = Readonly<{
+  attachmentId: string; sourceAssetId: string; sourceKey: string; issueId: string;
+  issueCommentId: string | null; createdByAgentId: string | null; createdByUserId: string | null;
+  assetCreatedAt: string; assetUpdatedAt: string; attachmentCreatedAt: string; attachmentUpdatedAt: string;
+  contentType: string; originalFilename: string | null;
+  targetAssetId: string | null; targetKey: string | null; byteSize: number; sha256: string | null;
+  state: "verified" | "missing"; createdByThisInvocation: boolean;
+}>;
+type MergeAttachmentManifest = Readonly<{
+  companyId: string; operationId: string; provider: ConfiguredStorage["provider"]; storageIdentity: string;
+  entries: readonly StagedAttachment[];
+}>;
 
-  return await input.targetDb.transaction(async (tx) => {
-    const importedProjectIds = input.plan.projectImports.map((project) => project.source.id);
-    const existingImportedProjectIds = importedProjectIds.length > 0
-      ? new Set(
-        (await tx
-          .select({ id: projects.id })
-          .from(projects)
-          .where(inArray(projects.id, importedProjectIds)))
-          .map((row) => row.id),
-      )
-      : new Set<string>();
-    const projectImports = input.plan.projectImports.filter((project) => !existingImportedProjectIds.has(project.source.id));
-    const importedWorkspaceIds = projectImports.flatMap((project) => project.workspaces.map((workspace) => workspace.id));
-    const existingImportedWorkspaceIds = importedWorkspaceIds.length > 0
-      ? new Set(
-        (await tx
-          .select({ id: projectWorkspaces.id })
-          .from(projectWorkspaces)
-          .where(inArray(projectWorkspaces.id, importedWorkspaceIds)))
-          .map((row) => row.id),
-      )
-      : new Set<string>();
-
-    let insertedProjects = 0;
-    let insertedProjectWorkspaces = 0;
-    for (const project of projectImports) {
-      await tx.insert(projects).values({
-        id: project.source.id,
-        companyId,
-        goalId: project.targetGoalId,
-        name: project.source.name,
-        description: project.source.description,
-        status: project.source.status,
-        leadAgentId: project.targetLeadAgentId,
-        targetDate: project.source.targetDate,
-        color: project.source.color,
-        pauseReason: project.source.pauseReason,
-        pausedAt: project.source.pausedAt,
-        executionWorkspacePolicy: project.source.executionWorkspacePolicy,
-        archivedAt: project.source.archivedAt,
-        createdAt: project.source.createdAt,
-        updatedAt: project.source.updatedAt,
-      });
-      insertedProjects += 1;
-
-      for (const workspace of project.workspaces) {
-        if (existingImportedWorkspaceIds.has(workspace.id)) continue;
-        await tx.insert(projectWorkspaces).values({
-          id: workspace.id,
-          companyId,
-          projectId: project.source.id,
-          name: workspace.name,
-          sourceType: workspace.sourceType,
-          cwd: workspace.cwd,
-          repoUrl: workspace.repoUrl,
-          repoRef: workspace.repoRef,
-          defaultRef: workspace.defaultRef,
-          visibility: workspace.visibility,
-          setupCommand: workspace.setupCommand,
-          cleanupCommand: workspace.cleanupCommand,
-          remoteProvider: workspace.remoteProvider,
-          remoteWorkspaceRef: workspace.remoteWorkspaceRef,
-          sharedWorkspaceKey: workspace.sharedWorkspaceKey,
-          metadata: workspace.metadata,
-          isPrimary: workspace.isPrimary,
-          createdAt: workspace.createdAt,
-          updatedAt: workspace.updatedAt,
-        });
-        insertedProjectWorkspaces += 1;
+// AgentDash: this private invocation owns fresh immutable object names. No removal API is assumed.
+async function stageMergeAttachments(companyId: string, plan: MergePlan, sourceStorages: ConfiguredStorage[], targetStorage: ConfiguredStorage): Promise<MergeAttachmentManifest> {
+  const operationId = randomUUID();
+  const entries: StagedAttachment[] = [];
+  const attempted: Array<{ targetAssetId: string; targetKey: string; acknowledged: boolean }> = [];
+  let failureReason: string | undefined;
+  try {
+    for (const attachment of plan.attachmentPlans) {
+      if (attachment.action !== "insert") continue;
+      const source = attachment.source;
+      if (source.companyId !== companyId) throw new Error("Attachment company is unavailable");
+      const pinned = {
+        attachmentId: source.id, sourceAssetId: source.assetId, sourceKey: source.objectKey, issueId: source.issueId,
+        issueCommentId: attachment.targetIssueCommentId, createdByAgentId: attachment.targetCreatedByAgentId, createdByUserId: source.createdByUserId,
+        assetCreatedAt: source.assetCreatedAt.toISOString(), assetUpdatedAt: source.assetUpdatedAt.toISOString(),
+        attachmentCreatedAt: source.attachmentCreatedAt.toISOString(), attachmentUpdatedAt: source.attachmentUpdatedAt.toISOString(),
+        contentType: source.contentType, originalFilename: source.originalFilename,
+      };
+      const body = await readSourceAttachmentBody(sourceStorages, companyId, source.objectKey);
+      if (body === null) {
+        const entry: StagedAttachment = Object.freeze({ ...pinned, state: "missing", targetAssetId: null, targetKey: null,
+          byteSize: source.byteSize, sha256: source.sha256, createdByThisInvocation: false });
+        entries.push(entry); continue;
       }
+      const sha256 = createHash("sha256").update(body).digest("hex");
+      if (body.length !== source.byteSize || (source.sha256 != null && source.sha256 !== sha256)) throw new Error(failureReason = "Attachment metadata does not match source bytes");
+      let entry: StagedAttachment | undefined;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const targetAssetId = randomUUID();
+        const targetKey = `${companyId}/worktree-merge/${operationId}/${targetAssetId}/${sha256}`;
+        const receipt = { targetAssetId, targetKey, acknowledged: false }; attempted.push(receipt);
+        if (await targetStorage.createObjectIfAbsent(companyId, targetKey, body, source.contentType) === "exists") continue;
+        receipt.acknowledged = true;
+        const verified = await targetStorage.getObject(companyId, targetKey);
+        if (verified.length !== body.length || !verified.equals(body)) throw new Error(failureReason = "Target attachment verification failed");
+        entry = Object.freeze({ ...pinned, state: "verified", targetAssetId, targetKey, byteSize: body.length, sha256, createdByThisInvocation: true });
+        break;
+      }
+      if (!entry) throw new Error(failureReason = "Immutable attachment object collisions exhausted bounded attempts");
+      entries.push(entry);
     }
+  } catch {
+    // Retain even ambiguous/partial objects. Errors contain no storage configuration or provider diagnostics.
+    throw Object.assign(new Error(failureReason ?? "Attachment staging failed before database acceptance; attempted objects retained"), {
+      persistenceOutcome: "not_started", retainedObjects: attempted, operationId,
+    });
+  }
+  return Object.freeze({ companyId, operationId, provider: targetStorage.provider, storageIdentity: targetStorage.identity, entries: Object.freeze(entries) });
+}
 
-    const issueCandidates = input.plan.issuePlans.filter(
-      (plan): plan is PlannedIssueInsert => plan.action === "insert",
-    );
-    const issueCandidateIds = issueCandidates.map((issue) => issue.source.id);
-    const existingIssueIds = issueCandidateIds.length > 0
-      ? new Set(
-        (await tx
+export async function applyMergePlan(input: {
+  sourceStorages: ConfiguredStorage[]; targetStorage: ConfiguredStorage; targetDb: ClosableDb;
+  company: ResolvedMergeCompany; plan: MergePlan;
+}) {
+  // Freeze the selected plan before the first external await; callers cannot retarget staged bindings.
+  const plan = structuredClone(input.plan);
+  const selectedAssetIds = new Set<string>();
+  const selectedAttachmentIds = new Set<string>();
+  for (const attachment of plan.attachmentPlans) {
+    if (attachment.action !== "insert") continue;
+    if (selectedAssetIds.has(attachment.source.assetId) || selectedAttachmentIds.has(attachment.source.id)) throw new Error("Unsupported attachment merge plan: attachment and asset selections must be unique");
+    selectedAssetIds.add(attachment.source.assetId); selectedAttachmentIds.add(attachment.source.id);
+  }
+  const manifest = await stageMergeAttachments(input.company.id, plan, input.sourceStorages, input.targetStorage);
+  return applyStagedMergePlan({ targetDb: input.targetDb, company: { ...input.company }, plan, manifest });
+}
+
+async function applyStagedMergePlan(input: { targetDb: ClosableDb; company: ResolvedMergeCompany; plan: MergePlan; manifest: MergeAttachmentManifest }) {
+  const companyId = input.company.id;
+  if (input.manifest.companyId !== companyId) throw new Error("Attachment manifest company changed");
+  let completed = false;
+  try {
+    return await input.targetDb.transaction(async (tx) => {
+      const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).for("update");
+      if (!company) throw new Error("Merge company is unavailable");
+      async function requireBinding(table: typeof projects | typeof projectWorkspaces | typeof goals | typeof agents | typeof issues, id: string | null) {
+        if (id && !(await tx.select({ id: table.id }).from(table).where(and(eq(table.id, id), eq(table.companyId, companyId))))[0]) throw new Error("Merge dependency is unavailable");
+      }
+      const importedProjectIds = input.plan.projectImports.map((project) => project.source.id);
+      const existingImportedProjectIds = importedProjectIds.length > 0
+        ? new Set(
+          (await tx
+            .select({ id: projects.id })
+            .from(projects)
+            .where(inArray(projects.id, importedProjectIds)))
+            .map((row) => row.id),
+        )
+        : new Set<string>();
+      const projectImports = input.plan.projectImports.filter((project) => !existingImportedProjectIds.has(project.source.id));
+      const importedWorkspaceIds = projectImports.flatMap((project) => project.workspaces.map((workspace) => workspace.id));
+      const existingImportedWorkspaceIds = importedWorkspaceIds.length > 0
+        ? new Set(
+          (await tx
+            .select({ id: projectWorkspaces.id })
+            .from(projectWorkspaces)
+            .where(inArray(projectWorkspaces.id, importedWorkspaceIds)))
+            .map((row) => row.id),
+        )
+        : new Set<string>();
+
+      let insertedProjects = 0;
+      let insertedProjectWorkspaces = 0;
+      for (const project of projectImports) {
+        await requireBinding(goals, project.targetGoalId);
+        await requireBinding(agents, project.targetLeadAgentId);
+        await tx.insert(projects).values({
+          id: project.source.id,
+          companyId,
+          goalId: project.targetGoalId,
+          name: project.source.name,
+          description: project.source.description,
+          status: project.source.status,
+          leadAgentId: project.targetLeadAgentId,
+          targetDate: project.source.targetDate,
+          color: project.source.color,
+          pauseReason: project.source.pauseReason,
+          pausedAt: project.source.pausedAt,
+          executionWorkspacePolicy: project.source.executionWorkspacePolicy,
+          archivedAt: project.source.archivedAt,
+          createdAt: project.source.createdAt,
+          updatedAt: project.source.updatedAt,
+        });
+        insertedProjects += 1;
+
+        for (const workspace of project.workspaces) {
+          if (existingImportedWorkspaceIds.has(workspace.id)) continue;
+          await tx.insert(projectWorkspaces).values({
+            id: workspace.id,
+            companyId,
+            projectId: project.source.id,
+            name: workspace.name,
+            sourceType: workspace.sourceType,
+            cwd: workspace.cwd,
+            repoUrl: workspace.repoUrl,
+            repoRef: workspace.repoRef,
+            defaultRef: workspace.defaultRef,
+            visibility: workspace.visibility,
+            setupCommand: workspace.setupCommand,
+            cleanupCommand: workspace.cleanupCommand,
+            remoteProvider: workspace.remoteProvider,
+            remoteWorkspaceRef: workspace.remoteWorkspaceRef,
+            sharedWorkspaceKey: workspace.sharedWorkspaceKey,
+            metadata: workspace.metadata,
+            isPrimary: workspace.isPrimary,
+            createdAt: workspace.createdAt,
+            updatedAt: workspace.updatedAt,
+          });
+          insertedProjectWorkspaces += 1;
+        }
+      }
+
+      const issueCandidates = input.plan.issuePlans.filter(
+        (plan): plan is PlannedIssueInsert => plan.action === "insert",
+      );
+      const issueCandidateIds = issueCandidates.map((issue) => issue.source.id);
+      const existingIssueIds = issueCandidateIds.length > 0
+        ? new Set(
+          (await tx
+            .select({ id: issues.id })
+            .from(issues)
+            .where(inArray(issues.id, issueCandidateIds)))
+            .map((row) => row.id),
+        )
+        : new Set<string>();
+      const issueInserts = issueCandidates.filter((issue) => !existingIssueIds.has(issue.source.id));
+
+      let nextIssueNumber = 0;
+      if (issueInserts.length > 0) {
+        const [companyRow] = await tx
+          .update(companies)
+          .set({ issueCounter: sql`${companies.issueCounter} + ${issueInserts.length}` })
+          .where(eq(companies.id, companyId))
+          .returning({ issueCounter: companies.issueCounter });
+        nextIssueNumber = companyRow.issueCounter - issueInserts.length + 1;
+      }
+
+      const insertedIssueIdentifiers = new Map<string, string>();
+      let insertedIssues = 0;
+      for (const issue of issueInserts) {
+        const issueNumber = nextIssueNumber;
+        nextIssueNumber += 1;
+        const identifier = `${company.issuePrefix}-${issueNumber}`;
+        insertedIssueIdentifiers.set(issue.source.id, identifier);
+        await requireBinding(projects, issue.targetProjectId);
+        await requireBinding(projectWorkspaces, issue.targetProjectWorkspaceId);
+        await requireBinding(goals, issue.targetGoalId);
+        await requireBinding(agents, issue.targetAssigneeAgentId);
+        await requireBinding(agents, issue.targetCreatedByAgentId);
+        await requireBinding(issues, issue.source.parentId);
+        if (issue.targetProjectWorkspaceId && !(await tx.select({ id: projectWorkspaces.id }).from(projectWorkspaces).where(and(eq(projectWorkspaces.id, issue.targetProjectWorkspaceId), eq(projectWorkspaces.projectId, issue.targetProjectId!))))[0]) throw new Error("Merge workspace project changed");
+        await tx.insert(issues).values({
+          id: issue.source.id,
+          companyId,
+          projectId: issue.targetProjectId,
+          projectWorkspaceId: issue.targetProjectWorkspaceId,
+          goalId: issue.targetGoalId,
+          parentId: issue.source.parentId,
+          title: issue.source.title,
+          description: issue.source.description,
+          status: issue.targetStatus,
+          priority: issue.source.priority,
+          assigneeAgentId: issue.targetAssigneeAgentId,
+          assigneeUserId: issue.source.assigneeUserId,
+          checkoutRunId: null,
+          executionRunId: null,
+          executionAgentNameKey: null,
+          executionLockedAt: null,
+          createdByAgentId: issue.targetCreatedByAgentId,
+          createdByUserId: issue.source.createdByUserId,
+          issueNumber,
+          identifier,
+          requestDepth: issue.source.requestDepth,
+          billingCode: issue.source.billingCode,
+          assigneeAdapterOverrides: issue.targetAssigneeAgentId ? issue.source.assigneeAdapterOverrides : null,
+          executionWorkspaceId: null,
+          executionWorkspacePreference: null,
+          executionWorkspaceSettings: null,
+          startedAt: issue.source.startedAt,
+          completedAt: issue.source.completedAt,
+          cancelledAt: issue.source.cancelledAt,
+          hiddenAt: issue.source.hiddenAt,
+          createdAt: issue.source.createdAt,
+          updatedAt: issue.source.updatedAt,
+        });
+        insertedIssues += 1;
+      }
+
+      const commentCandidates = input.plan.commentPlans.filter(
+        (plan): plan is PlannedCommentInsert => plan.action === "insert",
+      );
+      const commentCandidateIds = commentCandidates.map((comment) => comment.source.id);
+      const existingCommentIds = commentCandidateIds.length > 0
+        ? new Set(
+          (await tx
+            .select({ id: issueComments.id })
+            .from(issueComments)
+            .where(inArray(issueComments.id, commentCandidateIds)))
+            .map((row) => row.id),
+        )
+        : new Set<string>();
+
+      let insertedComments = 0;
+      for (const comment of commentCandidates) {
+        if (existingCommentIds.has(comment.source.id)) continue;
+        const parentExists = await tx
           .select({ id: issues.id })
           .from(issues)
-          .where(inArray(issues.id, issueCandidateIds)))
-          .map((row) => row.id),
-      )
-      : new Set<string>();
-    const issueInserts = issueCandidates.filter((issue) => !existingIssueIds.has(issue.source.id));
-
-    let nextIssueNumber = 0;
-    if (issueInserts.length > 0) {
-      const [companyRow] = await tx
-        .update(companies)
-        .set({ issueCounter: sql`${companies.issueCounter} + ${issueInserts.length}` })
-        .where(eq(companies.id, companyId))
-        .returning({ issueCounter: companies.issueCounter });
-      nextIssueNumber = companyRow.issueCounter - issueInserts.length + 1;
-    }
-
-    const insertedIssueIdentifiers = new Map<string, string>();
-    let insertedIssues = 0;
-    for (const issue of issueInserts) {
-      const issueNumber = nextIssueNumber;
-      nextIssueNumber += 1;
-      const identifier = `${input.company.issuePrefix}-${issueNumber}`;
-      insertedIssueIdentifiers.set(issue.source.id, identifier);
-      await tx.insert(issues).values({
-        id: issue.source.id,
-        companyId,
-        projectId: issue.targetProjectId,
-        projectWorkspaceId: issue.targetProjectWorkspaceId,
-        goalId: issue.targetGoalId,
-        parentId: issue.source.parentId,
-        title: issue.source.title,
-        description: issue.source.description,
-        status: issue.targetStatus,
-        priority: issue.source.priority,
-        assigneeAgentId: issue.targetAssigneeAgentId,
-        assigneeUserId: issue.source.assigneeUserId,
-        checkoutRunId: null,
-        executionRunId: null,
-        executionAgentNameKey: null,
-        executionLockedAt: null,
-        createdByAgentId: issue.targetCreatedByAgentId,
-        createdByUserId: issue.source.createdByUserId,
-        issueNumber,
-        identifier,
-        requestDepth: issue.source.requestDepth,
-        billingCode: issue.source.billingCode,
-        assigneeAdapterOverrides: issue.targetAssigneeAgentId ? issue.source.assigneeAdapterOverrides : null,
-        executionWorkspaceId: null,
-        executionWorkspacePreference: null,
-        executionWorkspaceSettings: null,
-        startedAt: issue.source.startedAt,
-        completedAt: issue.source.completedAt,
-        cancelledAt: issue.source.cancelledAt,
-        hiddenAt: issue.source.hiddenAt,
-        createdAt: issue.source.createdAt,
-        updatedAt: issue.source.updatedAt,
-      });
-      insertedIssues += 1;
-    }
-
-    const commentCandidates = input.plan.commentPlans.filter(
-      (plan): plan is PlannedCommentInsert => plan.action === "insert",
-    );
-    const commentCandidateIds = commentCandidates.map((comment) => comment.source.id);
-    const existingCommentIds = commentCandidateIds.length > 0
-      ? new Set(
-        (await tx
-          .select({ id: issueComments.id })
-          .from(issueComments)
-          .where(inArray(issueComments.id, commentCandidateIds)))
-          .map((row) => row.id),
-      )
-      : new Set<string>();
-
-    let insertedComments = 0;
-    for (const comment of commentCandidates) {
-      if (existingCommentIds.has(comment.source.id)) continue;
-      const parentExists = await tx
-        .select({ id: issues.id })
-        .from(issues)
-        .where(and(eq(issues.id, comment.source.issueId), eq(issues.companyId, companyId)))
-        .then((rows) => rows[0] ?? null);
-      if (!parentExists) continue;
-      await tx.insert(issueComments).values({
-        id: comment.source.id,
-        companyId,
-        issueId: comment.source.issueId,
-        authorAgentId: comment.targetAuthorAgentId,
-        authorUserId: comment.source.authorUserId,
-        body: comment.source.body,
-        createdAt: comment.source.createdAt,
-        updatedAt: comment.source.updatedAt,
-      });
-      insertedComments += 1;
-    }
-
-    const documentCandidates = input.plan.documentPlans.filter(
-      (plan): plan is PlannedIssueDocumentInsert | PlannedIssueDocumentMerge =>
-        plan.action === "insert" || plan.action === "merge_existing",
-    );
-    let insertedDocuments = 0;
-    let mergedDocuments = 0;
-    let insertedDocumentRevisions = 0;
-    for (const documentPlan of documentCandidates) {
-      const parentExists = await tx
-        .select({ id: issues.id })
-        .from(issues)
-        .where(and(eq(issues.id, documentPlan.source.issueId), eq(issues.companyId, companyId)))
-        .then((rows) => rows[0] ?? null);
-      if (!parentExists) continue;
-
-      const conflictingKeyDocument = await tx
-        .select({ documentId: issueDocuments.documentId })
-        .from(issueDocuments)
-        .where(and(eq(issueDocuments.issueId, documentPlan.source.issueId), eq(issueDocuments.key, documentPlan.source.key)))
-        .then((rows) => rows[0] ?? null);
-      if (
-        conflictingKeyDocument
-        && conflictingKeyDocument.documentId !== documentPlan.source.documentId
-      ) {
-        continue;
+          .where(and(eq(issues.id, comment.source.issueId), eq(issues.companyId, companyId)))
+          .then((rows) => rows[0] ?? null);
+        if (!parentExists) continue;
+        await tx.insert(issueComments).values({
+          id: comment.source.id,
+          companyId,
+          issueId: comment.source.issueId,
+          authorAgentId: comment.targetAuthorAgentId,
+          authorUserId: comment.source.authorUserId,
+          body: comment.source.body,
+          createdAt: comment.source.createdAt,
+          updatedAt: comment.source.updatedAt,
+        });
+        insertedComments += 1;
       }
 
-      const existingDocument = await tx
-        .select({ id: documents.id })
-        .from(documents)
-        .where(eq(documents.id, documentPlan.source.documentId))
-        .then((rows) => rows[0] ?? null);
-
-      if (!existingDocument) {
-        await tx.insert(documents).values({
-          id: documentPlan.source.documentId,
-          companyId,
-          title: documentPlan.source.title,
-          format: documentPlan.source.format,
-          latestBody: documentPlan.source.latestBody,
-          latestRevisionId: documentPlan.latestRevisionId,
-          latestRevisionNumber: documentPlan.latestRevisionNumber,
-          createdByAgentId: documentPlan.targetCreatedByAgentId,
-          createdByUserId: documentPlan.source.createdByUserId,
-          updatedByAgentId: documentPlan.targetUpdatedByAgentId,
-          updatedByUserId: documentPlan.source.updatedByUserId,
-          createdAt: documentPlan.source.documentCreatedAt,
-          updatedAt: documentPlan.source.documentUpdatedAt,
-        });
-        await tx.insert(issueDocuments).values({
-          id: documentPlan.source.id,
-          companyId,
-          issueId: documentPlan.source.issueId,
-          documentId: documentPlan.source.documentId,
-          key: documentPlan.source.key,
-          createdAt: documentPlan.source.linkCreatedAt,
-          updatedAt: documentPlan.source.linkUpdatedAt,
-        });
-        insertedDocuments += 1;
-      } else {
-        const existingLink = await tx
-          .select({ id: issueDocuments.id })
-          .from(issueDocuments)
-          .where(eq(issueDocuments.documentId, documentPlan.source.documentId))
+      const documentCandidates = input.plan.documentPlans.filter(
+        (plan): plan is PlannedIssueDocumentInsert | PlannedIssueDocumentMerge =>
+          plan.action === "insert" || plan.action === "merge_existing",
+      );
+      let insertedDocuments = 0;
+      let mergedDocuments = 0;
+      let insertedDocumentRevisions = 0;
+      for (const documentPlan of documentCandidates) {
+        const parentExists = await tx
+          .select({ id: issues.id })
+          .from(issues)
+          .where(and(eq(issues.id, documentPlan.source.issueId), eq(issues.companyId, companyId)))
           .then((rows) => rows[0] ?? null);
-        if (!existingLink) {
+        if (!parentExists) continue;
+
+        const conflictingKeyDocument = await tx
+          .select({ documentId: issueDocuments.documentId })
+          .from(issueDocuments)
+          .where(and(eq(issueDocuments.issueId, documentPlan.source.issueId), eq(issueDocuments.key, documentPlan.source.key)))
+          .then((rows) => rows[0] ?? null);
+        if (
+          conflictingKeyDocument
+          && conflictingKeyDocument.documentId !== documentPlan.source.documentId
+        ) {
+          continue;
+        }
+
+        const existingDocument = await tx
+          .select({ id: documents.id, companyId: documents.companyId })
+          .from(documents)
+          .where(eq(documents.id, documentPlan.source.documentId))
+          .then((rows) => rows[0] ?? null);
+
+        if (existingDocument && existingDocument.companyId !== companyId) throw new Error("Merge document is unavailable");
+        if (!existingDocument) {
+          await tx.insert(documents).values({
+            id: documentPlan.source.documentId,
+            companyId,
+            title: documentPlan.source.title,
+            format: documentPlan.source.format,
+            latestBody: documentPlan.source.latestBody,
+            latestRevisionId: documentPlan.latestRevisionId,
+            latestRevisionNumber: documentPlan.latestRevisionNumber,
+            createdByAgentId: documentPlan.targetCreatedByAgentId,
+            createdByUserId: documentPlan.source.createdByUserId,
+            updatedByAgentId: documentPlan.targetUpdatedByAgentId,
+            updatedByUserId: documentPlan.source.updatedByUserId,
+            createdAt: documentPlan.source.documentCreatedAt,
+            updatedAt: documentPlan.source.documentUpdatedAt,
+          });
           await tx.insert(issueDocuments).values({
             id: documentPlan.source.id,
             companyId,
@@ -2823,136 +2928,127 @@ async function applyMergePlan(input: {
             createdAt: documentPlan.source.linkCreatedAt,
             updatedAt: documentPlan.source.linkUpdatedAt,
           });
+          insertedDocuments += 1;
         } else {
-          await tx
-            .update(issueDocuments)
-            .set({
+          const existingLink = await tx
+            .select({ id: issueDocuments.id, companyId: issueDocuments.companyId, issueId: issueDocuments.issueId })
+            .from(issueDocuments)
+            .where(eq(issueDocuments.documentId, documentPlan.source.documentId))
+            .then((rows) => rows[0] ?? null);
+          if (existingLink && (existingLink.companyId !== companyId || existingLink.issueId !== documentPlan.source.issueId)) throw new Error("Merge document link changed");
+          if (!existingLink) {
+            await tx.insert(issueDocuments).values({
+              id: documentPlan.source.id,
+              companyId,
               issueId: documentPlan.source.issueId,
+              documentId: documentPlan.source.documentId,
               key: documentPlan.source.key,
+              createdAt: documentPlan.source.linkCreatedAt,
               updatedAt: documentPlan.source.linkUpdatedAt,
+            });
+          } else {
+            await tx
+              .update(issueDocuments)
+              .set({
+                issueId: documentPlan.source.issueId,
+                key: documentPlan.source.key,
+                updatedAt: documentPlan.source.linkUpdatedAt,
+              })
+              .where(eq(issueDocuments.documentId, documentPlan.source.documentId));
+          }
+
+          await tx
+            .update(documents)
+            .set({
+              title: documentPlan.source.title,
+              format: documentPlan.source.format,
+              latestBody: documentPlan.source.latestBody,
+              latestRevisionId: documentPlan.latestRevisionId,
+              latestRevisionNumber: documentPlan.latestRevisionNumber,
+              updatedByAgentId: documentPlan.targetUpdatedByAgentId,
+              updatedByUserId: documentPlan.source.updatedByUserId,
+              updatedAt: documentPlan.source.documentUpdatedAt,
             })
-            .where(eq(issueDocuments.documentId, documentPlan.source.documentId));
+            .where(eq(documents.id, documentPlan.source.documentId));
+          mergedDocuments += 1;
         }
 
-        await tx
-          .update(documents)
-          .set({
-            title: documentPlan.source.title,
-            format: documentPlan.source.format,
-            latestBody: documentPlan.source.latestBody,
-            latestRevisionId: documentPlan.latestRevisionId,
-            latestRevisionNumber: documentPlan.latestRevisionNumber,
-            updatedByAgentId: documentPlan.targetUpdatedByAgentId,
-            updatedByUserId: documentPlan.source.updatedByUserId,
-            updatedAt: documentPlan.source.documentUpdatedAt,
-          })
-          .where(eq(documents.id, documentPlan.source.documentId));
-        mergedDocuments += 1;
+        const existingRevisionIds = new Set(
+          (
+            await tx
+              .select({ id: documentRevisions.id })
+              .from(documentRevisions)
+              .where(eq(documentRevisions.documentId, documentPlan.source.documentId))
+          ).map((row) => row.id),
+        );
+        for (const revisionPlan of documentPlan.revisionsToInsert) {
+          if (existingRevisionIds.has(revisionPlan.source.id)) continue;
+          await tx.insert(documentRevisions).values({
+            id: revisionPlan.source.id,
+            companyId,
+            documentId: documentPlan.source.documentId,
+            revisionNumber: revisionPlan.targetRevisionNumber,
+            body: revisionPlan.source.body,
+            changeSummary: revisionPlan.source.changeSummary,
+            createdByAgentId: revisionPlan.targetCreatedByAgentId,
+            createdByUserId: revisionPlan.source.createdByUserId,
+            createdAt: revisionPlan.source.createdAt,
+          });
+          insertedDocumentRevisions += 1;
+        }
       }
 
-      const existingRevisionIds = new Set(
-        (
-          await tx
-            .select({ id: documentRevisions.id })
-            .from(documentRevisions)
-            .where(eq(documentRevisions.documentId, documentPlan.source.documentId))
-        ).map((row) => row.id),
-      );
-      for (const revisionPlan of documentPlan.revisionsToInsert) {
-        if (existingRevisionIds.has(revisionPlan.source.id)) continue;
-        await tx.insert(documentRevisions).values({
-          id: revisionPlan.source.id,
-          companyId,
-          documentId: documentPlan.source.documentId,
-          revisionNumber: revisionPlan.targetRevisionNumber,
-          body: revisionPlan.source.body,
-          changeSummary: revisionPlan.source.changeSummary,
-          createdByAgentId: revisionPlan.targetCreatedByAgentId,
-          createdByUserId: revisionPlan.source.createdByUserId,
-          createdAt: revisionPlan.source.createdAt,
-        });
-        insertedDocumentRevisions += 1;
+      const referenced: StagedAttachment[] = [];
+      const refused: StagedAttachment[] = [];
+      const insertedAssetIds = new Set<string>();
+      let insertedAttachments = 0;
+      let skippedMissingAttachmentObjects = 0;
+      for (const attachment of input.manifest.entries) {
+        const existing = await tx.select({ id: issueAttachments.id }).from(issueAttachments).where(eq(issueAttachments.id, attachment.attachmentId)).then(rows => rows[0]);
+        const parent = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, attachment.issueId), eq(issues.companyId, companyId))).then(rows => rows[0]);
+        if (existing || !parent) { refused.push(attachment); continue; }
+        if (attachment.issueCommentId && !(await tx.select({ id: issueComments.id }).from(issueComments).where(and(eq(issueComments.id, attachment.issueCommentId), eq(issueComments.issueId, attachment.issueId), eq(issueComments.companyId, companyId))))[0]) { refused.push(attachment); continue; }
+        if (attachment.state === "missing") { skippedMissingAttachmentObjects++; refused.push(attachment); continue; }
+        if (!attachment.createdByThisInvocation || !attachment.targetAssetId || !attachment.targetKey || !attachment.sha256) throw new Error("Unverified attachment manifest");
+        await requireBinding(agents, attachment.createdByAgentId);
+        if (!insertedAssetIds.has(attachment.targetAssetId)) {
+          await tx.insert(assets).values({
+            id: attachment.targetAssetId, companyId, provider: input.manifest.provider, objectKey: attachment.targetKey,
+            contentType: attachment.contentType, byteSize: attachment.byteSize, sha256: attachment.sha256,
+            originalFilename: attachment.originalFilename, createdByAgentId: attachment.createdByAgentId,
+            createdByUserId: attachment.createdByUserId, createdAt: new Date(attachment.assetCreatedAt), updatedAt: new Date(attachment.assetUpdatedAt),
+          });
+          insertedAssetIds.add(attachment.targetAssetId);
+        }
+        await tx.insert(issueAttachments).values({ id: attachment.attachmentId, companyId, issueId: attachment.issueId,
+          assetId: attachment.targetAssetId, issueCommentId: attachment.issueCommentId,
+          createdAt: new Date(attachment.attachmentCreatedAt), updatedAt: new Date(attachment.attachmentUpdatedAt) });
+        insertedAttachments++; referenced.push(attachment);
       }
-    }
-
-    const attachmentCandidates = input.plan.attachmentPlans.filter(
-      (plan): plan is PlannedAttachmentInsert => plan.action === "insert",
-    );
-    const existingAttachmentIds = new Set(
-      (
-        await tx
-          .select({ id: issueAttachments.id })
-          .from(issueAttachments)
-          .where(eq(issueAttachments.companyId, companyId))
-      ).map((row) => row.id),
-    );
-    let insertedAttachments = 0;
-    let skippedMissingAttachmentObjects = 0;
-    for (const attachment of attachmentCandidates) {
-      if (existingAttachmentIds.has(attachment.source.id)) continue;
-      const parentExists = await tx
-        .select({ id: issues.id })
-        .from(issues)
-        .where(and(eq(issues.id, attachment.source.issueId), eq(issues.companyId, companyId)))
-        .then((rows) => rows[0] ?? null);
-      if (!parentExists) continue;
-
-      const body = await readSourceAttachmentBody(
-        input.sourceStorages,
-        companyId,
-        attachment.source.objectKey,
-      );
-      if (!body) {
-        skippedMissingAttachmentObjects += 1;
-        continue;
-      }
-      await input.targetStorage.putObject(
-        companyId,
-        attachment.source.objectKey,
-        body,
-        attachment.source.contentType,
-      );
-
-      await tx.insert(assets).values({
-        id: attachment.source.assetId,
-        companyId,
-        provider: attachment.source.provider,
-        objectKey: attachment.source.objectKey,
-        contentType: attachment.source.contentType,
-        byteSize: attachment.source.byteSize,
-        sha256: attachment.source.sha256,
-        originalFilename: attachment.source.originalFilename,
-        createdByAgentId: attachment.targetCreatedByAgentId,
-        createdByUserId: attachment.source.createdByUserId,
-        createdAt: attachment.source.assetCreatedAt,
-        updatedAt: attachment.source.assetUpdatedAt,
-      });
-
-      await tx.insert(issueAttachments).values({
-        id: attachment.source.id,
-        companyId,
-        issueId: attachment.source.issueId,
-        assetId: attachment.source.assetId,
-        issueCommentId: attachment.targetIssueCommentId,
-        createdAt: attachment.source.attachmentCreatedAt,
-        updatedAt: attachment.source.attachmentUpdatedAt,
-      });
-      insertedAttachments += 1;
-    }
-
-    return {
-      insertedProjects,
-      insertedProjectWorkspaces,
-      insertedIssues,
-      insertedComments,
-      insertedDocuments,
-      mergedDocuments,
-      insertedDocumentRevisions,
-      insertedAttachments,
-      skippedMissingAttachmentObjects,
-      insertedIssueIdentifiers,
-    };
-  });
+      completed = true;
+      return {
+        insertedProjects,
+        insertedProjectWorkspaces,
+        insertedIssues,
+        insertedComments,
+        insertedDocuments,
+        mergedDocuments,
+        insertedDocumentRevisions,
+        insertedAttachments,
+        skippedMissingAttachmentObjects,
+        insertedIssueIdentifiers,
+        manifest: input.manifest,
+        referencedAttachments: referenced,
+        refusedAttachments: refused,
+        retainedObjects: input.manifest.entries.filter(entry => entry.state === "verified" && !insertedAssetIds.has(entry.targetAssetId!)),
+      };
+    });
+  } catch {
+    throw Object.assign(new Error(completed ? "Merge database acknowledgment is unknown; read target history before retrying. Staged objects retained." : "Merge database acceptance failed. Staged objects retained."), {
+      persistenceOutcome: completed ? "unknown" : "rolled_back", manifest: input.manifest,
+      retainedObjects: input.manifest.entries.filter(entry => entry.state === "verified"),
+    });
+  }
 }
 
 export async function worktreeMergeHistoryCommand(sourceArg: string | undefined, opts: WorktreeMergeHistoryOptions): Promise<void> {
@@ -3047,6 +3143,7 @@ export async function worktreeMergeHistoryCommand(sourceArg: string | undefined,
       company,
       plan: collected.plan,
     });
+    if (applied.retainedObjects.length > 0) p.log.warn(`Retained ${applied.retainedObjects.length} staged attachment references that were not imported; storage reclamation requires separate review.`);
     if (applied.skippedMissingAttachmentObjects > 0) {
       p.log.warn(
         `Skipped ${applied.skippedMissingAttachmentObjects} attachments whose source files were missing from storage.`,

@@ -153,8 +153,8 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
     await db.insert(issueThreadInteractions).values({ companyId: f.company.id, issueId: f.issue.id,
       kind: 'request_confirmation', payload: { version: 1, prompt: 'Proceed?', supersedeOnUserComment: true } });
     const [routine] = await db.insert(routines).values({ companyId: f.company.id, title: 'Routine' }).returning();
-    const [routineRun] = await db.insert(routineRuns).values({ companyId: f.company.id, routineId: routine.id, source: 'manual', status: 'running' }).returning();
-    await db.update(issues).set({ originKind: 'routine_execution', originRunId: routineRun.id }).where(eq(issues.id, f.issue.id));
+    const [routineRun] = await db.insert(routineRuns).values({ companyId: f.company.id, routineId: routine.id, source: 'manual', status: 'running', linkedIssueId: f.issue.id }).returning();
+    await db.update(issues).set({ originKind: 'routine_execution', originId: routine.id, originRunId: routineRun.id }).where(eq(issues.id, f.issue.id));
     return { ...f, referenced, routineRun };
   }
 

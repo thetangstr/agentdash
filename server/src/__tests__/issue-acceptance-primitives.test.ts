@@ -250,8 +250,8 @@ describe('issue acceptance DB primitives', () => {
   it('rolls back routine status bookkeeping and reads the transaction-local issue status', async () => {
     const f = await fixture('done');
     const [routine] = await db.insert(routines).values({ companyId: f.company.id, title: 'Routine' }).returning();
-    const [run] = await db.insert(routineRuns).values({ companyId: f.company.id, routineId: routine.id, source: 'manual', status: 'running' }).returning();
-    await db.update(issues).set({ originKind: 'routine_execution', originRunId: run.id }).where(eq(issues.id, f.issue.id));
+    const [run] = await db.insert(routineRuns).values({ companyId: f.company.id, routineId: routine.id, source: 'manual', status: 'running', linkedIssueId: f.issue.id }).returning();
+    await db.update(issues).set({ originKind: 'routine_execution', originId: routine.id, originRunId: run.id }).where(eq(issues.id, f.issue.id));
     await expect(db.transaction(async tx => {
       const result = await routineService(db).syncRunStatusForIssue(f.issue.id, tx);
       expect(result?.status).toBe('completed');
@@ -267,8 +267,8 @@ describe('issue acceptance DB primitives', () => {
     const [target] = await db.insert(issues).values({ companyId: f.company.id, title: 'Reference target', identifier: 'PRIM-17' }).returning();
     const [confirmation] = await db.insert(issueThreadInteractions).values({ companyId: f.company.id, issueId: f.issue.id, kind: 'request_confirmation', payload: { version: 1, prompt: 'Proceed?', supersedeOnUserComment: true } }).returning();
     const [routine] = await db.insert(routines).values({ companyId: f.company.id, title: 'Routine' }).returning();
-    const [run] = await db.insert(routineRuns).values({ companyId: f.company.id, routineId: routine.id, source: 'manual', status: 'running' }).returning();
-    await db.update(issues).set({ originKind: 'routine_execution', originRunId: run.id }).where(eq(issues.id, f.issue.id));
+    const [run] = await db.insert(routineRuns).values({ companyId: f.company.id, routineId: routine.id, source: 'manual', status: 'running', linkedIssueId: f.issue.id }).returning();
+    await db.update(issues).set({ originKind: 'routine_execution', originId: routine.id, originRunId: run.id }).where(eq(issues.id, f.issue.id));
     const before = await readIssue(f.issue.id);
     const refs = issueReferenceService(db);
     const publications: ActivityPublication[] = [];

@@ -46,3 +46,9 @@ issue-topology-acceptance block: same-company parenting, private deletion refusa
 atomic child/suggestion writes and read-back after uncertain persistence. Source
 deletion cannot resolve an original workspace quarantine.
 /AgentDash: issue-topology-acceptance -->
+
+<!-- AgentDash: routine-dispatch-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK
+This retired persona remains inert. The canonical worker bundle supplies routine
+accepted-pending/failed-with-link readback, no replay or compensation deletion,
+and human escalation for the existing issue. No separate recovery authority is added.
+/AgentDash: routine-dispatch-acceptance -->
