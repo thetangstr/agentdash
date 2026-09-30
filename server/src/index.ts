@@ -59,6 +59,8 @@ import type {
   InstanceDatabaseBackupTrigger,
 } from "./routes/instance-database-backups.js";
 import { CLAIM_ATTEMPT_HEADER } from "./lib/claim-code.js";
+import { configuredPublicBaseUrl } from "./lib/public-base-url.js";
+import { originBootReport, registerMintingOrigins } from "./lib/declared-origins.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -533,31 +535,44 @@ export async function startServer(): Promise<StartedServer> {
   }
   if (config.deploymentMode === "authenticated") {
     const {
-      createBetterAuthHandler,
-      createBetterAuthInstance,
-      deriveAuthTrustedOrigins,
+      createSchemeAwareBetterAuth,
+      createSchemeAwareBetterAuthHandler,
+      requestSchemeFromExpress,
+      requestSchemeFromHeaders,
+      resolveAuthTrustedOrigins,
       resolveBetterAuthSession,
       resolveBetterAuthSessionFromHeaders,
       capturePasswordResetUrl,
     } = await import("./auth/better-auth.js");
-    const derivedTrustedOrigins = deriveAuthTrustedOrigins(config, { listenPort });
-    const envTrustedOrigins = (process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0);
-    const effectiveTrustedOrigins = Array.from(new Set([...derivedTrustedOrigins, ...envTrustedOrigins]));
+    // AgentDash (#547): declared origins when PAPERCLIP_CANONICAL_ORIGIN /
+    // PAPERCLIP_ORIGINS are set, the previous hostname derivation otherwise.
+    const trusted = resolveAuthTrustedOrigins(config, { listenPort });
+    const effectiveTrustedOrigins = trusted.origins;
+    registerMintingOrigins(effectiveTrustedOrigins);
     logger.info(
       {
         authBaseUrlMode: config.authBaseUrlMode,
         authPublicBaseUrl: config.authPublicBaseUrl ?? null,
+        originsMode: trusted.mode,
+        canonicalOrigin: configuredPublicBaseUrl() ?? null,
         trustedOrigins: effectiveTrustedOrigins,
-        trustedOriginsSource: {
-          derived: derivedTrustedOrigins.length,
-          env: envTrustedOrigins.length,
-        },
+        trustedOriginsSource: trusted.source,
+        secureCookies: trusted.mode === "declared" ? "per-request-scheme" : "fixed",
       },
       "Authenticated mode auth origin configuration",
     );
+    // AgentDash (#547): say at boot when the address links are minted from
+    // cannot reach its readers — a warning, never a refusal, since a
+    // genuinely LAN-only deployment is legitimate.
+    const originReport = originBootReport({
+      canonical: configuredPublicBaseUrl(),
+      declaredOrigins: config.declaredOrigins,
+      allowedHostnames: config.allowedHostnames,
+      authPublicBaseUrl: config.authPublicBaseUrl,
+      env: process.env,
+    });
+    for (const warning of originReport.warnings) logger.warn({ originsMode: trusted.mode }, `[origins] ${warning}`);
+    for (const note of originReport.info) logger.info({ originsMode: trusted.mode }, `[origins] ${note}`);
     // AgentDash (Phase E): the auto-bootstrap auth hook is dropped in v2.
     // Fresh signups now flow through /company-create → /assess?onboarding=1
     // → /cos in the SPA (see ui/src/pages/Auth.tsx onSuccess and
@@ -629,14 +644,15 @@ export async function startServer(): Promise<StartedServer> {
         "[auth] auto-bootstrap on signup is disabled (v2 flow); set AGENTDASH_LEGACY_AUTH_AUTOBOOTSTRAP=true to re-enable",
       );
     }
-    const auth = createBetterAuthInstance(
+    const authPair = createSchemeAwareBetterAuth(
       db as any,
       config,
       effectiveTrustedOrigins,
       onUserCreated ? { onUserCreated } : undefined,
     );
-    betterAuthHandler = createBetterAuthHandler(auth);
-    resolveSession = (req) => resolveBetterAuthSession(auth, req);
+    const auth = authPair.primary;
+    betterAuthHandler = createSchemeAwareBetterAuthHandler(authPair);
+    resolveSession = (req) => resolveBetterAuthSession(authPair.forScheme(requestSchemeFromExpress(req)), req);
     // AgentDash: MCP-native signup — expose Better Auth's server-side
     // sign-up so the founding user can be created without a browser form.
     // The password never leaves the route handler that generated it.
@@ -651,7 +667,8 @@ export async function startServer(): Promise<StartedServer> {
     // AgentDash: MCP-native first login — wire the reset-URL capture so the
     // MCP signup response carries a browser-login link (no email dependency).
     mcpSignupCaptureResetUrl = (email) => capturePasswordResetUrl(auth, email);
-    resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
+    resolveSessionFromHeaders = (headers) =>
+      resolveBetterAuthSessionFromHeaders(authPair.forScheme(requestSchemeFromHeaders(headers)), headers);
     await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
     authReady = true;
   }
@@ -1077,7 +1094,12 @@ export async function startServer(): Promise<StartedServer> {
   {
     const { stewardWebhooksService } = await import("./services/steward-webhooks.js");
     const webhookSweep = stewardWebhooksService(db);
-    const approvalsBaseUrl = process.env.PAPERCLIP_PUBLIC_URL ?? config.authPublicBaseUrl ?? null;
+    // AgentDash (#547): a Teams card is read away from any request — canonical.
+    const approvalsBaseUrl =
+      (config.declaredOrigins ? configuredPublicBaseUrl() : undefined)
+      ?? process.env.PAPERCLIP_PUBLIC_URL
+      ?? config.authPublicBaseUrl
+      ?? null;
     const webhookHandle = setInterval(() => {
       void webhookSweep.sweep({ approvalsBaseUrl }).catch((err) => {
         logger.warn({ err }, "steward webhook sweep failed");

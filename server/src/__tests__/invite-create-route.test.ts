@@ -186,6 +186,85 @@ describe("POST /companies/:companyId/invites", () => {
     expect(res.body.inviteUrl).toMatch(/^https:\/\/paperclip\.example\/invite\/pcp_invite_[a-z0-9]{16}$/);
   });
 
+  // AgentDash (#547): in-band links echo the caller's origin only when it is
+  // one this instance trusts; a spoofed Host gets the canonical address.
+  describe("declared origins", () => {
+    const ORIGIN_KEYS = ["PAPERCLIP_CANONICAL_ORIGIN", "PAPERCLIP_ORIGINS", "PAPERCLIP_PUBLIC_URL"] as const;
+    const savedOrigins = new Map<string, string | undefined>();
+    beforeEach(() => {
+      for (const key of ORIGIN_KEYS) {
+        savedOrigins.set(key, process.env[key]);
+        delete process.env[key];
+      }
+    });
+    afterEach(() => {
+      for (const key of ORIGIN_KEYS) {
+        const value = savedOrigins.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it("echoes a declared door the inviter used", async () => {
+      process.env.PAPERCLIP_CANONICAL_ORIGIN = "https://agents.example.test";
+      process.env.PAPERCLIP_ORIGINS = "https://agents.example.test,http://office.example.test:3102";
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .set("host", "office.example.test:3102")
+        .send({ allowedJoinTypes: "human", humanRole: "member" });
+
+      expect(res.status).toBe(201);
+      expect(res.body.inviteUrl).toMatch(/^http:\/\/office\.example\.test:3102\/invite\/pcp_invite_[a-z0-9]{16}$/);
+    });
+
+    it("answers a spoofed Host with the canonical origin", async () => {
+      process.env.PAPERCLIP_CANONICAL_ORIGIN = "https://agents.example.test";
+      process.env.PAPERCLIP_ORIGINS = "https://agents.example.test,http://office.example.test:3102";
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .set("host", "office.example.test:3102")
+        .set("x-forwarded-host", "evil.example.test")
+        .set("x-forwarded-proto", "https")
+        .send({ allowedJoinTypes: "human", humanRole: "member" });
+
+      expect(res.status).toBe(201);
+      expect(res.body.inviteUrl).toMatch(/^https:\/\/agents\.example\.test\/invite\/pcp_invite_[a-z0-9]{16}$/);
+      expect(res.body.onboardingTextUrl).toMatch(/^https:\/\/agents\.example\.test\/api\/invites\//);
+      expect(JSON.stringify(res.body)).not.toContain("evil.example.test");
+    });
+
+    it("echoes a loopback caller on this machine as before", async () => {
+      process.env.PAPERCLIP_PUBLIC_URL = "http://office.example.test:3102";
+      const app = await createApp();
+
+      // supertest connects from 127.0.0.1.
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .set("host", "127.0.0.1:3102")
+        .send({ allowedJoinTypes: "human", humanRole: "member" });
+
+      expect(res.status).toBe(201);
+      expect(res.body.inviteUrl).toMatch(/^http:\/\/127\.0\.0\.1:3102\/invite\//);
+    });
+
+    it("without declared origins, still refuses to echo an unknown Host once a public URL is configured", async () => {
+      process.env.PAPERCLIP_PUBLIC_URL = "http://office.example.test:3102";
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .set("host", "evil.example.test")
+        .send({ allowedJoinTypes: "human", humanRole: "member" });
+
+      expect(res.status).toBe(201);
+      expect(res.body.inviteUrl).toMatch(/^http:\/\/office\.example\.test:3102\/invite\//);
+    });
+  });
+
   it("allows agent-only invites on Free workspaces with a human owner but no agent yet", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
     tierDepsMock.getCompany.mockResolvedValue({ planTier: "free" });

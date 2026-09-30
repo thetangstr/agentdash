@@ -13,6 +13,7 @@ import { serverVersion } from "../version.js";
 import { computeHealthChecks, type HealthChecks } from "../observability/health-checks.js";
 import { alerterStatus } from "../observability/alerter.js";
 import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
+import { declaredOriginsEnabled, normalizeOrigin } from "../lib/declared-origins.js";
 import { isHostedBox } from "../services/license.js";
 import { boxClaimedCached } from "../lib/claim-code.js";
 
@@ -187,6 +188,12 @@ export function healthRoutes(
     // proposal on a configured model. Read from process.env; cheap + sync.
     const adapter = readAdapterStatus();
 
+    // AgentDash (#547): the one address links are minted from, as an origin.
+    // Public for the same reason `publicBaseUrl` is: it is the address people
+    // are told to use. The rest of the declared set (LAN and tailnet doors)
+    // is not reported.
+    const canonicalOrigin = normalizeOrigin(configuredPublicBaseUrl());
+
     if (!exposeFullDetails) {
       res.json({
         status: checks.status,
@@ -202,6 +209,7 @@ export function healthRoutes(
         adapterReady: adapter.ready,
         adapterPreset: adapter.preset,
         ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
+        ...(canonicalOrigin ? { canonicalOrigin } : {}),
         ...(devServer ? { devServer } : {}),
       });
       return;
@@ -228,6 +236,8 @@ export function healthRoutes(
       adapterPreset: adapter.preset,
       adapterReason: adapter.reason,
       ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
+      ...(canonicalOrigin ? { canonicalOrigin } : {}),
+      originsMode: declaredOriginsEnabled() ? "declared" : "legacy",
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },

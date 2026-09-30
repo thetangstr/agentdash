@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approvalUrl, configuredPublicBaseUrl } from "./public-base-url.js";
 
-const ENV_KEYS = ["PAPERCLIP_PUBLIC_URL", "PAPERCLIP_AUTH_PUBLIC_BASE_URL"] as const;
+const ENV_KEYS = [
+  "PAPERCLIP_PUBLIC_URL",
+  "PAPERCLIP_AUTH_PUBLIC_BASE_URL",
+  "PAPERCLIP_CANONICAL_ORIGIN",
+  "PAPERCLIP_ORIGINS",
+] as const;
 
 describe("configuredPublicBaseUrl", () => {
   const saved = new Map<string, string | undefined>();
@@ -23,6 +28,22 @@ describe("configuredPublicBaseUrl", () => {
 
   it("is undefined when the instance advertises nothing", () => {
     expect(configuredPublicBaseUrl()).toBeUndefined();
+  });
+
+  // AgentDash (#547)
+  it("prefers a declared PAPERCLIP_CANONICAL_ORIGIN over every older variable", () => {
+    process.env.PAPERCLIP_PUBLIC_URL = "http://mkmini.local:3102";
+    process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL = "http://ignored.example:3102";
+    process.env.PAPERCLIP_CANONICAL_ORIGIN = "https://agents.example/";
+    expect(configuredPublicBaseUrl()).toBe("https://agents.example");
+    expect(approvalUrl("a-1")).toBe("https://agents.example/approvals/a-1");
+  });
+
+  it("falls back to the first PAPERCLIP_ORIGINS entry only when nothing else names an address", () => {
+    process.env.PAPERCLIP_ORIGINS = "https://first.example, http://second.example:3102";
+    expect(configuredPublicBaseUrl()).toBe("https://first.example");
+    process.env.PAPERCLIP_PUBLIC_URL = "http://mkmini.local:3102";
+    expect(configuredPublicBaseUrl()).toBe("http://mkmini.local:3102");
   });
 
   it("prefers PAPERCLIP_PUBLIC_URL over the auth base URL", () => {

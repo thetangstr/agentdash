@@ -78,7 +78,9 @@ launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 |----------|---------|
 | `AGENTDASH_DEFAULT_ADAPTER` | LLM adapter: `claude_api`, `claude_local`, `openai_compat` |
 | `ANTHROPIC_API_KEY` | Anthropic API key (for `claude_api`) |
-| `PAPERCLIP_PUBLIC_URL` | The URL users access the dashboard from |
+| `PAPERCLIP_PUBLIC_URL` | The URL users access the dashboard from (deprecated alias once `PAPERCLIP_CANONICAL_ORIGIN` is set) |
+| `PAPERCLIP_CANONICAL_ORIGIN` | Optional. The one address put into approval, email, Teams and MCP links (e.g. `https://agents.mkthink.com`) |
+| `PAPERCLIP_ORIGINS` | Optional. Every full origin people open the dashboard on, comma-separated; becomes the sign-in allow-list |
 | `BETTER_AUTH_SECRET` | Session encryption key (never change after setup) |
 | `AGENTDASH_DEPLOYMENT_KIND` | `on_prem` for this installation |
 | `AGENTDASH_LICENSE_KEY` | Your license token |

@@ -215,12 +215,31 @@ function collectDeploymentEnvRows(config: PaperclipConfig | null, configPath: st
       required: false,
       note: "HTTP listen port",
     },
+    // AgentDash (#547): declared origins. Left empty when unset, never
+    // pre-filled: exporting a guessed value would switch the server into
+    // declared mode and drop every door the old hostname derivation trusted.
+    {
+      key: "PAPERCLIP_CANONICAL_ORIGIN",
+      value: process.env.PAPERCLIP_CANONICAL_ORIGIN ?? "",
+      source: process.env.PAPERCLIP_CANONICAL_ORIGIN ? "env" : "default",
+      required: false,
+      note: process.env.PAPERCLIP_CANONICAL_ORIGIN
+        ? "The one address minted into approval, email, webhook and MCP links, and the auth base URL"
+        : `Unset: the legacy variables below decide${trustedOriginsDefault ? ` (suggested: ${trustedOriginsDefault})` : ""}. The one address minted into links for readers outside a request`,
+    },
+    {
+      key: "PAPERCLIP_ORIGINS",
+      value: process.env.PAPERCLIP_ORIGINS ?? "",
+      source: process.env.PAPERCLIP_ORIGINS ? "env" : "default",
+      required: false,
+      note: "Comma-separated full origins (scheme://host:port) browsers arrive on; when set with PAPERCLIP_CANONICAL_ORIGIN they ARE the trusted-origin list, replacing the PAPERCLIP_ALLOWED_HOSTNAMES cross-product",
+    },
     {
       key: "PAPERCLIP_PUBLIC_URL",
       value: publicUrl,
       source: publicUrlSource,
       required: false,
-      note: "Canonical public URL for auth/callback/invite origin wiring",
+      note: "Canonical public URL for auth/callback/invite origin wiring (deprecated alias of PAPERCLIP_CANONICAL_ORIGIN once that is set)",
     },
     {
       key: "BETTER_AUTH_TRUSTED_ORIGINS",
@@ -231,7 +250,7 @@ function collectDeploymentEnvRows(config: PaperclipConfig | null, configPath: st
           ? "default"
           : "missing",
       required: false,
-      note: "Comma-separated auth origin allowlist (auto-derived from PAPERCLIP_PUBLIC_URL when possible)",
+      note: "Comma-separated auth origin allowlist (auto-derived from PAPERCLIP_PUBLIC_URL when possible; deprecated, folded into PAPERCLIP_ORIGINS in declared mode)",
     },
     {
       key: "PAPERCLIP_AGENT_JWT_TTL_SECONDS",

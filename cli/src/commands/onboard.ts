@@ -60,6 +60,10 @@ const TAILNET_BIND_WARNING =
   "No Tailscale address was detected during setup. The saved config will stay on loopback until Tailscale is available or PAPERCLIP_TAILNET_BIND_HOST is set.";
 
 const ONBOARD_ENV_KEYS = [
+  // AgentDash (#547): declared origins (the server reads them from env at
+  // runtime; onboard folds them into the saved auth URL and hostname list).
+  "PAPERCLIP_CANONICAL_ORIGIN",
+  "PAPERCLIP_ORIGINS",
   "PAPERCLIP_PUBLIC_URL",
   "DATABASE_URL",
   "PAPERCLIP_DB_BACKUP_ENABLED",
@@ -140,6 +144,7 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
   const publicUrl = preferTrustedLocal
     ? undefined
     : (
+      process.env.PAPERCLIP_CANONICAL_ORIGIN?.trim() ||
       process.env.PAPERCLIP_PUBLIC_URL?.trim() ||
       process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL?.trim() ||
       process.env.BETTER_AUTH_URL?.trim() ||
@@ -193,6 +198,20 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
       }
     })()
     : null;
+  // AgentDash (#547): each declared door's host must pass the server's
+  // private-hostname guard, so it joins the saved allow-list.
+  const hostnamesFromDeclaredOrigins = preferTrustedLocal
+    ? []
+    : (process.env.PAPERCLIP_ORIGINS ?? "")
+      .split(",")
+      .map((value) => {
+        try {
+          return new URL(value.trim()).hostname.trim().toLowerCase();
+        } catch {
+          return "";
+        }
+      })
+      .filter((value) => value.length > 0);
   const storageProvider =
     parseEnumFromEnv<StorageProvider>(process.env.PAPERCLIP_STORAGE_PROVIDER, STORAGE_PROVIDERS) ??
     defaultStorage.provider;
@@ -232,7 +251,11 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
       ...(resolvedBind.customBindHost ? { customBindHost: resolvedBind.customBindHost } : {}),
       host: resolvedBind.host,
       port: Number(process.env.PORT) || 3100,
-      allowedHostnames: Array.from(new Set([...allowedHostnamesFromEnv, ...(hostnameFromPublicUrl ? [hostnameFromPublicUrl] : [])])),
+      allowedHostnames: Array.from(new Set([
+        ...allowedHostnamesFromEnv,
+        ...(hostnameFromPublicUrl ? [hostnameFromPublicUrl] : []),
+        ...hostnamesFromDeclaredOrigins,
+      ])),
       serveUi: parseBooleanFromEnv(process.env.SERVE_UI) ?? true,
     },
     auth: {
@@ -278,6 +301,8 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
       "PAPERCLIP_AUTH_BASE_URL_MODE",
       "PAPERCLIP_AUTH_PUBLIC_BASE_URL",
       "PAPERCLIP_PUBLIC_URL",
+      "PAPERCLIP_CANONICAL_ORIGIN",
+      "PAPERCLIP_ORIGINS",
       "BETTER_AUTH_URL",
       "BETTER_AUTH_BASE_URL",
     ] as const) {

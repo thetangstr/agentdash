@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { resolvePaperclipEnvPath } from "./paths.js";
 import { maybeRepairLegacyWorktreeConfigAndEnvFiles } from "./worktree-config.js";
+import { resolveOriginSettings } from "./lib/declared-origins.js";
 import {
   AUTH_BASE_URL_MODES,
   BIND_MODES,
@@ -60,6 +61,13 @@ export interface Config {
   authBaseUrlMode: AuthBaseUrlMode;
   authPublicBaseUrl: string | undefined;
   authDisableSignUp: boolean;
+  /**
+   * AgentDash (#547): set only in declared mode (PAPERCLIP_CANONICAL_ORIGIN
+   * or PAPERCLIP_ORIGINS). Undefined means the legacy derivation is in force.
+   */
+  canonicalOrigin?: string;
+  declaredOrigins?: string[];
+  trustedOriginPatterns?: string[];
   databaseMode: DatabaseMode;
   databaseUrl: string | undefined;
   databaseMigrationUrl: string | undefined;
@@ -196,14 +204,15 @@ export function loadConfig(): Config {
     AUTH_BASE_URL_MODES.includes(authBaseUrlModeFromEnvRaw as AuthBaseUrlMode)
       ? (authBaseUrlModeFromEnvRaw as AuthBaseUrlMode)
       : null;
-  const publicUrlFromEnv = process.env.PAPERCLIP_PUBLIC_URL;
-  const authPublicBaseUrlRaw =
-    process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL ??
-    process.env.BETTER_AUTH_URL ??
-    process.env.BETTER_AUTH_BASE_URL ??
-    publicUrlFromEnv ??
-    fileConfig?.auth?.publicBaseUrl;
-  const authPublicBaseUrl = authPublicBaseUrlRaw?.trim() || undefined;
+  // AgentDash (#547): origins — declared (PAPERCLIP_CANONICAL_ORIGIN /
+  // PAPERCLIP_ORIGINS) or, when neither is set, the previous derivation
+  // unchanged. See lib/declared-origins.ts.
+  const originSettings = resolveOriginSettings({
+    env: process.env,
+    fileAuthPublicBaseUrl: fileConfig?.auth?.publicBaseUrl,
+    fileAllowedHostnames: fileConfig?.server.allowedHostnames,
+  });
+  const authPublicBaseUrl = originSettings.authPublicBaseUrl;
   const authBaseUrlMode: AuthBaseUrlMode =
     authBaseUrlModeFromEnv ??
     fileConfig?.auth?.baseUrlMode ??
@@ -213,32 +222,7 @@ export function loadConfig(): Config {
     disableSignUpFromEnv !== undefined
       ? disableSignUpFromEnv === "true"
       : (fileConfig?.auth?.disableSignUp ?? false);
-  const allowedHostnamesFromEnvRaw = process.env.PAPERCLIP_ALLOWED_HOSTNAMES;
-  const allowedHostnamesFromEnv = allowedHostnamesFromEnvRaw
-    ? allowedHostnamesFromEnvRaw
-      .split(",")
-      .map((value) => value.trim().toLowerCase())
-      .filter((value) => value.length > 0)
-    : null;
-  const publicUrlHostname = authPublicBaseUrl
-    ? (() => {
-      try {
-        return new URL(authPublicBaseUrl).hostname.trim().toLowerCase();
-      } catch {
-        return null;
-      }
-    })()
-    : null;
-  const allowedHostnames = Array.from(
-    new Set(
-      [
-        ...(allowedHostnamesFromEnv ?? fileConfig?.server.allowedHostnames ?? []),
-        ...(publicUrlHostname ? [publicUrlHostname] : []),
-      ]
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  );
+  const allowedHostnames = originSettings.allowedHostnames;
   const companyDeletionEnvRaw = process.env.PAPERCLIP_ENABLE_COMPANY_DELETION;
   const companyDeletionEnabled =
     companyDeletionEnvRaw !== undefined
@@ -316,6 +300,13 @@ export function loadConfig(): Config {
     authBaseUrlMode,
     authPublicBaseUrl,
     authDisableSignUp,
+    ...(originSettings.declaredOrigins
+      ? {
+        canonicalOrigin: originSettings.canonicalOrigin,
+        declaredOrigins: originSettings.declaredOrigins,
+        trustedOriginPatterns: originSettings.trustedOriginPatterns ?? [],
+      }
+      : {}),
     databaseMode: fileDatabaseMode,
     databaseUrl: process.env.DATABASE_URL ?? fileDbUrl,
     databaseMigrationUrl: process.env.DATABASE_MIGRATION_URL,

@@ -51,7 +51,8 @@ import {
   readHermesProviderStatus,
 } from "../services/hermes-provider-setup.js";
 import { isHostedBox } from "../services/license.js";
-import { absoluteUrl } from "../lib/public-base-url.js";
+import { absoluteUrl, inBandBaseUrl, outOfBandBaseUrl } from "../lib/public-base-url.js";
+import { declaredOriginsEnabled } from "../lib/declared-origins.js";
 import { normalizeHumanRole } from "../services/company-member-roles.js";
 import { sendEmail, inviteEmailTemplate, modelKeyRequestEmailTemplate } from "../auth/email.js";
 import {
@@ -952,15 +953,16 @@ No greetings. No markdown headings outside the JSON block.`;
     }
     assertCompanyAccess(req, companyId);
 
-    // Resolve the public base URL from forwarded headers, with a
-    // fallback to the request's own protocol+host. Mirrors
-    // `requestBaseUrl` in access.ts so /invite/<token> URLs stay in
-    // the same shape across endpoints.
-    const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
-    const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
-    const proto = forwardedProto || req.protocol || "http";
-    const host = forwardedHost || req.header("host") || "";
-    const baseUrl = host ? `${proto}://${host}` : "";
+    // AgentDash (#547): two audiences, two bases. The URL in this response
+    // is read by the inviter, so it echoes the origin they used when that
+    // origin is trusted (canonical otherwise) — same as `requestBaseUrl` in
+    // access.ts. The email is read by the invitee, somewhere else entirely,
+    // so in declared mode it names the canonical address. Without declared
+    // origins it keeps the inviter's (validated) door, as before: the old
+    // PAPERCLIP_PUBLIC_URL may be a plaintext LAN address, and moving
+    // invitees off a TLS door onto it would be a downgrade.
+    const baseUrl = inBandBaseUrl(req);
+    const emailBaseUrl = declaredOriginsEnabled() ? outOfBandBaseUrl(req) : baseUrl;
 
     // Best-effort lookups for the email body. Failures here don't
     // block the create — we just fall back to neutral copy.
@@ -1033,6 +1035,7 @@ No greetings. No markdown headings outside the JSON block.`;
                 email: string;
                 invitePath: string;
                 inviteUrl: string;
+                emailInviteUrl: string;
                 expiresAt: Date;
               }> = [];
               for (const trimmed of validEmails) {
@@ -1045,12 +1048,14 @@ No greetings. No markdown headings outside the JSON block.`;
                   });
                   const invitePath = `/invite/${row.token}`;
                   const inviteUrl = baseUrl ? `${baseUrl}${invitePath}` : invitePath;
+                  const emailInviteUrl = emailBaseUrl ? `${emailBaseUrl}${invitePath}` : invitePath;
                   inviteIds.push(row.id);
                   rows.push({
                     id: row.id,
                     email: trimmed,
                     invitePath,
                     inviteUrl,
+                    emailInviteUrl,
                     expiresAt: row.expiresAt,
                   });
                 } catch (err) {
@@ -1072,7 +1077,7 @@ No greetings. No markdown headings outside the JSON block.`;
       // (status:"skipped") or a Resend 4xx (status:"failed") never aborts
       // the create — the inviter still has the URL to share by hand.
       const { subject, html, text } = inviteEmailTemplate({
-        inviteUrl: row.inviteUrl,
+        inviteUrl: row.emailInviteUrl,
         companyName,
         inviterName,
       });
