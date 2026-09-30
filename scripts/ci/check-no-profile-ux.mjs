@@ -15,8 +15,9 @@
 // Usage: node scripts/ci/check-no-profile-ux.mjs [--root <repo>] [--allowlist <file>] [--base <git-ref>]
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PATTERN = /productProfile|agentdash_mk/;
 const SOURCE_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -150,6 +151,17 @@ function main() {
   );
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("check-no-profile-ux.mjs")) {
+// Compare realpaths: a plain comparison silently skips main() when run through a symlink.
+const invokedDirectly = (() => {
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
+if (invokedDirectly) {
   main();
 }
