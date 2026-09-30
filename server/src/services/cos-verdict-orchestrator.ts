@@ -1,5 +1,5 @@
 // AgentDash: goals-eval-hitl
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   approvals,
@@ -9,6 +9,7 @@ import {
   verdicts,
 } from "@paperclipai/db";
 import { COS_REVIEW_DEFAULTS } from "@paperclipai/shared";
+import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import type { FeatureFlagsService } from "./feature-flags.js";
@@ -18,12 +19,18 @@ import {
   releaseNonRunnableReviewerItems,
 } from "./review-queue-assignments.js";
 import type { AutoHireReason, CosReviewerAutoHireService } from "./cos-reviewer-auto-hire.js";
-import type { VerdictsService } from "./verdicts.js";
+import { verdictsService, type VerdictsService } from "./verdicts.js";
 
 interface OrchestratorDeps {
   verdicts: VerdictsService;
   featureFlags: FeatureFlagsService;
   autoHire: CosReviewerAutoHireService;
+  /**
+   * AgentDash: #849 follow-up — the verdicts service bound to the escalation
+   * transaction, so the escalation verdict commits or rolls back with its
+   * approval. Defaults to `verdictsService(tx)`; unit tests inject a stub.
+   */
+  verdictsFor?: (dbOrTx: Db) => VerdictsService;
 }
 
 /**
@@ -41,7 +48,7 @@ interface OrchestratorDeps {
  *    `verdict_escalation` approval row when the SLA timer fires.
  */
 export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
-  const issueApprovalsSvc = issueApprovalService(db);
+  const verdictsFor = deps.verdictsFor ?? ((dbOrTx: Db) => verdictsService(dbOrTx));
 
   function escalateAfterMs(): number {
     const raw = process.env.AGENTDASH_VERDICT_ESCALATE_AFTER_MS;
@@ -57,7 +64,13 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
     const escalateAfter = new Date(now.getTime() + escalateAfterMs());
     const reviewerAgentId = await pickAvailableReviewer(db, companyId);
 
-    // Idempotent UPSERT keyed on issueId. Do NOT reset enqueuedAt on conflict.
+    // UPSERT keyed on issueId. AgentDash: #849 follow-up — a re-entry into
+    // `in_review` (the route hook only fires on a real status change, e.g.
+    // back from a revision) starts a new review round: enqueuedAt and
+    // escalateAfter are reset so the round gets its own SLA window, and
+    // hasOpenVerdict (scoped to enqueuedAt) stops counting the previous
+    // round's revision_requested / escalation verdict. An existing reviewer
+    // assignment is kept; a missing one is filled from this pick.
     await db
       .insert(issueReviewQueueState)
       .values({
@@ -67,7 +80,14 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
         escalateAfter,
         assignedReviewerAgentId: reviewerAgentId,
       })
-      .onConflictDoNothing({ target: issueReviewQueueState.issueId });
+      .onConflictDoUpdate({
+        target: issueReviewQueueState.issueId,
+        set: {
+          enqueuedAt: now,
+          escalateAfter,
+          assignedReviewerAgentId: sql`coalesce(${issueReviewQueueState.assignedReviewerAgentId}, excluded.assigned_reviewer_agent_id)`,
+        },
+      });
 
     // If no reviewer was available, trigger queue-depth-driven auto-hire.
     // Always evaluate after enqueue so growing depth eventually triggers.
@@ -211,29 +231,41 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
     // every free hire slot at once (each call finds a slot until the cap).
     const hireTriggers = new Set<AutoHireReason>();
     for (const item of queueRows) {
-      // (a) Dequeue if a closing verdict already exists.
-      const closing = await deps.verdicts.closingVerdictFor(
-        companyId,
-        "issue",
-        item.issueId,
-      );
-      if (closing) {
-        await dequeue(companyId, item.issueId);
-        continue;
-      }
-
-      // (b) Escalate if SLA expired.
-      if (item.escalateAfter && item.escalateAfter <= now) {
-        const trigger = await escalateToHuman(
+      // AgentDash: #849 follow-up — per-item isolation. One item that throws
+      // (a neutrality 409, a constraint error, a transient DB failure) used
+      // to escape the loop and abort the rest of the company's queue and the
+      // once-per-cycle auto-hire check below, on every tick. Log it and move
+      // on; the item is retried next cycle.
+      try {
+        // (a) Dequeue if a closing verdict already exists.
+        const closing = await deps.verdicts.closingVerdictFor(
           companyId,
+          "issue",
           item.issueId,
-          item.assignedReviewerAgentId,
-          { enqueuedAt: item.enqueuedAt, deferAutoHire: true },
         );
-        if (trigger) hireTriggers.add(trigger);
-        continue;
+        if (closing) {
+          await dequeue(companyId, item.issueId);
+          continue;
+        }
+
+        // (b) Escalate if SLA expired.
+        if (item.escalateAfter && item.escalateAfter <= now) {
+          const trigger = await escalateToHuman(
+            companyId,
+            item.issueId,
+            item.assignedReviewerAgentId,
+            { enqueuedAt: item.enqueuedAt, deferAutoHire: true },
+          );
+          if (trigger) hireTriggers.add(trigger);
+          continue;
+        }
+        // Otherwise: reviewer agent owns it; nothing to do here.
+      } catch (err) {
+        logger.error(
+          { err, companyId, issueId: item.issueId },
+          "cos_review_cycle: review item failed; continuing with the rest of the queue",
+        );
       }
-      // Otherwise: reviewer agent owns it; nothing to do here.
     }
 
     // One evaluation per company per cycle. A neutrality conflict (the only
@@ -273,9 +305,18 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
    * The company human an unreviewable item escalates to: the oldest active
    * owner/admin membership, so a named, decision-capable person always owns
    * the escalation instead of an anonymous row.
+   *
+   * `excludeUserId` is the issue's assignee: the neutral-validator rule
+   * rejects a verdict whose reviewer is the assignee (409), so the assignee
+   * can never be the escalation target — the next owner/admin is picked
+   * instead (#849 follow-up).
    */
-  async function accountableHumanFor(companyId: string): Promise<string | null> {
-    const rows = await db
+  async function accountableHumanFor(
+    dbOrTx: Db,
+    companyId: string,
+    excludeUserId: string | null,
+  ): Promise<string | null> {
+    const rows = await dbOrTx
       .select({ principalId: companyMemberships.principalId })
       .from(companyMemberships)
       .where(
@@ -284,11 +325,22 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
           eq(companyMemberships.principalType, "user"),
           eq(companyMemberships.status, "active"),
           inArray(companyMemberships.membershipRole, ["owner", "admin"]),
+          excludeUserId ? ne(companyMemberships.principalId, excludeUserId) : undefined,
         ),
       )
       .orderBy(asc(companyMemberships.createdAt))
       .limit(1);
     return rows[0]?.principalId ?? null;
+  }
+
+  /** The issue's human assignee, if any (see accountableHumanFor). */
+  async function issueAssigneeUserId(dbOrTx: Db, issueId: string): Promise<string | null> {
+    const rows = await dbOrTx
+      .select({ assigneeUserId: issues.assigneeUserId })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .limit(1);
+    return rows[0]?.assigneeUserId ?? null;
   }
 
   /**
@@ -298,17 +350,20 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
    * passed/failed; without this, every 60s sweep past the SLA would file a
    * duplicate escalated_to_human verdict + approval for the same item.
    *
-   * `since` scopes the check to the current queue episode (the item's
-   * `enqueuedAt`): an issue closed while its escalation was still open, then
-   * reopened into review, must be able to escalate once more rather than be
-   * silenced forever by the previous episode's verdict (GH #833).
+   * `since` scopes the check to the current review round (the item's
+   * `enqueuedAt`, which enqueueForReview resets on every re-entry into
+   * `in_review`): an issue sent back for revision, or closed while its
+   * escalation was still open, and then returned to review must be able to
+   * escalate once more rather than be silenced forever by an earlier
+   * round's verdict (GH #833, #849 follow-up).
    */
   async function hasOpenVerdict(
+    dbOrTx: Db,
     companyId: string,
     issueId: string,
     since?: Date | null,
   ): Promise<boolean> {
-    const rows = await db
+    const rows = await dbOrTx
       .select({ id: verdicts.id })
       .from(verdicts)
       .where(
@@ -324,6 +379,36 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
     return rows.length > 0;
   }
 
+  /**
+   * AgentDash: #849 follow-up — run one item's escalation write set (verdict,
+   * approval, issue link, activity) in a single transaction under a
+   * per-issue advisory lock. Without the transaction a failed approval insert
+   * left an orphan escalated_to_human verdict that hasOpenVerdict then read
+   * as "already escalated", silencing the item forever. Without the lock two
+   * overlapping sweeps (a slow tick overlapping the next setInterval, or two
+   * processes during an OTA restart) could both pass the idempotency checks
+   * and file two escalations. The checks re-run after the lock is taken, so
+   * the second sweep sees the first one's committed verdict.
+   */
+  async function withEscalationLock<T>(
+    issueId: string,
+    work: (tx: Db) => Promise<T>,
+  ): Promise<T> {
+    return db.transaction(async (tx) => {
+      const txDb = tx as unknown as Db;
+      await txDb.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext('cos_review_escalation'), hashtext(${issueId}))`,
+      );
+      return work(txDb);
+    });
+  }
+
+  type EscalationOutcome =
+    | { kind: "closed" }
+    | { kind: "already_open" }
+    | { kind: "escalated"; hireReason: AutoHireReason | null }
+    | { kind: "neutrality_conflict" };
+
   async function escalateToHuman(
     companyId: string,
     issueId: string,
@@ -332,7 +417,8 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
   ): Promise<AutoHireReason | null> {
     // The auto-hire evaluation this escalation calls for. runReviewCycle
     // passes deferAutoHire and makes one evaluation per cycle; a direct caller
-    // gets it run here.
+    // gets it run here. It runs after the escalation transaction commits —
+    // auto-hire takes its own locks on the outer connection.
     const requestHire = async (reason: AutoHireReason): Promise<AutoHireReason> => {
       if (!options.deferAutoHire) {
         await deps.autoHire.evaluateAndHireIfNeeded(companyId, reason);
@@ -340,136 +426,170 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
       return reason;
     };
 
-    // 1. Idempotency: bail if there's already a closing verdict.
-    const existing = await deps.verdicts.closingVerdictFor(companyId, "issue", issueId);
-    if (existing) {
-      await dequeue(companyId, issueId);
-      return null;
-    }
+    const outcome = await withEscalationLock<EscalationOutcome>(issueId, async (tx) => {
+      const txVerdicts = verdictsFor(tx);
+      const txIssueApprovals = issueApprovalService(tx);
 
-    // 1b. GH #701: an open verdict (escalated_to_human / revision_requested /
-    //     pending) also means the loop is already recorded — bail so the 60s
-    //     sweep cannot pile duplicate escalation verdicts onto one item.
-    //     This holds across a reviewer change too: an item escalated while
-    //     its reviewer was live and then freed by the reviewer sweep is still
-    //     covered by the same open verdict (GH #833).
-    if (await hasOpenVerdict(companyId, issueId, options.enqueuedAt)) {
-      return null;
-    }
+      // 1. Idempotency: bail if there's already a closing verdict.
+      const existing = await txVerdicts.closingVerdictFor(companyId, "issue", issueId);
+      if (existing) return { kind: "closed" };
 
-    // 2. A reviewerless item can no longer stall silently: escalate directly
-    //    to the company's accountable human with the orchestrator as actor
-    //    (there is no reviewer to attribute), then re-evaluating auto-hire
-    //    through the normal queue-depth gate (GH #833: the old
-    //    neutrality_conflict trigger bypassed the gate, so every stranded item
-    //    could file a hire). reviewerUserId is text, so any membership
-    //    principal id is acceptable; with no human member at all the item
-    //    still escalates (verdict + approval) and the auto-hire re-check runs.
-    if (!reviewerAgentId) {
-      const accountableUserId = await accountableHumanFor(companyId);
-      const verdict = await deps.verdicts.create({
-        companyId,
-        entityType: "issue",
-        issueId,
-        reviewerUserId: accountableUserId ?? "unassigned",
-        outcome: "escalated_to_human",
-        justification: "SLA expired with no reviewer assigned",
-      });
-      const insertedApproval = await db
+      // 1b. GH #701: an open verdict (escalated_to_human / revision_requested /
+      //     pending) in the current review round also means the loop is
+      //     already recorded — bail so the 60s sweep cannot pile duplicate
+      //     escalation verdicts onto one item. This holds across a reviewer
+      //     change too: an item escalated while its reviewer was live and then
+      //     freed by the reviewer sweep is still covered by the same open
+      //     verdict (GH #833).
+      if (await hasOpenVerdict(tx, companyId, issueId, options.enqueuedAt)) {
+        return { kind: "already_open" };
+      }
+
+      // 2. A reviewerless item can no longer stall silently: escalate directly
+      //    to the company's accountable human with the orchestrator as actor
+      //    (there is no reviewer to attribute), then re-evaluate auto-hire
+      //    through the normal queue-depth gate (GH #833: the old
+      //    neutrality_conflict trigger bypassed the gate, so every stranded
+      //    item could file a hire). reviewerUserId is text, so any membership
+      //    principal id is acceptable.
+      //
+      //    #849 follow-up: the target is never the issue's assignee — the
+      //    neutral-validator rule would 409 the verdict. When the assignee is
+      //    the only owner/admin (a one-human company reviewing its own work),
+      //    the item escalates exactly like a company with no human member:
+      //    the "unassigned" sentinel reviewer and an unnamed approval in the
+      //    company's approvals inbox. The item is surfaced once, the open
+      //    verdict then keeps the sweep from retrying it, and auto-hire can
+      //    still grow a neutral reviewer.
+      if (!reviewerAgentId) {
+        const assigneeUserId = await issueAssigneeUserId(tx, issueId);
+        const accountableUserId = await accountableHumanFor(tx, companyId, assigneeUserId);
+        const onlyHumanIsAssignee =
+          !accountableUserId &&
+          assigneeUserId !== null &&
+          (await accountableHumanFor(tx, companyId, null)) !== null;
+        const justification = onlyHumanIsAssignee
+          ? "SLA expired with no reviewer assigned; the only owner/admin is the issue's assignee"
+          : "SLA expired with no reviewer assigned";
+        const verdict = await txVerdicts.create({
+          companyId,
+          entityType: "issue",
+          issueId,
+          reviewerUserId: accountableUserId ?? "unassigned",
+          outcome: "escalated_to_human",
+          justification,
+        });
+        const insertedApproval = await tx
+          .insert(approvals)
+          .values({
+            companyId,
+            type: "verdict_escalation",
+            status: "pending",
+            payload: {
+              type: "verdict_escalation",
+              verdictId: verdict.id,
+              issueId,
+              justification,
+            } as Record<string, unknown>,
+          })
+          .returning();
+        const approval = insertedApproval[0]!;
+        await txIssueApprovals.link(issueId, approval.id, {
+          userId: accountableUserId,
+        });
+        await logActivity(tx, {
+          companyId,
+          actorType: "system",
+          actorId: "cos_verdict_orchestrator",
+          action: "verdict_escalated",
+          entityType: "issue",
+          entityId: issueId,
+          details: {
+            verdictId: verdict.id,
+            approvalId: approval.id,
+            reason: onlyHumanIsAssignee
+              ? "sla_expired_unassigned_assignee_only_human"
+              : "sla_expired_unassigned",
+            escalatedToUserId: accountableUserId,
+          },
+        });
+        // Auto-hire re-evaluation (GH #701): the queue has work nobody can
+        // review — grow the reviewer pool if the depth threshold and cap allow.
+        return { kind: "escalated", hireReason: "queue_depth" };
+      }
+
+      let verdictId: string | null = null;
+      try {
+        const verdict = await txVerdicts.create({
+          companyId,
+          entityType: "issue",
+          issueId,
+          reviewerAgentId,
+          outcome: "escalated_to_human",
+          justification: "SLA expired without closing verdict",
+        });
+        verdictId = verdict.id;
+      } catch (err) {
+        // Neutral-validator may reject if the reviewer is also the assignee.
+        // The rejection is thrown before any SQL write, so the transaction
+        // is still healthy; kick neutrality_conflict auto-hire and abort.
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("reviewer must not be the assignee")) {
+          return { kind: "neutrality_conflict" };
+        }
+        throw err;
+      }
+
+      // 3. Create the verdict_escalation approval (caller-only; no edit to
+      //    approvals service body). The bridge listens for the resolution.
+      const insertedApproval = await tx
         .insert(approvals)
         .values({
           companyId,
           type: "verdict_escalation",
+          requestedByAgentId: reviewerAgentId,
           status: "pending",
           payload: {
             type: "verdict_escalation",
-            verdictId: verdict.id,
+            verdictId,
             issueId,
-            justification: "SLA expired with no reviewer assigned",
+            justification: "SLA expired without closing verdict",
           } as Record<string, unknown>,
         })
         .returning();
       const approval = insertedApproval[0]!;
-      await issueApprovalsSvc.link(issueId, approval.id, {
-        userId: accountableUserId,
-      });
-      await logActivity(db, {
+
+      // 4. Link the approval to the issue.
+      await txIssueApprovals.link(issueId, approval.id, { agentId: reviewerAgentId });
+
+      await logActivity(tx, {
         companyId,
         actorType: "system",
         actorId: "cos_verdict_orchestrator",
         action: "verdict_escalated",
         entityType: "issue",
         entityId: issueId,
+        agentId: reviewerAgentId,
         details: {
-          verdictId: verdict.id,
+          verdictId,
           approvalId: approval.id,
-          reason: "sla_expired_unassigned",
-          escalatedToUserId: accountableUserId,
+          reason: "sla_expired",
         },
       });
-      // Auto-hire re-evaluation (GH #701): the queue has work nobody can
-      // review — grow the reviewer pool if the depth threshold and cap allow.
-      return requestHire("queue_depth");
-    }
-
-    let verdictId: string | null = null;
-    try {
-      const verdict = await deps.verdicts.create({
-        companyId,
-        entityType: "issue",
-        issueId,
-        reviewerAgentId,
-        outcome: "escalated_to_human",
-        justification: "SLA expired without closing verdict",
-      });
-      verdictId = verdict.id;
-    } catch (err) {
-      // Neutral-validator may reject if the reviewer is also the assignee.
-      // In that case kick neutrality_conflict auto-hire and abort this tick.
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("reviewer must not be the assignee")) {
-        return requestHire("neutrality_conflict");
-      }
-      throw err;
-    }
-
-    // 3. Create the verdict_escalation approval (caller-only; no edit to
-    //    approvals service body). The bridge listens for the resolution.
-    const insertedApproval = await db
-      .insert(approvals)
-      .values({
-        companyId,
-        type: "verdict_escalation",
-        requestedByAgentId: reviewerAgentId,
-        status: "pending",
-        payload: {
-          type: "verdict_escalation",
-          verdictId,
-          issueId,
-          justification: "SLA expired without closing verdict",
-        } as Record<string, unknown>,
-      })
-      .returning();
-    const approval = insertedApproval[0]!;
-
-    // 4. Link the approval to the issue.
-    await issueApprovalsSvc.link(issueId, approval.id, { agentId: reviewerAgentId });
-
-    await logActivity(db, {
-      companyId,
-      actorType: "system",
-      actorId: "cos_verdict_orchestrator",
-      action: "verdict_escalated",
-      entityType: "issue",
-      entityId: issueId,
-      agentId: reviewerAgentId,
-      details: {
-        verdictId,
-        approvalId: approval.id,
-        reason: "sla_expired",
-      },
+      return { kind: "escalated", hireReason: null };
     });
-    return null;
+
+    switch (outcome.kind) {
+      case "closed":
+        await dequeue(companyId, issueId);
+        return null;
+      case "already_open":
+        return null;
+      case "neutrality_conflict":
+        return requestHire("neutrality_conflict");
+      case "escalated":
+        return outcome.hireReason ? requestHire(outcome.hireReason) : null;
+    }
   }
 
   return {
