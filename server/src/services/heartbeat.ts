@@ -4819,16 +4819,38 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, run.companyId)).for("no key update");
       if (await workspacePersistenceHold(tx, run.companyId, run.agentId, issueId)) return { workspaceRecovery: true, blockedIssueId: null, run: null };
       if (issueId) {
+        const treePauseHold = await treeControlSvc.getActivePauseHoldGate(run.companyId, issueId, tx);
+        if (treePauseHold) {
+          const interaction = await isVerifiedIssueTreeControlInteractionWake(tx, { companyId: run.companyId, issueId, agentId: run.agentId,
+            runId: run.id, wakeupRequestId: run.wakeupRequestId, contextSnapshot: context });
+          if (!interaction) return { treePauseHold, blockedIssueId: null, run: null };
+          context.treeHoldInteraction = true;
+          context.activeTreeHold = { ...treePauseHold, interaction: true };
+        }
+      }
+      if (issueId) {
         await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId))).for('update');
       } else {
         await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, run.companyId), eq(issues.assigneeAgentId, run.agentId))).orderBy(asc(issues.id)).for('update');
       }
       const blockedIssueId = await workforceDispatchHold(tx as unknown as Db, run.companyId, run.agentId, issueId);
       if (blockedIssueId) return { blockedIssueId, run: null };
-      const [claimed] = await tx.update(heartbeatRuns).set({ status: 'running', startedAt: run.startedAt ?? claimedAt, updatedAt: claimedAt })
+      const [claimed] = await tx.update(heartbeatRuns).set({ status: 'running', startedAt: run.startedAt ?? claimedAt, updatedAt: claimedAt, ...(context.treeHoldInteraction ? { contextSnapshot: context } : {}) })
         .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, 'queued'))).returning();
       return { blockedIssueId: null, run: claimed ?? null };
     });
+    if (claim.treePauseHold) {
+      let outcome = "thrown";
+      try {
+        const cancelled = await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold");
+        outcome = cancelled?.status ?? "null";
+      } catch { /* Acceptance already refused; retain truthful unresolved evidence. */ }
+      await logActivity(db, { companyId: run.companyId, actorType: "system", actorId: "system", agentId: run.agentId, runId: run.id,
+        action: outcome === "cancelled" ? "issue.tree_hold_run_interrupted" : "issue.tree_hold_effect_unresolved",
+        entityType: "heartbeat_run", entityId: run.id, details: { issueId, holdId: claim.treePauseHold.holdId,
+          rootIssueId: claim.treePauseHold.rootIssueId, outcome, source: "heartbeat.claim_queued_run" } });
+      return null;
+    }
     if (claim.workspaceRecovery) { await cancelQueuedRunForWorkspaceRecovery(run); return null; }
     if (claim.blockedIssueId) { await cancelQueuedRunForWorkforceInput(run, claim.blockedIssueId); return null; }
     const claimed = claim.run;
@@ -8073,6 +8095,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const outcome = await db.transaction(async (tx) => {
         await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, agent.companyId)).for("no key update");
         if (await workspacePersistenceHold(tx, agent.companyId, agentId, issueId)) return { kind: "skipped" as const };
+        const treePauseHold = await treeControlSvc.getActivePauseHoldGate(agent.companyId, issueId, tx);
+        if (treePauseHold) {
+          const interaction = await isVerifiedIssueTreeControlInteractionWake(tx, { companyId: agent.companyId, issueId, agentId,
+            contextSnapshot: enrichedContextSnapshot, requestedByActorType: opts.requestedByActorType, requestedByActorId: opts.requestedByActorId });
+          if (!interaction) return { kind: "tree_hold" as const, hold: treePauseHold };
+          enrichedContextSnapshot.treeHoldInteraction = true;
+          enrichedContextSnapshot.activeTreeHold = { ...treePauseHold, interaction: true };
+        }
         await tx.execute(
           sql`select id from issues where id = ${issueId} and company_id = ${agent.companyId} for update`,
         );
@@ -8491,6 +8521,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         return { kind: "queued" as const, run: newRun };
       });
 
+      if (outcome.kind === "tree_hold") {
+        await writeSkippedRequest("issue_tree_hold_active");
+        await logActivity(db, { companyId: agent.companyId, actorType: "system", actorId: "system", agentId, runId: null,
+          action: "issue.tree_hold_wakeup_deferred", entityType: "issue", entityId: issueId,
+          details: { holdId: outcome.hold.holdId, rootIssueId: outcome.hold.rootIssueId, requestedReason: reason, source, triggerDetail,
+            securityPrinciples: ["Complete Mediation", "Fail Securely", "Secure Defaults"] } });
+        return null;
+      }
       if (outcome.kind === "deferred" || outcome.kind === "skipped") return null;
       if (outcome.kind === "coalesced") {
         await startNextQueuedRunForAgent(agent.id);

@@ -99,6 +99,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: routine-dispatch-acceptance is inherited from the canonical worker:
 // accepted pending/failed runs retain their linked issue; read back uncertainty,
 // never replay a wake or delete to compensate, and escalate without widening authority.
+// AgentDash: exact-tree-acceptance is inherited from the canonical worker bundle:
+// complete current/historical authority, atomic tree DB acceptance, truthful
+// postcommit runtime readback, final pause admission and private deletion refusal.
+// No hire-specific replay, repair, transport or capability grant is introduced.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

@@ -52,3 +52,10 @@ This retired persona remains inert. The canonical worker bundle supplies routine
 accepted-pending/failed-with-link readback, no replay or compensation deletion,
 and human escalation for the existing issue. No separate recovery authority is added.
 /AgentDash: routine-dispatch-acceptance -->
+
+<!-- AgentDash: exact-tree-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK
+This retired persona stays inert. Every worker inherits the canonical default
+bundle's complete current/historical tree-source authority, atomic accepted DB
+changes, postcommit runtime uncertainty/readback, final pause admission and
+private historical deletion refusal. No separate persona, replay or repair grant.
+/AgentDash: exact-tree-acceptance -->

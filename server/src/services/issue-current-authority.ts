@@ -1,9 +1,9 @@
-// AgentDash: current authority witnesses for the two canonical issue composers.
+// AgentDash: current authority witnesses for canonical issue and tree composers.
 // This is request-bound authority, independent of private intent/state pins.
 import type { Request } from "express";
 import { and, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import {
-  agents, agentApiKeys, authSessions, authUsers, boardApiKeys, companyMemberships,
+  type Db, agents, agentApiKeys, authSessions, authUsers, boardApiKeys, companyMemberships,
   instanceUserRoles, principalPermissionGrants, projects, projectAccess,
   projectWorkspaces, executionWorkspaces, environments, goals, assistantAccessTokens, assistantGrants,
 } from "@paperclipai/db";
@@ -25,22 +25,12 @@ function selection(issue: Issue, patch: Patch) {
     executionWorkspaceSettings: effective.executionWorkspaceSettings };
 }
 
-/** Called after the company mutex, before issue/run locks. Only the canonical
- * route supplies this closure, bound to its actual authenticated Request. */
-export function issueCurrentAuthority(req: Request, requestedProjectId?: string | null): NonNullable<IssueCommentContext["stageAuthority"]> {
-  const original = { ...req.actor };
-  const verified = req.verifiedCredential;
-  return async (executor, issue, resolvePatch) => {
-    const sourceBindings = bindings(issue);
-    const validateIssue = (current: Issue) => {
-      if (bindings(current) !== sourceBindings) throw conflict("Issue authority resources changed during acceptance");
-    };
-    const witnesses = new Map<string, Witness>();
-    let collecting = true;
-    let credentialDeadline: number | null = null;
+type CollectionState = { witnesses: Map<string, Witness>; collecting: boolean; credentialDeadline: number | null };
+function authorityCollection(req: Request, original: Request["actor"], verified: Request["verifiedCredential"],
+  executor: Pick<Db, "select">, issue: Issue, requestedProjectId: string | null | undefined, state: CollectionState) {
     function witness(key: string, lock: SQL) {
-      if (collecting) witnesses.set(key, { key, lock });
-      else if (!witnesses.has(key)) throw conflict("Issue authority changed during acceptance");
+      if (state.collecting) state.witnesses.set(key, { key, lock });
+      else if (!state.witnesses.has(key)) throw conflict("Issue authority changed during acceptance");
     }
     const byId = (table: SQLWrapper, id: string) =>
       sql`select id from ${table} where id = ${id} for share`;
@@ -62,14 +52,14 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
           const [row] = await executor.select({ id: authSessions.id, userId: authSessions.userId, expiresAt: authSessions.expiresAt })
             .from(authSessions).where(eq(authSessions.id, verified.sessionId));
           if (!row || row.userId !== userId || row.expiresAt.getTime() <= Date.now()) throw unauthorized();
-          credentialDeadline = row.expiresAt.getTime();
+          state.credentialDeadline = row.expiresAt.getTime();
           witness(`08:session:${row.id}`, byId(authSessions, row.id));
         } else if (original.source === "board_key") {
           if (!original.keyId) throw unauthorized();
           const [row] = await executor.select({ id: boardApiKeys.id, userId: boardApiKeys.userId, revokedAt: boardApiKeys.revokedAt, expiresAt: boardApiKeys.expiresAt })
             .from(boardApiKeys).where(eq(boardApiKeys.id, original.keyId));
           if (!row || row.userId !== userId || row.revokedAt || (row.expiresAt && row.expiresAt.getTime() <= Date.now())) throw unauthorized();
-          credentialDeadline = row.expiresAt?.getTime() ?? null;
+          state.credentialDeadline = row.expiresAt?.getTime() ?? null;
           witness(`08:board_key:${row.id}`, byId(boardApiKeys, row.id));
         } else if (original.source === "assistant_grant") {
           if (!original.assistantLoopback || verified?.kind !== "assistant" || !verified.loopback ||
@@ -87,7 +77,7 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
             if (!token || token.grantId !== grant.id || token.resource !== origin.resource || token.revokedAt ||
                 origin.expiresAt <= Date.now() || token.expiresAt.getTime() <= Date.now() ||
                 !origin.scopes.includes("agentdash:work") || !token.scopes.includes("agentdash:work")) throw unauthorized();
-            credentialDeadline = Math.min(token.expiresAt.getTime(), origin.expiresAt);
+            state.credentialDeadline = Math.min(token.expiresAt.getTime(), origin.expiresAt);
             witness(`08:assistant_access:${token.id}`, byId(assistantAccessTokens, token.id));
           } else if (verified.origin.kind !== "internal") throw unauthorized();
         } else throw unauthorized();
@@ -198,6 +188,34 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
       }
       return JSON.stringify(selected);
     }
+  async function referencedAgents(ids: readonly string[]) {
+    for (const id of strings([...ids])) {
+      const [row] = await executor.select({ id: agents.id, companyId: agents.companyId }).from(agents).where(eq(agents.id, id));
+      if (!row || row.companyId !== issue.companyId) throw notFound("Agent not found");
+      witness(`02:agent:${id}`, byId(agents, id));
+    }
+  }
+  return { identity, projectGuards, sourceWorkspace, resources, referencedAgents };
+}
+function checkAuthorityTime(verified: Request["verifiedCredential"], state: CollectionState) {
+  if (state.credentialDeadline !== null && state.credentialDeadline <= Date.now()) throw unauthorized();
+  if (verified?.kind === "assistant" && (!verified.loopback?.lease.isLive() ||
+      verified.loopback.expiresAt <= Date.now() || (verified.origin.kind === "oauth" && verified.origin.expiresAt <= Date.now()))) throw unauthorized();
+  if (verified?.kind === "agent_jwt" && verified.expiresAt < Math.floor(Date.now() / 1000)) throw unauthorized();
+}
+
+/** Called after the company mutex, before issue/run locks. Only the canonical
+ * route supplies this closure, bound to its actual authenticated Request. */
+export function issueCurrentAuthority(req: Request, requestedProjectId?: string | null): NonNullable<IssueCommentContext["stageAuthority"]> {
+  const original = { ...req.actor };
+  const verified = req.verifiedCredential;
+  return async (executor, issue, resolvePatch) => {
+    const sourceBindings = bindings(issue);
+    const validateIssue = (current: Issue) => {
+      if (bindings(current) !== sourceBindings) throw conflict("Issue authority resources changed during acceptance");
+    };
+    const state: CollectionState = { witnesses: new Map(), collecting: true, credentialDeadline: null };
+    const { identity, projectGuards, sourceWorkspace, resources } = authorityCollection(req, original, verified, executor, issue, requestedProjectId, state);
     await identity();
     await projectGuards(); // Before preparation can project a closed workspace.
     await sourceWorkspace();
@@ -214,8 +232,8 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
     // environment→agent→agent key, grant→access token. Resource parents
     // precede selected goal/project/workspace children. IDs sort within a
     // class; issue/topology writer coordination remains a separate contract.
-    for (const { lock } of [...witnesses.values()].sort((a, b) => a.key.localeCompare(b.key))) await executor.execute(lock);
-    collecting = false;
+    for (const { lock } of [...state.witnesses.values()].sort((a, b) => a.key.localeCompare(b.key))) await executor.execute(lock);
+    state.collecting = false;
     // A deleted/replaced positive row never silently substitutes a new ID.
     await identity(); await projectGuards(); await sourceWorkspace(); await resources(patch);
     return { validateIssue, beforeWrite: async (current, effectivePatch) => {
@@ -226,10 +244,58 @@ export function issueCurrentAuthority(req: Request, requestedProjectId?: string 
       await identity(); await projectGuards(); await sourceWorkspace(); await resources(effectivePatch);
       // Last synchronous liveness/time check is immediately before acceptance
       // writes. No external work or write-budget consumption occurs here.
-      if (credentialDeadline !== null && credentialDeadline <= Date.now()) throw unauthorized();
-      if (verified?.kind === "assistant" && (!verified.loopback?.lease.isLive() ||
-          verified.loopback.expiresAt <= Date.now() || (verified.origin.kind === "oauth" && verified.origin.expiresAt <= Date.now()))) throw unauthorized();
-      if (verified?.kind === "agent_jwt" && verified.expiresAt < Math.floor(Date.now() / 1000)) throw unauthorized();
+      checkAuthorityTime(verified, state);
     } };
+  };
+}
+
+// AgentDash: all targets share one positive witness collection and lock order.
+export type TreeAuthorityTarget = { issue: Issue; effectivePatch: Patch; referencedAgentIds?: readonly string[] };
+export type TreeAuthorityGuard = {
+  checkTime(): void;
+  validateTargets(current: readonly TreeAuthorityTarget[]): void;
+  beforeWrite(current: readonly TreeAuthorityTarget[]): Promise<void>;
+};
+export function issueTreeCurrentAuthority(req: Request) {
+  const original = { ...req.actor }, verified = req.verifiedCredential;
+  const fingerprint = (targets: readonly TreeAuthorityTarget[]) => JSON.stringify(targets.map(target =>
+    [target.issue.id, bindings(target.issue), selection(target.issue, target.effectivePatch), strings([...(target.referencedAgentIds ?? [])])]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  async function prepare(reader: Pick<Db, "select">, targets: readonly TreeAuthorityTarget[]) {
+    if (original.type !== "board") throw forbidden("Board access required");
+    if (!targets.length || targets.some(target => target.issue.companyId !== targets[0].issue.companyId)) throw notFound("Issue not found");
+    const state: CollectionState = { witnesses: new Map(), collecting: true, credentialDeadline: null };
+    const originalTargets = fingerprint(targets);
+    const collectors = targets.map(target => authorityCollection(req, original, verified, reader, target.issue, undefined, state));
+    const collect = async () => {
+      await collectors[0].identity();
+      for (let index = 0; index < collectors.length; index++) {
+        const collector = collectors[index];
+        await collector.projectGuards(); await collector.sourceWorkspace();
+        await collector.resources(targets[index].effectivePatch);
+        await collector.referencedAgents(targets[index].referencedAgentIds ?? []);
+      }
+    };
+    const validateTargets = (current: readonly TreeAuthorityTarget[]) => {
+      if (fingerprint(current) !== originalTargets) throw conflict("Tree authority changed during acceptance");
+    };
+    await collect();
+    return { state, collect, validateTargets };
+  }
+  return {
+    async read(reader: Pick<Db, "select">, targets: readonly TreeAuthorityTarget[]) {
+      const { state } = await prepare(reader, targets);
+      checkAuthorityTime(verified, state);
+    },
+    async stage(executor: Db, targets: readonly TreeAuthorityTarget[]): Promise<TreeAuthorityGuard> {
+      const prepared = await prepare(executor, targets);
+      for (const { lock } of [...prepared.state.witnesses.values()].sort((a, b) => a.key.localeCompare(b.key))) await executor.execute(lock);
+      prepared.state.collecting = false;
+      await prepared.collect();
+      return { validateTargets: prepared.validateTargets, checkTime: () => checkAuthorityTime(verified, prepared.state), async beforeWrite(current) {
+        prepared.validateTargets(current);
+        await prepared.collect();
+        checkAuthorityTime(verified, prepared.state);
+      } };
+    },
   };
 }

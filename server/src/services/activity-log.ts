@@ -73,21 +73,25 @@ export interface ActivityPublication {
 export async function insertActivity(
   executor: Pick<Db, "select" | "insert" | "update">,
   input: LogActivityInput,
+  beforeInsert?: () => void,
 ): Promise<ActivityPublication> {
   const settings = await readInstanceGeneralSettings(executor);
-  return insertActivityWithRedaction(executor, input, settings.censorUsernameInLogs);
+  return insertActivityWithRedaction(executor, input, settings.censorUsernameInLogs, beforeInsert);
 }
 
 async function insertActivityWithRedaction(
   executor: Pick<Db, "insert">,
   input: LogActivityInput,
   censorUsernameInLogs: boolean,
+  beforeInsert?: () => void,
 ): Promise<ActivityPublication> {
   const currentUserRedactionOptions = { enabled: censorUsernameInLogs };
   const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
   const redactedDetails = sanitizedDetails
     ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
     : null;
+  // AgentDash: optional final synchronous authority/expiry guard after all reads.
+  beforeInsert?.();
   await executor.insert(activityLog).values({
     companyId: input.companyId,
     actorType: input.actorType,
