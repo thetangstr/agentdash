@@ -195,6 +195,17 @@ describe("SidebarCompanyMenu", () => {
     });
   });
 
+  // One UX: the rule is the same for an MK company — its rail is hidden with
+  // one company too, so the menu carries the path.
+  it("offers New company to a single-company MK user as well", async () => {
+    mockState.selectedCompany = { ...mockState.selectedCompany, productProfile: "agentdash_mk" };
+    const root = await openMenu();
+    expect(document.body.textContent).toContain("New company");
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("hides New company on hosted boxes and for multi-company users", async () => {
     mockHealthApi.get.mockResolvedValue({ hostedBox: true });
     let root = await openMenu();

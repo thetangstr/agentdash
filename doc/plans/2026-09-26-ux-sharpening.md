@@ -227,6 +227,7 @@ Consequences for the web app:
 
 1. **GitHub:** a fine-grained token pasted in onboarding for the first ~10 waitlist boxes. The AgentDash GitHub App is built before signup opens fully (~11-04), as a separate issue that is not on the 10-28 critical path.
 2. **Sidebar:** the six items (Home, Ask, Work, Decisions, Shipped, Team), everything else under Advanced, **for the default profile and hosted boxes only.** The MK profile keeps its current layout.
+   - Superseded by [2026-09-30-one-ux.md](2026-09-30-one-ux.md): the six-item sidebar is for every company.
 3. **First run:** claim → model key → connect GitHub → first issue → Home. The CoS interview and the 5-question assessment become optional; "Plan with your Chief of Staff" is available from Home.
 4. **Naming:** keep **"issues"** in the UI. "Request" is not adopted; the Work page lists issues and Ask's composer says "New issue".
 5. The top-15 punch list and the GitHub App are filed as GitHub issues (labels `ui`, `ux-sharpening`, `mvl-1.0` except the App), with owners and dependencies in each issue. Punch-list items 1 to 15 are #782 to #796 in rank order (owner:orchestrator: #782, #783, #784, #786; owner:devin: the rest); the GitHub App is #797.

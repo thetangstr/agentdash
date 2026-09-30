@@ -37,9 +37,10 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
     retry: false,
   });
   // AgentDash: UX-6 review (#787) — CompanyRail hides itself for a
-  // single-company default-profile user, which would orphan the rail's "Add
-  // company" button. The menu keeps the path reachable on self-hosted
-  // instances; hosted agentdash.cloud boxes bind exactly one workspace.
+  // single-company user (every company, one UX), which would orphan the
+  // rail's "Add company" button. The menu keeps the path reachable on
+  // self-hosted instances; hosted agentdash.cloud boxes bind exactly one
+  // workspace.
   const { data: health } = useQuery({
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
@@ -48,7 +49,6 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
   });
   const showNewCompany =
     companies.filter((company) => company.status !== "archived").length <= 1 &&
-    selectedCompany?.productProfile !== "agentdash_mk" &&
     health?.hostedBox !== true;
 
   const signOutMutation = useMutation({

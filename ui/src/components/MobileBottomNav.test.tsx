@@ -33,9 +33,6 @@ const mockCompany = vi.hoisted(() => ({
     id: "company-1",
     issuePrefix: "PAP",
     name: "Paperclip",
-    // The Inbox badge pairing these tests exercise only renders on MK now —
-    // the default profile's five-item nav has no Inbox item (UX-6).
-    productProfile: "agentdash_mk",
   } as Record<string, unknown>,
 }));
 
@@ -46,18 +43,10 @@ vi.mock("../context/CompanyContext", () => ({
   }),
 }));
 
-vi.mock("../context/DialogContext", () => ({
-  useDialogActions: () => ({
-    openNewIssue: vi.fn(),
-  }),
-}));
-
-vi.mock("../hooks/useInboxBadge", () => ({
-  useInboxBadge: () => ({ inbox: 7, failedRuns: 0 }),
-}));
+const mockBadge = vi.hoisted(() => ({ value: 7 }));
 
 vi.mock("../hooks/useDecisionsBadge", () => ({
-  useDecisionsBadge: () => 0,
+  useDecisionsBadge: () => mockBadge.value,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,11 +65,13 @@ function renderNav(dark: boolean) {
   return { container, root };
 }
 
-describe("MobileBottomNav Inbox badge", () => {
+describe("MobileBottomNav", () => {
   let mounted: { container: HTMLDivElement; root: ReturnType<typeof createRoot> } | null = null;
 
   beforeEach(() => {
     mounted = null;
+    mockBadge.value = 7;
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
   });
 
   afterEach(() => {
@@ -94,16 +85,17 @@ describe("MobileBottomNav Inbox badge", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps the dark-mode Inbox badge legible with the mode-aware inverse text token", () => {
+  const decisionsLink = () =>
+    [...mounted!.container.querySelectorAll("a")].find((anchor) =>
+      anchor.textContent?.includes("Decisions"),
+    );
+
+  it("keeps the dark-mode Decisions badge legible with the mode-aware inverse text token", () => {
     // Same dark-mode pairing bug as the desktop sidebar bubble (AGE-31):
     // bg-primary (near-white in dark) must never pair with hardcoded white text.
     mounted = renderNav(true);
 
-    const inboxLink = [...mounted.container.querySelectorAll("a")].find(
-      (anchor) => anchor.textContent?.includes("Inbox"),
-    );
-    expect(inboxLink).toBeDefined();
-    const badge = inboxLink?.querySelector("span.rounded-full");
+    const badge = decisionsLink()?.querySelector("span.rounded-full");
     expect(badge).not.toBeNull();
     expect(badge?.textContent).toBe("7");
     expect(badge?.className).toContain("bg-primary");
@@ -114,40 +106,37 @@ describe("MobileBottomNav Inbox badge", () => {
   it("keeps light mode on the same legible pairing", () => {
     mounted = renderNav(false);
 
-    const inboxLink = [...mounted.container.querySelectorAll("a")].find(
-      (anchor) => anchor.textContent?.includes("Inbox"),
-    );
-    const badge = inboxLink?.querySelector("span.rounded-full");
+    const badge = decisionsLink()?.querySelector("span.rounded-full");
     expect(badge?.className).toContain("text-text-inverse");
     expect(badge?.className).not.toContain("text-primary-foreground");
   });
 
-  // AgentDash: UX-6 (#787) — the default profile gets the five-item nav.
-  it("renders Home, Work, Ask, Decisions, Team on the default profile", () => {
-    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-    try {
-      mounted = renderNav(false);
+  it("renders no badge when nothing is waiting", () => {
+    mockBadge.value = 0;
+    mounted = renderNav(false);
+    expect(decisionsLink()?.textContent).toBe("Decisions");
+  });
 
-      const links = [...mounted.container.querySelectorAll("a")];
-      const byLabel = (text: string) =>
-        links.find((anchor) => anchor.textContent?.includes(text));
-      expect(byLabel("Home")?.getAttribute("href")).toBe("/dashboard");
-      expect(byLabel("Work")?.getAttribute("href")).toBe("/issues");
-      expect(byLabel("Ask")?.getAttribute("href")).toBe("/cos");
-      expect(byLabel("Decisions")?.getAttribute("href")).toBe("/decisions");
-      expect(byLabel("Team")?.getAttribute("href")).toBe("/agents");
-      // The Decisions badge reads useDecisionsBadge (mocked to 0), not the
-      // inbox badge (7) — no stray "7" on the item.
-      expect(byLabel("Decisions")?.textContent).toBe("Decisions");
-      expect(byLabel("Inbox")).toBeUndefined();
-      expect(byLabel("Create")).toBeUndefined();
-    } finally {
-      mockCompany.current = {
-        id: "company-1",
-        issuePrefix: "PAP",
-        name: "Paperclip",
-        productProfile: "agentdash_mk",
-      };
-    }
+  // AgentDash: UX-6 (#787) + one UX — the five-item nav for every company.
+  it.each([
+    ["a default-profile company", {}],
+    ["an MK company (same nav as everyone)", { productProfile: "agentdash_mk" }],
+  ])("renders Home, Work, Ask, Decisions, Team for %s", (_label, extra) => {
+    mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip", ...extra };
+    mounted = renderNav(false);
+
+    const links = [...mounted.container.querySelectorAll("a")];
+    const byLabel = (text: string) => links.find((anchor) => anchor.textContent?.includes(text));
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "/dashboard",
+      "/issues",
+      "/cos",
+      "/decisions",
+      "/agents",
+    ]);
+    expect(byLabel("Home")?.getAttribute("href")).toBe("/dashboard");
+    expect(byLabel("Team")?.getAttribute("href")).toBe("/agents");
+    expect(byLabel("Inbox")).toBeUndefined();
+    expect(mounted.container.textContent).not.toContain("Create");
   });
 });

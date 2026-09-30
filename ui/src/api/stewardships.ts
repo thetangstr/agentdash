@@ -10,7 +10,7 @@ export interface InboxItem {
   approvalId: string;
   type: string;
   status: string;
-  /** Must be echoed back on any decision in an agentdash_mk company. */
+  /** Must be echoed back on any decision where the stewardship capability is on. */
   revision: number;
   payload: Record<string, unknown>;
   createdAt: string;

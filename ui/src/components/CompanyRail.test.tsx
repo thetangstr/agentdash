@@ -92,16 +92,16 @@ describe("CompanyRail", () => {
     resetState();
   });
 
-  // AgentDash: UX-6 (#787) — the rail is hidden for a single-company person
-  // on the default profile.
-  it("renders nothing for a single-company default-profile user", async () => {
+  // AgentDash: UX-6 (#787) + one UX — the rail is hidden for a single-company
+  // person, whatever the company's profile.
+  it("renders nothing for a single-company user", async () => {
     const { container, root } = await renderRail();
     expect(container.querySelector("a, button")).toBeNull();
     expect(container.textContent).toBe("");
     await act(async () => root.unmount());
   });
 
-  it("keeps the rail on the MK profile even with one company", async () => {
+  it("applies the same one-company rule to an MK company", async () => {
     mockState.selectedCompany = {
       id: "company-1",
       issuePrefix: "PAP",
@@ -109,7 +109,7 @@ describe("CompanyRail", () => {
       productProfile: "agentdash_mk",
     };
     const { container, root } = await renderRail();
-    expect(container.querySelector('button[aria-label="Add company"]')).not.toBeNull();
+    expect(container.querySelector("a, button")).toBeNull();
     await act(async () => root.unmount());
   });
 

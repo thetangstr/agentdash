@@ -156,6 +156,12 @@ When adding endpoints:
 - Use company selection context for company-scoped pages
 - Surface failures clearly; do not silently ignore API errors
 
+### One UX (doc/plans/2026-09-30-one-ux.md)
+
+- A UX change reaches every company. If something must not reach a customer yet, hold the release, not the code path.
+- No `productProfile` / `agentdash_mk` checks in `ui/src`. `scripts/ci/check-no-profile-ux.mjs` enforces this in the PR workflow; the files that still branch are on `scripts/ci/profile-ux-allowlist.json`, which may only shrink.
+- Capabilities that stay customer-specific are gated on the server with `requireProductProfile`. The UI keeps the entry point and shows an "available on request" empty state when the server says no.
+
 ## 10. Pull Request Requirements
 
 When creating a pull request (via `gh pr create` or any other method), you **must** read and fill in every section of [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). Do not craft ad-hoc PR bodies — use the template as the structure for your PR description. Required sections:

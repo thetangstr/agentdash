@@ -4,7 +4,6 @@ import { healthApi } from "./api/health";
 import { queryKeys } from "./lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
-import { PageSkeleton } from "./components/PageSkeleton";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
 import { FirstRunStart } from "./components/FirstRunStart";
@@ -29,14 +28,11 @@ import { UserProfile } from "./pages/UserProfile";
 import { ExecutionWorkspaceDetail } from "./pages/ExecutionWorkspaceDetail";
 import { Goals } from "./pages/Goals";
 import { GoalDetail } from "./pages/GoalDetail";
-import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
 import { Decisions } from "./pages/Decisions";
 import { Costs } from "./pages/Costs";
 import { Activity } from "./pages/Activity";
 import { Shipped } from "./pages/Shipped";
-import { Inbox } from "./pages/Inbox";
-import { CompanyInbox } from "./pages/CompanyInbox";
 import { CompanySettings } from "./pages/CompanySettings";
 import { CompanyConnections } from "./pages/CompanyConnections";
 import { CompanyModelKey } from "./pages/CompanyModelKey";
@@ -106,12 +102,12 @@ import { StartProgress as MarketingStartProgress } from "./marketing/pages/Start
 import { Find as MarketingFind } from "./marketing/pages/Find";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
-import { InboxRootRedirect, ProfileRouteSwitch } from "./components/ProfileRouteSwitch";
 import MyAgent from "./pages/MyAgent";
 import { OAuthConsent } from "./pages/OAuthConsent";
 import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
+import { legacyDecisionsRoutes } from "./lib/legacy-decisions-routes";
 
 // AgentDash: billing page wrapper — pulls companyId from context.
 function BillingPageRoute() {
@@ -124,7 +120,7 @@ function boardRoutes() {
   return (
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
-      {/* AgentDash: UX-3 (#784) — Home on the default profile, Overview on agentdash_mk. */}
+      {/* AgentDash: UX-3 (#784) — the landing page, the same for every company. */}
       <Route path="dashboard" element={<DashboardHome />} />
       {/* AgentDash (GH #786): assistant connection instructions until Settings › Connections (#793) */}
       <Route path="connect-assistant" element={<ConnectAssistant />} />
@@ -191,14 +187,12 @@ function boardRoutes() {
       <Route path="execution-workspaces/:workspaceId/routines" element={<ExecutionWorkspaceDetail />} />
       <Route path="goals" element={<Goals />} />
       <Route path="goals/:goalId" element={<GoalDetail />} />
-      {/* AgentDash: UX-7 (GH #788) — the default profile merges Inbox and
-          Approvals into Decisions; agentdash_mk keeps the original pages.
-          The approval DETAIL route stays on both profiles — a Decisions row
-          opens it. */}
-      <Route path="decisions" element={<ProfileRouteSwitch mk={<Navigate to="/inbox/mine" replace />} fallback={<Decisions />} skeleton={<PageSkeleton variant="approvals" />} />} />
-      <Route path="approvals" element={<ProfileRouteSwitch mk={<Navigate to="/approvals/pending" replace />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="approvals" />} />} />
-      <Route path="approvals/pending" element={<ProfileRouteSwitch mk={<Approvals />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="approvals" />} />} />
-      <Route path="approvals/all" element={<ProfileRouteSwitch mk={<Approvals />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="approvals" />} />} />
+      {/* AgentDash: UX-7 (GH #788) + one UX (doc/plans/2026-09-30-one-ux.md) —
+          Decisions replaces Inbox and Approvals for every company. The old
+          list URLs redirect so bookmarks keep working; the approval DETAIL
+          route stays — a Decisions row opens it. */}
+      <Route path="decisions" element={<Decisions />} />
+      {legacyDecisionsRoutes()}
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="costs" element={<Costs />} />
       <Route path="evaluation" element={<EvaluationOverviewPage />} />
@@ -216,14 +210,7 @@ function boardRoutes() {
           useful, but there is no second copy of the content to drift. */}
       <Route path="my-agent/connect-machine" element={<Navigate to="../my-agent" replace />} />
       <Route path="inbox/override" element={<OverrideInbox />} />
-      <Route path="inbox" element={<InboxRootRedirect />} />
-      <Route path="inbox/company" element={<ProfileRouteSwitch mk={<CompanyInbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
-      <Route path="inbox/mine" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
-      <Route path="inbox/recent" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
-      <Route path="inbox/unread" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
-      <Route path="inbox/all" element={<ProfileRouteSwitch mk={<Inbox />} fallback={<Navigate to="/decisions" replace />} skeleton={<PageSkeleton variant="inbox" />} />} />
       <Route path="inbox/requests" element={<JoinRequestQueue />} />
-      <Route path="inbox/new" element={<Navigate to="/inbox/mine" replace />} />
       <Route path="u/:userSlug" element={<UserProfile />} />
       <Route path="design-guide" element={<DesignGuide />} />
       <Route path="instance/settings/adapters" element={<AdapterManager />} />

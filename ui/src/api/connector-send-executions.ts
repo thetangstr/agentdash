@@ -5,7 +5,7 @@ import { api } from "./client";
  * AgentDash-MK T4: the `outcome_unknown` operator surface (audit item 14).
  *
  * Typed client for the two T4a routes. The list route is company-scoped,
- * profile-gated (404 off `agentdash_mk`), and authorized server-side to
+ * capability-gated on the server (404 without it), and authorized server-side to
  * owner/admin or the requesting steward — a member who is none of those gets a
  * 403, which the UI surfaces as a refusal rather than an empty list. Reconcile
  * records a human's verdict as an AUDIT record; it never resends. `revision` is
