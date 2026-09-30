@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IssueExecutionDecision, IssueExecutionPolicy, IssueExecutionStage, IssueExecutionStagePrincipal, IssueExecutionState } from "@paperclipai/shared";
-import { issueExecutionPolicySchema, issueExecutionStateSchema } from "@paperclipai/shared";
+import { issueExecutionPolicySchema, issueExecutionStateSchema, preserveIssueRecoveryBudget } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
 
 type AssigneeLike = {
@@ -293,7 +293,28 @@ function canAutoSkipPendingStage(input: {
     input.stage.participants.every((participant) => principalsEqual(participant, input.returnAssignee));
 }
 
+/**
+ * AgentDash (recovery budget, explicit clear): `execution_state` holds two
+ * namespaces: the review/approval stage state this module owns, and the
+ * `recoveryBudget` marker the heartbeat writes when automatic retries run
+ * out. Every stage write here rebuilds or nulls the whole column (the stage
+ * schema also strips unknown keys on parse), which used to strip an exhausted
+ * marker silently, with no `issue.recovery_budget_cleared` audit row. The
+ * marker now leaves only through the explicit clear, so any executionState
+ * this transition writes carries the existing recovery namespace forward.
+ */
 export function applyIssueExecutionPolicyTransition(input: TransitionInput): TransitionResult {
+  const result = computeIssueExecutionPolicyTransition(input);
+  if (result.patch.executionState !== undefined) {
+    result.patch.executionState = preserveIssueRecoveryBudget(
+      input.issue.executionState,
+      result.patch.executionState as Record<string, unknown> | null,
+    );
+  }
+  return result;
+}
+
+function computeIssueExecutionPolicyTransition(input: TransitionInput): TransitionResult {
   const patch: Record<string, unknown> = {};
   const existingState = parseIssueExecutionState(input.issue.executionState);
   const currentAssignee = assigneePrincipal(input.issue);

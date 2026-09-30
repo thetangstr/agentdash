@@ -13,6 +13,7 @@ import {
   AGENT_MEMORY_CONTEXT_KEY,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
   MODEL_PROFILE_KEYS,
+  preserveIssueRecoveryBudget,
   readIssueRecoveryBudget,
   isEnvironmentDriverSupportedForAdapter,
   type BillingType,
@@ -3270,6 +3271,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
    * Without this an agent could keep itself running on an exhausted issue by
    * filing and closing child issues assigned to itself. The wake request's
    * requestedByActorType is the record of who started it.
+   *
+   * AgentDash (recovery budget, explicit clear — INTERIM, 2026-09-30): a
+   * person's direct action no longer clears the marker (only the audited
+   * "Clear recovery block & retry" does), but the run that action starts
+   * still goes ahead here, so a board user can act on an exhausted issue
+   * without first clearing it. Automatic retries stay refused and the marker
+   * stays set; the stranded-issue reconciler moves the issue back to
+   * `blocked` once that run ends. The planned one-run permit (named-human
+   * prepare/confirm) replaces this check with an exact-run match: the permit
+   * names the run it allows, and an unlinked wake with
+   * requestedByActorType "user" alone will no longer be enough.
    */
   async function isRunStartedByPerson(run: typeof heartbeatRuns.$inferSelect) {
     if (taskRecoveryParentRunId(run)) return false;
@@ -3380,7 +3392,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const dimensions = input.exhaustedBy.length > 0
       ? input.exhaustedBy.join(", ")
       : "persisted aggregate limit";
-    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. Further automatic retries are suppressed until a board user clears the recovery block: use "Clear recovery block & retry" on this issue, move it out of \`blocked\`, reopen it with a comment, or reassign it. Human comments still reach the assignee.`;
+    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. Further automatic retries are suppressed until a board user clears the recovery block with "Clear recovery block & retry" on this issue. Moving the issue out of \`blocked\`, reopening it with a comment or reassigning it does not clear the block. Human comments still reach the assignee.`;
 
     // One visible comment per exhaustion: a comment from before the last
     // human clear belongs to the window that clear closed.
@@ -3456,7 +3468,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         usage,
         existingBudget.limits ?? taskRecoveryBudgetLimitsForAgent(agent),
       );
-      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Only runs a person starts can proceed until a board user clears the recovery block (the issue's "Clear recovery block & retry" action, or moving it out of blocked).`;
+      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Only runs a person starts can proceed until a board user clears the recovery block with the issue's "Clear recovery block & retry" action; moving the issue out of blocked, commenting or reassigning does not clear it.`;
       await cancelQueuedRunForRecoveryBudget(run, reason);
       await ensureTaskRecoveryBudgetCommentOnce({
         run,
@@ -7461,7 +7473,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             issue.id,
             {
               status: "todo",
-              executionState: null,
+              // AgentDash (recovery budget, explicit clear): reopening drops
+              // the stage state but keeps an exhausted recovery marker.
+              executionState: preserveIssueRecoveryBudget(issue.executionState, null),
             },
             tx,
           );

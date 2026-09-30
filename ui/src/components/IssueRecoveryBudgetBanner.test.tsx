@@ -47,6 +47,11 @@ describe("IssueRecoveryBudgetBanner", () => {
     expect(banner?.textContent).toContain("Automatic recovery stopped.");
     expect(banner?.textContent).toContain("automatic retries");
     expect(banner?.textContent).toContain("retries 1 of 1");
+    // Explicit clear only: the banner must not suggest that unblocking,
+    // commenting or reassigning clears the budget.
+    expect(
+      container.querySelector("[data-testid='issue-recovery-budget-explicit-clear']")?.textContent,
+    ).toContain("Changing the status, commenting or reassigning does not clear it.");
     const button = Array.from(container.querySelectorAll("button"))
       .find((candidate) => candidate.textContent === "Clear recovery block & retry");
     expect(button).toBeTruthy();

@@ -154,7 +154,7 @@ function formatRecoveryBudgetCause(cause: { usage: string | null }) {
 }
 
 const RECOVERY_BUDGET_CLEAR_HINT =
-  "A board user can clear it with \"Clear recovery block & retry\" on this issue, or by moving it out of `blocked`, reopening it with a comment, or reassigning it.";
+  "Only a board user's \"Clear recovery block & retry\" on this issue clears it; moving it out of `blocked`, reopening it with a comment or reassigning it does not.";
 
 function didAutomaticRecoveryFail(
   latestRun: LatestIssueRun,
