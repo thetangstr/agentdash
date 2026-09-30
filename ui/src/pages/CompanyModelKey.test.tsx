@@ -11,7 +11,7 @@ const mockAdmins = vi.hoisted(() => vi.fn());
 const mockRequest = vi.hoisted(() => vi.fn());
 const mockCompany = vi.hoisted(() => ({
   selectedCompanyId: "company-1",
-  selectedCompany: { id: "company-1", name: "Paperclip", productProfile: "default" },
+  selectedCompany: { id: "company-1", name: "Paperclip" },
 }));
 
 vi.mock("@/api/onboarding", () => ({
@@ -79,7 +79,7 @@ describe("CompanyModelKey", () => {
     mockAdapterStatus.mockResolvedValue({ hermesProvider: hermesProvider() });
     mockAdmins.mockResolvedValue({ admins: [] });
     mockCompany.selectedCompanyId = "company-1";
-    mockCompany.selectedCompany = { id: "company-1", name: "Paperclip", productProfile: "default" };
+    mockCompany.selectedCompany = { id: "company-1", name: "Paperclip" };
   });
 
   afterEach(() => {
@@ -165,12 +165,5 @@ describe("CompanyModelKey", () => {
     expect(container.querySelector('[data-testid="model-key-not-required"]')?.textContent).toContain(
       "does not use a hosted model provider",
     );
-  });
-
-  it("renders the not-found page on the MK profile", async () => {
-    mockCompany.selectedCompany = { id: "company-1", name: "Paperclip MK", productProfile: "agentdash_mk" };
-    await render();
-    expect(container.querySelector('[data-testid="company-model-key"]')).toBeNull();
-    expect(mockAdapterStatus).not.toHaveBeenCalled();
   });
 });

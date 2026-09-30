@@ -1,11 +1,9 @@
 // AgentDash (GH #785, UX-4): the readiness assessment is optional. It left the
 // signup chain and lives here, under Settings → Advanced, for anyone who wants
-// it. Default profile only: an agentdash_mk workspace still takes it during
-// onboarding and its settings page is unchanged.
+// it. Same card for every company (one UX).
 import { Button } from "@/components/ui/button";
 
-export function ReadinessAssessmentCard({ productProfile }: { productProfile?: string | null }) {
-  if (productProfile === "agentdash_mk") return null;
+export function ReadinessAssessmentCard() {
   return (
     <div className="space-y-4" data-testid="company-settings-advanced-section">
       <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Advanced</div>

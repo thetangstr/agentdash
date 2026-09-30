@@ -178,4 +178,32 @@ describe("NeedsReconciliationPanel", () => {
 
     await act(async () => root.unmount());
   });
+
+  it("shows the available-on-request state when connector sends are off for the company (404)", async () => {
+    // One UX: the panel renders for every company; the server's capability
+    // gate answers 404 when connector sends are not on for this workspace.
+    mockConnectorSendExecutionsApi.listUnresolved.mockRejectedValue(
+      new ApiError("Company not found", 404, null),
+    );
+
+    const { root, queryClient } = renderPanel(container);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <NeedsReconciliationPanel companyId="company-1" />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    expect(container.textContent).toContain("Needs reconciliation");
+    expect(container.querySelector('[data-testid="available-on-request"]')).not.toBeNull();
+    expect(container.textContent).toContain(
+      "Available on request — ask us to turn on connector sends for your workspace.",
+    );
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.textContent).not.toContain("Nothing needs reconciliation");
+
+    await act(async () => root.unmount());
+  });
 });

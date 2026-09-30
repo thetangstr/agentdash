@@ -143,6 +143,33 @@ describe("AgentCeilingEditor", () => {
     container.remove();
   });
 
+  it("shows the available-on-request state before any agent is picked when ceilings are off (404)", async () => {
+    // One UX: the panel renders for every company. The governance route checks
+    // the capability before authority, so its 404 means "off for this
+    // workspace"; the panel probes the first agent to find out up front.
+    mockGovernanceApi.get.mockRejectedValue(new ApiError("Company not found", 404, null));
+
+    await render();
+
+    expect(mockGovernanceApi.get).toHaveBeenCalledWith("company-1", "agent-1");
+    expect(container.textContent).toContain("Agent policy ceilings");
+    expect(container.querySelector('[data-testid="available-on-request"]')).not.toBeNull();
+    expect(container.textContent).toContain(
+      "Available on request — ask us to turn on agent ceilings for your workspace.",
+    );
+    expect(container.querySelector('[aria-label="Ceiling agent"]')).toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps the editor when the probe is refused (403) — the capability is on, authority is not", async () => {
+    mockGovernanceApi.get.mockRejectedValue(new ApiError("Forbidden", 403, null));
+
+    await render();
+
+    expect(container.querySelector('[data-testid="available-on-request"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Ceiling agent"]')).not.toBeNull();
+  });
+
   it("exposes an input for every one of the six ceiling dimensions", async () => {
     await render();
     await selectAgent();

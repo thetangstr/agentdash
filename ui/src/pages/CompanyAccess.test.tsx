@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/api/client";
 import { CompanyAccess } from "./CompanyAccess";
 
 const listMembersMock = vi.hoisted(() => vi.fn());
@@ -12,6 +13,8 @@ const updateMemberAccessMock = vi.hoisted(() => vi.fn());
 const archiveMemberMock = vi.hoisted(() => vi.fn());
 const listAgentsMock = vi.hoisted(() => vi.fn());
 const listIssuesMock = vi.hoisted(() => vi.fn());
+const getMyInboxMock = vi.hoisted(() => vi.fn());
+const listChannelBindingsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/api/access", () => ({
   accessApi: {
@@ -37,6 +40,21 @@ vi.mock("@/api/agents", () => ({
 vi.mock("@/api/issues", () => ({
   issuesApi: {
     list: (companyId: string, filters: unknown) => listIssuesMock(companyId, filters),
+  },
+}));
+
+// One UX: the stewardship and channel-binding sections render for every
+// company; the server's capability gate (404) decides whether they are live.
+vi.mock("@/api/stewardships", () => ({
+  stewardshipsApi: {
+    getMyInbox: (companyId: string) => getMyInboxMock(companyId),
+  },
+}));
+
+vi.mock("@/api/human-channels", () => ({
+  humanChannelsApi: {
+    listAll: (companyId: string) => listChannelBindingsMock(companyId),
+    revoke: vi.fn(),
   },
 }));
 
@@ -71,6 +89,8 @@ describe("CompanyAccess", () => {
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
+    getMyInboxMock.mockRejectedValue(new ApiError("Company not found", 404, null));
+    listChannelBindingsMock.mockRejectedValue(new ApiError("Company not found", 404, null));
     listMembersMock.mockResolvedValue({
       members: [
         {
@@ -431,6 +451,39 @@ describe("CompanyAccess", () => {
     );
     expect(removeButton).toBeTruthy();
     expect(removeButton).toHaveProperty("disabled", true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("shows stewardship and channel bindings as available on request when the capabilities are off", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyAccess />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(getMyInboxMock).toHaveBeenCalledWith("company-1");
+    expect(listChannelBindingsMock).toHaveBeenCalledWith("company-1");
+    const states = container.querySelectorAll('[data-testid="available-on-request"]');
+    expect(states).toHaveLength(2);
+    expect(container.textContent).toContain(
+      "Available on request — ask us to turn on stewardship for your workspace.",
+    );
+    expect(container.textContent).toContain(
+      "Available on request — ask us to turn on chat channels for your workspace.",
+    );
+    expect(container.textContent).not.toContain("One active agent per person");
 
     await act(async () => {
       root.unmount();

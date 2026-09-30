@@ -12,7 +12,7 @@ const mockCreate = vi.hoisted(() => vi.fn());
 const mockAdapterStatus = vi.hoisted(() => vi.fn());
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockCompany = vi.hoisted(() => ({
-  selectedCompany: { id: "company-1", issuePrefix: "ACM", productProfile: "default" } as null | Record<string, string>,
+  selectedCompany: { id: "company-1", issuePrefix: "ACM" } as null | Record<string, string>,
   selectedCompanyId: "company-1" as string | null,
   companies: [] as Array<Record<string, string>>,
   setSelectedCompanyId: (() => undefined) as (id: string) => void,
@@ -70,9 +70,9 @@ describe("FirstRunPage", () => {
     root = createRoot(container);
     for (const mock of [mockStatus, mockCreate, mockAdapterStatus, mockNavigate, mockModelKeyAdmins, mockRequestModelKey]) mock.mockReset();
     mockModelKeyAdmins.mockResolvedValue({ admins: [] });
-    mockCompany.selectedCompany = { id: "company-1", issuePrefix: "ACM", productProfile: "default" };
+    mockCompany.selectedCompany = { id: "company-1", issuePrefix: "ACM" };
     mockCompany.selectedCompanyId = "company-1";
-    mockCompany.companies = [mockCompany.selectedCompany, { id: "company-2", issuePrefix: "NEW", productProfile: "default" }];
+    mockCompany.companies = [mockCompany.selectedCompany, { id: "company-2", issuePrefix: "NEW" }];
     mockCompany.setSelectedCompanyId = vi.fn();
     mockAdapterStatus.mockResolvedValue({
       status: { adapter: "hermes_local", ready: false, preset: "hermes", reason: null },
@@ -169,7 +169,7 @@ describe("FirstRunPage", () => {
     expect(mockNavigate).toHaveBeenCalledWith("/ACM/dashboard", { replace: true });
   });
 
-  it("sends an agentdash_mk workspace to its unchanged onboarding at /cos", async () => {
+  it("goes to /cos when the server says the first run does not apply", async () => {
     mockStatus.mockResolvedValue(status({ applies: false }));
     await render();
     expect(container.textContent).toContain("COS PAGE");

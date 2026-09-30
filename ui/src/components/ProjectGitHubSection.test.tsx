@@ -1,17 +1,15 @@
 // @vitest-environment jsdom
-// AgentDash (GH #782): the project's GitHub section is default-profile only.
+// AgentDash (GH #782): the project's GitHub section, the same for every company.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockList = vi.hoisted(() => vi.fn());
-const mockCompany = vi.hoisted(() => ({ selectedCompany: null as null | { productProfile: string } }));
 vi.mock("@/api/githubConnections", () => ({
   GITHUB_FINE_GRAINED_TOKEN_URL: "https://github.com/settings/personal-access-tokens/new",
   githubConnectionsApi: { list: mockList, connect: vi.fn() },
 }));
-vi.mock("@/context/CompanyContext", () => ({ useCompany: () => mockCompany }));
 
 import { ProjectGitHubSection } from "./ProjectGitHubSection";
 
@@ -48,18 +46,10 @@ describe("ProjectGitHubSection", () => {
     });
   }
 
-  it("renders the connect form on the default profile", async () => {
-    mockCompany.selectedCompany = { productProfile: "default" };
+  it("renders the connect form for any company", async () => {
     mockList.mockResolvedValue({ connections: [], canManage: true });
     await render();
     expect(mockList).toHaveBeenCalledWith("company-1");
     expect(container.querySelector('[data-testid="project-github-section"] form')).not.toBeNull();
-  });
-
-  it("renders nothing and fetches nothing for an agentdash_mk company", async () => {
-    mockCompany.selectedCompany = { productProfile: "agentdash_mk" };
-    await render();
-    expect(mockList).not.toHaveBeenCalled();
-    expect(container.innerHTML).toBe("");
   });
 });

@@ -10,7 +10,7 @@ export interface InboxItem {
   approvalId: string;
   type: string;
   status: string;
-  /** Must be echoed back on any decision where the stewardship capability is on. */
+  /** Must be echoed back on any decision made from a stewardship inbox. */
   revision: number;
   payload: Record<string, unknown>;
   createdAt: string;

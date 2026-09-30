@@ -189,10 +189,8 @@ function CoSConversationView({
     role: a.role,
   }));
 
-  // AgentDash (GH #786): on the default profile the CoS page says what the
-  // Chief of Staff does and offers first messages; MK keeps its header.
-  const { selectedCompany } = useCompany();
-  const isDefaultProfile = Boolean(selectedCompany) && selectedCompany?.productProfile !== "agentdash_mk";
+  // AgentDash (GH #786): the CoS page says what the Chief of Staff does and
+  // offers first messages, for every company (one UX).
 
   // AgentDash (#725): a hosted box's Hermes has no model provider until the
   // founder adds a key, so the CoS cannot reply yet. Ask for it first.
@@ -224,9 +222,8 @@ function CoSConversationView({
         companyId={bootstrapped.companyId}
         cardContext={cardContext}
         agentDirectory={agentDirectory}
-        {...(isDefaultProfile
-          ? { headerProps: { agentRole: COS_HEADER_LINE }, suggestions: COS_SUGGESTED_MESSAGES }
-          : {})}
+        headerProps={{ agentRole: COS_HEADER_LINE }}
+        suggestions={COS_SUGGESTED_MESSAGES}
       />
     </div>
   );

@@ -9,6 +9,7 @@ import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
 import { stewardshipsApi } from "../api/stewardships";
+import { fetchStewardshipOn, useStewardshipCapability } from "../hooks/useStewardshipCapability";
 import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -119,11 +120,10 @@ const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the
  *    through approvals with the destructive ceiling on top. An agent's own
  *    adapter work is not intercepted, so the broader promise would be false.
  *
- * The last two points describe the workforce features, which are gated to the
- * `agentdash_mk` profile and answer 404 elsewhere — and this wizard creates a
- * plain workspace, because `companiesApi.create` is called with a name and
- * nothing else. So they are shown only when the workspace really has the
- * profile. Describing agent-to-agent asks and the bridge on a workspace where
+ * The last two points describe the workforce features, which the server turns
+ * on per workspace (a workspace code grants them) and answers 404 for
+ * elsewhere. So they are shown only when the server says the workspace really
+ * has them. Describing agent-to-agent asks and the bridge on a workspace where
  * both endpoints 404 would teach someone a mental model of the product that
  * their own instance then contradicts.
  */
@@ -132,7 +132,7 @@ function WhatHappensNext({
   workforce,
 }: {
   agentName: string;
-  /** Whether this workspace actually has the `agentdash_mk` features. */
+  /** Whether the server says this workspace has the workforce features. */
   workforce: boolean;
 }) {
   const points: Array<{ icon: typeof ListTodo; title: string; body: string }> = [
@@ -287,7 +287,7 @@ export function OnboardingWizard() {
   const [companyName, setCompanyName] = useState("");
   const [companyGoal, setCompanyGoal] = useState("");
   /**
-   * The workspace code that grants the `agentdash_mk` profile.
+   * The workspace code that turns on the workforce capabilities (server-side).
    *
    * Without it this wizard could only ever produce a plain workspace, because
    * the create call sent a name and nothing else — so the one route a person
@@ -643,15 +643,14 @@ export function OnboardingWizard() {
   /**
    * Whether the workspace this wizard is filling in has the workforce features.
    *
-   * Read from the company record rather than assumed, because the wizard runs
-   * both on a workspace it just created (never profiled) and on an existing one
-   * entered at a later step (which may be). Unknown counts as off: the copy it
-   * controls promises collaboration endpoints, and claiming those on a workspace
-   * where they 404 is worse than staying quiet about them.
+   * Asked of the server rather than assumed, because the wizard runs both on a
+   * workspace it just created and on an existing one entered at a later step.
+   * The UI never reads the company's profile (one UX); the stewardship route's
+   * capability gate is the answer. Unknown counts as off: the copy it controls
+   * promises collaboration endpoints, and claiming those on a workspace where
+   * they 404 is worse than staying quiet about them.
    */
-  const createdCompanyHasWorkforce =
-    companies.find((candidate) => candidate.id === createdCompanyId)?.productProfile ===
-    "agentdash_mk";
+  const createdCompanyHasWorkforce = useStewardshipCapability(createdCompanyId) === "on";
 
   const createdCompanyName =
     companies.find((candidate) => candidate.id === createdCompanyId)?.name ?? companyName;
@@ -1021,7 +1020,12 @@ export function OnboardingWizard() {
        * expected on a second run. Asking first keeps a real failure visible
        * instead of hiding it among the expected ones.
        */
-      if (createdCompanyHasWorkforce && session?.session.userId) {
+      // Asked of the server at the moment of writing, strictly: only a
+      // workspace whose stewardship route answers is paired.
+      if (
+        session?.session.userId &&
+        (await fetchStewardshipOn(queryClient, createdCompanyId))
+      ) {
         const mine = await stewardshipsApi.getMyAgent(createdCompanyId);
         if (!mine.agent) {
           await stewardshipsApi.pair(createdCompanyId, createdAgentId, session.session.userId);

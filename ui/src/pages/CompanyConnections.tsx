@@ -14,11 +14,9 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { Link } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
-import { NotFoundPage } from "@/pages/NotFound";
 
 export function CompanyConnections() {
   const { selectedCompany, selectedCompanyId } = useCompany();
-  const isMk = selectedCompany?.productProfile === "agentdash_mk";
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 
@@ -33,7 +31,7 @@ export function CompanyConnections() {
   const connections = useQuery({
     queryKey: queryKeys.githubConnections.list(selectedCompanyId ?? ""),
     queryFn: () => githubConnectionsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId && !isMk,
+    enabled: !!selectedCompanyId,
     retry: false,
   });
 
@@ -49,12 +47,6 @@ export function CompanyConnections() {
 
   if (!selectedCompanyId) {
     return <div className="text-sm text-muted-foreground">Select a company to manage connections.</div>;
-  }
-
-  // AgentDash (GH #793): this page is default-profile only. MK never had the
-  // route, so a typed URL gets the same not-found it always did.
-  if (isMk) {
-    return <NotFoundPage scope="board" />;
   }
 
   const items = connections.data?.connections ?? [];

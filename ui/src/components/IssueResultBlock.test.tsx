@@ -124,12 +124,4 @@ describe("IssueResultBlock", () => {
     await render();
     expect(container.innerHTML).toBe("");
   });
-
-  it("does not render or fetch on the agentdash_mk profile", async () => {
-    mockCompany.current = { id: "company-1", productProfile: "agentdash_mk" };
-    mockIssuesApi.listShipped.mockResolvedValue({ items: [shippedItem()], total: 1, nextCursor: null, monthTotal: null });
-    await render();
-    expect(mockIssuesApi.listShipped).not.toHaveBeenCalled();
-    expect(container.innerHTML).toBe("");
-  });
 });

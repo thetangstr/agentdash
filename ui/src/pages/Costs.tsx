@@ -212,24 +212,19 @@ function FinanceSummaryCard({
 }
 
 export function Costs() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
-  const isMk = selectedCompany?.productProfile === "agentdash_mk";
 
-  type CostsMainTab = "overview" | "budgets" | "providers" | "billers" | "finance" | "advanced";
+  type CostsMainTab = "overview" | "advanced";
   type CostsAdvancedTab = "budgets" | "providers" | "billers" | "finance";
   const [mainTab, setMainTab] = useState<CostsMainTab>("overview");
-  // AgentDash (GH #796): on the default profile the four finance-detail
-  // sections collapse into a single "Advanced" tab so the overview answers
+  // AgentDash (GH #796): the four finance-detail sections collapse into a
+  // single "Advanced" tab, for every company (one UX), so the overview answers
   // "what did the money buy" first. `innerTab` is the section any
   // tab-gated query should follow.
   const [advancedTab, setAdvancedTab] = useState<CostsAdvancedTab>("budgets");
-  const innerTab: CostsAdvancedTab | "overview" = isMk
-    ? (mainTab as CostsAdvancedTab | "overview")
-    : mainTab === "advanced"
-      ? advancedTab
-      : "overview";
+  const innerTab: CostsAdvancedTab | "overview" = mainTab === "advanced" ? advancedTab : "overview";
   const [activeProvider, setActiveProvider] = useState("all");
   const [activeBiller, setActiveBiller] = useState("all");
 
@@ -333,13 +328,13 @@ export function Costs() {
     enabled: !!selectedCompanyId && customReady,
   });
 
-  // GH #796: default profile's overview needs "what the money bought". The
+  // GH #796: the overview needs "what the money bought". The
   // shipped feed's monthTotal carries this month's shipped items/PRs and the
   // metered spend on the issues behind them — no new endpoint required.
   const { data: shippedData } = useQuery({
     queryKey: [...queryKeys.shipped(companyId, {}), "costs-overview"],
     queryFn: () => issuesApi.listShipped(companyId, { limit: 1 }),
-    enabled: !!selectedCompanyId && !isMk,
+    enabled: !!selectedCompanyId,
     staleTime: 60_000,
   });
   const shippedMonth = shippedData?.monthTotal ?? null;
@@ -992,80 +987,51 @@ export function Costs() {
               }
               icon={Coins}
             />
-            {/* GH #796: on the default profile the first screen must answer
-                "what did the money buy" — shipped count and cost per shipped
-                PR stand where the finance tiles used to; those still exist
-                under Advanced. */}
-            {isMk ? (
-              <>
-                <MetricTile
-                  label="Finance net"
-                  value={formatCents(financeData?.summary.netCents ?? 0)}
-                  subtitle={`${formatCents(financeData?.summary.debitCents ?? 0)} debits · ${formatCents(financeData?.summary.creditCents ?? 0)} credits`}
-                  icon={ReceiptText}
-                />
-                <MetricTile
-                  label="Finance events"
-                  value={String(financeData?.summary.eventCount ?? 0)}
-                  subtitle={`${formatCents(financeData?.summary.estimatedDebitCents ?? 0)} estimated in range`}
-                  icon={ArrowUpRight}
-                />
-              </>
-            ) : (
-              <>
-                <MetricTile
-                  testId="shipped-count-tile"
-                  label="Shipped this month"
-                  value={String(shippedMonth?.count ?? 0)}
-                  subtitle={`${shippedMonth?.pullRequests ?? 0} pull request${(shippedMonth?.pullRequests ?? 0) === 1 ? "" : "s"} (UTC month)`}
-                  icon={ArrowUpRight}
-                />
-                <MetricTile
-                  testId="cost-per-shipped-pr-tile"
-                  label="Cost per shipped PR"
-                  value={
-                    !shippedMonth?.usage.metered
-                      ? "Not metered yet"
-                      : shippedMonth.pullRequests > 0
-                        ? shippedMonth.usage.costCents > 0
-                          ? formatCents(Math.round(shippedMonth.usage.costCents / shippedMonth.pullRequests))
-                          // Token-only usage: cents never recorded, so "cost"
-                          // would read a dishonest $0.00 — show the real signal.
-                          : `${formatTokens(Math.round(
-                              (shippedMonth.usage.inputTokens +
-                                shippedMonth.usage.cachedInputTokens +
-                                shippedMonth.usage.outputTokens) /
-                                shippedMonth.pullRequests,
-                            ))} tokens`
-                        : "No PRs yet"
-                  }
-                  subtitle={
-                    shippedMonth?.usage.metered
-                      ? shippedMonth.usage.costCents > 0
-                        ? "Metered spend on this month's shipped issues ÷ shipped PRs"
-                        : "Metered tokens on this month's shipped issues ÷ shipped PRs"
-                      : "No metered spend on shipped issues yet"
-                  }
-                  icon={ReceiptText}
-                />
-              </>
-            )}
+            {/* GH #796: the first screen answers "what did the money buy" —
+                shipped count and cost per shipped PR stand where the finance
+                tiles used to; those still exist under Advanced. */}
+            <MetricTile
+              testId="shipped-count-tile"
+              label="Shipped this month"
+              value={String(shippedMonth?.count ?? 0)}
+              subtitle={`${shippedMonth?.pullRequests ?? 0} pull request${(shippedMonth?.pullRequests ?? 0) === 1 ? "" : "s"} (UTC month)`}
+              icon={ArrowUpRight}
+            />
+            <MetricTile
+              testId="cost-per-shipped-pr-tile"
+              label="Cost per shipped PR"
+              value={
+                !shippedMonth?.usage.metered
+                  ? "Not metered yet"
+                  : shippedMonth.pullRequests > 0
+                    ? shippedMonth.usage.costCents > 0
+                      ? formatCents(Math.round(shippedMonth.usage.costCents / shippedMonth.pullRequests))
+                      // Token-only usage: cents never recorded, so "cost"
+                      // would read a dishonest $0.00 — show the real signal.
+                      : `${formatTokens(Math.round(
+                          (shippedMonth.usage.inputTokens +
+                            shippedMonth.usage.cachedInputTokens +
+                            shippedMonth.usage.outputTokens) /
+                            shippedMonth.pullRequests,
+                        ))} tokens`
+                    : "No PRs yet"
+              }
+              subtitle={
+                shippedMonth?.usage.metered
+                  ? shippedMonth.usage.costCents > 0
+                    ? "Metered spend on this month's shipped issues ÷ shipped PRs"
+                    : "Metered tokens on this month's shipped issues ÷ shipped PRs"
+                  : "No metered spend on shipped issues yet"
+              }
+              icon={ReceiptText}
+            />
           </div>
       </div>
 
       <Tabs value={mainTab} onValueChange={(value) => setMainTab(value as typeof mainTab)}>
         <TabsList variant="line" className="justify-start">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          {isMk ? (
-            <>
-              <TabsTrigger value="budgets">Budgets</TabsTrigger>
-              <TabsTrigger value="providers">Providers</TabsTrigger>
-              <TabsTrigger value="billers">Billers</TabsTrigger>
-              <TabsTrigger value="finance">Finance</TabsTrigger>
-            </>
-          ) : (
-            <TabsTrigger value="advanced">Advanced</TabsTrigger>
-          )}
+          <TabsTrigger value="advanced">Advanced</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -1152,60 +1118,49 @@ export function Costs() {
                   </CardContent>
                 </Card>
 
-                {/* GH #796: MK keeps the finance ledger beside the inference
-                    ledger; the default profile answers "what did the money
-                    buy" with spend per issue instead. */}
-                {isMk ? (
-                  <FinanceSummaryCard
-                    debitCents={financeData?.summary.debitCents ?? 0}
-                    creditCents={financeData?.summary.creditCents ?? 0}
-                    netCents={financeData?.summary.netCents ?? 0}
-                    estimatedDebitCents={financeData?.summary.estimatedDebitCents ?? 0}
-                    eventCount={financeData?.summary.eventCount ?? 0}
-                  />
-                ) : (
-                  <Card data-testid="by-issue-card">
-                    <CardHeader className="px-5 pt-5 pb-2">
-                      <CardTitle className="text-base">By issue</CardTitle>
-                      <CardDescription>
-                        What each issue cost in the selected period.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-2 px-5 pb-5 pt-2">
-                      {(spendData?.byIssue.length ?? 0) === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          {spendMeasured ? "No issue-attributed costs yet." : "Not metered yet."}
-                        </p>
-                      ) : (
-                        spendData?.byIssue.slice(0, 8).map((row) => (
-                          <div
-                            key={row.issueId}
-                            className="flex items-center justify-between gap-3 border border-border px-3 py-2 text-sm"
+                {/* GH #796: "what did the money buy", answered with spend per
+                    issue beside the inference ledger. */}
+                <Card data-testid="by-issue-card">
+                  <CardHeader className="px-5 pt-5 pb-2">
+                    <CardTitle className="text-base">By issue</CardTitle>
+                    <CardDescription>
+                      What each issue cost in the selected period.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-2 px-5 pb-5 pt-2">
+                    {(spendData?.byIssue.length ?? 0) === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        {spendMeasured ? "No issue-attributed costs yet." : "Not metered yet."}
+                      </p>
+                    ) : (
+                      spendData?.byIssue.slice(0, 8).map((row) => (
+                        <div
+                          key={row.issueId}
+                          className="flex items-center justify-between gap-3 border border-border px-3 py-2 text-sm"
+                        >
+                          <Link
+                            to={`/issues/${row.issueIdentifier ?? row.issueId}`}
+                            className="min-w-0 truncate hover:underline"
                           >
-                            <Link
-                              to={`/issues/${row.issueIdentifier ?? row.issueId}`}
-                              className="min-w-0 truncate hover:underline"
-                            >
-                              {row.issueIdentifier ? (
-                                <span className="mr-1.5 font-mono text-xs text-muted-foreground">
-                                  {row.issueIdentifier}
-                                </span>
-                              ) : null}
-                              {row.issueTitle ?? "Untitled issue"}
-                            </Link>
-                            <span className="font-medium tabular-nums">
-                              {row.costCents > 0
-                                ? formatCents(row.costCents)
-                                : `${formatTokens(
-                                      row.inputTokens + row.cachedInputTokens + row.outputTokens,
-                                    )} tokens`}
-                            </span>
-                          </div>
-                        ))
-                      )}
-                    </CardContent>
-                  </Card>
-                )}
+                            {row.issueIdentifier ? (
+                              <span className="mr-1.5 font-mono text-xs text-muted-foreground">
+                                {row.issueIdentifier}
+                              </span>
+                            ) : null}
+                            {row.issueTitle ?? "Untitled issue"}
+                          </Link>
+                          <span className="font-medium tabular-nums">
+                            {row.costCents > 0
+                              ? formatCents(row.costCents)
+                              : `${formatTokens(
+                                    row.inputTokens + row.cachedInputTokens + row.outputTokens,
+                                  )} tokens`}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
               </div>
 
               <div className="grid gap-4 xl:grid-cols-[1.25fr,0.95fr]">
@@ -1319,31 +1274,25 @@ export function Costs() {
                     </CardContent>
                   </Card>
 
-                  {isMk ? (
-                    <FinanceTimelineCard rows={topFinanceEvents.slice(0, 6)} emptyMessage="No finance events yet. Add account-level charges once biller invoices or credits land." />
-                  ) : null}
                 </div>
               </div>
             </>
           )}
         </TabsContent>
 
-        {/* GH #796: MK renders the four finance-detail sections as top-level
-            tabs exactly as before; the default profile tucks them behind one
+        {/* GH #796: the four finance-detail sections sit behind one
             "Advanced" tab with its own secondary nav. */}
-        {isMk ? advancedSections : (
-          <TabsContent value="advanced" className="mt-4">
-            <Tabs value={advancedTab} onValueChange={(value) => setAdvancedTab(value as CostsAdvancedTab)}>
-              <TabsList variant="line" className="justify-start">
-                <TabsTrigger value="budgets">Budgets</TabsTrigger>
-                <TabsTrigger value="providers">Providers</TabsTrigger>
-                <TabsTrigger value="billers">Billers</TabsTrigger>
-                <TabsTrigger value="finance">Finance</TabsTrigger>
-              </TabsList>
-              {advancedSections}
-            </Tabs>
-          </TabsContent>
-        )}
+        <TabsContent value="advanced" className="mt-4">
+          <Tabs value={advancedTab} onValueChange={(value) => setAdvancedTab(value as CostsAdvancedTab)}>
+            <TabsList variant="line" className="justify-start">
+              <TabsTrigger value="budgets">Budgets</TabsTrigger>
+              <TabsTrigger value="providers">Providers</TabsTrigger>
+              <TabsTrigger value="billers">Billers</TabsTrigger>
+              <TabsTrigger value="finance">Finance</TabsTrigger>
+            </TabsList>
+            {advancedSections}
+          </Tabs>
+        </TabsContent>
       </Tabs>
     </div>
   );

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
+import { AvailableOnRequest, isCapabilityNotFound } from "@/components/AvailableOnRequest";
 import {
   connectorSendExecutionsApi,
   type ConnectorSendExecutionRow,
@@ -23,8 +24,9 @@ interface Props {
  * next to the ceilings it belongs to reads more honestly and keeps this slice's
  * footprint off a 2,600-line file.
  *
- * Authority is resolved server-side: the list route 404s without the capability and
- * 403s a member who is neither owner/admin nor the requesting steward. A 403 is
+ * Authority is resolved server-side: the list route 404s when connector sends
+ * are off for the workspace (shown as the available-on-request state — every
+ * company sees this panel) and 403s a member who is neither owner/admin nor the requesting steward. A 403 is
  * shown as a refusal, never an empty list, so the surface never implies
  * "nothing to reconcile" to someone who simply cannot see it. Reconcile records
  * a human's verdict as an audit fact and does NOT resend — resending stays with
@@ -78,6 +80,7 @@ export function NeedsReconciliationPanel({ companyId }: Props) {
   });
 
   const forbidden = list.error instanceof ApiError && list.error.status === 403;
+  const capabilityOff = isCapabilityNotFound(list.error);
 
   return (
     <section aria-labelledby="reconcile-heading" className="space-y-3 rounded-lg border p-4">
@@ -91,7 +94,9 @@ export function NeedsReconciliationPanel({ companyId }: Props) {
         </p>
       </div>
 
-      {forbidden ? (
+      {capabilityOff ? (
+        <AvailableOnRequest compact capability="connector sends" />
+      ) : forbidden ? (
         <p role="alert" className="text-sm text-muted-foreground">
           You do not have access to reconcile connector sends. Ask a company owner, an
           administrator, or the requesting agent's steward.

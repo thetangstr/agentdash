@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // AgentDash: UX-15 (GH #796) — the Costs page answers "what did the money
-// buy" on the default profile; agentdash_mk keeps the finance-first layout.
+// buy" first, the same for every company (one UX).
 
 import { act } from "react";
 import type { ReactNode } from "react";
@@ -36,11 +36,10 @@ vi.mock("../api/costs", () => ({ costsApi: mockCostsApi }));
 vi.mock("../api/budgets", () => ({ budgetsApi: mockBudgetsApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 
-let productProfile: string | null = null;
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
-    selectedCompany: { id: "company-1", productProfile },
+    selectedCompany: { id: "company-1" },
   }),
 }));
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }) }));
@@ -143,7 +142,6 @@ describe("Costs page (UX-15)", () => {
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
-    productProfile = null;
     mockHappyApis();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -172,7 +170,7 @@ describe("Costs page (UX-15)", () => {
     return [...container.querySelectorAll<HTMLElement>('[role="tab"]')].map((el) => el.textContent ?? "");
   }
 
-  it("default profile shows Overview + Advanced and what the money bought", async () => {
+  it("shows Overview + Advanced and what the money bought", async () => {
     await render();
     expect(tabTriggers()).toEqual(["Overview", "Advanced"]);
     expect(mockIssuesApi.listShipped).toHaveBeenCalledWith("company-1", expect.objectContaining({ limit: 1 }));
@@ -191,7 +189,7 @@ describe("Costs page (UX-15)", () => {
     expect(container.textContent).not.toContain("Finance ledger");
   });
 
-  it("default profile keeps the ledgers reachable under Advanced", async () => {
+  it("keeps the ledgers reachable under Advanced", async () => {
     await render();
     async function activateTab(label: string) {
       const tab = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].find(
@@ -213,7 +211,7 @@ describe("Costs page (UX-15)", () => {
     expect(container.textContent).toContain("Finance ledger");
   });
 
-  it("default profile says 'Not metered yet' rather than $0 for unmetered shipped spend", async () => {
+  it("says 'Not metered yet' rather than $0 for unmetered shipped spend", async () => {
     mockIssuesApi.listShipped.mockResolvedValue(shippedFeed(UNMETERED_MONTH));
     mockCostsApi.byIssue.mockResolvedValue([]);
     mockCostsApi.summary.mockResolvedValue({
@@ -256,15 +254,5 @@ describe("Costs page (UX-15)", () => {
     const byIssue = container.querySelector('[data-testid="by-issue-card"]')?.textContent ?? "";
     expect(byIssue).toContain("12.0k tokens");
     expect(byIssue).not.toContain("$0.00");
-  });
-
-  it("agentdash_mk keeps the five finance tabs and the finance tiles", async () => {
-    productProfile = "agentdash_mk";
-    await render();
-    expect(tabTriggers()).toEqual(["Overview", "Budgets", "Providers", "Billers", "Finance"]);
-    expect(container.textContent).toContain("Finance net");
-    expect(container.textContent).toContain("Finance ledger");
-    expect(container.querySelector('[data-testid="by-issue-card"]')).toBeNull();
-    expect(mockIssuesApi.listShipped).not.toHaveBeenCalled();
   });
 });

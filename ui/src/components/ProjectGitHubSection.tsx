@@ -1,23 +1,17 @@
 // AgentDash (GH #782): the GitHub connection of one project, in its
-// Configuration tab. Default profile only: an agentdash_mk company keeps its
-// project settings exactly as before (those boxes wire repos by operator).
+// Configuration tab. Same section for every company (one UX).
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { githubConnectionsApi } from "@/api/githubConnections";
-import { useCompany } from "@/context/CompanyContext";
 import { queryKeys } from "@/lib/queryKeys";
 import { GitHubConnectStep } from "./onboarding/GitHubConnectStep";
 
 export function ProjectGitHubSection({ companyId, projectId }: { companyId: string; projectId: string }) {
-  const { selectedCompany } = useCompany();
-  const isMkProfile = selectedCompany?.productProfile === "agentdash_mk";
   const queryClient = useQueryClient();
   const { data, error, isLoading } = useQuery({
     queryKey: queryKeys.githubConnections.list(companyId),
     queryFn: () => githubConnectionsApi.list(companyId),
-    enabled: !isMkProfile,
   });
 
-  if (isMkProfile) return null;
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading GitHub connection…</p>;
   if (error) {
     return (

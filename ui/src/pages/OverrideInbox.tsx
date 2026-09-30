@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { approvalsApi } from "../api/approvals";
 import { stewardshipsApi, type InboxItem } from "../api/stewardships";
+import { AvailableOnRequest, isCapabilityNotFound } from "../components/AvailableOnRequest";
 import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -15,16 +16,16 @@ import { queryKeys } from "../lib/queryKeys";
  * reason before it can be submitted.
  */
 export default function OverrideInbox() {
-  const { selectedCompanyId, selectedCompany } = useCompany();
+  const { selectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
-  const isProfileCompany = selectedCompany?.productProfile === "agentdash_mk";
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   const inbox = useQuery({
     queryKey: queryKeys.myAgent.overrideInbox(selectedCompanyId ?? ""),
     queryFn: () => stewardshipsApi.getOverrideInbox(selectedCompanyId!),
-    enabled: !!selectedCompanyId && isProfileCompany,
+    // Every company asks; the server answers 404 when stewardship is off.
+    enabled: !!selectedCompanyId,
   });
 
   const override = useMutation({
@@ -43,19 +44,14 @@ export default function OverrideInbox() {
     onError: (err) => setError(err instanceof Error ? err.message : "Override failed"),
   });
 
-  if (!isProfileCompany) {
-    return (
-      <div className="p-6">
-        <h1 className="text-lg font-semibold">Emergency override</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          This workspace does not use the AgentDash-MK profile.
-        </p>
-      </div>
-    );
-  }
-
   if (inbox.isLoading) {
     return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  // 404 is the capability gate; a 403 here means "not an admin" and stays an
+  // error below.
+  if (isCapabilityNotFound(inbox.error)) {
+    return <AvailableOnRequest title="Emergency override" capability="stewardship" />;
   }
 
   if (inbox.error) {

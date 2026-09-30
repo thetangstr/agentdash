@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
-// UX-14 (GH #795): the default profile leads with doing/shipped/spend, a
-// health warning when recent runs keep leaving nothing, three top tabs with
-// the detail views folded under Settings, and an honest "No summary." state.
-// agentdash_mk keeps the seven-tab layout and unknown-tab behavior.
+// UX-14 (GH #795): agent detail leads with doing/shipped/spend, a health
+// warning when recent runs keep leaving nothing, three top tabs with the
+// detail views folded under Settings, and an honest "No summary." state —
+// the same for every company (one UX).
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -76,8 +76,7 @@ const {
   LatestRunCard,
   agentDetailInSettings,
   agentDetailTabValue,
-  agentDetailTopTabs,
-  resolveAgentDetailView,
+  AGENT_DETAIL_TOP_TABS,
   runsLeftNothingShare,
 } = await import("./AgentDetail");
 
@@ -158,9 +157,9 @@ afterEach(() => {
   container = null;
 });
 
-describe("default-profile tab grouping", () => {
+describe("tab grouping (every company)", () => {
   it("reduces the top tabs to Overview, Runs, and Settings", () => {
-    expect(agentDetailTopTabs(false).map((t) => t.label)).toEqual([
+    expect(AGENT_DETAIL_TOP_TABS.map((t) => t.label)).toEqual([
       "Overview",
       "Runs",
       "Settings",
@@ -169,39 +168,16 @@ describe("default-profile tab grouping", () => {
 
   it("highlights Settings for every detail view", () => {
     for (const view of ["instructions", "skills", "configuration", "budget", "mandates"] as const) {
-      expect(agentDetailTabValue(view, false)).toBe("settings");
-      expect(agentDetailInSettings(view, false)).toBe(true);
+      expect(agentDetailTabValue(view)).toBe("settings");
+      expect(agentDetailInSettings(view)).toBe(true);
     }
-    expect(agentDetailTabValue("runs", false)).toBe("runs");
-    expect(agentDetailTabValue("dashboard", false)).toBe("dashboard");
+    expect(agentDetailTabValue("runs")).toBe("runs");
+    expect(agentDetailTabValue("dashboard")).toBe("dashboard");
   });
 
   it("keeps the bare /settings URL inside the group", () => {
-    expect(resolveAgentDetailView("settings", false)).toBe("settings");
-    expect(agentDetailInSettings("settings", false)).toBe(true);
-  });
-});
-
-describe("agentdash_mk preservation", () => {
-  it("keeps the seven legacy tabs", () => {
-    expect(agentDetailTopTabs(true).map((t) => t.label)).toEqual([
-      "Dashboard",
-      "Instructions",
-      "Skills",
-      "Configuration",
-      "Runs",
-      "Budget",
-      "Mandates",
-    ]);
-  });
-
-  it("never folds a detail view under Settings", () => {
-    expect(agentDetailTabValue("budget", true)).toBe("budget");
-    expect(agentDetailInSettings("budget", true)).toBe(false);
-  });
-
-  it("keeps the historic unknown-tab fallback for /settings", () => {
-    expect(resolveAgentDetailView("settings", true)).toBe("dashboard");
+    expect(agentDetailInSettings("settings")).toBe(true);
+    expect(agentDetailTabValue("settings")).toBe("settings");
   });
 });
 
@@ -274,14 +250,14 @@ describe("AgentRunHealthNote", () => {
 });
 
 describe("LatestRunCard empty summary", () => {
-  it("says 'No summary.' on the default profile", () => {
+  it("says 'No summary.' when asked to", () => {
     render(
       <LatestRunCard runs={[runFixture()]} agentId="agent-1" showEmptySummary />,
     );
     expect(container!.textContent).toContain("No summary.");
   });
 
-  it("leaves the body blank on agentdash_mk", () => {
+  it("leaves the body blank by default", () => {
     render(<LatestRunCard runs={[runFixture()]} agentId="agent-1" />);
     expect(container!.textContent).not.toContain("No summary.");
   });
