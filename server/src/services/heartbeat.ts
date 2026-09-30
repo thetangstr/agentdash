@@ -309,7 +309,14 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
-const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved"]);
+// AgentDash-MK: the connector_send outcomes replace `approval_approved` for an
+// approved send that did not deliver, so they need the same follow-up — a
+// running issue must not swallow the news that its message never went out.
+const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
+  "approval_approved",
+  "connector_send_failed",
+  "connector_send_outcome_unknown",
+]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",

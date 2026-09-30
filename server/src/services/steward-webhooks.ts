@@ -1,4 +1,4 @@
-import { and, eq, isNull, max } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lte, max } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { authUsers, companies, stewardInboxEvents, stewardWebhooks } from "@paperclipai/db";
 import { badRequest, conflict, notFound } from "../errors.js";
@@ -67,10 +67,23 @@ export function renderStewardWebhookMessage(input: {
   ownerName: string | null;
   digest: StewardWebhookDigest;
   approvalsUrl: string | null;
+  /**
+   * Approved sends that did not go out since the last delivery, one line each.
+   * Not part of the digest: a failed send waits on nobody, so the projection
+   * of "what is waiting" never contains it.
+   */
+  undelivered?: string[];
 }): string {
   const heading = input.ownerName ? `AgentDash inbox — ${input.ownerName}` : "AgentDash inbox";
   const { digest } = input;
   const lines: string[] = [heading, ""];
+
+  const undelivered = input.undelivered ?? [];
+  if (undelivered.length > 0) {
+    lines.push(`Approved but not delivered (${undelivered.length}):`);
+    for (const line of undelivered) lines.push(`  - ${line}`);
+    lines.push("");
+  }
 
   if (digest.approvals.total > 0) {
     lines.push(`Waiting on your decision (${digest.approvals.total}):`);
@@ -358,7 +371,31 @@ export function stewardWebhooksService(db: Db, deps: { fetchImpl?: typeof fetch 
             ? `${options.approvalsBaseUrl.replace(/\/+$/, "")}/${prefix}/approvals`
             : options.approvalsBaseUrl ?? null;
 
-        const text = renderStewardWebhookMessage({ ownerName: name, digest, approvalsUrl });
+        // The window this delivery covers is (lastDeliveredSeq, head]. Only
+        // the agent's name and the machine reason travel — the channel's
+        // audience is wider than the steward, same rule as the digest.
+        const undelivered = await db
+          .select({ payload: stewardInboxEvents.payload })
+          .from(stewardInboxEvents)
+          .where(
+            and(
+              eq(stewardInboxEvents.companyId, hook.companyId),
+              eq(stewardInboxEvents.stewardUserId, hook.userId),
+              eq(stewardInboxEvents.kind, "connector_send.failed"),
+              gt(stewardInboxEvents.seq, hook.lastDeliveredSeq),
+              lte(stewardInboxEvents.seq, head!),
+            ),
+          )
+          .orderBy(asc(stewardInboxEvents.seq))
+          .then((rows) =>
+            rows.map(({ payload }) => {
+              const who = typeof payload.agentName === "string" && payload.agentName ? payload.agentName : "An agent";
+              const why = typeof payload.reason === "string" && payload.reason ? ` (${payload.reason})` : "";
+              return `${who}: an approved send was not delivered${why}`;
+            }),
+          );
+
+        const text = renderStewardWebhookMessage({ ownerName: name, digest, approvalsUrl, undelivered });
 
         const now = new Date();
         const response = await fetchImpl(hook.url, {

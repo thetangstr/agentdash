@@ -44,6 +44,10 @@ const WAKE_REASON_BY_CONTEXT_REASON: Record<string, RunFactWakeReason> = {
   issue_reopened_via_comment: "comment",
   issue_comment_mentioned: "mention",
   approval_approved: "approval",
+  // An approved connector_send that did not deliver wakes its requester with
+  // one of these instead of `approval_approved`; it is still that decision.
+  connector_send_failed: "approval",
+  connector_send_outcome_unknown: "approval",
   // Issue-tree gate transitions are human decisions, so they bucket with the
   // approval wake rather than generic automation.
   execution_approval_requested: "approval",

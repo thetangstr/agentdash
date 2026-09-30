@@ -233,12 +233,41 @@ export function unseenApprovalCount(response) {
   const shown = new Set(digest.approvals.items.map((item) => item.approvalId));
   const onPage = new Set(
     response.events
-      .filter((event) => event.refType === "approval" && typeof event.refId === "string")
+      .filter(
+        (event) =>
+          event.refType === "approval" &&
+          typeof event.refId === "string" &&
+          // Only approval events are "decided elsewhere". An undelivered-send
+          // notice also refers to an approval, and is rendered on its own.
+          String(event.kind ?? "").startsWith("approval."),
+      )
       .map((event) => event.refId),
   );
   let unseen = 0;
   for (const ref of onPage) if (!shown.has(ref)) unseen += 1;
   return unseen;
+}
+
+/**
+ * Approved sends that did not go out. The digest is a projection of what is
+ * waiting, and a failed send is not waiting on anyone, so these come from the
+ * events on the page instead. The server writes a one-line `message` (the
+ * outcome and why, never what was to be sent).
+ */
+export function undeliveredSendLines(response) {
+  return (response.events ?? [])
+    .filter((event) => event.kind === "connector_send.failed")
+    .map((event) => {
+      const message =
+        typeof event.payload?.message === "string" && event.payload.message.trim()
+          ? event.payload.message.trim()
+          : "An approved send did not go out.";
+      const who =
+        typeof event.payload?.agentName === "string" && event.payload.agentName
+          ? `${event.payload.agentName} — `
+          : "";
+      return `  - ${who}${message}`;
+    });
 }
 
 /** The plain-text rendering a SessionStart hook feeds straight into a session. */
@@ -257,8 +286,12 @@ export function renderInbox(response, now) {
   const ownerName = response.owner?.name || response.owner?.email || null;
   const heading = ownerName ? `AgentDash inbox — ${ownerName}` : "AgentDash inbox";
 
+  const undelivered = undeliveredSendLines(response);
   const nothing =
-    digest.approvals.total === 0 && digest.blockers.total === 0 && digest.completions.total === 0;
+    digest.approvals.total === 0 &&
+    digest.blockers.total === 0 &&
+    digest.completions.total === 0 &&
+    undelivered.length === 0;
   if (nothing) {
     const other = unseenApprovalCount(response);
     if (other > 0) {
@@ -281,6 +314,12 @@ export function renderInbox(response, now) {
     }
     const more = remainder(digest.approvals);
     if (more) lines.push(more);
+    lines.push("");
+  }
+
+  if (undelivered.length > 0) {
+    lines.push(`Approved but not delivered (${undelivered.length}):`);
+    lines.push(...undelivered);
     lines.push("");
   }
 

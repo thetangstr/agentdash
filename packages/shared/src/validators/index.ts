@@ -302,6 +302,15 @@ export {
 
 export {
   createApprovalSchema,
+  checkConnectorSendPayload,
+  CONNECTOR_SEND_PROVIDERS,
+  CONNECTOR_SEND_TEAMS_GUIDANCE,
+  HUBSPOT_WRITE_OBJECT_TYPES,
+  HUBSPOT_WRITE_OPERATIONS,
+  type ConnectorSendProvider,
+  type ConnectorSendPayloadCheck,
+  type ConnectorSendPayloadProblem,
+  type HubspotWriteObjectType,
   resolveApprovalSchema,
   overrideApprovalSchema,
   APPROVAL_DECISION_CHANNELS,

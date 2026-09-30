@@ -645,7 +645,10 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "create_approval",
-      "Create a board approval request, optionally linked to one or more issues",
+      "Create a board approval request, optionally linked to one or more issues. "
+        + "A connector_send must name a provider with an executor (today only \"hubspot\", with objectType, "
+        + "operation and properties); one with no provider or naming Teams is refused with 422. There is no "
+        + "Teams send: to reach a person, comment on the issue and set it blocked, or open a request_board_approval.",
       createApprovalToolSchema,
       async ({ companyId, ...body }) =>
         client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/approvals`, {

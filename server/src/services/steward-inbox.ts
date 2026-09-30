@@ -65,6 +65,10 @@ export const STEWARD_INBOX_KINDS = [
   // its timer/comment wakes. No decision handle — it is a notification, and
   // the fix lives on the agent page.
   "agent.token_ceiling",
+  // An approved connector_send that was refused, failed, or cannot be
+  // confirmed. Without it the steward believed the send went out.
+  // Notification only, no decision handle.
+  "connector_send.failed",
 ] as const;
 export type StewardInboxKind = (typeof STEWARD_INBOX_KINDS)[number];
 
