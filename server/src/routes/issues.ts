@@ -7,10 +7,20 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { issueExecutionDecisions, issues } from "@paperclipai/db";
 import {
+  assertFeedbackTraceVisible,
+  assertIssueIdsVisibleInCompany,
   assertIssueIdVisible,
   assertProjectIdVisible,
   assertWorkspaceIdsVisible,
+  feedbackTraceVisibilityCondition,
+  filterVisibleBlockedByOnRows,
+  filterVisibleIssueRelations,
+  filterVisibleReferenceSummary,
+  isCanonicalUuid,
+  isProjectIdVisible,
+  listVisibleIssueIds,
   projectScopedVisibilityCondition,
+  truncateAncestorsAtInvisible,
 } from "./visibility.js";
 import { decodeShippedCursor } from "../services/work-products.js";
 import {
@@ -1052,6 +1062,7 @@ export function issueRoutes(
       inheritExecutionWorkspaceFromIssueId?: unknown;
       projectWorkspaceId?: unknown;
       executionWorkspaceId?: unknown;
+      blockedByIssueIds?: unknown;
     },
   ) {
     if (typeof body.projectId === "string") {
@@ -1064,6 +1075,10 @@ export function issueRoutes(
       await assertIssueIdVisible(db, req, body.inheritExecutionWorkspaceFromIssueId);
     }
     await assertWorkspaceIdsVisible(db, req, body);
+    // AgentDash (GH #830 follow-up): a blocker id is a link to another
+    // issue; linking a restricted one would echo its title back in the
+    // response. Missing, foreign and restricted ids share one 404.
+    await assertIssueIdsVisibleInCompany(db, req, companyId, body.blockedByIssueIds);
   }
 
   // Common malformed path when companyId is empty in "/api/companies/{companyId}/issues".
@@ -1192,7 +1207,8 @@ export function issueRoutes(
       limit,
       offset,
     });
-    res.json(result);
+    // A5: a visible issue's blockedBy must not name an invisible blocker.
+    res.json(await filterVisibleBlockedByOnRows(db, req, companyId, result));
   });
 
   router.get("/companies/:companyId/labels", async (req, res) => {
@@ -1280,10 +1296,11 @@ export function issueRoutes(
     ] =
       await Promise.all([
         resolveIssueProjectAndGoal(issue),
-        svc.getAncestors(issue.id),
+        // A5: ancestors and related issues follow the viewer's visibility.
+        svc.getAncestors(issue.id).then((rows) => truncateAncestorsAtInvisible(db, req, issue.companyId, rows)),
         svc.getCommentCursor(issue.id),
         wakeCommentId ? svc.getComment(wakeCommentId) : null,
-        svc.getRelationSummaries(issue.id),
+        svc.getRelationSummaries(issue.id).then((rows) => filterVisibleIssueRelations(db, req, issue.companyId, rows)),
         svc.listBlockerAttention(issue.companyId, [issue]).then((map) => map.get(issue.id) ?? null),
         svc.listProductivityReviews(issue.companyId, [issue.id]).then((map) => map.get(issue.id) ?? null),
         svc.listAttachments(issue.id),
@@ -1385,13 +1402,20 @@ export function issueRoutes(
       referenceSummary,
     ] = await Promise.all([
       resolveIssueProjectAndGoal(issue),
-      svc.getAncestors(issue.id),
-      svc.findMentionedProjectIds(issue.id, { includeCommentBodies: false }),
+      // A5 (GH #830 follow-up): ancestors, related issues, mentioned
+      // projects and related work follow the viewer's visibility.
+      svc.getAncestors(issue.id).then((rows) => truncateAncestorsAtInvisible(db, req, issue.companyId, rows)),
+      svc.findMentionedProjectIds(issue.id, { includeCommentBodies: false }).then(async (projectIds) => {
+        const visible = await Promise.all(projectIds.map((projectId) => isProjectIdVisible(db, req, projectId)));
+        return projectIds.filter((_projectId, index) => visible[index]);
+      }),
       documentsSvc.getIssueDocumentPayload(issue),
-      svc.getRelationSummaries(issue.id),
+      svc.getRelationSummaries(issue.id).then((rows) => filterVisibleIssueRelations(db, req, issue.companyId, rows)),
       svc.listBlockerAttention(issue.companyId, [issue]).then((map) => map.get(issue.id) ?? null),
       svc.listProductivityReviews(issue.companyId, [issue.id]).then((map) => map.get(issue.id) ?? null),
-      issueReferencesSvc.listIssueReferenceSummary(issue.id),
+      issueReferencesSvc
+        .listIssueReferenceSummary(issue.id)
+        .then((summary) => filterVisibleReferenceSummary(db, req, issue.companyId, summary)),
     ]);
     const mentionedProjects = mentionedProjectIds.length > 0
       ? await projectsSvc.listByIds(issue.companyId, mentionedProjectIds)
@@ -2228,10 +2252,15 @@ export function issueRoutes(
       requestedByActorId: actor.actorId,
     });
 
+    // A5: a mention of a restricted issue in the new description must not
+    // echo that issue's title back.
+    const visibleReferenceSummary = await filterVisibleReferenceSummary(db, req, companyId, referenceSummary);
     res.status(201).json({
       ...issue,
-      relatedWork: referenceSummary,
-      referencedIssueIdentifiers: referenceSummary.outbound.map((item) => item.issue.identifier ?? item.issue.id),
+      relatedWork: visibleReferenceSummary,
+      referencedIssueIdentifiers: visibleReferenceSummary.outbound.map(
+        (item) => item.issue.identifier ?? item.issue.id,
+      ),
     });
   });
 
@@ -2354,6 +2383,23 @@ export function issueRoutes(
       Array.isArray(req.body.blockedByIssueIds)
         ? await svc.getRelationSummaries(existing.id)
         : null;
+    // A5 (GH #830 follow-up): blockedByIssueIds replaces the whole set, but
+    // an off-list actor never sees blockers in a restricted project. Keep
+    // those as they are instead of silently dropping links it cannot see.
+    if (existingRelations && existingRelations.blockedBy.length > 0) {
+      const visibleBlockers = await listVisibleIssueIds(
+        db,
+        req,
+        existing.companyId,
+        existingRelations.blockedBy.map((relation) => relation.id),
+      );
+      const hiddenBlockerIds = existingRelations.blockedBy
+        .map((relation) => relation.id)
+        .filter((blockerId) => !visibleBlockers.has(blockerId));
+      if (hiddenBlockerIds.length > 0) {
+        req.body.blockedByIssueIds = [...new Set([...(req.body.blockedByIssueIds as string[]), ...hiddenBlockerIds])];
+      }
+    }
     const {
       comment: commentBody,
       reviewRequest,
@@ -2753,10 +2799,12 @@ export function issueRoutes(
     let updatedRelations: Awaited<ReturnType<typeof svc.getRelationSummaries>> | null = null;
     if (issue && Array.isArray(req.body.blockedByIssueIds)) {
       updatedRelations = await svc.getRelationSummaries(issue.id);
+      // A5: the response names only blockers the actor can see.
+      const visibleRelations = await filterVisibleIssueRelations(db, req, issue.companyId, updatedRelations);
       issueResponse = {
         ...issue,
-        blockedBy: updatedRelations.blockedBy,
-        blocks: updatedRelations.blocks,
+        blockedBy: visibleRelations.blockedBy,
+        blocks: visibleRelations.blocks,
       };
     }
     await routinesSvc.syncRunStatusForIssue(issue.id);
@@ -3207,6 +3255,20 @@ export function issueRoutes(
       }
     })();
 
+    // A5: related work in the response names only issues the actor can see.
+    if (issueResponse.relatedWork) {
+      const visibleRelatedWork = await filterVisibleReferenceSummary(
+        db,
+        req,
+        issue.companyId,
+        issueResponse.relatedWork,
+      );
+      issueResponse = {
+        ...issueResponse,
+        relatedWork: visibleRelatedWork,
+        referencedIssueIdentifiers: visibleRelatedWork.outbound.map((item) => item.issue.identifier ?? item.issue.id),
+      };
+    }
     res.json({ ...issueResponse, comment });
   });
 
@@ -3986,6 +4048,8 @@ export function issueRoutes(
     const traces = await feedback.listFeedbackTraces({
       companyId: issue.companyId,
       issueId: issue.id,
+      // A5: a trace captured while the issue sat in a restricted project.
+      visibleWhere: feedbackTraceVisibilityCondition(req, issue.companyId),
       targetType,
       vote,
       status,
@@ -4004,11 +4068,14 @@ export function issueRoutes(
       return;
     }
     const includePayload = parseBooleanQuery(req.query.includePayload) || req.query.includePayload === undefined;
-    const trace = await feedback.getFeedbackTraceById(traceId, includePayload);
+    const trace = isCanonicalUuid(traceId) ? await feedback.getFeedbackTraceById(traceId, includePayload) : null;
     if (!trace || !actorCanAccessCompany(req, trace.companyId)) {
       res.status(404).json({ error: "Feedback trace not found" });
       return;
     }
+    // A5 (GH #830 follow-up): a trace carries its issue's title and a
+    // payload snapshot; one on an invisible issue or project is 404.
+    await assertFeedbackTraceVisible(db, req, trace);
     res.json(trace);
   });
 
@@ -4018,6 +4085,13 @@ export function issueRoutes(
       res.status(403).json({ error: "Only board users can view feedback trace bundles" });
       return;
     }
+    // A5: resolve the trace's issue/project first, before building the bundle.
+    const trace = isCanonicalUuid(traceId) ? await feedback.getFeedbackTraceById(traceId, false) : null;
+    if (!trace || !actorCanAccessCompany(req, trace.companyId)) {
+      res.status(404).json({ error: "Feedback trace not found" });
+      return;
+    }
+    await assertFeedbackTraceVisible(db, req, trace);
     const bundle = await feedback.getFeedbackTraceBundle(traceId);
     if (!bundle || !actorCanAccessCompany(req, bundle.companyId)) {
       res.status(404).json({ error: "Feedback trace not found" });

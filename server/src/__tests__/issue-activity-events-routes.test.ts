@@ -15,6 +15,12 @@ vi.mock("../routes/visibility.js", async (importOriginal) => ({
   runVisibilityCondition: () => undefined,
   issueVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
   runVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  // GH #830 follow-up: blocker ids and relation summaries follow the same
+  // rule (project-visibility-relations.test.ts runs it against a real db).
+  assertIssueIdsVisibleInCompany: vi.fn(async () => undefined),
+  listVisibleIssueIds: vi.fn(async (_db: unknown, _req: unknown, _companyId: unknown, ids: Iterable<string>) => new Set(ids)),
+  filterVisibleIssueRelations: vi.fn(async (_db: unknown, _req: unknown, _companyId: unknown, relations: unknown) => relations),
+  filterVisibleReferenceSummary: vi.fn(async (_db: unknown, _req: unknown, _companyId: unknown, summary: unknown) => summary),
 }));
 
 const mockIssueService = vi.hoisted(() => ({

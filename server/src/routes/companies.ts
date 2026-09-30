@@ -17,7 +17,7 @@ import {
   updateCompanyBrandingSchema,
   updateCompanySchema,
 } from "@paperclipai/shared";
-import { badRequest, forbidden } from "../errors.js";
+import { badRequest, forbidden, notFound } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { isMkInviteCode } from "../lib/mk-invite-codes.js";
 import {
@@ -38,6 +38,12 @@ import {
   assertInstanceAdmin,
   getActorInfo,
 } from "./authz.js";
+import {
+  assertIssueIdVisible,
+  assertProjectIdVisible,
+  feedbackTraceVisibilityCondition,
+  isCanonicalUuid,
+} from "./visibility.js";
 import { deploymentKind } from "../services/license.js";
 import { isBillingDisabled } from "../services/tier-policy.js";
 
@@ -239,11 +245,22 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     const projectId = typeof req.query.projectId === "string" && req.query.projectId.trim().length > 0
       ? req.query.projectId
       : undefined;
+    // AgentDash (GH #830 follow-up): A5 on feedback traces. A filter naming
+    // an invisible issue or project is 404, like the issue/project routes,
+    // and the list itself omits traces on restricted issues/projects.
+    if (issueId !== undefined) {
+      if (!isCanonicalUuid(issueId)) throw notFound("Issue not found");
+      await assertIssueIdVisible(db, req, issueId);
+    }
+    if (projectId !== undefined) {
+      await assertProjectIdVisible(db, req, companyId, projectId, "Project");
+    }
 
     const traces = await feedback.listFeedbackTraces({
       companyId,
       issueId,
       projectId,
+      visibleWhere: feedbackTraceVisibilityCondition(req, companyId),
       targetType: targetTypeRaw ? feedbackTargetTypeSchema.parse(targetTypeRaw) : undefined,
       vote: voteRaw ? feedbackVoteValueSchema.parse(voteRaw) : undefined,
       status: statusRaw ? feedbackTraceStatusSchema.parse(statusRaw) : undefined,

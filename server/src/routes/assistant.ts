@@ -13,7 +13,7 @@ import { assistantGatedActionsService } from "../services/assistant-gated-action
 import { validate } from "../middleware/validate.js";
 import { forbidden, notFound } from "../errors.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess } from "./authz.js";
-import { projectVisibilityCondition } from "./visibility.js";
+import { listVisibleIssueIds, projectVisibilityCondition } from "./visibility.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 /**
@@ -100,7 +100,20 @@ export function assistantRoutes(
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    res.json(await waitingOnYou.list(companyId, req.actor as never));
+    const result = await waitingOnYou.list(companyId, req.actor as never);
+    // AgentDash (GH #830 follow-up): an approval's linked issue is named by
+    // identifier and title; one in a restricted project the caller is off
+    // the list for is dropped from the row, as on GET /approvals/:id/issues.
+    const relatedIds = result.decisions
+      .map((decision) => decision.relatedItem?.id)
+      .filter((id): id is string => typeof id === "string");
+    if (relatedIds.length > 0) {
+      const visible = await listVisibleIssueIds(db, req, companyId, relatedIds);
+      result.decisions = result.decisions.map((decision) =>
+        decision.relatedItem && !visible.has(decision.relatedItem.id) ? { ...decision, relatedItem: null } : decision,
+      );
+    }
+    res.json(result);
   });
 
   /**

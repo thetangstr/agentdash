@@ -1,9 +1,10 @@
 import type { NextFunction, Request, Response } from "express";
-import { and, eq, exists, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, exists, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
   executionWorkspaces,
+  feedbackExports,
   heartbeatRuns,
   issues,
   projectAccess,
@@ -353,4 +354,176 @@ export function activityVisibilityCondition(req: Request, companyId: string): SQ
     projectScopedVisibilityCondition(req, companyId, issues.projectId),
     projectScopedVisibilityCondition(req, companyId, projectEntityId),
   );
+}
+
+/**
+ * Which of these issue ids may this actor see? Returns the visible subset;
+ * ids that are malformed, missing, in another company, or in a restricted
+ * project the actor is off the list for are all absent from the result.
+ * One query, whatever the size of the input.
+ */
+export async function listVisibleIssueIds(
+  db: Db,
+  req: Request,
+  companyId: string,
+  issueIds: Iterable<string>,
+): Promise<Set<string>> {
+  const ids = [...new Set([...issueIds].filter((id) => isCanonicalUuid(id)))];
+  if (ids.length === 0) return new Set();
+  const visibility = projectScopedVisibilityCondition(req, companyId, issues.projectId);
+  const rows = await db
+    .select({ id: issues.id })
+    .from(issues)
+    .where(and(eq(issues.companyId, companyId), inArray(issues.id, ids), visibility));
+  return new Set(rows.map((row) => row.id));
+}
+
+/**
+ * Body-supplied issue-id arrays (`blockedByIssueIds`): every id must name an
+ * issue in this company that the actor can see. Missing, foreign and
+ * restricted ids get the SAME 404, so the answer is not an existence oracle
+ * for a restricted issue's UUID (GH #830 follow-up).
+ */
+export async function assertIssueIdsVisibleInCompany(
+  db: Db,
+  req: Request,
+  companyId: string,
+  issueIds: unknown,
+  what = "Blocker issue",
+): Promise<void> {
+  if (!Array.isArray(issueIds) || issueIds.length === 0) return;
+  const refs = [...new Set(issueIds as unknown[])];
+  if (!refs.every((ref) => isCanonicalUuid(ref))) throw notFound(`${what} not found`);
+  const visible = await listVisibleIssueIds(db, req, companyId, refs as string[]);
+  if (visible.size !== refs.length) throw notFound(`${what} not found`);
+}
+
+interface RelatedIssueRef {
+  id: string;
+  terminalBlockers?: RelatedIssueRef[];
+}
+
+function collectRelatedIssueIds(entries: readonly RelatedIssueRef[], into: Set<string>) {
+  for (const entry of entries) {
+    into.add(entry.id);
+    if (entry.terminalBlockers) collectRelatedIssueIds(entry.terminalBlockers, into);
+  }
+}
+
+function pruneRelatedIssues<E extends RelatedIssueRef>(entries: readonly E[], visible: Set<string>): E[] {
+  return entries
+    .filter((entry) => visible.has(entry.id))
+    .map((entry) =>
+      entry.terminalBlockers
+        ? ({ ...entry, terminalBlockers: pruneRelatedIssues(entry.terminalBlockers, visible) } as E)
+        : entry,
+    );
+}
+
+/**
+ * blockedBy / blocks summaries carry the related issue's identifier, title,
+ * status and assignees. A related issue the actor cannot see is omitted
+ * entirely — including from nested `terminalBlockers` — as if the relation
+ * did not exist.
+ */
+export async function filterVisibleIssueRelations<
+  E extends RelatedIssueRef,
+  T extends { blockedBy: E[]; blocks: E[] },
+>(db: Db, req: Request, companyId: string, relations: T): Promise<T> {
+  if (seesEverything(req, companyId)) return relations;
+  const ids = new Set<string>();
+  collectRelatedIssueIds(relations.blockedBy, ids);
+  collectRelatedIssueIds(relations.blocks, ids);
+  if (ids.size === 0) return relations;
+  const visible = await listVisibleIssueIds(db, req, companyId, ids);
+  return {
+    ...relations,
+    blockedBy: pruneRelatedIssues(relations.blockedBy, visible),
+    blocks: pruneRelatedIssues(relations.blocks, visible),
+  };
+}
+
+/** The same rule over list rows that each carry an optional `blockedBy`. */
+export async function filterVisibleBlockedByOnRows<R extends object>(
+  db: Db,
+  req: Request,
+  companyId: string,
+  rows: R[],
+): Promise<R[]> {
+  if (seesEverything(req, companyId)) return rows;
+  const blockedByOf = (row: R) => (row as { blockedBy?: RelatedIssueRef[] }).blockedBy;
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const blockedBy = blockedByOf(row);
+    if (Array.isArray(blockedBy)) collectRelatedIssueIds(blockedBy, ids);
+  }
+  if (ids.size === 0) return rows;
+  const visible = await listVisibleIssueIds(db, req, companyId, ids);
+  return rows.map((row) => {
+    const blockedBy = blockedByOf(row);
+    return Array.isArray(blockedBy) ? { ...row, blockedBy: pruneRelatedIssues(blockedBy, visible) } : row;
+  });
+}
+
+/**
+ * Ancestor chains (nearest parent first) stop at the first ancestor the
+ * actor cannot see. Anything above it is reachable only through the hidden
+ * link, and skipping over it would leave a gap that confirms the hidden
+ * issue; the chain reads as if the visible part were the whole hierarchy.
+ */
+export async function truncateAncestorsAtInvisible<A extends { id: string }>(
+  db: Db,
+  req: Request,
+  companyId: string,
+  ancestors: A[],
+): Promise<A[]> {
+  if (ancestors.length === 0 || seesEverything(req, companyId)) return ancestors;
+  const visible = await listVisibleIssueIds(
+    db,
+    req,
+    companyId,
+    ancestors.map((ancestor) => ancestor.id),
+  );
+  const firstHidden = ancestors.findIndex((ancestor) => !visible.has(ancestor.id));
+  return firstHidden === -1 ? ancestors : ancestors.slice(0, firstHidden);
+}
+
+/** "Related work" (issue mentions, both directions) follows the same rule. */
+export async function filterVisibleReferenceSummary<
+  I extends { issue: { id: string } },
+  S extends { outbound: I[]; inbound: I[] },
+>(db: Db, req: Request, companyId: string, summary: S): Promise<S> {
+  if (seesEverything(req, companyId)) return summary;
+  const ids = [...summary.outbound, ...summary.inbound].map((item) => item.issue.id);
+  if (ids.length === 0) return summary;
+  const visible = await listVisibleIssueIds(db, req, companyId, ids);
+  return {
+    ...summary,
+    outbound: summary.outbound.filter((item) => visible.has(item.issue.id)),
+    inbound: summary.inbound.filter((item) => visible.has(item.issue.id)),
+  };
+}
+
+/**
+ * SQL condition over `feedback_exports` joined to `issues`: a trace follows
+ * its issue's current project AND the project recorded on the trace, so a
+ * trace captured while the issue sat in a restricted project stays hidden
+ * after the issue moves out (its payload was captured there).
+ */
+export function feedbackTraceVisibilityCondition(req: Request, companyId: string): SQL | undefined {
+  if (seesEverything(req, companyId)) return undefined;
+  return and(
+    projectScopedVisibilityCondition(req, companyId, issues.projectId),
+    projectScopedVisibilityCondition(req, companyId, feedbackExports.projectId),
+  );
+}
+
+/** Single-trace fetches: a trace on an invisible issue or project is 404. */
+export async function assertFeedbackTraceVisible(
+  db: Db,
+  req: Request,
+  trace: { issueId: string; projectId: string | null },
+): Promise<void> {
+  await assertIssueIdVisible(db, req, trace.issueId, "Feedback trace");
+  await assertProjectIdVisible(db, req, "", trace.projectId, "Feedback trace");
 }
