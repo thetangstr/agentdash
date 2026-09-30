@@ -40,7 +40,7 @@ export function buildAssessmentCommentBody({question,requestKey}) {
 
 function parseMarker(comment) {
   const match=typeof comment?.body==='string'?comment.body.match(markerRe):null;
-  return match?{requestKey:match[1],question:comment.body.slice(match.index+match[0].length).trim()}:null;
+  return match?{requestKey:match[1],anchored:match.index===0,question:comment.body.slice(match.index+match[0].length).trim()}:null;
 }
 
 function freshnessOf(recordedAt,observedMs) {
@@ -123,6 +123,13 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
       if(!advertised)return {status:'unavailable',reason:'no-stored-assessment',issueId,observedAt:new Date(now()).toISOString()};
       const document=await readDocument(issueId,'ross-review');
       if(!document)return {status:'unavailable',reason:'no-stored-assessment',issueId,observedAt:new Date(now()).toISOString()};
+      // A ross-review answers only when authored by the issue's assigned agent;
+      // a review by anyone else is present but unattributed, never an answer.
+      if(!issue.assigneeAgentId||document.updatedByAgentId!==issue.assigneeAgentId) {
+        return {status:'unattributed',reason:'review-author-not-assigned-agent',issueId,
+          expectedAuthorAgentId:issue.assigneeAgentId??null,
+          review:projectReview(document),observedAt:new Date(now()).toISOString()};
+      }
       const review=projectReview(document);
       const freshness=freshnessOf(document.updatedAt,now());
       return {
@@ -140,13 +147,23 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
     }
   }
 
-  async function findMarkedComment(issueId,requestKey) {
+  // A marker records this actor's request only when it opens the comment body
+  // and the comment is attributed to the actor. Any other comment carrying the
+  // same key — a mid-body quote or another author's marker — contests the key
+  // and must fail closed: coalescing on it would suppress the person's request
+  // and hand back a spoofed receipt.
+  async function markedCommentState(issueId,requestKey) {
     const comments=await transport.request(`/issues/${encodeURIComponent(issueId)}/comments?limit=${commentScanLimit}`);
     const rows=Array.isArray(comments)?comments:[];
+    let own=null,contested=false;
     for(const comment of rows) {
       const marked=parseMarker(comment);
-      if(marked&&marked.requestKey===requestKey)return {comment,...marked};
+      if(!marked||marked.requestKey!==requestKey)continue;
+      if(marked.anchored&&comment.authorUserId===actor.userId){own={comment,question:marked.question};continue;}
+      contested=true;
     }
+    if(own)return {state:'own',...own};
+    if(contested)return {state:'contested'};
     return null;
   }
 
@@ -164,7 +181,7 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
     if(!issue.assigneeAgentId)return {status:'unavailable',reason:'no-assigned-agent',requestKey,issueId};
 
     let prior;
-    try {prior=await findMarkedComment(issueId,requestKey);}
+    try {prior=await markedCommentState(issueId,requestKey);}
     catch (error) {
       const status=statusOf(error);
       if(status===401||status===403)return {status:'denied',reason:'actor-not-permitted',requestKey,issueId};
@@ -172,6 +189,9 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
       throw error;
     }
     if(prior) {
+      if(prior.state==='contested') {
+        return {status:'conflict',reason:'request-key-contested-by-foreign-comment',requestKey,issueId};
+      }
       if(prior.question===question.trim()) {
         return {status:'coalesced',reason:'identical-request-already-recorded',requestKey,issueId,
           receipt:{commentId:prior.comment.id,requestKey,issueId,companyId,reused:true},

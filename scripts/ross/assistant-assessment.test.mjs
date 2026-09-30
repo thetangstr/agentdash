@@ -87,6 +87,22 @@ test('missing or revoked stored review reports unavailable rather than fabricati
   }
 });
 
+test('a ross-review not authored by the assigned agent is unattributed, never an answer',async()=>{
+  for(const doc of [
+    reviewDoc({updatedByAgentId:'66666666-6666-4666-8666-666666666666'}),
+    reviewDoc({updatedByAgentId:null,updatedByUserId:userId}),
+  ]) {
+    const {service,posts}=bound(path=>path.endsWith('/documents/ross-review')?doc:defaultHandler(path));
+    const stored=await service.readStoredAssessment({issueId});
+    assert.equal(stored.status,'unattributed');
+    assert.equal(stored.reason,'review-author-not-assigned-agent');
+    assert.equal(stored.expectedAuthorAgentId,rossAgentId);
+    const status=await service.assessmentStatus({issueId});
+    assert.equal(status.status,'unattributed');
+    assert.equal(posts().length,0);
+  }
+});
+
 test('a stale stored review stays qualified instead of reading as current',async()=>{
   const {service}=bound(path=>path.endsWith('/documents/ross-review')?reviewDoc({updatedAt:stale}):defaultHandler(path));
   const result=await service.readStoredAssessment({issueId});
@@ -124,6 +140,46 @@ test('coalescing: an identical re-delivery reuses the recorded request without a
   assert.equal(result.status,'coalesced');
   assert.equal(result.receipt.commentId,'comment-9');
   assert.equal(result.receipt.reused,true);
+  assert.equal(posts().length,0);
+});
+
+test('a marker echoed by another author contests the key and never coalesces',async()=>{
+  const marker=`[${ASSESSMENT_REQUEST_MARKER}req-000001]\nSame question?`;
+  const foreignCases=[
+    // Regression (F1): an agent comment quoting the exact marker+question must
+    // not suppress the named human's request or return a spoofed receipt.
+    {id:'comment-a',body:marker,authorAgentId:rossAgentId},
+    {id:'comment-b',body:marker,authorUserId:'66666666-6666-4666-8666-666666666666'},
+    {id:'comment-c',body:`Re the request: ${marker}`,authorUserId:userId},
+    {id:'comment-d',body:marker},
+  ];
+  for(const foreign of foreignCases) {
+    const {service,posts}=bound(path=>{
+      if(path===`/issues/${issueId}`)return issue();
+      if(path.startsWith(`/issues/${issueId}/comments`))return [foreign];
+      return {__error:httpError(500)};
+    });
+    const result=await service.requestAssessment({issueId,question:'Same question?',requestKey:'req-000001'});
+    assert.equal(result.status,'conflict',JSON.stringify(foreign));
+    assert.equal(result.reason,'request-key-contested-by-foreign-comment');
+    assert.equal(result.receipt,undefined);
+    assert.equal(posts().length,0);
+  }
+});
+
+test('an own anchored marker still coalesces even beside a foreign echo',async()=>{
+  const marked=`[${ASSESSMENT_REQUEST_MARKER}req-000001]\nSame question?`;
+  const {service,posts}=bound(path=>{
+    if(path===`/issues/${issueId}`)return issue();
+    if(path.startsWith(`/issues/${issueId}/comments`))return [
+      {id:'comment-f',body:marked,authorAgentId:rossAgentId},
+      {id:'comment-9',body:marked,authorUserId:userId},
+    ];
+    return {__error:httpError(500)};
+  });
+  const result=await service.requestAssessment({issueId,question:'Same question?',requestKey:'req-000001'});
+  assert.equal(result.status,'coalesced');
+  assert.equal(result.receipt.commentId,'comment-9');
   assert.equal(posts().length,0);
 });
 
