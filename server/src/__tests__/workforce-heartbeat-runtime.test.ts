@@ -6,10 +6,11 @@ import express from 'express';
 import request from 'supertest';
 import { issueRoutes } from '../routes/issues.js';
 import type { StorageService } from '../storage/types.js';
+import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/index.js';
 import { eq, and } from 'drizzle-orm';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
-import { agents, companies, companyMemberships, createDb, agentRuns, issueComments, issues } from '@paperclipai/db';
+import { agents, companies, companyMemberships, authUsers, authSessions, createDb, agentRuns, issueComments, issues } from '@paperclipai/db';
 import type { AdapterExecutionContext } from '@paperclipai/adapter-utils';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 import { workforceService } from '../services/workforce.js';
@@ -36,7 +37,10 @@ describe('workforce real heartbeat context and hold lifecycle', () => {
   afterAll(async () => { await db?.$client.end({ timeout: 0 }); await temp?.cleanup(); if (priorHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = priorHome; await rm(home, { recursive: true, force: true }); });
   it('starts discovery, asks, holds without adapter/quota use, then resumes with private answers for the same job only', async () => {
     const [company] = await db.insert(companies).values({ name: 'Runtime company', issuePrefix: randomUUID().slice(0, 8) }).returning();
-    await db.insert(companyMemberships).values({ companyId: company.id, principalType: 'user', principalId: 'owner', status: 'active' });
+    await db.insert(companyMemberships).values({ companyId: company.id, principalType: 'user', principalId: 'owner', membershipRole: 'owner', status: 'active' });
+    await db.insert(authUsers).values({ id: 'owner', name: 'Owner', email: 'owner@runtime.test.invalid', createdAt: new Date(), updatedAt: new Date() });
+    const sessionId = randomUUID();
+    await db.insert(authSessions).values({ id: sessionId, token: randomUUID(), userId: 'owner', expiresAt: new Date(Date.now() + 600000), createdAt: new Date(), updatedAt: new Date() });
     const [agent] = await db.insert(agents).values({ companyId: company.id, name: 'Worker', adapterType: 'codex_local', adapterConfig: { cwd: home, command: '/bin/true' }, autonomy: 'autonomous', accountableUserId: 'owner' }).returning();
     const svc = workforceService(db), questions = issueThreadInteractionService(db), heartbeat = heartbeatService(db);
     await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, { userId: 'owner' });
@@ -70,7 +74,7 @@ describe('workforce real heartbeat context and hold lifecycle', () => {
     expect(await db.select().from(agentRuns).where(eq(agentRuns.agentId, agent.id))).toHaveLength(1);
     const app = express();
     app.use(express.json());
-    app.use((req, _res, next) => { req.actor = { type: 'board', source: 'session', userId: 'owner', companyIds: [company.id], memberships: [{ companyId: company.id, status: 'active', membershipRole: 'owner' }] }; next(); });
+    app.use(actorMiddleware(db, { deploymentMode: 'authenticated', resolveSession: async () => ({ session: { id: sessionId, userId: 'owner' }, user: { id: 'owner', name: 'Owner', email: 'owner@runtime.test.invalid' } }) }));
     app.use('/api', issueRoutes(db, {} as StorageService));
     app.use(errorHandler);
     const responsePath = `/api/issues/${job.id}/interactions/${interactionId}/respond`;

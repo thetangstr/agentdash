@@ -3307,6 +3307,7 @@ export function issueService(db: Db) {
       companyId: string,
       data: IssueCreateInput,
       acceptance?: ActivityAcceptance,
+      beforeWrite?: () => void,
     ) => {
       const {
         labelIds: inputLabelIds,
@@ -3431,6 +3432,7 @@ export function issueService(db: Db) {
           .where(eq(issues.companyId, companyId));
         const currentMax = maxRow?.maxNum ?? 0;
 
+        beforeWrite?.();
         const [company] = await tx
           .update(companies)
           .set({

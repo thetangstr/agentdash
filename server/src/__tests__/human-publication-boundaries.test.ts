@@ -33,8 +33,21 @@ describe('human HTTP acceptance publication and continuation', () => {
   function app(mode: 'normal' | 'rollback' | 'unknown', wake: () => Promise<any> = async () => null) {
     const connection = new Proxy(db, { get(target, key, receiver) {
       if(key === 'transaction') return async (work: (tx: any) => Promise<any>) => {
-        const result = await target.transaction(async tx => { const value = await work(tx); if(mode === 'rollback') throw new Error('synthetic acceptance rollback'); return value; });
-        if(mode === 'unknown') throw new Error('synthetic unknown commit acknowledgement');
+        let domainWrite = false;
+        const result = await target.transaction(async tx => {
+          const executor = new Proxy(tx, { get(inner, property, receiver) {
+            const value = Reflect.get(inner, property, receiver);
+            if (property === 'insert' || property === 'update' || property === 'delete') return (table: unknown) => {
+              if (table !== humanActionHandles) domainWrite = true;
+              return value.call(inner, table);
+            };
+            return typeof value === 'function' ? value.bind(inner) : value;
+          } });
+          const value = await work(executor);
+          if (domainWrite && mode === 'rollback') throw new Error('synthetic acceptance rollback');
+          return value;
+        });
+        if(domainWrite && mode === 'unknown') throw new Error('synthetic unknown commit acknowledgement');
         return result;
       };
       return Reflect.get(target,key,receiver);

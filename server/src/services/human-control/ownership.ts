@@ -88,16 +88,22 @@ export function ownershipHumanOperations(): HumanOperation[] {
       }
       return { payload: p, readback: { agent: { id: agent.id, name: agent.name }, previousUserId: active?.userId ?? agent.accountableUserId, nextUserId: p.userId ?? p.accountableUserId, effects: [operationId.endsWith('.transfer') ? 'Transfer stewardship, recording history and revoking prior stewardship endpoints and channel authority through the canonical service.' : 'Assign the displayed accountable human. Existing pending questions keep their pinned owner until explicitly cancelled and replaced.'] }, preconditions: { agentUpdatedAt: agent.updatedAt.toISOString(), stewardshipId: active?.id ?? null } };
     },
+    async currentOutput(ctx, p) {
+      const [agent] = await ctx.db.select().from(agents).where(and(eq(agents.id, p.agentId as string), eq(agents.companyId, humanCompany(ctx))));
+      if (!agent) throw notFound('Agent not found');
+      const active = await agentStewardshipService(ctx.db).activeByAgent(humanCompany(ctx), agent.id);
+      return { agentId: agent.id, userId: operationId === 'human_questions.owner.assign' ? agent.accountableUserId : active?.userId, stewardshipId: operationId === 'human_questions.owner.assign' ? null : active?.id };
+    },
     async execute(ctx, p) {
       const companyId = humanCompany(ctx), svc = agentStewardshipService(ctx.db);
       if (operationId !== 'human_questions.owner.assign') {
-        const row = operationId.endsWith('.assign') ? await svc.assign(companyId, { agentId: p.agentId as string, userId: p.userId as string, assignedByUserId: ctx.req.actor.userId! }, ctx.acceptance) : await svc.transfer(companyId, p.agentId as string, { userId: p.userId as string, transferReason: p.transferReason as string, transferredByUserId: ctx.req.actor.userId! }, ctx.acceptance);
+        const row = operationId.endsWith('.assign') ? await svc.assign(companyId, { agentId: p.agentId as string, userId: p.userId as string, assignedByUserId: ctx.req.actor.userId! }, ctx.acceptance, ctx.beforeWrite) : await svc.transfer(companyId, p.agentId as string, { userId: p.userId as string, transferReason: p.transferReason as string, transferredByUserId: ctx.req.actor.userId! }, ctx.acceptance, ctx.beforeWrite);
         return { agentId: row.agentId, userId: row.userId, stewardshipId: row.id };
       }
       const [existing] = await ctx.db.select().from(agents).where(and(eq(agents.id, p.agentId as string), eq(agents.companyId, companyId))).for('update');
       if (!existing) throw notFound('Agent not found');
       const patch = await resolveAccountabilityPatch(ctx.db, ctx.req, existing, { accountableUserId: p.accountableUserId });
-      const updated = await agentService(ctx.db).update(existing.id, patch, { recordRevision: { createdByAgentId: null, createdByUserId: ctx.req.actor.userId!, source: 'patch' } });
+      const updated = await agentService(ctx.db).update(existing.id, patch, { beforeWrite: ctx.beforeWrite, recordRevision: { createdByAgentId: null, createdByUserId: ctx.req.actor.userId!, source: 'patch' } });
       if (!updated) throw notFound('Agent not found');
       ctx.acceptance!.publications.push(await insertActivity(ctx.acceptance!.executor, { companyId, actorType: 'user', actorId: ctx.req.actor.userId!, action: 'agent.updated', entityType: 'agent', entityId: updated.id, details: { changedTopLevelKeys: Object.keys(patch).sort() } }));
       await recordAccountabilityChange(ctx.db, ctx.req, existing, updated, ctx.acceptance);

@@ -28,6 +28,19 @@ export function workforceHumanOperations(heartbeat: Pick<ReturnType<typeof heart
       descriptor: { operationId, version: 1, pageId: 'workforce', actionId: operationId.slice('workforce.'.length), targetKind: 'company', behavior: handler.read ? 'read' : 'prepare_confirm', authority: direction ? 'company_direction' : 'company_access', confirmation: handler.read ? 'none' : 'human_readback', inputSchema: humanJsonSchema(input), outputSchema: humanJsonSchema(output), content: { fullText: true, pagination: 'none' } },
       input, output, ...handler,
       authorize(ctx) { if (direction) assertCanSetCompanyDirection(ctx.req, humanCompany(ctx)); },
+      async currentOutput(ctx, payload) {
+        const svc = workforceService(ctx.db), companyId = humanCompany(ctx);
+        if (operationId === 'workforce.brief.publish') return svc.getBrief(companyId);
+        if (operationId === 'workforce.proposals.review') return (await svc.listProposals(companyId, { userId: ctx.req.actor.userId! })).find(value => value.id === payload.proposalId);
+        if (operationId === 'workforce.first_job.start') {
+          const current = await svc.getEnrollment(companyId, payload.agentId as string);
+          const [issue] = current?.firstJobIssueId ? await ctx.db.select().from(issues).where(and(eq(issues.id, current.firstJobIssueId), eq(issues.companyId, companyId))) : [];
+          if (!issue) throw notFound('First job not found');
+          return { issueId: issue.id, identifier: issue.identifier, title: issue.title, status: issue.status, agentId: issue.assigneeAgentId };
+        }
+        return ['workforce.enrollment.create', 'workforce.skills.retry'].includes(operationId)
+          ? svc.getInstalledEnrollment(companyId, payload.agentId as string) : svc.getEnrollment(companyId, payload.agentId as string);
+      },
       async authorizeRecovery(ctx, payload, reference) {
         if (typeof payload.agentId !== 'string') return null;
         const companyId = humanCompany(ctx);
@@ -94,18 +107,18 @@ export function workforceHumanOperations(heartbeat: Pick<ReturnType<typeof heart
   return [
     operation('workforce.templates.list', empty, z.array(template), false, { read: async () => WORKFORCE_TEMPLATES }),
     operation('workforce.brief.read', empty, brief, false, { read: ctx => workforceService(ctx.db).getBrief(humanCompany(ctx)) }),
-    operation('workforce.brief.publish', updateWorkforceBriefSchema, brief, true, { execute: (ctx, p) => workforceService(ctx.db).updateBrief(humanCompany(ctx), updateWorkforceBriefSchema.parse(p), actor(ctx), ctx.acceptance) }),
+    operation('workforce.brief.publish', updateWorkforceBriefSchema, brief, true, { execute: (ctx, p) => workforceService(ctx.db).updateBrief(humanCompany(ctx), updateWorkforceBriefSchema.parse(p), actor(ctx), ctx.acceptance, ctx.beforeWrite) }),
     operation('workforce.proposals.list', empty, z.array(proposal), true, { read: ctx => workforceService(ctx.db).listProposals(humanCompany(ctx), actor(ctx)) }),
-    operation('workforce.proposals.review', reviewWorkforceProposalSchema.extend({ proposalId: id }).strict(), proposal, true, { execute: (ctx, p) => workforceService(ctx.db).reviewProposal(humanCompany(ctx), p.proposalId as string, { decision: p.decision as 'approve' | 'reject', expectedRevision: p.expectedRevision as number }, actor(ctx), ctx.acceptance) }),
+    operation('workforce.proposals.review', reviewWorkforceProposalSchema.extend({ proposalId: id }).strict(), proposal, true, { execute: (ctx, p) => workforceService(ctx.db).reviewProposal(humanCompany(ctx), p.proposalId as string, { decision: p.decision as 'approve' | 'reject', expectedRevision: p.expectedRevision as number }, actor(ctx), ctx.acceptance, ctx.beforeWrite) }),
     operation('workforce.enrollment.read', agentInput, enrollment.nullable(), false, { read: (ctx, p) => workforceService(ctx.db).getEnrollment(humanCompany(ctx), p.agentId as string) }),
     operation('workforce.readiness.read', agentInput, readiness.nullable(), false, { read: (ctx, p) => workforceService(ctx.db).getReadiness(humanCompany(ctx), p.agentId as string) }),
     operation('workforce.enrollment.create', enrollWorkforceSchema.extend({ agentId: id }).strict(), enrollment, true, {
       recoveryReference: value => ({ enrollmentId: (value as {id:string}).id }),
-      execute: (ctx, p) => { const { agentId, ...body } = p; return workforceService(ctx.db).enroll(humanCompany(ctx), agentId as string, enrollWorkforceSchema.parse(body), actor(ctx), ctx.acceptance); },
-      afterCommit: (ctx, p) => workforceService(ctx.db).ensureSkillsInstalled(humanCompany(ctx), p.agentId as string, actor(ctx)),
+      execute: (ctx, p) => { const { agentId, ...body } = p; return workforceService(ctx.db).enroll(humanCompany(ctx), agentId as string, enrollWorkforceSchema.parse(body), actor(ctx), ctx.acceptance, ctx.beforeWrite); },
+      afterCommit: (ctx, p, value) => workforceService(ctx.db).ensureSkillsInstalled(humanCompany(ctx), p.agentId as string, actor(ctx), ctx.authority!.skillStages(ctx.db, value as NonNullable<Awaited<ReturnType<ReturnType<typeof workforceService>['getEnrollment']>>>)),
     }),
-    operation('workforce.enrollment.update', updateWorkforceEnrollmentSchema.extend({ agentId: id }).strict(), enrollment, true, { execute: (ctx, p) => { const { agentId, ...body } = p; return workforceService(ctx.db).updateEnrollment(humanCompany(ctx), agentId as string, updateWorkforceEnrollmentSchema.parse(body), actor(ctx), ctx.acceptance); } }),
-    operation('workforce.learning.acknowledge', agentInput.extend({ revision }).strict(), enrollment, true, { execute: (ctx, p) => workforceService(ctx.db).acknowledgeLearning(humanCompany(ctx), p.agentId as string, p.revision as number, actor(ctx), ctx.acceptance) }),
+    operation('workforce.enrollment.update', updateWorkforceEnrollmentSchema.extend({ agentId: id }).strict(), enrollment, true, { execute: (ctx, p) => { const { agentId, ...body } = p; return workforceService(ctx.db).updateEnrollment(humanCompany(ctx), agentId as string, updateWorkforceEnrollmentSchema.parse(body), actor(ctx), ctx.acceptance, ctx.beforeWrite); } }),
+    operation('workforce.learning.acknowledge', agentInput.extend({ revision }).strict(), enrollment, true, { execute: (ctx, p) => workforceService(ctx.db).acknowledgeLearning(humanCompany(ctx), p.agentId as string, p.revision as number, actor(ctx), ctx.acceptance, ctx.beforeWrite) }),
     operation('workforce.skills.retry', agentInput, enrollment, true, {
       recoveryReference: value => ({ enrollmentId: (value as { id: string }).id }),
       async execute(ctx, p) {
@@ -113,11 +126,11 @@ export function workforceHumanOperations(heartbeat: Pick<ReturnType<typeof heart
         if (!current) throw notFound('Workforce enrollment not found');
         return current;
       },
-      afterCommit: (ctx, p) => workforceService(ctx.db).ensureSkillsInstalled(humanCompany(ctx), p.agentId as string, actor(ctx)),
+      afterCommit: (ctx, p, value) => workforceService(ctx.db).ensureSkillsInstalled(humanCompany(ctx), p.agentId as string, actor(ctx), ctx.authority!.skillStages(ctx.db, value as NonNullable<Awaited<ReturnType<ReturnType<typeof workforceService>['getEnrollment']>>>)),
     }),
     operation('workforce.first_job.start', agentInput, job, true, {
       recoveryReference: value => ({ issueId: (value as {issue:{id:string}}).issue.id }),
-      execute: (ctx, p) => workforceService(ctx.db).startFirstJobWithCreation(humanCompany(ctx), p.agentId as string, actor(ctx), ctx.acceptance),
+      execute: (ctx, p) => workforceService(ctx.db).startFirstJobWithCreation(humanCompany(ctx), p.agentId as string, actor(ctx), ctx.acceptance, ctx.beforeWrite),
       afterCommit: async (ctx, p, value) => {
         const result = value as Awaited<ReturnType<ReturnType<typeof workforceService>['startFirstJobWithCreation']>>;
         await heartbeat.wakeup(p.agentId as string, { source: 'assignment', reason: 'workforce_first_job', idempotencyKey: `workforce-first-job:${result.issue.id}`, requestedByActorType: 'user', requestedByActorId: ctx.req.actor.userId!, contextSnapshot: { issueId: result.issue.id, forceFreshSession: result.created } });

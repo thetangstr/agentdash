@@ -5,7 +5,9 @@ import { randomUUID } from 'node:crypto';
 import express from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { agents, companies, createDb } from '@paperclipai/db';
+import { eq } from 'drizzle-orm';
+import { actorMiddleware } from '../middleware/auth.js';
+import { agents, companies, companyMemberships, authUsers, authSessions, createDb } from '@paperclipai/db';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 import { heartbeatService } from '../services/heartbeat.js';
 import * as routes from '../routes/workforce.js';
@@ -17,17 +19,27 @@ describe('workforce HTTP authority', () => {
   let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   let db: ReturnType<typeof createDb>;
   let companyId: string, agentId: string, peerId: string;
+  const sessionId = randomUUID();
   beforeAll(async () => {
     skillHome = await mkdtemp(path.join(tmpdir(), 'workforce-skills-'));
     process.env.PAPERCLIP_HOME = skillHome;
     temp = await startEmbeddedPostgresTestDatabase('agentdash-workforce-routes-'); db = createDb(temp.connectionString);
+    await db.insert(authUsers).values({ id: 'owner', name: 'Owner', email: 'owner@routes.test.invalid', createdAt: new Date(), updatedAt: new Date() });
+    await db.insert(authSessions).values({ id: sessionId, token: randomUUID(), userId: 'owner', expiresAt: new Date(Date.now() + 600000), createdAt: new Date(), updatedAt: new Date() });
     [companyId] = (await db.insert(companies).values({ name: 'Route test', issuePrefix: randomUUID().slice(0, 8) }).returning()).map(x => x.id);
+    await db.insert(companyMemberships).values({ companyId, principalType: 'user', principalId: 'owner', status: 'active', membershipRole: 'admin' });
     [agentId, peerId] = (await db.insert(agents).values([{ companyId, name: 'Self', adapterType: 'codex_local' }, { companyId, name: 'Peer' }]).returning()).map(x => x.id);
   });
   afterAll(async () => { await temp?.cleanup(); await rm(skillHome, { recursive: true, force: true }); if (previousHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = previousHome; });
   function app(actor: Record<string, unknown>) {
     const app = express(); app.use(express.json());
-    app.use((req, _res, next) => { req.actor = actor as typeof req.actor; next(); });
+    if (actor.type === 'board') {
+      app.use(async (_req, _res, next) => {
+        await db.update(companyMemberships).set({ membershipRole: (actor.memberships as { membershipRole: string }[])[0].membershipRole }).where(eq(companyMemberships.companyId, companyId));
+        next();
+      });
+      app.use(actorMiddleware(db, { deploymentMode: 'authenticated', resolveSession: async () => ({ session: { id: sessionId, userId: 'owner' }, user: { id: 'owner', name: 'Owner', email: 'owner@routes.test.invalid' } }) }));
+    } else app.use((req, _res, next) => { req.actor = actor as typeof req.actor; next(); });
     app.use('/api', routes.workforceRoutes(db, { heartbeat: heartbeatService(db, { autoDispatchQueuedRuns: false }) })); app.use(errorHandler); return app;
   }
   const worker = () => ({ type: 'agent', companyId, agentId });

@@ -335,7 +335,7 @@ export function agentStewardshipService(db: Db) {
       .orderBy(desc(agentStewardships.startedAt));
   }
 
-  async function assign(companyId: string, input: AssignInput, acceptance?: ActivityAcceptance): Promise<AgentStewardshipRow> {
+  async function assign(companyId: string, input: AssignInput, acceptance?: ActivityAcceptance, beforeWrite?: () => void): Promise<AgentStewardshipRow> {
     const now = new Date();
 
     try {
@@ -343,6 +343,7 @@ export function agentStewardshipService(db: Db) {
         await lockActiveUserMember(tx, companyId, input.userId);
         await lockAssignableCompanyAgent(tx, companyId, input.agentId);
 
+        beforeWrite?.();
         const row = await tx
           .insert(agentStewardships)
           .values({
@@ -381,7 +382,7 @@ export function agentStewardshipService(db: Db) {
     }
   }
 
-  async function transfer(companyId: string, agentId: string, input: TransferInput, acceptance?: ActivityAcceptance): Promise<AgentStewardshipRow> {
+  async function transfer(companyId: string, agentId: string, input: TransferInput, acceptance?: ActivityAcceptance, beforeWrite?: () => void): Promise<AgentStewardshipRow> {
     const transferReason = normalizeReason(input.transferReason);
     const now = new Date();
 
@@ -429,6 +430,7 @@ export function agentStewardshipService(db: Db) {
           throw conflict("Agent is already stewarded by this user");
         }
 
+        beforeWrite?.();
         await tx
           .update(agentStewardships)
           .set({

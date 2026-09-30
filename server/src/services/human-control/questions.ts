@@ -65,6 +65,7 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
     return {
       descriptor: { operationId, version: 1, pageId: 'inbox', actionId: operationId.slice('human_questions.'.length), targetKind: 'company', behavior: handler.read ? 'read' : 'prepare_confirm', authority: 'exact_question_owner', confirmation: handler.read ? 'none' : 'human_readback', inputSchema: humanJsonSchema(input), outputSchema: humanJsonSchema(output), content: { fullText: true, pagination: operationId.endsWith('list') ? 'offset' : 'none' } },
       input, output, ...handler, recoveryReference: value => ({ interactionId: (value as {id:string}).id, issueId: (value as {issueId:string}).issueId }), authorize() {},
+      async currentOutput(ctx, p) { return project((await visible(ctx, p)).q); },
       async authorizeRecovery(ctx, p, reference) {
         const { issue, q } = await visible(ctx, p);
         if (reference.issueId !== issue.id || reference.interactionId !== q.id) return null;
@@ -77,7 +78,7 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
         let replacementReadback: unknown = null;
         if (operationId === 'human_questions.respond') {
           const { issueId: _i, interactionId: _q, ...body } = p;
-          await svc.previewAnswer(issue, q.id, body as Parameters<typeof svc.previewAnswer>[2], actor);
+          await svc.previewAnswer(issue, q.id, body as Parameters<typeof svc.previewAnswer>[2], actor, { assertSource: ctx.assertQuestionSource });
           resolved.shareWithCompany = p.shareWithCompany ?? false;
         } else if (operationId === 'human_questions.cancel') {
           if (q.status !== 'pending') throw conflict('Question is no longer pending');
@@ -99,10 +100,10 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
     const { issue, q } = await visible(ctx, p, kind !== 'replace');
     const svc = issueThreadInteractionService(ctx.db), actor = { userId: ctx.req.actor.userId! };
     const { issueId: _i, interactionId: _q, ...body } = p;
-    const updated = kind === 'respond' ? await svc.answerQuestions(issue, q.id, body as Parameters<typeof svc.answerQuestions>[2], actor, ctx.acceptance)
-      : kind === 'cancel' ? await svc.cancelQuestions(issue, q.id, body, actor, ctx.acceptance)
-      : await svc.create(issue, { ...replacement(q), idempotencyKey: `human-action:${actionId}` }, actor, ctx.acceptance);
-    ctx.acceptance!.publications.push(await insertActivity(ctx.acceptance!.executor, { companyId: issue.companyId, actorType: 'user', actorId: actor.userId, action: `issue.thread_interaction_${kind === 'respond' ? 'answered' : kind === 'cancel' ? 'cancelled' : 'created'}`, entityType: 'issue', entityId: issue.id, details: { interactionId: updated.id, interactionKind: updated.kind, interactionStatus: updated.status } }));
+    const updated = kind === 'respond' ? await svc.answerQuestions(issue, q.id, body as Parameters<typeof svc.answerQuestions>[2], actor, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite })
+      : kind === 'cancel' ? await svc.cancelQuestions(issue, q.id, body, actor, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite })
+      : await svc.create(issue, { ...replacement(q), idempotencyKey: `human-action:${actionId}` }, actor, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite });
+    ctx.acceptance!.publications.push(await insertActivity(ctx.acceptance!.executor, { companyId: issue.companyId, actorType: 'user', actorId: actor.userId, action: `issue.thread_interaction_${kind === 'respond' ? 'answered' : kind === 'cancel' ? 'cancelled' : 'created'}`, entityType: 'issue', entityId: issue.id, details: { interactionId: updated.id, interactionKind: updated.kind, interactionStatus: updated.status } }, ctx.beforeWrite));
     return updated;
   }
   async function afterCommit(ctx: HumanOperationContext, p: Record<string, unknown>, value: unknown) {
@@ -113,7 +114,7 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
   }
   return [
     operation('human_questions.pending.list', listInput, listOutput, { read: async (ctx, p) => {
-      const result = await waitingOnYouService(ctx.db).pendingQuestions(humanCompany(ctx), ctx.req.actor, { offset: p.offset as number, limit: p.limit as number });
+      const result = await waitingOnYouService(ctx.db).pendingQuestions(humanCompany(ctx), ctx.req.actor, { offset: p.offset as number, limit: p.limit as number }, ctx.req);
       return { questions: result.items, total: result.total, nextOffset: (p.offset as number) + result.items.length < result.total ? (p.offset as number) + result.items.length : null };
     } }),
     operation('human_questions.read', reference, detail, { read: async (ctx, p) => project((await visible(ctx, p)).q) }),

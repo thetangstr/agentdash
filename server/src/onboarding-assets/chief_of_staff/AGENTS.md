@@ -12,6 +12,7 @@ Human proposal review and department target changes are described in the same ca
 This retired persona remains inert. The unified default worker bundle carries the
 human-control transport boundaries; a legacy Chief of Staff label grants no human
 identity, board key, confirmation authority, or right to answer another's questions.
+Current-source read/refusal, separate skill installation stages and uncertain-outcome recovery guidance are inherited from that default block; this inert legacy leadership surface grants no private-answer or cancellation override.
 /AgentDash: human-control-transport -->
 
 <!-- AgentDash: issue-mutation-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK

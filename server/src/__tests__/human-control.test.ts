@@ -2,6 +2,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createAgentDashServer } from '../../../packages/mcp-server/src/index.js';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import express from 'express';
 import type { Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -16,7 +19,6 @@ import { workforceService } from '../services/workforce.js';
 import * as workforceModule from '../services/workforce.js';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 
-vi.mock('../services/company-skills.js', () => ({ companySkillService: () => ({ getByKey: async () => null, createLocalSkill: async (companyId: string, input: {slug: string; markdown: string}) => ({ key: `company/${companyId}/${input.slug}`, markdown: input.markdown }) }) }));
 
 describe('human control HTTP contract with current named authority', () => {
   let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
@@ -25,7 +27,11 @@ describe('human control HTTP contract with current named authority', () => {
   let base: string;
   let bridgeAvailable = false;
   let failAfterWake = false;
+  let skillHome: string;
+  const priorHome = process.env.PAPERCLIP_HOME;
   beforeAll(async () => {
+    skillHome = await mkdtemp(path.join(tmpdir(), 'human-control-skills-'));
+    process.env.PAPERCLIP_HOME = skillHome;
     temp = await startEmbeddedPostgresTestDatabase('human-control-'); db = createDb(temp.connectionString);
     const bridge = await import('../routes/human-control.js').catch(() => null);
     bridgeAvailable = Boolean(bridge?.humanControlRoutes);
@@ -37,7 +43,7 @@ describe('human control HTTP contract with current named authority', () => {
     server = app.listen(0, '127.0.0.1'); await new Promise<void>(r => server!.once('listening', r));
     base = `http://127.0.0.1:${(server.address() as {port: number}).port}/api/human-control`;
   });
-  afterAll(async () => { if (server) await new Promise<void>(r => server!.close(() => r())); await temp?.cleanup(); });
+  afterAll(async () => { if (server) await new Promise<void>(r => server!.close(() => r())); await temp?.cleanup(); await rm(skillHome, { recursive: true, force: true }); if (priorHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = priorHome; });
   async function human(role = 'admin') {
     const userId = randomUUID(), token = `pcp_board_${randomUUID()}`;
     await db.insert(authUsers).values({ id: userId, name: 'Named human', email: `${userId}@test.invalid`, createdAt: new Date(), updatedAt: new Date() });

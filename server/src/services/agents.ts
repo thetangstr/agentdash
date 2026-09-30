@@ -65,6 +65,8 @@ export interface RevisionMetadata {
 }
 
 export interface UpdateAgentOptions {
+  // AgentDash: synchronous first-write check for supplied human acceptance.
+  beforeWrite?: () => void;
   recordRevision?: RevisionMetadata;
 }
 
@@ -399,6 +401,7 @@ export function agentService(db: Db) {
     const shouldRecordRevision = Boolean(options?.recordRevision) && hasConfigPatchFields(normalizedPatch);
     const beforeConfig = shouldRecordRevision ? buildConfigSnapshot(existing) : null;
 
+    options?.beforeWrite?.();
     const updated = await connection
       .update(agents)
       .set({ ...normalizedPatch, updatedAt: new Date() })

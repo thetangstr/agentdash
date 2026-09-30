@@ -13,10 +13,11 @@ export function humanActionHandleService(db: Db) {
       .where(and(eq(humanActionHandles.id, id), eq(humanActionHandles.status, 'prepared')));
   }
   return {
-    async prepare(input: Binding & { operationId: string; version: number; payload: Record<string, unknown>; preconditions: Record<string, unknown> }) {
+    async prepare(input: Binding & { operationId: string; version: number; payload: Record<string, unknown>; preconditions: Record<string, unknown> }, beforeWrite?: () => void) {
       const handle = randomBytes(32).toString('base64url');
       const createdAt = new Date();
       const expiresAt = new Date(createdAt.getTime() + 15 * 60 * 1000);
+      beforeWrite?.();
       const [row] = await db.insert(humanActionHandles).values({
         tokenHash: hashBearerToken(handle), actorUserId: input.userId, boardApiKeyId: input.keyId,
         targetKind: input.target.kind, companyId: input.target.kind === 'company' ? input.target.companyId : null,

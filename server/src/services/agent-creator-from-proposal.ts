@@ -80,6 +80,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 // bundle: repair accepted IDs without replaying interview/plan confirmations.
 // AgentDash: this remains the proposal creator's agent-facing prompt surface.
 // AgentDash: human fact-review and target-update guidance remains in the canonical bundle.
+// AgentDash: current-source authority, separate guarded skill stages and unknown-outcome
+// recovery are inherited with human-control-transport; generated hires get no private-owner override.
 // AgentDash: human-control-transport is inherited from the unified default worker,
 // including named-owner questions, private sharing and recovery boundaries.
 // AgentDash: issue-mutation-acceptance (comment and PATCH) recovery/no-blind-retry guidance is

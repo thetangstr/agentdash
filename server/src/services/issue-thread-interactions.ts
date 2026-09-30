@@ -108,7 +108,7 @@ function isEquivalentCreateRequest(
   );
 }
 
-function hydrateInteraction(
+export function hydrateInteraction(
   row: IssueThreadInteractionRow,
 ): IssueThreadInteraction {
   const base = {
@@ -428,6 +428,72 @@ async function expireStaleRequestConfirmationTarget(db: Db | any, args: {
   return hydrateInteraction(updated);
 }
 
+
+// AgentDash: native SELECT-only question pins; factual resolution is not authorization.
+export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
+    issue: { id: string; companyId: string },
+    input: CreateIssueThreadInteraction,
+    actor: InteractionActor,
+  ) {
+    const data = createIssueThreadInteractionSchema.parse(input);
+    if (data.kind === 'ask_user_questions') {
+      const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+      if (!persistedIssue) throw notFound('Issue not found');
+      const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
+      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
+      const accountability = agentAccountabilityService(connection);
+      // The server pins the target, never a body-supplied agent identifier.
+      delete data.payload.workforceAgentId;
+      delete data.payload.workforceEnrollmentId;
+      delete data.payload.workforceTemplateId;
+      delete data.payload.workforceTemplateVersion;
+      if (data.payload.questions.some(q => q.companyFactKey) && !template && !data.payload.replacesInteractionId) throw unprocessable('Assign an enrolled worker before requesting workforce facts');
+      if (template && persistedIssue.assigneeAgentId) {
+        if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
+        if (actor.agentId && actor.agentId !== persistedIssue.assigneeAgentId) throw forbidden('Only the enrolled assignee may request workforce input');
+        if (!actor.agentId && !actor.userId) throw forbidden('An authenticated human or assigned worker is required');
+        if (data.payload.questions.some(q => q.companyFactKey && !template.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Question must reference a known fact key of the assigned workforce template');
+        const owner = await accountability.escalationUserId(issue.companyId, persistedIssue.assigneeAgentId);
+        if (!owner) throw conflict('Assign an active accountable company member before asking workforce questions');
+        if (data.payload.answerOwnerUserId && data.payload.answerOwnerUserId !== owner) throw conflict('Question owner must be the assignee’s current accountable member');
+        data.payload.answerOwnerUserId = owner;
+        data.payload.workforceAgentId = persistedIssue.assigneeAgentId;
+        data.payload.workforceEnrollmentId = enrollment!.id;
+        data.payload.workforceTemplateId = template.id;
+        data.payload.workforceTemplateVersion = template.version;
+      }
+      if (data.payload.answerOwnerUserId) await accountability.assertAccountableMember(issue.companyId, data.payload.answerOwnerUserId);
+      if (data.payload.replacesInteractionId) {
+        const [prior] = await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id)));
+        if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled') throw unprocessable('Replace an explicitly cancelled question on this issue');
+        const previous = askUserQuestionsPayloadSchema.parse(prior.payload);
+        if (previous.workforceAgentId && !data.payload.workforceAgentId) {
+          if (actor.agentId || !actor.userId) throw forbidden('A human must replace a workforce question after reassignment to an unenrolled worker');
+          if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
+          const owner = await accountability.escalationUserId(issue.companyId, previous.workforceAgentId);
+          if (!owner) throw conflict('Assign an active accountable member before replacing this question');
+          await accountability.assertAccountableMember(issue.companyId, owner);
+          data.payload.answerOwnerUserId = owner;
+          data.payload.workforceAgentId = previous.workforceAgentId;
+          data.payload.workforceEnrollmentId = previous.workforceEnrollmentId;
+          data.payload.workforceTemplateId = previous.workforceTemplateId;
+          data.payload.workforceTemplateVersion = previous.workforceTemplateVersion;
+        }
+        const originTemplate = resolveWorkforceTemplate(data.payload.workforceTemplateId ?? '', data.payload.workforceTemplateVersion);
+        if (originTemplate && data.payload.questions.some(q => q.companyFactKey && !originTemplate.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Replacement must use known fact keys of its workforce template');
+        if (previous.questions.some(q => q.required && !data.payload.questions.some(replacement => replacement.id === q.id && replacement.required && replacement.companyFactKey === q.companyFactKey))) throw unprocessable('Replacement must retain every required question and fact key');
+      }
+    }
+
+    return data;
+  }
+
+// AgentDash: actual-request source check and synchronous leaf guard are private and optional.
+export type QuestionWriteGuards = {
+  assertSource?: (executor: Db, issue: { id: string; companyId: string }) => Promise<void>;
+  beforeWrite?: () => void;
+};
+
 export function issueThreadInteractionService(db: Db) {
   async function acceptInteractionWrite<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db, acceptance: ActivityAcceptance) => Promise<T>): Promise<T> {
     if (supplied !== undefined) {
@@ -633,69 +699,20 @@ export function issueThreadInteractionService(db: Db) {
     });
   }
 
-  async function resolveCreateInput(connection: Db,
-    issue: { id: string; companyId: string },
-    input: CreateIssueThreadInteraction,
-    actor: InteractionActor,
-  ) {
-    const data = createIssueThreadInteractionSchema.parse(input);
-    if (data.kind === 'ask_user_questions') {
-      const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for('update');
-      if (!persistedIssue) throw notFound('Issue not found');
-      const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
-      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
-      const accountability = agentAccountabilityService(connection);
-      // The server pins the target, never a body-supplied agent identifier.
-      delete data.payload.workforceAgentId;
-      delete data.payload.workforceEnrollmentId;
-      delete data.payload.workforceTemplateId;
-      delete data.payload.workforceTemplateVersion;
-      if (data.payload.questions.some(q => q.companyFactKey) && !template && !data.payload.replacesInteractionId) throw unprocessable('Assign an enrolled worker before requesting workforce facts');
-      if (template && persistedIssue.assigneeAgentId) {
-        if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
-        if (actor.agentId && actor.agentId !== persistedIssue.assigneeAgentId) throw forbidden('Only the enrolled assignee may request workforce input');
-        if (!actor.agentId && !actor.userId) throw forbidden('An authenticated human or assigned worker is required');
-        if (data.payload.questions.some(q => q.companyFactKey && !template.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Question must reference a known fact key of the assigned workforce template');
-        const owner = await accountability.escalationUserId(issue.companyId, persistedIssue.assigneeAgentId);
-        if (!owner) throw conflict('Assign an active accountable company member before asking workforce questions');
-        if (data.payload.answerOwnerUserId && data.payload.answerOwnerUserId !== owner) throw conflict('Question owner must be the assignee’s current accountable member');
-        data.payload.answerOwnerUserId = owner;
-        data.payload.workforceAgentId = persistedIssue.assigneeAgentId;
-        data.payload.workforceEnrollmentId = enrollment!.id;
-        data.payload.workforceTemplateId = template.id;
-        data.payload.workforceTemplateVersion = template.version;
-      }
-      if (data.payload.answerOwnerUserId) await accountability.assertAccountableMember(issue.companyId, data.payload.answerOwnerUserId);
-      if (data.payload.replacesInteractionId) {
-        const [prior] = await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id)));
-        if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled') throw unprocessable('Replace an explicitly cancelled question on this issue');
-        const previous = askUserQuestionsPayloadSchema.parse(prior.payload);
-        if (previous.workforceAgentId && !data.payload.workforceAgentId) {
-          if (actor.agentId || !actor.userId) throw forbidden('A human must replace a workforce question after reassignment to an unenrolled worker');
-          if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
-          const owner = await accountability.escalationUserId(issue.companyId, previous.workforceAgentId);
-          if (!owner) throw conflict('Assign an active accountable member before replacing this question');
-          await accountability.assertAccountableMember(issue.companyId, owner);
-          data.payload.answerOwnerUserId = owner;
-          data.payload.workforceAgentId = previous.workforceAgentId;
-          data.payload.workforceEnrollmentId = previous.workforceEnrollmentId;
-          data.payload.workforceTemplateId = previous.workforceTemplateId;
-          data.payload.workforceTemplateVersion = previous.workforceTemplateVersion;
-        }
-        const originTemplate = resolveWorkforceTemplate(data.payload.workforceTemplateId ?? '', data.payload.workforceTemplateVersion);
-        if (originTemplate && data.payload.questions.some(q => q.companyFactKey && !originTemplate.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Replacement must use known fact keys of its workforce template');
-        if (previous.questions.some(q => q.required && !data.payload.questions.some(replacement => replacement.id === q.id && replacement.required && replacement.companyFactKey === q.companyFactKey))) throw unprocessable('Replacement must retain every required question and fact key');
-      }
+  async function resolveCreateInput(connection: Db, issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor) {
+    if (input.kind === 'ask_user_questions') {
+      await connection.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for('update');
     }
-
-    return data;
+    return resolveQuestionCreateInput(connection, issue, input, actor);
   }
 
   async function createInteraction(connection: Db,
     issue: { id: string; companyId: string },
     input: CreateIssueThreadInteraction,
     actor: InteractionActor,
+    guards?: QuestionWriteGuards,
   ) {
+    await guards?.assertSource?.(connection, issue);
     const data = await resolveCreateInput(connection, issue, input, actor);
     if (data.idempotencyKey) {
       const existing = await getIdempotentInteraction({
@@ -751,6 +768,7 @@ export function issueThreadInteractionService(db: Db) {
 
     let created: IssueThreadInteractionRow;
     try {
+      guards?.beforeWrite?.();
       [created] = await connection
         .insert(issueThreadInteractions)
         .values({
@@ -798,6 +816,7 @@ export function issueThreadInteractionService(db: Db) {
     actor: InteractionActor,
     validationOnly = false,
     acceptance?: ActivityAcceptance,
+    guards?: QuestionWriteGuards,
   ) {
     input = respondIssueThreadInteractionSchema.parse(input);
     const current = await connection
@@ -818,13 +837,14 @@ export function issueThreadInteractionService(db: Db) {
     }
 
     const interaction = hydrateInteraction(current) as AskUserQuestionsInteraction;
+    await guards?.assertSource?.(connection, issue);
     if (interaction.payload.answerOwnerUserId) {
       if (actor.agentId || actor.userId !== interaction.payload.answerOwnerUserId) throw forbidden('Only the named human answer owner may respond');
       const accountability = agentAccountabilityService(connection);
       await accountability.assertAccountableMember(issue.companyId, actor.userId!);
       const [member] = await connection.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, issue.companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, actor.userId!), eq(companyMemberships.status, 'active')));
       const [job] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
-      await assertProjectIdVisible(connection, { actor: { type: 'board', userId: actor.userId, memberships: member ? [member] : [] } } as unknown as Request, issue.companyId, job?.projectId);
+      if (!guards?.assertSource) await assertProjectIdVisible(connection, { actor: { type: 'board', userId: actor.userId, memberships: member ? [member] : [] } } as unknown as Request, issue.companyId, job?.projectId);
     }
     const normalizedAnswers = normalizeQuestionAnswers({
       questions: interaction.payload.questions,
@@ -842,10 +862,11 @@ export function issueThreadInteractionService(db: Db) {
       const facts = interaction.payload.questions.filter(q => q.companyFactKey).map(q => ({ key: q.companyFactKey!, value: normalizedAnswers.find(a => a.questionId === q.id)?.text ?? '', sourceReference: `interaction:${interaction.id}/question:${q.id}` }));
       if (!template || !facts.length || facts.some(f => !template.requiredFactKeys.includes(f.key) || !f.value.trim())) throw unprocessable('Only answered template fact keys may be shared');
       const prior = await svc.getBrief(issue.companyId);
-      publish = () => svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId! }, acceptance);
+      publish = () => svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId! }, acceptance, guards?.beforeWrite);
     }
     if (validationOnly) return interaction;
     if (publish) await publish();
+    guards?.beforeWrite?.();
     const [updated] = await connection
       .update(issueThreadInteractions)
       .set({
@@ -879,7 +900,7 @@ export function issueThreadInteractionService(db: Db) {
     // AgentDash: read-only preflight uses the canonical validation and owner
     // resolution. No answer, company fact or interaction row is written.
     previewCreate: (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor) => resolveCreateInput(db, issue, input, actor),
-    previewAnswer: (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor) => answerQuestions(db, issue, interactionId, input, actor, true),
+    previewAnswer: (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor, guards?: QuestionWriteGuards) => answerQuestions(db, issue, interactionId, input, actor, true, undefined, guards),
     listForIssue: async (issueId: string) => {
       const rows = await db
         .select()
@@ -900,12 +921,12 @@ export function issueThreadInteractionService(db: Db) {
       return row ? hydrateInteraction(row) : null;
     },
 
-    create: async (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance) => {
+    create: async (issue: { id: string; companyId: string }, input: CreateIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance, guards?: QuestionWriteGuards) => {
       const participating = input.kind === 'ask_user_questions' || input.kind === 'request_confirmation';
       return participating || acceptance !== undefined ? acceptInteractionWrite(acceptance, async connection => {
         await lockInteractionIssue(connection, issue);
-        return createInteraction(connection, issue, input, actor);
-      }) : createInteraction(db, issue, input, actor);
+        return createInteraction(connection, issue, input, actor, guards);
+      }) : createInteraction(db, issue, input, actor, guards);
     },
 
     acceptInteraction: async (
@@ -1271,12 +1292,12 @@ export function issueThreadInteractionService(db: Db) {
       });
     },
 
-    answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance) => acceptInteractionWrite(acceptance, async (tx, accepted) => {
+    answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance, guards?: QuestionWriteGuards) => acceptInteractionWrite(acceptance, async (tx, accepted) => {
       const connection = tx;
       // Lock company before issue, matching brief publication and job creation.
       await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for('update');
       await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for('update');
-      return answerQuestions(connection, issue, interactionId, input, actor, false, accepted);
+      return answerQuestions(connection, issue, interactionId, input, actor, false, accepted, guards);
     }),
 
     cancelQuestions: async (
@@ -1285,6 +1306,7 @@ export function issueThreadInteractionService(db: Db) {
       input: CancelIssueThreadInteraction,
       actor: InteractionActor,
       acceptance?: ActivityAcceptance,
+      guards?: QuestionWriteGuards,
     ) => acceptInteractionWrite(acceptance, async (connection) => {
       await lockInteractionIssue(connection, issue);
       const data = cancelIssueThreadInteractionSchema.parse(input);
@@ -1305,6 +1327,8 @@ export function issueThreadInteractionService(db: Db) {
         throw conflict("Interaction has already been resolved");
       }
 
+      await guards?.assertSource?.(connection, issue);
+      guards?.beforeWrite?.();
       const reason = data.reason?.trim() || null;
       const [updated] = await connection
         .update(issueThreadInteractions)

@@ -167,6 +167,12 @@ function assertIssueOverrideHostExecutionAllowed(req: Request, storedOverrides: 
   });
 }
 
+// AgentDash: finite native question entry points bind their actual Request.
+import { foundationAuthority } from '../services/human-control/authority.js';
+import { insertActivity, publishActivity, type ActivityPublication } from '../services/activity-log.js';
+import type { QuestionWriteGuards } from '../services/issue-thread-interactions.js';
+import type { ActivityAcceptance } from '../services/workforce.js';
+
 export function issueRoutes(
   db: Db,
   storage: StorageService,
@@ -2254,7 +2260,34 @@ export function issueRoutes(
     res.json(comments);
   });
 
+  async function protectedQuestions<T>(req: Request, authority: ReturnType<typeof foundationAuthority>, companyId: string, operationId: string, input: Record<string, unknown>,
+    work: (executor: Db, acceptance: ActivityAcceptance, guards: QuestionWriteGuards, visible: (id: string, issueId: string) => Promise<unknown>) => Promise<T>, mutation = false) {
+    const publications: ActivityPublication[] = [];
+    let callbackCompleted = false;
+    let value: T;
+    try {
+      value = await db.transaction(async tx => {
+        const executor = tx as unknown as Db;
+        const guard = await authority.stage(executor, { companyId, operationId, input, native: true });
+        assertBoard(req); assertCompanyAccess(req, companyId);
+        await guard.seal();
+        const value = await work(executor, { executor, publications }, { assertSource: guard.assertSource, beforeWrite: guard.checkTime }, guard.visibleQuestion);
+        if (!mutation) await guard.seal();
+        guard.checkTime(); callbackCompleted = true;
+        return value;
+      });
+    } catch (error) {
+      if (mutation && callbackCompleted) throw conflict('Question persistence is uncertain; inspect current state before retrying', { persistenceOutcome: 'unknown' });
+      throw error;
+    }
+    for (const publication of publications) publishActivity(publication);
+    return value;
+  }
+  async function currentQuestion(req: Request, authority: ReturnType<typeof foundationAuthority>, issue: { id: string; companyId: string }, interactionId: string) {
+    return protectedQuestions(req, authority, issue.companyId, 'human_questions.read', { issueId: issue.id, interactionId }, executor => issueThreadInteractionService(executor).getById(interactionId));
+  }
   router.get("/issues/:id/interactions", async (req, res) => {
+    const authority = req.actor.type === 'board' ? foundationAuthority(req) : null;
     const id = req.params.id as string;
     const issue = await svc.getById(id);
     if (!issue) {
@@ -2262,11 +2295,20 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    const interactions = await issueThreadInteractionService(db).listForIssue(id);
+    const interactions = authority ? await protectedQuestions(req, authority, issue.companyId, 'native.question.list', { issueId: id }, async (executor, _acceptance, _guards, visible) => {
+      const rows = await issueThreadInteractionService(executor).listForIssue(id), allowed = [];
+      for (const value of rows) {
+        if (value.kind !== 'ask_user_questions') { allowed.push(value); continue; }
+        try { await visible(value.id, id); allowed.push(value); }
+        catch (error) { if ((error as {status?: number}).status !== 404) throw error; }
+      }
+      return allowed;
+    }) : await issueThreadInteractionService(db).listForIssue(id);
     res.json(interactions);
   });
 
   router.post("/issues/:id/interactions", validate(createIssueThreadInteractionSchema), async (req, res) => {
+    const authority = req.actor.type === 'board' && req.body.kind === 'ask_user_questions' ? foundationAuthority(req) : null;
     const id = req.params.id as string;
     const issue = await svc.getById(id);
     if (!issue) {
@@ -2284,6 +2326,18 @@ export function issueRoutes(
     const agentSourceRunId = req.actor.type === "agent" ? requireAgentRunId(req, res) : null;
     if (req.actor.type === "agent" && !agentSourceRunId) return;
 
+    if (authority) {
+      const input = { ...req.body, sourceRunId: req.body.sourceRunId ?? null };
+      const interaction = await protectedQuestions(req, authority, issue.companyId, 'native.question.create', { issueId: id, body: input }, async (executor, acceptance, guards) => {
+        const value = await issueThreadInteractionService(executor).create(issue, input, { userId: actor.actorId }, acceptance, guards);
+        acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
+          action: 'issue.thread_interaction_created', entityType: 'issue', entityId: issue.id,
+          details: { interactionId: value.id, interactionKind: value.kind, interactionStatus: value.status, continuationPolicy: value.continuationPolicy } }, guards.beforeWrite));
+        return value;
+      }, true);
+      res.status(201).json(await currentQuestion(req, authority, issue, interaction.id));
+      return;
+    }
     const interaction = await issueThreadInteractionService(db).create(issue, {
       ...req.body,
       sourceRunId: req.actor.type === "agent" ? agentSourceRunId : req.body.sourceRunId ?? null,
@@ -2469,6 +2523,7 @@ export function issueRoutes(
     "/issues/:id/interactions/:interactionId/respond",
     validate(respondIssueThreadInteractionSchema),
     async (req, res) => {
+      const authority = foundationAuthority(req);
       const id = req.params.id as string;
       const interactionId = req.params.interactionId as string;
       const issue = await svc.getById(id);
@@ -2480,30 +2535,13 @@ export function issueRoutes(
       assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await issueThreadInteractionService(db).answerQuestions(issue, interactionId, req.body, {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      });
-
-      await logActivity(db, {
-        companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.thread_interaction_answered",
-        entityType: "issue",
-        entityId: issue.id,
-        details: {
-          interactionId: interaction.id,
-          interactionKind: interaction.kind,
-          interactionStatus: interaction.status,
-          answeredQuestionCount:
-            interaction.kind === "ask_user_questions"
-              ? (interaction.result?.answers?.length ?? 0)
-              : 0,
-        },
-      });
+      const interaction = await protectedQuestions(req, authority, issue.companyId, 'human_questions.respond', { issueId: id, interactionId }, async (executor, acceptance, guards) => {
+        const value = await issueThreadInteractionService(executor).answerQuestions(issue, interactionId, req.body, { agentId: actor.agentId, userId: actor.actorType === 'user' ? actor.actorId : null }, acceptance, guards);
+        acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
+          action: 'issue.thread_interaction_answered', entityType: 'issue', entityId: issue.id,
+          details: { interactionId: value.id, interactionKind: value.kind, interactionStatus: value.status, answeredQuestionCount: value.kind === 'ask_user_questions' ? value.result?.answers?.length ?? 0 : 0 } }, guards.beforeWrite));
+        return value;
+      }, true);
 
       queueResolvedInteractionContinuationWakeup({
         heartbeat,
@@ -2513,7 +2551,7 @@ export function issueRoutes(
         source: "issue.interaction.respond",
       });
 
-      res.json(interaction);
+      res.json(await currentQuestion(req, authority, issue, interaction.id));
     },
   );
 
@@ -2521,6 +2559,7 @@ export function issueRoutes(
     "/issues/:id/interactions/:interactionId/cancel",
     validate(cancelIssueThreadInteractionSchema),
     async (req, res) => {
+      const authority = foundationAuthority(req);
       const id = req.params.id as string;
       const interactionId = req.params.interactionId as string;
       const issue = await svc.getById(id);
@@ -2532,30 +2571,13 @@ export function issueRoutes(
       assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await issueThreadInteractionService(db).cancelQuestions(issue, interactionId, req.body, {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      });
-
-      await logActivity(db, {
-        companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.thread_interaction_cancelled",
-        entityType: "issue",
-        entityId: issue.id,
-        details: {
-          interactionId: interaction.id,
-          interactionKind: interaction.kind,
-          interactionStatus: interaction.status,
-          cancellationReason:
-            interaction.kind === "ask_user_questions"
-              ? (interaction.result?.cancellationReason ?? null)
-              : null,
-        },
-      });
+      const interaction = await protectedQuestions(req, authority, issue.companyId, 'human_questions.cancel', { issueId: id, interactionId }, async (executor, acceptance, guards) => {
+        const value = await issueThreadInteractionService(executor).cancelQuestions(issue, interactionId, req.body, { agentId: actor.agentId, userId: actor.actorType === 'user' ? actor.actorId : null }, acceptance, guards);
+        acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
+          action: 'issue.thread_interaction_cancelled', entityType: 'issue', entityId: issue.id,
+          details: { interactionId: value.id, interactionKind: value.kind, interactionStatus: value.status, cancellationReason: value.kind === 'ask_user_questions' ? value.result?.cancellationReason ?? null : null } }, guards.beforeWrite));
+        return value;
+      }, true);
 
       queueResolvedInteractionContinuationWakeup({
         heartbeat,
@@ -2565,7 +2587,7 @@ export function issueRoutes(
         source: "issue.interaction.cancel",
       });
 
-      res.json(interaction);
+      res.json(await currentQuestion(req, authority, issue, interaction.id));
     },
   );
 

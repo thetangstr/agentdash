@@ -56,12 +56,12 @@ export function waitingOnYouService(db: Db) {
   const approvals = approvalService(db);
   const issueApprovals = issueApprovalService(db);
 
-  async function pendingQuestions(companyId: string, actor: WaitingOnYouActor, page: { offset?: number; limit?: number } = {}): Promise<{ items: WaitingOnYouQuestion[]; total: number }> {
+  async function pendingQuestions(companyId: string, actor: WaitingOnYouActor, page: { offset?: number; limit?: number } = {}, actualRequest?: Request): Promise<{ items: WaitingOnYouQuestion[]; total: number }> {
     // A memberless local operator has no named answer identity. It does not
     // inherit someone else's questions or become an arbitrary answer owner.
     if (!actor.userId) return { items: [] as WaitingOnYouQuestion[], total: 0 };
     const ownerId = sql<string>`${issueThreadInteractions.payload} ->> 'answerOwnerUserId'`;
-    const visibility = projectScopedVisibilityCondition({ actor: { ...actor, type: 'board' } } as Request, companyId, issues.projectId);
+    const visibility = projectScopedVisibilityCondition(actualRequest ?? { actor: { ...actor, type: 'board' } } as Request, companyId, issues.projectId);
     const rows = await db.select({
       interactionId: issueThreadInteractions.id, issueId: issues.id, identifier: issues.identifier,
       issueTitle: issues.title, title: issueThreadInteractions.title, payload: issueThreadInteractions.payload,
@@ -74,7 +74,7 @@ export function waitingOnYouService(db: Db) {
       .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id)).limit(page.limit ?? 50).offset(page.offset ?? 0);
     // An exhausted page still reports the full authorized count.
     const total = rows[0] ? Number(rows[0].total) : (page.offset ?? 0) > 0
-      ? (await pendingQuestions(companyId, actor, { offset: 0, limit: 1 })).total
+      ? (await pendingQuestions(companyId, actor, { offset: 0, limit: 1 }, actualRequest)).total
       : 0;
     return {
       total,
