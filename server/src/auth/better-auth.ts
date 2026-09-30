@@ -28,6 +28,8 @@ import {
   claimCompanyInviteSignup,
 } from "../services/invites.js";
 import { logger } from "../middleware/logger.js";
+import { configuredPublicBaseUrl, requestOrigin } from "../lib/public-base-url.js";
+import { normalizeOrigin } from "../lib/declared-origins.js";
 
 export type BetterAuthSessionUser = {
   id: string;
@@ -53,11 +55,21 @@ export function deriveAuthCookiePrefix(instanceId = resolvePaperclipInstanceId()
   return `paperclip-${scopedInstanceId}`;
 }
 
-export function buildBetterAuthAdvancedOptions(input: { disableSecureCookies: boolean; edgeSecretSet?: boolean }) {
+export function buildBetterAuthAdvancedOptions(input: {
+  disableSecureCookies: boolean;
+  /**
+   * AgentDash (#547): an explicit per-instance choice, used by the
+   * scheme-aware pair in declared mode. Wins over `disableSecureCookies`.
+   */
+  useSecureCookies?: boolean;
+  edgeSecretSet?: boolean;
+}) {
   const edgeSecretSet = input.edgeSecretSet ?? configuredEdgeSecret() !== null;
   return {
     cookiePrefix: deriveAuthCookiePrefix(),
-    ...(input.disableSecureCookies ? { useSecureCookies: false } : {}),
+    ...(input.useSecureCookies !== undefined
+      ? { useSecureCookies: input.useSecureCookies }
+      : input.disableSecureCookies ? { useSecureCookies: false } : {}),
     // AgentDash (#807 review): behind the edge router every request's
     // X-Forwarded-For is the router; Better Auth's limiter keys on the
     // visitor address the router sends (validated by the edge gate).
@@ -143,6 +155,50 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
   return Array.from(trustedOrigins);
 }
 
+/**
+ * AgentDash (#547): the origin list handed to Better Auth.
+ *
+ * Legacy (no PAPERCLIP_CANONICAL_ORIGIN / PAPERCLIP_ORIGINS): exactly what
+ * startup computed before — the hostname cross-product from
+ * `deriveAuthTrustedOrigins` plus `BETTER_AUTH_TRUSTED_ORIGINS` verbatim.
+ *
+ * Declared: the declared set and nothing else. The deprecated variables are
+ * already folded into it by `resolveOriginSettings`; the auth base URL is
+ * re-added here because startup may have moved its port (`detectPort`), and
+ * wildcard patterns from `BETTER_AUTH_TRUSTED_ORIGINS` pass through as-is.
+ */
+export function resolveAuthTrustedOrigins(
+  config: Config,
+  opts?: { listenPort?: number; env?: Record<string, string | undefined> },
+): { origins: string[]; mode: "declared" | "legacy"; source: Record<string, number> } {
+  const env = opts?.env ?? process.env;
+  if (config.declaredOrigins) {
+    const baseUrl = config.authBaseUrlMode === "explicit" ? config.authPublicBaseUrl : undefined;
+    const baseOrigin = normalizeOrigin(baseUrl);
+    const patterns = config.trustedOriginPatterns ?? [];
+    const origins = Array.from(new Set([
+      ...config.declaredOrigins,
+      ...(baseOrigin ? [baseOrigin] : []),
+      ...patterns,
+    ]));
+    return {
+      origins,
+      mode: "declared",
+      source: { declared: config.declaredOrigins.length, patterns: patterns.length },
+    };
+  }
+  const derived = deriveAuthTrustedOrigins(config, { listenPort: opts?.listenPort });
+  const fromEnv = (env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  return {
+    origins: Array.from(new Set([...derived, ...fromEnv])),
+    mode: "legacy",
+    source: { derived: derived.length, env: fromEnv.length },
+  };
+}
+
 // AgentDash (MCP-native first login): one-shot capture registry for the
 // password-reset URL. capturePasswordResetUrl() registers a resolver here,
 // then calls auth.api.requestPasswordReset; the sendResetPassword callback
@@ -217,6 +273,12 @@ export interface CreateBetterAuthInstanceOptions {
    * has to retry workspace bootstrap manually.
    */
   onUserCreated?: (user: { id: string; email: string; name: string | null }) => Promise<void>;
+  /**
+   * AgentDash (#547): force Better Auth's `useSecureCookies` for this
+   * instance. Left undefined, the legacy rule applies (off when the public
+   * URL is http://). Set by `createSchemeAwareBetterAuth` in declared mode.
+   */
+  useSecureCookies?: boolean;
 }
 
 const DEFAULT_RESET_TOKEN_TTL_SECONDS = 3600; // Better Auth's own default
@@ -285,7 +347,12 @@ export function createBetterAuthInstance(
       "For local development, set BETTER_AUTH_SECRET=paperclip-dev-secret in your .env file.",
     );
   }
-  const publicUrl = process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl;
+  // Emails (reset, welcome) leave the request, so they name the canonical
+  // address. AgentDash (#547): in declared mode that is the declared
+  // canonical; otherwise the previous rule, unchanged.
+  const publicUrl = config.declaredOrigins
+    ? (configuredPublicBaseUrl() ?? baseUrl)
+    : (process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl);
   const isHttpOnly = publicUrl ? publicUrl.startsWith("http://") : false;
   const socialProviders = buildSocialProviders();
   const resetTokenTtlSeconds = resolveResetTokenTtlSeconds();
@@ -409,7 +476,10 @@ export function createBetterAuthInstance(
         },
       },
     },
-    advanced: buildBetterAuthAdvancedOptions({ disableSecureCookies: isHttpOnly }),
+    advanced: buildBetterAuthAdvancedOptions({
+      disableSecureCookies: isHttpOnly,
+      useSecureCookies: opts?.useSecureCookies,
+    }),
     // AgentDash: SSO — enable Google/Microsoft only when their credentials are
     // present. Omitting `socialProviders` entirely (rather than passing an empty
     // object) keeps Better Auth from advertising callback routes for providers
@@ -605,6 +675,151 @@ function derivePublicAppUrl(publicUrl: string | undefined): string | null {
   if (!publicUrl) return null;
   const trimmed = publicUrl.trim().replace(/\/+$/, "");
   return trimmed.replace(/\/api$/, "");
+}
+
+export type RequestScheme = "http" | "https";
+
+/**
+ * AgentDash (#547): Better Auth instances selected by the scheme a request
+ * arrived on.
+ *
+ * Why two instances. Better Auth 1.6.x fixes cookie security once, when the
+ * auth context is created (`getCookies(options)` in `createAuthContext`):
+ * `advanced.useSecureCookies` is a boolean, not a per-request callback, and
+ * the only per-request cookie path (dynamic `baseURL` + cross-subdomain
+ * cookies) would also turn on cross-subdomain cookies and replace the static
+ * trusted-origin list with host patterns. So the choice is made by picking an
+ * instance per request instead:
+ *
+ * - https requests go to an instance with `useSecureCookies: true` —
+ *   `Secure` cookies named `__Secure-<prefix>.session_token`;
+ * - http requests go to one with `useSecureCookies: false`.
+ *
+ * Before this, one flag derived from the canonical URL's scheme applied to
+ * every door: an http:// canonical turned `Secure` off on the TLS doors too,
+ * and an https:// canonical set `Secure` on cookies the http doors then could
+ * not keep. The distinct `__Secure-` name also matters on a host served on
+ * both schemes (http://host:3102 and https://host:3112): with one name, the
+ * browser refuses to let the http door overwrite the https door's `Secure`
+ * cookie and sign-in there silently fails. With two names each door keeps its
+ * own session, and the https instance never reads a cookie an http page set.
+ *
+ * The scheme is `req.protocol`, which honours X-Forwarded-Proto only because
+ * `app.ts` sets `trust proxy` to exactly one hop in authenticated mode.
+ *
+ * Trust assumption: the reverse proxy in front of the app (e.g. Caddy)
+ * sets X-Forwarded-Proto to the scheme the BROWSER used, overwriting any
+ * client-supplied value. Two consequences:
+ *
+ * - Spoofing is harmless. A client talking to the app directly can claim
+ *   https, but that only changes which of its own cookies the server reads:
+ *   browsers never send a `Secure` cookie over http, a cross-site page cannot
+ *   set the header without a CORS preflight, and both instances enforce the
+ *   same trusted-origin list.
+ * - Misreporting is not. If a hop reports `http` for a TLS door (e.g. a TLS
+ *   terminator in front of Caddy, so Caddy itself sees http), every user of
+ *   that door lands on the insecure instance and gets non-Secure cookies —
+ *   silently. `warnOnTlsDoorServedAsHttp` logs once per origin when a request
+ *   names a host:port that is declared only as https but arrives as http.
+ *   Boot cannot detect this: the proxy's behaviour is only visible per request.
+ *
+ * Both instances share the database, secret, hooks, base URL and trusted
+ * origins; Better Auth's in-memory rate limiter is module-level, so the two
+ * do not get separate budgets.
+ *
+ * In legacy mode (no declared origins) there is exactly one instance and
+ * behaviour is unchanged.
+ */
+export interface SchemeAwareBetterAuth {
+  mode: "declared" | "legacy";
+  /** Declared mode: the declared origins, for the TLS-door sanity check. */
+  declaredOrigins?: string[];
+  /** The instance server-side calls use (sign-up, reset capture). */
+  primary: BetterAuthInstance;
+  forScheme(scheme: RequestScheme): BetterAuthInstance;
+}
+
+export function createSchemeAwareBetterAuth(
+  db: Db,
+  config: Config,
+  trustedOrigins: string[],
+  opts?: Omit<CreateBetterAuthInstanceOptions, "useSecureCookies">,
+): SchemeAwareBetterAuth {
+  if (!config.declaredOrigins) {
+    const auth = createBetterAuthInstance(db, config, trustedOrigins, opts);
+    return { mode: "legacy", primary: auth, forScheme: () => auth };
+  }
+  const secure = createBetterAuthInstance(db, config, trustedOrigins, { ...opts, useSecureCookies: true });
+  const insecure = createBetterAuthInstance(db, config, trustedOrigins, { ...opts, useSecureCookies: false });
+  const canonical = config.canonicalOrigin ?? config.authPublicBaseUrl ?? "";
+  return {
+    mode: "declared",
+    declaredOrigins: config.declaredOrigins,
+    primary: canonical.startsWith("https://") ? secure : insecure,
+    forScheme: (scheme) => (scheme === "https" ? secure : insecure),
+  };
+}
+
+export function requestSchemeFromExpress(req: Pick<Request, "protocol">): RequestScheme {
+  return req.protocol === "https" ? "https" : "http";
+}
+
+/**
+ * The scheme for a request known only by its headers (the live-events
+ * WebSocket upgrade). Mirrors Express's one-hop `trust proxy`: the first
+ * X-Forwarded-Proto value, else http — this server never terminates TLS
+ * itself.
+ */
+export function requestSchemeFromHeaders(headers: Headers): RequestScheme {
+  const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  return proto === "https" ? "https" : "http";
+}
+
+/**
+ * The declared https origin an http request claims to be addressed to, when
+ * the same host:port is not also declared as http — i.e. a TLS door the
+ * proxy is reporting as plaintext (or an undeclared http door on a TLS name).
+ * Null when nothing is wrong.
+ */
+export function tlsDoorServedAsHttp(
+  declaredOrigins: readonly string[],
+  req: Pick<Request, "header" | "protocol">,
+): string | null {
+  if (requestSchemeFromExpress(req) !== "http") return null;
+  const requested = requestOrigin(req);
+  if (!requested || declaredOrigins.includes(requested)) return null;
+  const host = requested.slice("http://".length);
+  const asTls = normalizeOrigin(`https://${host}`);
+  return asTls && declaredOrigins.includes(asTls) ? asTls : null;
+}
+
+const warnedTlsDoors = new Set<string>();
+
+export function warnOnTlsDoorServedAsHttp(
+  declaredOrigins: readonly string[],
+  req: Pick<Request, "header" | "protocol">,
+): void {
+  const door = tlsDoorServedAsHttp(declaredOrigins, req);
+  if (!door || warnedTlsDoors.has(door)) return;
+  warnedTlsDoors.add(door);
+  logger.warn(
+    { door, xForwardedProto: req.header("x-forwarded-proto") ?? null },
+    "[origins] A request addressed to the TLS door arrived as http. Either the proxy is not reporting "
+      + "X-Forwarded-Proto: https for it (its users get non-Secure session cookies), or someone reached an "
+      + "undeclared plaintext door on that name. Check the proxy's X-Forwarded-Proto. Logged once per door.",
+  );
+}
+
+export function createSchemeAwareBetterAuthHandler(pair: SchemeAwareBetterAuth): RequestHandler {
+  if (pair.mode === "legacy") return createBetterAuthHandler(pair.primary);
+  const secureHandler = createBetterAuthHandler(pair.forScheme("https"));
+  const insecureHandler = createBetterAuthHandler(pair.forScheme("http"));
+  const declared = pair.declaredOrigins ?? [];
+  return (req, res, next) => {
+    const scheme = requestSchemeFromExpress(req);
+    if (scheme === "http") warnOnTlsDoorServedAsHttp(declared, req);
+    return (scheme === "https" ? secureHandler : insecureHandler)(req, res, next);
+  };
 }
 
 export function createBetterAuthHandler(auth: BetterAuthInstance): RequestHandler {

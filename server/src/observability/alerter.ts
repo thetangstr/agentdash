@@ -19,6 +19,7 @@
 
 import type { Signal, SignalKind } from "./signals.js";
 import { subscribeToSignals } from "./signals.js";
+import { normalizeOrigin } from "../lib/declared-origins.js";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const SEND_TIMEOUT_MS = 10_000;
@@ -43,7 +44,9 @@ export function readAlerterConfigFromEnv(env: NodeJS.ProcessEnv = process.env): 
     apiKey: env.AGENTDASH_ALERT_RESEND_API_KEY?.trim() || null,
     from: env.AGENTDASH_ALERT_FROM?.trim() || null,
     to,
-    publicBaseUrl: env.PAPERCLIP_AUTH_PUBLIC_BASE_URL?.trim() || null,
+    // AgentDash (#547): an alert email is read away from any request, so it
+    // names the declared canonical origin when there is one.
+    publicBaseUrl: normalizeOrigin(env.PAPERCLIP_CANONICAL_ORIGIN) ?? (env.PAPERCLIP_AUTH_PUBLIC_BASE_URL?.trim() || null),
   };
 }
 

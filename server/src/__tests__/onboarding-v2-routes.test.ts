@@ -766,6 +766,94 @@ describe("POST /api/onboarding/invites", () => {
     );
   });
 
+  // AgentDash (#547): without declared origins the email keeps the
+  // inviter's (validated) door — PAPERCLIP_PUBLIC_URL may be a plaintext LAN
+  // address, and an invitee must not be moved off a TLS door onto it.
+  it("without declared origins, emails the inviter's trusted TLS door, not the plaintext public URL", async () => {
+    const savedTrusted = process.env.BETTER_AUTH_TRUSTED_ORIGINS;
+    process.env.PAPERCLIP_PUBLIC_URL = "http://10.0.0.20:3102";
+    process.env.BETTER_AUTH_TRUSTED_ORIGINS = "https://office-mini.tail0000.ts.net:3112";
+    try {
+      mockInvites.createCompanyInvite.mockResolvedValue({
+        id: "invite-1",
+        token: "pcp_invite_tok1",
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
+      mockSendEmail.mockResolvedValue({ status: "sent" });
+      const res = await request(buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }))
+        .post("/api/onboarding/invites")
+        .set("x-forwarded-proto", "https")
+        .set("host", "office-mini.tail0000.ts.net:3112")
+        .send({ conversationId: "conv1", companyId: "c1", emails: ["bob@acme.com"] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.invites[0].inviteUrl).toBe("https://office-mini.tail0000.ts.net:3112/invite/pcp_invite_tok1");
+      const email = mockSendEmail.mock.calls[0][0];
+      expect(email.text).toContain("https://office-mini.tail0000.ts.net:3112/invite/pcp_invite_tok1");
+      expect(email.text).not.toContain("10.0.0.20");
+    } finally {
+      if (savedTrusted === undefined) delete process.env.BETTER_AUTH_TRUSTED_ORIGINS;
+      else process.env.BETTER_AUTH_TRUSTED_ORIGINS = savedTrusted;
+    }
+  });
+
+  // AgentDash (#547): the response URL is read by the inviter (echo a
+  // trusted door); the email is read by the invitee elsewhere (canonical).
+  describe("declared origins", () => {
+    const ORIGIN_KEYS = ["PAPERCLIP_CANONICAL_ORIGIN", "PAPERCLIP_ORIGINS"] as const;
+    const savedOrigins = new Map<string, string | undefined>();
+    beforeEach(() => {
+      for (const key of ORIGIN_KEYS) {
+        savedOrigins.set(key, process.env[key]);
+        delete process.env[key];
+      }
+      process.env.PAPERCLIP_CANONICAL_ORIGIN = "https://agents.example.test";
+      process.env.PAPERCLIP_ORIGINS = "https://agents.example.test,http://office.example.test:3102";
+      mockInvites.createCompanyInvite.mockResolvedValue({
+        id: "invite-1",
+        token: "pcp_invite_tok1",
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
+      mockSendEmail.mockResolvedValue({ status: "sent" });
+    });
+    afterEach(() => {
+      for (const key of ORIGIN_KEYS) {
+        const value = savedOrigins.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+    const actor = { type: "board", userId: "u1", source: "session", companyIds: ["c1"] };
+
+    it("echoes the inviter's declared door in the response but emails the canonical link", async () => {
+      const res = await request(buildApp(actor))
+        .post("/api/onboarding/invites")
+        .set("host", "office.example.test:3102")
+        .send({ conversationId: "conv1", companyId: "c1", emails: ["bob@acme.com"] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.invites[0].inviteUrl).toBe("http://office.example.test:3102/invite/pcp_invite_tok1");
+      expect(mockSendEmail).toHaveBeenCalledTimes(1);
+      const email = mockSendEmail.mock.calls[0][0];
+      expect(email.text).toContain("https://agents.example.test/invite/pcp_invite_tok1");
+      expect(email.text).not.toContain("office.example.test");
+    });
+
+    it("answers a spoofed Host with the canonical origin in both the response and the email", async () => {
+      const res = await request(buildApp(actor))
+        .post("/api/onboarding/invites")
+        .set("x-forwarded-proto", "https")
+        .set("x-forwarded-host", "evil.example.test")
+        .send({ conversationId: "conv1", companyId: "c1", emails: ["bob@acme.com"] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.invites[0].inviteUrl).toBe("https://agents.example.test/invite/pcp_invite_tok1");
+      const email = mockSendEmail.mock.calls[0][0];
+      expect(email.text).toContain("https://agents.example.test/invite/pcp_invite_tok1");
+      expect(email.text).not.toContain("evil.example.test");
+    });
+  });
+
   it("allows the first teammate invite on a Free workspace with no active humans", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
     mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });

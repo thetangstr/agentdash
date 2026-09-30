@@ -239,6 +239,23 @@ vi.mock("../auth/better-auth.js", () => ({
   createBetterAuthHandler: vi.fn(() => undefined),
   createBetterAuthInstance: createBetterAuthInstanceMock,
   deriveAuthTrustedOrigins: deriveAuthTrustedOriginsMock,
+  // AgentDash (#547): startup now goes through the mode-aware wrappers. In
+  // legacy mode (these fixtures) they reduce to the two mocks above, which
+  // is what the assertions below pin.
+  resolveAuthTrustedOrigins: vi.fn((config: unknown, opts?: { listenPort?: number }) => ({
+    origins: (deriveAuthTrustedOriginsMock as unknown as (c: unknown, o: unknown) => string[])(config, {
+      listenPort: opts?.listenPort,
+    }),
+    mode: "legacy",
+    source: {},
+  })),
+  createSchemeAwareBetterAuth: vi.fn((...args: unknown[]) => {
+    const auth = (createBetterAuthInstanceMock as unknown as (...a: unknown[]) => unknown)(...args);
+    return { mode: "legacy", primary: auth, forScheme: () => auth };
+  }),
+  createSchemeAwareBetterAuthHandler: vi.fn(() => undefined),
+  requestSchemeFromExpress: vi.fn(() => "http"),
+  requestSchemeFromHeaders: vi.fn(() => "http"),
   resolveBetterAuthSession: vi.fn(async () => null),
   resolveBetterAuthSessionFromHeaders: vi.fn(async () => null),
   capturePasswordResetUrl: vi.fn(async () => null),

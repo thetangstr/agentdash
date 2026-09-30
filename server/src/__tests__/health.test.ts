@@ -207,6 +207,71 @@ describe("GET /health", () => {
 
   // AgentDash (#726): the runbook and launch run assert the hosted flag
   // without signing in, so it appears on the public response too.
+  // AgentDash (#547): the canonical origin is reported; the rest of the
+  // declared set (LAN and tailnet doors) is not.
+  describe("canonicalOrigin", () => {
+    const KEYS = ["PAPERCLIP_CANONICAL_ORIGIN", "PAPERCLIP_ORIGINS", "PAPERCLIP_PUBLIC_URL", "PAPERCLIP_AUTH_PUBLIC_BASE_URL"];
+    const saved = new Map<string, string | undefined>();
+    beforeEach(() => {
+      for (const key of KEYS) {
+        saved.set(key, process.env[key]);
+        delete process.env[key];
+      }
+    });
+    afterEach(() => {
+      for (const key of KEYS) {
+        const value = saved.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    const stubDb = () => ({
+      execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ count: 1 }]),
+        })),
+      })),
+    }) as unknown as Db;
+
+    it("is absent when nothing is configured", async () => {
+      const res = await request(createApp(stubDb())).get("/health");
+      expect(res.body).not.toHaveProperty("canonicalOrigin");
+      expect(res.body).not.toHaveProperty("publicBaseUrl");
+    });
+
+    it("reports the declared canonical to an anonymous caller, without the other declared doors", async () => {
+      process.env.PAPERCLIP_CANONICAL_ORIGIN = "https://agents.example.test";
+      process.env.PAPERCLIP_ORIGINS = "https://agents.example.test,http://10.0.0.20:3102";
+      process.env.PAPERCLIP_PUBLIC_URL = "http://10.0.0.20:3102";
+      const app = express();
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: "none", source: "none" };
+        next();
+      });
+      app.use("/health", healthRoutes(stubDb(), {
+        deploymentMode: "authenticated",
+        deploymentExposure: "private",
+        authReady: true,
+        companyDeletionEnabled: false,
+      }));
+
+      const res = await request(app).get("/health");
+
+      expect(res.body.canonicalOrigin).toBe("https://agents.example.test");
+      expect(res.body.publicBaseUrl).toBe("https://agents.example.test");
+      expect(JSON.stringify(res.body)).not.toContain("10.0.0.20");
+    });
+
+    it("reports the old public URL's origin when no origin is declared", async () => {
+      process.env.PAPERCLIP_PUBLIC_URL = "http://office.example.test:3102/";
+      const res = await request(createApp(stubDb())).get("/health");
+      expect(res.body.canonicalOrigin).toBe("http://office.example.test:3102");
+      expect(res.body.originsMode).toBe("legacy");
+    });
+  });
+
   describe("hostedBox", () => {
     const ORIGINAL_KIND = process.env.AGENTDASH_DEPLOYMENT_KIND;
     afterEach(() => {

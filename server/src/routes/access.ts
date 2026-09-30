@@ -109,6 +109,7 @@ import {
   inspectBoardClaimChallenge
 } from "../board-claim.js";
 import { getStorageService } from "../storage/index.js";
+import { inBandBaseUrl } from "../lib/public-base-url.js";
 
 const INVITE_RESOLUTION_DNS_TIMEOUT_MS = 3_000;
 
@@ -134,13 +135,11 @@ function tokenHashesMatch(left: string, right: string) {
   );
 }
 
+// AgentDash (#547): links in these responses are read by the caller, so they
+// echo the caller's origin — but only a trusted one; a spoofed Host gets the
+// canonical address instead. See `inBandBaseUrl`.
 function requestBaseUrl(req: Request) {
-  const forwardedProto = req.header("x-forwarded-proto");
-  const proto = forwardedProto?.split(",")[0]?.trim() || req.protocol || "http";
-  const host =
-    req.header("x-forwarded-host")?.split(",")[0]?.trim() || req.header("host");
-  if (!host) return "";
-  return `${proto}://${host}`;
+  return inBandBaseUrl(req);
 }
 
 function buildCliAuthApprovalPath(challengeId: string, token: string) {

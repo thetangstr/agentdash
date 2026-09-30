@@ -30,6 +30,12 @@ function trustedOriginsForRequest(req: Request) {
   // explicitly-configured PAPERCLIP_PUBLIC_URL when it's set.
   const publicUrl = parseOrigin(process.env.PAPERCLIP_PUBLIC_URL?.trim());
   if (publicUrl) origins.add(publicUrl);
+  // AgentDash (#547): the declared origins are the operator's own statement
+  // of where browsers arrive, so they are trusted here for the same reason.
+  for (const raw of [process.env.PAPERCLIP_CANONICAL_ORIGIN, ...(process.env.PAPERCLIP_ORIGINS ?? "").split(",")]) {
+    const declared = parseOrigin(raw?.trim());
+    if (declared) origins.add(declared);
+  }
   return origins;
 }
 
