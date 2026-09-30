@@ -220,6 +220,10 @@ export function useLiveRunTranscripts({
       try {
         const result = await heartbeatsApi.log(run.id, offset, logReadLimitBytes);
         if (cancelled) return;
+        if (result.missing && isTerminalStatus(run.status)) {
+          // A finished run that never wrote a log will not get one; stop asking.
+          missingTerminalLogRunIdsRef.current.add(run.id);
+        }
 
         appendChunks(run.id, parsePersistedLogContent(run.id, result.content, pendingLogRowsByRunRef.current));
 

@@ -221,6 +221,60 @@ describe("CompanyAccess", () => {
     });
   });
 
+  // AgentDash (#845): the edit dialog is taller than short or narrow viewports, so
+  // it must cap its height and scroll the grants while Save stays pinned.
+  it("caps the edit dialog to the viewport with a scrolling body and pinned footer", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyAccess />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const editButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Edit",
+    );
+    await act(async () => {
+      editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const content = document.body.querySelector<HTMLElement>('[data-slot="dialog-content"]');
+    expect(content).toBeTruthy();
+    expect(content!.className).toContain("max-h-[calc(100dvh-2rem)]");
+    expect(content!.className).toContain("flex-col");
+    expect(content!.className).toContain("overflow-hidden");
+
+    const body = content!.querySelector<HTMLElement>('[data-testid="edit-member-dialog-body"]');
+    expect(body).toBeTruthy();
+    expect(body!.className).toContain("overflow-y-auto");
+    expect(body!.className).toContain("min-h-0");
+    expect(body!.className).toContain("flex-1");
+    // The last grant (joins:approve) scrolls with the body.
+    expect(body!.textContent).toContain("joins:approve");
+
+    const header = content!.querySelector('[data-slot="dialog-header"]');
+    const footer = content!.querySelector('[data-slot="dialog-footer"]');
+    expect(header).toBeTruthy();
+    expect(footer).toBeTruthy();
+    expect(body!.contains(header)).toBe(false);
+    expect(body!.contains(footer)).toBe(false);
+    expect(Array.from(content!.children)).toEqual(expect.arrayContaining([header, body, footer]));
+    expect(footer!.textContent).toContain("Save access");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("saves member role, status, and grants in one request", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({

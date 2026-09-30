@@ -12,6 +12,7 @@ import {
   buildUserMentionHref,
 } from "@paperclipai/shared";
 import { ThemeProvider } from "../context/ThemeContext";
+import { IssuePrefixesContext } from "../context/IssuePrefixesContext";
 import { MarkdownBody } from "./MarkdownBody";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -198,6 +199,26 @@ describe("MarkdownBody", () => {
     expect(html).toContain("lucide-external-link");
     expect(html).not.toContain('href="/issues/PAPA-115"');
     expect(html).not.toContain("paperclip-markdown-issue-ref");
+  });
+
+  it("links only identifiers with a visible company prefix, never UUID fragments or model names", () => {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ThemeProvider>
+          <IssuePrefixesContext.Provider value={["ACME"]}>
+            <MarkdownBody>
+              {"Run 3f9a1c7e-bd42-4916-a8c3-5e0f2b7d9c14 used GPT-4 for ACME-60 and `GPT-4`."}
+            </MarkdownBody>
+          </IssuePrefixesContext.Provider>
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(html).toContain('href="/issues/ACME-60"');
+    expect(html).not.toContain('href="/issues/BD42-4916"');
+    expect(html).not.toContain('href="/issues/GPT-4"');
+    expect(html).toContain("3f9a1c7e-bd42-4916-a8c3-5e0f2b7d9c14");
+    expect(html.match(/data-mention-kind="issue"/g)).toHaveLength(1);
   });
 
   it("linkifies plain internal issue paths in markdown text", () => {

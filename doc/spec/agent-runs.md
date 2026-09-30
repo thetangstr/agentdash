@@ -682,6 +682,7 @@ On server startup:
    - fetch persisted lightweight timeline
 7. `GET /heartbeat-runs/:runId/log`
    - reads full log stream via `RunLogStore` (or redirects/presigned URL for object store)
+   - a run with no log yet (never started) returns `200` with `content: ""`, `store`/`logRef` `null` and `missing: true`
 8. `GET /api/companies/:companyId/events/ws`
    - websocket stream
 

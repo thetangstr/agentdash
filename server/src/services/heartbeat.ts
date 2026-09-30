@@ -9084,7 +9084,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const run = typeof runOrLookup === "string" ? await getRunLogAccess(runOrLookup) : runOrLookup;
       const runId = typeof runOrLookup === "string" ? runOrLookup : runOrLookup.id;
       if (!run) throw notFound("Heartbeat run not found");
-      if (!run.logStore || !run.logRef) throw notFound("Run log not found");
+      // AgentDash: a run that never started (queued, or cancelled before it ran) has
+      // no log yet. That is an empty log, not a missing resource: answer 200 with
+      // `missing: true` so pollers stop filling the server log with 404s.
+      if (!run.logStore || !run.logRef) {
+        return { runId, store: null, logRef: null, content: "", missing: true as const };
+      }
 
       const result = await runLogStore.read(
         {
