@@ -184,15 +184,38 @@ test('request validation rejects malformed identity, scope and question shapes',
   assert.equal(posts().length,0);
 });
 
-test('attribution mismatch on the accepted comment is surfaced honestly',async()=>{
-  const {service}=bound(path=>{
-    if(path===`/issues/${issueId}`)return issue();
-    if(path.startsWith(`/issues/${issueId}/comments?`))return [];
-    return {id:'comment-2',authorUserId:'66666666-6666-4666-8666-666666666666'};
-  });
-  const result=await service.requestAssessment({issueId,question:'q',requestKey:'req-000001'});
-  assert.equal(result.status,'requested');
-  assert.equal(result.attribution.verified,false);
+test('attribution is verified only by an exact named-human author on the accepted comment',async()=>{
+  const cases=[
+    [{id:'comment-2',authorUserId:'66666666-6666-4666-8666-666666666666'},false],
+    // Regression: an omitted or null author must not read as verified.
+    [{id:'comment-3'},false],
+    [{id:'comment-4',authorUserId:null},false],
+    [{id:'comment-5',authorUserId:userId},true],
+  ];
+  for(const [accepted,verified] of cases) {
+    const {service}=bound(path=>{
+      if(path===`/issues/${issueId}`)return issue();
+      if(path.startsWith(`/issues/${issueId}/comments?`))return [];
+      return accepted;
+    });
+    const result=await service.requestAssessment({issueId,question:'q',requestKey:'req-000001'});
+    assert.equal(result.status,'requested',JSON.stringify(accepted));
+    assert.equal(result.attribution.verified,verified,JSON.stringify(accepted));
+  }
+});
+
+test('an acceptance without a comment id is uncertain, not a fabricated receipt',async()=>{
+  for(const accepted of [null,{authorUserId:userId},{id:42,authorUserId:userId}]) {
+    const {service}=bound(path=>{
+      if(path===`/issues/${issueId}`)return issue();
+      if(path.startsWith(`/issues/${issueId}/comments?`))return [];
+      return accepted;
+    });
+    const result=await service.requestAssessment({issueId,question:'q',requestKey:'req-000001'});
+    assert.equal(result.status,'uncertain',JSON.stringify(accepted));
+    assert.equal(result.reason,'accepted-response-lacked-comment-receipt');
+    assert.equal(result.receipt,undefined);
+  }
 });
 
 test('assessmentStatus answers only from a fresh, newer stored review',async()=>{

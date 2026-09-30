@@ -11,7 +11,7 @@ import {rossSourceTime} from './commitment-records.mjs';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const requestKeyPattern=/^[a-z0-9][a-z0-9-]{7,63}$/;
 const questionLimit=2000;
-const commentScanLimit=50;
+const commentScanLimit=200;
 const freshMs=60*60*1000;
 export const ASSESSMENT_REQUEST_MARKER='ross-assessment-request:';
 const markerRe=/\[ross-assessment-request:([a-z0-9][a-z0-9-]{7,63})\]\n?/;
@@ -192,13 +192,17 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
       // write. Read the issue before retrying, matching IssueCommentAcceptanceUncertain.
       return {status:'uncertain',reason:'acceptance-uncertain-read-before-retry',requestKey,issueId};
     }
-    const attributionOk=comment&&typeof comment.id==='string'
-      &&(comment.authorUserId===undefined||comment.authorUserId===null||comment.authorUserId===actor.userId);
+    // The receipt is the safety boundary: only an exact named-human author
+    // proves attribution. Absent/null authorUserId is unverified, and a
+    // comment record without an id cannot be a receipt at all.
+    if(!comment||typeof comment.id!=='string') {
+      return {status:'uncertain',reason:'accepted-response-lacked-comment-receipt',requestKey,issueId};
+    }
     return {
       status:'requested',
       requestKey,issueId,
       receipt:{commentId:comment.id,requestKey,issueId,companyId,requestedAt:new Date(now()).toISOString()},
-      attribution:{actorUserId:actor.userId,verified:attributionOk===true},
+      attribution:{actorUserId:actor.userId,verified:comment.authorUserId===actor.userId},
       baselineRevisionId:(issue.documentSummaries??[]).find(summary=>summary.key==='ross-review')?.latestRevisionId??null,
       inference:{state:'delegated-to-native-run-gates',startedByThisCall:false,
         wake:'assignee-notified-through-issue-comment',
