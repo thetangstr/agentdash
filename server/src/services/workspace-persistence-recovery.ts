@@ -13,6 +13,13 @@ export interface WorkspacePersistenceAttempt {
   recoveryRequired: boolean;
 }
 
+// Only the private attempt writer establishes this separate server-owned usage slot.
+// Historical adapter result fields (even with a matching errorCode) are not provenance.
+export const workspacePersistenceHasProvenance = sql<boolean>`(
+  ${heartbeatRuns.usageJson}->>'workspacePersistenceAttemptId' is not null
+  and ${heartbeatRuns.usageJson}->>'workspacePersistenceAttemptId' = ${heartbeatRuns.resultJson}->'workspacePersistence'->>'workspaceId'
+)`;
+
 // Read all original unresolved attempts: later refused/cancelled runs cannot hide one.
 // Caller-owned transactions take the company mutex before this predicate read.
 export async function workspacePersistenceHold(
@@ -31,6 +38,7 @@ export async function workspacePersistenceHold(
     sql`${issues.id}::text = ${heartbeatRuns.resultJson}->'workspacePersistence'->>'issueId'`,
   )).where(and(
     eq(heartbeatRuns.companyId, companyId),
+    workspacePersistenceHasProvenance,
     sql`${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true'`,
   ));
   return rows.find(row => row.issueId === null

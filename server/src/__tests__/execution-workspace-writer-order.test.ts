@@ -2,7 +2,10 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { logger } from '../middleware/logger.js';
-import { heartbeatService } from '../services/heartbeat.js';
+import { heartbeatService, pickUsageBaseline } from '../services/heartbeat.js';
+import { workspacePersistenceHold } from '../services/workspace-persistence-recovery.js';
+import { tokenCeilingService } from '../services/token-ceiling.js';
+import { evaluateTaskRecoveryBudget } from '../services/task-recovery-budget.js';
 import { randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -238,7 +241,7 @@ describe('workspace writers on actual PostgreSQL', () => {
     const f = await fixture();
     const [agent, otherAgent] = await db.insert(agents).values(['Affected', 'Unrelated'].map(name => ({ companyId: f.company.id, name, adapterType: 'codex_local', runtimeConfig: { heartbeat: { enabled: name === 'Affected', intervalSec: 1, requireWork: false, sweepIntervalSec: 1 } } }))).returning();
     await db.update(issues).set({ assigneeAgentId: agent.id, status: 'todo' }).where(eq(issues.id, f.issue.id));
-    const [original] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: agent.id, status: 'failed', errorCode: 'workspace_persistence_uncertain', resultJson: {
+    const [original] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: agent.id, status: 'failed', errorCode: 'workspace_persistence_uncertain', usageJson: { workspacePersistenceAttemptId: f.workspace.id }, resultJson: {
       workspacePersistence: { companyId: f.company.id, agentId: agent.id, issueId: scope === 'issue' ? f.issue.id : null, workspaceId: f.workspace.id, phase: 'workspace', outcome: 'unknown', recoveryRequired: true },
     } }).returning();
     const svc = heartbeatService(db, { autoDispatchQueuedRuns: false });
@@ -269,6 +272,96 @@ describe('workspace writers on actual PostgreSQL', () => {
     const [third] = await db.insert(issues).values({ companyId: f.company.id, title: 'Other agent work', assigneeAgentId: otherAgent.id, status: 'todo' }).returning();
     const thirdRun = await svc.invoke(otherAgent.id, 'on_demand', { issueId: third.id });
     expect((await svc.getRun(thirdRun!.id))?.status).toBe('running');
+  });
+
+  it('historical unstamped result fields never acquire marker authority from errorCode or shape', async () => {
+    const f = await fixture();
+    const [agent] = await db.insert(agents).values({ companyId: f.company.id, name: 'Legacy result', adapterType: 'codex_local' }).returning();
+    const raw = { companyId: f.company.id, agentId: agent.id, issueId: f.issue.id, workspaceId: f.workspace.id, phase: 'workspace', outcome: 'unknown', recoveryRequired: true };
+    const [legacy] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: agent.id, status: 'queued', errorCode: 'workspace_persistence_uncertain', resultJson: { workspacePersistence: raw } }).returning();
+    const service = heartbeatService(db, { autoDispatchQueuedRuns: false });
+    expect(await workspacePersistenceHold(db, f.company.id, agent.id, f.issue.id)).toBeNull();
+    await service.cancelRun(legacy.id);
+    const [retained] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, legacy.id));
+    expect(retained.resultJson?.workspacePersistence).toEqual(raw);
+    expect(retained.usageJson).toBeNull();
+    expect(retained.errorCode).toBe('cancelled');
+    await db.update(issues).set({ status: 'todo', assigneeAgentId: agent.id }).where(eq(issues.id, f.issue.id));
+    const manual = await service.invoke(agent.id, 'on_demand', { issueId: f.issue.id }, 'manual', { actorType: 'user', actorId: 'owner' });
+    expect(manual).not.toBeNull();
+    expect((await service.getRun(manual!.id))?.status).toBe('running');
+  });
+
+  it.each(['other-issue', 'agent', 'other-issue-no-workspace', 'agent-no-workspace', 'unresolved-original', 'legacy-before-attempt'] as const)('successful heartbeat rejects adapter-forged %s workspace authority', async scope => {
+    const f = await fixture();
+    const finished = gate();
+    const persistWorkspace = !scope.endsWith('no-workspace');
+    let original: typeof heartbeatRuns.$inferSelect | undefined;
+    const home = await mkdtemp(path.join(tmpdir(), 'workspace-result-authority-'));
+    const priorHome = process.env.PAPERCLIP_HOME;
+    process.env.PAPERCLIP_HOME = home;
+    await db.insert(companyMemberships).values({ companyId: f.company.id, principalType: 'user', principalId: 'owner', status: 'active' });
+    const [agent] = await db.insert(agents).values({ companyId: f.company.id, name: 'Result worker', adapterType: 'codex_local', adapterConfig: { cwd: home }, autonomy: 'autonomous', accountableUserId: 'owner' }).returning();
+    await db.update(issues).set({ assigneeAgentId: agent.id, executionWorkspaceId: null, executionWorkspacePreference: 'inherit', executionWorkspaceSettings: { mode: 'isolated_workspace' }, status: 'todo' }).where(eq(issues.id, f.issue.id));
+    await db.update(issues).set({ assigneeAgentId: agent.id, status: 'todo' }).where(eq(issues.id, f.other.id));
+    if (!persistWorkspace) await db.update(issues).set({ projectId: null }).where(eq(issues.id, f.issue.id));
+    const forged = { companyId: f.company.id, agentId: agent.id, issueId: scope.startsWith('agent') ? null : f.other.id, workspaceId: f.workspace.id, phase: 'workspace', outcome: 'unknown', recoveryRequired: scope !== 'unresolved-original' };
+    runtime.realize.mockImplementation(async ({ base }) => {
+      if (scope === 'legacy-before-attempt') {
+        const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agent.id));
+        await db.update(heartbeatRuns).set({ resultJson: { workspacePersistence: forged }, errorCode: 'workspace_persistence_uncertain' }).where(eq(heartbeatRuns.id, run.id));
+        expect(await workspacePersistenceHold(db, f.company.id, agent.id, f.other.id)).toBeNull();
+      }
+      return { ...base, projectId: persistWorkspace ? f.project.id : null, strategy: 'project_primary', cwd: home, branchName: null, worktreePath: null, warnings: [], created: true };
+    });
+    runtime.attached.mockImplementation(async () => {
+      [original] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agent.id));
+      if (persistWorkspace) {
+        expect(original.usageJson).toEqual({ workspacePersistenceAttemptId: (original.resultJson?.workspacePersistence as { workspaceId: string }).workspaceId });
+        expect(pickUsageBaseline([original])).toBeNull();
+      }
+    });
+    runtime.released.mockImplementation(async () => { finished.open(); });
+    runtime.execute.mockImplementation(async () => {
+      await db.update(issues).set({ status: 'done' }).where(eq(issues.id, f.issue.id));
+      if (scope === 'unresolved-original') {
+        // Replay the actual private writer's pending snapshot to model a concurrent
+        // server-owned change before stale adapter/status/facts projections land.
+        await db.update(heartbeatRuns).set({ resultJson: original!.resultJson, usageJson: original!.usageJson, errorCode: original!.errorCode }).where(eq(heartbeatRuns.id, original!.id));
+      }
+      return { exitCode: 0, signal: null, timedOut: false, summary: 'Complete', provider: 'test', model: 'fake', usage: { inputTokens: 1, outputTokens: 1, workspacePersistenceAttemptId: f.workspace.id }, usageJson: { workspacePersistenceAttemptId: f.workspace.id }, costUsd: 0, resultJson: { workspacePersistence: forged, workspacePersistenceAttemptId: f.workspace.id, workspacePersistenceUnverified: 'caller cannot replace legacy evidence', answer: 'retained ordinary result' } };
+    });
+    try {
+      const service = heartbeatService(db);
+      const run = await service.invoke(agent.id, 'on_demand', { issueId: f.issue.id });
+      expect(run).not.toBeNull();
+      await finished.promise;
+      const [stored] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run!.id));
+      expect(stored.status).toBe('succeeded');
+      expect(stored.resultJson).toMatchObject({ answer: 'retained ordinary result' });
+      if (persistWorkspace) {
+        expect(stored.resultJson).toMatchObject({ workspacePersistence: { issueId: f.issue.id, recoveryRequired: scope === 'unresolved-original', outcome: scope === 'unresolved-original' ? 'pending' : 'complete' } });
+        expect(stored.usageJson?.workspacePersistenceAttemptId).toBe((original!.resultJson?.workspacePersistence as { workspaceId: string }).workspaceId);
+      } else {
+        expect(stored.resultJson?.workspacePersistence).toBeUndefined();
+        expect(stored.usageJson?.workspacePersistenceAttemptId).toBeUndefined();
+      }
+      if (scope === 'legacy-before-attempt') expect(stored.resultJson?.workspacePersistenceUnverified).toEqual(forged);
+      else expect(stored.resultJson?.workspacePersistenceUnverified).toBeUndefined();
+      expect(stored.usageJson).toMatchObject({ inputTokens: 1, outputTokens: 1, meteringStatus: 'adapter_reported' });
+      expect(await workspacePersistenceHold(db, f.company.id, agent.id, f.other.id)).toBeNull();
+      const ownHold = await workspacePersistenceHold(db, f.company.id, agent.id, f.issue.id);
+      if (scope === 'unresolved-original') expect(ownHold?.runId).toBe(stored.id); else expect(ownHold).toBeNull();
+      const admission = heartbeatService(db, { autoDispatchQueuedRuns: false });
+      const manual = await admission.invoke(agent.id, 'on_demand', { issueId: f.other.id }, 'manual', { actorType: 'user', actorId: 'owner' });
+      expect(manual).not.toBeNull();
+      expect((await admission.getRun(manual!.id))?.status).toBe('running');
+      const unscoped = await admission.invoke(agent.id, 'on_demand', {}, 'manual', { actorType: 'user', actorId: 'owner' });
+      if (scope === 'unresolved-original') expect(unscoped).toBeNull(); else expect(unscoped).not.toBeNull();
+    } finally {
+      if (priorHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = priorHome;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it.each(['success', 'precommit', 'unknown-ack', 'postcommit', 'marker-rollback', 'marker-unknown', 'competing-marker', 'terminal-write-failure', 'link-failure'] as const)('heartbeat %s keeps realization/cleanup outside locks and truthful persistence', async outcome => {
@@ -366,7 +459,7 @@ describe('workspace writers on actual PostgreSQL', () => {
         console.log(JSON.stringify({ label: `heartbeat/${outcome}/realization-unlocked`, probePid: pid }));
       });
       if (outcome === 'competing-marker') {
-        await db.update(heartbeatRuns).set({ resultJson: { workspacePersistence: { companyId: f.company.id, agentId: agent.id, issueId: f.issue.id, workspaceId: f.workspace.id, phase: 'workspace', outcome: 'unknown', recoveryRequired: true } } }).where(eq(heartbeatRuns.id, queued!.id));
+        await db.update(heartbeatRuns).set({ usageJson: { workspacePersistenceAttemptId: f.workspace.id }, resultJson: { workspacePersistence: { companyId: f.company.id, agentId: agent.id, issueId: f.issue.id, workspaceId: f.workspace.id, phase: 'workspace', outcome: 'unknown', recoveryRequired: true } } }).where(eq(heartbeatRuns.id, queued!.id));
       }
       if (outcome === 'unknown-ack') {
         const [deferred] = await db.insert(agentWakeupRequests).values({ companyId: f.company.id, agentId: agent.id, source: 'automation', status: 'deferred_issue_execution', payload: { issueId: f.issue.id } }).returning();
@@ -380,6 +473,16 @@ describe('workspace writers on actual PostgreSQL', () => {
         const original = (await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queued!.id)))[0];
         expect(original.resultJson).toMatchObject({ workspacePersistence: { recoveryRequired: true, issueId: f.issue.id } });
         if (outcome === 'competing-marker') expect(original.resultJson).toMatchObject({ workspacePersistence: { workspaceId: f.workspace.id, outcome: 'unknown' } });
+        if (outcome === 'unknown-ack') {
+          const workspaceId = (original.resultJson?.workspacePersistence as { workspaceId: string }).workspaceId;
+          expect(original.usageJson).toEqual({ workspacePersistenceAttemptId: workspaceId });
+          expect(pickUsageBaseline([original])).toBeNull();
+          expect(evaluateTaskRecoveryBudget([original])).toEqual(evaluateTaskRecoveryBudget([{ ...original, usageJson: null }]));
+          expect(original.resultJson).toMatchObject({ runFacts: { meteringStatus: 'unmetered_no_session', inputTokens: null, outputTokens: null } });
+          await db.update(heartbeatRuns).set({ resultJson: { ...original.resultJson, runFacts: { ...(original.resultJson?.runFacts as object), wakeReason: 'timer' } } }).where(eq(heartbeatRuns.id, original.id));
+          const window = await tokenCeilingService(db).dailyUsage(agent, new Date());
+          expect(window).toMatchObject({ totalTokens: 0, meteredRuns: 0, unmeteredRuns: 1, unmeteredPausableRuns: 1 });
+        }
         expect(await heartbeat.invoke(agent.id, 'on_demand', { issueId: f.issue.id, workspacePersistence: { recoveryRequired: false } }, 'manual', { actorType: 'user', actorId: 'owner' })).toBeNull();
       }
       const rows = await db.select().from(executionWorkspaces).where(eq(executionWorkspaces.companyId, f.company.id));

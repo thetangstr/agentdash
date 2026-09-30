@@ -1,6 +1,6 @@
 import { workforceDispatchHold, workforceIssueInputs } from './workforce-inputs.js';
 import { workforceService } from './workforce.js';
-import { workspacePersistenceHold, WORKSPACE_PERSISTENCE_RECOVERY_CODE, type WorkspacePersistenceAttempt } from './workspace-persistence-recovery.js';
+import { workspacePersistenceHasProvenance, workspacePersistenceHold, WORKSPACE_PERSISTENCE_RECOVERY_CODE, type WorkspacePersistenceAttempt } from './workspace-persistence-recovery.js';
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
@@ -3115,11 +3115,28 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return ensured;
   }
 
-  // AgentDash: cached terminal projections must never erase an unresolved original attempt.
+  // AgentDash: adapter/cached projections cannot mint or replace private attempt state.
+  function withoutWorkspaceResultFields(result: Record<string, unknown> | null) {
+    if (result === null) return null;
+    const { workspacePersistence: _attempt, workspacePersistenceUnverified: _legacy, ...rest } = result;
+    return rest;
+  }
+
   function preserveWorkspaceAttempt(result: Record<string, unknown> | null) {
-    return sql`case when ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true'
-      then coalesce(${JSON.stringify(result)}::jsonb, '{}'::jsonb) || jsonb_build_object('workspacePersistence', ${heartbeatRuns.resultJson}->'workspacePersistence')
-      else ${JSON.stringify(result)}::jsonb end`;
+    const incoming = JSON.stringify(withoutWorkspaceResultFields(result));
+    return sql`case when ${heartbeatRuns.resultJson} ? 'workspacePersistence' or ${heartbeatRuns.resultJson} ? 'workspacePersistenceUnverified'
+      then coalesce(${incoming}::jsonb, '{}'::jsonb)
+        || case when ${heartbeatRuns.resultJson} ? 'workspacePersistence' then jsonb_build_object('workspacePersistence', ${heartbeatRuns.resultJson}->'workspacePersistence') else '{}'::jsonb end
+        || case when ${heartbeatRuns.resultJson} ? 'workspacePersistenceUnverified' then jsonb_build_object('workspacePersistenceUnverified', ${heartbeatRuns.resultJson}->'workspacePersistenceUnverified') else '{}'::jsonb end
+      else ${incoming}::jsonb end`;
+  }
+
+  function preserveWorkspaceAttemptProvenance(usage: Record<string, unknown> | null) {
+    const { workspacePersistenceAttemptId: _attemptId, ...rest } = usage ?? {};
+    const incoming = JSON.stringify(usage === null ? null : rest);
+    return sql`case when ${heartbeatRuns.usageJson} ? 'workspacePersistenceAttemptId'
+      then coalesce(${incoming}::jsonb, '{}'::jsonb) || jsonb_build_object('workspacePersistenceAttemptId', ${heartbeatRuns.usageJson}->'workspacePersistenceAttemptId')
+      else ${incoming}::jsonb end`;
   }
 
   async function setRunStatus(
@@ -3134,7 +3151,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .update(heartbeatRuns)
       .set({ status, ...patch,
         ...(patch?.resultJson !== undefined ? { resultJson: preserveWorkspaceAttempt(patch.resultJson) } : {}),
-        errorCode: sql`case when ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true' then ${WORKSPACE_PERSISTENCE_RECOVERY_CODE} else ${patch?.errorCode === undefined ? heartbeatRuns.errorCode : patch.errorCode} end`,
+        ...(patch?.usageJson !== undefined ? { usageJson: preserveWorkspaceAttemptProvenance(patch.usageJson) } : {}),
+        errorCode: sql`case when ${workspacePersistenceHasProvenance} and ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true' then ${WORKSPACE_PERSISTENCE_RECOVERY_CODE} else ${patch?.errorCode === undefined ? heartbeatRuns.errorCode : patch.errorCode} end`,
         updatedAt: new Date() })
       .where(
         options?.onlyIfStatus
@@ -4631,15 +4649,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           .where(and(eq(issues.id, attempt.issueId), eq(issues.companyId, run.companyId))).for("update");
         if (!issue) throw conflict("Workspace source issue is unavailable");
       }
-      const [current] = await tx.select({ resultJson: heartbeatRuns.resultJson }).from(heartbeatRuns)
+      const [current] = await tx.select({ resultJson: heartbeatRuns.resultJson, usageJson: heartbeatRuns.usageJson }).from(heartbeatRuns)
         .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.companyId, run.companyId), eq(heartbeatRuns.agentId, run.agentId))).for("update");
       if (!current) throw conflict("Workspace run is unavailable");
-      const stored = parseObject(parseObject(current.resultJson).workspacePersistence);
-      if (!starting && (stored.workspaceId !== attempt.workspaceId || stored.recoveryRequired !== true)) {
+      const result = parseObject(current.resultJson);
+      const usage = parseObject(current.usageJson);
+      const stored = parseObject(result.workspacePersistence);
+      if (!starting && (usage.workspacePersistenceAttemptId !== attempt.workspaceId || stored.workspaceId !== attempt.workspaceId || stored.recoveryRequired !== true)) {
         throw conflict("Workspace attempt changed before acknowledgement");
       }
       const [updated] = await tx.update(heartbeatRuns).set({
-        resultJson: sql`jsonb_set(coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb), '{workspacePersistence}', ${JSON.stringify(attempt)}::jsonb)`,
+        resultJson: {
+          ...result,
+          // Keep historical unproven payload as evidence; never stamp it as an original.
+          ...(starting && result.workspacePersistence !== undefined && (typeof usage.workspacePersistenceAttemptId !== "string" || usage.workspacePersistenceAttemptId !== stored.workspaceId)
+            ? { workspacePersistenceUnverified: result.workspacePersistence } : {}),
+          workspacePersistence: attempt,
+        },
+        usageJson: { ...usage, workspacePersistenceAttemptId: attempt.workspaceId },
         errorCode: attempt.recoveryRequired ? WORKSPACE_PERSISTENCE_RECOVERY_CODE : null,
         updatedAt: new Date(),
       }).where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.companyId, run.companyId), eq(heartbeatRuns.agentId, run.agentId))).returning({ id: heartbeatRuns.id });
@@ -5434,7 +5461,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await db
           .update(heartbeatRuns)
           .set({
-            resultJson: {
+            resultJson: preserveWorkspaceAttempt({
               ...parseObject(factsRun.resultJson),
               runFacts: buildRunFacts({
                 meteringStatus: "unmetered_no_session",
@@ -5451,7 +5478,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                   contextSnapshot: parseObject(factsRun.contextSnapshot),
                 }),
               }),
-            },
+            }),
             updatedAt: new Date(),
           })
           .where(eq(heartbeatRuns.id, factsRun.id))
@@ -6731,6 +6758,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await flushGitHubTokenRedactors();
       }
       const adapterResult = redactGitHubTokensInValue(rawAdapterResult);
+      adapterResult.resultJson = withoutWorkspaceResultFields(adapterResult.resultJson ?? null);
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
             db,
@@ -6998,7 +7026,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         persistedRun =
           (await db
             .update(heartbeatRuns)
-            .set({ resultJson: persistedResultJson, updatedAt: new Date() })
+            .set({ resultJson: preserveWorkspaceAttempt(persistedResultJson), updatedAt: new Date() })
             .where(eq(heartbeatRuns.id, run.id))
             .returning()
             .then((rows) => rows[0])) ?? persistedRun;
@@ -7147,7 +7175,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await db
           .update(heartbeatRuns)
           .set({
-            resultJson: {
+            resultJson: preserveWorkspaceAttempt({
               ...parseObject(livenessRun.resultJson),
               runFacts: buildRunFacts({
                 meteringStatus: "unmetered_no_session",
@@ -7162,7 +7190,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                   contextSnapshot: parseObject(livenessRun.contextSnapshot),
                 }),
               }),
-            },
+            }),
             updatedAt: new Date(),
           })
           .where(eq(heartbeatRuns.id, failedRun.id))
