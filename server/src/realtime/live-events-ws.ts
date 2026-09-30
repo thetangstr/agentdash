@@ -10,6 +10,11 @@ import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
 import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 import { edgeUpgradeAllowed } from "../middleware/edge-gate.js";
+import {
+  createLiveEventVisibility,
+  loadBoardUserActor,
+  type LiveEventActor,
+} from "./live-event-visibility.js";
 
 interface WsSocket {
   readyState: number;
@@ -45,6 +50,9 @@ interface UpgradeContext {
   companyId: string;
   actorType: "board" | "agent";
   actorId: string;
+  // AgentDash (GH #830 part A follow-up): how the subscriber is authenticated,
+  // so live events can be filtered by the same project rule as REST.
+  source: "local_implicit" | "session" | "agent_key";
 }
 
 interface IncomingMessageWithContext extends IncomingMessage {
@@ -135,6 +143,7 @@ async function authorizeUpgrade(
         companyId,
         actorType: "board",
         actorId: "board",
+        source: "local_implicit",
       };
     }
 
@@ -171,6 +180,7 @@ async function authorizeUpgrade(
       companyId,
       actorType: "board",
       actorId: userId,
+      source: "session",
     };
   }
 
@@ -194,7 +204,19 @@ async function authorizeUpgrade(
     companyId,
     actorType: "agent",
     actorId: key.agentId,
+    source: "agent_key",
   };
+}
+
+/** The subscriber as the REST auth middleware would describe it on `req.actor`. */
+async function liveEventActorFor(db: Db, context: UpgradeContext): Promise<LiveEventActor> {
+  if (context.source === "local_implicit") {
+    return { type: "board", userId: "local-board", isInstanceAdmin: true, source: "local_implicit" };
+  }
+  if (context.source === "agent_key") {
+    return { type: "agent", agentId: context.actorId, companyId: context.companyId, source: "agent_key" };
+  }
+  return loadBoardUserActor(db, context.actorId);
 }
 
 export function setupLiveEventsWebSocketServer(
@@ -208,6 +230,8 @@ export function setupLiveEventsWebSocketServer(
   const wss = new WebSocketServer({ noServer: true });
   const cleanupByClient = new Map<WsSocket, () => void>();
   const aliveByClient = new Map<WsSocket, boolean>();
+  // AgentDash (GH #830 part A follow-up): per-subscriber project visibility.
+  const visibility = createLiveEventVisibility(db);
 
   const pingInterval = setInterval(() => {
     for (const socket of wss.clients) {
@@ -227,9 +251,26 @@ export function setupLiveEventsWebSocketServer(
       return;
     }
 
+    // AgentDash (GH #830 part A follow-up): an event about an issue, run or
+    // project in a restricted project reaches only subscribers who could read
+    // that resource over REST. Delivery stays in publish order per socket.
+    const shouldDeliver = visibility.createSubscriberFilter({
+      companyId: context.companyId,
+      loadActor: () => liveEventActorFor(db, context),
+    });
+    let delivery: Promise<void> = Promise.resolve();
     const unsubscribe = subscribeCompanyLiveEvents(context.companyId, (event) => {
-      if (socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify(event));
+      void visibility.resolveEvent(event); // resolve (and invalidate caches) at emit time
+      delivery = delivery.then(async () => {
+        let deliver = false;
+        try {
+          deliver = await shouldDeliver(event);
+        } catch (err) {
+          logger.warn({ err, companyId: context.companyId, type: event.type }, "live event visibility check failed");
+        }
+        if (!deliver || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify(event));
+      });
     });
 
     cleanupByClient.set(socket, unsubscribe);
