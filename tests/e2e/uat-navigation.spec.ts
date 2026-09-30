@@ -118,15 +118,16 @@ test.describe("every destination stays reachable", () => {
 
     await test.step("clicked from the sidebar", async () => {
       await page.goto("/dashboard");
-      // Only the links actually rendered for this user — role and profile
-      // decide what the shell offers, and clicking a hidden one proves nothing.
-      // MK profile labels plus the default profile's six-item nav (UX-6).
+      // Only the links actually rendered for this user — role decides what
+      // the shell offers, and clicking a hidden one proves nothing. One
+      // sidebar for every company (doc/plans/2026-09-30-one-ux.md): the six
+      // primary items plus a few Advanced destinations.
       const labels = [
-        "Dashboard", "Home", "Ask", "Work", "Decisions", "Shipped", "Team",
-        "Inbox", "Issues", "Org", "Billing", "Settings", "My Agent",
+        "Home", "Ask", "Work", "Decisions", "Shipped", "Team",
+        "Org", "Billing", "Settings", "My Agent",
       ];
-      // Default profile folds secondary destinations under Advanced — expand
-      // it once so those links are clickable too.
+      // Secondary destinations fold under Advanced — expand it once so those
+      // links are clickable too.
       const advancedToggle = page.getByRole("button", { name: "Advanced", exact: true }).first();
       if (await advancedToggle.count()) {
         await advancedToggle.click();

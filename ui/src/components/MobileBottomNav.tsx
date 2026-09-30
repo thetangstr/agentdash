@@ -5,15 +5,12 @@ import {
   CircleDot,
   SquarePen,
   Users,
-  Inbox,
   ShieldQuestion,
   MessageSquare,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
-import { useDialogActions } from "../context/DialogContext";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
-import { useInboxBadge } from "../hooks/useInboxBadge";
 import { useDecisionsBadge } from "../hooks/useDecisionsBadge";
 
 interface MobileBottomNavProps {
@@ -39,45 +36,27 @@ type MobileNavItem = MobileNavLinkItem | MobileNavActionItem;
 
 export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   const location = useLocation();
-  const { selectedCompanyId, selectedCompany } = useCompany();
-  const { openNewIssue } = useDialogActions();
-  // AgentDash: UX-6/UX-7 (#787/#788) — the default profile's five slots are
-  // Home/Work/Ask/Decisions/Team and the Decisions badge is #817's
-  // useDecisionsBadge (one number everywhere); agentdash_mk keeps its Inbox.
-  const isMk = selectedCompany?.productProfile === "agentdash_mk";
-  const inboxBadge = useInboxBadge(selectedCompanyId, isMk);
-  const decisionsBadge = useDecisionsBadge(selectedCompanyId, !isMk);
+  const { selectedCompanyId } = useCompany();
+  // AgentDash: UX-6/UX-7 (#787/#788) + one UX (doc/plans/2026-09-30-one-ux.md)
+  // — the same five slots for every company: Home/Work/Ask/Decisions/Team.
+  // The Decisions badge is #817's useDecisionsBadge, one number everywhere.
+  const decisionsBadge = useDecisionsBadge(selectedCompanyId);
 
   const items = useMemo<MobileNavItem[]>(
-    () =>
-      isMk
-        ? [
-            { type: "link", to: "/dashboard", label: "Home", icon: House },
-            { type: "link", to: "/issues", label: "Issues", icon: CircleDot },
-            { type: "action", label: "Create", icon: SquarePen, onClick: () => openNewIssue() },
-            { type: "link", to: "/agents/all", label: "Agents", icon: Users },
-            {
-              type: "link",
-              to: "/inbox",
-              label: "Inbox",
-              icon: Inbox,
-              badge: inboxBadge.inbox,
-            },
-          ]
-        : [
-            { type: "link", to: "/dashboard", label: "Home", icon: House },
-            { type: "link", to: "/issues", label: "Work", icon: CircleDot },
-            { type: "link", to: "/cos", label: "Ask", icon: MessageSquare },
-            {
-              type: "link",
-              to: "/decisions",
-              label: "Decisions",
-              icon: ShieldQuestion,
-              badge: decisionsBadge,
-            },
-            { type: "link", to: "/agents", label: "Team", icon: Users },
-          ],
-    [isMk, openNewIssue, inboxBadge.inbox, decisionsBadge],
+    () => [
+      { type: "link", to: "/dashboard", label: "Home", icon: House },
+      { type: "link", to: "/issues", label: "Work", icon: CircleDot },
+      { type: "link", to: "/cos", label: "Ask", icon: MessageSquare },
+      {
+        type: "link",
+        to: "/decisions",
+        label: "Decisions",
+        icon: ShieldQuestion,
+        badge: decisionsBadge,
+      },
+      { type: "link", to: "/agents", label: "Team", icon: Users },
+    ],
+    [decisionsBadge],
   );
 
   return (

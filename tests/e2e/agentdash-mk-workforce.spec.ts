@@ -193,10 +193,10 @@ test("CEO consolidates three stewarded contributions with web and Telegram appro
   // or "Ceo". A database value on a person's own page reads as a leak.
   await expect(page.locator("main").getByText(/CEO Agent.*CEO.*idle/)).toBeVisible();
 
-  // The Inbox `all` tab is scoped to the signed-in user in a profile company,
-  // and says so. Asserted in the browser because the scoping is wiring between
-  // a query and a filter — unit tests cover both halves and neither proves they
-  // are connected.
+  // One UX (doc/plans/2026-09-30-one-ux.md): the Inbox is gone for every
+  // company. An MK bookmark to an Inbox tab lands on Decisions, which reads
+  // the same server-scoped waiting-on-you list plus the steward inbox.
   await page.goto(`/${issuePrefix}/inbox/all`);
-  await expect(page.getByText("Showing only the approvals you can act on.")).toBeVisible();
+  await page.waitForURL(`**/${issuePrefix}/decisions`);
+  await expect(page.getByTestId("decisions")).toBeVisible();
 });

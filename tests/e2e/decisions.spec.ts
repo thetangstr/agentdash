@@ -1,13 +1,8 @@
 /**
- * E2E: UX-7 (#788) — the Decisions page and the profile-aware redirects.
- *
- * The bug this guards: on a COLD deep link the product profile is still
- * resolving (companies fetch in flight, selection effect not yet run) and
- * the route switch used to read the null as "default profile", firing a
- * redirect to /decisions that rewrote the URL before MK could be seen. An
- * agentdash_mk bookmark like /ACME/inbox/unread landed on /inbox/mine.
- * These tests navigate by page.goto — a full document load, the real
- * cold-load path — and assert the final URL survives.
+ * E2E: UX-7 (#788) + one UX (doc/plans/2026-09-30-one-ux.md) — the Decisions
+ * page and the redirects from the old Inbox and Approvals list URLs, the same
+ * for every company. These tests navigate by page.goto — a full document
+ * load, the real cold-load path — and assert where each URL settles.
  *
  * Requires local_trusted deployment mode (playwright.config.ts webServer env).
  */
@@ -37,9 +32,9 @@ async function expectHealthySettledUrl(page: Page, url: string, where: string) {
     .waitForURL((u) => new URL(u).pathname === url, { timeout: 15_000 })
     .catch(() => undefined);
   await page.waitForLoadState("networkidle").catch(() => undefined);
-  // The profile-aware redirect is a client-side Navigate that fires after the
-  // companies query resolves — on a slow runner networkidle settles before
-  // React commits it, so wait for the URL itself, not just a quiet network.
+  // The redirect is a client-side Navigate — on a slow runner networkidle
+  // settles before React commits it, so wait for the URL itself, not just a
+  // quiet network.
   await page.waitForURL(`**${url}`, { timeout: 15_000 }).catch(() => undefined);
   const pathname = new URL(page.url()).pathname;
   expect(pathname, `${where}: deep link was rewritten`).toBe(url);
@@ -50,7 +45,7 @@ async function expectHealthySettledUrl(page: Page, url: string, where: string) {
   }
 }
 
-test.describe("Decisions and profile-aware redirects", () => {
+test.describe("Decisions and the legacy list redirects", () => {
   test("default profile: inbox and approvals routes land on Decisions", async ({ page, request }) => {
     const company = await createCompany(request);
     const title = `Decide the launch date ${Date.now()}`;
@@ -84,35 +79,25 @@ test.describe("Decisions and profile-aware redirects", () => {
     }
   });
 
-  test("agentdash_mk: cold deep links keep their URLs instead of bouncing to Decisions", async ({
+  // One UX (doc/plans/2026-09-30-one-ux.md): an MK company gets the same
+  // Decisions page and the same redirects — its old bookmarks land here too.
+  test("agentdash_mk: the same inbox and approvals routes land on Decisions", async ({
     page,
     request,
   }) => {
     const company = await createCompany(request, "agentdash_mk");
 
-    // Cold document loads — the profile must resolve before any redirect
-    // fires, so each of these proves the switch waited instead of guessing.
-    for (const path of ["inbox/unread", "inbox/company", "approvals/all", "approvals/pending"]) {
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/decisions`);
+    await expectHealthySettledUrl(page, `/${company.issuePrefix}/decisions`, "MK typed /decisions");
+    await expect(page.getByTestId("decisions")).toBeVisible({ timeout: 20_000 });
+
+    for (const path of ["inbox", "inbox/mine", "inbox/unread", "inbox/company", "approvals/all", "approvals/pending"]) {
       await page.goto(`${BASE_URL}/${company.issuePrefix}/${path}`);
       await expectHealthySettledUrl(
         page,
-        `/${company.issuePrefix}/${path}`,
+        `/${company.issuePrefix}/decisions`,
         `MK typed /${path}`,
       );
     }
-
-    // And MK's own redirects still happen once the profile is known.
-    await page.goto(`${BASE_URL}/${company.issuePrefix}/decisions`);
-    await expectHealthySettledUrl(
-      page,
-      `/${company.issuePrefix}/inbox/mine`,
-      "MK typed /decisions",
-    );
-    await page.goto(`${BASE_URL}/${company.issuePrefix}/inbox`);
-    await expectHealthySettledUrl(
-      page,
-      `/${company.issuePrefix}/inbox/mine`,
-      "MK typed /inbox",
-    );
   });
 });

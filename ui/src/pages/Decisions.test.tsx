@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// AgentDash: UX-7 (GH #788) — one Decisions page on the default profile.
+// AgentDash: UX-7 (GH #788) — one Decisions page, for every company (one UX,
+// doc/plans/2026-09-30-one-ux.md), including the sources the MK Inbox showed.
 
 import { act } from "react";
 import type { ReactNode } from "react";
@@ -10,7 +11,25 @@ import type { WaitingOnYou } from "@paperclipai/shared";
 
 const mockDashboardApi = vi.hoisted(() => ({ waitingOnYou: vi.fn() }));
 
+const mockStewardshipsApi = vi.hoisted(() => ({
+  getMyInbox: vi.fn(),
+  getOverrideInbox: vi.fn(),
+  myFactRequests: vi.fn(),
+}));
+const mockConnectorSendApi = vi.hoisted(() => ({ listUnresolved: vi.fn() }));
+const mockAccessApi = vi.hoisted(() => ({ listJoinRequests: vi.fn() }));
+
 vi.mock("../api/dashboard", () => ({ dashboardApi: mockDashboardApi }));
+vi.mock("../api/stewardships", () => ({ stewardshipsApi: mockStewardshipsApi }));
+vi.mock("../api/connector-send-executions", () => ({
+  connectorSendExecutionsApi: mockConnectorSendApi,
+}));
+vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
+
+/** What a capability-gated route answers for a company without it. */
+function notFound() {
+  return Promise.reject(Object.assign(new Error("Not found"), { status: 404 }));
+}
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompanyId: "company-1" }),
 }));
@@ -97,6 +116,14 @@ describe("Decisions", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockDashboardApi.waitingOnYou.mockResolvedValue(waitingWith());
+    // Default: every extra source is gated off (a default-profile company).
+    mockStewardshipsApi.getMyInbox.mockImplementation(notFound);
+    mockStewardshipsApi.getOverrideInbox.mockImplementation(notFound);
+    mockStewardshipsApi.myFactRequests.mockImplementation(notFound);
+    mockConnectorSendApi.listUnresolved.mockImplementation(notFound);
+    mockAccessApi.listJoinRequests.mockImplementation(() =>
+      Promise.reject(Object.assign(new Error("Forbidden"), { status: 403 })),
+    );
   });
 
   afterEach(async () => {
@@ -197,5 +224,132 @@ describe("Decisions", () => {
     // The noise is reachable but muted, not counted.
     expect(q("decisions-count")?.textContent).toBe("0");
     expect(q("decisions-other")?.textContent).toContain("1");
+  });
+  const EMPTY_WAITING = {
+    decisions: [],
+    total: 0,
+    shown: 0,
+    tasksAssignedToYou: [],
+    tasksAssignedToYouTotal: 0,
+    otherTasksAssignedToYou: [],
+    otherTasksAssignedToYouTotal: 0,
+  };
+
+  function inboxItem(approvalId: string, type: string, agentName = "Casper") {
+    return {
+      approvalId,
+      type,
+      status: "pending",
+      revision: 1,
+      payload: {},
+      createdAt: new Date().toISOString(),
+      decidedAt: null,
+      expiresAt: null,
+      requestingAgent: { id: "agent-1", name: agentName, role: "general" },
+      sourceIssues: [{ id: "iss-1", identifier: "MK-7", title: "Send the Q3 update", status: "in_progress" }],
+      risk: { level: "high", reason: "sends outside the company" },
+      effectiveAuthority: { steward: null, minimumApproval: null },
+      decisionHistory: {
+        decidedAt: null,
+        decidedByUserId: null,
+        decisionChannel: null,
+        decisionActorRole: null,
+        overrideReason: null,
+        supersededAt: null,
+      },
+      requiresOverride: false,
+    };
+  }
+
+  it("shows nothing extra and no error when the gated sources 404", async () => {
+    await render();
+    for (const id of [
+      "decisions-steward",
+      "decisions-questions",
+      "decisions-connector-sends",
+      "decisions-join-requests",
+      "decisions-override",
+    ]) {
+      expect(q(id), id).toBeNull();
+    }
+    expect(container.querySelector(".text-destructive")).toBeNull();
+    expect(q("decisions-row")).not.toBeNull();
+  });
+
+  it("surfaces steward, question, connector-send, join and override items when their APIs answer", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue(waitingWith(EMPTY_WAITING));
+    mockStewardshipsApi.getMyInbox.mockResolvedValue({
+      stewardedAgent: { id: "agent-1", name: "Casper", role: "general", status: "active" },
+      items: [inboxItem("appr-mk-1", "connector_send")],
+    });
+    mockStewardshipsApi.getOverrideInbox.mockResolvedValue({
+      items: [inboxItem("appr-mk-1", "connector_send"), inboxItem("appr-mk-2", "hire_agent", "Priya")],
+    });
+    mockStewardshipsApi.myFactRequests.mockResolvedValue({
+      factRequests: [
+        {
+          id: "fr-1",
+          factKey: "fiscal_year_end",
+          question: "When does the fiscal year end?",
+          pipelineId: "p-1",
+          runId: "r-1",
+          status: "open",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    });
+    mockConnectorSendApi.listUnresolved.mockResolvedValue({
+      items: [
+        {
+          id: "cse-1",
+          provider: "hubspot",
+          objectType: "contact",
+          operation: "update",
+          outcome: "outcome_unknown",
+          reason: "timeout",
+          requestedByAgentId: "agent-1",
+          executedAt: new Date().toISOString(),
+          revision: 0,
+        },
+      ],
+    });
+    mockAccessApi.listJoinRequests.mockResolvedValue([{ id: "jr-1" }, { id: "jr-2" }]);
+
+    await render();
+
+    // With extra items waiting, the page does not claim nothing needs you.
+    expect(q("decisions-empty")).toBeNull();
+
+    const steward = q("decisions-steward")!;
+    expect(steward.textContent).toContain("Casper is waiting on you");
+    expect(steward.textContent).toContain("Casper wants to send something outside the company");
+    expect(steward.textContent).toContain("sends outside the company");
+    expect(steward.querySelector('a[href="/approvals/appr-mk-1"]')).toBeTruthy();
+
+    const questions = q("decisions-questions")!;
+    expect(questions.textContent).toContain("When does the fiscal year end?");
+    expect(questions.querySelector('a[href="/my-agent"]')).toBeTruthy();
+
+    const sends = q("decisions-connector-sends")!;
+    expect(sends.textContent).toContain("hubspot update contact: outcome unknown");
+
+    const joins = q("decisions-join-requests")!;
+    expect(joins.textContent).toContain("2 requests to join the company");
+    expect(joins.querySelector('a[href="/inbox/requests"]')).toBeTruthy();
+
+    // The override entry counts only what is not already listed above.
+    const override = q("decisions-override")!;
+    expect(override.textContent).toContain("1 company approval open to the override view");
+    expect(override.querySelector('a[href="/inbox/override"]')).toBeTruthy();
+  });
+
+  it("does not list a steward approval twice when the main list already has it", async () => {
+    mockStewardshipsApi.getMyInbox.mockResolvedValue({
+      stewardedAgent: { id: "agent-1", name: "Casper", role: "general", status: "active" },
+      items: [inboxItem("appr-1", "hire_agent")],
+    });
+    await render();
+    expect(q("decisions-row")).not.toBeNull();
+    expect(q("decisions-steward")).toBeNull();
   });
 });

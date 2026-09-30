@@ -39,6 +39,12 @@ jobs:
         # (upstream-digest.yml, 2026-05-10 → 2026-09-01); this fails the PR instead.
         run: node scripts/ci/check-workflow-block-scalars.mjs && node --test scripts/ci/check-workflow-block-scalars.test.mjs
 
+      - name: One UX — no profile-driven navigation in ui/src
+        # doc/plans/2026-09-30-one-ux.md: the UI does not branch on
+        # productProfile. Files that still do are on
+        # scripts/ci/profile-ux-allowlist.json, which may only shrink.
+        run: node scripts/ci/check-no-profile-ux.mjs && node --test scripts/ci/check-no-profile-ux.test.mjs
+
       - name: Release log is complete and indexed
         # releases/*.md is the release log (GitHub Release bodies, in-app
         # Changelog). Fails when a stable tag has no notes, a note has no

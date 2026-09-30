@@ -6,7 +6,14 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SidebarAgents } from "./SidebarAgents";
+import { SidebarAgentRows, useSidebarAgentRows } from "./SidebarAgents";
+
+// The agent rows as the Team item nests them (SidebarTeamItem), without its
+// disclosure — the row behaviour under test is the same.
+function SidebarAgents() {
+  const rows = useSidebarAgentRows();
+  return <SidebarAgentRows {...rows} />;
+}
 
 const mockAgentsApi = vi.hoisted(() => ({
   list: vi.fn(),

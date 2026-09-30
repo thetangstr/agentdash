@@ -18,9 +18,8 @@ export function decisionsListLength(data: WaitingOnYou | undefined): number {
 }
 
 /**
- * The shared waiting-on-you query, read as a badge count. `enabled` is the
- * profile gate — the agentdash_mk profile keeps its own Inbox badge and
- * never asks this question.
+ * The shared waiting-on-you query, read as a badge count — the one badge
+ * every company's sidebar and mobile nav show (doc/plans/2026-09-30-one-ux.md).
  */
 export function useDecisionsBadge(companyId: string | null | undefined, enabled = true): number {
   const { data } = useQuery({

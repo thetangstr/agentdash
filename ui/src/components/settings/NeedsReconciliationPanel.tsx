@@ -23,7 +23,7 @@ interface Props {
  * next to the ceilings it belongs to reads more honestly and keeps this slice's
  * footprint off a 2,600-line file.
  *
- * Authority is resolved server-side: the list route 404s off `agentdash_mk` and
+ * Authority is resolved server-side: the list route 404s without the capability and
  * 403s a member who is neither owner/admin nor the requesting steward. A 403 is
  * shown as a refusal, never an empty list, so the surface never implies
  * "nothing to reconcile" to someone who simply cannot see it. Reconcile records

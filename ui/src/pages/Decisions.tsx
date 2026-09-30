@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@/lib/router";
 import {
@@ -22,10 +22,12 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { cn } from "../lib/utils";
+import { DecisionsOtherSources, useDecisionsOtherSources } from "./DecisionsOtherSources";
 
 /**
  * AgentDash: UX-7 (GH #788) — one Decisions page instead of Inbox +
- * Approvals, on the default profile. Everything on it comes from
+ * Approvals, for every company (one UX, doc/plans/2026-09-30-one-ux.md).
+ * The main list comes from
  * GET /assistant/pending-decisions — the same waiting-on-you query Home's
  * block and the assistant's list_pending_decisions read, so the three
  * surfaces can never disagree about what needs the person.
@@ -132,6 +134,11 @@ export function Decisions() {
     enabled: !!selectedCompanyId,
     refetchInterval: 30_000,
   });
+  const shownApprovalIds = useMemo(
+    () => new Set((waiting?.decisions ?? []).map((decision) => decision.approvalId)),
+    [waiting],
+  );
+  const otherSources = useDecisionsOtherSources(selectedCompanyId, shownApprovalIds);
 
   if (!selectedCompanyId) {
     return <p className="text-sm text-muted-foreground">Select a company first.</p>;
@@ -171,7 +178,7 @@ export function Decisions() {
         </p>
       ) : null}
 
-      {waiting && mainCount === 0 ? (
+      {waiting && mainCount === 0 && otherSources.total === 0 ? (
         <div
           data-testid="decisions-empty"
           className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-center"
@@ -218,6 +225,8 @@ export function Decisions() {
           </Link>
         </p>
       ) : null}
+
+      <DecisionsOtherSources sources={otherSources} />
 
       {otherTasks.length > 0 ? (
         <section className="rounded-xl border border-border bg-card" data-testid="decisions-other">

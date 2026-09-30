@@ -4,7 +4,7 @@ import { DEFAULT_DESTRUCTIVE_ACTION_CLASSES } from "@paperclipai/shared";
  * AgentDash-MK: read-only onboarding display of the default destructive-action
  * class list (T5a-3). See doc/plans/2026-08-04-t5-destructive-classifier.md.
  *
- * Shown to the owner at agentdash_mk company governance setup, next to the
+ * Shown to the owner at governance setup (stewardship capability), next to the
  * `destructiveActions` ceiling control, so they can see exactly which agent
  * actions that mode applies to. The list is the shared code constant the
  * server-side classifier enforces (T5a-1) — the display and the enforcement

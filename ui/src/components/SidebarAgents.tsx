@@ -2,15 +2,12 @@ import { useMemo, useState } from "react";
 import { Link, NavLink, useLocation } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronRight,
   MoreHorizontal,
   PauseCircle,
   Pencil,
   PlayCircle,
-  Plus,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
-import { useDialogActions } from "../context/DialogContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { agentsApi } from "../api/agents";
@@ -23,11 +20,6 @@ import { useAgentOrder } from "../hooks/useAgentOrder";
 import { AgentIcon } from "./AgentIconPicker";
 import { BudgetSidebarMarker } from "./BudgetSidebarMarker";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -153,9 +145,8 @@ function SidebarAgentItem({
   );
 }
 
-// AgentDash: the row data behind the agent list, shared by the MK "Agents"
-// section (SidebarAgents) and the default profile's collapsible list under
-// Team (SidebarTeamItem). One hook so both render identical rows.
+// AgentDash: the row data behind the agent list nested under Team
+// (SidebarTeamItem) — one sidebar for every company (doc/plans/2026-09-30-one-ux.md).
 export function useSidebarAgentRows() {
   const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(() => new Set());
   const queryClient = useQueryClient();
@@ -297,45 +288,5 @@ export function SidebarAgentRows({
         );
       })}
     </div>
-  );
-}
-
-export function SidebarAgents() {
-  const [open, setOpen] = useState(true);
-  const { openNewAgent } = useDialogActions();
-  const rows = useSidebarAgentRows();
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="group">
-        <div className="flex items-center px-3 py-1.5">
-          <CollapsibleTrigger className="flex items-center gap-1 flex-1 min-w-0">
-            <ChevronRight
-              className={cn(
-                "h-3 w-3 text-muted-foreground/60 transition-transform opacity-0 group-hover:opacity-100",
-                open && "rotate-90"
-              )}
-            />
-            <span className="text-[10px] font-medium uppercase tracking-widest font-mono text-muted-foreground/60">
-              Agents
-            </span>
-          </CollapsibleTrigger>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openNewAgent();
-            }}
-            className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-colors"
-            aria-label="New agent"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-
-      <CollapsibleContent>
-        <SidebarAgentRows {...rows} />
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
