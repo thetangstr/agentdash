@@ -16,6 +16,7 @@ import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
 import { declaredOriginsEnabled, normalizeOrigin } from "../lib/declared-origins.js";
 import { isHostedBox } from "../services/license.js";
 import { boxClaimedCached } from "../lib/claim-code.js";
+import { servedRelease } from "../lib/served-release.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
 // creation + instance-admin promotion behind an env flag so existing
@@ -84,17 +85,26 @@ export function healthRoutes(
     const hostedBox = isHostedBox();
     // AgentDash: release tag, on every response shape (see currentReleaseTag above).
     const releaseTag = currentReleaseTag();
+    // AgentDash: the commit of the immutable release this process was loaded
+    // from, when it runs from one. ota-apply.mjs waits for it to match the
+    // release it just switched to, so an old process still answering after a
+    // restart that did nothing is not mistaken for a successful update.
+    const releaseCommit = servedRelease()?.commit;
+    const release = {
+      ...(releaseTag ? { releaseTag } : {}),
+      ...(releaseCommit ? { releaseCommit } : {}),
+    };
 
     if (!db) {
       res.json(
         exposeFullDetails
-          ? { status: "ok", version: serverVersion, hostedBox, ...(releaseTag ? { releaseTag } : {}) }
+          ? { status: "ok", version: serverVersion, hostedBox, ...release }
           : {
               status: "ok",
               deploymentMode: opts.deploymentMode,
               hostedBox,
               version: serverVersion,
-              ...(releaseTag ? { releaseTag } : {}),
+              ...release,
             },
       );
       return;
@@ -112,7 +122,7 @@ export function healthRoutes(
         status: "unhealthy",
         version: serverVersion,
         error: "database_unreachable",
-        ...(releaseTag ? { releaseTag } : {}),
+        ...release,
       });
       return;
     }
@@ -200,7 +210,7 @@ export function healthRoutes(
         deploymentMode: opts.deploymentMode,
         hostedBox,
         version: serverVersion,
-        ...(releaseTag ? { releaseTag } : {}),
+        ...release,
         bootstrapStatus,
         bootstrapInviteActive,
         selfServeBootstrap,
@@ -223,7 +233,7 @@ export function healthRoutes(
       runs: checks.runs,
       alerter: alerterStatus(),
       version: serverVersion,
-      ...(releaseTag ? { releaseTag } : {}),
+      ...release,
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
       hostedBox,

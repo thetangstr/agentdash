@@ -14,6 +14,10 @@
 # daily check ran a legacy updater and reported a commit nothing was serving. A
 # healthy `ota-apply.mjs --tag` also installs this wrapper and both tools into
 # ~/.agentdash/bin, which is where com.agentdash.update runs this file from.
+# The refresh never downgrades: it is skipped when the serving release's
+# ota-apply.mjs declares an older UPDATER_VERSION than the installed one (a
+# rollback to a release that predates an updater fix), and the two files are
+# replaced together or not at all.
 #
 # The git clone is only a source of releases here (`--repo-dir`): the check
 # fetches tags from it and reads nothing else. AGENTDASH_REPO_DIR names it;
@@ -60,9 +64,60 @@ if [ -f "$RELEASES_ROOT/current/scripts/deploy/ota-apply.mjs" ] && [ -f "$RELEAS
   TOOLS_DIR="$RELEASES_ROOT/current"
 fi
 
-mkdir -p "$BIN_DIR"
-install -m 755 "$TOOLS_DIR/scripts/deploy/ota-apply.mjs" "$UPDATER"
-install -m 755 "$TOOLS_DIR/scripts/deploy/ota-release-layout.mjs" "$BIN_DIR/ota-release-layout.mjs"
+# UPDATER_VERSION declared by an ota-apply.mjs (see that file); 0 when absent,
+# which is every updater written before the constant existed.
+updater_version() {
+  v="$(sed -n 's/^export const UPDATER_VERSION = \([0-9][0-9]*\);$/\1/p' "$1" 2>/dev/null | head -n 1)"
+  echo "${v:-0}"
+}
+
+# Refresh the installed pair from TOOLS_DIR, but never downgrade it: after a
+# rollback to a release that predates an updater fix, releases/current holds
+# the OLD updater, and copying it over the installed one would take the fix
+# away. Both files are staged first and renamed into place together; if the
+# second rename fails the first is put back, so the pair is never mixed.
+refresh_updater() {
+  src_apply="$TOOLS_DIR/scripts/deploy/ota-apply.mjs"
+  src_layout="$TOOLS_DIR/scripts/deploy/ota-release-layout.mjs"
+  dst_layout="$BIN_DIR/ota-release-layout.mjs"
+  if [ -f "$UPDATER" ]; then
+    have="$(updater_version "$UPDATER")"
+    offered="$(updater_version "$src_apply")"
+    if [ "$offered" -lt "$have" ]; then
+      echo "[update] kept the installed updater (version $have); $TOOLS_DIR offers the older version $offered"
+      return 0
+    fi
+  fi
+  mkdir -p "$BIN_DIR"
+  tmp_apply="$BIN_DIR/.ota-apply.mjs.$$.tmp"
+  tmp_layout="$BIN_DIR/.ota-release-layout.mjs.$$.tmp"
+  if ! cp "$src_apply" "$tmp_apply" || ! cp "$src_layout" "$tmp_layout" \
+    || ! chmod 755 "$tmp_apply" "$tmp_layout"; then
+    rm -f "$tmp_apply" "$tmp_layout"
+    echo "[update] could not stage the updater from $TOOLS_DIR; $BIN_DIR left as it was" >&2
+    return 1
+  fi
+  prev_layout=""
+  if [ -f "$dst_layout" ]; then
+    prev_layout="$BIN_DIR/.ota-release-layout.mjs.$$.prev"
+    cp -p "$dst_layout" "$prev_layout" || { rm -f "$tmp_apply" "$tmp_layout"; return 1; }
+  fi
+  if ! mv -f "$tmp_layout" "$dst_layout"; then
+    rm -f "$tmp_apply" "$tmp_layout" ${prev_layout:+"$prev_layout"}
+    echo "[update] could not install the updater; $BIN_DIR left as it was" >&2
+    return 1
+  fi
+  if ! mv -f "$tmp_apply" "$UPDATER"; then
+    if [ -n "$prev_layout" ]; then mv -f "$prev_layout" "$dst_layout"; else rm -f "$dst_layout"; fi
+    rm -f "$tmp_apply"
+    echo "[update] could not install the updater; $BIN_DIR put back as it was" >&2
+    return 1
+  fi
+  [ -n "$prev_layout" ] && rm -f "$prev_layout"
+  return 0
+}
+
+refresh_updater
 
 echo "[update] $(date -u +%Y-%m-%dT%H:%M:%SZ) instance=$INSTANCE apply=${AGENTDASH_UPDATE_APPLY:-0} tools=$TOOLS_DIR repo=$REPO_DIR"
 

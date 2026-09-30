@@ -9,10 +9,11 @@
 //
 // The stage order is the safety property, and it is not arbitrary:
 //
-//   provenance → approval → restart command → compatibility → backup
-//   → materialize → switch → restart → health
+//   provenance → approval → restart command → compatibility
+//   → served-release check → backup → materialize → switch → restart
+//   → health (ok AND serving the new commit)
 //   → (rollback on failure | refresh the updater copies and prune on success)
-//   → receipt
+//   → receipt, consuming the approval once the apply completed
 //
 // Everything that can refuse does so BEFORE anything is mutated. Materializing
 // happens before the switch, so a build failure costs a directory and not an
@@ -154,10 +155,31 @@ export function evaluateMigrationPolicy({ pending, allowMigrations }) {
   };
 }
 
-/** Does this approval authorize this exact commit? Mirrors the TS planner. */
-export function approvalAuthorizes({ approval, tag, commit }) {
+/**
+ * Does this approval authorize this exact commit? Mirrors the TS planner.
+ *
+ * An approval is single-use: a completed apply or rollback moves it out of
+ * `pending-approval.json` (see consumeApproval), so it cannot authorize the
+ * same release again later. `consumedAt` is refused here too, as a second
+ * line for a file that was restored by hand. `expiresAt` is optional; when
+ * present it must parse and be in the future.
+ */
+export function approvalAuthorizes({ approval, tag, commit, now = Date.now() }) {
   if (!approval) return { ok: false, reason: "No approval on record. A human must approve this release first." };
   if (approval.status !== "approved") return { ok: false, reason: `Approval is '${approval.status}', not 'approved'.` };
+  if (approval.consumedAt) {
+    return { ok: false, reason: `This approval was already used at ${approval.consumedAt}. Approvals are single-use; approve again.` };
+  }
+  if (approval.expiresAt !== undefined && approval.expiresAt !== null) {
+    const expires = Date.parse(String(approval.expiresAt));
+    if (!Number.isFinite(expires)) {
+      return { ok: false, reason: `The approval's expiresAt '${approval.expiresAt}' is not a date. Refusing rather than guessing.` };
+    }
+    const nowMs = typeof now === "number" ? now : Date.parse(String(now));
+    if (nowMs >= expires) {
+      return { ok: false, reason: `The approval expired at ${approval.expiresAt}. Approve again.` };
+    }
+  }
   if (approval.commit !== commit) {
     return { ok: false, reason: "The approval is for a different commit than the release being applied." };
   }
@@ -165,6 +187,53 @@ export function approvalAuthorizes({ approval, tag, commit }) {
     return { ok: false, reason: `The approval is for tag '${approval.tag}', not '${tag}'.` };
   }
   return { ok: true };
+}
+
+/** Where used approvals go: out of the path the apply reads, kept for the audit trail. */
+export const USED_APPROVALS_DIRNAME = "used-approvals";
+
+/**
+ * Make an approval single-use.
+ *
+ * Called after the receipt of an apply that completed: `applied`, or
+ * `rolled_back` (the approval was acted on; the release was tried and
+ * refused by health). The file is moved, never rewritten in place, so
+ * `pending-approval.json` keeps exactly the shape the board writes and reads,
+ * and the next run finds no approval rather than a reusable one. The moved
+ * copy carries `consumedAt`, `consumedByReceipt` and `consumedOutcome`.
+ *
+ * Only the approval that was checked is consumed: if the file now holds a
+ * different approval (someone approved a newer release mid-apply), it is left
+ * alone and the result says so.
+ */
+export function consumeApproval({ stateDir, approval, receiptPath, outcome, now = nowIso() }) {
+  const approvalPath = path.join(stateDir, APPROVAL_FILENAME);
+  const onDisk = readJsonFile(approvalPath);
+  if (!onDisk) return { consumed: false, detail: "no approval file to consume" };
+  if (onDisk.id !== approval?.id || onDisk.tag !== approval?.tag || onDisk.commit !== approval?.commit) {
+    return { consumed: false, detail: "the approval file changed during the apply; left as it is" };
+  }
+  const usedDir = path.join(stateDir, USED_APPROVALS_DIRNAME);
+  mkdirSync(usedDir, { recursive: true });
+  const receiptName = receiptPath ? path.basename(receiptPath, ".json") : `${String(now).replace(/[:.]/g, "-")}-no-receipt`;
+  const safeId = String(onDisk.id ?? "unknown").replace(/[^A-Za-z0-9_-]/g, "_");
+  const usedPath = path.join(usedDir, `${receiptName}-${safeId}.json`);
+  // One atomic rename takes the approval out of the path the gate reads; only
+  // then is the moved copy annotated. A crash between the two leaves an
+  // unannotated record, never a reusable approval.
+  renameSync(approvalPath, usedPath);
+  try {
+    const temp = `${usedPath}.${process.pid}.tmp`;
+    writeFileSync(
+      temp,
+      `${JSON.stringify({ ...onDisk, consumedAt: now, consumedByReceipt: receiptPath ?? null, consumedOutcome: outcome }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    renameSync(temp, usedPath);
+  } catch (error) {
+    return { consumed: true, detail: `moved to ${usedPath} (not annotated: ${error.message})`, path: usedPath };
+  }
+  return { consumed: true, detail: `moved to ${usedPath}`, path: usedPath };
 }
 
 function git(repoDir, args, timeoutMs = 0) {
@@ -447,11 +516,41 @@ export const UPDATER_TOOL_FILES = [
 ];
 
 /**
+ * The updater's own version. Bump it whenever the updater's behaviour changes
+ * (these three files), so that nothing can replace an installed updater with
+ * an older one: a rollback to a release that predates a fix must not take
+ * that fix away from `~/.agentdash/bin`. `deploy/agentdash-update.sh` reads
+ * this line with grep, so keep it a single `export const UPDATER_VERSION = <n>;`
+ * line. A file without it is version 0 (everything before this constant).
+ *
+ * 1: single-use approvals, the served-release check, no updater downgrade.
+ */
+export const UPDATER_VERSION = 1;
+
+const UPDATER_VERSION_LINE = /^export const UPDATER_VERSION = (\d+);$/m;
+
+/** UPDATER_VERSION declared by an ota-apply.mjs on disk: 0 when absent, null when the file is missing. */
+export function readUpdaterVersion(filePath) {
+  let text;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  const match = UPDATER_VERSION_LINE.exec(text);
+  return match ? Number(match[1]) : 0;
+}
+
+/**
  * Install the updater tools from a release into a bin directory.
  *
  * All or nothing: `ota-apply.mjs` imports `ota-release-layout.mjs`, so a pair
  * from two different releases is a broken tool. Every file is staged beside its
  * destination first and only then renamed into place.
+ *
+ * Never a downgrade: when the installed `ota-apply.mjs` declares a higher
+ * UPDATER_VERSION than the release's, nothing is replaced and the result says
+ * so (`skipped: true`).
  */
 export function installUpdaterTools({ releaseDir, binDir }) {
   const missing = UPDATER_TOOL_FILES.filter((file) => !existsSync(path.join(releaseDir, file.from)));
@@ -459,6 +558,16 @@ export function installUpdaterTools({ releaseDir, binDir }) {
     throw new Error(
       `the release has no ${missing.map((file) => file.from).join(", ")}; ${binDir} was left as it was`,
     );
+  }
+  const releaseVersion = readUpdaterVersion(path.join(releaseDir, "scripts", "deploy", "ota-apply.mjs")) ?? 0;
+  const installedVersion = readUpdaterVersion(path.join(binDir, "ota-apply.mjs"));
+  if (installedVersion !== null && installedVersion > releaseVersion) {
+    return {
+      binDir,
+      installed: [],
+      skipped: true,
+      detail: `kept the installed updater (version ${installedVersion}); the release's is older (version ${releaseVersion})`,
+    };
   }
   mkdirSync(binDir, { recursive: true });
   const staged = [];
@@ -496,7 +605,7 @@ export function installUpdaterTools({ releaseDir, binDir }) {
     throw error;
   }
   for (const entry of staged) if (entry.backup) rmSync(entry.backup, { force: true });
-  return { binDir, installed: UPDATER_TOOL_FILES.map((file) => file.to) };
+  return { binDir, installed: UPDATER_TOOL_FILES.map((file) => file.to), version: releaseVersion };
 }
 
 /** Do two paths name the same directory? Resolves symlinks when they exist. */
@@ -512,16 +621,53 @@ function samePath(a, b) {
   return real(a) === real(b);
 }
 
-async function defaultCheckHealth(url, timeoutSec, intervalMs, log) {
+/** The /api/health field that names the commit of the release being served. */
+export const SERVED_COMMIT_HEALTH_FIELD = "releaseCommit";
+
+/**
+ * Does this release's server report SERVED_COMMIT_HEALTH_FIELD in /api/health?
+ * Read from the release's own source, because a release that predates the
+ * field can only ever answer health without it.
+ */
+export function releaseReportsCommit(releaseDir) {
+  try {
+    const source = readFileSync(path.join(releaseDir, "server", "src", "routes", "health.ts"), "utf8");
+    return new RegExp(`\\b${SERVED_COMMIT_HEALTH_FIELD}\\b`).test(source);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Poll /api/health until it is ok — and, when `expectCommit` is given, until
+ * it also reports that commit as the release being served.
+ *
+ * "ok" alone is not proof of an update: a restart that did nothing leaves the
+ * old process answering, healthy, from the old release. A body that is ok but
+ * names another commit (or none) is therefore not success; polling continues
+ * until the deadline, since the old process may still be draining.
+ */
+export async function defaultCheckHealth(url, timeoutSec, intervalMs, log, { expectCommit = null } = {}) {
   const deadline = Date.now() + timeoutSec * 1000;
   let lastError = "never responded";
+  let servedCommit;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
         const body = await response.json().catch(() => ({}));
-        if (!body.status || body.status === "ok") return { ok: true, detail: `HTTP ${response.status}` };
-        lastError = `status=${body.status}`;
+        if (!body.status || body.status === "ok") {
+          servedCommit = typeof body[SERVED_COMMIT_HEALTH_FIELD] === "string" ? body[SERVED_COMMIT_HEALTH_FIELD] : undefined;
+          if (!expectCommit) return { ok: true, detail: `HTTP ${response.status}`, servedCommit };
+          if (servedCommit === expectCommit) {
+            return { ok: true, detail: `HTTP ${response.status}, serving ${expectCommit.slice(0, 12)}`, servedCommit };
+          }
+          lastError = servedCommit
+            ? `healthy but serving ${servedCommit.slice(0, 12)}, not ${expectCommit.slice(0, 12)} (the old process is still answering)`
+            : `healthy but reports no ${SERVED_COMMIT_HEALTH_FIELD}; expected ${expectCommit.slice(0, 12)} (the old process is still answering)`;
+        } else {
+          lastError = `status=${body.status}`;
+        }
       } else {
         lastError = `HTTP ${response.status}`;
       }
@@ -531,7 +677,43 @@ async function defaultCheckHealth(url, timeoutSec, intervalMs, log) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   log?.(`[ota] health did not come back within ${timeoutSec}s (last: ${lastError})`);
-  return { ok: false, detail: lastError };
+  return { ok: false, detail: lastError, servedCommit };
+}
+
+/**
+ * What health must report for `releaseDir` to count as served, or why it
+ * cannot be checked. Used for the rollback target, which may be an older
+ * release that predates the field: there, health ok without it is accepted
+ * and the receipt says the served release was not verified.
+ */
+function servedReleaseExpectation(releaseDir, deps) {
+  if (!releaseDir) return { expectCommit: null, reason: "no release directory" };
+  const marker = deps.readReleaseMarker(releaseDir);
+  if (!marker || marker.complete !== true || typeof marker.commit !== "string") {
+    return { expectCommit: null, reason: `${releaseDir} has no completion marker to take its commit from` };
+  }
+  if (!deps.releaseReportsCommit(releaseDir)) {
+    return { expectCommit: null, reason: `${path.basename(releaseDir)} predates ${SERVED_COMMIT_HEALTH_FIELD} in /api/health` };
+  }
+  return { expectCommit: marker.commit, reason: null };
+}
+
+/**
+ * Health said ok; does that prove `expectCommit` is served? Also guards a
+ * checkHealth that ignored the expectation and reported another commit.
+ */
+function verifyServed(healthy, expectCommit) {
+  if (!healthy.ok || !expectCommit) return healthy;
+  if (healthy.servedCommit !== expectCommit) {
+    return {
+      ok: false,
+      detail: healthy.servedCommit
+        ? `healthy but serving ${String(healthy.servedCommit).slice(0, 12)}, not ${expectCommit.slice(0, 12)}`
+        : `healthy but no ${SERVED_COMMIT_HEALTH_FIELD} reported; expected ${expectCommit.slice(0, 12)}`,
+      servedCommit: healthy.servedCommit,
+    };
+  }
+  return healthy;
 }
 
 function defaultRunCommand(command, label) {
@@ -557,6 +739,7 @@ export const defaultDeps = {
   resolveTagCommit,
   commitIsOnMain,
   checkHealth: defaultCheckHealth,
+  releaseReportsCommit,
   runCommand: defaultRunCommand,
   now: nowIso,
   log: (message) => console.log(message),
@@ -628,10 +811,19 @@ export async function runApply(input, overrides = {}) {
 
   // ---- 2. Approval ----------------------------------------------------------
   const approval = readJsonFile(path.join(stateDir, APPROVAL_FILENAME));
+  // The approval this run acts on. persistOutcome consumes it once the apply
+  // completes (applied or rolled back), so it authorizes exactly one attempt.
+  let usedApproval = null;
   if (input.requireApproval !== false) {
-    const authorized = approvalAuthorizes({ approval, tag: input.tag, commit });
+    const authorized = approvalAuthorizes({ approval, tag: input.tag, commit, now: deps.now() });
     if (!authorized.ok) return fail("approval", authorized.reason);
-    record("approval", "passed", `approved by ${approval.decidedByUserId} at ${approval.decidedAt}`);
+    usedApproval = approval;
+    record(
+      "approval",
+      "passed",
+      `approved by ${approval.decidedByUserId} at ${approval.decidedAt}`
+      + `${approval.expiresAt ? `, expires ${approval.expiresAt}` : ""}; single-use, consumed when this apply completes`,
+    );
   } else {
     record("approval", "skipped", "approval gate explicitly disabled for this run");
   }
@@ -694,20 +886,33 @@ export async function runApply(input, overrides = {}) {
         installedState?.current?.releaseDir,
         installedState?.previous?.releaseDir,
       ];
+      // The same protections pruning applies: a live process, or an installed
+      // launchd job whose plist names this directory (it would start from a
+      // half-deleted tree on its next launch).
       let inUse;
+      let configured;
       try {
         inUse = deps.releasesInUse(input.releasesRoot);
+        configured = deps.releasesInPlists(input.releasesRoot, input.launchdPlistDirs ?? []);
       } catch (error) {
         return fail(
           "materialize",
-          `${materialized.releaseDir} has no completion marker, and whether a process still uses it cannot be checked `
+          `${materialized.releaseDir} has no completion marker, and whether a process or a launchd job still uses it cannot be checked `
           + `(${error.message}). It was not removed; nothing was changed.`,
         );
       }
-      if (inUse.includes(path.basename(materialized.releaseDir))) {
+      const leftoverName = path.basename(materialized.releaseDir);
+      if (inUse.includes(leftoverName)) {
         return fail(
           "materialize",
           `${materialized.releaseDir} has no completion marker, but a running process still uses it, so it will not be removed. Nothing was changed.`,
+        );
+      }
+      if (configured.includes(leftoverName)) {
+        return fail(
+          "materialize",
+          `${materialized.releaseDir} has no completion marker, but an installed launchd plist names it, so it will not be removed. `
+          + "Nothing was changed. Point that job at another release (or unload it), then re-run.",
         );
       }
       if (serving.some((dir) => samePath(dir, materialized.releaseDir))) {
@@ -736,6 +941,20 @@ export async function runApply(input, overrides = {}) {
   const policy = evaluateMigrationPolicy({ pending, allowMigrations: Boolean(input.allowMigrations) });
   if (!policy.ok) return fail("compatibility", policy.reason, { pendingMigrations: pending });
   record("compatibility", "passed", policy.reason);
+
+  // ---- 3b. Served-release check --------------------------------------------
+  // After the restart, health must report this commit as the release being
+  // served; "ok" from the old process is not an update. That needs the target
+  // to report it. A target that predates the field could never pass, so it is
+  // refused here, before anything is backed up or switched.
+  if (!deps.releaseReportsCommit(materialized.releaseDir)) {
+    return fail(
+      "served_release",
+      `${path.basename(materialized.releaseDir)} predates ${SERVED_COMMIT_HEALTH_FIELD} in /api/health, so this updater cannot `
+      + "verify that it is the release being served after the restart. Nothing was changed.",
+    );
+  }
+  record("served_release", "passed", `after the restart, /api/health must report ${SERVED_COMMIT_HEALTH_FIELD}=${commit.slice(0, 12)}`);
 
   if (input.dryRun) {
     record("dry_run", "passed", "stopped before backup; nothing was switched");
@@ -783,15 +1002,20 @@ export async function runApply(input, overrides = {}) {
       // Nothing has been switched yet, so the running instance is untouched.
       return fail("materialize", `Build failed (nothing was switched): ${error.message}`);
     }
-    // Last, so its presence means every step before it finished. Not fatal:
-    // without it a rerun rebuilds this directory, which is slower, not wrong.
-    let marker = "completion marker written";
+    // Last, so its presence means every step before it finished. It is also
+    // where the server reads the commit it reports in /api/health, so without
+    // it the served-release check could never pass: fail now, before the
+    // switch, rather than roll back after it. A rerun rebuilds the directory.
     try {
       deps.writeReleaseMarker(materialized.releaseDir, { tag: input.tag, commit, now: deps.now() });
     } catch (error) {
-      marker = `completion marker NOT written (${error.message}); a rerun will rebuild this directory`;
+      return fail(
+        "materialize",
+        `The completion marker could not be written (${error.message}); the server reads its commit from it, so the `
+        + "update could not be verified. Nothing was switched; a rerun rebuilds this directory.",
+      );
     }
-    record("materialize", "passed", `${materialized.releaseDir}; ${marker}`);
+    record("materialize", "passed", `${materialized.releaseDir}; completion marker written`);
   }
 
   // ---- 6. Switch ------------------------------------------------------------
@@ -812,14 +1036,21 @@ export async function runApply(input, overrides = {}) {
   try {
     const restarted = runRestart();
     record("restart", "passed", restarted?.detail);
-    healthy = await deps.checkHealth(healthUrl, timeoutSec, input.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS, deps.log);
+    healthy = verifyServed(
+      await deps.checkHealth(healthUrl, timeoutSec, input.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS, deps.log, {
+        expectCommit: commit,
+      }),
+      commit,
+    );
   } catch (error) {
     healthy = { ok: false, detail: `restart failed: ${error.message}` };
     record("restart", "failed", healthy.detail);
   }
 
+  const approvalFields = usedApproval ? { approvalId: usedApproval.id ?? null, approval: usedApproval } : {};
+
   if (healthy.ok) {
-    record("health", "passed", healthy.detail);
+    record("health", "passed", `${healthy.detail}; served release verified (${SERVED_COMMIT_HEALTH_FIELD}=${commit.slice(0, 12)})`);
     housekeepAfterApply({ input, deps, record, releaseDir: materialized.releaseDir, previousReleaseDir });
     return {
       outcome: "applied",
@@ -827,6 +1058,7 @@ export async function runApply(input, overrides = {}) {
       commit,
       releaseDir: materialized.releaseDir,
       previousReleaseDir,
+      ...approvalFields,
       backupPath,
       pendingMigrations: pending,
       checks,
@@ -869,8 +1101,20 @@ export async function runApply(input, overrides = {}) {
     record("rollback_restart", "failed", `${error.message}; checking health anyway`);
   }
 
-  const recovered = await deps.checkHealth(healthUrl, timeoutSec, input.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS, deps.log);
-  record("rollback_health", recovered.ok ? "passed" : "failed", recovered.detail);
+  // The rollback target may be a release older than the served-release field.
+  // Then health ok without it is accepted, and the receipt says the served
+  // release was NOT verified; for a target that reports it, it must match.
+  const rollbackExpectation = servedReleaseExpectation(previousReleaseDir, deps);
+  const recovered = verifyServed(
+    await deps.checkHealth(healthUrl, timeoutSec, input.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS, deps.log, {
+      expectCommit: rollbackExpectation.expectCommit,
+    }),
+    rollbackExpectation.expectCommit,
+  );
+  const rollbackServed = rollbackExpectation.expectCommit
+    ? `served release verified (${SERVED_COMMIT_HEALTH_FIELD}=${rollbackExpectation.expectCommit.slice(0, 12)})`
+    : `served release NOT verified: ${rollbackExpectation.reason}; health ok accepted without it`;
+  record("rollback_health", recovered.ok ? "passed" : "failed", recovered.ok ? `${recovered.detail}; ${rollbackServed}` : recovered.detail);
 
   return {
     outcome: recovered.ok ? "rolled_back" : "failed",
@@ -879,6 +1123,7 @@ export async function runApply(input, overrides = {}) {
     releaseDir: previousReleaseDir,
     attemptedReleaseDir: materialized.releaseDir,
     previousReleaseDir,
+    ...approvalFields,
     backupPath,
     pendingMigrations: pending,
     checks,
@@ -903,7 +1148,8 @@ function housekeepAfterApply({ input, deps, record, releaseDir, previousReleaseD
   if (input.binDir) {
     try {
       const installed = deps.installUpdaterTools({ releaseDir, binDir: input.binDir });
-      record("install_updater", "passed", `${installed.installed.join(", ")} -> ${installed.binDir}`);
+      if (installed.skipped) record("install_updater", "skipped", installed.detail);
+      else record("install_updater", "passed", `${installed.installed.join(", ")} -> ${installed.binDir}`);
     } catch (error) {
       record("install_updater", "failed", `(non-fatal) ${error.message}`);
     }
@@ -984,12 +1230,33 @@ export function runPrune(input, overrides = {}) {
  * turn a successful, healthy update into a reported failure.
  */
 export function persistOutcome({ stateDir, result, mode = "source-release", channel = "stable" }) {
-  const written = { receiptPath: null, statePath: null, error: null };
+  const written = { receiptPath: null, statePath: null, approvalConsumed: null, error: null };
+  const receiptDir = path.join(stateDir, "receipts");
+  const stamp = String(result.finishedAt).replace(/[:.]/g, "-");
+  const receiptPath = path.join(receiptDir, `${stamp}-ota-${result.outcome}.json`);
+
+  // An approval authorizes one completed attempt. Consumed first and on its
+  // own, so a receipt that cannot be written never leaves it reusable. A run
+  // that failed before completing (a refused gate, a build failure, a
+  // rollback that did not recover) keeps it: nothing was settled.
+  let approvalConsumed = null;
+  if (result.approval && (result.outcome === "applied" || result.outcome === "rolled_back")) {
+    try {
+      approvalConsumed = consumeApproval({
+        stateDir,
+        approval: result.approval,
+        receiptPath,
+        outcome: result.outcome,
+        now: result.finishedAt,
+      });
+    } catch (error) {
+      approvalConsumed = { consumed: false, detail: `could not consume the approval: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    written.approvalConsumed = approvalConsumed;
+  }
+
   try {
-    const receiptDir = path.join(stateDir, "receipts");
     mkdirSync(receiptDir, { recursive: true });
-    const stamp = String(result.finishedAt).replace(/[:.]/g, "-");
-    const receiptPath = path.join(receiptDir, `${stamp}-ota-${result.outcome}.json`);
     const receipt = {
       schemaVersion: 2,
       outcome: result.outcome,
@@ -999,6 +1266,7 @@ export function persistOutcome({ stateDir, result, mode = "source-release", chan
       previousReleaseDir: result.previousReleaseDir ?? null,
       attemptedReleaseDir: result.attemptedReleaseDir ?? null,
       approvalId: result.approvalId ?? null,
+      approvalConsumed,
       backupPath: result.backupPath ?? null,
       pendingMigrations: result.pendingMigrations ?? null,
       // Recorded on every receipt so the limitation is in the audit trail, not
@@ -1318,6 +1586,12 @@ function usage() {
   --health-timeout <sec>     Default ${DEFAULT_HEALTH_TIMEOUT_SEC}
   --dry-run                  Stop after compatibility; switch nothing
 
+Approvals are single-use: an apply that completes (applied or rolled back)
+moves pending-approval.json into used-approvals/, and an approval with an
+expiresAt in the past is refused. After the restart, /api/health must report
+releaseCommit = the target commit; a healthy answer from the old process is
+a failure and rolls back.
+
 Signatures are NOT verified. Provenance means the tag is on origin/main.
 Migrations are refused unless --allow-migrations, because automatic rollback
 restores code and cannot undo a migration.`;
@@ -1467,4 +1741,8 @@ export default {
   restartService,
   runPrune,
   installUpdaterTools,
+  consumeApproval,
+  readUpdaterVersion,
+  releaseReportsCommit,
+  UPDATER_VERSION,
 };

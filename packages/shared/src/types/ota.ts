@@ -176,6 +176,13 @@ export interface OtaApproval {
   decidedAt: string | null;
   /** Compatibility verdict AT APPROVAL TIME, so drift is detectable later. */
   approvedVerdict: OtaCompatibilityVerdict | null;
+  /**
+   * AgentDash: optional ISO time after which the approval no longer
+   * authorizes an apply. Absent or null means no expiry. Approvals are also
+   * single-use: the updater moves the file out of `pending-approval.json`
+   * once an apply completes (scripts/deploy/ota-apply.mjs consumeApproval).
+   */
+  expiresAt?: string | null;
 }
 
 /**

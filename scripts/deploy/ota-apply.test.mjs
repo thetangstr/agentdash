@@ -77,7 +77,13 @@ function harness(overrides = {}) {
       return { link: "/releases/current", previous, now: releaseDir };
     },
     runCommand: () => {},
-    checkHealth: async () => ({ ok: true, detail: "HTTP 200" }),
+    // A restart that worked: health reports whatever commit it was told to expect.
+    checkHealth: async (_url, _timeout, _interval, _log, expect) => ({
+      ok: true,
+      detail: "HTTP 200",
+      servedCommit: expect?.expectCommit ?? undefined,
+    }),
+    releaseReportsCommit: () => true,
     now: () => "2026-09-02T00:00:00.000Z",
     log: () => {},
   };
@@ -1987,5 +1993,428 @@ test("installUpdaterTools puts the old set back when a rename fails part-way", (
   } finally {
     realRemoveReleaseDir(releaseDir);
     rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #853 follow-up: single-use approvals, the served-release check, no updater
+// downgrade, and the launchd-plist protection on the rebuild path.
+// ---------------------------------------------------------------------------
+
+import http from "node:http";
+import {
+  consumeApproval,
+  defaultCheckHealth,
+  readUpdaterVersion,
+  releaseReportsCommit,
+  UPDATER_VERSION,
+  USED_APPROVALS_DIRNAME,
+} from "./ota-apply.mjs";
+
+const PREV_COMMIT = "e912d614aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+/** A target release directory with an unchanged journal, plus cleanup. */
+function forwardTarget() {
+  const installed = tempRoot("ota-installed-");
+  const target = tempRoot("ota-target-");
+  writeJournal(installed, ["0001_a"]);
+  writeJournal(target, ["0001_a"]);
+  const exportRelease = () => ({ releaseDir: target, stagingDir: `${target}.s`, reused: false });
+  const cleanup = () => [installed, target].forEach((d) => rmSync(d, { recursive: true, force: true }));
+  return { installed, target, exportRelease, cleanup };
+}
+
+function usedApprovals(stateDir) {
+  const dir = path.join(stateDir, USED_APPROVALS_DIRNAME);
+  return existsSync(dir) ? readdirSync(dir).map((name) => JSON.parse(readFileSync(path.join(dir, name), "utf8"))) : [];
+}
+
+test("approvalAuthorizes honours an optional expiresAt, and refuses one already consumed", () => {
+  const approval = { status: "approved", tag: "v2026.827.2", commit: COMMIT, decidedByUserId: "u1" };
+  const at = (now, extra) => approvalAuthorizes({ approval: { ...approval, ...extra }, tag: "v2026.827.2", commit: COMMIT, now });
+  assert.equal(at("2026-09-30T00:00:00Z", {}).ok, true, "no expiresAt: the existing shape still works");
+  assert.equal(at("2026-09-30T00:00:00Z", { expiresAt: "2026-10-01T00:00:00Z" }).ok, true);
+  assert.equal(at("2026-09-30T00:00:00Z", { expiresAt: null }).ok, true);
+  assert.match(at("2026-10-02T00:00:00Z", { expiresAt: "2026-10-01T00:00:00Z" }).reason, /expired at 2026-10-01/);
+  assert.match(at("2026-09-30T00:00:00Z", { expiresAt: "next tuesday" }).reason, /not a date/);
+  assert.match(at("2026-09-30T00:00:00Z", { consumedAt: "2026-09-29T00:00:00Z" }).reason, /already used/);
+});
+
+test("APPROVAL: a successful apply consumes the approval, so it cannot authorize a second apply", async () => {
+  const t = forwardTarget();
+  const { deps } = harness({ deps: { exportRelease: t.exportRelease } });
+  const stateDir = approvedStateDir();
+  try {
+    const first = await runApply(baseInput(stateDir, { requireApproval: true, installedRoot: t.installed }), deps);
+    assert.equal(first.outcome, "applied");
+    assert.equal(first.approvalId, "a1");
+    const persisted = persistOutcome({ stateDir, result: first });
+    assert.equal(persisted.approvalConsumed.consumed, true);
+    assert.equal(existsSync(path.join(stateDir, "pending-approval.json")), false);
+    const [used] = usedApprovals(stateDir);
+    assert.equal(used.id, "a1");
+    assert.equal(used.status, "approved", "the original shape is kept");
+    assert.equal(used.consumedOutcome, "applied");
+    assert.equal(used.consumedByReceipt, persisted.receiptPath);
+    const receipt = JSON.parse(readFileSync(persisted.receiptPath, "utf8"));
+    assert.equal(receipt.approvalId, "a1");
+    assert.equal(receipt.approvalConsumed.consumed, true);
+
+    // The same tag again (--force past the no-op): the old approval no longer authorizes it.
+    const again = await runApply(
+      baseInput(stateDir, { requireApproval: true, installedRoot: t.installed, force: true }),
+      deps,
+    );
+    assert.equal(again.outcome, "failed");
+    assert.equal(again.failedStage, "approval");
+    assert.match(again.error, /No approval on record/);
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("APPROVAL: a completed rollback consumes the approval too", async () => {
+  const t = forwardTarget();
+  let healthCalls = 0;
+  const { deps } = harness({
+    deps: {
+      exportRelease: t.exportRelease,
+      checkHealth: async () => (++healthCalls === 1 ? { ok: false, detail: "HTTP 500" } : { ok: true, detail: "HTTP 200" }),
+    },
+  });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { requireApproval: true, installedRoot: t.installed }), deps);
+    assert.equal(result.outcome, "rolled_back");
+    persistOutcome({ stateDir, result });
+    assert.equal(existsSync(path.join(stateDir, "pending-approval.json")), false);
+    assert.equal(usedApprovals(stateDir)[0].consumedOutcome, "rolled_back");
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("APPROVAL: a run that fails before completing keeps the approval for a retry", async () => {
+  const t = forwardTarget();
+  const { deps } = harness({
+    deps: {
+      exportRelease: t.exportRelease,
+      buildRelease: () => {
+        throw new Error("tsc exploded");
+      },
+    },
+  });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { requireApproval: true, installedRoot: t.installed }), deps);
+    assert.equal(result.outcome, "failed");
+    const persisted = persistOutcome({ stateDir, result });
+    assert.equal(persisted.approvalConsumed, null);
+    assert.equal(existsSync(path.join(stateDir, "pending-approval.json")), true);
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("APPROVAL: consumeApproval leaves alone an approval that changed during the apply", () => {
+  const stateDir = approvedStateDir({ id: "a2", tag: "v2026.901.0" });
+  try {
+    const result = consumeApproval({
+      stateDir,
+      approval: { id: "a1", tag: "v2026.827.2", commit: COMMIT },
+      receiptPath: "/r.json",
+      outcome: "applied",
+    });
+    assert.equal(result.consumed, false);
+    assert.equal(JSON.parse(readFileSync(path.join(stateDir, "pending-approval.json"), "utf8")).id, "a2");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("APPROVAL: an expired approval is refused before anything is exported", async () => {
+  const { deps, order } = harness();
+  const stateDir = approvedStateDir({ expiresAt: "2026-09-01T00:00:00Z" });
+  try {
+    const result = await runApply(baseInput(stateDir, { requireApproval: true }), deps);
+    assert.equal(result.failedStage, "approval");
+    assert.match(result.error, /expired/);
+    assert.deepEqual(order, []);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+/** A local /api/health whose answers are scripted by `respond`. */
+async function healthServer(respond) {
+  const server = http.createServer((_req, res) => {
+    const { status = 200, body } = respond();
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/api/health`;
+  return { url, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+test("SERVED: defaultCheckHealth waits for the expected releaseCommit and fails when the old process keeps answering", async () => {
+  const old = await healthServer(() => ({ body: { status: "ok", releaseCommit: PREV_COMMIT } }));
+  try {
+    const stale = await defaultCheckHealth(old.url, 0.3, 50, null, { expectCommit: COMMIT });
+    assert.equal(stale.ok, false);
+    assert.match(stale.detail, /serving e912d614aaaa, not 4637abd727df/);
+    // Without an expectation (a rollback target that predates the field), ok is enough.
+    assert.equal((await defaultCheckHealth(old.url, 0.3, 50, null)).ok, true);
+  } finally {
+    await old.close();
+  }
+
+  const noField = await healthServer(() => ({ body: { status: "ok" } }));
+  try {
+    const result = await defaultCheckHealth(noField.url, 0.3, 50, null, { expectCommit: COMMIT });
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /reports no releaseCommit/);
+  } finally {
+    await noField.close();
+  }
+
+  let calls = 0;
+  const restarting = await healthServer(() => {
+    calls += 1;
+    if (calls === 1) return { body: { status: "ok" } }; // the old release, still draining
+    return { body: { status: "ok", releaseCommit: COMMIT } };
+  });
+  try {
+    const result = await defaultCheckHealth(restarting.url, 2, 20, null, { expectCommit: COMMIT });
+    assert.equal(result.ok, true);
+    assert.equal(result.servedCommit, COMMIT);
+    assert.ok(calls >= 2);
+  } finally {
+    await restarting.close();
+  }
+});
+
+test("SERVED: a restart that did nothing is a failure, and the apply rolls back", async () => {
+  const t = forwardTarget();
+  const expectations = [];
+  // The old process never went away: healthy, serving the previous commit.
+  // Honours the expectation the way defaultCheckHealth does.
+  const { deps, state } = harness({
+    deps: {
+      exportRelease: t.exportRelease,
+      checkHealth: async (_u, _t, _i, _l, expect) => {
+        expectations.push(expect?.expectCommit ?? null);
+        return expect?.expectCommit && expect.expectCommit !== PREV_COMMIT
+          ? { ok: false, detail: `healthy but serving ${PREV_COMMIT.slice(0, 12)}`, servedCommit: PREV_COMMIT }
+          : { ok: true, detail: "HTTP 200", servedCommit: PREV_COMMIT };
+      },
+    },
+  });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { installedRoot: t.installed }), deps);
+    assert.equal(result.outcome, "rolled_back");
+    assert.equal(state.current, PREV_DIR);
+    assert.deepEqual(expectations, [COMMIT, null], "the rollback target has no marker, so no expectation");
+    assert.match(result.checks.find((c) => c.name === "health").detail, /serving e912d614aaaa/);
+    const rollbackHealth = result.checks.find((c) => c.name === "rollback_health");
+    assert.equal(rollbackHealth.status, "passed");
+    assert.match(rollbackHealth.detail, /served release NOT verified: .*no completion marker/);
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("SERVED: a health check that ignores the expectation still cannot pass the wrong commit", async () => {
+  const t = forwardTarget();
+  const { deps } = harness({
+    deps: {
+      exportRelease: t.exportRelease,
+      checkHealth: async () => ({ ok: true, detail: "HTTP 200", servedCommit: PREV_COMMIT }),
+    },
+  });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { installedRoot: t.installed }), deps);
+    assert.equal(result.outcome, "rolled_back");
+    assert.match(result.checks.find((c) => c.name === "health").detail, /not 4637abd727df/);
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("SERVED: a rollback target that reports releaseCommit must report its own commit", async () => {
+  const t = forwardTarget();
+  const expectations = [];
+  let healthCalls = 0;
+  const { deps } = harness({
+    deps: {
+      exportRelease: t.exportRelease,
+      readReleaseMarker: (dir) => (dir === PREV_DIR ? { complete: true, commit: PREV_COMMIT } : null),
+      checkHealth: async (_u, _t, _i, _l, expect) => {
+        expectations.push(expect?.expectCommit ?? null);
+        return ++healthCalls === 1
+          ? { ok: false, detail: "HTTP 500" }
+          : { ok: true, detail: "HTTP 200", servedCommit: PREV_COMMIT };
+      },
+    },
+  });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { installedRoot: t.installed }), deps);
+    assert.equal(result.outcome, "rolled_back");
+    assert.deepEqual(expectations, [COMMIT, PREV_COMMIT]);
+    assert.match(
+      result.checks.find((c) => c.name === "rollback_health").detail,
+      /served release verified \(releaseCommit=e912d614aaaa\)/,
+    );
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("SERVED: a target that predates releaseCommit is refused before the backup", async () => {
+  const t = forwardTarget();
+  const { deps, order } = harness({ deps: { exportRelease: t.exportRelease, releaseReportsCommit: () => false } });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { installedRoot: t.installed }), deps);
+    assert.equal(result.failedStage, "served_release");
+    assert.match(result.error, /predates releaseCommit/);
+    assert.deepEqual(order, ["export"]);
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("SERVED: a completion marker that cannot be written fails before the switch", async () => {
+  const t = forwardTarget();
+  const { deps, order, state } = harness({
+    deps: {
+      exportRelease: t.exportRelease,
+      writeReleaseMarker: () => {
+        throw new Error("EROFS");
+      },
+    },
+  });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { installedRoot: t.installed }), deps);
+    assert.equal(result.failedStage, "materialize");
+    assert.match(result.error, /completion marker could not be written \(EROFS\)/);
+    assert.ok(!order.some((step) => step.startsWith("swap:")));
+    assert.equal(state.current, PREV_DIR);
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("SERVED: releaseReportsCommit reads the release's own health route", () => {
+  const dir = tempRoot("ota-health-src-");
+  try {
+    assert.equal(releaseReportsCommit(dir), false, "no source at all");
+    mkdirSync(path.join(dir, "server", "src", "routes"), { recursive: true });
+    writeFileSync(path.join(dir, "server", "src", "routes", "health.ts"), "res.json({ status, releaseTag })\n");
+    assert.equal(releaseReportsCommit(dir), false);
+    writeFileSync(path.join(dir, "server", "src", "routes", "health.ts"), "const release = { releaseCommit };\n");
+    assert.equal(releaseReportsCommit(dir), true);
+    // This checkout's own server reports it, or no release built from it could pass.
+    const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
+    assert.equal(releaseReportsCommit(repoRoot), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("UPDATER: the version constant is readable the way the shell wrapper reads it", () => {
+  const here = path.join(path.dirname(new URL(import.meta.url).pathname), "ota-apply.mjs");
+  assert.equal(readUpdaterVersion(here), UPDATER_VERSION);
+  assert.ok(UPDATER_VERSION >= 1);
+  assert.equal(readUpdaterVersion(path.join(here, "missing")), null);
+  const shellRead = execFileSync(
+    "sh",
+    ["-c", "sed -n 's/^export const UPDATER_VERSION = \\([0-9][0-9]*\\);$/\\1/p' \"$1\"", "sh", here],
+    { encoding: "utf8" },
+  ).trim();
+  assert.equal(Number(shellRead), UPDATER_VERSION);
+});
+
+test("UPDATER: installUpdaterTools never replaces a newer installed updater with an older release's", () => {
+  const releaseDir = seedToolRelease(); // its ota-apply.mjs declares no version: 0
+  const binDir = tempRoot("ota-bin-");
+  try {
+    for (const file of UPDATER_TOOL_FILES) {
+      writeFileSync(
+        path.join(binDir, file.to),
+        file.to === "ota-apply.mjs" ? "export const UPDATER_VERSION = 1;\n" : `kept ${file.to}\n`,
+      );
+    }
+    const result = installUpdaterTools({ releaseDir, binDir });
+    assert.equal(result.skipped, true);
+    assert.match(result.detail, /version 1.*version 0/);
+    assert.equal(readFileSync(path.join(binDir, "ota-apply.mjs"), "utf8"), "export const UPDATER_VERSION = 1;\n");
+    assert.equal(readFileSync(path.join(binDir, "ota-release-layout.mjs"), "utf8"), "kept ota-release-layout.mjs\n");
+  } finally {
+    realRemoveReleaseDir(releaseDir);
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test("UPDATER: a skipped install is recorded as skipped, not as a failure", async () => {
+  const t = forwardTarget();
+  const { deps } = harness({
+    deps: {
+      exportRelease: t.exportRelease,
+      installUpdaterTools: ({ binDir }) => ({ binDir, installed: [], skipped: true, detail: "kept the installed updater (version 2)" }),
+    },
+  });
+  const stateDir = approvedStateDir();
+  try {
+    const result = await runApply(baseInput(stateDir, { installedRoot: t.installed, binDir: "/bin-dir" }), deps);
+    assert.equal(result.outcome, "applied");
+    const check = result.checks.find((c) => c.name === "install_updater");
+    assert.equal(check.status, "skipped");
+    assert.match(check.detail, /kept the installed updater/);
+  } finally {
+    t.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("REBUILD: an incomplete directory an installed launchd plist names is never removed", async () => {
+  const f = diskFixture();
+  const stateDir = tempRoot("ota-state-");
+  try {
+    f.leaveBehind({ completed: false });
+    const seen = [];
+    f.deps.releasesInPlists = (root, dirs) => {
+      seen.push({ root, dirs });
+      return [path.basename(f.releaseDir)];
+    };
+    const result = await runApply(f.input(stateDir, { launchdPlistDirs: ["/Library/LaunchDaemons"] }), f.deps);
+    assert.equal(result.failedStage, "materialize");
+    assert.match(result.error, /launchd plist names it/);
+    assert.deepEqual(seen, [{ root: f.releasesRoot, dirs: ["/Library/LaunchDaemons"] }]);
+    assert.deepEqual(f.order, ["export"], "no removal, no backup, no switch");
+    assert.ok(existsSync(path.join(f.releaseDir, "server", "dist", "index.js")));
+
+    f.deps.releasesInPlists = () => {
+      throw new Error("EACCES reading /Library/LaunchDaemons");
+    };
+    const blind = await runApply(f.input(stateDir), f.deps);
+    assert.equal(blind.failedStage, "materialize");
+    assert.match(blind.error, /cannot be checked \(EACCES/);
+    assert.ok(existsSync(f.releaseDir));
+  } finally {
+    f.cleanup();
+    rmSync(stateDir, { recursive: true, force: true });
   }
 });
