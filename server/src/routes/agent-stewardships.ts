@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Request } from "express";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { authUsers, companyMemberships } from "@paperclipai/db";
+import { authUsers, companies, companyMemberships } from "@paperclipai/db";
 import {
   assignAgentStewardshipSchema,
   transferAgentStewardshipSchema,
@@ -13,6 +13,7 @@ import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { agentService } from "../services/agents.js";
+import { requireProductProfile } from "../services/companies.js";
 import { logger } from "../middleware/logger.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
@@ -31,10 +32,31 @@ export function agentStewardshipRoutes(db: Db) {
   const stewardships = agentStewardshipService(db);
   const access = accessService(db);
 
+  /**
+   * AgentDash (one UX): stewardship is a per-workspace capability, gated on
+   * the server like every other one. A company without it answers 404 here,
+   * the same "Company not found" the other capability routes send, so the
+   * UI's capability check is the server's answer and nothing on this router
+   * can create an agent or a pairing for a company that does not have
+   * stewardship. Reads of an agent's (empty) stewardship stay open.
+   */
+  async function requireStewardshipCompany(companyId: string) {
+    const company = await db
+      .select({ id: companies.id, productProfile: companies.productProfile })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .then((rows) => rows[0] ?? null);
+    return requireProductProfile(company, "agentdash_mk");
+  }
+
   async function assertCanMutateStewardships(req: Request, companyId: string) {
     assertBoard(req);
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+      await requireStewardshipCompany(companyId);
+      return;
+    }
     assertCompanyAccess(req, companyId);
+    await requireStewardshipCompany(companyId);
     const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
     if (!allowed) {
       throw forbidden("Agent stewardship management requires agent creation permission");
@@ -116,6 +138,9 @@ export function agentStewardshipRoutes(db: Db) {
   router.get("/companies/:companyId/me/agent", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    // Before anything else: this route provisions a personal agent on first
+    // visit, and a company without stewardship must never get one.
+    await requireStewardshipCompany(companyId);
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw forbidden("Board user access required");
     }

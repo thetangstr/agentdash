@@ -18,6 +18,9 @@ const mockStewardshipsApi = vi.hoisted(() => ({
 }));
 const mockConnectorSendApi = vi.hoisted(() => ({ listUnresolved: vi.fn() }));
 const mockAccessApi = vi.hoisted(() => ({ listJoinRequests: vi.fn() }));
+const mockHeartbeatsApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockInboxDismissalsApi = vi.hoisted(() => ({ list: vi.fn(), dismiss: vi.fn() }));
+const mockAgentsApi = vi.hoisted(() => ({ list: vi.fn() }));
 
 vi.mock("../api/dashboard", () => ({ dashboardApi: mockDashboardApi }));
 vi.mock("../api/stewardships", () => ({ stewardshipsApi: mockStewardshipsApi }));
@@ -25,6 +28,9 @@ vi.mock("../api/connector-send-executions", () => ({
   connectorSendExecutionsApi: mockConnectorSendApi,
 }));
 vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
+vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
+vi.mock("../api/inboxDismissals", () => ({ inboxDismissalsApi: mockInboxDismissalsApi }));
+vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
 
 const { ApiError } = await import("../api/client");
 
@@ -45,6 +51,12 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const { Decisions, decisionsListLength } = await import("./Decisions");
+const { useDecisionsBadge } = await import("../hooks/useDecisionsBadge");
+
+/** What the sidebar and mobile nav render: the badge number, nothing else. */
+function BadgeProbe() {
+  return <span data-testid="badge-probe">{useDecisionsBadge("company-1")}</span>;
+}
 const {
   loadSource,
   resetSourceFailureStreaks,
@@ -134,6 +146,12 @@ describe("Decisions", () => {
     mockAccessApi.listJoinRequests.mockImplementation(() =>
       Promise.reject(new ApiError("Forbidden", 403, null)),
     );
+    mockHeartbeatsApi.list.mockResolvedValue([]);
+    mockInboxDismissalsApi.list.mockResolvedValue([]);
+    mockInboxDismissalsApi.dismiss.mockImplementation((_companyId: string, itemKey: string) =>
+      Promise.resolve({ id: "d-1", itemKey }),
+    );
+    mockAgentsApi.list.mockResolvedValue([{ id: "agent-1", name: "Casper" }, { id: "agent-2", name: "Priya" }]);
     resetSourceFailureStreaks();
   });
 
@@ -149,6 +167,7 @@ describe("Decisions", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
+          <BadgeProbe />
           <Decisions />
         </QueryClientProvider>,
       );
@@ -385,6 +404,80 @@ describe("Decisions", () => {
     const override = q("decisions-override")!;
     expect(override.textContent).toContain("1 company approval open to the override view");
     expect(override.querySelector('a[href="/inbox/override"]')).toBeTruthy();
+
+    // One steward ask + one question + one outside write + two join requests
+    // + one override item: the header and the badge count all of them, once.
+    expect(q("decisions-count")?.textContent).toBe("6");
+    expect(q("badge-probe")?.textContent).toBe("6");
+  });
+
+  function run(id: string, agentId: string, status: string, minutesAgo: number, error: string | null = null) {
+    return {
+      id,
+      agentId,
+      companyId: "company-1",
+      status,
+      error,
+      stderrExcerpt: null,
+      createdAt: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+    };
+  }
+
+  it("lists each agent's latest failed run, counts it, and lets the person dismiss it", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue(waitingWith(EMPTY_WAITING));
+    mockHeartbeatsApi.list.mockResolvedValue([
+      // Casper's latest run failed.
+      run("run-3", "agent-1", "failed", 1, "adapter crashed\nstack trace"),
+      run("run-1", "agent-1", "succeeded", 30),
+      // Priya failed earlier but has since succeeded: not listed.
+      run("run-4", "agent-2", "succeeded", 2),
+      run("run-2", "agent-2", "timed_out", 20),
+    ]);
+    await render();
+
+    const section = q("decisions-failed-runs")!;
+    expect(section).not.toBeNull();
+    const rowsShown = section.querySelectorAll('[data-testid="decisions-failed-run-row"]');
+    expect(rowsShown).toHaveLength(1);
+    expect(rowsShown[0]!.textContent).toContain("Casper's last run failed");
+    expect(rowsShown[0]!.textContent).toContain("adapter crashed");
+    expect(rowsShown[0]!.textContent).not.toContain("stack trace");
+    expect(rowsShown[0]!.querySelector('a[href="/agents/agent-1/runs/run-3"]')).toBeTruthy();
+    expect(q("decisions-empty")).toBeNull();
+    expect(q("decisions-count")?.textContent).toBe("1");
+    expect(q("badge-probe")?.textContent).toBe("1");
+
+    // Dismissing uses the old Inbox's key, so earlier dismissals still hold.
+    mockInboxDismissalsApi.list.mockResolvedValue([
+      { id: "d-1", itemKey: "run:run-3", dismissedAt: new Date().toISOString() },
+    ]);
+    await act(async () => {
+      (q("decisions-failed-run-dismiss") as HTMLButtonElement).click();
+    });
+    await flush();
+    expect(mockInboxDismissalsApi.dismiss).toHaveBeenCalledWith("company-1", "run:run-3");
+    expect(q("decisions-failed-runs")).toBeNull();
+    expect(q("decisions-count")?.textContent).toBe("0");
+    expect(q("badge-probe")?.textContent).toBe("0");
+  });
+
+  it("shows a failed run again when the agent fails again after the dismissal", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue(waitingWith(EMPTY_WAITING));
+    mockHeartbeatsApi.list.mockResolvedValue([run("run-9", "agent-1", "failed", 1)]);
+    mockInboxDismissalsApi.list.mockResolvedValue([
+      // Dismissed an older failure an hour ago.
+      { id: "d-1", itemKey: "run:run-9", dismissedAt: new Date(Date.now() - 60 * 60_000).toISOString() },
+    ]);
+    await render();
+    expect(q("decisions-failed-runs")).not.toBeNull();
+  });
+
+  it("the badge and the header agree with the main list and the other sections together", async () => {
+    // Main list: 1 approval + 1 manual issue (waitingWith default) = 2.
+    mockHeartbeatsApi.list.mockResolvedValue([run("run-5", "agent-2", "failed", 3)]);
+    await render();
+    expect(q("decisions-count")?.textContent).toBe("3");
+    expect(q("badge-probe")?.textContent).toBe("3");
   });
 
   it("does not list a steward approval twice when the main list already has it", async () => {

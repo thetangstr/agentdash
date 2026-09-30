@@ -12,6 +12,12 @@ import { queryKeys } from "../lib/queryKeys";
 import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
 import { EmptyState } from "../components/EmptyState";
 import { IssuesList } from "../components/IssuesList";
+import {
+  WorkViewTabs,
+  filterIssuesForWorkView,
+  parseWorkView,
+  workViewFilters,
+} from "../components/WorkViewTabs";
 import { CircleDot } from "lucide-react";
 import type { Issue } from "@paperclipai/shared";
 
@@ -72,6 +78,8 @@ export function Issues() {
     return urlSearch;
   }, [searchOverride, urlSearch, location.search]);
   const participantAgentId = searchParams.get("participantAgentId") ?? undefined;
+  // AgentDash (one UX): "Touched by me" / "Unread", the Inbox views MK kept.
+  const workView = parseWorkView(searchParams.get("view"));
   const initialWorkspaces = searchParams.getAll("workspace").filter((workspaceId) => workspaceId.length > 0);
   const workspaceIdFilter = initialWorkspaces.length === 1 ? initialWorkspaces[0] : undefined;
   const handleSearchChange = useCallback((search: string) => {
@@ -136,12 +144,15 @@ export function Issues() {
       "workspace",
       workspaceIdFilter ?? "__all__",
       "with-routine-executions",
+      "view",
+      workView,
       "infinite",
       issuePageSize,
     ],
     queryFn: ({ pageParam }) => issuesApi.list(selectedCompanyId!, {
       participantAgentId,
       workspaceId: workspaceIdFilter,
+      ...workViewFilters(workView),
       includeRoutineExecutions: true,
       limit: issuePageSize,
       offset: pageParam,
@@ -153,7 +164,10 @@ export function Issues() {
     placeholderData: (previousData) => previousData,
   });
 
-  const issues = useMemo(() => mergeIssuePagesStable(issuePages?.pages ?? []), [issuePages]);
+  const issues = useMemo(
+    () => filterIssuesForWorkView(mergeIssuePagesStable(issuePages?.pages ?? []), workView),
+    [issuePages, workView],
+  );
   const hasMoreServerIssues = syncedSearch.trim().length === 0
     && hasNextPage === true;
   const loadMoreServerIssues = useCallback(() => {
@@ -177,26 +191,33 @@ export function Issues() {
   }
 
   return (
-    <IssuesList
-      issues={issues ?? []}
-      isLoading={isLoading}
-      isLoadingMoreIssues={isFetchingNextPage}
-      error={error as Error | null}
-      agents={agents}
-      projects={projects}
-      liveIssueIds={liveIssueIds}
-      viewStateKey="paperclip:issues-view"
-      issueLinkState={issueLinkState}
-      showAskEmptyState
-      initialAssignees={searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined}
-      initialWorkspaces={initialWorkspaces.length > 0 ? initialWorkspaces : undefined}
-      initialSearch={syncedSearch}
-      onSearchChange={handleSearchChange}
-      enableRoutineVisibilityFilter
-      hasMoreIssues={hasMoreServerIssues}
-      onLoadMoreIssues={loadMoreServerIssues}
-      onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
-      searchFilters={participantAgentId || workspaceIdFilter ? { participantAgentId, workspaceId: workspaceIdFilter } : undefined}
-    />
+    <div className="space-y-3">
+      <WorkViewTabs view={workView} />
+      <IssuesList
+        issues={issues ?? []}
+        isLoading={isLoading}
+        isLoadingMoreIssues={isFetchingNextPage}
+        error={error as Error | null}
+        agents={agents}
+        projects={projects}
+        liveIssueIds={liveIssueIds}
+        viewStateKey="paperclip:issues-view"
+        issueLinkState={issueLinkState}
+        showAskEmptyState
+        initialAssignees={searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined}
+        initialWorkspaces={initialWorkspaces.length > 0 ? initialWorkspaces : undefined}
+        initialSearch={syncedSearch}
+        onSearchChange={handleSearchChange}
+        enableRoutineVisibilityFilter
+        hasMoreIssues={hasMoreServerIssues}
+        onLoadMoreIssues={loadMoreServerIssues}
+        onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
+        searchFilters={
+          participantAgentId || workspaceIdFilter || workView !== "all"
+            ? { participantAgentId, workspaceId: workspaceIdFilter, ...workViewFilters(workView) }
+            : undefined
+        }
+      />
+    </div>
   );
 }

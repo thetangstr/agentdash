@@ -21,6 +21,12 @@ const mockCompany = vi.hoisted(() => ({
   current: { id: "company-1", name: "Acme Robotics", productProfile: "default" } as Record<string, unknown>,
 }));
 
+// Decisions' other sections (steward asks, questions, failed runs, …): their
+// own tests live with Decisions; here only their total matters.
+const mockOtherSources = vi.hoisted(() => ({ total: 0 }));
+vi.mock("../hooks/useDecisionsSources", () => ({
+  useDecisionsOtherSources: () => ({ total: mockOtherSources.total }),
+}));
 vi.mock("../api/dashboard", () => ({ dashboardApi: mockDashboardApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/auth", () => ({ authApi: mockAuthApi }));
@@ -185,6 +191,7 @@ describe("Home", () => {
     mockAccessApi.listUserDirectory.mockResolvedValue({ users: [] });
     mockFirstRunApi.status.mockResolvedValue(firstRunNotApplicable);
     mockAssistantGrantsApi.listMine.mockResolvedValue({ grants: [] });
+    mockOtherSources.total = 0;
   });
 
   afterEach(async () => {
@@ -228,6 +235,16 @@ describe("Home", () => {
     expect(block.textContent).toContain("The board asks to hire a new agent.");
     expect(block.querySelector('a[href="/issues/ACM-6"]')?.textContent).toContain("Approve the pricing page copy");
     expect(block.textContent).toContain("Issue assigned to you");
+  });
+
+  it("counts everything Decisions shows, and says where the rest waits", async () => {
+    // e.g. a failed run and a join request, shown only on the Decisions page.
+    mockOtherSources.total = 2;
+    await render();
+    expect(q("home-waiting-count")?.textContent).toBe("5");
+    expect(rows("home-waiting-row")).toHaveLength(3);
+    const more = q("home-waiting")?.querySelector('a[href="/decisions"]');
+    expect(more?.textContent).toBe("and 2 more waiting in Decisions");
   });
 
   it("says how many more when the list is capped, so the count still adds up", async () => {

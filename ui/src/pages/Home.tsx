@@ -23,7 +23,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
-import { decisionsListLength } from "../hooks/useDecisionsBadge";
+import { decisionsListLength, useDecisionsCount } from "../hooks/useDecisionsBadge";
 import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
 import { ControlPlanePanels } from "../components/dashboard/ControlPlanePanels";
 
@@ -126,14 +126,24 @@ function MoreLine({ count, to, noun }: { count: number; to: string; noun: string
   );
 }
 
-function WaitingOnYouBlock({ data, failed }: { data: WaitingOnYou | undefined; failed: boolean }) {
+function WaitingOnYouBlock({
+  data,
+  failed,
+  otherCount,
+}: {
+  data: WaitingOnYou | undefined;
+  failed: boolean;
+  /** Items Decisions shows beyond its main list (steward asks, questions, failed runs, …). */
+  otherCount: number;
+}) {
   const decisions = data?.decisions ?? [];
   const tasks = data?.tasksAssignedToYou ?? [];
   const shownDecisions = decisions.slice(0, HOME_LIST_LIMIT);
   const shownTasks = tasks.slice(0, HOME_LIST_LIMIT);
   const moreDecisions = (data?.total ?? 0) - shownDecisions.length;
   const moreTasks = (data?.tasksAssignedToYouTotal ?? 0) - shownTasks.length;
-  const count = waitingCount(data);
+  // The same total the sidebar badge and the Decisions header show.
+  const count = waitingCount(data) + otherCount;
   return (
     <Block title="Waiting on you" count={data ? count : null} testId="home-waiting">
       {failed && !data ? <ErrorLine what="what is waiting on you" /> : null}
@@ -197,6 +207,7 @@ function WaitingOnYouBlock({ data, failed }: { data: WaitingOnYou | undefined; f
         to="/issues?assignee=__me"
         noun={moreTasks === 1 ? "issue assigned to you" : "issues assigned to you"}
       />
+      <MoreLine count={otherCount} to="/decisions" noun="waiting in Decisions" />
     </Block>
   );
 }
@@ -252,12 +263,8 @@ export function Home() {
     queryFn: () => dashboardApi.summary(selectedCompanyId!),
     enabled,
   });
-  const { data: waiting, isError: waitingFailed } = useQuery({
-    queryKey: queryKeys.home.waitingOnYou(selectedCompanyId ?? ""),
-    queryFn: () => dashboardApi.waitingOnYou(selectedCompanyId!),
-    enabled,
-    refetchInterval: 30_000,
-  });
+  // One count with the sidebar badge and the Decisions page (useDecisionsCount).
+  const { waiting, isError: waitingFailed, sources: decisionsSources } = useDecisionsCount(selectedCompanyId);
   const { data: working, isError: workingFailed } = useQuery({
     queryKey: queryKeys.home.workingNow(selectedCompanyId ?? ""),
     queryFn: () => dashboardApi.workingNow(selectedCompanyId!),
@@ -309,7 +316,7 @@ export function Home() {
       {/* AgentDash (GH #786): finish setup, then connect an assistant */}
       <FirstRunHomeNudges companyId={selectedCompanyId} />
 
-      <WaitingOnYouBlock data={waiting} failed={waitingFailed} />
+      <WaitingOnYouBlock data={waiting} failed={waitingFailed} otherCount={decisionsSources.total} />
 
       <Block
         title="Working now"
