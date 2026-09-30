@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -31,11 +31,11 @@ function completeEvidence() {
     kind: "ross-private-host-evidence",
     collectedAt: "2026-09-30T12:00:00Z",
     host: {
-      expected: { hostname: "mac-mini-x14" },
+      expected: { hostname: "ross-host-example" },
       identity: {
         observedAt: "2026-09-30T11:00:00Z",
         via: "verified ssh host key fingerprint over known-good channel",
-        hostname: "mac-mini-x14",
+        hostname: "ross-host-example",
         trusted: true,
         hardwareUuid: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
         tailscaleNodeId: "nXYZ123",
@@ -120,7 +120,7 @@ test("untrusted or mismatched host identity fails", () => {
 
 test("a nearly full disk fails the headroom gate", () => {
   const evidence = completeEvidence();
-  evidence.disk = { observedAt: "2026-09-30T11:00:00Z", mount: "/Volumes/mac_studio_ssd", availableBytes: 13 * 1024 * 1024 * 1024, capacityPercent: 98 };
+  evidence.disk = { observedAt: "2026-09-30T11:00:00Z", mount: "/Volumes/data", availableBytes: 13 * 1024 * 1024 * 1024, capacityPercent: 98 };
   const result = evaluateEvidenceBundle(evidence);
   assert.equal(result.ok, false);
   assert.equal(gateByName(result, "disk_headroom").status, "fail");
@@ -285,9 +285,9 @@ test("observe-local collects passive facts without effects", () => {
 test("df and FileVault parsers handle real macOS shapes", () => {
   const parsed = parseDfOutput(
     "Filesystem   1024-blocks      Used Available Capacity  iused     ifree %iused  Mounted on\n" +
-      "/dev/disk7s1   468646704 454680548  13810892    98% 10014223 138108920    7%   /Volumes/mac_studio_ssd",
+      "/dev/disk7s1   468646704 454680548  13810892    98% 10014223 138108920    7%   /Volumes/data",
   );
-  assert.equal(parsed.mount, "/Volumes/mac_studio_ssd");
+  assert.equal(parsed.mount, "/Volumes/data");
   assert.equal(parsed.availableBytes, 13810892 * 1024);
   assert.equal(parsed.capacityPercent, 98);
   assert.equal(parseFileVaultStatus("FileVault is On."), true);
@@ -379,10 +379,36 @@ test("render-drafts rejects deny-listed shared ports like evaluate does", () => 
   );
 });
 
+test("render-drafts refuses an out-dir inside the repository checkout", () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  for (const outDir of [repoRoot, path.join(repoRoot, "scripts/ross/drafts-should-not-exist")]) {
+    assert.throws(
+      () => writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:3114", paperclipPort: "3114" }),
+      /outside the repository/,
+    );
+  }
+  assert.equal(existsSync(path.join(repoRoot, "scripts/ross/drafts-should-not-exist")), false);
+});
+
+test("render-drafts checks the public URL port against the deny-list and the allocated port", () => {
+  const outDir = mkdtempSync(path.join(tmpdir(), "ross-host-drafts-"));
+  for (const url of ["http://100.64.0.14:3100", "http://100.64.0.14:3199", "https://mini.example.ts.net"]) {
+    assert.throws(
+      () => writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: url, paperclipPort: "3114" }),
+      /deny-listed/,
+      `${url} must be refused`,
+    );
+  }
+  assert.throws(
+    () => writeDraftBundle({ outDir, targetSha: TARGET_SHA, publicUrl: "http://100.64.0.14:3115", paperclipPort: "3114" }),
+    /must match --paperclip-port/,
+  );
+});
+
 test("evaluate CLI exits nonzero on incomplete evidence and prints the scorecard", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "host-readiness-cli-"));
   const bundle = buildEvidenceTemplate();
-  bundle.host.expected.hostname = "mac-mini-x14";
+  bundle.host.expected.hostname = "ross-host-example";
   const file = path.join(dir, "evidence.json");
   writeFileSync(file, JSON.stringify(bundle), "utf8");
   let stdout = "";

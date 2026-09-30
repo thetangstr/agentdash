@@ -111,8 +111,8 @@ settings or profiles by design.
 
 The scorecard can only confirm what is observed. Still open until real receipts exist:
 
-- Trusted host identity for the selected Mini (the historical `mac-mini-x14` probe was
-  refused at SSH host trust — resolve through the trusted channel, do not bypass).
+- Trusted host identity for the selected Mini (an earlier probe was refused at SSH
+  host trust — resolve through the trusted channel, do not bypass).
 - Deployed candidate on an explicitly allocated noncolliding private listener.
 - Second private device authorized access **and** observed public denial (no public443
   Funnel exposure of the Ross service).

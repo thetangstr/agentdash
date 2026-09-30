@@ -88,8 +88,12 @@ function assertIssue(issue,{companyId,projectId,issueId}) {
 }
 
 // heartbeat.ts writes executionState.recoveryBudget.status='exhausted' when the
-// task recovery budget is spent: comments still post, but no wake or provider
-// run can start until human remediation clears it.
+// task recovery budget is spent: comments still post, but an assistant-grant
+// request cannot start a run (under #877 a run a board user starts directly
+// still goes ahead in the interim; this primitive never does that). Remediation
+// does not clear the marker: only an explicit named-human clear does (or, once
+// it ships, a one-run named-human permit). Main has no permit yet, so an
+// exhausted issue always refuses here.
 function isRecoveryExhausted(issue) {
   return issue?.executionState?.recoveryBudget?.status==='exhausted';
 }
@@ -187,12 +191,12 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
       throw error;
     }
     if(!issue.assigneeAgentId)return {status:'unavailable',reason:'no-assigned-agent',requestKey,issueId};
-    // An exhausted recovery budget suppresses the wake: reporting 'requested'
-    // or 'pending' would fake work that cannot start. Refuse before writing so
-    // the requestKey stays usable after human remediation.
+    // An exhausted recovery budget suppresses an assistant-grant wake: reporting
+    // 'requested' or 'pending' would fake work this request cannot start. Refuse before writing so
+    // the requestKey stays usable after an explicit clear of the budget.
     if(isRecoveryExhausted(issue)) {
       return {status:'refused',reason:'recovery-exhausted',requestKey,issueId,
-        detail:'task recovery budget exhausted; a comment would record but no wake or run can start until human remediation'};
+        detail:'task recovery budget exhausted; a comment would record but an assistant-grant request cannot start a run until a named human explicitly clears the budget'};
     }
 
     let prior;
@@ -256,8 +260,8 @@ export function createAssistantAssessment({transport,actor,companyId,projectId=n
     const recordedAfter=requestedAt?Date.parse(stored.review.recordedAt)>=Date.parse(requestedAt):false;
     if(!baselineRevisionId&&!requestedAt)return {...stored,status:'answered',reason:null};
     if(revisionChanged||recordedAfter)return {...stored,status:'answered',reason:null};
-    // An exhausted recovery budget means no wake can actuate: report refused
-    // rather than a pending that can never resolve without human remediation.
+    // An exhausted recovery budget means this request's wake cannot actuate: report refused
+    // rather than a pending that can never resolve without an explicit clear.
     if(stored.recoveryExhausted) {
       return {...stored,status:'refused',reason:'recovery-exhausted',
         gate:{state:'recovery-budget-exhausted'}};

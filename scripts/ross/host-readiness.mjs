@@ -670,6 +670,18 @@ export function renderDraftBundle(input = {}) {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error(`--paperclip-port must be an integer 1024-65535; got ${input.paperclipPort}`);
   }
+  // The drafts describe a direct private listener, so the URL clients use must
+  // land on that same allocated port and never on a shared listener.
+  let publicUrl;
+  try { publicUrl = new URL(String(input.publicUrl)); } catch { throw new Error("--public-url must be an absolute http(s) URL"); }
+  if (publicUrl.protocol !== "http:" && publicUrl.protocol !== "https:") throw new Error("--public-url must be an absolute http(s) URL");
+  const urlPort = Number(publicUrl.port || (publicUrl.protocol === "https:" ? 443 : 80));
+  if (deniedPorts.includes(urlPort)) {
+    throw new Error(`--public-url port ${urlPort} is a deny-listed shared listener port; use the allocated private port`);
+  }
+  if (urlPort !== port) {
+    throw new Error(`--public-url port ${urlPort} must match --paperclip-port ${port}`);
+  }
   const plan = buildMacMiniSourceLaunchdPlan({
     ...input,
     betterAuthSecret: input.betterAuthSecret ?? DRAFT_SECRET_PLACEHOLDER,
@@ -693,6 +705,16 @@ export function writeDraftBundle(input = {}) {
   const outDir = input.outDir;
   if (!nonEmptyString(outDir)) throw new Error("--out-dir is required for render-drafts");
   const resolved = path.resolve(process.cwd(), outDir);
+  // Drafts are scratch output: never write them into this checkout, where they
+  // could be committed. Compare real paths so symlinks cannot slip inside.
+  const repoRoot = realpathSync(fileURLToPath(new URL("../..", import.meta.url)));
+  let existing = resolved;
+  while (!existsSync(existing) && path.dirname(existing) !== existing) existing = path.dirname(existing);
+  const realTarget = path.join(realpathSync(existing), path.relative(existing, resolved));
+  const inside = path.relative(repoRoot, realTarget);
+  if (inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside))) {
+    throw new Error("--out-dir must be outside the repository checkout");
+  }
   const { plan, artifacts } = renderDraftBundle(input);
   mkdirSync(resolved, { recursive: true });
   const manifest = {
@@ -782,7 +804,7 @@ evaluate options:
 render-drafts options:
   --target-sha <sha>       Exact 40-hex reviewed git SHA (required).
   --public-url <url>       Private/tailnet URL the deployed instance will answer on (required).
-  --out-dir <dir>          Scratch directory for the inert draft bundle (required).
+  --out-dir <dir>          Scratch directory for the inert draft bundle, outside the repository (required).
   --label <label>          launchd label (default ai.agentdash.agent).
   --paperclip-port <port>  Explicitly allocated private listener port (required;
                            no default — 3100 is a deny-listed shared listener).
