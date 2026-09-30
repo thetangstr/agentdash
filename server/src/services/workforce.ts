@@ -191,12 +191,12 @@ export function workforceService(db: Db) {
         if (!existing) throw notFound('First job not found');
         return { issue: existing, created: false };
       }
-      const job = await issueService(connection).create(companyId, {
+      const job = await issueService(db).create(companyId, {
         title: template.starterJob.title, description: [template.starterJob.description, enrollment.objective && `Objective: ${enrollment.objective}`, `Declared targets (outcomes unknown until measured): ${enrollment.metrics.join('; ')}`].filter(Boolean).join('\n\n'),
         status: 'todo', assigneeAgentId: agentId, createdByUserId: actor.userId,
         goalId: enrollment.goalId, originKind: 'workforce_onboarding', originId: enrollment.id,
         definitionOfDone: { summary: 'Deliver an evidence-backed first job for neutral review', criteria: template.qualityChecks.map((text, i) => ({ id: `workforce-${i + 1}`, text, done: false })) },
-      });
+      }, { executor: connection, publications });
       await tx.update(workforceEnrollments).set({ firstJobIssueId: job.id, updatedAt: new Date() }).where(eq(workforceEnrollments.id, enrollment.id));
       publications.push(await insertActivity(connection, {
         companyId,

@@ -1,4 +1,22 @@
-import { sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { executionWorkspaces, issues, type Db } from "@paperclipai/db";
+import { conflict } from "../errors.js";
+
+// AgentDash: caller holds company mutex on this actual transaction before discovery.
+export async function prepareIssueDeletion(tx: Pick<Db, "select">, companyId: string, issueIds: string[]) {
+  const ids = [...new Set(issueIds)].sort();
+  if (ids.length === 0) return { companyId, issueIds: ids };
+  const targets = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, companyId), inArray(issues.id, ids)));
+  if (targets.length !== ids.length) throw conflict("Issue topology is unavailable for deletion");
+  const children = await tx.select({ id: issues.id, companyId: issues.companyId }).from(issues).where(inArray(issues.parentId, ids));
+  const sources = await tx.select({ id: executionWorkspaces.id, companyId: executionWorkspaces.companyId }).from(executionWorkspaces).where(inArray(executionWorkspaces.sourceIssueId, ids));
+  if (children.some(row => row.companyId !== companyId) || sources.some(row => row.companyId !== companyId)) throw conflict("Issue topology is unavailable for deletion");
+  // Resource rows precede issues, including self-origin workspaces and surviving sources.
+  if (sources.length) await tx.select({ id: executionWorkspaces.id }).from(executionWorkspaces).where(inArray(executionWorkspaces.id, sources.map(row => row.id))).orderBy(asc(executionWorkspaces.id)).for("update");
+  const affected = [...new Set([...ids, ...children.map(row => row.id)])].sort();
+  await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, companyId), inArray(issues.id, affected))).orderBy(asc(issues.id)).for("update");
+  return { companyId, issueIds: ids };
+}
 
 /**
  * Clear everything that would block deleting a set of issues.
@@ -31,13 +49,15 @@ import { sql, type SQL } from "drizzle-orm";
  *
  * @param tx    a transaction — every caller must already be inside one, or a
  *              failure part-way leaves dependents cleared and issues standing.
- * @param match SQL matching the issue ids, e.g. `sql\`= ${id}\`` or
- *              `sql\`in (select id from issues where project_id = ${p})\``.
+ * @param context exact targets validated by prepareIssueDeletion on this executor,
+ *                while the owning company mutex remains held.
  */
 export async function clearIssueDependents(
   tx: { execute: (query: SQL) => Promise<unknown> },
-  match: SQL,
+  context: { companyId: string; issueIds: string[] },
 ): Promise<void> {
+  if (!context.issueIds.length) return;
+  const match = sql`in (${sql.join(context.issueIds.map(id => sql`${id}`), sql`, `)})`;
   // Owned — deleted with the issue.
   await tx.execute(sql`delete from issue_comments where issue_id ${match}`);
   await tx.execute(sql`delete from issue_read_states where issue_id ${match}`);
@@ -52,5 +72,5 @@ export async function clearIssueDependents(
   await tx.execute(sql`update experiments set issue_id = null where issue_id ${match}`);
 
   // Children — detached, so deleting a parent never destroys them.
-  await tx.execute(sql`update issues set parent_id = null where parent_id ${match}`);
+  await tx.execute(sql`update issues set parent_id = null where company_id = ${context.companyId} and parent_id ${match}`);
 }

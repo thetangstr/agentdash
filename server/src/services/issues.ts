@@ -1,7 +1,9 @@
 import { workforceIssueInputs } from './workforce-inputs.js';
 import { Buffer } from "node:buffer";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
-import { clearIssueDependents } from "./issue-dependents.js";
+import { assertActivityAcceptance, type ActivityAcceptance } from "./workforce.js";
+import { publishActivity } from "./activity-log.js";
+import { clearIssueDependents, prepareIssueDeletion } from "./issue-dependents.js";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -43,7 +45,7 @@ import type {
   IssueRelationIssueSummary,
 } from "@paperclipai/shared";
 import { clampIssueRequestDepth, extractAgentMentionIds, extractProjectMentionIds, isUuidLike } from "@paperclipai/shared";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { HttpError, conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
   gateProjectExecutionWorkspacePolicy,
@@ -1918,6 +1920,34 @@ async function blockedByMapForIssues(
 }
 
 export function issueService(db: Db) {
+  // AgentDash: explicit actual acceptance; a tx-bound factory is not ownership.
+  async function acceptTopology<T>(supplied: ActivityAcceptance | undefined, work: (tx: Db, accepted: ActivityAcceptance) => Promise<T>): Promise<T> {
+    if (supplied !== undefined) {
+      assertActivityAcceptance(supplied);
+      if (typeof supplied.executor.execute !== "function" || typeof supplied.executor.delete !== "function") throw new Error("Invalid topology acceptance executor");
+      return work(supplied.executor, supplied);
+    }
+    const publications: ActivityAcceptance["publications"] = [];
+    let callbackCompleted = false;
+    let result: T;
+    try {
+      result = await db.transaction(async tx => {
+        const result = await work(tx as unknown as Db, { executor: tx as unknown as Db, publications });
+        callbackCompleted = true;
+        return result;
+      });
+    } catch (error) {
+      if (callbackCompleted) throw new HttpError(409, "Issue persistence is uncertain. Read current state before retrying.", { persistenceOutcome: "unknown" });
+      throw error;
+    }
+    for (const publication of publications) publishActivity(publication);
+    return result;
+  }
+  async function lockTopologyCompany(tx: IssueMutationExecutor, companyId: string) {
+    const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
+    if (!company) throw conflict("Issue company is unavailable");
+  }
+
   const instanceSettings = instanceSettingsService(db);
   const treeControlSvc = issueTreeControlService(db);
 
@@ -3236,72 +3266,47 @@ export function issueService(db: Db) {
     createChild: async (
       parentIssueId: string,
       data: IssueChildCreateInput,
+      acceptance?: ActivityAcceptance,
     ) => {
-      const parent = await db
-        .select()
-        .from(issues)
-        .where(eq(issues.id, parentIssueId))
-        .then((rows) => rows[0] ?? null);
-      if (!parent) throw notFound("Parent issue not found");
-
-      const [{ childCount }] = await db
-        .select({ childCount: sql<number>`count(*)::int` })
-        .from(issues)
-        .where(and(eq(issues.companyId, parent.companyId), eq(issues.parentId, parent.id)));
-      if (childCount >= MAX_CHILD_ISSUES_CREATED_BY_HELPER) {
-        throw unprocessable(`Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} child issues for this helper`);
-      }
-
-      const {
-        acceptanceCriteria,
-        blockParentUntilDone,
-        actorAgentId,
-        actorUserId,
-        ...issueData
-      } = data;
-      const child = await issueService(db).create(parent.companyId, {
-        ...issueData,
-        parentId: parent.id,
-        projectId: issueData.projectId ?? parent.projectId,
-        goalId: issueData.goalId ?? parent.goalId,
-        requestDepth: clampIssueRequestDepth(
-          Math.max(clampIssueRequestDepth(parent.requestDepth) + 1, issueData.requestDepth ?? 0),
-        ),
-        description: appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria),
-        definitionOfDone:
-          issueData.definitionOfDone
-          ?? definitionOfDoneFromAcceptanceCriteria(issueData.title, acceptanceCriteria),
-        inheritExecutionWorkspaceFromIssueId: parent.id,
-      });
-
-      if (blockParentUntilDone) {
-        await db.transaction(async tx => {
-          await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, parent.companyId)).for("update");
-          const [currentParent] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, parent.id));
-          if (!currentParent || currentParent.companyId !== parent.companyId) throw conflict("Parent issue changed before blocker acceptance");
-          const existingBlockers = await tx
-            .select({ blockerIssueId: issueRelations.issueId })
-            .from(issueRelations)
+      const connection = acceptance?.executor ?? db;
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      const [binding] = await connection.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, parentIssueId));
+      if (!binding) throw notFound("Parent issue not found");
+      if (acceptance === undefined) await instanceSettings.getExperimental();
+      return acceptTopology(acceptance, async (tx, accepted) => {
+        await lockTopologyCompany(tx, binding.companyId);
+        await lockBlockerIssues(parentIssueId, binding.companyId, data.blockedByIssueIds ?? [], tx);
+        const [parent] = await tx.select().from(issues).where(and(eq(issues.id, parentIssueId), eq(issues.companyId, binding.companyId)));
+        if (!parent) throw conflict("Parent issue is unavailable");
+        const [{ childCount }] = await tx.select({ childCount: sql<number>`count(*)::int` }).from(issues)
+          .where(and(eq(issues.companyId, parent.companyId), eq(issues.parentId, parent.id)));
+        if (childCount >= MAX_CHILD_ISSUES_CREATED_BY_HELPER) throw unprocessable(`Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} child issues for this helper`);
+        const { acceptanceCriteria, blockParentUntilDone, actorAgentId, actorUserId, ...issueData } = data;
+        const child = await issueService(db).create(parent.companyId, {
+          ...issueData,
+          parentId: parent.id,
+          projectId: issueData.projectId ?? parent.projectId,
+          goalId: issueData.goalId ?? parent.goalId,
+          requestDepth: clampIssueRequestDepth(Math.max(clampIssueRequestDepth(parent.requestDepth) + 1, issueData.requestDepth ?? 0)),
+          description: appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria),
+          definitionOfDone: issueData.definitionOfDone ?? definitionOfDoneFromAcceptanceCriteria(issueData.title, acceptanceCriteria),
+          inheritExecutionWorkspaceFromIssueId: parent.id,
+        }, accepted);
+        if (blockParentUntilDone) {
+          const existingBlockers = await tx.select({ blockerIssueId: issueRelations.issueId }).from(issueRelations)
             .where(and(eq(issueRelations.companyId, parent.companyId), eq(issueRelations.relatedIssueId, parent.id), eq(issueRelations.type, "blocks")));
-          await syncBlockedByIssueIds(
-            parent.id,
-            parent.companyId,
-            [...new Set([...existingBlockers.map((row) => row.blockerIssueId), child.id])],
-            { agentId: actorAgentId ?? null, userId: actorUserId ?? null },
-            tx,
-          );
-        });
-      }
-
-      return {
-        issue: child,
-        parentBlockerAdded: Boolean(blockParentUntilDone),
-      };
+          await syncBlockedByIssueIds(parent.id, parent.companyId,
+            [...new Set([...existingBlockers.map(row => row.blockerIssueId), child.id])],
+            { agentId: actorAgentId ?? null, userId: actorUserId ?? null }, tx);
+        }
+        return { issue: child, parentBlockerAdded: Boolean(blockParentUntilDone) };
+      });
     },
 
     create: async (
       companyId: string,
       data: IssueCreateInput,
+      acceptance?: ActivityAcceptance,
     ) => {
       const {
         labelIds: inputLabelIds,
@@ -3310,35 +3315,31 @@ export function issueService(db: Db) {
         routeUnownedTodoToChiefOfStaff,
         ...issueData
       } = data;
-      // AgentDash: the issue start policy (see issue-start-policy.ts). An
-      // omitted status takes the company default; an unowned `todo` goes to
-      // the Chief of Staff when the caller may assign — but never back to a
-      // CoS that created it, which would wake itself for its own issue.
-      if (issueData.status == null) issueData.status = await defaultStatusForNewIssue(db, companyId);
-      if (routeUnownedTodoToChiefOfStaff) {
-        const triageOwnerId = await triageOwnerForNewIssue(db, companyId, issueData);
-        if (triageOwnerId && triageOwnerId !== issueData.createdByAgentId) issueData.assigneeAgentId = triageOwnerId;
-      }
-      const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
-      if (!isolatedWorkspacesEnabled) {
-        delete issueData.executionWorkspaceId;
-        delete issueData.executionWorkspacePreference;
-        delete issueData.executionWorkspaceSettings;
-      }
-      if (issueData.assigneeAgentId && issueData.assigneeUserId) {
-        throw unprocessable("Issue can only have one assignee");
-      }
-      if (issueData.assigneeAgentId) {
-        await assertAssignableAgent(companyId, issueData.assigneeAgentId);
-      }
-      if (issueData.assigneeUserId) {
-        await assertAssignableUser(companyId, issueData.assigneeUserId);
-      }
-      if (issueData.status === "in_progress" && !issueData.assigneeAgentId && !issueData.assigneeUserId) {
-        throw unprocessable("in_progress issues require an assignee");
-      }
-      return db.transaction(async (tx) => {
-        await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("update");
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      const experimental = acceptance === undefined ? await instanceSettings.getExperimental() : null;
+      return acceptTopology(acceptance, async (tx) => {
+        await lockTopologyCompany(tx, companyId);
+        const isolatedWorkspacesEnabled = (experimental ?? await readInstanceExperimentalSettings(tx)).enableIsolatedWorkspaces;
+        if (!isolatedWorkspacesEnabled) {
+          delete issueData.executionWorkspaceId;
+          delete issueData.executionWorkspacePreference;
+          delete issueData.executionWorkspaceSettings;
+        }
+        if (issueData.status == null) issueData.status = await defaultStatusForNewIssue(tx, companyId);
+        if (routeUnownedTodoToChiefOfStaff) {
+          const triageOwnerId = await triageOwnerForNewIssue(tx, companyId, issueData);
+          if (triageOwnerId && triageOwnerId !== issueData.createdByAgentId) issueData.assigneeAgentId = triageOwnerId;
+        }
+        if (issueData.assigneeAgentId && issueData.assigneeUserId) throw unprocessable("Issue can only have one assignee");
+        if (issueData.assigneeAgentId) await assertAssignableAgent(companyId, issueData.assigneeAgentId, tx);
+        if (issueData.assigneeUserId) await assertAssignableUser(companyId, issueData.assigneeUserId, tx);
+        if (issueData.status === "in_progress" && !issueData.assigneeAgentId && !issueData.assigneeUserId) throw unprocessable("in_progress issues require an assignee");
+        const relatedIds = [...new Set([issueData.parentId, inheritExecutionWorkspaceFromIssueId, ...(blockedByIssueIds ?? [])].filter((id): id is string => Boolean(id)))].sort();
+        if (relatedIds.length) await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, companyId), inArray(issues.id, relatedIds))).orderBy(asc(issues.id)).for("update");
+        if (issueData.parentId) {
+          const [parent] = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, issueData.parentId)));
+          if (!parent) throw unprocessable("Parent issue is unavailable");
+        }
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;
@@ -3510,7 +3511,7 @@ export function issueService(db: Db) {
         // Serialize predicate writers while allowing incidental company FK KEY SHARE
         // held by caller-owned comment/activity transactions.
         await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("no key update");
-        await lockBlockerIssues(id, binding.companyId, data.blockedByIssueIds ?? [], tx);
+        await lockBlockerIssues(id, binding.companyId, [...(data.blockedByIssueIds ?? []), ...(data.parentId ? [data.parentId] : [])], tx);
         const existing = await tx
           .select()
           .from(issues)
@@ -3519,10 +3520,17 @@ export function issueService(db: Db) {
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!existing) return null;
         if (existing.companyId !== binding.companyId) throw conflict("Issue company changed before acceptance");
+        const companyPatch = (data as Record<string, unknown>).companyId;
+        if (companyPatch !== undefined && companyPatch !== existing.companyId) throw unprocessable("Issue company cannot be changed");
+        if (data.parentId !== undefined && data.parentId !== null && data.parentId !== existing.parentId) {
+          const [parent] = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, existing.companyId), eq(issues.id, data.parentId)));
+          if (!parent) throw unprocessable("Parent issue is unavailable");
+        }
+        const { companyId: _companyId, ...acceptedData } = data as IssueUpdateData & { companyId?: unknown };
 
         const { patch, issueData, nextLabelIds, blockedByIssueIds, actorAgentId, actorUserId,
           nextExecutionWorkspaceId, nextExecutionWorkspacePreference, nextExecutionWorkspaceSettings } =
-          await resolveUpdate(existing, data, tx, experimentalSettings);
+          await resolveUpdate(existing, acceptedData, tx, experimentalSettings);
         patch.updatedAt = new Date();
         applyStatusSideEffects(issueData.status, patch, existing);
         if (issueData.status && issueData.status !== "done") {
@@ -3639,8 +3647,12 @@ export function issueService(db: Db) {
       return cleared;
     },
 
-    remove: (id: string) =>
-      db.transaction(async (tx) => {
+    remove: (id: string, acceptance?: ActivityAcceptance) =>
+      acceptTopology(acceptance, async (tx) => {
+        const [binding] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, id));
+        if (!binding) return null;
+        await lockTopologyCompany(tx, binding.companyId);
+        const deletion = await prepareIssueDeletion(tx, binding.companyId, [id]);
         const attachmentAssetIds = await tx
           .select({ assetId: issueAttachments.assetId })
           .from(issueAttachments)
@@ -3652,7 +3664,7 @@ export function issueService(db: Db) {
 
         // Every dependent that would block the delete below. Shared with the
         // project-delete path so the two cannot drift apart.
-        await clearIssueDependents(tx, sql`= ${id}`);
+        await clearIssueDependents(tx, deletion);
 
         const removedIssue = await tx
           .delete(issues)

@@ -39,3 +39,10 @@ Do not activate a separate hiring loop or replay confirmations from this surface
 <!-- AgentDash: workspace-persistence-recovery — DO NOT REMOVE OR REORDER THIS BLOCK -->
 <!-- Applicability: this inert leadership surface inherits workspace-persistence-recovery from the canonical default worker bundle. It does not introduce a separate workspace retry or cleanup workflow. -->
 <!-- /AgentDash: workspace-persistence-recovery -->
+
+<!-- AgentDash: issue-topology-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK
+This retired persona remains inert. All workers inherit the canonical default
+issue-topology-acceptance block: same-company parenting, private deletion refusal,
+atomic child/suggestion writes and read-back after uncertain persistence. Source
+deletion cannot resolve an original workspace quarantine.
+/AgentDash: issue-topology-acceptance -->

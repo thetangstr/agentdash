@@ -93,6 +93,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // existing endpoints and private-answer rules. Predicate locking is server-side;
 // stale/refused preparation has no cleanup/runtime effects, and an expired
 // confirmation remains a distinct accepted outcome. No new worker call is needed.
+// AgentDash: issue-topology-acceptance is inherited from the canonical bundle:
+// same-company parents, private unsafe-deletion refusal, atomic child/suggestion
+// acceptance and no replay or quarantine resolution after uncertain persistence.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

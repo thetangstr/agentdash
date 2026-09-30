@@ -2,7 +2,7 @@ import { publishActivity, type ActivityPublication } from './activity-log.js';
 import type { Request } from 'express';
 import { assertProjectIdVisible } from '../routes/visibility.js';
 import { isDeepStrictEqual } from "node:util";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   documents,
@@ -13,6 +13,7 @@ import {
   issueComments,
   issueDocuments,
   issueThreadInteractions,
+  issueRelations,
   issues,
 } from "@paperclipai/db";
 import type {
@@ -43,9 +44,9 @@ import {
   suggestTasksPayloadSchema,
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
-import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { HttpError, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
-import { issueService } from "./issues.js";
+import { issueService, MAX_CHILD_ISSUES_CREATED_BY_HELPER } from "./issues.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
 import { workforceService, assertActivityAcceptance, type ActivityAcceptance } from "./workforce.js";
 
@@ -917,10 +918,10 @@ export function issueThreadInteractionService(db: Db) {
       const data = acceptIssueThreadInteractionSchema.parse(input);
       if (acceptance !== undefined) assertActivityAcceptance(acceptance);
       const current = await getPendingInteractionForResolution({ issue, interactionId }, acceptance?.executor ?? db);
-      if (acceptance !== undefined && current.kind !== "request_confirmation") throw unprocessable("Supplied acceptance supports request confirmations only");
+      if (acceptance !== undefined && current.kind !== "request_confirmation" && current.kind !== "suggest_tasks") throw unprocessable("Supplied acceptance supports confirmations and suggested tasks only");
       switch (current.kind) {
         case "suggest_tasks":
-          return issueThreadInteractionService(db).acceptSuggestedTasks(issue, interactionId, data, actor);
+          return issueThreadInteractionService(db).acceptSuggestedTasks(issue, interactionId, data, actor, acceptance);
         case "request_confirmation": {
           const accepted = await acceptRequestConfirmation({
             issue,
@@ -944,145 +945,174 @@ export function issueThreadInteractionService(db: Db) {
       interactionId: string,
       input: AcceptIssueThreadInteraction,
       actor: InteractionActor,
+      acceptance?: ActivityAcceptance,
     ) => {
-      const current = await db
-        .select()
-        .from(issueThreadInteractions)
-        .where(eq(issueThreadInteractions.id, interactionId))
-        .then((rows) => rows[0] ?? null);
+      let callbackCompleted = false;
+      try {
+        return await acceptInteractionWrite(acceptance, async (tx, accepted) => {
+          const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for("update");
+          if (!company) throw notFound("Issue not found");
+          const [freshIssue] = await tx.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+          if (!freshIssue) throw notFound("Issue not found");
+          const current = await tx
+            .select()
+            .from(issueThreadInteractions)
+            .where(eq(issueThreadInteractions.id, interactionId))
+            .then((rows) => rows[0] ?? null);
 
-      if (!current) throw notFound("Interaction not found");
-      if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
-        throw notFound("Interaction not found");
-      }
-      if (current.kind !== "suggest_tasks") {
-        throw unprocessable("Only suggest_tasks interactions can be accepted");
-      }
-      if (current.status !== "pending") {
-        throw conflict("Interaction has already been resolved");
-      }
-
-      const interaction = hydrateInteraction(current) as SuggestTasksInteraction;
-      const { selectedTasks, skippedClientKeys } = resolveSelectedSuggestedTasks({
-        interaction,
-        selectedClientKeys: input.selectedClientKeys,
-      });
-      const orderedTasks = buildTaskCreationOrder(selectedTasks);
-      const explicitParentIds = [...new Set([
-        issue.id,
-        ...(interaction.payload.defaultParentId ? [interaction.payload.defaultParentId] : []),
-        ...selectedTasks
-          .map((task) => task.parentId ?? null)
-          .filter((value): value is string => Boolean(value)),
-      ])];
-
-      const parentRows = explicitParentIds.length === 0
-        ? []
-        : await db
-          .select({
-            id: issues.id,
-            identifier: issues.identifier,
-            companyId: issues.companyId,
-          })
-          .from(issues)
-          .where(and(eq(issues.companyId, issue.companyId), inArray(issues.id, explicitParentIds)));
-      if (parentRows.length !== explicitParentIds.length) {
-        throw unprocessable("Suggested tasks reference parent issues outside this company or issue tree");
-      }
-
-      const parentById = new Map(parentRows.map((row) => [row.id, row] as const));
-      const createdByClientKey = new Map<string, SuggestTasksResultCreatedTask>();
-      const createdWakeTargets: IssueWakeTarget[] = [];
-
-      await db.transaction(async (tx) => {
-        const resolvedAt = new Date();
-        const [claimed] = await tx
-          .update(issueThreadInteractions)
-          .set({
-            status: "accepted",
-            resolvedByAgentId: actor.agentId ?? null,
-            resolvedByUserId: actor.userId ?? null,
-            resolvedAt,
-            updatedAt: resolvedAt,
-          })
-          .where(and(
-            eq(issueThreadInteractions.id, interactionId),
-            eq(issueThreadInteractions.status, "pending"),
-          ))
-          .returning();
-
-        if (!claimed) {
-          throw conflict("Interaction has already been resolved");
-        }
-
-        for (const task of orderedTasks) {
-          const parentIssueId = task.parentClientKey
-            ? createdByClientKey.get(task.parentClientKey)?.issueId ?? null
-            : task.parentId ?? interaction.payload.defaultParentId ?? issue.id;
-          if (!parentIssueId) {
-            throw unprocessable(`Unable to resolve parent for suggested task ${task.clientKey}`);
+          if (!current) throw notFound("Interaction not found");
+          if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
+            throw notFound("Interaction not found");
+          }
+          if (current.kind !== "suggest_tasks") {
+            throw unprocessable("Only suggest_tasks interactions can be accepted");
+          }
+          if (current.status !== "pending") {
+            throw conflict("Interaction has already been resolved");
           }
 
-          const { issue: createdIssue } = await issueService(tx as unknown as Db).createChild(parentIssueId, {
-            title: task.title,
-            description: task.description ?? null,
-            status: "todo",
-            priority: task.priority ?? "medium",
-            assigneeAgentId: task.assigneeAgentId ?? null,
-            assigneeUserId: task.assigneeUserId ?? null,
-            projectId: task.projectId ?? issue.projectId,
-            goalId: task.goalId ?? issue.goalId,
-            billingCode: task.billingCode ?? null,
-            createdByAgentId: actor.agentId ?? null,
-            createdByUserId: actor.userId ?? null,
-            actorAgentId: actor.agentId ?? null,
-            actorUserId: actor.userId ?? null,
-          } as Parameters<ReturnType<typeof issueService>["createChild"]>[1]);
-
-          const parentIdentifier = createdByClientKey.get(task.parentClientKey ?? "")?.identifier
-            ?? parentById.get(parentIssueId)?.identifier
-            ?? null;
-          createdByClientKey.set(task.clientKey, {
-            clientKey: task.clientKey,
-            issueId: createdIssue.id,
-            identifier: createdIssue.identifier ?? null,
-            title: createdIssue.title,
-            parentIssueId,
-            parentIdentifier,
+          const interaction = hydrateInteraction(current) as SuggestTasksInteraction;
+          const { selectedTasks, skippedClientKeys } = resolveSelectedSuggestedTasks({
+            interaction,
+            selectedClientKeys: input.selectedClientKeys,
           });
-          createdWakeTargets.push({
-            id: createdIssue.id,
-            assigneeAgentId: createdIssue.assigneeAgentId ?? null,
-            status: createdIssue.status,
-          });
-        }
+          const orderedTasks = buildTaskCreationOrder(selectedTasks);
+          const explicitParentIds = [...new Set([
+            issue.id,
+            ...(interaction.payload.defaultParentId ? [interaction.payload.defaultParentId] : []),
+            ...selectedTasks
+              .map((task) => task.parentId ?? null)
+              .filter((value): value is string => Boolean(value)),
+          ])];
 
-        const [updated] = await tx
-          .update(issueThreadInteractions)
-          .set({
-            result: {
-              version: 1,
-              createdTasks: [...createdByClientKey.values()],
-              ...(skippedClientKeys.length > 0 ? { skippedClientKeys } : {}),
-            },
-            updatedAt: new Date(),
-          })
-          .where(eq(issueThreadInteractions.id, interactionId))
-          .returning();
+          const parentRows = explicitParentIds.length === 0
+            ? []
+            : await tx
+              .select({
+                id: issues.id,
+                identifier: issues.identifier,
+                companyId: issues.companyId,
+              })
+              .from(issues)
+              .where(and(eq(issues.companyId, issue.companyId), inArray(issues.id, explicitParentIds)));
+          if (parentRows.length !== explicitParentIds.length) {
+            throw unprocessable("Suggested tasks reference parent issues outside this company or issue tree");
+          }
 
-        await touchIssue(tx, issue.id);
-        current.status = updated.status;
-        current.result = updated.result;
-        current.resolvedByAgentId = updated.resolvedByAgentId;
-        current.resolvedByUserId = updated.resolvedByUserId;
-        current.resolvedAt = updated.resolvedAt;
-        current.updatedAt = updated.updatedAt;
-      });
+          const parentById = new Map(parentRows.map((row) => [row.id, row] as const));
+          const createdByClientKey = new Map<string, SuggestTasksResultCreatedTask>();
+          const createdWakeTargets: IssueWakeTarget[] = [];
 
-      return {
-        interaction: hydrateInteraction(current),
-        createdIssues: createdWakeTargets,
-      };
+          // Admission counts are refreshed under company before claiming any selection.
+          const requestedChildren = new Map<string, number>();
+          for (const task of selectedTasks) {
+            const parentKey = task.parentClientKey ? `new:${task.parentClientKey}` : task.parentId ?? interaction.payload.defaultParentId ?? issue.id;
+            requestedChildren.set(parentKey, (requestedChildren.get(parentKey) ?? 0) + 1);
+          }
+          const childCounts = await tx.select({ parentId: issues.parentId, count: sql<number>`count(*)::int` }).from(issues)
+            .where(and(eq(issues.companyId, issue.companyId), inArray(issues.parentId, explicitParentIds))).groupBy(issues.parentId);
+          for (const [parentId, requested] of requestedChildren) {
+            const existing = childCounts.find(row => row.parentId === parentId)?.count ?? 0;
+            if (existing + requested > MAX_CHILD_ISSUES_CREATED_BY_HELPER) throw unprocessable(`Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} child issues for this helper`);
+          }
+
+          // All existing parents and their blockers lock in one sorted union before claim.
+          const blockers = await tx.select({ id: issueRelations.issueId }).from(issueRelations)
+            .where(and(eq(issueRelations.companyId, issue.companyId), inArray(issueRelations.relatedIssueId, explicitParentIds), eq(issueRelations.type, "blocks")));
+          const relatedIds = [...new Set([...explicitParentIds, ...blockers.map(row => row.id)])].sort();
+          await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, issue.companyId), inArray(issues.id, relatedIds))).orderBy(asc(issues.id)).for("update");
+          const resolvedAt = new Date();
+          const [claimed] = await tx
+            .update(issueThreadInteractions)
+            .set({
+              status: "accepted",
+              resolvedByAgentId: actor.agentId ?? null,
+              resolvedByUserId: actor.userId ?? null,
+              resolvedAt,
+              updatedAt: resolvedAt,
+            })
+            .where(and(
+              eq(issueThreadInteractions.id, interactionId),
+              eq(issueThreadInteractions.status, "pending"),
+            ))
+            .returning();
+
+          if (!claimed) {
+            throw conflict("Interaction has already been resolved");
+          }
+
+          for (const task of orderedTasks) {
+            const parentIssueId = task.parentClientKey
+              ? createdByClientKey.get(task.parentClientKey)?.issueId ?? null
+              : task.parentId ?? interaction.payload.defaultParentId ?? issue.id;
+            if (!parentIssueId) {
+              throw unprocessable(`Unable to resolve parent for suggested task ${task.clientKey}`);
+            }
+
+            const { issue: createdIssue } = await issueService(db).createChild(parentIssueId, {
+              title: task.title,
+              description: task.description ?? null,
+              status: "todo",
+              priority: task.priority ?? "medium",
+              assigneeAgentId: task.assigneeAgentId ?? null,
+              assigneeUserId: task.assigneeUserId ?? null,
+              projectId: task.projectId ?? freshIssue.projectId,
+              goalId: task.goalId ?? freshIssue.goalId,
+              billingCode: task.billingCode ?? null,
+              createdByAgentId: actor.agentId ?? null,
+              createdByUserId: actor.userId ?? null,
+              actorAgentId: actor.agentId ?? null,
+              actorUserId: actor.userId ?? null,
+            } as Parameters<ReturnType<typeof issueService>["createChild"]>[1], accepted);
+
+            const parentIdentifier = createdByClientKey.get(task.parentClientKey ?? "")?.identifier
+              ?? parentById.get(parentIssueId)?.identifier
+              ?? null;
+            createdByClientKey.set(task.clientKey, {
+              clientKey: task.clientKey,
+              issueId: createdIssue.id,
+              identifier: createdIssue.identifier ?? null,
+              title: createdIssue.title,
+              parentIssueId,
+              parentIdentifier,
+            });
+            createdWakeTargets.push({
+              id: createdIssue.id,
+              assigneeAgentId: createdIssue.assigneeAgentId ?? null,
+              status: createdIssue.status,
+            });
+          }
+
+          const [updated] = await tx
+            .update(issueThreadInteractions)
+            .set({
+              result: {
+                version: 1,
+                createdTasks: [...createdByClientKey.values()],
+                ...(skippedClientKeys.length > 0 ? { skippedClientKeys } : {}),
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(issueThreadInteractions.id, interactionId))
+            .returning();
+
+          await touchIssue(tx, issue.id);
+          current.status = updated.status;
+          current.result = updated.result;
+          current.resolvedByAgentId = updated.resolvedByAgentId;
+          current.resolvedByUserId = updated.resolvedByUserId;
+          current.resolvedAt = updated.resolvedAt;
+          current.updatedAt = updated.updatedAt;
+          callbackCompleted = true;
+          return {
+            interaction: hydrateInteraction(current),
+            createdIssues: createdWakeTargets,
+          };
+        });
+      } catch (error) {
+        if (acceptance === undefined && callbackCompleted) throw new HttpError(409, "Suggestion persistence is uncertain. Read current state before retrying.", { persistenceOutcome: "unknown" });
+        throw error;
+      }
     },
 
     rejectInteraction: async (
