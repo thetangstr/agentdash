@@ -129,13 +129,34 @@ type ProcessOutputAccumulator = {
   finish(): ProcessOutputCapture;
 };
 
-export async function resetRuntimeServicesForTests() {
+// AgentDash: every service process this server spawned and has not yet seen
+// exit, keyed by pid, with the process group it leads (null on Windows, where
+// services are not spawned detached). Kept apart from the maps above so a test
+// reset can stop what it started even after a record has left them.
+const spawnedServiceProcesses = new Map<number, number | null>();
+
+/**
+ * Forget all runtime-service state. By default it also stops every service
+ * process this module spawned: they run detached, so a test that only cleared
+ * the maps left them serving on after vitest exited.
+ *
+ * `stopProcesses: false` keeps them running, for tests that simulate a server
+ * restart and then adopt the survivors. Whatever they adopt is still stopped
+ * by the next default reset.
+ */
+export async function resetRuntimeServicesForTests(opts: { stopProcesses?: boolean } = {}) {
   for (const record of runtimeServicesById.values()) {
     clearIdleTimer(record);
   }
   runtimeServicesById.clear();
   runtimeServicesByReuseKey.clear();
   runtimeServiceLeasesByRun.clear();
+  if (opts.stopProcesses === false) return;
+  const spawned = [...spawnedServiceProcesses.entries()];
+  spawnedServiceProcesses.clear();
+  await Promise.all(
+    spawned.map(([pid, processGroupId]) => terminateLocalService({ pid, processGroupId })),
+  );
 }
 
 function stableStringify(value: unknown): string {
@@ -2058,6 +2079,13 @@ async function startLocalRuntimeService(input: {
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const spawnedPid = child.pid;
+  if (spawnedPid) {
+    spawnedServiceProcesses.set(spawnedPid, process.platform !== "win32" ? spawnedPid : null);
+    child.once("exit", () => {
+      spawnedServiceProcesses.delete(spawnedPid);
+    });
+  }
   const spawnErrorPromise = new Promise<never>((_, reject) => {
     child.once("error", (err) => {
       reject(err);

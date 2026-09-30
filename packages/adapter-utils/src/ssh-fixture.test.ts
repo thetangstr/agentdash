@@ -35,6 +35,10 @@ describe("ssh env-lab fixture", () => {
     while (cleanupDirs.length > 0) {
       const dir = cleanupDirs.pop();
       if (!dir) continue;
+      // Stop before removing: sshd runs detached, and deleting its state file
+      // first would leave nothing to find it by. Every fixture test keeps its
+      // state at <dir>/state.json; a no-op when the test already stopped it.
+      await stopSshEnvLabFixture(path.join(dir, "state.json")).catch(() => undefined);
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });

@@ -685,6 +685,146 @@ describeEmbeddedPostgres("local agent bridge", () => {
     expect(await db.select().from(bridgeTasks)).toHaveLength(0);
   });
 
+  // -- malformed ids: the caller's 400, never a Postgres cast error's 500 ----
+
+  it("400s a non-uuid endpointId on the task route, and files nothing", async () => {
+    // An agent that sends a placeholder instead of an id used to reach the
+    // uuid column, where Postgres raised 22P02 and the handler answered 500.
+    const { company, agent } = await seed();
+    const app = createApp(agentActor(company.id, agent.id));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/bridge/tasks`)
+        .send({
+          endpointId: "ENDPOINT-ID-PLACEHOLDER",
+          taskClass: "read",
+          instruction: "x",
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(JSON.stringify(res.body.details)).toContain("endpointId must be a uuid");
+    expect(await db.select().from(bridgeTasks)).toHaveLength(0);
+  });
+
+  it("404s a well-formed endpointId that names no endpoint", async () => {
+    const { company, agent } = await seed();
+    const app = createApp(agentActor(company.id, agent.id));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/bridge/tasks`)
+        .send({ endpointId: randomUUID(), taskClass: "read", instruction: "x" }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(404);
+    expect(res.body.error).toBe("Endpoint not found");
+  });
+
+  it("refuses an unrecognised taskClass instead of filing it as a read", async () => {
+    // A read dispatches without approval, so a mistyped "act" read as "read"
+    // would skip the steward's decision.
+    const { company, steward, owner, agent } = await seed();
+    const { endpointId } = await enrolledEndpoint(
+      company.id,
+      steward.principalId,
+      owner.principalId,
+    );
+    const app = createApp(agentActor(company.id, agent.id));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/bridge/tasks`)
+        .send({ endpointId, taskClass: "ACT", instruction: "delete the build dir" }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(await db.select().from(bridgeTasks)).toHaveLength(0);
+  });
+
+  it("still defaults an omitted taskClass to read", async () => {
+    const { company, steward, owner, agent } = await seed();
+    const { endpointId } = await enrolledEndpoint(
+      company.id,
+      steward.principalId,
+      owner.principalId,
+    );
+    const app = createApp(agentActor(company.id, agent.id));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/bridge/tasks`)
+        .send({ endpointId, instruction: "summarize the README" }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const stored = await db.select().from(bridgeTasks).then((rows) => rows[0]!);
+    expect(stored.taskClass).toBe("read");
+  });
+
+  it("400s a non-uuid taskId on result and decline, and 404s an unknown one", async () => {
+    const { company, steward, owner } = await seed();
+    const { token } = await enrolledEndpoint(company.id, steward.principalId, owner.principalId);
+    const { actorMiddleware } = await import("../middleware/auth.js");
+
+    const app = express();
+    app.use(express.json());
+    app.use(actorMiddleware(db, { deploymentMode: "authenticated" }));
+    app.use("/api", bridgeRoutes(db));
+    app.use(errorHandler);
+
+    for (const route of ["/api/bridge/result", "/api/bridge/decline"]) {
+      const malformed = await call(app, (baseUrl) =>
+        request(baseUrl)
+          .post(route)
+          .set("authorization", `Bearer ${token}`)
+          .send({ taskId: "not-a-task", resultToken: "t", result: "r", reason: "r" }),
+      );
+      expect(malformed.status, `${route}: ${JSON.stringify(malformed.body)}`).toBe(400);
+      expect(malformed.body.error).toBe("taskId must be a uuid");
+
+      const unknown = await call(app, (baseUrl) =>
+        request(baseUrl)
+          .post(route)
+          .set("authorization", `Bearer ${token}`)
+          .send({ taskId: randomUUID(), resultToken: "t", result: "r", reason: "r" }),
+      );
+      expect(unknown.status, `${route}: ${JSON.stringify(unknown.body)}`).toBe(404);
+      expect(unknown.body.error).toBe("Task not found");
+    }
+  });
+
+  it("400s a non-uuid :endpointId on approve and revoke, and 404s an unknown one", async () => {
+    const { company, owner } = await seed();
+    // An administrator, so an endpoint they do not own reaches the service
+    // lookup rather than stopping at the ownership check.
+    const app = createApp({
+      ...boardActor(company.id, owner.principalId),
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    for (const [verb, notFoundMessage] of [
+      ["approve", "Enrollment not found"],
+      ["revoke", "Endpoint not found"],
+    ] as const) {
+      const malformed = await call(app, (baseUrl) =>
+        request(baseUrl).post(`/api/companies/${company.id}/bridge/endpoints/not-a-uuid/${verb}`).send({}),
+      );
+      expect(malformed.status, `${verb}: ${JSON.stringify(malformed.body)}`).toBe(400);
+      expect(malformed.body.error).toBe("endpointId must be a uuid");
+
+      const unknown = await call(app, (baseUrl) =>
+        request(baseUrl)
+          .post(`/api/companies/${company.id}/bridge/endpoints/${randomUUID()}/${verb}`)
+          .send({}),
+      );
+      expect(unknown.status, `${verb}: ${JSON.stringify(unknown.body)}`).toBe(404);
+      expect(unknown.body.error).toBe(notFoundMessage);
+    }
+  });
+
   it("lets an endpoint decline a task with a reason", async () => {
     const { company, steward, owner, agent } = await seed();
     const { endpointId, token } = await enrolledEndpoint(

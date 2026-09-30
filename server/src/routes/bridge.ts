@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { Request } from "express";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
@@ -11,9 +12,29 @@ import { stewardInboxDecisionService } from "../services/steward-inbox-decisions
 import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
-import { bridgeService } from "../services/bridge.js";
+import { BRIDGE_TASK_CLASSES, bridgeService } from "../services/bridge.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+
+// Ids reach uuid columns. Checked here so a malformed one is the caller's 400,
+// not a Postgres cast error (22P02) surfacing as a 500 with the SQL and body
+// in the server log.
+const uuidSchema = z.string().uuid();
+
+function requireUuid(value: unknown, field: string): string {
+  const parsed = uuidSchema.safeParse(value);
+  if (!parsed.success) throw badRequest(`${field} must be a uuid`);
+  return parsed.data;
+}
+
+const createBridgeTaskSchema = z.object({
+  endpointId: z
+    .string({ required_error: "endpointId is required" })
+    .uuid("endpointId must be a uuid"),
+  taskClass: z.enum(BRIDGE_TASK_CLASSES).default("read"),
+  // Emptiness is the service's refusal ("An instruction is required").
+  instruction: z.string().default(""),
+});
 
 /**
  * AgentDash-MK: the local agent bridge.
@@ -227,6 +248,7 @@ export function bridgeRoutes(
     if (!taskId || !resultToken || result === null) {
       throw badRequest("taskId, resultToken, and result are required");
     }
+    requireUuid(taskId, "taskId");
     const updated = await bridge.submitResult(endpointId, taskId, resultToken, result);
     res.json({ taskId: updated.id, outcome: updated.outcome });
   });
@@ -237,6 +259,7 @@ export function bridgeRoutes(
     const resultToken = typeof req.body?.resultToken === "string" ? req.body.resultToken : null;
     const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
     if (!taskId || !resultToken) throw badRequest("taskId and resultToken are required");
+    requireUuid(taskId, "taskId");
     const updated = await bridge.declineTask(endpointId, taskId, resultToken, reason);
     res.json({ taskId: updated.id, outcome: updated.outcome });
   });
@@ -295,9 +318,9 @@ export function bridgeRoutes(
    */
   router.post("/companies/:companyId/bridge/endpoints/:endpointId/approve", async (req, res) => {
     const companyId = req.params.companyId as string;
-    const endpointId = req.params.endpointId as string;
     await requireProfileCompany(req, companyId);
     const userId = requireBoardUser(req);
+    const endpointId = requireUuid(req.params.endpointId, "endpointId");
 
     const endpoints = await bridge.listEndpointsForUser(companyId, userId);
     const own = endpoints.some((endpoint) => endpoint.id === endpointId);
@@ -311,9 +334,9 @@ export function bridgeRoutes(
 
   router.post("/companies/:companyId/bridge/endpoints/:endpointId/revoke", async (req, res) => {
     const companyId = req.params.companyId as string;
-    const endpointId = req.params.endpointId as string;
     await requireProfileCompany(req, companyId);
     const userId = requireBoardUser(req);
+    const endpointId = requireUuid(req.params.endpointId, "endpointId");
 
     const endpoints = await bridge.listEndpointsForUser(companyId, userId);
     const own = endpoints.some((endpoint) => endpoint.id === endpointId);
@@ -342,10 +365,10 @@ export function bridgeRoutes(
       throw forbidden("Agent key cannot access another company");
     }
 
-    const endpointId = typeof req.body?.endpointId === "string" ? req.body.endpointId : null;
-    const taskClass = req.body?.taskClass === "act" ? "act" : "read";
-    const instruction = typeof req.body?.instruction === "string" ? req.body.instruction : "";
-    if (!endpointId) throw badRequest("endpointId is required");
+    // Parsed after authorization, so a caller who may not file tasks learns
+    // nothing from a validation error. An unrecognised taskClass is refused
+    // rather than read as "read": a mistyped "act" must not skip its approval.
+    const { endpointId, taskClass, instruction } = createBridgeTaskSchema.parse(req.body ?? {});
 
     const task = await bridge.createTask(companyId, {
       endpointId,

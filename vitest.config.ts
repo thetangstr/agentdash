@@ -2,6 +2,11 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // AgentDash: fail the run if a test leaves a runtime-service or SSH-fixture
+    // process alive. It only kills processes proven to be this run's (recorded
+    // descendants, or carrying the run id in their environment), never other
+    // runs' or anything that merely names the run's short /tmp directory.
+    globalSetup: ["./scripts/lib/vitest-process-leak-check.mjs"],
     projects: [
       "packages/shared",
       "packages/db",

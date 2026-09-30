@@ -2537,8 +2537,15 @@ describe("ensureRuntimeServicesForRun", () => {
     const response = await fetch(services[0]!.url!);
     expect(await response.text()).toBe("ok");
 
+    // The service has a manual stop policy, so releasing the run does not stop
+    // it. Stop it by its own workspace, or it outlives the test run.
+    await stopRuntimeServicesForExecutionWorkspace({
+      executionWorkspaceId: "execution-workspace-sibling",
+      workspaceCwd: siblingWorkspaceRoot,
+    });
     await releaseRuntimeServicesForRun(runId);
     leasedRunIds.delete(runId);
+    await expect(fetch(services[0]!.url!)).rejects.toThrow();
   });
 
   it("starts only the selected workspace-controlled runtime service", async () => {
@@ -2979,7 +2986,8 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
     expect(service?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     await expect(fetch(service!.url!)).resolves.toMatchObject({ ok: true });
 
-    await resetRuntimeServicesForTests();
+    // Simulates a restart: in-memory state goes, the process stays to be adopted.
+    await resetRuntimeServicesForTests({ stopProcesses: false });
 
     const result = await reconcilePersistedRuntimeServicesOnStartup(db);
     expect(result).toMatchObject({ reconciled: 1, adopted: 1, stopped: 0 });
