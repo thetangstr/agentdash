@@ -76,6 +76,11 @@ import {
 import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { approvalDecisionEffectsService } from "../services/approval-decision-effects.js";
+import {
+  approvalAuthorityService,
+  type ApprovalDecisionRole,
+} from "../services/approval-authority.js";
 import {
   accountabilityLabel,
   type AgentAccountability,
@@ -185,6 +190,31 @@ export function agentRoutes(
   const stewardships = agentStewardshipService(db);
   const accountability = agentAccountabilityService(db);
   const approvalsSvc = approvalService(db);
+  // Decision role for a hire approval recorded from the agent page. The
+  // caller has already passed the agent-administrator gate, which is what an
+  // emergency override requires; this only decides how it is recorded.
+  let approvalAuthority: ReturnType<typeof approvalAuthorityService> | null = null;
+  async function resolveAgentPageDecisionRole(
+    approval: Awaited<ReturnType<typeof approvalsSvc.listPendingHireApprovalsForAgent>>[number],
+    actor: Request["actor"],
+  ): Promise<ApprovalDecisionRole> {
+    approvalAuthority ??= approvalAuthorityService(db);
+    try {
+      return (await approvalAuthority.requireDecisionActor(approval, actor)) ?? "board";
+    } catch (err) {
+      if ((err as { status?: number })?.status === 403) return "owner_override";
+      throw err;
+    }
+  }
+
+  // Post-decision effects for a hire approval resolved from the agent page,
+  // shared with every other decision surface. Built on first use: only the
+  // approve route needs it, and it wires up a dozen services.
+  let decisionEffects: ReturnType<typeof approvalDecisionEffectsService> | null = null;
+  const getDecisionEffects = () =>
+    (decisionEffects ??= approvalDecisionEffectsService(db, {
+      pluginWorkerManager: options.pluginWorkerManager,
+    }));
   const budgets = budgetService(db);
   const environmentsSvc = environmentService(db);
   const heartbeat = heartbeatService(db, {
@@ -3852,6 +3882,65 @@ export function agentRoutes(
       details: { source: "agent_detail" },
     });
 
+    // AgentDash: approving the agent IS the answer to its hire request, so the
+    // linked `hire_agent` approval is decided too. Left pending it stayed an
+    // open decision in every inbox — and rejecting it later terminated the
+    // agent this call just activated. The agent is already activated when this
+    // runs, so a failure here is logged rather than turned into an error.
+    const decidedByUserId = req.actor.userId ?? "board";
+    const decisionNote = "Approved from the agent page";
+    try {
+      const linked = await approvalsSvc.listPendingHireApprovalsForAgent(agent.companyId, agent.id);
+      for (const pending of linked) {
+        // Recorded under the same authority rules as any other decision. In
+        // `agentdash_mk` an agent-requested hire belongs to that agent's
+        // steward; an administrator who is not the decider has bypassed them,
+        // which is exactly an emergency override and is recorded as one, with
+        // a reason. Default-profile companies keep the `board` role.
+        const role = await resolveAgentPageDecisionRole(pending, req.actor);
+        const overrideReason =
+          role === "owner_override" ? "Activated from the agent page" : undefined;
+        const resolved = await approvalsSvc.approve(pending.id, decidedByUserId, decisionNote, {
+          revision: pending.revision,
+          channel: "web",
+          actorRole: role,
+          ...(overrideReason ? { overrideReason } : {}),
+        });
+        if (resolved.applied && role === "owner_override") {
+          await logActivity(db, {
+            companyId: agent.companyId,
+            actorType: "user",
+            actorId: decidedByUserId,
+            action: "approval.emergency_override",
+            entityType: "approval",
+            entityId: pending.id,
+            details: {
+              type: pending.type,
+              decision: "approved",
+              overrideReason,
+              channel: "web",
+              revision: pending.revision,
+              requestedByAgentId: pending.requestedByAgentId,
+              source: "agent_detail",
+            },
+          });
+        }
+        // No requester wake: activating from the agent page never woke the
+        // requesting agent, and recording the decision must not start a full
+        // agent run that the person who activated it did not ask for.
+        await getDecisionEffects().afterApprove(resolved.approval, resolved.applied, {
+          actorUserId: decidedByUserId,
+          decisionNote,
+          wakeRequester: false,
+        });
+      }
+    } catch (err) {
+      logger.error(
+        { err, agentId: agent.id, companyId: agent.companyId },
+        "agent approved but its hire approval could not be resolved; it may still show as pending",
+      );
+    }
+
     res.json(agent);
   });
 
@@ -3861,7 +3950,7 @@ export function agentRoutes(
     if (!(await getAccessibleAgent(req, res, id))) {
       return;
     }
-    const agent = await svc.terminate(id);
+    const agent = await svc.terminate(id, { endedByUserId: req.actor.userId ?? null });
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
@@ -3948,8 +4037,19 @@ export function agentRoutes(
    * Mint a short, single-use code that pairs one machine with this agent.
    *
    * This is the thing a steward hands to a colleague instead of a raw agent
-   * key. Same access check as minting a key, because it *is* minting a key —
-   * just deferred, scoped to one device, and worthless ten minutes from now.
+   * key. Authorized as configuration authority over THIS agent: an
+   * administrator with `agents:create`, or — in `agentdash_mk` companies — the
+   * agent's active steward, or its creator while it has no other steward. It
+   * used to require `agents:create`
+   * outright, which is the company-wide agent-administrator predicate, so a
+   * member could not connect their own terminal to the agent they steward
+   * (the My Agent page offers exactly that) without being made an
+   * administrator of every agent. A code only lets someone run the agent they
+   * already answer for: redemption mints a key scoped to this agent and
+   * enrolls an endpoint under the redeeming user.
+   *
+   * Deliberately NOT widened to the key list/revoke, pause or resume routes;
+   * those still require `agents:create`.
    *
    * Any unredeemed codes for this agent are revoked first. Two live codes for
    * one agent means a screen showing a stale one still works, which is exactly
@@ -3958,8 +4058,26 @@ export function agentRoutes(
   router.post("/agents/:id/connect-codes", async (req, res) => {
     assertBoard(req);
     const id = req.params.id as string;
-    const agent = await getAccessibleAgent(req, res, id);
-    if (!agent) return;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    const authority = await requireAgentConfigurationAuthority(req, agent);
+    if (authority === "steward") {
+      // The steward tier covers the active steward AND the agent's creator.
+      // For configuration that is fine; here it is not. A code mints a live key
+      // for this agent, so a creator whose agent was handed to someone else
+      // must not keep a way to run it — a transfer is how an administrator
+      // takes an agent away. The creator qualifies only while nobody stewards
+      // the agent.
+      const active = await stewardships.activeByAgent(agent.companyId, agent.id);
+      if (active && active.userId !== req.actor.userId) {
+        throw forbidden(
+          "This agent has another steward. Only its steward or an administrator can connect a terminal to it.",
+        );
+      }
+    }
 
     if (agent.status === "terminated" || agent.status === "pending_approval") {
       res.status(409).json({ error: "This agent cannot be connected to yet." });

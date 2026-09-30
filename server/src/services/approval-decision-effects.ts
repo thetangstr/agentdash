@@ -31,6 +31,14 @@ export interface DecisionEffectsContext {
    * activity row reads "via assistant", never as a hand-checked record.
    */
   via?: string;
+  /**
+   * Whether to wake the requesting agent with `approval_approved`. Default
+   * true. False only when the decision records an outcome a human already
+   * brought about directly — a hire activated from the agent's own page —
+   * which never woke the requester before the approval was recorded, and a
+   * wake is a full agent run.
+   */
+  wakeRequester?: boolean;
 }
 
 /**
@@ -76,7 +84,7 @@ export function approvalDecisionEffectsService(
   async function afterApprove(
     approval: ApprovalRow,
     applied: boolean,
-    { actorUserId, decisionNote, via }: DecisionEffectsContext,
+    { actorUserId, decisionNote, via, wakeRequester = true }: DecisionEffectsContext,
   ): Promise<void> {
   if (applied) {
     const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
@@ -108,7 +116,7 @@ export function approvalDecisionEffectsService(
       }
     }
 
-    if (approval.requestedByAgentId) {
+    if (approval.requestedByAgentId && wakeRequester) {
       try {
         const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
           source: "automation",

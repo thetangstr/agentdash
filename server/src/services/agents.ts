@@ -26,6 +26,7 @@ import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { deprovisionAgentProfile, hermesManagedProfilesEnabled } from "./hermes-profile.js";
 import { assignUnassignedReviewItems } from "./review-queue-assignments.js";
+import { endStewardshipForTerminatedAgent } from "./agent-stewardships.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
 
 function hashToken(token: string) {
@@ -493,24 +494,59 @@ export function agentService(db: Db) {
       return updated ? normalizeAgentRow(updated) : null;
     },
 
-    terminate: async (id: string) => {
+    /**
+     * `endedByUserId` is the person the termination is attributed to (the
+     * route caller, or the decider of a rejected hire). It is recorded on the
+     * stewardship this ends and on the revocation audit rows.
+     *
+     * `onlyIfStatus` makes the termination conditional on the agent's status
+     * at the moment of the write, in the same statement. A rejected hire
+     * passes `pending_approval`: an agent activated a moment earlier, from its
+     * own page, must not be killed by a decision about whether to hire it.
+     * When the condition does not hold nothing is changed and the current
+     * agent is returned.
+     */
+    terminate: async (
+      id: string,
+      options: { endedByUserId?: string | null; onlyIfStatus?: string } = {},
+    ) => {
       const existing = await getById(id);
       if (!existing) return null;
 
-      await db
-        .update(agents)
-        .set({
-          status: "terminated",
-          pauseReason: null,
-          pausedAt: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(agents.id, id));
+      const terminated = await db.transaction(async (tx) => {
+        const updated = await tx
+          .update(agents)
+          .set({
+            status: "terminated",
+            pauseReason: null,
+            pausedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            options.onlyIfStatus
+              ? and(eq(agents.id, id), eq(agents.status, options.onlyIfStatus))
+              : eq(agents.id, id),
+          )
+          .returning({ id: agents.id });
+        if (updated.length === 0) return false;
 
-      await db
-        .update(agentApiKeys)
-        .set({ revokedAt: new Date() })
-        .where(eq(agentApiKeys.agentId, id));
+        await tx
+          .update(agentApiKeys)
+          .set({ revokedAt: new Date() })
+          .where(eq(agentApiKeys.agentId, id));
+
+        // AgentDash: a terminated agent has no steward. Left open, the pairing
+        // held its person's one-per-person slot for ever: they could not be
+        // assigned a new agent, and release/transfer refused the dead one.
+        // Same transaction as the status change, so the two cannot disagree.
+        await endStewardshipForTerminatedAgent(tx, {
+          companyId: existing.companyId,
+          agentId: id,
+          endedByUserId: options.endedByUserId ?? null,
+        });
+        return true;
+      });
+      if (!terminated) return getById(id);
 
       // AgentDash: a terminated reviewer cannot review. Retire its queue
       // assignment here — inside terminate, not at the call sites — so every

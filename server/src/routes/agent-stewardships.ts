@@ -74,6 +74,12 @@ export function agentStewardshipRoutes(db: Db) {
 
     if (!membership || membership.status !== "active") return null;
     if (membership.createdAt < PERSONAL_AGENT_PROVISIONING_FROM) return null;
+    // First visit only. Someone who has held a pairing here before -- their
+    // agent was terminated, released, or moved to someone else -- is not new,
+    // and quietly creating a fresh Chief of Staff for them on page load would
+    // undo an administrator's decision. My Agent shows "No agent assigned" and
+    // an administrator assigns the next one.
+    if (await stewardships.hasStewardshipHistory(companyId, userId)) return null;
 
     const user = await db
       .select({ name: authUsers.name, email: authUsers.email })

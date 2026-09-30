@@ -18,6 +18,13 @@ export interface InboxItem {
   expiresAt: string | null;
   /** Null when no agent requested the approval (budget incidents, human-created). */
   requestingAgent: { id: string; name: string; role: string } | null;
+  /**
+   * For a `hire_agent` approval that names an existing agent: that agent and
+   * its CURRENT status. Anything other than `pending_approval` means the hire
+   * was already decided elsewhere (e.g. approved from the agent's page).
+   * Optional because only the inbox routes send it.
+   */
+  hireAgent?: { id: string; name: string; status: string } | null;
   sourceIssues: Array<{ id: string; identifier: string; title: string; status: string }>;
   risk: { level: "high" | "medium" | "low"; reason: string };
   effectiveAuthority: {

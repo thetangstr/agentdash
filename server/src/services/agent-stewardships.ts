@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -102,6 +102,7 @@ async function lockTransferCompanyAgent(
   database: StewardshipDb,
   companyId: string,
   agentId: string,
+  options: { allowTerminated?: boolean } = {},
 ) {
   const result = await database.execute(sql`
     select ${agents.id}, ${agents.status}
@@ -115,7 +116,7 @@ async function lockTransferCompanyAgent(
   if (!row) {
     throw notFound("Agent not found");
   }
-  if (row.status === "terminated") {
+  if (row.status === "terminated" && !options.allowTerminated) {
     throw conflict("Stewardship agent must not be terminated");
   }
 }
@@ -178,7 +179,7 @@ async function auditRevocations(
   input: {
     companyId: string;
     actorUserId: string | null;
-    reason: "stewardship_ended" | "stewardship_transferred" | "stewardship_released";
+    reason: "stewardship_ended" | "stewardship_transferred" | "stewardship_released" | "agent_terminated";
     bindings: Array<{ id: string; agentId: string; provider: string }>;
     endpoints: Array<{ id: string; label: string }>;
   },
@@ -208,20 +209,131 @@ async function auditRevocations(
   }
 }
 
+/**
+ * End a terminated agent's pairing, inside the caller's transaction.
+ *
+ * Termination used to leave the stewardship open. The one-per-person unique
+ * index filters on `ended_at` alone, so the person kept a slot held by a dead
+ * agent: `assign` to a new agent 409'd on the index, `release` and `transfer`
+ * refused the terminated agent, and My Agent kept showing it. The only way out
+ * was archiving the person's membership.
+ *
+ * Called from `agentService.terminate` on the same transaction as the status
+ * change, so there is no moment where an agent is terminated and still
+ * stewarded. The outgoing steward's channel bindings FOR THIS AGENT are
+ * revoked, with the same per-row audit `releaseForAgent` writes.
+ *
+ * Bridge endpoints are deliberately left alone, unlike transfer and release.
+ * An endpoint belongs to a person, not to an agent (there is no agent column),
+ * and it also carries that person's steward inbox for any autonomous agent
+ * they are accountable for and for tasks from codes they issued. Termination
+ * is an administrator's act on the agent, not a decision about the person's
+ * devices; revoking every one of them here would cut off work that has nothing
+ * to do with the terminated agent. What the terminated agent could still use
+ * is already gone: its API keys (including every key minted by redeeming a
+ * connect code) are revoked by `terminate` itself.
+ */
+export async function endStewardshipForTerminatedAgent(
+  database: StewardshipDb,
+  input: { companyId: string; agentId: string; endedByUserId: string | null },
+): Promise<AgentStewardshipRow[]> {
+  const now = new Date();
+  const ended = await database
+    .update(agentStewardships)
+    .set({
+      endedAt: now,
+      endedByUserId: input.endedByUserId,
+      transferReason: "agent_terminated",
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(agentStewardships.companyId, input.companyId),
+        eq(agentStewardships.agentId, input.agentId),
+        isNull(agentStewardships.endedAt),
+      ),
+    )
+    .returning();
+
+  for (const stewardship of ended) {
+    const revokedBindings = await database
+      .update(humanChannelBindings)
+      .set({ revokedAt: now, revokedByUserId: input.endedByUserId, updatedAt: now })
+      .where(
+        and(
+          eq(humanChannelBindings.companyId, input.companyId),
+          eq(humanChannelBindings.userId, stewardship.userId),
+          eq(humanChannelBindings.agentId, input.agentId),
+          isNull(humanChannelBindings.revokedAt),
+        ),
+      )
+      .returning();
+    await auditRevocations(database, {
+      companyId: input.companyId,
+      actorUserId: input.endedByUserId,
+      reason: "agent_terminated",
+      bindings: revokedBindings,
+      endpoints: [],
+    });
+
+    await logActivity(database as unknown as Db, {
+      companyId: input.companyId,
+      actorType: "user",
+      actorId: input.endedByUserId ?? "board",
+      action: "agent.stewardship_ended",
+      entityType: "agent_stewardship",
+      entityId: stewardship.id,
+      agentId: input.agentId,
+      details: {
+        userId: stewardship.userId,
+        reason: "agent_terminated",
+      },
+    });
+  }
+
+  return ended;
+}
+
 export function agentStewardshipService(db: Db) {
 
+  /**
+   * The person's current pairing, ignoring one that points at a terminated
+   * agent.
+   *
+   * Termination now ends the pairing itself, so a terminated agent's open row
+   * should not exist. The filter stays as defence: a row left over from before
+   * that change (or written by some path that forgets) would otherwise keep
+   * showing a dead agent on My Agent and silently block creator auto-pairing.
+   */
   async function activeByUser(companyId: string, userId: string) {
     return db
-      .select()
+      .select({ stewardship: agentStewardships })
       .from(agentStewardships)
+      .innerJoin(agents, eq(agents.id, agentStewardships.agentId))
       .where(
         and(
           eq(agentStewardships.companyId, companyId),
           eq(agentStewardships.userId, userId),
           isNull(agentStewardships.endedAt),
+          ne(agents.status, "terminated"),
         ),
       )
+      .then((rows) => rows[0]?.stewardship ?? null);
+  }
+
+  /**
+   * Whether this person has ever stewarded an agent in this company, ended or
+   * not. Personal-agent provisioning is for a first visit; a person whose agent
+   * was terminated, released or transferred is not arriving for the first time.
+   */
+  async function hasStewardshipHistory(companyId: string, userId: string) {
+    const row = await db
+      .select({ id: agentStewardships.id })
+      .from(agentStewardships)
+      .where(and(eq(agentStewardships.companyId, companyId), eq(agentStewardships.userId, userId)))
+      .limit(1)
       .then((rows) => rows[0] ?? null);
+    return row !== null;
   }
 
   async function activeByAgent(companyId: string, agentId: string) {
@@ -252,6 +364,8 @@ export function agentStewardshipService(db: Db) {
           eq(agentStewardships.userId, userId),
           eq(agents.companyId, companyId),
           isNull(agentStewardships.endedAt),
+          // Same defence as `activeByUser`: a dead agent is not "my agent".
+          ne(agents.status, "terminated"),
         ),
       )
       .then((rows) => rows[0] ?? null);
@@ -551,7 +665,10 @@ export function agentStewardshipService(db: Db) {
         throw conflict("Agent stewardship change already in progress");
       }
 
-      await lockTransferCompanyAgent(tx, companyId, agentId);
+      // Release, unlike transfer and assign, is allowed on a terminated agent:
+      // ending a dead agent's pairing is exactly what frees its person for a
+      // new one. Nobody is being handed authority over the terminated agent.
+      await lockTransferCompanyAgent(tx, companyId, agentId, { allowTerminated: true });
 
       const locked = await tx.execute(sql`
         select ${agentStewardships.id}
@@ -738,6 +855,7 @@ export function agentStewardshipService(db: Db) {
 
   return {
     activeByUser,
+    hasStewardshipHistory,
     activeByAgent,
     activeByUserWithAgent,
     activeStewardsByAgentIds,
