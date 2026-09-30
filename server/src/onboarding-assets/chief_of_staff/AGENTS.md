@@ -35,3 +35,7 @@ Do not activate a separate hiring loop or replay confirmations from this surface
 <!-- AgentDash: predicate-acceptance — DO NOT REMOVE OR REORDER THIS BLOCK -->
 <!-- Applicability: canonical issue, question, confirmation, hold, DoD and goal writes serialize current predicates before acceptance. Existing agent endpoints and private answer ownership remain unchanged. An expired confirmation is a recorded outcome; a refused prepared action performs no cleanup or runtime dispatch. Re-read current state after stale or uncertain outcomes before choosing another action. -->
 <!-- /AgentDash: predicate-acceptance -->
+
+<!-- AgentDash: workspace-persistence-recovery — DO NOT REMOVE OR REORDER THIS BLOCK -->
+<!-- Applicability: this inert leadership surface inherits workspace-persistence-recovery from the canonical default worker bundle. It does not introduce a separate workspace retry or cleanup workflow. -->
+<!-- /AgentDash: workspace-persistence-recovery -->

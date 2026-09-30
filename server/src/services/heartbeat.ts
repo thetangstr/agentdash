@@ -1,5 +1,6 @@
 import { workforceDispatchHold, workforceIssueInputs } from './workforce-inputs.js';
 import { workforceService } from './workforce.js';
+import { workspacePersistenceHold, WORKSPACE_PERSISTENCE_RECOVERY_CODE, type WorkspacePersistenceAttempt } from './workspace-persistence-recovery.js';
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
@@ -25,6 +26,7 @@ import {
 } from "@paperclipai/shared";
 import {
   agents,
+  companies,
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
@@ -145,7 +147,7 @@ import {
   getIssueContinuationSummaryDocument,
   refreshIssueContinuationSummary,
 } from "./issue-continuation-summary.js";
-import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
+import { ExecutionWorkspacePersistenceUncertain, executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
 import { workspaceOperationService } from "./workspace-operations.js";
 import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
 import {
@@ -3113,6 +3115,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return ensured;
   }
 
+  // AgentDash: cached terminal projections must never erase an unresolved original attempt.
+  function preserveWorkspaceAttempt(result: Record<string, unknown> | null) {
+    return sql`case when ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true'
+      then coalesce(${JSON.stringify(result)}::jsonb, '{}'::jsonb) || jsonb_build_object('workspacePersistence', ${heartbeatRuns.resultJson}->'workspacePersistence')
+      else ${JSON.stringify(result)}::jsonb end`;
+  }
+
   async function setRunStatus(
     runId: string,
     status: string,
@@ -3123,7 +3132,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   ) {
     const updated = await db
       .update(heartbeatRuns)
-      .set({ status, ...patch, updatedAt: new Date() })
+      .set({ status, ...patch,
+        ...(patch?.resultJson !== undefined ? { resultJson: preserveWorkspaceAttempt(patch.resultJson) } : {}),
+        errorCode: sql`case when ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true' then ${WORKSPACE_PERSISTENCE_RECOVERY_CODE} else ${patch?.errorCode === undefined ? heartbeatRuns.errorCode : patch.errorCode} end`,
+        updatedAt: new Date() })
       .where(
         options?.onlyIfStatus
           ? and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, options.onlyIfStatus))
@@ -4607,6 +4619,45 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await db.update(issues).set({ executionRunId: null, executionAgentNameKey: null, executionLockedAt: null }).where(and(eq(issues.companyId, run.companyId), eq(issues.id, issueId), eq(issues.executionRunId, run.id)));
   }
 
+  // AgentDash: durable original-run attempt before workspace persistence. No runtime inside.
+  async function writeWorkspaceAttempt(run: typeof heartbeatRuns.$inferSelect, attempt: WorkspacePersistenceAttempt, starting = false) {
+    await db.transaction(async tx => {
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, run.companyId)).for("no key update");
+      if (starting && await workspacePersistenceHold(tx, run.companyId, run.agentId, attempt.issueId)) {
+        throw conflict("Workspace recovery is required before another attempt");
+      }
+      if (attempt.issueId) {
+        const [issue] = await tx.select({ id: issues.id }).from(issues)
+          .where(and(eq(issues.id, attempt.issueId), eq(issues.companyId, run.companyId))).for("update");
+        if (!issue) throw conflict("Workspace source issue is unavailable");
+      }
+      const [current] = await tx.select({ resultJson: heartbeatRuns.resultJson }).from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.companyId, run.companyId), eq(heartbeatRuns.agentId, run.agentId))).for("update");
+      if (!current) throw conflict("Workspace run is unavailable");
+      const stored = parseObject(parseObject(current.resultJson).workspacePersistence);
+      if (!starting && (stored.workspaceId !== attempt.workspaceId || stored.recoveryRequired !== true)) {
+        throw conflict("Workspace attempt changed before acknowledgement");
+      }
+      const [updated] = await tx.update(heartbeatRuns).set({
+        resultJson: sql`jsonb_set(coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb), '{workspacePersistence}', ${JSON.stringify(attempt)}::jsonb)`,
+        errorCode: attempt.recoveryRequired ? WORKSPACE_PERSISTENCE_RECOVERY_CODE : null,
+        updatedAt: new Date(),
+      }).where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.companyId, run.companyId), eq(heartbeatRuns.agentId, run.agentId))).returning({ id: heartbeatRuns.id });
+      if (!updated) throw conflict("Workspace run is unavailable");
+    });
+  }
+
+  async function cancelQueuedRunForWorkspaceRecovery(run: typeof heartbeatRuns.$inferSelect) {
+    await db.transaction(async tx => {
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, run.companyId)).for("no key update");
+      await tx.update(issues).set({ executionRunId: null, executionAgentNameKey: null, executionLockedAt: null })
+        .where(and(eq(issues.companyId, run.companyId), eq(issues.executionRunId, run.id)));
+      await tx.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date(), error: "Workspace recovery required", errorCode: WORKSPACE_PERSISTENCE_RECOVERY_CODE })
+        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")));
+      if (run.wakeupRequestId) await tx.update(agentWakeupRequests).set({ status: "skipped", finishedAt: new Date(), error: "Workspace recovery required" }).where(eq(agentWakeupRequests.id, run.wakeupRequestId));
+    });
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
@@ -4620,6 +4671,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const context = parseObject(run.contextSnapshot);
+    if (await workspacePersistenceHold(db, run.companyId, run.agentId, taskRecoveryRunIssueId(run))) {
+      await cancelQueuedRunForWorkspaceRecovery(run);
+      return null;
+    }
     const workforceIssueId = readNonEmptyString(context.issueId);
     const workforceHoldIssueId = await workforceDispatchHold(db, run.companyId, run.agentId, workforceIssueId);
     if (workforceHoldIssueId) {
@@ -4734,6 +4789,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const claimedAt = new Date();
     const claim = await db.transaction(async tx => {
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, run.companyId)).for("no key update");
+      if (await workspacePersistenceHold(tx, run.companyId, run.agentId, issueId)) return { workspaceRecovery: true, blockedIssueId: null, run: null };
       if (issueId) {
         await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId))).for('update');
       } else {
@@ -4745,6 +4802,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, 'queued'))).returning();
       return { blockedIssueId: null, run: claimed ?? null };
     });
+    if (claim.workspaceRecovery) { await cancelQueuedRunForWorkspaceRecovery(run); return null; }
     if (claim.blockedIssueId) { await cancelQueuedRunForWorkforceInput(run, claim.blockedIssueId); return null; }
     const claimed = claim.run;
     if (!claimed) return null;
@@ -5663,6 +5721,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     activeRunExecutions.add(run.id);
+    let workspaceAttempt: WorkspacePersistenceAttempt | null = null;
+    let workspaceAttemptAcknowledged = false;
 
     try {
     const agent = await getAgent(run.agentId);
@@ -6044,6 +6104,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           workspace: existingExecutionWorkspace,
         })
       : null;
+    // AgentDash: recheck after target resolution and before any realization await.
+    await db.transaction(async tx => {
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, agent.companyId)).for("no key update");
+      if (await workspacePersistenceHold(tx, agent.companyId, agent.id, issueId)) throw conflict("Workspace recovery required");
+    });
     const executionWorkspace = reusedExecutionWorkspace ?? await realizeExecutionWorkspace({
           base: executionWorkspaceBase,
           config: runtimeConfig,
@@ -6065,6 +6130,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       configSnapshot,
       shouldReuseExisting,
     });
+    const attemptedWorkspaceId = shouldReuseExisting && existingExecutionWorkspace ? existingExecutionWorkspace.id : randomUUID();
+    if (resolvedProjectId || (shouldReuseExisting && existingExecutionWorkspace)) {
+      workspaceAttempt = { companyId: agent.companyId, agentId: agent.id, issueId, workspaceId: attemptedWorkspaceId, phase: "workspace", outcome: "pending", recoveryRequired: true };
+      // If marker acknowledgement fails, do not persist or destructively compensate.
+      await writeWorkspaceAttempt(run, workspaceAttempt, true);
+      workspaceAttemptAcknowledged = true;
+    }
     try {
       persistedExecutionWorkspace = shouldReuseExisting && existingExecutionWorkspace
         ? await executionWorkspacesSvc.update(existingExecutionWorkspace.id, {
@@ -6080,6 +6152,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           })
         : resolvedProjectId
           ? await executionWorkspacesSvc.create({
+              id: attemptedWorkspaceId,
               companyId: agent.companyId,
               projectId: resolvedProjectId,
               projectWorkspaceId: resolvedProjectWorkspaceId,
@@ -6107,7 +6180,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             })
           : null;
     } catch (error) {
-      if (executionWorkspace.created) {
+      if (workspaceAttempt && error instanceof ExecutionWorkspacePersistenceUncertain) workspaceAttempt.outcome = "unknown";
+      // AgentDash: a lost commit acknowledgement may already reference these artifacts.
+      // Preserve them for read-back recovery; only a failed callback permits cleanup.
+      if (executionWorkspace.created && !(error instanceof ExecutionWorkspacePersistenceUncertain)) {
         try {
           await cleanupExecutionWorkspaceArtifacts({
             workspace: {
@@ -6146,8 +6222,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           );
         }
       }
+      if (workspaceAttempt && !(error instanceof ExecutionWorkspacePersistenceUncertain)) {
+        await writeWorkspaceAttempt(run, { ...workspaceAttempt, outcome: "rolled_back", recoveryRequired: false });
+        workspaceAttempt = null;
+      }
       throw error;
     }
+    if (workspaceAttempt) { workspaceAttempt.outcome = "accepted"; workspaceAttempt.phase = "recorder"; }
     await workspaceOperationRecorder.attachExecutionWorkspaceId(persistedExecutionWorkspace?.id ?? null);
     if (
       existingExecutionWorkspace &&
@@ -6155,6 +6236,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       existingExecutionWorkspace.id !== persistedExecutionWorkspace.id &&
       existingExecutionWorkspace.status === "active"
     ) {
+      if (workspaceAttempt) workspaceAttempt.phase = "old_workspace";
       await executionWorkspacesSvc.update(existingExecutionWorkspace.id, {
         status: "idle",
         cleanupReason: null,
@@ -6181,10 +6263,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         };
       }
       if (Object.keys(nextIssuePatch).length > 0) {
+        if (workspaceAttempt) workspaceAttempt.phase = "issue_link";
         await issuesSvc.update(issueId, nextIssuePatch);
       }
     }
     if (persistedExecutionWorkspace) {
+      if (workspaceAttempt) workspaceAttempt.phase = "run_context";
       context.executionWorkspaceId = persistedExecutionWorkspace.id;
       await db
         .update(heartbeatRuns)
@@ -6193,6 +6277,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           updatedAt: new Date(),
         })
         .where(eq(heartbeatRuns.id, run.id));
+    }
+    if (workspaceAttempt) {
+      await writeWorkspaceAttempt(run, { ...workspaceAttempt, phase: "complete", outcome: "complete", recoveryRequired: false });
+      workspaceAttempt = null;
     }
     const persistedEnvironmentId = persistedExecutionWorkspace?.config?.environmentId ?? selectedEnvironmentId;
     const acquiredEnvironment = await envOrchestrator.acquireForRun({
@@ -7115,14 +7203,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           // The inner catch did not fire, so we must record the failure here.
           const message = outerErr instanceof Error ? outerErr.message : "Unknown setup failure";
           logger.error({ err: outerErr, runId }, "heartbeat execution setup failed");
+          if (workspaceAttempt && outerErr instanceof ExecutionWorkspacePersistenceUncertain) workspaceAttempt.outcome = "unknown";
+          if (workspaceAttempt && workspaceAttemptAcknowledged) await writeWorkspaceAttempt(run, workspaceAttempt).catch(() => undefined);
+          const setupErrorCode = workspaceAttempt ? WORKSPACE_PERSISTENCE_RECOVERY_CODE : "adapter_failed";
+          const setupResult = (await getRun(runId, { unsafeFullResultJson: true }).catch(() => null))?.resultJson;
           const setupFailureAgent = await getAgent(run.agentId).catch(() => null);
           await setRunStatus(runId, "failed", {
             error: message,
-            errorCode: "adapter_failed",
+            errorCode: setupErrorCode,
             finishedAt: new Date(),
             ...(setupFailureAgent ? {
               resultJson: mergeRunStopMetadataForAgent(setupFailureAgent, "failed", {
-                errorCode: "adapter_failed",
+                resultJson: parseObject(setupResult),
+                errorCode: setupErrorCode,
                 errorMessage: message,
               }),
             } : {}),
@@ -7147,7 +7240,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             await db
               .update(heartbeatRuns)
               .set({
-                resultJson: {
+                resultJson: preserveWorkspaceAttempt({
                   ...parseObject(livenessRun.resultJson),
                   runFacts: buildRunFacts({
                     meteringStatus: "unmetered_no_session",
@@ -7161,7 +7254,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                       contextSnapshot: parseObject(livenessRun.contextSnapshot),
                     }),
                   }),
-                },
+                }),
                 updatedAt: new Date(),
               })
               .where(eq(heartbeatRuns.id, failedRun.id))
@@ -7253,6 +7346,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const recoveryAgentNameKey = normalizeAgentNameKey(recoveryAgent?.name);
 
     const promotionResult = await db.transaction(async (tx) => {
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, run.companyId)).for("no key update");
       if (contextIssueId) {
         await tx.execute(
           sql`select id from issues where company_id = ${run.companyId} and id = ${contextIssueId} for update`,
@@ -7288,6 +7382,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           })
           .where(eq(issues.id, issue.id));
       }
+
+      if (await workspacePersistenceHold(tx, run.companyId, run.agentId, contextIssueId)) return { kind: "released" as const };
 
       while (true) {
         const deferred = await tx
@@ -7790,6 +7886,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueId;
     }
+    if (await workspacePersistenceHold(db, agent.companyId, agentId, issueId)) return null;
     // AgentDash: suppress redundant requests before scheduling/accounting.
     // The persisted claim gate repeats this check; wake metadata has no authority.
     if (await workforceDispatchHold(db, agent.companyId, agentId, issueId)) return null;
@@ -7946,6 +8043,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const agentNameKey = normalizeAgentNameKey(agent.name);
 
       const outcome = await db.transaction(async (tx) => {
+        await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, agent.companyId)).for("no key update");
+        if (await workspacePersistenceHold(tx, agent.companyId, agentId, issueId)) return { kind: "skipped" as const };
         await tx.execute(
           sql`select id from issues where id = ${issueId} and company_id = ${agent.companyId} for update`,
         );
@@ -9245,6 +9344,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           skipped += 1;
           continue;
         }
+
+        if (await workspacePersistenceHold(db, agent.companyId, agent.id, null)) { skippedNoWork += 1; continue; }
 
         // Preserve the full wakeworthy-work contract (assigned blocked work,
         // fact requests, new comments, explicit sweeps, and opt-out agents).

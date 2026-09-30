@@ -114,3 +114,7 @@ These are the human's hiring inputs. They do not grant capability or publish com
 ${userVoice || "No interview context was captured."}
 `;
 }
+
+// AgentDash: workspace-persistence-recovery is inherited from the canonical default
+// worker bundle: uncertain workspace persistence requires read-back, no blind retry
+// or destructive compensation; separate setup/persistence/link phases stay truthful.
