@@ -63,8 +63,15 @@ function createDbStub(selectResults: ApprovalRecord[][], updateResults: Approval
 describe("approvalService resolution idempotency", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockAgentService.activatePendingApproval.mockResolvedValue(undefined);
-    mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1" });
+    mockAgentService.activatePendingApproval.mockResolvedValue({ activated: true });
+    // A hire approval is about an agent still waiting on it; reject now
+    // refuses one whose agent is already running, so the fixture says which.
+    mockAgentService.getById.mockResolvedValue({
+      id: "agent-1",
+      companyId: "company-1",
+      name: "Hire",
+      status: "pending_approval",
+    });
     mockAgentService.terminate.mockResolvedValue(undefined);
     mockAgentService.create.mockResolvedValue({ id: "agent-1" });
     mockAgentService.terminate.mockResolvedValue(undefined);
@@ -112,6 +119,52 @@ describe("approvalService resolution idempotency", () => {
     expect(result.applied).toBe(true);
     expect(mockAgentService.activatePendingApproval).toHaveBeenCalledWith("agent-1");
     expect(mockNotifyHireApproved).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to reject a hire whose agent is already active, before writing the decision", async () => {
+    mockAgentService.getById.mockResolvedValue({
+      id: "agent-1",
+      companyId: "company-1",
+      name: "Helper",
+      status: "idle",
+    });
+    const dbStub = createDbStub([[createApproval("pending")]], [createApproval("rejected")]);
+
+    const svc = approvalService(dbStub.db as any);
+    await expect(svc.reject("approval-1", "board", "stale")).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringMatching(/Helper is already active/),
+    });
+
+    expect(dbStub.returning).not.toHaveBeenCalled();
+    expect(mockAgentService.terminate).not.toHaveBeenCalled();
+  });
+
+  it("threads the decider through to a termination conditional on the agent still pending", async () => {
+    const dbStub = createDbStub([[createApproval("pending")]], [createApproval("rejected")]);
+
+    const svc = approvalService(dbStub.db as any);
+    const result = await svc.reject("approval-1", "user-7", "no");
+
+    expect(result.applied).toBe(true);
+    expect(mockAgentService.terminate).toHaveBeenCalledWith("agent-1", {
+      endedByUserId: "user-7",
+      onlyIfStatus: "pending_approval",
+    });
+  });
+
+  it("does not re-run the budget policy or hire hook when the agent was already activated", async () => {
+    // Deciding a hire approval after the agent was activated from its own
+    // page: activation is a no-op, and the lifecycle side effects already
+    // belong to that earlier moment.
+    mockAgentService.activatePendingApproval.mockResolvedValue({ activated: false });
+    const dbStub = createDbStub([[createApproval("pending")]], [createApproval("approved")]);
+
+    const svc = approvalService(dbStub.db as any);
+    const result = await svc.approve("approval-1", "board", "record it");
+
+    expect(result.applied).toBe(true);
+    expect(mockNotifyHireApproved).not.toHaveBeenCalled();
   });
 });
 

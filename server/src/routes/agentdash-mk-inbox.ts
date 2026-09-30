@@ -3,6 +3,7 @@ import type { Request } from "express";
 import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies } from "@paperclipai/db";
+import { isUuidLike } from "@paperclipai/shared";
 import { badRequest, forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { accessService } from "../services/access.js";
@@ -15,6 +16,17 @@ import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 /** Statuses a human can still act on. */
 const OPEN_APPROVAL_STATUSES = ["pending", "revision_requested"];
+
+/** The existing agent a `hire_agent` approval names, if it names one. */
+function hireApprovalAgentId(approval: { type: string; payload: unknown }): string | null {
+  if (approval.type !== "hire_agent") return null;
+  const payload =
+    typeof approval.payload === "object" && approval.payload !== null
+      ? (approval.payload as Record<string, unknown>)
+      : {};
+  // The payload is caller-supplied; a non-uuid would fail the uuid lookup.
+  return typeof payload.agentId === "string" && isUuidLike(payload.agentId) ? payload.agentId : null;
+}
 
 export function agentdashMkInboxRoutes(db: Db) {
   const router = Router();
@@ -117,6 +129,26 @@ export function agentdashMkInboxRoutes(db: Db) {
       // Bounded: the override view spans every agent in the company.
       .limit(200);
 
+    // AgentDash: the agent a hire approval would activate (approve) or
+    // terminate (reject), with its CURRENT status. An agent can be activated
+    // from its own page while its hire approval is still open, and nothing on
+    // a decision surface said so — an administrator rejected such a stale
+    // approval from the override page and terminated a working agent. One
+    // batched lookup, like authority below.
+    const hireAgentIds = new Set<string>();
+    for (const { approval } of rows) {
+      const agentId = hireApprovalAgentId(approval);
+      if (agentId) hireAgentIds.add(agentId);
+    }
+    const hireAgentsById = new Map<string, { id: string; name: string; status: string }>();
+    if (hireAgentIds.size > 0) {
+      const hireAgents = await db
+        .select({ id: agents.id, name: agents.name, status: agents.status })
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), inArray(agents.id, [...hireAgentIds])));
+      for (const row of hireAgents) hireAgentsById.set(row.id, row);
+    }
+
     // Authority is per AGENT, not per approval — resolving it inside the row
     // map issued two extra queries for every row on an unbounded admin view.
     const authorityByAgent = new Map<string, Awaited<ReturnType<typeof resolveEffectiveAuthority>>>();
@@ -141,6 +173,10 @@ export function agentdashMkInboxRoutes(db: Db) {
         decidedAt: approval.decidedAt,
         expiresAt: approval.expiresAt,
         requestingAgent: agent ? { id: agent.id, name: agent.name, role: agent.role } : null,
+        hireAgent: (() => {
+          const agentId = hireApprovalAgentId(approval);
+          return agentId ? hireAgentsById.get(agentId) ?? null : null;
+        })(),
         sourceIssues: (await issueApprovals.listIssuesForApproval(approval.id)).map((issue) => ({
           id: issue.id,
           identifier: issue.identifier,

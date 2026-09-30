@@ -368,6 +368,49 @@ describeEmbeddedPostgres("agentdash-mk personal inbox", () => {
     expect(orphanItem.requestingAgent).toBeNull();
   });
 
+  it("names a hire approval's agent and its current status, so a stale hire is visible", async () => {
+    // An agent approved from its own page while its hire approval stayed
+    // open: rejecting that approval would terminate a running agent, and the
+    // override view is where an administrator did exactly that.
+    const { company, owner, myAgent } = await seed();
+    const [pendingAgent] = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: `Waiting ${randomUUID()}`,
+        role: "engineer",
+        status: "pending_approval",
+        adapterType: "process",
+      })
+      .returning();
+    const [staleHire, liveHire, legacyHire] = await db
+      .insert(approvals)
+      .values([
+        { companyId: company.id, type: "hire_agent", status: "pending", payload: { agentId: myAgent.id } },
+        { companyId: company.id, type: "hire_agent", status: "pending", payload: { agentId: pendingAgent!.id } },
+        // Legacy shape: no agent yet, approving creates one.
+        { companyId: company.id, type: "hire_agent", status: "pending", payload: { name: "New" } },
+      ])
+      .returning();
+    const app = await createApp(boardActor(company.id, owner.principalId, "owner"));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/inbox/override`),
+    );
+
+    expect(res.status).toBe(200);
+    const byId = new Map(
+      res.body.items.map((item: { approvalId: string }) => [item.approvalId, item]),
+    ) as Map<string, { hireAgent: unknown }>;
+    expect(byId.get(staleHire!.id)!.hireAgent).toEqual({
+      id: myAgent.id,
+      name: myAgent.name,
+      status: "idle",
+    });
+    expect(byId.get(liveHire!.id)!.hireAgent).toMatchObject({ status: "pending_approval" });
+    expect(byId.get(legacyHire!.id)!.hireAgent).toBeNull();
+  });
+
   it("carries the source issue, risk, effective authority, and decision history", async () => {
     const { company, steward, mine } = await seed();
     const app = await createApp(boardActor(company.id, steward.principalId));

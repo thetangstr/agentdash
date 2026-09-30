@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals, bridgeTasks } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -79,6 +79,12 @@ export function approvalService(db: Db) {
     decidedByUserId: string,
     decisionNote: string | null | undefined,
     meta: DecisionMeta = {},
+    /**
+     * Runs once the approval is known to be decidable and before the decision
+     * is written, so a refusal here leaves the approval untouched. Replays and
+     * already-decided approvals never reach it.
+     */
+    beforeApply?: (existing: ApprovalRecord) => Promise<void>,
   ): Promise<ResolutionResult> {
     const existing = await getExistingApproval(id);
 
@@ -137,6 +143,8 @@ export function approvalService(db: Db) {
         `Only pending or revision requested approvals can be ${targetStatus === "approved" ? "approved" : "rejected"}`,
       );
     }
+
+    if (beforeApply) await beforeApply(existing);
 
     const now = new Date();
     const updated = await db
@@ -213,7 +221,74 @@ export function approvalService(db: Db) {
     );
   }
 
+  function hirePayloadAgentId(approval: { payload: unknown }) {
+    const payload =
+      typeof approval.payload === "object" && approval.payload !== null
+        ? (approval.payload as Record<string, unknown>)
+        : {};
+    return typeof payload.agentId === "string" ? payload.agentId : null;
+  }
+
+  /**
+   * A hire approval decides whether a PENDING agent becomes a working one.
+   *
+   * Rejecting it used to terminate the named agent unconditionally. When the
+   * agent had already been activated some other way (approved from its own
+   * page, which left the approval pending), a later reject of that stale
+   * approval terminated a working, connected agent and revoked its keys. The
+   * question the approval asked has already been answered, so the reject is
+   * refused rather than applied: 409, the approval left as it is, and the
+   * message says how to end the agent if that is really what is wanted.
+   *
+   * An agent that is already terminated is not refused — rejecting its hire
+   * changes nothing and clears the stale approval.
+   */
+  async function refuseRejectingActivatedHire(existing: ApprovalRecord) {
+    if (existing.type !== "hire_agent") return;
+    const payloadAgentId = hirePayloadAgentId(existing);
+    if (!payloadAgentId) return;
+    const target = await agentsSvc.getById(payloadAgentId);
+    if (!target || target.companyId !== existing.companyId) return;
+    if (target.status === "pending_approval" || target.status === "terminated") return;
+    throw conflict(
+      `${target.name} is already active, so rejecting this hire request would terminate a working agent. ` +
+        "It was activated outside this approval (for example from its own page). " +
+        "To remove the agent, terminate it from its page.",
+      {
+        code: "HIRE_APPROVAL_AGENT_ALREADY_ACTIVE",
+        agentId: target.id,
+        agentStatus: target.status,
+      },
+    );
+  }
+
+  /**
+   * The still-open `hire_agent` approvals that name this agent.
+   *
+   * Used by the agent page's approve, which activates the agent directly and
+   * must then decide these too. It decides them through `approve` rather than
+   * writing the rows, so the side effects the approval path owns (budget
+   * policy, hire hook, workflow measurement) are the same whichever surface
+   * activated the agent.
+   */
+  async function listPendingHireApprovalsForAgent(companyId: string, agentId: string) {
+    const rows = await db
+      .select()
+      .from(approvals)
+      .where(
+        and(
+          eq(approvals.companyId, companyId),
+          eq(approvals.type, "hire_agent"),
+          inArray(approvals.status, resolvableStatuses),
+          sql`${approvals.payload}->>'agentId' = ${agentId}`,
+        ),
+      );
+    return rows;
+  }
+
   return {
+    listPendingHireApprovalsForAgent,
+
     list: (companyId: string, status?: string) => {
       const conditions = [eq(approvals.companyId, companyId)];
       if (status) conditions.push(eq(approvals.status, status));
@@ -275,8 +350,13 @@ export function approvalService(db: Db) {
           if (!target || target.companyId !== updated.companyId) {
             throw unprocessable("Hire approval references an agent outside this company");
           }
-          await agentsSvc.activatePendingApproval(payloadAgentId);
-          hireApprovedAgentId = payloadAgentId;
+          // Budget policy and the adapter hire hook belong to the moment the
+          // agent is activated. When this approval is decided after the agent
+          // was already activated some other way (its own page), activation is
+          // a no-op, and re-running them would overwrite a budget changed
+          // since and fire the hook a second time.
+          const activation = await agentsSvc.activatePendingApproval(payloadAgentId);
+          if (activation?.activated) hireApprovedAgentId = payloadAgentId;
         } else {
           const created = await agentsSvc.create(updated.companyId, {
             name: String(payload.name ?? "New Agent"),
@@ -342,17 +422,24 @@ export function approvalService(db: Db) {
         decidedByUserId,
         decisionNote,
         meta,
+        refuseRejectingActivatedHire,
       );
 
       if (applied && updated.type === "hire_agent") {
-        const payload = updated.payload as Record<string, unknown>;
-        const payloadAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
+        const payloadAgentId = hirePayloadAgentId(updated);
         if (payloadAgentId) {
           const target = await agentsSvc.getById(payloadAgentId);
           if (!target || target.companyId !== updated.companyId) {
             throw unprocessable("Hire approval references an agent outside this company");
           }
-          await agentsSvc.terminate(payloadAgentId);
+          // Conditional in the terminating statement itself: the guard above
+          // ran before the decision was written, and an agent activated in
+          // between must still not be killed by a decision about whether to
+          // hire it. An already-terminated agent is left as it is.
+          await agentsSvc.terminate(payloadAgentId, {
+            endedByUserId: decidedByUserId,
+            onlyIfStatus: "pending_approval",
+          });
         }
       }
 

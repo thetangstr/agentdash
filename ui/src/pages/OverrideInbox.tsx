@@ -94,6 +94,13 @@ export default function OverrideInbox() {
           {items.map((item) => {
             const reason = reasons[item.approvalId] ?? "";
             const canSubmit = reason.trim().length > 0 && !override.isPending;
+            // A hire approval whose agent is no longer waiting on it. The
+            // server refuses to reject one whose agent is running (rejecting
+            // a hire terminates the agent), so the control says so up front
+            // instead of letting an administrator find out from an error.
+            const hireAgent = item.type === "hire_agent" ? item.hireAgent ?? null : null;
+            const hireAlreadyActive =
+              !!hireAgent && hireAgent.status !== "pending_approval" && hireAgent.status !== "terminated";
             return (
               <li key={item.approvalId} className="rounded-lg border p-4">
                 <div className="flex flex-wrap items-baseline gap-2 text-sm">
@@ -117,6 +124,18 @@ export default function OverrideInbox() {
                     No active steward — administrators decide this one.
                   </p>
                 )}
+
+                {hireAlreadyActive ? (
+                  <p
+                    role="alert"
+                    className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs"
+                  >
+                    {hireAgent!.name} is already active ({hireAgent!.status.replace(/_/g, " ")}): it was
+                    activated outside this approval, for example from its own page. Rejecting it would
+                    terminate a working agent, so reject is disabled here. To remove the agent, terminate
+                    it from its page.
+                  </p>
+                ) : null}
 
                 <label className="mt-3 block text-xs font-medium" htmlFor={`reason-${item.approvalId}`}>
                   Reason for overriding
@@ -142,7 +161,8 @@ export default function OverrideInbox() {
                   </button>
                   <button
                     type="button"
-                    disabled={!canSubmit}
+                    disabled={!canSubmit || hireAlreadyActive}
+                    title={hireAlreadyActive ? "This agent is already active" : undefined}
                     onClick={() => override.mutate({ item, decision: "rejected" })}
                     className="rounded border px-2 py-1 text-xs disabled:opacity-50"
                   >

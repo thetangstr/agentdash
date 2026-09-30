@@ -149,6 +149,53 @@ describe("OverrideInbox", () => {
     expect(container.textContent).toContain("administrators decide");
   });
 
+  it("warns, and will not reject, when a hire approval's agent is already active", async () => {
+    // Rejecting a hire terminates its agent. When the agent was already
+    // approved from its own page, that is a working agent — the page must say
+    // so before an administrator types a reason and presses reject.
+    mockStewardshipsApi.getOverrideInbox.mockResolvedValue({
+      items: [
+        item({
+          type: "hire_agent",
+          hireAgent: { id: "agent-9", name: "Helper", status: "idle" },
+        }),
+      ],
+    });
+
+    await render();
+
+    const input = container.querySelector("input") as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(input, "cleaning up");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("Helper is already active");
+    expect(container.textContent).toContain("would terminate a working agent");
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const reject = buttons.find((b) => b.textContent?.includes("reject"))!;
+    const approve = buttons.find((b) => b.textContent?.includes("approve"))!;
+    expect(reject.disabled).toBe(true);
+    // Approving still records the decision the agent page already made.
+    expect(approve.disabled).toBe(false);
+  });
+
+  it("does not warn for a hire whose agent is still waiting on the approval", async () => {
+    mockStewardshipsApi.getOverrideInbox.mockResolvedValue({
+      items: [
+        item({
+          type: "hire_agent",
+          hireAgent: { id: "agent-9", name: "Helper", status: "pending_approval" },
+        }),
+      ],
+    });
+
+    await render();
+
+    expect(container.textContent).not.toContain("already active");
+  });
+
   it("does not query the override route off-profile", async () => {
     mockCompany.value = {
       selectedCompanyId: "company-1",
