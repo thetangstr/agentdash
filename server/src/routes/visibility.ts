@@ -116,7 +116,7 @@ export function projectScopedVisibilityCondition(
  * project row is already in hand.
  */
 export async function isProjectVisible(
-  db: Db,
+  db: Pick<Db, "select">,
   req: Request,
   project: { id: string; companyId: string; visibility?: string | null; createdByUserId?: string | null },
 ): Promise<boolean> {
@@ -141,7 +141,7 @@ export async function isProjectVisible(
 
 /** 404, never 403 — invisible means nonexistent. */
 export async function assertProjectVisible(
-  db: Db,
+  db: Pick<Db, "select">,
   req: Request,
   project: { id: string; companyId: string; visibility?: string | null; createdByUserId?: string | null },
 ): Promise<void> {

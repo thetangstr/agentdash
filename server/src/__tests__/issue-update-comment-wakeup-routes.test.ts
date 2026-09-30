@@ -1,3 +1,6 @@
+// Current credential/row witnesses are covered by issue-current-authority.test.ts with real HTTP and PostgreSQL.
+vi.mock("../services/issue-current-authority.js", () => ({ issueCurrentAuthority: () => undefined }));
+import { installPatchServiceMocks, patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +22,11 @@ vi.mock("../routes/visibility.js", async (importOriginal) => ({
 const ASSIGNEE_AGENT_ID = "11111111-1111-4111-8111-111111111111";
 
 const mockIssueService = vi.hoisted(() => ({
+  // Acceptance locks blocker/parent rows on the caller transaction; real lock
+  // order is covered by issue-mutation-acceptance.test.ts with PostgreSQL.
+  lockBlockerIssues: vi.fn(async () => undefined),
+  // Domain behavior is covered with PostgreSQL; this route fixture models its explicit result.
+  prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
   getById: vi.fn(),
   update: vi.fn(),
   addComment: vi.fn(),
@@ -164,6 +172,7 @@ function registerModuleMocks() {
 }
 
 async function createApp() {
+  await installPatchServiceMocks();
   const [{ errorHandler }, { issueRoutes }] = await Promise.all([
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
     vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
@@ -180,7 +189,7 @@ async function createApp() {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  app.use("/api", issueRoutes(patchTransactionFixture(() => mockIssueService.getById()) as any, {} as any));
   app.use(errorHandler);
   return app;
 }

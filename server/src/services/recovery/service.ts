@@ -1,3 +1,4 @@
+import { workspacePersistenceHold } from "../workspace-persistence-recovery.js";
 import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -545,6 +546,7 @@ export function recoveryService(
     const seen = new Set<string>();
 
     for (const candidate of candidates) {
+      if (await workspacePersistenceHold(db, candidate.companyId, null, candidate.id)) { skipped += 1; continue; }
       if (seen.has(candidate.id)) continue;
       seen.add(candidate.id);
 
@@ -1618,6 +1620,7 @@ export function recoveryService(
     latestRun: LatestIssueRun;
     comment: string;
   }) {
+    if (await workspacePersistenceHold(db, input.issue.companyId, input.issue.assigneeAgentId, input.issue.id)) return null;
     if (isStrandedIssueRecoveryIssue(input.issue)) {
       return escalateStrandedRecoveryIssueInPlace({
         issue: input.issue,
@@ -1707,6 +1710,7 @@ export function recoveryService(
     };
 
     for (const issue of candidates) {
+      if (await workspacePersistenceHold(db, issue.companyId, issue.assigneeAgentId, issue.id)) { result.skipped += 1; continue; }
       const agentId = issue.assigneeAgentId;
       if (!agentId) {
         result.skipped += 1;
@@ -2240,6 +2244,8 @@ export function recoveryService(
       if (recovery.originId && currentIncidentKeys.has(recovery.originId)) continue;
       const parsed = parseLivenessIncidentKey(recovery.originId);
       if (!parsed) continue;
+      if (await workspacePersistenceHold(db, recovery.companyId, recovery.assigneeAgentId, parsed.issueId)
+        || await workspacePersistenceHold(db, recovery.companyId, recovery.assigneeAgentId, parsed.leafIssueId)) continue;
       if (
         currentLeafKeys.has(
           livenessRecoveryLeafKey(parsed.companyId, parsed.state, parsed.leafIssueId),
@@ -2483,6 +2489,10 @@ export function recoveryService(
       .where(eq(issues.id, input.finding.issueId))
       .then((rows) => rows[0] ?? null);
     if (!issue || issue.companyId !== input.finding.companyId) return { kind: "skipped" as const };
+    if (await workspacePersistenceHold(db, issue.companyId, issue.assigneeAgentId, issue.id)) return { kind: "skipped" as const };
+    for (const member of input.finding.dependencyPath) {
+      if (await workspacePersistenceHold(db, issue.companyId, null, member.issueId)) return { kind: "skipped" as const };
+    }
     if (await isAutomaticRecoverySuppressedByPauseHold(db, issue.companyId, issue.id, treeControlSvc)) {
       return { kind: "skipped" as const };
     }

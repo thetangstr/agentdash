@@ -327,6 +327,7 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
   describe("assistant loopback credential (pcin_)", () => {
     function mintLoopback(companyId: string, grantId = randomUUID(), scopes = ["agentdash:read"]) {
       return mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
         userId: USER_ID,
         companyId,
         membershipRole: "owner",

@@ -1,8 +1,14 @@
+import type { AssistantCredentialOrigin, AssistantLoopbackLease } from "../services/assistant-loopback.js";
 export {};
 
 declare global {
   namespace Express {
     interface Request {
+      /** Set only by credential verification; never parsed from request data. */
+      verifiedCredential?:
+        | { kind: "session"; sessionId: string; userId: string }
+        | { kind: "agent_jwt"; expiresAt: number; agentId: string; companyId: string; signedRunId: string }
+        | { kind: "assistant"; origin: AssistantCredentialOrigin; loopback?: { expiresAt: number; lease: AssistantLoopbackLease } };
       actor: {
         type: "board" | "agent" | "none";
         userId?: string;

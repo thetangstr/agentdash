@@ -9,7 +9,7 @@ import { redactCurrentUserValue } from "../log-redaction.js";
 import { sanitizeRecord } from "../redaction.js";
 import { logger } from "../middleware/logger.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
-import { instanceSettingsService } from "./instance-settings.js";
+import { instanceSettingsService, readInstanceGeneralSettings } from "./instance-settings.js";
 
 const PLUGIN_EVENT_SET: ReadonlySet<string> = new Set(PLUGIN_EVENT_TYPES);
 const ACTIVITY_ACTION_TO_PLUGIN_EVENT: Readonly<Record<string, PluginEventType>> = {
@@ -63,15 +63,36 @@ export interface LogActivityInput {
   details?: Record<string, unknown> | null;
 }
 
-export async function logActivity(db: Db, input: LogActivityInput) {
-  const currentUserRedactionOptions = {
-    enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
-  };
+// AgentDash: server-private data to publish only after the owning transaction commits.
+export interface ActivityPublication {
+  liveEvent: Parameters<typeof publishLiveEvent>[0];
+  pluginEvent: PluginEvent | null;
+}
+
+/** DB-only insertion. Discard the returned publication if the transaction fails. */
+export async function insertActivity(
+  executor: Pick<Db, "select" | "insert" | "update">,
+  input: LogActivityInput,
+  beforeInsert?: () => void,
+): Promise<ActivityPublication> {
+  const settings = await readInstanceGeneralSettings(executor);
+  return insertActivityWithRedaction(executor, input, settings.censorUsernameInLogs, beforeInsert);
+}
+
+async function insertActivityWithRedaction(
+  executor: Pick<Db, "insert">,
+  input: LogActivityInput,
+  censorUsernameInLogs: boolean,
+  beforeInsert?: () => void,
+): Promise<ActivityPublication> {
+  const currentUserRedactionOptions = { enabled: censorUsernameInLogs };
   const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
   const redactedDetails = sanitizedDetails
     ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
     : null;
-  await db.insert(activityLog).values({
+  // AgentDash: optional final synchronous authority/expiry guard after all reads.
+  beforeInsert?.();
+  await executor.insert(activityLog).values({
     companyId: input.companyId,
     actorType: input.actorType,
     actorId: input.actorId,
@@ -81,12 +102,12 @@ export async function logActivity(db: Db, input: LogActivityInput) {
     agentId: input.agentId ?? null,
     runId: input.runId ?? null,
     details: redactedDetails,
-    // AgentDash (consolidation PR-C): logActivity is only called by server
+    // AgentDash (consolidation PR-C): activity insertion is only called by server
     // code with the actor it resolved itself, so these rows are server records.
     origin: "server",
   });
 
-  publishLiveEvent({
+  const liveEvent: ActivityPublication["liveEvent"] = {
     companyId: input.companyId,
     type: "activity.logged",
     payload: {
@@ -99,11 +120,12 @@ export async function logActivity(db: Db, input: LogActivityInput) {
       runId: input.runId ?? null,
       details: redactedDetails,
     },
-  });
+  };
 
+  let pluginEvent: PluginEvent | null = null;
   const pluginEventType = eventTypeForActivityAction(input.action);
   if (pluginEventType) {
-    const event: PluginEvent = {
+    pluginEvent = {
       eventId: randomUUID(),
       eventType: pluginEventType,
       occurredAt: new Date().toISOString(),
@@ -118,8 +140,21 @@ export async function logActivity(db: Db, input: LogActivityInput) {
         runId: input.runId ?? null,
       },
     };
-    publishPluginDomainEvent(event);
   }
+  return { liveEvent, pluginEvent };
+}
+
+/** Caller must invoke this only after a successful commit, once per accepted record. */
+export function publishActivity(publication: ActivityPublication): void {
+  publishLiveEvent(publication.liveEvent);
+  if (publication.pluginEvent) publishPluginDomainEvent(publication.pluginEvent);
+}
+
+export async function logActivity(db: Db, input: LogActivityInput) {
+  // Legacy eager calls retain lazy initialization. Transaction composers use
+  // insertActivity, whose settings lookup cannot acquire an initialization lock.
+  const settings = await instanceSettingsService(db).getGeneral();
+  publishActivity(await insertActivityWithRedaction(db, input, settings.censorUsernameInLogs));
 }
 
 /**
@@ -379,4 +414,15 @@ export async function logAuthzRefusal(
     // warn-worthy, not request-failing.
     logger.warn({ err, action: AUTHZ_REFUSED_ACTION }, "authz.refused activity log failed");
   }
+}
+
+// AgentDash: private caller-owned acceptance; never infer a transaction from a
+// DB object. A caller that owns a transaction passes its executor and a
+// publication collector; the callee inserts audits on that executor and the
+// caller publishes the collected live events only after its commit.
+export interface ActivityAcceptance { executor: Db; publications: ActivityPublication[] }
+export function assertActivityAcceptance(acceptance: ActivityAcceptance): void {
+  if (!acceptance?.executor || typeof acceptance.executor.select !== 'function'
+    || typeof acceptance.executor.insert !== 'function' || typeof acceptance.executor.update !== 'function'
+    || !Array.isArray(acceptance.publications)) throw new Error('An executor and publication collector are required');
 }

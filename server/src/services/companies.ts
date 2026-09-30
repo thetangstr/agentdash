@@ -1,3 +1,4 @@
+import { prepareIssueDeletion } from "./issue-dependents.js";
 import { and, count, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { CompanyProductProfile } from "@paperclipai/shared";
@@ -465,119 +466,132 @@ export function companyService(db: Db) {
         return enrichCompany(hydrated);
       }),
 
-    remove: (id: string) =>
-      db.transaction(async (tx) => {
-        // AgentDash (Company Evaluator): the evaluation ledger is append-only
-        // by trigger; tenant deletion is the one sanctioned purge, gated on
-        // this session setting so no other path can delete ledger rows.
-        await tx.execute(sql`SET LOCAL agentdash.ledger_purge = 'on'`);
-        await tx.delete(evaluationScorecards).where(eq(evaluationScorecards.companyId, id));
-        await tx.delete(evaluationIngestState).where(eq(evaluationIngestState.companyId, id));
-        await tx.delete(evaluationEvents).where(eq(evaluationEvents.companyId, id));
-        // Delete from child tables in dependency order
-        await tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.companyId, id));
-        await tx.delete(agentTaskSessions).where(eq(agentTaskSessions.companyId, id));
-        await tx.delete(activityLog).where(eq(activityLog.companyId, id));
-        await tx.delete(heartbeatRuns).where(eq(heartbeatRuns.companyId, id));
-        await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, id));
-        await tx.delete(agentApiKeys).where(eq(agentApiKeys.companyId, id));
-        await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.companyId, id));
-        await tx.delete(issueComments).where(eq(issueComments.companyId, id));
-        await tx.delete(costEvents).where(eq(costEvents.companyId, id));
-        await tx.delete(financeEvents).where(eq(financeEvents.companyId, id));
-        await tx.delete(approvalComments).where(eq(approvalComments.companyId, id));
-        // Delete budget incidents before approvals — incidents have an FK
-        // to approvals via approval_id (AGE-3: company delete FK violation).
-        await tx.delete(budgetIncidents).where(eq(budgetIncidents.companyId, id));
-        await tx.delete(budgetPolicies).where(eq(budgetPolicies.companyId, id));
-        // Both of these reference `approvals`, so they have to go first.
-        //
-        // Found by an end-to-end proof rather than by reading: deleting a
-        // company that had ever used the bridge failed on
-        // `channel_callback_tokens_approval_id_approvals_id_fk`, and then again
-        // on `bridge_tasks_approval_id_approvals_id_fk` once the first was
-        // cleared. `channel_callback_tokens` was in no purge list at all, and
-        // `bridge_tasks` was below this line. Every inbox sync mints callback
-        // handles, so any MK company whose steward had opened their inbox could
-        // not be deleted.
-        await tx.delete(channelCallbackTokens).where(eq(channelCallbackTokens.companyId, id));
-        await tx.delete(bridgeTasks).where(eq(bridgeTasks.companyId, id));
-        await tx.delete(approvals).where(eq(approvals.companyId, id));
-        await tx.delete(companySecrets).where(eq(companySecrets.companyId, id));
-        await tx.delete(joinRequests).where(eq(joinRequests.companyId, id));
-        await tx.delete(invites).where(eq(invites.companyId, id));
-        await tx.delete(principalPermissionGrants).where(eq(principalPermissionGrants.companyId, id));
-        await tx.delete(companyMemberships).where(eq(companyMemberships.companyId, id));
-        await tx.delete(companySkills).where(eq(companySkills.companyId, id));
-        await tx.delete(issueReadStates).where(eq(issueReadStates.companyId, id));
-        await tx.delete(documents).where(eq(documents.companyId, id));
-        await tx.delete(issues).where(eq(issues.companyId, id));
-        await tx.delete(companyLogos).where(eq(companyLogos.companyId, id));
-        await tx.delete(assets).where(eq(assets.companyId, id));
-        // Projects must go before goals: projects.goal_id -> goals.id is a
-        // NO ACTION foreign key, so deleting goals first failed the whole
-        // delete with `projects_goal_id_goals_id_fk` for any company whose
-        // project referenced a goal (AGE-120, hit 16/16 during the AGE-114
-        // cleanup). project_goals rows are no concern here — both of their
-        // edges (to projects and to goals) cascade.
-        await tx.delete(projects).where(eq(projects.companyId, id));
-        await tx.delete(goals).where(eq(goals.companyId, id));
-        // AgentDash-MK: both reference agents with ON DELETE NO ACTION, so they
-        // must go before the agents themselves or the delete fails with a
-        // foreign-key violation.
-        await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.companyId, id));
-        await tx.delete(agentStewardships).where(eq(agentStewardships.companyId, id));
-        // AgentDash (AGE-36): the remaining agent-referencing tables, all
-        // NO ACTION, all scoped by company. bridge_tasks first (it references
-        // bridge_endpoints), routines cascades its own triggers and runs.
-        await tx.delete(bridgeEndpoints).where(eq(bridgeEndpoints.companyId, id));
-        await tx.delete(agentDirectives).where(eq(agentDirectives.companyId, id));
-        await tx.delete(agentMemory).where(eq(agentMemory.companyId, id));
-        await tx.delete(routines).where(eq(routines.companyId, id));
-        await tx.delete(verdicts).where(eq(verdicts.companyId, id));
-        await tx.delete(cosReviewerAssignments).where(eq(cosReviewerAssignments.companyId, id));
-        await tx.delete(issueReviewQueueState).where(eq(issueReviewQueueState.companyId, id));
-        await tx.delete(issueExecutionDecisions).where(eq(issueExecutionDecisions.companyId, id));
-        await tx.delete(issueThreadInteractions).where(eq(issueThreadInteractions.companyId, id));
-        await tx.delete(assistantConversations).where(eq(assistantConversations.companyId, id));
-        // AgentDash (GH #677): the assistant OAuth tables (migration 0129) hold
-        // NO ACTION foreign keys: grants and auth requests to companies, and
-        // tokens and auth requests to grants. Once an assistant had connected,
-        // DELETE /companies/:id failed on assistant_grants_company_id_companies_id_fk.
-        // FK-safe order: tokens, then auth requests, then the grants themselves.
-        // Auth requests are matched by company and by grant, because an
-        // approved request carries both and a request can reference a grant
-        // of this company even if its own company_id was never set.
-        const companyGrantIds = tx
-          .select({ id: assistantGrants.id })
-          .from(assistantGrants)
-          .where(eq(assistantGrants.companyId, id));
-        await tx.delete(assistantAccessTokens).where(inArray(assistantAccessTokens.grantId, companyGrantIds));
-        await tx.delete(assistantRefreshTokens).where(inArray(assistantRefreshTokens.grantId, companyGrantIds));
-        await tx
-          .delete(assistantAuthRequests)
-          .where(
-            or(
-              eq(assistantAuthRequests.companyId, id),
-              inArray(assistantAuthRequests.grantId, companyGrantIds),
-            ),
-          );
-        await tx.delete(assistantGrants).where(eq(assistantGrants.companyId, id));
-        await tx.delete(agentConnectCodes).where(eq(agentConnectCodes.companyId, id));
-        await tx.delete(trialSessions).where(eq(trialSessions.companyId, id));
-        await tx.delete(mandates).where(eq(mandates.companyId, id));
-        await tx.delete(humanChannelBindings).where(eq(humanChannelBindings.companyId, id));
-        await tx.delete(connectorSendExecutions).where(eq(connectorSendExecutions.companyId, id));
-        await tx.delete(agentRuns).where(eq(agentRuns.companyId, id));
-        await tx.delete(agentConnectorOverrides).where(eq(agentConnectorOverrides.companyId, id));
-        await tx.delete(connections).where(eq(connections.companyId, id));
-        await tx.delete(agents).where(eq(agents.companyId, id));
-        const rows = await tx
-          .delete(companies)
-          .where(eq(companies.id, id))
-          .returning();
-        return rows[0] ?? null;
-      }),
+    remove: async (id: string) => {
+      let callbackCompleted = false;
+      try {
+        return await db.transaction(async (tx) => {
+          // AgentDash: refuse foreign incoming topology before the first purge write.
+          const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, id)).for("update");
+          if (!company) return null;
+          const targets = await tx.select({ id: issues.id }).from(issues).where(eq(issues.companyId, id));
+          await prepareIssueDeletion(tx, id, targets.map(row => row.id));
+          // AgentDash (Company Evaluator): the evaluation ledger is append-only
+          // by trigger; tenant deletion is the one sanctioned purge, gated on
+          // this session setting so no other path can delete ledger rows.
+          await tx.execute(sql`SET LOCAL agentdash.ledger_purge = 'on'`);
+          await tx.delete(evaluationScorecards).where(eq(evaluationScorecards.companyId, id));
+          await tx.delete(evaluationIngestState).where(eq(evaluationIngestState.companyId, id));
+          await tx.delete(evaluationEvents).where(eq(evaluationEvents.companyId, id));
+          // Delete from child tables in dependency order
+          await tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.companyId, id));
+          await tx.delete(agentTaskSessions).where(eq(agentTaskSessions.companyId, id));
+          await tx.delete(activityLog).where(eq(activityLog.companyId, id));
+          await tx.delete(heartbeatRuns).where(eq(heartbeatRuns.companyId, id));
+          await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, id));
+          await tx.delete(agentApiKeys).where(eq(agentApiKeys.companyId, id));
+          await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.companyId, id));
+          await tx.delete(issueComments).where(eq(issueComments.companyId, id));
+          await tx.delete(costEvents).where(eq(costEvents.companyId, id));
+          await tx.delete(financeEvents).where(eq(financeEvents.companyId, id));
+          await tx.delete(approvalComments).where(eq(approvalComments.companyId, id));
+          // Delete budget incidents before approvals — incidents have an FK
+          // to approvals via approval_id (AGE-3: company delete FK violation).
+          await tx.delete(budgetIncidents).where(eq(budgetIncidents.companyId, id));
+          await tx.delete(budgetPolicies).where(eq(budgetPolicies.companyId, id));
+          // Both of these reference `approvals`, so they have to go first.
+          //
+          // Found by an end-to-end proof rather than by reading: deleting a
+          // company that had ever used the bridge failed on
+          // `channel_callback_tokens_approval_id_approvals_id_fk`, and then again
+          // on `bridge_tasks_approval_id_approvals_id_fk` once the first was
+          // cleared. `channel_callback_tokens` was in no purge list at all, and
+          // `bridge_tasks` was below this line. Every inbox sync mints callback
+          // handles, so any MK company whose steward had opened their inbox could
+          // not be deleted.
+          await tx.delete(channelCallbackTokens).where(eq(channelCallbackTokens.companyId, id));
+          await tx.delete(bridgeTasks).where(eq(bridgeTasks.companyId, id));
+          await tx.delete(approvals).where(eq(approvals.companyId, id));
+          await tx.delete(companySecrets).where(eq(companySecrets.companyId, id));
+          await tx.delete(joinRequests).where(eq(joinRequests.companyId, id));
+          await tx.delete(invites).where(eq(invites.companyId, id));
+          await tx.delete(principalPermissionGrants).where(eq(principalPermissionGrants.companyId, id));
+          await tx.delete(companyMemberships).where(eq(companyMemberships.companyId, id));
+          await tx.delete(companySkills).where(eq(companySkills.companyId, id));
+          await tx.delete(issueReadStates).where(eq(issueReadStates.companyId, id));
+          await tx.delete(documents).where(eq(documents.companyId, id));
+          await tx.delete(issues).where(eq(issues.companyId, id));
+          await tx.delete(companyLogos).where(eq(companyLogos.companyId, id));
+          await tx.delete(assets).where(eq(assets.companyId, id));
+          // Projects must go before goals: projects.goal_id -> goals.id is a
+          // NO ACTION foreign key, so deleting goals first failed the whole
+          // delete with `projects_goal_id_goals_id_fk` for any company whose
+          // project referenced a goal (AGE-120, hit 16/16 during the AGE-114
+          // cleanup). project_goals rows are no concern here — both of their
+          // edges (to projects and to goals) cascade.
+          await tx.delete(projects).where(eq(projects.companyId, id));
+          await tx.delete(goals).where(eq(goals.companyId, id));
+          // AgentDash-MK: both reference agents with ON DELETE NO ACTION, so they
+          // must go before the agents themselves or the delete fails with a
+          // foreign-key violation.
+          await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.companyId, id));
+          await tx.delete(agentStewardships).where(eq(agentStewardships.companyId, id));
+          // AgentDash (AGE-36): the remaining agent-referencing tables, all
+          // NO ACTION, all scoped by company. bridge_tasks first (it references
+          // bridge_endpoints), routines cascades its own triggers and runs.
+          await tx.delete(bridgeEndpoints).where(eq(bridgeEndpoints.companyId, id));
+          await tx.delete(agentDirectives).where(eq(agentDirectives.companyId, id));
+          await tx.delete(agentMemory).where(eq(agentMemory.companyId, id));
+          await tx.delete(routines).where(eq(routines.companyId, id));
+          await tx.delete(verdicts).where(eq(verdicts.companyId, id));
+          await tx.delete(cosReviewerAssignments).where(eq(cosReviewerAssignments.companyId, id));
+          await tx.delete(issueReviewQueueState).where(eq(issueReviewQueueState.companyId, id));
+          await tx.delete(issueExecutionDecisions).where(eq(issueExecutionDecisions.companyId, id));
+          await tx.delete(issueThreadInteractions).where(eq(issueThreadInteractions.companyId, id));
+          await tx.delete(assistantConversations).where(eq(assistantConversations.companyId, id));
+          // AgentDash (GH #677): the assistant OAuth tables (migration 0129) hold
+          // NO ACTION foreign keys: grants and auth requests to companies, and
+          // tokens and auth requests to grants. Once an assistant had connected,
+          // DELETE /companies/:id failed on assistant_grants_company_id_companies_id_fk.
+          // FK-safe order: tokens, then auth requests, then the grants themselves.
+          // Auth requests are matched by company and by grant, because an
+          // approved request carries both and a request can reference a grant
+          // of this company even if its own company_id was never set.
+          const companyGrantIds = tx
+            .select({ id: assistantGrants.id })
+            .from(assistantGrants)
+            .where(eq(assistantGrants.companyId, id));
+          await tx.delete(assistantAccessTokens).where(inArray(assistantAccessTokens.grantId, companyGrantIds));
+          await tx.delete(assistantRefreshTokens).where(inArray(assistantRefreshTokens.grantId, companyGrantIds));
+          await tx
+            .delete(assistantAuthRequests)
+            .where(
+              or(
+                eq(assistantAuthRequests.companyId, id),
+                inArray(assistantAuthRequests.grantId, companyGrantIds),
+              ),
+            );
+          await tx.delete(assistantGrants).where(eq(assistantGrants.companyId, id));
+          await tx.delete(agentConnectCodes).where(eq(agentConnectCodes.companyId, id));
+          await tx.delete(trialSessions).where(eq(trialSessions.companyId, id));
+          await tx.delete(mandates).where(eq(mandates.companyId, id));
+          await tx.delete(humanChannelBindings).where(eq(humanChannelBindings.companyId, id));
+          await tx.delete(connectorSendExecutions).where(eq(connectorSendExecutions.companyId, id));
+          await tx.delete(agentRuns).where(eq(agentRuns.companyId, id));
+          await tx.delete(agentConnectorOverrides).where(eq(agentConnectorOverrides.companyId, id));
+          await tx.delete(connections).where(eq(connections.companyId, id));
+          await tx.delete(agents).where(eq(agents.companyId, id));
+          const rows = await tx
+            .delete(companies)
+            .where(eq(companies.id, id))
+            .returning();
+          callbackCompleted = true;
+          return rows[0] ?? null;
+        });
+      } catch (error) {
+        if (callbackCompleted) throw new HttpError(409, "Company persistence is uncertain. Read current state before retrying.", { persistenceOutcome: "unknown" });
+        throw error;
+      }
+    },
 
     findByStripeCustomerId: async (stripeCustomerId: string) => {
       if (!stripeCustomerId) return null;

@@ -9,6 +9,7 @@ import {
   updateRoutineTriggerSchema,
 } from "@paperclipai/shared";
 import { trackRoutineCreated } from "@paperclipai/shared/telemetry";
+import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
 import { accessService, logActivity, routineService } from "../services/index.js";
 import { assertCanSetCompanyDirection, assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -311,17 +312,21 @@ export function routineRoutes(
       userId: req.actor.type === "board" ? req.actor.userId ?? null : null,
     });
     const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId: routine.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "routine.run_triggered",
-      entityType: "routine_run",
-      entityId: run.id,
-      details: { routineId: routine.id, source: run.source, status: run.status },
-    });
+    try {
+      await logActivity(db, {
+        companyId: routine.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "routine.run_triggered",
+        entityType: "routine_run",
+        entityId: run.id,
+        details: { routineId: routine.id, source: run.source, status: run.status },
+      });
+    } catch (err) {
+      logger.warn({ err, routineId: routine.id, runId: run.id }, "failed to log accepted manual routine run");
+    }
     res.status(202).json(run);
   });
 

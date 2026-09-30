@@ -6,7 +6,7 @@ import {
   verdictEntityTypeSchema,
   type VerdictEntityType,
 } from "@paperclipai/shared";
-import { HttpError, badRequest } from "../errors.js";
+import { HttpError, badRequest, forbidden } from "../errors.js";
 import { approvalService } from "../services/approvals.js";
 import { issueApprovalService } from "../services/issue-approvals.js";
 import { verdictsService } from "../services/verdicts.js";
@@ -40,9 +40,27 @@ export function verdictRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      // AgentDash: HTTP reviewers are authenticated principals. Internal
+      // orchestration calls the service directly with its trusted identity.
+      const reviewerAgentId = req.actor.type === "agent" ? req.actor.agentId : undefined;
+      const reviewerUserId = req.actor.type === "board"
+        ? req.actor.userId ?? (req.actor.source === "local_implicit" ? "board" : undefined)
+        : undefined;
+      if (!reviewerAgentId && !reviewerUserId) {
+        throw forbidden("An authenticated reviewer identity is required");
+      }
+      const claimedAgentId = req.body?.reviewerAgentId;
+      const claimedUserId = req.body?.reviewerUserId;
+      const impersonatesAgent = claimedAgentId !== undefined && claimedAgentId !== reviewerAgentId;
+      const impersonatesUser = claimedUserId !== undefined && claimedUserId !== reviewerUserId;
+      if (impersonatesAgent || impersonatesUser) {
+        throw forbidden("Reviewer identity must match the authenticated actor");
+      }
       const parsed = createVerdictInputSchema.safeParse({
         ...req.body,
         companyId,
+        reviewerAgentId,
+        reviewerUserId,
       });
       if (!parsed.success) {
         throw badRequest("Invalid verdict input", {

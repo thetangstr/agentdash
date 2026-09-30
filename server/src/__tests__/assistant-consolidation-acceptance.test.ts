@@ -573,6 +573,7 @@ describeEmbeddedPostgres("consolidation acceptance queries (A1–A9)", () => {
 
     // The digest route itself refuses another company's project id.
     const loopback = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: FOUNDER,
       companyId: yarda,
       membershipRole: "owner",
@@ -604,6 +605,7 @@ describeEmbeddedPostgres("consolidation acceptance queries (A1–A9)", () => {
     for (const row of data.changed.items) expect(row.project).not.toBe("Secret pricing");
 
     const loopback = mintAssistantLoopbackToken({
+      origin: { kind: "internal" },
       userId: SAM,
       companyId: yarda,
       membershipRole: "member",

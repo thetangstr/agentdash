@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-or
 import type { Db } from "@paperclipai/db";
 import {
   agents,
+  companies,
   agentConfigRevisions,
   agentApiKeys,
   agentGovernancePolicies,
@@ -611,6 +612,16 @@ export function agentService(db: Db) {
       }
 
       return db.transaction(async (tx) => {
+        // AgentDash: canonical issue acceptance locks this company before
+        // principal witnesses. Join that order before detaching issues or
+        // deleting credential children, which otherwise invert those locks.
+        const [company] = await tx.select({ id: companies.id }).from(companies)
+          .where(eq(companies.id, existing.companyId)).for("update");
+        if (!company) return null;
+        const [current] = await tx.select({ id: agents.id, companyId: agents.companyId }).from(agents)
+          .where(eq(agents.id, id));
+        if (!current) return null;
+        if (current.companyId !== existing.companyId) throw conflict("Agent company changed during removal");
         await tx.update(agents).set({ reportsTo: null }).where(eq(agents.reportsTo, id));
         await tx
           .update(issues)
