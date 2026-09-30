@@ -1,27 +1,7 @@
 {
-  "_comment": "Files under ui/src that may still mention productProfile / agentdash_mk (doc/plans/2026-09-30-one-ux.md). This list must ONLY SHRINK: scripts/ci/check-no-profile-ux.mjs fails a PR that adds an entry not on the base branch. Remove a file here in the PR that removes its profile branch. Pending: one-UX 2/3 (merged landing) clears Home.tsx, DashboardLive.tsx and ProfileRouteSwitch.tsx; one-UX 3/3 (page variants) clears the pages and components; ReadinessAssessmentCard.tsx goes with CompanySettings. api/companies.ts carries the Company type's productProfile field from the server and is the last to go.",
+  "_comment": "Files under ui/src that may still mention productProfile / agentdash_mk (doc/plans/2026-09-30-one-ux.md). This list must ONLY SHRINK: scripts/ci/check-no-profile-ux.mjs fails a PR that adds an entry not on the base branch. Remove a file here in the PR that removes its profile branch. Remaining: api/companies.ts carries the create-company productProfile field to the server, and OnboardingWizard.tsx sends it when creating a company.",
   "files": [
     "ui/src/api/companies.ts",
-    "ui/src/components/CompanySettingsSidebar.tsx",
-    "ui/src/components/FirstRunStart.tsx",
-    "ui/src/components/IssueResultBlock.tsx",
-    "ui/src/components/IssuesList.tsx",
-    "ui/src/components/OnboardingWizard.tsx",
-    "ui/src/components/ProjectGitHubSection.tsx",
-    "ui/src/components/settings/ReadinessAssessmentCard.tsx",
-    "ui/src/pages/AgentDetail.tsx",
-    "ui/src/pages/Agents.tsx",
-    "ui/src/pages/CoSConversation.tsx",
-    "ui/src/pages/CompanyAccess.tsx",
-    "ui/src/pages/CompanyConnections.tsx",
-    "ui/src/pages/CompanyCreate.tsx",
-    "ui/src/pages/CompanyModelKey.tsx",
-    "ui/src/pages/CompanySettings.tsx",
-    "ui/src/pages/Costs.tsx",
-    "ui/src/pages/FirstRun.tsx",
-    "ui/src/pages/MyAgent.tsx",
-    "ui/src/pages/OverrideInbox.tsx",
-    "ui/src/pages/ProjectDetail.tsx",
-    "ui/src/pages/Shipped.tsx"
+    "ui/src/components/OnboardingWizard.tsx"
   ]
 }

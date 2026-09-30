@@ -26,9 +26,11 @@ vi.mock("../api/connector-send-executions", () => ({
 }));
 vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
 
+const { ApiError } = await import("../api/client");
+
 /** What a capability-gated route answers for a company without it. */
 function notFound() {
-  return Promise.reject(Object.assign(new Error("Not found"), { status: 404 }));
+  return Promise.reject(new ApiError("Company not found", 404, null));
 }
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompanyId: "company-1" }),
@@ -43,6 +45,14 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const { Decisions, decisionsListLength } = await import("./Decisions");
+const {
+  loadSource,
+  resetSourceFailureStreaks,
+  sourceRefetchInterval,
+  SOURCE_MAX_BACKOFF_MS,
+  SOURCE_POLL_MS,
+  decisionsSourceKeys,
+} = await import("./DecisionsOtherSources");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -122,8 +132,9 @@ describe("Decisions", () => {
     mockStewardshipsApi.myFactRequests.mockImplementation(notFound);
     mockConnectorSendApi.listUnresolved.mockImplementation(notFound);
     mockAccessApi.listJoinRequests.mockImplementation(() =>
-      Promise.reject(Object.assign(new Error("Forbidden"), { status: 403 })),
+      Promise.reject(new ApiError("Forbidden", 403, null)),
     );
+    resetSourceFailureStreaks();
   });
 
   afterEach(async () => {
@@ -132,8 +143,9 @@ describe("Decisions", () => {
     vi.clearAllMocks();
   });
 
+  let client: QueryClient;
   async function render() {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
@@ -276,6 +288,38 @@ describe("Decisions", () => {
     expect(q("decisions-row")).not.toBeNull();
   });
 
+  it("treats a transient failure as transient: nothing broken shown, and the source comes back", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue(waitingWith(EMPTY_WAITING));
+    mockConnectorSendApi.listUnresolved.mockImplementationOnce(() =>
+      Promise.reject(new ApiError("Internal error", 500, null)),
+    );
+    await render();
+    expect(q("decisions-connector-sends")).toBeNull();
+    expect(container.querySelector(".text-destructive")).toBeNull();
+    // Not cached as "absent": the query is in error and keeps its poll.
+    const state = client.getQueryState(decisionsSourceKeys.connectorSends("company-1"));
+    expect(state?.status).toBe("error");
+    expect(state?.data).toBeUndefined();
+
+    mockConnectorSendApi.listUnresolved.mockResolvedValue({
+      items: [
+        {
+          id: "send-1",
+          provider: "hubspot",
+          operation: "update",
+          objectType: "deal",
+          reason: "timed out",
+          executedAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await act(async () => {
+      await client.refetchQueries({ queryKey: decisionsSourceKeys.connectorSends("company-1") });
+    });
+    await flush();
+    expect(q("decisions-connector-sends")).not.toBeNull();
+  });
+
   it("surfaces steward, question, connector-send, join and override items when their APIs answer", async () => {
     mockDashboardApi.waitingOnYou.mockResolvedValue(waitingWith(EMPTY_WAITING));
     mockStewardshipsApi.getMyInbox.mockResolvedValue({
@@ -351,5 +395,30 @@ describe("Decisions", () => {
     await render();
     expect(q("decisions-row")).not.toBeNull();
     expect(q("decisions-steward")).toBeNull();
+  });
+});
+
+describe("Decisions source loading", () => {
+  beforeEach(() => resetSourceFailureStreaks());
+
+  it("resolves only the gates' 404 and 403 to absent", async () => {
+    await expect(loadSource("k404", () => Promise.reject(new ApiError("nf", 404, null)))).resolves.toBeNull();
+    await expect(loadSource("k403", () => Promise.reject(new ApiError("no", 403, null)))).resolves.toBeNull();
+    await expect(loadSource("k500", () => Promise.reject(new ApiError("boom", 500, null)))).rejects.toThrow("boom");
+    await expect(loadSource("knet", () => Promise.reject(new TypeError("Failed to fetch")))).rejects.toThrow(
+      "Failed to fetch",
+    );
+    await expect(loadSource("kok", () => Promise.resolve({ items: [] }))).resolves.toEqual({ items: [] });
+  });
+
+  it("stops polling an absent source, backs off a failing one, polls a healthy one", () => {
+    expect(sourceRefetchInterval({ data: null, status: "success" }, 0)).toBe(false);
+    expect(sourceRefetchInterval({ data: { items: [] }, status: "success" }, 0)).toBe(SOURCE_POLL_MS);
+    expect(sourceRefetchInterval({ data: undefined, status: "error" }, 1)).toBe(SOURCE_POLL_MS);
+    expect(sourceRefetchInterval({ data: undefined, status: "error" }, 2)).toBe(SOURCE_POLL_MS * 2);
+    expect(sourceRefetchInterval({ data: undefined, status: "error" }, 3)).toBe(SOURCE_POLL_MS * 4);
+    expect(sourceRefetchInterval({ data: undefined, status: "error" }, 50)).toBe(SOURCE_MAX_BACKOFF_MS);
+    // A source that had loaded and then failed keeps polling (with backoff) too.
+    expect(sourceRefetchInterval({ data: { items: [] }, status: "error" }, 1)).toBe(SOURCE_POLL_MS);
   });
 });
