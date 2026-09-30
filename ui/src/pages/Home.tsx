@@ -23,10 +23,9 @@ import { queryKeys } from "../lib/queryKeys";
 import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
-import { agentsApi } from "../api/agents";
 import { decisionsListLength } from "../hooks/useDecisionsBadge";
 import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
-import { ControlPlanePanels, fleetSize } from "../components/dashboard/ControlPlanePanels";
+import { ControlPlanePanels } from "../components/dashboard/ControlPlanePanels";
 
 export const HOME_LIST_LIMIT = 6;
 export const WAITING_EMPTY_TEXT = "Nothing needs you right now. Decisions and issues assigned to you show up here.";
@@ -253,11 +252,6 @@ export function Home() {
     queryFn: () => dashboardApi.summary(selectedCompanyId!),
     enabled,
   });
-  const { data: agents } = useQuery({
-    queryKey: queryKeys.agents.list(selectedCompanyId ?? ""),
-    queryFn: () => agentsApi.list(selectedCompanyId!),
-    enabled,
-  });
   const { data: waiting, isError: waitingFailed } = useQuery({
     queryKey: queryKeys.home.waitingOnYou(selectedCompanyId ?? ""),
     queryFn: () => dashboardApi.waitingOnYou(selectedCompanyId!),
@@ -284,8 +278,6 @@ export function Home() {
   }
 
   const firstName = firstNameFor(session?.user);
-  // One definition of fleet size, shared with the Agents stat below.
-  const agentCount = fleetSize(summary, agents);
   const openIssues = summary?.tasks.open ?? null;
   const workingItems = working?.items ?? [];
   const shippedItems = shipped?.items ?? [];
@@ -302,9 +294,8 @@ export function Home() {
             {firstName ? `, ${firstName}` : ""}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground" data-testid="home-subline">
+            {/* Agents and open issues are counted once, in the stat tiles below. */}
             {selectedCompany?.name ?? "Your workspace"}
-            {agentCount !== null ? ` · ${agentCount} agent${agentCount === 1 ? "" : "s"}` : ""}
-            {openIssues !== null ? ` · ${openIssues} open issue${openIssues === 1 ? "" : "s"}` : ""}
           </p>
         </div>
         <Button asChild variant="outline" size="sm" className="shrink-0">

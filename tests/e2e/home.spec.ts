@@ -63,11 +63,11 @@ test.describe("Home (UX-3)", () => {
     const more = [...moreText.matchAll(/and (\d+) more/g)].reduce((sum, m) => sum + Number(m[1]), 0);
     expect(shownRows + more).toBe(expected);
 
-    // The subline states the same agent and issue counts the summary does.
+    // The subline names the workspace; agent and issue counts live in the stat tiles only.
     const summary = (await (await request.get(`${BASE_URL}/api/companies/${company.id}/dashboard`)).json()) as {
       tasks: { open: number };
     };
-    await expect(page.getByTestId("home-subline")).toContainText(`${summary.tasks.open} open issue`);
+    await expect(page.getByTestId("home-subline")).not.toContainText("open issue");
     await expect(page.getByTestId("home-plan-with-cos")).toHaveAttribute("href", /\/cos$/);
 
     // One-UX: the control-plane panels sit under the three blocks, for every company.

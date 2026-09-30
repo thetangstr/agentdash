@@ -208,9 +208,11 @@ describe("Home", () => {
     // A frame never comes, as in a background tab: numbers must not depend on one.
     const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
     await render();
-    // Fleet size = max(summary total, live agent list) — shared with the Agents stat.
-    expect(q("home-subline")?.textContent).toBe("Acme Robotics · 6 agents · 92 open issues");
+    // Agents and open issues are counted once, in the stat tiles — not repeated
+    // in the subline. Fleet size = max(summary total, live agent list).
+    expect(q("home-subline")?.textContent).toBe("Acme Robotics");
     expect(q("dashboard-stat-agents-value")?.textContent).toBe("6");
+    expect(q("dashboard-stat-issues-value")?.textContent).toBe("92");
     expect(q("home-waiting-count")?.textContent).toBe("3");
     expect(rows("home-waiting-row")).toHaveLength(3);
     expect(q("home-working-count")?.textContent).toBe("2");

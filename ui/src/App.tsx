@@ -7,7 +7,7 @@ import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
 import { FirstRunStart } from "./components/FirstRunStart";
-// Dashboard.tsx is left in place (unreferenced) — the dashboard route now renders Overview.
+// The /dashboard route renders pages/Home (DashboardHome): Home blocks over the control-plane panels.
 import { DashboardHome } from "./pages/Home";
 import { ConnectAssistant } from "./pages/ConnectAssistant";
 import { DashboardLive } from "./pages/DashboardLive";
