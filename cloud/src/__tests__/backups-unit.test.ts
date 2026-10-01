@@ -2,8 +2,12 @@
 // SigV4 (against AWS's published example), the encrypted envelope (round
 // trip, wrong key, tampering, truncation), retention, config, the admin CLI.
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import zlib from "node:zlib";
 import sodium from "libsodium-wrappers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { runAdmin } from "../admin/run.js";
@@ -11,8 +15,8 @@ import { loadBackupConfig } from "../backups/config.js";
 import { createDecryptStream, createEncryptStream, ENVELOPE_MAGIC, FRAME_PLAINTEXT_BYTES, type BackupEnvelopeMeta } from "../backups/envelope.js";
 import { EMPTY_SHA256, S3Store, signV4, uriEncode } from "../backups/s3.js";
 import { isoWeek, selectPrunable } from "../backups/service.js";
-import { parseCopyFromStdin } from "../backups/sql-restore.js";
-import { checkStatement, initDumpGuard, MAX_STATEMENT_BYTES } from "../backups/dump-guard.js";
+import { DumpTooLarge, MAX_LINE_BYTES, MAX_STATEMENT_LINES, parseCopyFromStdin, scanDump, statements } from "../backups/sql-restore.js";
+import { checkStatement, initDumpGuard, MAX_STATEMENT_BYTES, STATEMENT_BREAKPOINT } from "../backups/dump-guard.js";
 import { ConfigError } from "../config.js";
 import { escrowKeyId } from "../railway/secrets.js";
 import { Secret } from "../secret.js";
@@ -185,6 +189,57 @@ describe("restore parser", () => {
   });
 });
 
+describe("dump splitter (bounded, streaming)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backup-split-"));
+  const write = (name: string, text: string | Buffer) => {
+    const f = path.join(dir, name);
+    fs.writeFileSync(f, text);
+    return f;
+  };
+  const BP = STATEMENT_BREAKPOINT;
+
+  it("yields one piece per chunk and streams a COPY payload line by line", async () => {
+    const f = write("roundtrip.sql", ["BEGIN;", BP, '-- Data for: public.t (3 rows)', 'COPY "public"."t" ("a") FROM stdin;', "1", "2", "3", "\\.", BP, "COMMIT;", BP].join("\n"));
+    const pieces = [];
+    for await (const p of statements(f)) {
+      if (p.kind === "copy") {
+        const rows: string[] = [];
+        for await (const line of p.payload) rows.push(line);
+        pieces.push({ ...p, payload: rows });
+      } else pieces.push(p);
+    }
+    expect(pieces).toEqual([
+      { kind: "sql", text: "BEGIN;" },
+      { kind: "copy", text: '-- Data for: public.t (3 rows)\nCOPY "public"."t" ("a") FROM stdin;', command: 'COPY "public"."t" ("a") FROM stdin', payload: ["1", "2", "3"] },
+      { kind: "sql", text: "COMMIT;" },
+    ]);
+  });
+
+  it("refuses a statement with too many lines or too many bytes during a scan", async () => {
+    const long = write("long.sql", ["BEGIN;", BP, ...Array.from({ length: MAX_STATEMENT_LINES + 1 }, () => "-- x"), "COMMIT;", BP].join("\n"));
+    expect((await scanDump(long)).refused.map((r) => r.reason)).toEqual([expect.stringContaining(`${MAX_STATEMENT_LINES} lines`)]);
+    const big = write("big.sql", ["BEGIN;", BP, `INSERT INTO "public"."t" ("a") VALUES ('${"x".repeat(MAX_STATEMENT_BYTES + 1)}');`, BP].join("\n"));
+    expect((await scanDump(big)).refused.map((r) => r.reason)).toEqual([expect.stringContaining(`${MAX_STATEMENT_BYTES} bytes`)]);
+  });
+
+  it("bounds a single physical line, even inside COPY data, plain or gzipped", async () => {
+    const head = Buffer.from(`BEGIN;\n${BP}\nCOPY "public"."t" ("a") FROM stdin;\n`, "utf8");
+    const tail = Buffer.from(`\n\\.\n${BP}\nCOMMIT;\n${BP}\n`, "utf8");
+    const f = write("wide-line.sql", Buffer.concat([head, Buffer.alloc(MAX_LINE_BYTES + 1, "x"), tail]));
+    expect((await scanDump(f)).refused.map((r) => r.reason)).toEqual([expect.stringContaining(`${MAX_LINE_BYTES} bytes`)]);
+    const gz = write("wide-line.sql.gz", zlib.gzipSync(fs.readFileSync(f)));
+    expect((await scanDump(gz)).refused.map((r) => r.reason)).toEqual([expect.stringContaining(`${MAX_LINE_BYTES} bytes`)]);
+  });
+
+  it("throws DumpTooLarge when iterating past a cap", async () => {
+    const f = write("toobig.sql", ["BEGIN;", BP, `INSERT INTO "public"."t" ("a") VALUES ('${"x".repeat(MAX_STATEMENT_BYTES + 1)}');`, BP].join("\n"));
+    const drain = async () => {
+      for await (const p of statements(f)) if (p.kind === "copy") for await (const _ of p.payload) void _;
+    };
+    await expect(drain()).rejects.toThrow(DumpTooLarge);
+  });
+});
+
 describe("backup config", () => {
   const pub = () => Buffer.from(keys.publicKey).toString("base64");
   const full = () => ({
@@ -307,6 +362,8 @@ describe("dump guard (libpg_query AST allowlist)", () => {
     "-- Data for: public.t (1 rows)\nCOPY \"public\".\"t\" (\"a\") FROM stdin;\nPROGRAM; DROP TABLE x; \\! rm -rf /\n\\.",
     "INSERT INTO \"public\".\"t\" (\"a\", \"b\") VALUES ($paperclip$COPY x FROM PROGRAM 'rm'; DROP TABLE t; \\! ls$paperclip$, NULL);",
     "SELECT setval('\"public\".\"issues_id_seq\"', 300, true);",
+    // ASCII whitespace Postgres itself accepts — tabs, form feed, CR — is fine.
+    "  -- a comment\r\n\t\fBEGIN;",
     "COMMIT;",
   ];
   // Each one a bypass found in review of the old regex guard, or a statement kind it let through by prefix.
@@ -345,6 +402,15 @@ describe("dump guard (libpg_query AST allowlist)", () => {
     ["CREATE EXTENSION IF NOT EXISTS plpython3u;", /not on the allowlist/],
     ['CREATE EXTENSION IF NOT EXISTS "dblink";', /not on the allowlist/],
     ["CREATE EXTENSION pg_trgm;", /only IF NOT EXISTS/],
+    ['CREATE EXTENSION IF NOT EXISTS "pg_trgm" WITH SCHEMA "public" VERSION \'1.6\';', /option new_version is not allowed/],
+    // Unicode whitespace is NOT Postgres whitespace: a leading line that only
+    // looks blank or commented to JavaScript's trim() must stay in the body
+    // and fail the real parser, not be silently dropped.
+    ["\u00A0BEGIN;", /does not parse/],
+    ["\u00A0-- a comment only to JS trim\nBEGIN;", /does not parse/],
+    ["-- real comment\n\u00A0\nBEGIN;", /does not parse/],
+    ["COPY\u00A0\"public\".\"t\" (\"a\") FROM stdin;\n1\n\\.", /does not parse/],
+    ["COPY FROM stdin;", /does not parse/],
     ["SELECT setval('s', 1, true); SELECT pg_sleep(100);", /more than one statement/],
     ["SELECT pg_sleep(100);", /only SELECT setval/],
     ["SELECT setval('s', (SELECT 1), true);", /A_Const|SubLink/],

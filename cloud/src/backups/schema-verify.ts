@@ -3,8 +3,11 @@
 //
 //   1. the applied-migration list is read from the RESTORED
 //      drizzle.__drizzle_migrations (never from the box-written header) and
-//      every hash must be the SHA-256 of a migration file in this repository
-//      (packages/db/src/migrations), as the box's own migrator records it;
+//      its hashes — in row order — must form an UNBROKEN PREFIX of this
+//      repository's journal (packages/db/src/migrations), each the SHA-256 of
+//      its migration file as the box's own migrator records it. A known hash
+//      that is not the next journal entry means the box skipped or reordered
+//      a migration, and the restore fails;
 //   2. a reference database is built by applying exactly those migrations,
 //      from this repository, to an empty database in the same sandbox;
 //   3. the two catalogs are compared object by object: tables, columns,
@@ -41,23 +44,38 @@ function connect(url: string) {
   return postgres(url, { max: 1, connect_timeout: 10, onnotice: () => {} });
 }
 
-/** Which of our migrations the restored database says it applied, and any hash we do not know. */
-export async function restoredMigrations(url: string, ours: BoxMigration[]): Promise<{ applied: BoxMigration[]; unknown: string[]; duplicates: string[] }> {
+/**
+ * Which of our migrations the restored database says it applied, and any hash
+ * we do not know. `applied` is the UNBROKEN PREFIX of our journal the rows
+ * match, in `id` order — a known hash anywhere else is `outOfOrder`, not
+ * applied, so a box that skipped migration 2 cannot claim migrations 1 and 3.
+ */
+export async function restoredMigrations(url: string, ours: BoxMigration[]): Promise<{ applied: BoxMigration[]; unknown: string[]; duplicates: string[]; outOfOrder: string[] }> {
   const sql = connect(url);
   try {
     const [t] = await sql<Array<{ present: boolean }>>`select to_regclass('drizzle.__drizzle_migrations') is not null as present`;
-    if (!t?.present) return { applied: [], unknown: ["(no drizzle.__drizzle_migrations table)"], duplicates: [] };
+    if (!t?.present) return { applied: [], unknown: ["(no drizzle.__drizzle_migrations table)"], duplicates: [], outOfOrder: [] };
     const rows = await sql<Array<{ hash: string }>>`select hash from drizzle.__drizzle_migrations order by id`;
     const byHash = new Map(ours.map((m) => [m.hash, m]));
     const seen = new Set<string>();
     const unknown: string[] = [];
     const duplicates: string[] = [];
+    const outOfOrder: string[] = [];
+    const applied: BoxMigration[] = [];
     for (const r of rows) {
-      if (seen.has(r.hash)) duplicates.push(r.hash);
+      if (seen.has(r.hash)) {
+        duplicates.push(r.hash);
+        continue;
+      }
       seen.add(r.hash);
-      if (!byHash.has(r.hash)) unknown.push(r.hash);
+      const expected = ours[applied.length];
+      if (expected && r.hash === expected.hash) {
+        applied.push(expected);
+        continue;
+      }
+      (byHash.has(r.hash) ? outOfOrder : unknown).push(r.hash);
     }
-    return { applied: ours.filter((m) => seen.has(m.hash)), unknown, duplicates };
+    return { applied, unknown, duplicates, outOfOrder };
   } finally {
     await sql.end({ timeout: 5 });
   }
@@ -118,7 +136,7 @@ export async function catalogSnapshot(url: string): Promise<CatalogSnapshot> {
                      from pg_proc p join pg_namespace n on n.oid = p.pronamespace join pg_language l on l.oid = p.prolang where ${USER_SCHEMAS} and ${NOT_EXTENSION("pg_proc", "p.oid")}`),
       q("policy", `select p.polname || ' on ' || p.polrelid::regclass::text as e from pg_policy p`),
       q("rls", `select n.nspname || '.' || c.relname || (case when c.relforcerowsecurity then ' forced' else '' end) as e from pg_class c join pg_namespace n on n.oid = c.relnamespace where ${USER_SCHEMAS} and c.relrowsecurity`),
-      q("extension", `select extname as e from pg_extension`),
+      q("extension", `select e.extname || ' in ' || n.nspname as e from pg_extension e join pg_namespace n on n.oid = e.extnamespace`),
       q("event_trigger", `select evtname as e from pg_event_trigger`),
       q("type", `select t.typtype::text || ':' || n.nspname || '.' || t.typname || coalesce(' = ' || (select string_agg(e.enumlabel, ',' order by e.enumsortorder) from pg_enum e where e.enumtypid = t.oid), '') as e
                  from pg_type t join pg_namespace n on n.oid = t.typnamespace
@@ -217,11 +235,15 @@ export async function repairFromReference(restoredUrl: string, referenceUrl: str
  */
 export async function verifyRestoredSchema(opts: { restoredUrl: string; referenceUrl: string; migrationsDir: string; repair?: boolean }): Promise<SchemaVerification & { repaired: string[] }> {
   const ours = loadBoxMigrations(opts.migrationsDir);
-  const { applied, unknown, duplicates } = await restoredMigrations(opts.restoredUrl, ours);
+  const { applied, unknown, duplicates, outOfOrder } = await restoredMigrations(opts.restoredUrl, ours);
   const problems: string[] = [];
   if (unknown.length) problems.push(`${unknown.length} applied migration(s) are not in this repository (${unknown.slice(0, 3).map((h) => h.slice(0, 12)).join(", ")})`);
   if (duplicates.length) problems.push(`${duplicates.length} migration(s) recorded twice`);
-  if (!applied.length) problems.push("no known migrations are recorded as applied");
+  if (outOfOrder.length) {
+    const tag = ours.find((m) => m.hash === outOfOrder[0])?.tag;
+    problems.push(`${outOfOrder.length} applied migration(s) are not an unbroken prefix of this repository's journal (first: ${tag ?? outOfOrder[0]!.slice(0, 12)})`);
+  }
+  if (!applied.length && !outOfOrder.length) problems.push("no known migrations are recorded as applied");
   if (problems.length) return { ok: false, appliedMigrations: applied.length, unknownMigrations: unknown, problems, extra: [], missing: [], repaired: [] };
   await buildReference(opts.referenceUrl, applied);
   const [restored, reference] = await Promise.all([catalogSnapshot(opts.restoredUrl), catalogSnapshot(opts.referenceUrl)]);

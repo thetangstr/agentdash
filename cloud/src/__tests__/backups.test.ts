@@ -456,6 +456,23 @@ describe("off-box backup round trip", () => {
     expect(errs.join("\n")).toMatch(/not in this repository/);
   });
 
+  it("the applied migrations must be an unbroken prefix of the journal, not any subset", async () => {
+    const dump = await freshDump();
+    // Swapping the hashes of the first two recorded migrations keeps every hash known
+    // and unique — the old check accepted that as "applied"; the prefix rule refuses it.
+    const reordered = tamper(dump, (sql) =>
+      sql.replace(
+        /(COPY "drizzle"\."__drizzle_migrations" \([^)]*\) FROM stdin;\n1\t)([0-9a-f]{64})(\t[^\n]*\n2\t)([0-9a-f]{64})(\t)/,
+        (_m, a, h0, b, h1, c) => `${a}${h1}${b}${h0}${c}`,
+      ),
+    );
+    expect(reordered).not.toBe(dump);
+    const t = await sandboxDatabase();
+    const errs: string[] = [];
+    expect(await runRestoreTool(["replay", "--dump", reordered, "--into", t.url, "--reference", t.reference, "--migrations-dir", MIGRATIONS_DIR], { out: () => {}, err: (l) => errs.push(l) })).toBe(1);
+    expect(errs.join("\n")).toMatch(/unbroken prefix/);
+  });
+
   it("a hostile dump from a compromised box is refused at decrypt and at replay, and runs nothing", async () => {
     const pwned = path.join(work, "pwned");
     const hostileSql = [

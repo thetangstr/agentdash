@@ -39,6 +39,74 @@ export const FUNCTION_ALLOWLIST = new Set([
 /** Largest non-COPY statement accepted (an INSERT row with a big text value is the largest legitimate one). */
 export const MAX_STATEMENT_BYTES = 16 * 1024 * 1024;
 
+/**
+ * PostgreSQL whitespace: the six ASCII characters the backend's scanner
+ * treats as space (C-locale isspace). JavaScript's trim() also strips Unicode
+ * spaces (U+00A0, U+2028, …) that Postgres sees as ordinary characters, so it
+ * must never decide what counts as blank or a comment here — a line that only
+ * LOOKS empty to JS would be skipped while Postgres still saw it.
+ */
+const PG_LEADING_WS = /^[ \t\n\r\f\v]+/;
+const PG_TRAILING_WS = /[ \t\n\r\f\v]+$/;
+const PG_ONLY_WS = /^[ \t\n\r\f\v]*$/;
+
+/** trim() with PostgreSQL's whitespace set. */
+export function pgTrim(s: string): string {
+  return s.replace(PG_LEADING_WS, "").replace(PG_TRAILING_WS, "");
+}
+
+/** A line of nothing but PostgreSQL whitespace. */
+export function isPgBlankLine(line: string): boolean {
+  return PG_ONLY_WS.test(line);
+}
+
+/** A line whose first non-whitespace characters open a `--` comment, as Postgres sees it. */
+export function isPgCommentLine(line: string): boolean {
+  return line.replace(PG_LEADING_WS, "").startsWith("--");
+}
+
+/**
+ * The ONE `COPY … FROM stdin` header test. Both the guard and the dump
+ * splitter go through here so the two can never diverge — the earlier
+ * duplicate regexes accepted slightly different shapes. Whitespace is
+ * PostgreSQL's ASCII set, not JS `\s` (which also matches Unicode spaces the
+ * real parser would choke on anyway).
+ */
+const COPY_FROM_STDIN = /^COPY[ \t\r\f\v].+[ \t\r\f\v]FROM[ \t\r\f\v]+stdin[ \t\r\f\v]*;?$/i;
+
+/** The COPY command without its trailing `;`, or null when `line` is not a COPY-FROM-stdin header. */
+export function copyFromStdinCommand(line: string): string | null {
+  const t = pgTrim(line);
+  return COPY_FROM_STDIN.test(t) ? t.replace(/;$/, "") : null;
+}
+
+/** Leading blank lines and `--` comment lines, as PostgreSQL would classify them. */
+export function stripLeadingComments(statement: string): string {
+  const lines = statement.split("\n");
+  let i = 0;
+  while (i < lines.length && (isPgBlankLine(lines[i]!) || isPgCommentLine(lines[i]!))) i++;
+  return pgTrim(lines.slice(i).join("\n"));
+}
+
+/**
+ * A `COPY … FROM stdin` block (after any leading comments), split into
+ * command and TSV payload. Returns null for anything else, so ordinary DDL
+ * keeps its existing path. For big payloads prefer the streaming splitter in
+ * ./sql-restore.ts — this joins the data into one string.
+ */
+export function parseCopyFromStdin(statement: string): { command: string; payload: string } | null {
+  const all = statement.split("\n");
+  let i = 0;
+  while (i < all.length && (isPgBlankLine(all[i]!) || isPgCommentLine(all[i]!))) i++;
+  if (i >= all.length) return null;
+  const command = copyFromStdinCommand(all[i]!);
+  if (command === null) return null;
+  const lines = all.slice(i + 1);
+  const end = lines.findIndex((l) => l === "\\.");
+  const data = end === -1 ? lines : lines.slice(0, end);
+  return { command, payload: data.length ? `${data.join("\n")}\n` : "" };
+}
+
 let ready: Promise<void> | null = null;
 /** Load the parser (WASM) once; call before checkStatement. */
 export function initDumpGuard(): Promise<void> {
@@ -284,6 +352,10 @@ function checkTop(stmt: unknown): void {
       strings(b.vals, w);
       return;
     case "CreateExtensionStmt": {
+      // WITH SCHEMA stays allowed: backup-lib writes it to keep each extension
+      // in its recorded schema, and backups already in storage rely on it. It
+      // is only safe on a server with the March-2018 search_path fix, which
+      // replayDump (sql-restore.ts) enforces via server_version_num.
       fields(b, ["extname", "options"], w, { if_not_exists: true });
       if (b.if_not_exists !== true) fail(`${w}: only IF NOT EXISTS`);
       if (!EXTENSION_ALLOWLIST.has(String(b.extname))) fail(`extension ${String(b.extname)} is not on the allowlist`);
@@ -394,24 +466,17 @@ function checkTop(stmt: unknown): void {
   }
 }
 
-function stripLeadingComments(statement: string): string {
-  const lines = statement.split("\n");
-  let i = 0;
-  while (i < lines.length && (lines[i]!.trim() === "" || lines[i]!.trim().startsWith("--"))) i++;
-  return lines.slice(i).join("\n").trim();
-}
-
 /**
  * Why a statement must not be replayed, or null when it may. A COPY block is
- * checked on its header line only (the rest is TSV data, never parsed as SQL).
+ * checked on its header line only (the rest is TSV data, never parsed as SQL);
+ * parseCopyFromStdin is the single place that decides what is such a block.
  * Call initDumpGuard() first.
  */
 export function checkStatement(statement: string): string | null {
   const body = stripLeadingComments(statement);
   if (!body) return null;
-  const firstLine = body.split("\n")[0]!.trim();
-  const isCopy = /^COPY\s/i.test(firstLine) && /\sFROM\s+stdin\s*;?$/i.test(firstLine);
-  const sql = isCopy ? firstLine : body;
+  const copy = parseCopyFromStdin(body);
+  const sql = copy ? copy.command : body;
   if (Buffer.byteLength(sql, "utf8") > MAX_STATEMENT_BYTES) return `statement larger than ${MAX_STATEMENT_BYTES} bytes`;
   let parsed: { stmts?: Array<{ stmt?: unknown }> };
   try {
