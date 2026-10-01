@@ -106,7 +106,15 @@ describe("docs: markdown normalisation", () => {
     const tree = docsTree();
     const ref = listDocPages(tree)[0]!;
     const page = parseDocPage({ ...ref, file: "x/y.mdx" }, '---\ntitle: T\ndescription: "D"\n---\nimport A from "a";\n\nBody.', tree);
-    expect(page).toMatchObject({ title: "T", summary: "D", body: "Body." });
+    expect(page).toMatchObject({ title: "T", summary: "D", kind: "markdown", body: "Body." });
+  });
+
+  it("reads `kind: openapi` from front matter, and only that value", () => {
+    const tree = docsTree();
+    const ref = listDocPages(tree)[0]!;
+    expect(parseDocPage(ref, "---\ntitle: R\nkind: openapi\n---\nIntro.", tree).kind).toBe("openapi");
+    expect(parseDocPage(ref, "---\ntitle: R\nkind: something-else\n---\nIntro.", tree).kind).toBe("markdown");
+    expect(findDocPage("api/reference"), "the API reference is a bundled page").not.toBeNull();
   });
 });
 
@@ -272,6 +280,8 @@ describe("docs: the bundled set", () => {
     targets.set("docs/docs.json", readFileSync(path.join(DOCS_DIR, "docs.json"), "utf8"));
     targets.set("ui/src/generated/docs-search-index.json", JSON.stringify(searchIndex));
     targets.set("ui/src/generated/docs-routes.json", JSON.stringify(docsRoutes));
+    // Shipped as a static asset by the API reference page (components/docs/ApiReference.tsx).
+    targets.set("docs/api/openapi.yaml", readFileSync(path.join(DOCS_DIR, "api", "openapi.yaml"), "utf8"));
     for (const [name, text] of targets) {
       expect(forbiddenTokenOffsets(text), name).toEqual([]);
     }

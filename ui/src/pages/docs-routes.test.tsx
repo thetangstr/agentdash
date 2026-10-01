@@ -28,6 +28,13 @@ vi.mock("@/components/MarkdownBody", () => ({
   MarkdownBody: ({ children }: { children: string }) => <div data-testid="body">{children}</div>,
 }));
 
+// The API reference page renders Scalar, a large lazy chunk with its own
+// renderer; what it draws is Scalar's concern. Here it is a marker, so the test
+// can see that an `openapi` page mounts it and no other page does.
+vi.mock("@/components/docs/ApiReference", () => ({
+  default: () => <div data-testid="api-reference">API reference</div>,
+}));
+
 // Link (from @/lib/router) reads the selected company to prefix board routes.
 // /docs is a global root, so no company is selected and nothing is prefixed.
 vi.mock("@/context/CompanyContext", () => ({
@@ -94,6 +101,7 @@ describe("docs URLs", () => {
       prev: container.querySelector('a[rel="prev"]')?.getAttribute("href") ?? null,
       next: container.querySelector('a[rel="next"]')?.getAttribute("href") ?? null,
       text: container.textContent ?? "",
+      apiReference: container.querySelector('[data-testid="api-reference"]') !== null,
     };
   }
 
@@ -137,6 +145,16 @@ describe("docs URLs", () => {
       expect(rendered.prev).toBe(index > 0 ? `/docs/${pages[index - 1]!.slug}` : null);
       expect(rendered.next).toBe(index < pages.length - 1 ? `/docs/${pages[index + 1]!.slug}` : null);
     });
+  });
+
+  it("mounts the API reference on the openapi page, and only there", async () => {
+    const reference = pages.find((page) => page.slug === "api/reference");
+    expect(reference, "api/reference is in the nav").toBeDefined();
+    const rendered = await visit("/docs/api/reference", (current) => current.body !== "" && current.apiReference);
+    expect(rendered.heading).toBe(reference!.title);
+    expect(rendered.apiReference).toBe(true);
+    const other = await visit("/docs/api/authentication", (current) => current.body !== "");
+    expect(other.apiReference).toBe(false);
   });
 
   it("/docs lands on the first page of the first tab", async () => {
