@@ -19,6 +19,7 @@ import {
 } from "@paperclipai/shared";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { validate } from "../middleware/validate.js";
+import { assertAllowedGitHubSourceUrl } from "../services/github-fetch.js";
 import { isMkInviteCode } from "../lib/mk-invite-codes.js";
 import {
   accessService,
@@ -66,6 +67,14 @@ export interface CompanyRoutesOptions {
   // AgentDash (#102): when true, bypass the single-company-installation guard.
   // Set by the CLI onboard --allow-multi-company flag.
   allowMultiCompany?: boolean;
+}
+
+// AgentDash: GH #709 — reject a non-allowlisted GitHub import source with a clear 400
+// before any preview/import work (and before the server fetches anything).
+function assertImportSourceAllowed(source: { type: string; url?: string } | undefined) {
+  if (source?.type === "github" && typeof source.url === "string") {
+    assertAllowedGitHubSourceUrl(source.url);
+  }
 }
 
 export function companyRoutes(db: Db, storage?: StorageService, options: CompanyRoutesOptions = {}) {
@@ -282,6 +291,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.post("/import/preview", validate(companyPortabilityPreviewSchema), async (req, res) => {
     assertBoard(req);
     assertImportTargetAccess(req, req.body.target);
+    assertImportSourceAllowed(req.body.source);
     const preview = await portability.previewImport(req.body);
     res.json(preview);
   });
@@ -289,6 +299,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.post("/import", validate(companyPortabilityImportSchema), async (req, res) => {
     assertBoard(req);
     assertImportTargetAccess(req, req.body.target);
+    assertImportSourceAllowed(req.body.source);
     const actor = getActorInfo(req);
     const result = await portability.importBundle(req.body, req.actor.type === "board" ? req.actor.userId : null, {
       allowHostExecutionConfig: actorMaySetHostExecutionConfig(req.actor),
@@ -329,6 +340,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.post("/:companyId/imports/preview", validate(companyPortabilityPreviewSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "imports");
+    assertImportSourceAllowed(req.body.source);
     if (req.body.target.mode === "existing_company" && req.body.target.companyId !== companyId) {
       throw forbidden("Safe import route can only target the route company");
     }
@@ -345,6 +357,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.post("/:companyId/imports/apply", validate(companyPortabilityImportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "imports");
+    assertImportSourceAllowed(req.body.source);
     if (req.body.target.mode === "existing_company" && req.body.target.companyId !== companyId) {
       throw forbidden("Safe import route can only target the route company");
     }

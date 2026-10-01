@@ -8,6 +8,16 @@ import {
   resolveGitHubIssuesConfig,
   type GitHubIssuesConfig,
 } from "./github-issues.js";
+import { ghFetch } from "./github-fetch.js";
+
+// AgentDash: GH #709 — ghFetch no longer goes through global fetch (it pins the
+// connection to a validated address), so mock the GitHub seam instead.
+vi.mock("./github-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-fetch.js")>()),
+  ghFetch: vi.fn(),
+}));
+
+const ghFetchMock = vi.mocked(ghFetch);
 
 const config: GitHubIssuesConfig = {
   hostname: "github.com",
@@ -25,6 +35,7 @@ function jsonResponse(status: number, body: unknown) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  ghFetchMock.mockReset();
 });
 
 describe("resolveGitHubIssuesConfig", () => {
@@ -123,8 +134,7 @@ describe("buildIssueBody", () => {
 
 describe("createIssueReport", () => {
   it("posts a labelled issue and returns number + url", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
+    const fetchMock = ghFetchMock
       .mockResolvedValue(
         jsonResponse(201, { number: 42, html_url: "https://github.com/thetangstr/agentdash/issues/42" }),
       );
@@ -152,8 +162,7 @@ describe("createIssueReport", () => {
   });
 
   it("labels feature requests as enhancement", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
+    const fetchMock = ghFetchMock
       .mockResolvedValue(jsonResponse(201, { number: 7, html_url: "https://example.com/7" }));
 
     await createIssueReport({
@@ -171,8 +180,7 @@ describe("createIssueReport", () => {
   it("retries unlabelled when the repo rejects the labels", async () => {
     // The report matters more than its labels — a repo without `user-report`
     // must still capture what the person typed.
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
+    const fetchMock = ghFetchMock
       .mockResolvedValueOnce(jsonResponse(422, { message: "Validation Failed" }))
       .mockResolvedValueOnce(jsonResponse(201, { number: 9, html_url: "https://example.com/9" }));
 
@@ -191,7 +199,7 @@ describe("createIssueReport", () => {
   });
 
   it("reports a rejected credential as a server-side misconfiguration", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(401, { message: "Bad credentials" }));
+    ghFetchMock.mockResolvedValue(jsonResponse(401, { message: "Bad credentials" }));
     await expect(
       createIssueReport({
         config,
@@ -204,7 +212,7 @@ describe("createIssueReport", () => {
   });
 
   it("reports a missing repository distinctly", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(404, { message: "Not Found" }));
+    ghFetchMock.mockResolvedValue(jsonResponse(404, { message: "Not Found" }));
     await expect(
       createIssueReport({
         config,
@@ -217,7 +225,7 @@ describe("createIssueReport", () => {
   });
 
   it("rejects a 2xx that is not actually an issue", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(201, { unexpected: true }));
+    ghFetchMock.mockResolvedValue(jsonResponse(201, { unexpected: true }));
     await expect(
       createIssueReport({
         config,
