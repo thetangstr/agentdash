@@ -16,12 +16,15 @@ import { RailwayClient } from "./railway/client.js";
 import { provisionHandler } from "./railway/provisioner.js";
 import { loadMonitorConfig, startMonitor } from "./monitor/service.js";
 import { resumeHandler, suspendHandler } from "./monitor/suspend.js";
+import { tickRollout } from "./jobs/rollout.js";
+import { upgradeHandler } from "./jobs/upgrade.js";
 
 const log = createLogger({ base: { service: "cloud-control" } });
 const SWEEP_MS = 10 * 60_000;
 const READY_MAIL_MS = 20_000;
 const RELEASE_MS = 60_000;
 const PRUNE_MS = 60 * 60_000;
+const ROLLOUT_TICK_MS = 60_000;
 
 async function main() {
   const config = loadConfig();
@@ -54,6 +57,7 @@ async function main() {
 
   let runner: JobRunner | null = null;
   let sweep: NodeJS.Timeout | null = null;
+  let rolloutTimer: NodeJS.Timeout | null = null;
   if (config.railwayToken && config.railwayWorkspaceId) {
     const client = new RailwayClient({ token: config.railwayToken, log });
     const provision = provisionHandler({
@@ -75,8 +79,21 @@ async function main() {
         // AgentDash (SC-10, GH #771): suspend (web deployment removed) and wake.
         suspendHandler({ client, workspaceId: config.railwayWorkspaceId }),
         resumeHandler({ client, workspaceId: config.railwayWorkspaceId }),
+        // AgentDash (SC-12, GH #773): fleet upgrades.
+        upgradeHandler({
+          client,
+          workspaceId: config.railwayWorkspaceId,
+          edgeDomain: config.edgeDomain,
+          imageRepo: config.boxImageRepo,
+          sourceRepo: config.boxSourceRepo,
+          edgeLive: config.edgeLive,
+          alerter,
+        }),
       ] });
     runner.start();
+    // AgentDash (SC-12, GH #773): the rollout orchestrator, once a minute; all its state is in the database.
+    rolloutTimer = setInterval(() => void tickRollout(db, { log }).catch((err: unknown) => log.error("rollout tick failed", { err })), ROLLOUT_TICK_MS);
+    rolloutTimer.unref();
     const runSweep = () => void sweepCleanup(db, log, { alerter }).catch((err: unknown) => log.error("cleanup sweep failed", { err }));
     sweep = setInterval(runSweep, SWEEP_MS);
     sweep.unref();
@@ -116,6 +133,7 @@ async function main() {
   });
   const shutdown = () => {
     if (sweep) clearInterval(sweep);
+    if (rolloutTimer) clearInterval(rolloutTimer);
     for (const t of passes) clearInterval(t);
     monitor.stop();
     void (runner?.stop() ?? Promise.resolve()).finally(() => {

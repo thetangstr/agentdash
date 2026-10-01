@@ -44,6 +44,11 @@ export type EmailTokenPurpose = (typeof EMAIL_TOKEN_PURPOSES)[number];
 export const BOX_KINDS = ["dedicated", "shared"] as const; // `shared` reserved for Option B
 export type BoxKind = (typeof BOX_KINDS)[number];
 
+// AgentDash (GH #861): what a box is for. `demo` boxes hold upgrades by
+// default; `canary` boxes are the first wave of every fleet rollout (SC-12).
+export const BOX_PURPOSES = ["customer", "demo", "canary", "internal"] as const;
+export type BoxPurpose = (typeof BOX_PURPOSES)[number];
+
 export const BOX_STATES = [
   "requested",
   "waitlisted",
@@ -221,6 +226,8 @@ export const boxes = pgTable(
     deleteAfter: timestamp("delete_after", { withTimezone: true }),
     holdUpgrades: boolean("hold_upgrades").notNull().default(false),
     cohort: text("cohort"),
+    /** AgentDash (GH #861): customer | demo | canary | internal. */
+    purpose: text("purpose").$type<BoxPurpose>().notNull().default("customer"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -230,6 +237,7 @@ export const boxes = pgTable(
     index("boxes_state_idx").on(t.state),
     check("boxes_kind_ck", inList("kind", BOX_KINDS)),
     check("boxes_state_ck", inList("state", BOX_STATES)),
+    check("boxes_purpose_ck", inList("purpose", BOX_PURPOSES)),
   ],
 );
 
@@ -569,5 +577,94 @@ export const boxIdleNotices = pgTable(
   (t) => [
     uniqueIndex("box_idle_notices_period_uq").on(t.boxId, t.kind, t.idleSince),
     check("box_idle_notices_kind_ck", inList("kind", IDLE_NOTICE_KINDS)),
+  ],
+);
+
+// ---- Fleet upgrade (SC-12, GH #773) -------------------------------------
+
+export const ROLLOUT_STATES = ["running", "completed", "cancelled"] as const;
+export type RolloutState = (typeof ROLLOUT_STATES)[number];
+
+/**
+ * planned → queued (job enqueued) → running → succeeded, or → rolling_back →
+ * rolled_back | failed. `skipped` when a planned box became ineligible (held,
+ * no longer active, already on the release).
+ */
+export const BOX_UPGRADE_STATES = ["planned", "queued", "running", "rolling_back", "succeeded", "rolled_back", "failed", "skipped"] as const;
+export type BoxUpgradeState = (typeof BOX_UPGRADE_STATES)[number];
+export const BOX_UPGRADE_LIVE_STATES = ["queued", "running", "rolling_back"] as const satisfies readonly BoxUpgradeState[];
+export const BOX_UPGRADE_DONE_STATES = ["succeeded", "rolled_back", "failed", "skipped"] as const satisfies readonly BoxUpgradeState[];
+
+/**
+ * One fleet rollout of a release (spec §6.1). Its waves are planned once, at
+ * start, into box_upgrades; pausing is the global `rollout_paused` setting.
+ * At most one rollout runs at a time.
+ */
+export const rollouts = pgTable(
+  "rollouts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    releaseTag: text("release_tag").notNull(),
+    imageDigest: text("image_digest").notNull(),
+    /** The tag's commit, when GitHub answered: a box's health releaseCommit must match it when reported. */
+    releaseCommit: text("release_commit"),
+    state: text("state").$type<RolloutState>().notNull().default("running"),
+    /** The operator's "now": waves start outside the nightly window. */
+    ignoreWindow: boolean("ignore_window").notNull().default(false),
+    pausedReason: text("paused_reason"),
+    createdBy: text("created_by").notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("rollouts_one_running_uq").on(t.state).where(sql`state = 'running'`),
+    check("rollouts_state_ck", inList("state", ROLLOUT_STATES)),
+  ],
+);
+
+/**
+ * One box's upgrade: a planned member of a rollout wave, or (rollout_id null)
+ * an operator's single-box upgrade. The upgrade job (../jobs/upgrade.ts)
+ * records every fact it needs to resume or roll back here as it learns it.
+ */
+export const boxUpgrades = pgTable(
+  "box_upgrades",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    boxId: uuid("box_id")
+      .notNull()
+      .references(() => boxes.id),
+    rolloutId: uuid("rollout_id").references(() => rollouts.id),
+    wave: integer("wave").notNull().default(0),
+    state: text("state").$type<BoxUpgradeState>().notNull().default("planned"),
+    jobId: uuid("job_id").references(() => jobs.id),
+    toTag: text("to_tag").notNull(),
+    toDigest: text("to_digest").notNull(),
+    toCommit: text("to_commit"),
+    fromTag: text("from_tag"),
+    fromDigest: text("from_digest"),
+    fromBuildSource: text("from_build_source"),
+    fromSourceCommit: text("from_source_commit"),
+    fromDeploymentId: text("from_deployment_id"),
+    /** Pre-upgrade snapshot ids per volume ({ pg, web }). */
+    snapshots: jsonb("snapshots").$type<Record<string, unknown>>(),
+    deploymentId: text("deployment_id"),
+    rollbackDeploymentId: text("rollback_deployment_id"),
+    /** Why it was skipped, failed or rolled back (redacted). */
+    error: text("error"),
+    lastHealth: jsonb("last_health").$type<Record<string, unknown>>(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("box_upgrades_rollout_idx").on(t.rolloutId, t.wave, t.state),
+    index("box_upgrades_box_idx").on(t.boxId, t.createdAt),
+    uniqueIndex("box_upgrades_rollout_box_uq").on(t.rolloutId, t.boxId),
+    // At most one upgrade in flight per box (a rollout's and a single-box one cannot overlap).
+    uniqueIndex("box_upgrades_one_live_per_box_uq").on(t.boxId).where(sql`state in ('queued', 'running', 'rolling_back')`),
+    check("box_upgrades_state_ck", inList("state", BOX_UPGRADE_STATES)),
   ],
 );

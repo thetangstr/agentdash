@@ -13,6 +13,8 @@ import { isSettingKey, SettingValidationError, settingsService } from "../settin
 import { EdgeNotLive } from "../railway/edge-backfill.js";
 import type { FrontDoor } from "../front-door/service.js";
 import { type inviteService, parseCodeList } from "../invites.js";
+import type { ReleaseResolverDeps } from "../jobs/rollout.js";
+import { fleetRoutes, isBoxPurpose } from "./fleet.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
@@ -24,10 +26,14 @@ export interface InternalRouteDeps {
   invites?: ReturnType<typeof inviteService>;
   /** The fleet edge-secret back-fill (#807 review); absent without a Railway token. */
   edgeBackfill?: () => Promise<unknown>;
+  /** AgentDash (SC-12, GH #773): resolving a release to its GHCR digest for rollouts and single-box upgrades. */
+  fleet?: ReleaseResolverDeps;
 }
 
 export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps = {}): ExpressRouter {
   const router = Router();
+  // AgentDash (SC-12 GH #773, GH #861): rollouts, single-box upgrades, hold and purpose.
+  if (deps.fleet) router.use(fleetRoutes(db, log, deps.fleet));
 
   router.post("/fleet/edge-backfill", async (_req, res) => {
     if (!deps.edgeBackfill) {
@@ -85,20 +91,29 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
     }
   });
 
-  router.get("/boxes", async (_req, res) => {
+  router.get("/boxes", async (req, res) => {
+    // AgentDash (GH #861): `boxes list --purpose demo`.
+    const purpose = typeof req.query.purpose === "string" ? req.query.purpose : null;
+    if (purpose !== null && !isBoxPurpose(purpose)) {
+      res.status(400).json({ error: "purpose must be customer, demo, canary or internal" });
+      return;
+    }
     const rows = await db
       .select({
         id: boxes.id,
         slug: boxes.slug,
         kind: boxes.kind,
+        purpose: boxes.purpose,
         state: boxes.state,
         planTier: boxes.planTier,
         releaseTag: boxes.releaseTag,
+        holdUpgrades: boxes.holdUpgrades,
         publicUrl: boxes.publicUrl,
         claimedAt: boxes.claimedAt,
         createdAt: boxes.createdAt,
       })
       .from(boxes)
+      .where(purpose ? eq(boxes.purpose, purpose) : undefined)
       .orderBy(desc(boxes.createdAt))
       .limit(500);
     res.json({ boxes: rows });
@@ -275,7 +290,11 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
     };
   // AgentDash (GH #763): an operator-created box, provisioned under the same kill switch and daily cap.
   router.post("/boxes", async (req, res) => {
-    const { slug, email, releaseTag } = (req.body ?? {}) as { slug?: unknown; email?: unknown; releaseTag?: unknown };
+    const { slug, email, releaseTag, purpose } = (req.body ?? {}) as { slug?: unknown; email?: unknown; releaseTag?: unknown; purpose?: unknown };
+    if (purpose !== undefined && purpose !== null && !isBoxPurpose(purpose)) {
+      res.status(400).json({ error: "purpose must be customer, demo, canary or internal" });
+      return;
+    }
     if (typeof slug !== "string" || typeof email !== "string" || (releaseTag !== undefined && releaseTag !== null && typeof releaseTag !== "string")) {
       res.status(400).json({ error: 'body must be {"slug": "...", "email": "...", "releaseTag"?: "vYYYY.MDD.N"}' });
       return;
@@ -285,7 +304,11 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
       return;
     }
     try {
-      const r = await createBoxForOperator(db, { slug, email, releaseTag: (releaseTag as string | undefined) ?? null }, "admin-cli");
+      const r = await createBoxForOperator(
+        db,
+        { slug, email, releaseTag: (releaseTag as string | undefined) ?? null, ...(isBoxPurpose(purpose) ? { purpose } : {}) },
+        "admin-cli",
+      );
       log.info("box created by operator", { slug, outcome: r.provisioning.outcome });
       res.status(201).json({ slug, ...r });
     } catch (err) {

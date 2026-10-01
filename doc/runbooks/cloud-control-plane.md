@@ -112,3 +112,31 @@ The old instance is the Railway project `agentdash`, service `web` (`web-product
 4. **Scale to zero.** Remove the `web` deployment (`railway down` in the project, or scale replicas to 0). Keep Postgres and the volume. Confirm `https://web-production-33a3b6.up.railway.app/api/health` no longer answers and that www and the self-hosted validator still work (section 5, steps 3 to 5).
 5. **Wait 30 days.** Anything that still needed it surfaces here; scaling back up restores it as it was.
 6. **Delete.** The founder deletes the project in the Railway dashboard, then records the date, the export's location and checksums on #760 and closes it.
+
+## 7. Box purpose and fleet upgrades (GH #861, SC-12 GH #773)
+
+**Purpose.** Every box has a `purpose`: `customer` (default), `demo`, `canary` or `internal` (migration `0009_fleet_upgrade`). `demo` boxes are created with `hold_upgrades` on, so rollouts leave them on their pinned release. `canary` boxes are the first wave of every rollout: mark the launch box (or a dedicated canary box) as one.
+
+```sh
+A="pnpm --filter @agentdash/cloud-control admin"
+$A boxes create demo-acme you@agentdash.cloud v2026.930.1 --purpose demo
+$A boxes list --purpose demo
+$A boxes purpose launch canary
+$A boxes hold <slug>      # rollouts skip it; also for a customer who asks us to wait
+$A boxes unhold <slug>
+```
+
+**What an upgrade does, per box** (`cloud/src/jobs/upgrade.ts`, one `upgrade` job; every step is recorded in `box_upgrades`, so a restarted control plane resumes it and never deploys twice): a Railway snapshot of both volumes; the web service pointed at the release's GHCR image **by digest**; `AGENTDASH_RELEASE_TAG` set (variables already upserted with skipDeploys, such as close-signup or the edge secret, ride this deploy); one deploy, waited to SUCCESS (15 min cap); then `/api/health` must report the exact `releaseTag` (and `releaseCommit`, when the box reports one, must match the tag's commit) on the Railway host and, once `CLOUD_EDGE_LIVE` is true, through the router (5 and 2 min caps). On a failed deploy or a health mismatch it restores the previous image and tag, runs Railway's rollback to the previous deployment, checks the old release answers, sets `hold_upgrades` on the box, and pages ops. Migrations apply on boot: a rollback across a migration needs the pre-upgrade snapshot (hosted-box runbook §10).
+
+**One box** (no rollout): `$A boxes upgrade <slug> [release]` queues it for the next window opening; `--now` runs it at once. The release defaults to `target_release`; a tag without a GHCR image is refused.
+
+**A fleet rollout:**
+
+1. `$A settings set target_release v2026.1001.0` (the image must be on GHCR; `rollout start` refuses a tag without one).
+2. `$A rollout start` plans the waves and prints them: wave 0 the canary boxes, wave 1 the oldest 10 percent of the rest (at least one), then batches of 5, oldest first. Held, suspended and already-current boxes are listed as skipped.
+3. Waves start only inside `upgrade_window` (default `02:00-05:00` in `upgrade_window_tz`, default `America/Los_Angeles`; `null` means always). The orchestrator ticks every minute and starts the next wave once the previous one has finished. `rollout start --now` ignores the window for that rollout; `$A rollout tick` runs a pass at once.
+4. `$A rollout status` shows the plan, each box's state, the counts, the window and when it next opens.
+5. **The first failure pauses the rollout** (`rollout_paused` true, audited as a setting change, with the reason on the rollout) and pages ops. Members of the same wave that had not started go back to planned. Investigate the held box (its `box_upgrades` row has the error and the last health answer; `box_events` has the trail), then `$A rollout resume`. The failed box stays held until `$A boxes unhold <slug>`; upgrade it alone with `boxes upgrade <slug> --now` once fixed.
+6. `$A rollout pause [reason]` stops new upgrades by hand (in-flight ones finish); `$A rollout cancel` drops the remaining planned boxes.
+
+**Not covered yet:** the Railway snapshot and rollback mutations (`volumeInstanceBackupCreate`, `deploymentRollback`) are exercised against the fake Railway only; the first live run on two boxes (#773 acceptance) confirms them. Boxes do not report `releaseCommit` until their image carries a release marker, so the tag is the check until then.
