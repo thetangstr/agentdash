@@ -55,6 +55,11 @@ import {
   parseProjectExecutionWorkspacePolicy,
 } from "./execution-workspace-policy.js";
 import { mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
+import {
+  EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL,
+  exhaustedRecoveryBudgetAllowsRun,
+  exhaustedRecoveryBudgetAllowsRunSql,
+} from "./issue-recovery-budget.js";
 import { instanceSettingsService, readInstanceExperimentalSettings, readInstanceGeneralSettings } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
@@ -2349,6 +2354,9 @@ export function issueService(db: Db) {
           eq(issues.status, "in_progress"),
           eq(issues.assigneeAgentId, input.actorAgentId),
           eq(issues.checkoutRunId, input.expectedCheckoutRunId),
+          // AgentDash (GH #891 F-A): never hand an exhausted issue to a run
+          // the permit did not bind.
+          exhaustedRecoveryBudgetAllowsRunSql(input.actorRunId, input.actorAgentId),
         ),
       )
       .returning({
@@ -2413,14 +2421,16 @@ export function issueService(db: Db) {
     actorRunId: string | null,
     executor: DbReader = db,
   ): Promise<CheckoutOwnerEvaluation> {
-    const current = await executor.select({
+    const row = await executor.select({
       id: issues.id,
       status: issues.status,
       assigneeAgentId: issues.assigneeAgentId,
       checkoutRunId: issues.checkoutRunId,
       executionRunId: issues.executionRunId,
+      executionState: issues.executionState,
     }).from(issues).where(eq(issues.id, id)).then((rows) => rows[0] ?? null);
-    if (!current) throw notFound("Issue not found");
+    if (!row) throw notFound("Issue not found");
+    const { executionState, ...current } = row;
     const clearExecutionRunId = current.executionRunId &&
       await isTerminalOrMissingHeartbeatRun(current.executionRunId, executor)
       ? current.executionRunId : null;
@@ -2439,6 +2449,18 @@ export function issueService(db: Db) {
         assigneeAgentId: current.assigneeAgentId,
         checkoutRunId: current.checkoutRunId,
         executionRunId: effectiveExecutionRunId,
+        actorAgentId,
+        actorRunId,
+      });
+    }
+    // AgentDash (GH #891 F-A): adopting the issue hands its execution to this
+    // run. On an exhausted issue only the permit-bound run may take it — an
+    // unrelated run of the same agent (a timer run, another issue's run) must
+    // not adopt it through an ordinary mutation.
+    if (!sameRun && !exhaustedRecoveryBudgetAllowsRun(executionState, { runId: actorRunId, agentId: actorAgentId })) {
+      throw conflict(EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL, {
+        issueId: current.id,
+        code: "task_recovery_budget_exhausted",
         actorAgentId,
         actorRunId,
       });
@@ -3722,11 +3744,24 @@ export function issueService(db: Db) {
 
     checkout: async (id: string, agentId: string, expectedStatuses: string[], checkoutRunId: string | null) => {
       const issueCompany = await db
-        .select({ companyId: issues.companyId })
+        .select({ companyId: issues.companyId, executionState: issues.executionState })
         .from(issues)
         .where(eq(issues.id, id))
         .then((rows) => rows[0] ?? null);
       if (!issueCompany) throw notFound("Issue not found");
+      // AgentDash (GH #891 F-A): an exhausted issue is taken only by the exact
+      // run a named-human permit bound (and the claim gate let through). The
+      // claim gate only sees runs whose context names this issue, so without
+      // this an agent in an unrelated live run could check it out of
+      // `blocked` and work it with no permit. Re-checked atomically below.
+      if (!exhaustedRecoveryBudgetAllowsRun(issueCompany.executionState, { runId: checkoutRunId, agentId })) {
+        throw conflict(EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL, {
+          issueId: id,
+          code: "task_recovery_budget_exhausted",
+          agentId,
+          checkoutRunId,
+        });
+      }
       await assertAssignableAgent(issueCompany.companyId, agentId);
 
       const now = new Date();
@@ -3778,6 +3813,7 @@ export function issueService(db: Db) {
             inArray(issues.status, expectedStatuses),
             or(isNull(issues.assigneeAgentId), sameRunAssigneeCondition),
             executionLockCondition,
+            exhaustedRecoveryBudgetAllowsRunSql(checkoutRunId, agentId),
           ),
         )
         .returning()
@@ -3823,6 +3859,7 @@ export function issueService(db: Db) {
               eq(issues.assigneeAgentId, agentId),
               isNull(issues.checkoutRunId),
               or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId)),
+              exhaustedRecoveryBudgetAllowsRunSql(checkoutRunId, agentId),
             ),
           )
           .returning()

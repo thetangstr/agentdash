@@ -126,7 +126,7 @@ import {
 } from "./token-ceiling.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
 import { stewardInboxService } from "./steward-inbox.js";
-import { logActivity, publishPluginDomainEvent, type LogActivityInput } from "./activity-log.js";
+import { insertActivity, logActivity, publishActivity, publishPluginDomainEvent, type LogActivityInput } from "./activity-log.js";
 import { agentInstructionRefreshService } from "./agent-instruction-refresh.js";
 import {
   buildWorkspaceReadyComment,
@@ -222,6 +222,9 @@ const DETACHED_PROCESS_ERROR_CODE = "process_detached";
 /** The liveness reaper's verdict when it can no longer see a run's child process. */
 const PROCESS_LOST_ERROR_CODE = "process_lost";
 const TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE = "task_recovery_budget_exhausted";
+// AgentDash (GH #891): side effects (live events, run events, activity
+// publication) collected inside a transaction and run only after it commits.
+type PostCommitEffects = Array<() => void | Promise<void>>;
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INLINE_WAKE_COMMENTS = 8;
@@ -3176,7 +3179,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     patch?: Partial<typeof heartbeatRuns.$inferInsert>,
     // AgentDash (OBS-5): a compare-and-set, so a caller acting on a stale read
     // (the first-output deadline) cannot overwrite a run that already finished.
-    options?: { onlyIfStatus?: string },
+    // AgentDash (GH #891): inside a caller's transaction, pass deferPublish so
+    // live/plugin events go out only after that transaction commits.
+    options?: { onlyIfStatus?: string; deferPublish?: PostCommitEffects },
     executor: Db = db,
   ) {
     const updated = await executor
@@ -3194,7 +3199,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .returning()
       .then((rows) => rows[0] ?? null);
 
-    if (updated) {
+    if (updated && options?.deferPublish) {
+      const run = updated;
+      options.deferPublish.push(() => publishRunStatusChange(run));
+    } else if (updated) {
+      publishRunStatusChange(updated);
+    }
+
+    return updated;
+  }
+
+  function publishRunStatusChange(updated: typeof heartbeatRuns.$inferSelect) {
+    {
       publishLiveEvent({
         companyId: updated.companyId,
         type: "heartbeat.run.status",
@@ -3227,8 +3243,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         });
       }
     }
-
-    return updated;
   }
 
   function publishRunLifecyclePluginEvent(run: typeof heartbeatRuns.$inferSelect) {
@@ -3376,14 +3390,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   async function cancelQueuedRunForRecoveryBudget(
     run: typeof heartbeatRuns.$inferSelect,
     reason: string,
-    executor: Db = db,
+    executor: Db,
+    postCommit: PostCommitEffects,
   ) {
     const now = new Date();
     const cancelled = await setRunStatus(run.id, "cancelled", {
       finishedAt: now,
       error: reason,
       errorCode: TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE,
-    }, undefined, executor);
+    }, { deferPublish: postCommit }, executor);
     await setWakeupStatus(run.wakeupRequestId, "skipped", {
       finishedAt: now,
       error: reason,
@@ -3461,7 +3476,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const dimensions = input.exhaustedBy.length > 0
       ? input.exhaustedBy.join(", ")
       : "persisted aggregate limit";
-    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. No further run starts on this issue until a board user either clears the recovery block with "Clear recovery block & retry" or authorizes exactly one run through the named-human task_recovery.remediate operation. Moving the issue out of \`blocked\`, reopening it with a comment or reassigning it does not clear the block, and the run it would start is refused. Comments stay on the issue for the next permitted run.`;
+    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. No further run starts on this issue until a board user either clears the recovery block with "Clear recovery block & retry" or uses "Authorize one run" on the issue page to let exactly one run go ahead while the block stays. Moving the issue out of \`blocked\`, reopening it with a comment or reassigning it does not clear the block, and the run it would start is refused. Comments stay on the issue for the next permitted run.`;
 
     // One visible comment per exhaustion: a comment from before the last
     // human clear belongs to the window that clear closed.
@@ -3513,6 +3528,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     issueId: string,
     agent: typeof agents.$inferSelect,
     executor: Db,
+    // AgentDash (GH #891): run events, live events and activity publication
+    // for this gate go here and run only after the claim transaction commits.
+    postCommit: PostCommitEffects,
   ): Promise<{ blocked: boolean; permit: Record<string, unknown> | null }> {
     const issue = await executor
       .select()
@@ -3547,8 +3565,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // AgentDash (review F3): the marker is never cleared — a named-human
       // remediation permit is the only way past it. Point at the permit
       // operation, not at clearing the exhausted recovery state.
-      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Only the exact run a confirmed task_recovery.remediate permit names can proceed until a board user clears the recovery block with the issue's "Clear recovery block & retry" action; moving the issue out of blocked, commenting, reassigning or starting an ordinary wake does not clear it.`;
-      await cancelQueuedRunForRecoveryBudget(run, reason, executor);
+      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Only the one run a board user authorizes with "Authorize one run" can proceed until a board user clears the recovery block with the issue's "Clear recovery block & retry" action; moving the issue out of blocked, commenting, reassigning or starting an ordinary wake does not clear it.`;
+      await cancelQueuedRunForRecoveryBudget(run, reason, executor, postCommit);
       await ensureTaskRecoveryBudgetCommentOnceTx(executor, {
         run,
         issueId,
@@ -3580,7 +3598,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const now = new Date();
     const usageSummary = formatTaskRecoveryBudgetUsage(decision.usage, limits);
-    const reason = `Automatic recovery budget exhausted (${exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further provider run will start until a board user clears the recovery block or a named-human task_recovery.remediate permit authorizes one bound run on this issue.`;
+    const reason = `Automatic recovery budget exhausted (${exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further provider run will start until a board user clears the recovery block or authorizes exactly one run on this issue ("Authorize one run" on the issue page).`;
     const recoveryBudget = {
       status: "exhausted",
       exhaustedBy,
@@ -3604,7 +3622,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       })
       .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)));
 
-    const cancelled = await cancelQueuedRunForRecoveryBudget(run, reason, executor);
+    const cancelled = await cancelQueuedRunForRecoveryBudget(run, reason, executor, postCommit);
     if (!cancelled) return { blocked: true, permit: null };
 
     const siblingRuns = await executor
@@ -3623,7 +3641,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         ),
       );
     for (const sibling of siblingRuns) {
-      await cancelQueuedRunForRecoveryBudget(sibling, reason, executor);
+      await cancelQueuedRunForRecoveryBudget(sibling, reason, executor, postCommit);
     }
 
     await ensureTaskRecoveryBudgetCommentOnceTx(executor, {
@@ -3632,14 +3650,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       usageSummary,
       exhaustedBy,
     });
-    await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
-      eventType: "lifecycle",
-      stream: "system",
-      level: "error",
-      message: reason,
-      payload: { recoveryBudget },
+    // AgentDash (GH #891): the run event is written on the main pool and the
+    // activity row's live/plugin events are broadcast — both only after the
+    // claim transaction commits, so a rolled-back trip never announces itself.
+    postCommit.push(async () => {
+      await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "error",
+        message: reason,
+        payload: { recoveryBudget },
+      });
     });
-    await logActivity(executor, {
+    const exhaustedActivity = await insertActivity(executor, {
       companyId: run.companyId,
       actorType: "system",
       actorId: "system",
@@ -3650,6 +3673,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       entityId: issueId,
       details: recoveryBudget,
     });
+    postCommit.push(() => publishActivity(exhaustedActivity));
     return { blocked: true, permit: null };
   }
 
@@ -4860,7 +4884,77 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     });
   }
 
+  // AgentDash (GH #891): a permit-bound run that an earlier start check
+  // (agent not invokable, budget, quota, dependency, staleness, a hold, …)
+  // cancelled can never claim its permit. Finalize the permit as denied right
+  // away so the issue page stops saying a run is waiting to start; the next
+  // authorization mints a fresh permit. Guarded so it only touches a permit
+  // still authorized for THIS run, and only once the run is terminal.
+  async function denyPermitOfRefusedBoundRun(run: typeof heartbeatRuns.$inferSelect) {
+    const context = parseObject(run.contextSnapshot);
+    if (context.taskRecoveryPermit !== true) return;
+    const issueId = taskRecoveryRunIssueId(run);
+    if (!issueId) return;
+    const current = await db
+      .select({ status: heartbeatRuns.status, error: heartbeatRuns.error, errorCode: heartbeatRuns.errorCode })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, run.id))
+      .then((rows) => rows[0] ?? null);
+    if (current && (current.status === "queued" || current.status === "scheduled_retry" || current.status === "running")) return;
+    const now = new Date();
+    const reason = current?.error
+      ? `the authorized run was stopped before it started: ${current.error}`
+      : "the authorized run was stopped before it started";
+    const denied = await db
+      .update(issues)
+      .set({
+        executionState: sql`jsonb_set(${issues.executionState}, '{recoveryBudget,remediation}', (${issues.executionState} -> 'recoveryBudget' -> 'remediation') || ${JSON.stringify({ status: "denied", deniedAt: now.toISOString(), denialReason: reason.slice(0, 1000) })}::jsonb)`,
+        updatedAt: now,
+      })
+      .where(and(
+        eq(issues.id, issueId),
+        eq(issues.companyId, run.companyId),
+        sql`${issues.executionState} -> 'recoveryBudget' -> 'remediation' ->> 'status' = 'authorized'`,
+        sql`${issues.executionState} -> 'recoveryBudget' -> 'remediation' ->> 'runId' = ${run.id}`,
+      ))
+      .returning({ executionState: issues.executionState })
+      .then((rows) => rows[0] ?? null);
+    if (!denied) return;
+    const permit = parseObject(parseObject(parseObject(denied.executionState).recoveryBudget).remediation);
+    await logActivity(db, {
+      companyId: run.companyId,
+      actorType: "system",
+      actorId: "system",
+      agentId: run.agentId,
+      runId: run.id,
+      action: "issue.task_recovery_permit_denied",
+      entityType: "issue",
+      entityId: issueId,
+      details: {
+        runId: run.id,
+        actionHandleId: typeof permit.actionHandleId === "string" ? permit.actionHandleId : null,
+        // Not "authorizedBy…": activity-detail keys containing "auth" are redacted.
+        permitGrantedByUserId: typeof permit.authorizedByUserId === "string" ? permit.authorizedByUserId : null,
+        runStatus: current?.status ?? null,
+        runErrorCode: current?.errorCode ?? null,
+        reason,
+      },
+    });
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
+    const claimed = await claimQueuedRunGated(run);
+    if (!claimed) {
+      try {
+        await denyPermitOfRefusedBoundRun(run);
+      } catch (err) {
+        logger.warn({ err, runId: run.id }, "claimQueuedRun: failed to finalize the permit of a refused bound run");
+      }
+    }
+    return claimed;
+  }
+
+  async function claimQueuedRunGated(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
     if (!agent) {
@@ -4987,6 +5081,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const claimedAt = new Date();
+    const claimPostCommit: PostCommitEffects = [];
     const claim = await db.transaction(async tx => {
       await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, run.companyId)).for("no key update");
       if (await workspacePersistenceHold(tx, run.companyId, run.agentId, issueId)) return { workspaceRecovery: true, blockedIssueId: null, run: null };
@@ -5013,7 +5108,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // earlier return) leaves it authorized for a fresh prepare/confirm.
       let consumedPermit: Record<string, unknown> | null = null;
       if (recoveryIssueId) {
-        const verdict = await enforceTaskRecoveryBudget(run, recoveryIssueId, agent, tx as unknown as Db);
+        const verdict = await enforceTaskRecoveryBudget(run, recoveryIssueId, agent, tx as unknown as Db, claimPostCommit);
         if (verdict.blocked) return { blockedIssueId: null, run: null, recoveryBlocked: true };
         consumedPermit = verdict.permit;
       }
@@ -5025,6 +5120,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       return { blockedIssueId: null, run: claimed ?? null, consumedPermit };
     });
+    // AgentDash (GH #891): the claim transaction has committed — only now do
+    // the recovery gate's run events and live/activity events go out.
+    for (const effect of claimPostCommit) {
+      try {
+        await effect();
+      } catch (err) {
+        logger.warn({ err, runId: run.id }, "claimQueuedRun: post-commit recovery-budget effect failed");
+      }
+    }
     if (claim.recoveryBlocked) {
       logger.info(
         { runId: run.id, issueId: recoveryIssueId, errorCode: TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE },
@@ -5050,16 +5154,23 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // marker.
     if (claim.deniedPermit) {
       const permit = claim.deniedPermit;
+      // AgentDash (GH #891): the system denied it; the authorizer is a detail.
       await logActivity(db, {
         companyId: run.companyId,
-        actorType: "user",
-        actorId: typeof permit.authorizedByUserId === "string" ? permit.authorizedByUserId : "unknown",
+        actorType: "system",
+        actorId: "system",
         agentId: run.agentId,
         runId: run.id,
         action: "issue.task_recovery_permit_denied",
         entityType: "issue",
         entityId: recoveryIssueId!,
-        details: { runId: run.id, actionHandleId: permit.actionHandleId ?? null, reason: "bound run was not claimed; permit produced no execution" },
+        details: {
+          runId: run.id,
+          actionHandleId: permit.actionHandleId ?? null,
+          // Not "authorizedBy…": activity-detail keys containing "auth" are redacted.
+          permitGrantedByUserId: typeof permit.authorizedByUserId === "string" ? permit.authorizedByUserId : null,
+          reason: "bound run was not claimed; permit produced no execution",
+        },
       });
       return null;
     }
@@ -5080,20 +5191,30 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const claimed = claim.run;
     if (!claimed) return null;
     // AgentDash (review F2a): the permit was spent inside the claim tx and the
-    // CAS won — publish the consumption receipt post-commit, attributed to the
-    // named human who authorized it.
+    // CAS won — publish the consumption receipt post-commit. GH #891: the
+    // system consumed it at claim, so the system is the actor; the person who
+    // authorized the run is recorded in details (issue.task_recovery_authorized
+    // carries their own action).
     if (claim.consumedPermit) {
       const permit = claim.consumedPermit;
       await logActivity(db, {
         companyId: claimed.companyId,
-        actorType: "user",
-        actorId: typeof permit.authorizedByUserId === "string" ? permit.authorizedByUserId : "unknown",
+        actorType: "system",
+        actorId: "system",
         agentId: claimed.agentId,
         runId: claimed.id,
         action: "issue.task_recovery_permit_consumed",
         entityType: "issue",
         entityId: recoveryIssueId!,
-        details: { runId: claimed.id, actionHandleId: permit.actionHandleId ?? null, sourceRunId: permit.sourceRunId ?? null, refusedRunId: permit.refusedRunId ?? null },
+        details: {
+          runId: claimed.id,
+          actionHandleId: permit.actionHandleId ?? null,
+          // Not "authorizedBy…": activity-detail keys containing "auth" are redacted.
+          permitGrantedByUserId: typeof permit.authorizedByUserId === "string" ? permit.authorizedByUserId : null,
+          permitGrantedVia: typeof permit.authorizedVia === "string" ? permit.authorizedVia : null,
+          sourceRunId: permit.sourceRunId ?? null,
+          refusedRunId: permit.refusedRunId ?? null,
+        },
       });
     }
 

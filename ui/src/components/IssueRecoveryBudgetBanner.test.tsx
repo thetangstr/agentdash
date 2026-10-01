@@ -3,7 +3,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { authorizedRecoveryRun, IssueRecoveryBudgetBanner, recoveryBudgetClearedToastBody } from "./IssueRecoveryBudgetBanner";
+import {
+  authorizedRecoveryRun,
+  IssueRecoveryBudgetBanner,
+  recoveryBudgetClearedToastBody,
+  unusedRecoveryRunOutcome,
+} from "./IssueRecoveryBudgetBanner";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -67,7 +72,9 @@ describe("IssueRecoveryBudgetBanner", () => {
     expect(banner).toContain("clears the block, or authorizes exactly one run");
     const detail = container.querySelector("[data-testid='issue-recovery-budget-explicit-clear']")?.textContent ?? "";
     expect(detail).toContain("The run that would start is refused too.");
-    expect(detail).toContain("task_recovery.remediate");
+    // GH #891: plain language for admins — no internal operation names.
+    expect(detail).not.toContain("task_recovery");
+    expect(detail).toContain("authorize one run");
     // #877's interim wording is gone: an ordinary run no longer goes ahead.
     expect(banner).not.toContain("can still go ahead");
     expect(banner).not.toContain("Comments still reach the assignee");
@@ -96,6 +103,139 @@ describe("IssueRecoveryBudgetBanner", () => {
     const button = container.querySelector("button");
     expect(button?.disabled).toBe(true);
     expect(button?.textContent).toBe("Clearing...");
+  });
+});
+
+describe("Authorize one run (GH #891)", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const flush = async () => {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+
+  it("is hidden when the page passes no authorize handlers", () => {
+    act(() => {
+      root.render(<IssueRecoveryBudgetBanner executionState={exhaustedState} isClearing={false} onClear={() => {}} />);
+    });
+    expect(container.querySelector("[data-testid='issue-recovery-budget-authorize-run']")).toBeNull();
+  });
+
+  it("reviews first, then authorizes against the reviewed preconditions after an explicit confirm", async () => {
+    const preconditions = { exhaustedAt: "2026-10-01T10:00:00.000Z", pendingPermitStatus: null };
+    const onPreview = vi.fn().mockResolvedValue({
+      readback: { context: { issue: { assigneeAgentName: "Maya" } } },
+      preconditions,
+    });
+    const onAuthorize = vi.fn().mockResolvedValue(undefined);
+    act(() => {
+      root.render(
+        <IssueRecoveryBudgetBanner
+          executionState={exhaustedState}
+          isClearing={false}
+          onClear={() => {}}
+          onPreviewAuthorizeRun={onPreview}
+          onAuthorizeRun={onAuthorize}
+        />,
+      );
+    });
+    const open = container.querySelector<HTMLButtonElement>("[data-testid='issue-recovery-budget-authorize-run']");
+    expect(open?.textContent).toBe("Authorize one run");
+    act(() => open!.click());
+    await flush();
+    expect(onPreview).toHaveBeenCalledTimes(1);
+    // Opening the dialog authorizes nothing.
+    expect(onAuthorize).not.toHaveBeenCalled();
+    const dialog = document.body.querySelector("[data-testid='issue-recovery-budget-authorize-dialog']");
+    expect(dialog?.textContent).toContain("Maya gets exactly one run on this issue");
+    expect(dialog?.textContent).toContain("recovery block stays");
+    expect(dialog?.textContent).not.toContain("task_recovery");
+    const confirm = document.body.querySelector<HTMLButtonElement>("[data-testid='issue-recovery-budget-authorize-confirm']");
+    act(() => confirm!.click());
+    await flush();
+    expect(onAuthorize).toHaveBeenCalledWith(preconditions);
+  });
+
+  it("shows the server's refusal and does not authorize", async () => {
+    const onPreview = vi.fn().mockRejectedValue(new Error("Only a company admin, or a person who manages this issue's agent, can authorize a run."));
+    const onAuthorize = vi.fn();
+    act(() => {
+      root.render(
+        <IssueRecoveryBudgetBanner
+          executionState={exhaustedState}
+          isClearing={false}
+          onClear={() => {}}
+          onPreviewAuthorizeRun={onPreview}
+          onAuthorizeRun={onAuthorize}
+        />,
+      );
+    });
+    act(() => container.querySelector<HTMLButtonElement>("[data-testid='issue-recovery-budget-authorize-run']")!.click());
+    await flush();
+    expect(document.body.querySelector("[data-testid='issue-recovery-budget-authorize-error']")?.textContent)
+      .toContain("Only a company admin");
+    const confirm = document.body.querySelector<HTMLButtonElement>("[data-testid='issue-recovery-budget-authorize-confirm']");
+    expect(confirm?.disabled).toBe(true);
+    expect(onAuthorize).not.toHaveBeenCalled();
+  });
+
+  it("is disabled while a run is already authorized", () => {
+    const state = {
+      recoveryBudget: { ...exhaustedState.recoveryBudget, remediation: { status: "authorized", expiresAt: "2026-10-01T12:00:00.000Z" } },
+    };
+    act(() => {
+      root.render(
+        <IssueRecoveryBudgetBanner
+          executionState={state}
+          isClearing={false}
+          onClear={() => {}}
+          onPreviewAuthorizeRun={vi.fn()}
+          onAuthorizeRun={vi.fn()}
+        />,
+      );
+    });
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='issue-recovery-budget-authorize-run']")?.disabled).toBe(true);
+  });
+
+  it("says when the last authorized run never started, instead of waiting forever", () => {
+    const state = {
+      recoveryBudget: {
+        ...exhaustedState.recoveryBudget,
+        remediation: { status: "denied", denialReason: "the authorized run was stopped before it started: Run quota exceeded" },
+      },
+    };
+    act(() => {
+      root.render(<IssueRecoveryBudgetBanner executionState={state} isClearing={false} onClear={() => {}} />);
+    });
+    expect(container.querySelector("[data-testid='issue-recovery-budget-authorized-run']")).toBeNull();
+    const unused = container.querySelector("[data-testid='issue-recovery-budget-unused-run']")?.textContent ?? "";
+    expect(unused).toContain("The last authorized run did not start");
+    expect(unused).toContain("Run quota exceeded");
+    expect(unused).toContain("Authorize again");
+  });
+});
+
+describe("unusedRecoveryRunOutcome", () => {
+  it("reports only a denied or expired permit", () => {
+    const withPermit = (status: string) => ({ recoveryBudget: { status: "exhausted", remediation: { status, denialReason: "x" } } });
+    expect(unusedRecoveryRunOutcome(withPermit("denied"))).toEqual({ status: "denied", reason: "x" });
+    expect(unusedRecoveryRunOutcome(withPermit("expired"))).toEqual({ status: "expired", reason: "x" });
+    for (const status of ["authorized", "consumed"]) expect(unusedRecoveryRunOutcome(withPermit(status))).toBeNull();
+    expect(unusedRecoveryRunOutcome(null)).toBeNull();
   });
 });
 

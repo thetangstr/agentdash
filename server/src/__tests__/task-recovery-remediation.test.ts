@@ -419,8 +419,19 @@ describeEmbeddedPostgres('task recovery permit (named-human prepare/confirm)', (
         }
 
         expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runA)))[0].status).toBe('cancelled');
-        // Dead but truthful: still authorized until a fresh confirm finalizes it.
-        expect(await markerOf(issueId)).toMatchObject({ recoveryBudget: { status: 'exhausted', remediation: { status: 'authorized', runId: runA } } });
+        if (variant === 'hold') {
+          // GH #891: a start check inside the claim path refused the bound
+          // run, so the system finalizes the permit as denied right away —
+          // the issue page no longer says a run is waiting to start.
+          expect(await markerOf(issueId)).toMatchObject({ recoveryBudget: { status: 'exhausted', remediation: { status: 'denied', runId: runA } } });
+          const denied = await db.select().from(activityLog).where(and(eq(activityLog.companyId, h.company.id), eq(activityLog.action, 'issue.task_recovery_permit_denied')));
+          expect(denied).toHaveLength(1);
+          expect(denied[0]).toMatchObject({ actorType: 'system', actorId: 'system' });
+        } else {
+          // Cancelled outside the claim path: dead but truthful — still
+          // authorized until a fresh confirm finalizes it.
+          expect(await markerOf(issueId)).toMatchObject({ recoveryBudget: { status: 'exhausted', remediation: { status: 'authorized', runId: runA } } });
+        }
         expect(await db.select().from(activityLog).where(and(eq(activityLog.companyId, h.company.id), eq(activityLog.action, 'issue.task_recovery_permit_consumed')))).toHaveLength(0);
       } finally {
         suppressDispatch = 'off';
@@ -437,8 +448,13 @@ describeEmbeddedPostgres('task recovery permit (named-human prepare/confirm)', (
       expect(await markerOf(issueId)).toMatchObject({ recoveryBudget: { status: 'exhausted', remediation: { status: 'consumed', runId: runB } } });
 
       const superseded = await db.select().from(activityLog).where(and(eq(activityLog.companyId, h.company.id), eq(activityLog.action, 'issue.task_recovery_permit_superseded')));
-      expect(superseded).toHaveLength(1);
-      expect(superseded[0].details).toMatchObject({ previousRunId: runA });
+      // An already-denied permit needs no supersession; a dead authorized one does.
+      if (variant === 'hold') {
+        expect(superseded).toHaveLength(0);
+      } else {
+        expect(superseded).toHaveLength(1);
+        expect(superseded[0].details).toMatchObject({ previousRunId: runA });
+      }
       expect(await db.select().from(activityLog).where(and(eq(activityLog.companyId, h.company.id), eq(activityLog.action, 'issue.task_recovery_permit_consumed')))).toHaveLength(1);
     },
   );

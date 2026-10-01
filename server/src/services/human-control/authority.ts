@@ -240,6 +240,13 @@ export function foundationAuthority(req: Request) {
       if (typeof input.issueId !== 'string') throw badRequest('Task recovery operations require issueId');
       const selected = await source.issue(input.issueId);
       if (selected.assigneeAgentId) await source.ownerFacts(selected.assigneeAgentId);
+      // AgentDash (GH #891, F4): remediation needs agent-management authority;
+      // witness the agents:create grant it may rest on (the agent row and its
+      // stewardships are witnessed by ownerFacts above).
+      if (op === 'task_recovery.remediate' && facts.userId) {
+        const grants = await executor.select().from(principalPermissionGrants).where(and(eq(principalPermissionGrants.companyId, companyId), eq(principalPermissionGrants.principalType, 'user'), eq(principalPermissionGrants.principalId, facts.userId), eq(principalPermissionGrants.permissionKey, 'agents:create')));
+        for (const value of grants) row(state, '10:permission', principalPermissionGrants, value.id);
+      }
     } else if (op === 'human_questions.pending.list') {
       const pending = await waitingOnYouService(executor).pendingQuestions(companyId, req.actor, { limit: 2147483647 }, req);
       for (const value of pending.items) await source.question(value.interactionId, value.issueId);

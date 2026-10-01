@@ -98,6 +98,18 @@ export const issuesApi = {
       `/issues/${id}/recovery-budget/clear`,
       {},
     ),
+  // AgentDash (GH #891): "Authorize one run" for a signed-in board user —
+  // review (preview) first, then authorize against the reviewed preconditions.
+  previewRecoveryRunAuthorization: (id: string) =>
+    api.post<{ readback: { context: Record<string, unknown> }; preconditions: Record<string, unknown> }>(
+      `/human-control/issues/${id}/recovery-run/preview`,
+      {},
+    ),
+  authorizeRecoveryRun: (id: string, preconditions: Record<string, unknown>) =>
+    api.post<{ status: "completed"; actionId: string; result: { runId: string; expiresAt: string; runStatus: string } }>(
+      `/human-control/issues/${id}/recovery-run/authorize`,
+      { preconditions },
+    ),
   previewTreeControl: (id: string, data: PreviewIssueTreeControl) =>
     api.post<IssueTreeControlPreview>(`/issues/${id}/tree-control/preview`, data),
   createTreeHold: (id: string, data: CreateIssueTreeHold) =>

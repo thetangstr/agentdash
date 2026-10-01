@@ -88,6 +88,10 @@ export const taskRecoveryPermitSchema = z.object({
   exhaustedBy: z.array(z.string()),
   authorizedByUserId: z.string(),
   actionHandleId: z.string(),
+  // AgentDash (GH #891): which transport authorized it. 'session' permits come
+  // from the web app's "Authorize one run"; their actionHandleId is a
+  // server-generated action id, not a durable handle.
+  authorizedVia: z.enum(['board_key', 'session']).optional(),
   authorizedAt: z.string(),
   expiresAt: z.string(),
   consumedAt: z.string().nullable().optional(),
@@ -127,6 +131,16 @@ export const taskRecoveryRemediateReceiptSchema = z.object({
   runStatus: z.string(),
   expiresAt: z.string(),
 }).strict();
+// AgentDash (GH #891): the web app's "Authorize one run" (board session user).
+// Review first (preview), then apply with the preconditions the preview returned.
+export const taskRecoveryAuthorizeRunPreviewSchema = z.object({
+  outcomeCriteria: z.string().trim().min(1).max(4000).nullable().optional(),
+  expiresInMinutes: z.number().int().min(1).max(120).optional(),
+}).strict();
+export const taskRecoveryAuthorizeRunSchema = taskRecoveryAuthorizeRunPreviewSchema.extend({
+  preconditions: z.record(z.unknown()),
+}).strict();
+export type TaskRecoveryAuthorizeRunInput = z.infer<typeof taskRecoveryAuthorizeRunSchema>;
 export type TaskRecoveryPermit = z.infer<typeof taskRecoveryPermitSchema>;
 export type TaskRecoveryExhaustedIssue = z.infer<typeof taskRecoveryExhaustedIssueSchema>;
 export type TaskRecoveryRemediateInput = z.input<typeof taskRecoveryRemediateInputSchema>;

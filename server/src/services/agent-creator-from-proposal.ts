@@ -142,4 +142,7 @@ ${userVoice || "No interview context was captured."}
 // bundle: a persisted exhausted marker refuses every wake source, including a
 // board user's ordinary wake; only the explicit clear or one board-user-confirmed
 // task_recovery.remediate permit (exactly one bound run, no automatic
-// continuation) gets past it. A confirmed handle is not consent evidence.
+// continuation; board session users reach the same operation through the
+// issue page's "Authorize one run") gets past it. Checkout or adoption of an
+// exhausted issue is refused for every run except the permit-bound one
+// (GH #891). A confirmed handle is not consent evidence.

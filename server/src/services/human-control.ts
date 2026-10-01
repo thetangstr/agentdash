@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { randomUUID } from 'node:crypto';
 // AgentDash: finite named-human operations; no caller-controlled transport paths.
 import type { Request } from 'express';
 import { eq } from 'drizzle-orm';
@@ -45,6 +46,26 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
     if (op.companyAccess === 'instance_admin_stewardship' && !['human_questions.stewardship.assign', 'human_questions.stewardship.transfer'].includes(op.descriptor.operationId)) throw new Error('Instance administrator exception is restricted to canonical stewardship operations');
   }
   const handles = humanActionHandleService(db);
+  // AgentDash (GH #891): operations a signed-in board SESSION user may apply
+  // from the web app, through the same resolve/execute as the board-key
+  // prepare/confirm path. Finite on purpose — adding one is a reviewed change.
+  const sessionOperations = new Set<string>(['task_recovery.remediate']);
+  function captureSession(req: Request) {
+    // Only an interactive browser session of a named user. Board keys use the
+    // handle-bound prepare/confirm transport; assistant grants, agents and the
+    // implicit local operator are never a named human here.
+    const credential = req.verifiedCredential;
+    if (req.actor.type !== 'board' || req.actor.source !== 'session' || !req.actor.userId
+      || credential?.kind !== 'session' || credential.userId !== req.actor.userId) {
+      throw forbidden('A signed-in board user is required for this action');
+    }
+    return foundationAuthority(req);
+  }
+  function sessionOperation(id: string, version: number) {
+    const op = operation(id, version);
+    if (!sessionOperations.has(op.descriptor.operationId) || !op.execute) throw badRequest('This operation is not available to board sessions');
+    return op;
+  }
   function capture(req: Request) {
     const credential = verifiedBoardCredential(req);
     if (!credential || (credential.expiresAt !== null && credential.expiresAt <= Date.now())) throw forbidden('Named board-key human authentication required');
@@ -115,6 +136,50 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
   }
   return {
     identity,
+    /**
+     * AgentDash (GH #891): the readback a session user reviews before applying
+     * a session operation. Read-only; returns the exact preconditions the
+     * apply call must send back unchanged.
+     */
+    async sessionPreview(req: Request, input: { target: HumanTarget; operationId: string; version: number; input: Record<string, unknown> }) {
+      const authority = captureSession(req), op = sessionOperation(input.operationId, input.version), parsed = op.input.parse(input.input);
+      return protectedOperation(req, input.target, op, parsed, authority, async (ctx, seal) => {
+        const resolved = await op.resolve(ctx, parsed);
+        await seal();
+        return { target: input.target, operationId: input.operationId, version: input.version,
+          readback: { target: input.target, input: resolved.payload, context: resolved.readback ?? {} },
+          preconditions: resolved.preconditions };
+      }, false, false);
+    },
+    /**
+     * AgentDash (GH #891): one deliberate session action = prepare + confirm.
+     * The operation is re-resolved under its locks and must still match the
+     * preconditions the person reviewed; attribution is the authenticated
+     * session user. No durable handle exists on this path: on an uncertain
+     * outcome, read the canonical resource rather than applying again.
+     */
+    async sessionApply(req: Request, input: { target: HumanTarget; operationId: string; version: number; input: Record<string, unknown>; preconditions: Record<string, unknown> }) {
+      const authority = captureSession(req), op = sessionOperation(input.operationId, input.version), payload = op.input.parse(input.input);
+      await authority.identity.readPrincipal(db);
+      const actionId = randomUUID();
+      const publications: ActivityPublication[] = [];
+      let result = await protectedOperation(req, input.target, op, payload, authority, async (ctx, seal) => {
+        const current = await op.resolve(ctx, payload);
+        await seal();
+        if (!isDeepStrictEqual(current.preconditions, input.preconditions)) {
+          throw conflict('This changed since you reviewed it. Review it again before confirming.');
+        }
+        return op.execute!({ ...ctx, acceptance: { executor: ctx.db, publications } }, payload, actionId);
+      });
+      for (const publication of publications) publishActivity(publication);
+      if (op.afterCommit) result = await op.afterCommit({ ...context(req, input.target), authority }, payload, result);
+      const output = await protectedOperation(req, input.target, op, payload, authority, async (ctx, seal) => {
+        const current = op.currentOutput ? await op.currentOutput(ctx, payload, result) : result;
+        await seal();
+        return op.output.parse(JSON.parse(JSON.stringify(current)));
+      }, true, false);
+      return { status: 'completed' as const, actionId, result: output };
+    },
     async discover(req: Request, target: HumanTarget, pageId?: string, page: { cursor?: string; limit?: number } = {}) {
       const authority = capture(req);
       return db.transaction(async tx => {
