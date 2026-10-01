@@ -1,5 +1,5 @@
 {
-  "id": "713e7897-7908-4a76-acf4-b9ff6d402057",
+  "id": "b4b8f563-9838-4203-9d6f-b56b4b54dcb3",
   "prevId": "a582703e-b6fa-4b3f-af8c-0b8c6663088b",
   "version": "7",
   "dialect": "postgresql",
@@ -25805,6 +25805,36 @@
           "columns": [
             {
               "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "workforce_enrollments_goal_idx": {
+          "name": "workforce_enrollments_goal_idx",
+          "columns": [
+            {
+              "expression": "goal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "workforce_enrollments_first_job_issue_idx": {
+          "name": "workforce_enrollments_first_job_issue_idx",
+          "columns": [
+            {
+              "expression": "first_job_issue_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

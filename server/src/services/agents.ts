@@ -529,12 +529,20 @@ export function agentService(db: Db) {
         throw conflict("Pending approval agents cannot be resumed");
       }
 
+      // AgentDash (#882 review P3): a person resuming a hire whose onboarding
+      // materialization never completed takes it over; the marker records that
+      // instead of staying `pending` (completeMaterialization would refuse it).
+      const metadata = isPlainRecord(existing.metadata) ? existing.metadata : null;
+      const takeOverMaterialization = metadata?.onboardingMaterialization === "pending";
       const updated = await db
         .update(agents)
         .set({
           status: "idle",
           pauseReason: null,
           pausedAt: null,
+          ...(takeOverMaterialization
+            ? { metadata: { ...metadata, onboardingMaterialization: "resumed_incomplete", onboardingMaterializationResumedAt: new Date().toISOString() } }
+            : {}),
           updatedAt: new Date(),
         })
         .where(eq(agents.id, id))

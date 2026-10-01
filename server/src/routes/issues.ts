@@ -2382,8 +2382,9 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, companyId);
     const body = (req.body ?? {}) as { issueId?: unknown; agentId?: unknown; note?: unknown };
-    const rawIssueId = typeof body.issueId === "string" ? body.issueId : null;
-    const agentId = typeof body.agentId === "string" ? body.agentId : null;
+    // #882 review P3: an empty id is a malformed request (400), not a refusal.
+    const rawIssueId = typeof body.issueId === "string" && body.issueId.trim() ? body.issueId.trim() : null;
+    const agentId = typeof body.agentId === "string" && body.agentId.trim() ? body.agentId.trim() : null;
     if ((rawIssueId === null) === (agentId === null)) {
       res.status(400).json({ error: "Pass exactly one of issueId or agentId" });
       return;
@@ -2582,8 +2583,28 @@ export function issueRoutes(
   async function currentQuestion(req: Request, authority: ReturnType<typeof foundationAuthority>, issue: { id: string; companyId: string }, interactionId: string) {
     return protectedQuestions(req, authority, issue.companyId, 'human_questions.read', { issueId: issue.id, interactionId }, executor => issueThreadInteractionService(executor).getById(interactionId));
   }
+  // AgentDash (#882 review P2): assistant connectors act through an OAuth
+  // grant, not a named board credential, so the named-owner authority cannot
+  // admit them. They keep ordinary interactions; private (owner-pinned or
+  // workforce) questions stay out of their reach.
+  const isAssistantActor = (req: Request) => req.actor.type === 'board' && req.actor.source === 'assistant_grant';
+  const isPrivateQuestion = (value: { kind: string; payload?: unknown }) => {
+    if (value.kind !== 'ask_user_questions') return false;
+    const payload = (value.payload ?? {}) as { answerOwnerUserId?: unknown; workforceAgentId?: unknown; workforceEnrollmentId?: unknown; workforceTemplateId?: unknown; questions?: Array<{ companyFactKey?: unknown }> };
+    return Boolean(payload.answerOwnerUserId || payload.workforceAgentId || payload.workforceEnrollmentId || payload.workforceTemplateId
+      || payload.questions?.some(question => question.companyFactKey));
+  };
+  async function assistantQuestionWrite<T>(issue: { id: string; companyId: string }, interactionId: string,
+    work: (executor: Db, acceptance: ActivityAcceptance) => Promise<T>) {
+    const current = await issueThreadInteractionService(db).getById(interactionId);
+    if (!current || current.issueId !== issue.id || isPrivateQuestion(current)) throw notFound("Interaction not found");
+    const publications: ActivityPublication[] = [];
+    const value = await db.transaction(async tx => work(tx as unknown as Db, { executor: tx as unknown as Db, publications }));
+    for (const publication of publications) publishActivity(publication);
+    return value;
+  }
   router.get("/issues/:id/interactions", async (req, res) => {
-    const authority = req.actor.type === 'board' ? foundationAuthority(req) : null;
+    const authority = req.actor.type === 'board' && !isAssistantActor(req) ? foundationAuthority(req) : null;
     const id = req.params.id as string;
     const issue = await svc.getById(id);
     if (!issue) {
@@ -2599,12 +2620,13 @@ export function issueRoutes(
         catch (error) { if ((error as {status?: number}).status !== 404) throw error; }
       }
       return allowed;
-    }) : await issueThreadInteractionService(db).listForIssue(id);
+    }) : (await issueThreadInteractionService(db).listForIssue(id))
+      .filter(value => !isAssistantActor(req) || !isPrivateQuestion(value));
     res.json(interactions);
   });
 
   router.post("/issues/:id/interactions", validate(createIssueThreadInteractionSchema), async (req, res) => {
-    const authority = req.actor.type === 'board' && req.body.kind === 'ask_user_questions' ? foundationAuthority(req) : null;
+    const authority = req.actor.type === 'board' && !isAssistantActor(req) && req.body.kind === 'ask_user_questions' ? foundationAuthority(req) : null;
     const id = req.params.id as string;
     const issue = await svc.getById(id);
     if (!issue) {
@@ -2819,7 +2841,7 @@ export function issueRoutes(
     "/issues/:id/interactions/:interactionId/respond",
     validate(respondIssueThreadInteractionSchema),
     async (req, res) => {
-      const authority = foundationAuthority(req);
+      const authority = isAssistantActor(req) ? null : foundationAuthority(req);
       const id = req.params.id as string;
       const interactionId = req.params.interactionId as string;
       const issue = await svc.getById(id);
@@ -2831,13 +2853,16 @@ export function issueRoutes(
       assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await protectedQuestions(req, authority, issue.companyId, 'human_questions.respond', { issueId: id, interactionId, shareWithCompany: req.body.shareWithCompany === true }, async (executor, acceptance, guards) => {
+      const respond = async (executor: Db, acceptance: ActivityAcceptance, guards: QuestionWriteGuards = {}) => {
         const value = await issueThreadInteractionService(executor).answerQuestions(issue, interactionId, req.body, { agentId: actor.agentId, userId: actor.actorType === 'user' ? actor.actorId : null }, acceptance, guards);
         acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
           action: 'issue.thread_interaction_answered', entityType: 'issue', entityId: issue.id,
           details: { interactionId: value.id, interactionKind: value.kind, interactionStatus: value.status, answeredQuestionCount: value.kind === 'ask_user_questions' ? value.result?.answers?.length ?? 0 : 0 } }, guards.beforeWrite));
         return value;
-      }, true);
+      };
+      const interaction = authority
+        ? await protectedQuestions(req, authority, issue.companyId, 'human_questions.respond', { issueId: id, interactionId, shareWithCompany: req.body.shareWithCompany === true }, (executor, acceptance, guards) => respond(executor, acceptance, guards), true)
+        : await assistantQuestionWrite(issue, interactionId, (executor, acceptance) => respond(executor, acceptance));
 
       queueResolvedInteractionContinuationWakeup({
         heartbeat,
@@ -2847,7 +2872,7 @@ export function issueRoutes(
         source: "issue.interaction.respond",
       });
 
-      res.json(await currentQuestion(req, authority, issue, interaction.id));
+      res.json(authority ? await currentQuestion(req, authority, issue, interaction.id) : interaction);
     },
   );
 
@@ -2855,7 +2880,7 @@ export function issueRoutes(
     "/issues/:id/interactions/:interactionId/cancel",
     validate(cancelIssueThreadInteractionSchema),
     async (req, res) => {
-      const authority = foundationAuthority(req);
+      const authority = isAssistantActor(req) ? null : foundationAuthority(req);
       const id = req.params.id as string;
       const interactionId = req.params.interactionId as string;
       const issue = await svc.getById(id);
@@ -2867,13 +2892,16 @@ export function issueRoutes(
       assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await protectedQuestions(req, authority, issue.companyId, 'human_questions.cancel', { issueId: id, interactionId }, async (executor, acceptance, guards) => {
+      const respond = async (executor: Db, acceptance: ActivityAcceptance, guards: QuestionWriteGuards = {}) => {
         const value = await issueThreadInteractionService(executor).cancelQuestions(issue, interactionId, req.body, { agentId: actor.agentId, userId: actor.actorType === 'user' ? actor.actorId : null }, acceptance, guards);
         acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
           action: 'issue.thread_interaction_cancelled', entityType: 'issue', entityId: issue.id,
           details: { interactionId: value.id, interactionKind: value.kind, interactionStatus: value.status, cancellationReason: value.kind === 'ask_user_questions' ? value.result?.cancellationReason ?? null : null } }, guards.beforeWrite));
         return value;
-      }, true);
+      };
+      const interaction = authority
+        ? await protectedQuestions(req, authority, issue.companyId, 'human_questions.cancel', { issueId: id, interactionId }, (executor, acceptance, guards) => respond(executor, acceptance, guards), true)
+        : await assistantQuestionWrite(issue, interactionId, (executor, acceptance) => respond(executor, acceptance));
 
       queueResolvedInteractionContinuationWakeup({
         heartbeat,
@@ -2883,7 +2911,7 @@ export function issueRoutes(
         source: "issue.interaction.cancel",
       });
 
-      res.json(await currentQuestion(req, authority, issue, interaction.id));
+      res.json(authority ? await currentQuestion(req, authority, issue, interaction.id) : interaction);
     },
   );
 

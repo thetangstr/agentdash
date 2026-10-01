@@ -8,7 +8,7 @@ import { agents, agentStewardships, authUsers, companies, companyContext, compan
   workforceEnrollments, type Db } from '@paperclipai/db';
 import { type AskUserQuestionsInteraction, type CreateIssueThreadInteraction, resolveWorkforceTemplate } from '@paperclipai/shared';
 import { conflict, forbidden, notFound } from '../../errors.js';
-import { assertCompanyAccess, assertCanSetCompanyDirection } from '../../routes/authz.js';
+import { actorHumanRole, assertCompanyAccess, assertCanSetCompanyDirection } from '../../routes/authz.js';
 import { assertProjectVisible } from '../../routes/visibility.js';
 import { currentBoardIdentity, type BoardIdentityWitness } from '../current-board-identity.js';
 import { hydrateInteraction, resolveQuestionCreateInput } from '../issue-thread-interactions.js';
@@ -149,6 +149,11 @@ export function foundationAuthority(req: Request) {
         const resolved = await creation(job.id, questionReplacement(q));
         if (resolved.kind === 'ask_user_questions' && resolved.payload.answerOwnerUserId === req.actor.userId) return { issue: job, q };
       }
+      // #882 review P2: readiness reports pending question ids, never answer
+      // content, so a company admin may still read it for a job that has a
+      // private question owned by someone else.
+      if (selection.operationId === 'workforce.readiness.read'
+        && (req.actor.isInstanceAdmin || req.actor.source === 'local_implicit' || actorHumanRole(req, companyId) === 'admin')) return { issue: job, q };
       if (selection.operationId === 'workforce.readiness.read' || selection.operationId === 'native.question.list') throw notFound('Question not found');
       throw forbidden('Only the named human answer owner may access this question');
     }

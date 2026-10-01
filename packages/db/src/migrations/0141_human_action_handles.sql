@@ -26,4 +26,6 @@ ALTER TABLE "human_action_handles" ADD CONSTRAINT "human_action_handles_company_
 CREATE UNIQUE INDEX "human_action_handles_hash_uq" ON "human_action_handles" USING btree ("token_hash");--> statement-breakpoint
 CREATE INDEX "human_action_handles_actor_idx" ON "human_action_handles" USING btree ("actor_user_id","board_api_key_id");--> statement-breakpoint
 CREATE INDEX "human_action_handles_status_expires_idx" ON "human_action_handles" USING btree ("status","expires_at");--> statement-breakpoint
-CREATE INDEX "human_action_handles_company_idx" ON "human_action_handles" USING btree ("company_id");
+CREATE INDEX "human_action_handles_company_idx" ON "human_action_handles" USING btree ("company_id");--> statement-breakpoint
+CREATE INDEX "workforce_enrollments_goal_idx" ON "workforce_enrollments" USING btree ("goal_id");--> statement-breakpoint
+CREATE INDEX "workforce_enrollments_first_job_issue_idx" ON "workforce_enrollments" USING btree ("first_job_issue_id");

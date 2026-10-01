@@ -597,7 +597,7 @@ export function onboardingV2Routes(db: Db) {
         body: `${proposal.name} (${proposal.role}) is on your team. ${proposal.oneLineOkr}.`,
         cardKind: 'proposal_card_v1', cardPayload: proposal as unknown as Record<string, unknown>,
       });
-    } catch { throw acceptedHireNeedsRepair(accepted.map(item => item.created.id)); }
+    } catch (error) { throw acceptedHireNeedsRepair(accepted.map(item => item.created.id), error); }
     res.status(201).json({
       agent: { id: result.agentId, name: proposal.name, title: proposal.role },
       apiKey: result.apiKey,
@@ -709,9 +709,13 @@ export function onboardingV2Routes(db: Db) {
     });
     if (!accepted) return;
     const materialized = { createdAgentIds: accepted.map(item => item.created.id), cosAgentId: accepted[0]?.cosAgentId ?? null };
+    // #882 review P3: one failed hire no longer leaves the later ones paused;
+    // each hire completes on its own and the response names only the hires
+    // that still need repair.
+    const failedHires: Array<{ agentId: string; error: unknown }> = [];
     try {
       for (const { created, planAgent } of accepted) {
-        await completeManagedHire({ db, agents: agentService(db), instructions: agentInstructionsService() }, created, async () => {
+        try { await completeManagedHire({ db, agents: agentService(db), instructions: agentInstructionsService() }, created, async () => {
           const responsibilities = (planAgent.responsibilities ?? []).map((r) => `- ${r}`).join("\n");
           const kpis = (planAgent.kpis ?? []).map((k) => `- ${k}`).join("\n");
           const agentsMd = `# AGENTS.md — ${planAgent.name}
@@ -738,14 +742,18 @@ ${kpis || "- (none captured)"}
 `;
           const defaultBundle = await loadDefaultAgentInstructionsBundle('default');
           return { ...defaultBundle, 'AGENTS.md': `${defaultBundle['AGENTS.md']}\n\n${agentsMd}` };
-        }, planAgent.workforceTemplateId, req.actor.userId);
+        }, planAgent.workforceTemplateId, req.actor.userId); }
+        catch (error) { failedHires.push({ agentId: created.id, error }); }
       }
+      if (failedHires.length > 0) throw failedHires[0].error;
       if (materialized.cosAgentId) await conversations.postMessage({
         conversationId, authorKind: 'agent', authorId: materialized.cosAgentId,
         body: 'Done — your team has been created. You can talk to any of them via @mention, or stay here and route through me.',
       });
       await cosOnboardingStateService(db).advancePhase(conversationId, 'ready');
-    } catch { throw acceptedHireNeedsRepair(materialized.createdAgentIds); }
+    } catch (error) {
+      throw acceptedHireNeedsRepair(failedHires.length > 0 ? failedHires.map(item => item.agentId) : materialized.createdAgentIds, error);
+    }
 
     // AgentDash (issue #174): materialize the captured onboarding goals
     // ({shortTerm, longTerm}) into the goals table so the user sees them on

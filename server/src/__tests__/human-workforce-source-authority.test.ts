@@ -108,6 +108,19 @@ describe('current authority for actual readiness sources', () => {
     const worker = await request(application).get(`${path}/readiness`).set('authorization', `Bearer ${agentToken}`);
     expect(worker.status).toBe(200);
     expect(worker.body).toEqual(owned.body);
+    // #882 review P2: a company admin still reads readiness (question ids,
+    // never the private answer).
+    const admin = await credential();
+    await db.insert(companyMemberships).values({ companyId: company.id, principalType: 'user', principalId: admin.userId, membershipRole: 'admin', status: 'active' });
+    const adminNative = await request(application).get(`${path}/readiness`).set('authorization', `Bearer ${admin.token}`);
+    expect(adminNative.status).toBe(200);
+    expect(adminNative.body).toEqual(owned.body);
+    expect(JSON.stringify(adminNative.body)).not.toContain('Private accepted offer');
+    const adminFoundation = await request(application).post('/human/read').set('authorization', `Bearer ${admin.token}`).send({
+      target: { kind: 'company', companyId: company.id }, operationId: 'workforce.readiness.read', version: 1, input: { agentId: agent.id },
+    });
+    expect(adminFoundation.status).toBe(200);
+    expect(JSON.stringify(adminFoundation.body)).not.toContain('Private accepted offer');
   });
   it('retains dispatched files but refuses catalog, assignment and failure writes after key revocation', async () => {
     const owner = await credential();

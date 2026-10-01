@@ -5,6 +5,7 @@ import { assertActivityAcceptance, type ActivityAcceptance } from './activity-lo
 import type { Db } from '@paperclipai/db';
 import type { AgentProposal, InterviewTurn } from "@paperclipai/shared";
 import { conflict, notFound } from "../errors.js";
+import { logger } from "../middleware/logger.js";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 
 interface Deps {
@@ -24,11 +25,16 @@ interface CreateInput {
 export function onboardingMaterializationPause() {
   return { status: 'paused' as const, pauseReason: 'system', pausedAt: new Date(), metadata: { onboardingMaterialization: 'pending' } };
 }
-export function acceptedHireNeedsRepair(agentIds: string[]) {
-  return conflict('Hire accepted but configuration needs repair; use the existing agents, do not hire again', {
+export function acceptedHireNeedsRepair(agentIds: string[], cause?: unknown) {
+  // #882 review P3: keep the original failure for operators; the response
+  // still carries only the repair contract.
+  if (cause !== undefined) logger.warn({ err: cause, agentIds }, 'accepted hire needs configuration repair');
+  const error = conflict('Hire accepted but configuration needs repair; use the existing agents, do not hire again', {
     accepted: true, agentIds,
     repair: 'Use authorized instructions-bundle PATCH and instructions-bundle/file PUT to restore the canonical worker bundle and hiring context; retry workforce skills if selected, then resume the existing agent. Refresh alone cannot recreate missing hiring context.',
   });
+  if (cause !== undefined) (error as Error & { cause?: unknown }).cause = cause;
+  return error;
 }
 export async function completeManagedHire(deps: Deps, created: Awaited<ReturnType<ReturnType<typeof agentService>['create']>>, files: () => Promise<Record<string, string>>, workforceTemplateId?: string, userId?: string, mintKey = false) {
   if (!created.pausedAt) throw conflict('Hire materialization pause is missing');
@@ -72,7 +78,7 @@ export function agentCreatorFromProposal(deps: Deps) {
     create: async (input: CreateInput) => {
       const accepted = await accept(input);
       try { return await complete(accepted); }
-      catch { throw acceptedHireNeedsRepair([accepted.created.id]); }
+      catch (error) { throw acceptedHireNeedsRepair([accepted.created.id], error); }
     },
   };
 }
