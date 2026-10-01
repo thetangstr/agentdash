@@ -1,12 +1,12 @@
 # Target Mac Mini Audit
 
 **Date:** 2026-05-27  
-**Target:** `maxiaoer@192.168.86.48` (`mac-mini.lan`)  
+**Target:** `maxiaoer@<hq-lan-ip>` (`mac-mini.lan`)  
 **Purpose:** Post-cutover evidence for the first MSP design-partner launch path.
 
 ## Summary
 
-The target Mac mini is reachable over SSH and has been cut over to the launchd production candidate from the PR branch. The service is healthy on `http://192.168.86.48:3100`, authenticated/private mode is active, the readiness script has no P0 failures, and Hermes has completed both CoS-chat and assigned-issue agent-write smoke tests.
+The target Mac mini is reachable over SSH and has been cut over to the launchd production candidate from the PR branch. The service is healthy on `http://<hq-lan-ip>:3100`, authenticated/private mode is active, the readiness script has no P0 failures, and Hermes has completed both CoS-chat and assigned-issue agent-write smoke tests.
 
 Remaining launch work is outside the code/host preflight: prove login from the actual partner device or tailnet path, rotate any historical target GitHub token, and fill in named partner operating owners.
 
@@ -14,7 +14,7 @@ Current launch signoff packet: `doc/plans/2026-05-27-design-partner-launch-signo
 
 ## Evidence Collected
 
-- SSH reachability confirmed for `maxiaoer@192.168.86.48`.
+- SSH reachability confirmed for `maxiaoer@<hq-lan-ip>`.
 - Target host reported `mac-mini.lan` and macOS `26.5`.
 - Local health endpoint returned healthy authenticated-mode JSON:
   - `{"status":"ok","deploymentMode":"authenticated","bootstrapStatus":"ready","bootstrapInviteActive":false}`
@@ -46,7 +46,7 @@ Cutover evidence:
 - Health returns:
   - `{"status":"ok","deploymentMode":"authenticated","bootstrapStatus":"ready","bootstrapInviteActive":false}`
 - PostgreSQL is running through Homebrew PostgreSQL 17 because Docker was unavailable for the target cutover.
-- `PAPERCLIP_PUBLIC_URL=http://192.168.86.48:3100`.
+- `PAPERCLIP_PUBLIC_URL=http://<hq-lan-ip>:3100`.
 - `AGENTDASH_DEFAULT_ADAPTER=hermes_local`.
 - `AGENTDASH_HERMES_COMMAND=/Users/maxiaoer/.local/bin/hermes`.
 
@@ -56,7 +56,7 @@ Latest readiness was run from the launch checkout after cutover:
 
 ```sh
 cd ~/workspace/agentdash_msp_launch
-scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100
+scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://<hq-lan-ip>:3100
 ```
 
 Result:
@@ -76,9 +76,9 @@ Remaining warnings:
 
 Manual backup evidence:
 
-- `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100`
+- `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://<hq-lan-ip>:3100`
 - Database backup artifact: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz`
-- `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100`
+- `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://<hq-lan-ip>:3100`
 - Instance-file backup artifact: `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260527T220254Z.tgz`
 
 Local account evidence:
@@ -93,7 +93,7 @@ Git remote evidence:
 
 Partner access precheck evidence:
 
-- `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` was run from the operator LAN device.
+- `scripts/msp-partner-access-proof.sh --network-only --base-url http://<hq-lan-ip>:3100` was run from the operator LAN device.
 - Result: `9 pass, 1 warn, 0 fail`.
 - The precheck confirms authenticated/private health, UI reachability, inactive bootstrap invite, and unauthenticated board API rejection.
 - The precheck does not satisfy the partner-device login proof gate because it intentionally skips sign-in.

@@ -204,7 +204,7 @@ describe("boot lint", () => {
   it("fires for private, CGNAT, loopback and link-local canonicals", () => {
     expect(unreachableHostReason(LAN_IP)).toMatch(/private IP/);
     expect(unreachableHostReason("172.20.1.1")).toMatch(/private IP/);
-    expect(unreachableHostReason("192.168.86.57")).toMatch(/private IP/);
+    expect(unreachableHostReason("192.168.1.57")).toMatch(/private IP/);
     expect(unreachableHostReason(CGNAT_IP)).toMatch(/CGNAT/);
     expect(unreachableHostReason("127.0.0.1")).toMatch(/loopback/);
     expect(unreachableHostReason("localhost")).toMatch(/loopback/);

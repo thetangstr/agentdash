@@ -20,8 +20,8 @@ Run it at home, with a keyboard and a monitor, not on site.
 daemons loaded : 7
 http  :3102    200      http  :3103    200
 https :3112    200      https :3113    200
-tailscale      100.64.89.16
-LAN            192.168.86.57
+tailscale      <tailnet-ip>
+LAN            <lan-ip>
 in-flight runs 0
 ```
 
@@ -35,8 +35,8 @@ That is what "passed" looks like. Anything less is a finding.
 daemons loaded : 7   (4 running, 3 calendar-triggered and correctly idle)
 http  :3102    200      http  :3103    200
 https :3112    200      https :3113    200      <- real CA validation, not -k
-tailscale      100.64.89.16   up, daemon started at boot
-LAN            192.168.86.57
+tailscale      <tailnet-ip>   up, daemon started at boot
+LAN            <lan-ip>
 in-flight runs 0     (no pending/running rows in any run/job table)
 ```
 
@@ -83,14 +83,14 @@ Two things learned in the same session, both worth more than the pass:
    Wi-Fi:
 
    ```
-   http://192.168.86.57:3102/api/health     ← mkboard
+   http://<lan-ip>:3102/api/health     ← mkboard
    ```
 
    Plain HTTP on purpose: your phone does not have the mkcert root installed,
    and a certificate warning would tell you nothing about whether the service
    booted.
 
-   If your phone has Tailscale, `http://100.64.89.16:3102/api/health` also
+   If your phone has Tailscale, `http://<tailnet-ip>:3102/api/health` also
    proves the Tailscale daemon came up without a session, which is worth
    knowing separately.
 

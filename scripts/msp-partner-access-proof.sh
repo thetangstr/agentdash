@@ -31,7 +31,7 @@ Collects partner-device launch evidence:
   - optional sign-in proves login/session/company access from this device
 
 Options:
-  --base-url URL     Partner-visible AgentDash URL, for example http://192.168.86.48:3100.
+  --base-url URL     Partner-visible AgentDash URL, for example http://192.168.1.48:3100.
   --email EMAIL      Proof account email. Can also use AGENTDASH_PROOF_EMAIL.
   --password VALUE   Proof account password. Can also use AGENTDASH_PROOF_PASSWORD.
   --expected-company VALUE

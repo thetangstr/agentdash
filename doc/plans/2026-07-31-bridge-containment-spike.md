@@ -53,7 +53,7 @@ allow the system, deny the human, re-open the workspace.
 | 13 | loopback reachable (proxy shape) | succeeds | ✅ |
 | 14 | egress to `api.anthropic.com` | denied | ✅ |
 | 15 | egress to raw IP `1.1.1.1` | denied | ✅ |
-| 16 | egress to LAN peer `192.168.86.1` | denied | ✅ |
+| 16 | egress to LAN peer `<lan-gateway>` | denied | ✅ |
 
 The four that matter most:
 
@@ -105,7 +105,7 @@ It matters for the `direct` egress policy (`--egress direct`, allow outbound
 | 443 allow only | `https://api.anthropic.com/` | **`Could not resolve host`** |
 | 443 allow + mDNSResponder | `https://api.anthropic.com/` | connects, HTTP 404 |
 | 443 allow + mDNSResponder | `http://example.com/` (port 80) | denied |
-| 443 allow + mDNSResponder | `192.168.86.1:22` (LAN) | denied |
+| 443 allow + mDNSResponder | `<lan-gateway>:22` (LAN) | denied |
 
 So `direct` needs one more line, or it looks configured and does nothing:
 

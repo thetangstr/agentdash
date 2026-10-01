@@ -26,11 +26,11 @@ These must be complete before the first design partner is asked to use the insta
 - [x] Install on the target Mac mini.
   - Command: `bash ./docker/launchd/install.sh` after starting Homebrew PostgreSQL 17.
   - Evidence:
-    - SSH access confirmed for `maxiaoer@192.168.86.48`.
+    - SSH access confirmed for `maxiaoer@<hq-lan-ip>`.
     - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` is clean on branch `codex/msp-mac-mini-launch`.
     - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
     - `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready health.
-    - `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` exits with `30 pass, 12 warn, 0 fail`.
+    - `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://<hq-lan-ip>:3100` exits with `30 pass, 12 warn, 0 fail`.
     - Docker was unavailable during cutover; Homebrew PostgreSQL 17 is running the production database.
 
 - [x] Verify Hermes harness on the target Mac mini.
@@ -55,7 +55,7 @@ These must be complete before the first design partner is asked to use the insta
     - capture `scripts/msp-mac-mini-readiness.sh --base-url <partner-visible-url>` output.
     - capture `scripts/msp-partner-access-proof.sh --base-url <partner-visible-url>` output from the partner machine.
   - Current evidence:
-    - `PAPERCLIP_PUBLIC_URL=http://192.168.86.48:3100`.
+    - `PAPERCLIP_PUBLIC_URL=http://<hq-lan-ip>:3100`.
     - LAN health from this operator machine passes.
     - Partner proof runbook exists: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
     - Launch signoff packet exists: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
@@ -204,9 +204,9 @@ Completed on the target Mac mini after cutover:
 - `pnpm build` passed during launchd installer at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
 - Target checkout fast-forwarded cleanly on branch `codex/msp-mac-mini-launch`.
 - Health passed locally and over LAN.
-- `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` returned `30 pass, 12 warn, 0 fail`.
-- `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` created a fresh database backup and on-host instance-file backup archive.
-- `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` returned `9 pass, 1 warn, 0 fail` from the operator LAN device.
+- `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://<hq-lan-ip>:3100` returned `30 pass, 12 warn, 0 fail`.
+- `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://<hq-lan-ip>:3100` created a fresh database backup and on-host instance-file backup archive.
+- `scripts/msp-partner-access-proof.sh --network-only --base-url http://<hq-lan-ip>:3100` returned `9 pass, 1 warn, 0 fail` from the operator LAN device.
 - Hermes CoS chat proof passed.
 - Hermes assigned issue-write proof passed.
 

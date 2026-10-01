@@ -10,7 +10,7 @@ Three addresses reach the same instance, and which one you use matters.
 
 | Address | Use it for | Certificate |
 |---|---|---|
-| `https://mkthinks-mac-mini.tail112187.ts.net:3112` | **Anything you send to a person.** Invite links, the board, connecting a harness | Publicly trusted (Let's Encrypt, via Tailscale) — the only one an MDM-managed Mac will accept without a warning |
+| `https://<tailnet-host>.ts.net:3112` | **Anything you send to a person.** Invite links, the board, connecting a harness | Publicly trusted (Let's Encrypt, via Tailscale) — the only one an MDM-managed Mac will accept without a warning |
 | `https://mkmini.local:3112` | LAN convenience when Tailscale is not in play | Self-signed; the browser asks first |
 | `http://127.0.0.1:3102` | Commands run **on the Mini itself**, like the health checks below | None; loopback only |
 

@@ -1,6 +1,6 @@
 # Mac Mini Rollback Runbook
 
-**Target:** `maxiaoer@192.168.86.48`  
+**Target:** `maxiaoer@<hq-lan-ip>`  
 **Service:** `ai.agentdash.agent`  
 **Launch checkout:** `/Users/maxiaoer/workspace/agentdash_msp_launch`  
 **Current launch checkout SHA:** capture with `git rev-parse HEAD`; before launch it should match the latest PR #376 head.
@@ -12,7 +12,7 @@ Use this only for the first MSP design-partner Mac mini path. It assumes the ins
 Run this before any rollback decision:
 
 ```sh
-ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
+ssh maxiaoer@<hq-lan-ip> 'zsh -s' <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 cd "$HOME/workspace/agentdash_msp_launch"
@@ -40,7 +40,7 @@ Dry-run evidence captured on 2026-05-27:
 This rolls back code only. It does not modify the database or instance files.
 
 ```sh
-ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
+ssh maxiaoer@<hq-lan-ip> 'zsh -s' <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -58,7 +58,7 @@ git reset --hard "$rollback_sha"
 bash ./docker/launchd/install.sh
 
 curl -fsS http://127.0.0.1:3100/api/health
-curl -fsS http://192.168.86.48:3100/api/health
+curl -fsS http://<hq-lan-ip>:3100/api/health
 REMOTE
 ```
 
@@ -69,7 +69,7 @@ Known rollback candidate before the latest Hermes command fix: `ec7fcf04a9e652fe
 Use only if data corruption or migration rollback requires it. This is destructive to current database state.
 
 ```sh
-ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
+ssh maxiaoer@<hq-lan-ip> 'zsh -s' <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -89,18 +89,18 @@ REMOTE
 Database backups do not include the env file, local storage, or local secret material. The readiness script can create the on-host archive without copying secrets into the repo:
 
 ```sh
-ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
+ssh maxiaoer@<hq-lan-ip> 'zsh -s' <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 cd "$HOME/workspace/agentdash_msp_launch"
-scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100
+scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://<hq-lan-ip>:3100
 REMOTE
 ```
 
 Manual fallback:
 
 ```sh
-ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
+ssh maxiaoer@<hq-lan-ip> 'zsh -s' <<'REMOTE'
 set -euo pipefail
 archive="$HOME/agentdash-instance-files-$(date -u +%Y%m%dT%H%M%SZ).tgz"
 tar -czf "$archive" \

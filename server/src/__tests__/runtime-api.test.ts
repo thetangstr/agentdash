@@ -21,7 +21,7 @@ describe("runtime API discovery", () => {
     expect(
       choosePrimaryRuntimeApiUrl({
         authPublicBaseUrl: null,
-        allowedHostnames: ["192.168.86.48", "mac-mini.tail112187.ts.net"],
+        allowedHostnames: ["192.168.1.48", "mac-mini.example-tailnet.ts.net"],
         bindHost: "127.0.0.1",
         port: 3101,
       }),
@@ -32,14 +32,14 @@ describe("runtime API discovery", () => {
     expect(
       buildRuntimeApiCandidateUrls({
         authPublicBaseUrl: null,
-        allowedHostnames: ["192.168.86.48"],
+        allowedHostnames: ["192.168.1.48"],
         bindHost: "127.0.0.1",
         port: 3101,
         networkInterfacesMap: {},
       }),
     ).toEqual([
       "http://127.0.0.1:3101",
-      "http://192.168.86.48:3101",
+      "http://192.168.1.48:3101",
     ]);
   });
 

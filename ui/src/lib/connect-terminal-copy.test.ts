@@ -10,7 +10,7 @@ import {
 
 describe("resolveOriginChoices", () => {
   const PUBLISHED = "http://mkmini.local:3102";
-  const TAILNET = "https://mkthinks-mac-mini.tail112187.ts.net:3112";
+  const TAILNET = "https://agentdash-host.example-tailnet.ts.net:3112";
 
   it("offers the published address when it is also the one you came through", () => {
     const choices = resolveOriginChoices(PUBLISHED, PUBLISHED);

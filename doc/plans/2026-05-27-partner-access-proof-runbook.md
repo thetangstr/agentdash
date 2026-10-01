@@ -2,7 +2,7 @@
 
 **Purpose:** Capture the final P0 evidence that the first MSP design partner can reach and log in to the Mac mini AgentDash instance from the chosen private network path.
 
-**Current target URL:** `http://192.168.86.48:3100`
+**Current target URL:** `http://<hq-lan-ip>:3100`
 
 Do not paste passwords, session cookies, or invite tokens into this document. The proof script redacts by omission: it records the proof account email but never prints the password.
 
@@ -13,7 +13,7 @@ Use this when validating the URL from any LAN/tailnet device before sharing proo
 ```sh
 scripts/msp-partner-access-proof.sh \
   --network-only \
-  --base-url http://192.168.86.48:3100
+  --base-url http://<hq-lan-ip>:3100
 ```
 
 Evidence captured from the operator LAN device on 2026-05-27:
@@ -38,7 +38,7 @@ AGENTDASH_PROOF_EMAIL="<proof-account-email>" \
 AGENTDASH_PROOF_PASSWORD="<proof-account-password>" \
 AGENTDASH_EXPECTED_COMPANY="<expected-company-name-or-id>" \
 scripts/msp-partner-access-proof.sh \
-  --base-url http://192.168.86.48:3100 \
+  --base-url http://<hq-lan-ip>:3100 \
   --output "agentdash-partner-proof-$(date -u +%Y%m%dT%H%M%SZ).txt"
 ```
 

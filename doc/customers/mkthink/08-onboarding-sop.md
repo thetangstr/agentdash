@@ -6,14 +6,14 @@ The procedure lives in the product, not here. Open **Guides** in the left nav of
 
 | Who | Read |
 | --- | --- |
-| The new person | `http://10.50.10.129:3102/guides/steward/getting-started` — then connect your terminal, your inbox, troubleshooting |
-| The admin | `http://10.50.10.129:3102/guides/board-operator/onboard-a-steward` — invite, agent, stewardship transfer, verify, offboarding |
+| The new person | `http://<office-lan-ip>:3102/guides/steward/getting-started` — then connect your terminal, your inbox, troubleshooting |
+| The admin | `http://<office-lan-ip>:3102/guides/board-operator/onboard-a-steward` — invite, agent, stewardship transfer, verify, offboarding |
 
 ## What is specific to us
 
 | Fact | Value | Why it matters |
 | --- | --- | --- |
-| Instance address | `http://10.50.10.129:3102` | What the instance publishes; invite links and the connect command carry it. A DHCP lease — when it moves to a stable name (#547), nothing in the guides changes, because they read the address from the instance |
+| Instance address | `http://<office-lan-ip>:3102` | What the instance publishes; invite links and the connect command carry it. A DHCP lease — when it moves to a stable name (#547), nothing in the guides changes, because they read the address from the instance |
 | Network | Office LAN, or a VPN that routes to it | `mkmini.local` does not resolve over the VPN; the IP does. `.ts.net` addresses are Yang's personal tailnet and are not available to staff |
 | Instance admin | Yang | Creates accounts and transfers stewardship |
 | Default agent role for new stewards | `chief_of_staff` | Matches the existing MKThink agent; change it per person if the role is different |

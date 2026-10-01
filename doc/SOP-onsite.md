@@ -198,7 +198,7 @@ A green table of `200`s means reachable. It then prints the URLs and a
 
 ```
 https://mkmini.local:3112              ← mkboard, the real workspace
-https://mkthinks-mac-mini.tail112187.ts.net:3112   ← same, over Tailscale
+https://<tailnet-host>.ts.net:3112   ← same, over Tailscale
 ```
 
 There is one instance. The practice instance `uat` (3103/3113) was retired on
