@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, costEvents, financeEvents, goals, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
@@ -121,8 +121,12 @@ export function financeService(db: Db) {
         .orderBy(desc(sql`(${debitExpr} - ${creditExpr})::double precision`), financeEvents.eventKind);
     },
 
-    list: async (companyId: string, range?: FinanceDateRange, limit: number = 100) => {
-      const conditions = rangeConditions(companyId, range);
+    // AgentDash: `visibleWhere` is the caller's restricted-project condition —
+    // rows carry raw issueId/projectId, so events linked to an invisible
+    // project must be treated as nonexistent rather than redacted.
+    list: async (companyId: string, range?: FinanceDateRange, limit: number = 100, opts: { visibleWhere?: SQL } = {}) => {
+      const conditions: SQL[] = rangeConditions(companyId, range);
+      if (opts.visibleWhere) conditions.push(opts.visibleWhere);
       return db
         .select()
         .from(financeEvents)

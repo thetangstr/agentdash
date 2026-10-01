@@ -469,7 +469,10 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .orderBy(costEvents.provider, costEvents.biller, costEvents.billingType, costEvents.model);
     },
 
-    byProject: async (companyId: string, range?: CostDateRange) => {
+    // AgentDash: `visibleWhere` is the caller's restricted-project condition
+    // over the joined projects.id — a restricted project must not surface its
+    // name or its spend to actors off the access list.
+    byProject: async (companyId: string, range?: CostDateRange, opts: { visibleWhere?: SQL } = {}) => {
       const issueIdAsText = sql<string>`${issues.id}::text`;
       const runProjectLinks = db
         .selectDistinctOn([activityLog.runId, issues.projectId], {
@@ -496,9 +499,10 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .as("run_project_links");
 
       const effectiveProjectId = sql<string | null>`coalesce(${costEvents.projectId}, ${runProjectLinks.projectId})`;
-      const conditions: ReturnType<typeof eq>[] = [eq(costEvents.companyId, companyId)];
+      const conditions: SQL[] = [eq(costEvents.companyId, companyId)];
       if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
       if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
+      if (opts.visibleWhere) conditions.push(opts.visibleWhere);
 
       const costCentsExpr = sumAsNumber(costEvents.costCents);
 

@@ -23,6 +23,11 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const TOKEN = E2E_GITHUB_TOKEN;
 
 test("a new workspace goes through the first run to Home with its first issue assigned", async ({ page, request }) => {
+  // This is the longest full-journey spec (workspace → GitHub connect → first
+  // issue → Home → CoS chat → instructions). Under CI heartbeat churn the
+  // global 60s is eaten before the last clicks — same budget as
+  // multi-user-authenticated.spec.ts's full journeys.
+  test.setTimeout(180_000);
   const name = `E2E-FirstRun-${Date.now()}`;
   // The shared e2e board user may already belong to other specs' workspaces;
   // drop fromSignup so a real workspace is created (see onboarding-optional-assessment.spec.ts).
