@@ -1,6 +1,6 @@
 # Agent visibility: members see the agents they answer for
 
-2026-09-30 · Yang · **Draft for review** · Asked for by a design-partner steward: "only admins can see all agents and their tasks; a regular member should only be able to see their own agent."
+2026-09-30 · Yang · **Built** (#885, #887, #888 merged 2026-09-30; step 4 of the rollout still to do on the design partner's instance) · Asked for by a design-partner steward: "only admins can see all agents and their tasks; a regular member should only be able to see their own agent."
 
 A company admin keeps seeing everything. A member sees the agents they answer for, those agents' work, their own work, and every issue in a project they are listed on. Everything else is nonexistent to them — 404 on the id, absent from every list — the same rule restricted projects already enforce. One company setting turns it on; one per-agent override and the existing project access list give an admin the sharing they need. No new permission keys, no new access table.
 
@@ -98,12 +98,12 @@ That is the whole surface. No per-member settings, no new permission keys, no ne
 
 ## Rollout
 
-1. Migration and the `visibility.ts` helpers with the real-Postgres suite — one pull request, no behaviour change (default `company`).
-2. Routes and services take the condition; the configuration-route fix rides along — one pull request.
-3. The three UI controls and the guide text — one pull request.
+1. Migration and the `visibility.ts` helpers with the real-Postgres suite — one pull request, no behaviour change (default `company`). **Done: #885.**
+2. Routes and services take the condition — one pull request. **Done: #887.** The configuration-route fix did not ride along: it broke stub-DB suites across the server and was reverted; it is tracked as #886.
+3. The three UI controls and the guide text — one pull request. **Done: #888.**
 4. On the design partner's instance: an admin flips **Agent visibility** to *People see the agents they answer for*, marks the shared agents `Everyone`, and lists the members who need project-wide views. A member confirms they see their agent and nothing else; an admin confirms nothing changed for them.
 
-Effort: estimated at 4–5 working days for one person, most of it the route sweep and its tests — the same shape as #854. Estimate, not a measurement.
+Effort: estimated at 4–5 working days for one person, most of it the route sweep and its tests — the same shape as #854. Measured: the three pull requests were written, tested and merged in one working day (2026-09-30), by Claude Code with the owner reviewing.
 
 ## Risks and what was deliberately left out
 
@@ -114,5 +114,5 @@ Effort: estimated at 4–5 working days for one person, most of it the route swe
 
 ## Open questions
 
-- Should the `reportsTo` subtree count? Proposed yes — it is the org a steward runs. If the design partner would rather a steward see exactly one agent, drop that row; it is one clause.
-- Should an admin be able to make a single *member* see everything without making them an admin? Proposed no; that is what admin means here, and two human roles was a deliberate 2026-08-16 decision.
+- Should the `reportsTo` subtree count? Built as proposed (yes) — it is the org a steward runs. If the design partner would rather a steward see exactly one agent, drop that row; it is one clause.
+- Should an admin be able to make a single *member* see everything without making them an admin? Built as proposed (no); that is what admin means here, and two human roles was a deliberate 2026-08-16 decision.
