@@ -12,8 +12,7 @@ import { trackRoutineCreated } from "@paperclipai/shared/telemetry";
 import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
 import { accessService, logActivity, routineService } from "../services/index.js";
-import { assertCanSetCompanyDirection, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { forbidden } from "../errors.js";
+import { assertCanSetCompanyDirection, assertCanWriteRoutines, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { getTelemetryClient } from "../telemetry.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -37,7 +36,6 @@ export function routineRoutes(
    * exactly what the direction guard exists to prevent.
    */
   async function assertBoardCanAssignTasks(req: Request, companyId: string) {
-    assertCompanyAccess(req, companyId);
     // Agents may not write standing instructions. This returned early for any
     // non-board actor, and `assertCanManageCompanyRoutine` separately allowed an
     // agent that named itself as assignee — verified live, an agent POSTed an
@@ -48,15 +46,10 @@ export function routineRoutes(
     // delegated permission an owner grants; requiring owner/admin/operator here
     // instead broke ten tests that encode that delegation, which is the design
     // saying so. The hole was agents, so agents are what this closes.
-    if (req.actor.type === "agent") {
-      throw forbidden("Agents cannot create or change routines. Ask an owner, admin or operator.");
-    }
-    if (req.actor.type !== "board") return;
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-    const allowed = await access.canUser(companyId, req.actor.userId, "tasks:assign");
-    if (!allowed) {
-      throw forbidden("Missing permission: tasks:assign");
-    }
+    //
+    // AgentDash: (#710) the check itself lives in `assertCanWriteRoutines`
+    // (authz.ts) so the company import routes apply exactly the same rule.
+    await assertCanWriteRoutines(access, req, companyId);
   }
 
   // AgentDash: (#710) every routine write goes through `assertBoardCanAssignTasks`.

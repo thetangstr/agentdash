@@ -153,6 +153,31 @@ export async function assertCompanyAdministrator(
   throw forbidden(message);
 }
 
+/**
+ * AgentDash: (#710) the standing-instruction guard. A routine is a scheduled
+ * instruction that outlives every agent session, so writing one (directly or
+ * through a company import) is direction, not work. Agents may never do it;
+ * board users need the delegated `tasks:assign` permission unless they are the
+ * local implicit board or an instance admin. Shared by the routine routes and
+ * the company import routes so the two cannot disagree.
+ */
+export async function assertCanWriteRoutines(
+  access: { canUser(companyId: string, userId: string | null | undefined, permissionKey: "tasks:assign"): Promise<boolean> },
+  req: Request,
+  companyId: string,
+): Promise<void> {
+  assertCompanyAccess(req, companyId);
+  if (req.actor.type === "agent") {
+    throw forbidden("Agents cannot create or change routines. Ask an owner, admin or operator.");
+  }
+  if (req.actor.type !== "board") return;
+  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+  const allowed = await access.canUser(companyId, req.actor.userId, "tasks:assign");
+  if (!allowed) {
+    throw forbidden("Missing permission: tasks:assign");
+  }
+}
+
 export function assertInstanceAdmin(req: Request) {
   assertBoard(req);
   if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {

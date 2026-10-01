@@ -451,60 +451,116 @@ describe("routine routes", () => {
       expect(mockRoutineService.update).toHaveBeenCalled();
     });
 
-    it("rejects the assigned agent on every trigger route and manual run", async () => {
-      const app = await createApp(assignedAgent);
+    // Every write route, so a route added later without the guard shows up here.
+    const writeRoutes = [
+      {
+        name: "create routine",
+        method: "post",
+        path: `/api/companies/${companyId}/routines`,
+        body: { projectId, title: "Daily routine", assigneeAgentId: agentId },
+        service: "create",
+        okStatus: 201,
+      },
+      {
+        name: "update routine",
+        method: "patch",
+        path: `/api/routines/${routineId}`,
+        body: { description: "New instructions." },
+        service: "update",
+        okStatus: 200,
+      },
+      {
+        name: "create trigger",
+        method: "post",
+        path: `/api/routines/${routineId}/triggers`,
+        body: { kind: "schedule", cronExpression: "0 10 * * *", timezone: "UTC" },
+        service: "createTrigger",
+        okStatus: 201,
+      },
+      {
+        name: "update trigger",
+        method: "patch",
+        path: `/api/routine-triggers/${trigger.id}`,
+        body: { cronExpression: "* * * * *" },
+        service: "updateTrigger",
+        okStatus: 200,
+      },
+      {
+        name: "delete trigger",
+        method: "delete",
+        path: `/api/routine-triggers/${trigger.id}`,
+        body: undefined,
+        service: "deleteTrigger",
+        okStatus: 204,
+      },
+      {
+        name: "rotate trigger secret",
+        method: "post",
+        path: `/api/routine-triggers/${trigger.id}/rotate-secret`,
+        body: {},
+        service: "rotateTriggerSecret",
+        okStatus: 200,
+      },
+      {
+        name: "run routine",
+        method: "post",
+        path: `/api/routines/${routineId}/run`,
+        body: {},
+        service: "runRoutine",
+        okStatus: 202,
+      },
+    ] as const;
 
-      const responses = await Promise.all([
-        request(app)
-          .post(`/api/routines/${routineId}/triggers`)
-          .send({ kind: "schedule", cronExpression: "0 10 * * *", timezone: "UTC" }),
-        request(app).patch(`/api/routine-triggers/${trigger.id}`).send({ cronExpression: "* * * * *" }),
-        request(app).delete(`/api/routine-triggers/${trigger.id}`),
-        request(app).post(`/api/routine-triggers/${trigger.id}/rotate-secret`).send({}),
-        request(app).post(`/api/routines/${routineId}/run`).send({}),
-      ]);
+    function send(app: express.Express, route: (typeof writeRoutes)[number]) {
+      const req = request(app)[route.method](route.path);
+      return route.body === undefined ? req : req.send(route.body);
+    }
 
-      for (const res of responses) {
-        expect(res.status).toBe(403);
-        expect(res.body.error).toContain("Agents cannot create or change routines");
-      }
-      expect(mockRoutineService.createTrigger).not.toHaveBeenCalled();
-      expect(mockRoutineService.updateTrigger).not.toHaveBeenCalled();
-      expect(mockRoutineService.deleteTrigger).not.toHaveBeenCalled();
-      expect(mockRoutineService.rotateTriggerSecret).not.toHaveBeenCalled();
-      expect(mockRoutineService.runRoutine).not.toHaveBeenCalled();
-    });
-
-    it("requires tasks:assign to delete a trigger or rotate its secret", async () => {
-      const app = await createApp(memberWithoutAssign);
-
-      const [deleted, rotated] = await Promise.all([
-        request(app).delete(`/api/routine-triggers/${trigger.id}`),
-        request(app).post(`/api/routine-triggers/${trigger.id}/rotate-secret`).send({}),
-      ]);
-
-      expect(deleted.status).toBe(403);
-      expect(deleted.body.error).toContain("tasks:assign");
-      expect(rotated.status).toBe(403);
-      expect(rotated.body.error).toContain("tasks:assign");
-      expect(mockRoutineService.deleteTrigger).not.toHaveBeenCalled();
-      expect(mockRoutineService.rotateTriggerSecret).not.toHaveBeenCalled();
-    });
-
-    it("lets an instance admin delete a trigger and rotate its secret", async () => {
+    beforeEach(() => {
+      mockRoutineService.createTrigger.mockResolvedValue({ trigger, secretMaterial: null });
+      mockRoutineService.updateTrigger.mockResolvedValue(trigger);
       mockRoutineService.deleteTrigger.mockResolvedValue(undefined);
       mockRoutineService.rotateTriggerSecret.mockResolvedValue({ trigger, secretMaterial: null });
+    });
+
+    it.each(writeRoutes)("rejects the assigned agent: $name", async (route) => {
+      const app = await createApp(assignedAgent);
+
+      const res = await send(app, route);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("Agents cannot create or change routines");
+      expect(mockRoutineService[route.service]).not.toHaveBeenCalled();
+    });
+
+    it.each(writeRoutes)("rejects a member without tasks:assign: $name", async (route) => {
+      const app = await createApp(memberWithoutAssign);
+
+      const res = await send(app, route);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("tasks:assign");
+      expect(mockRoutineService[route.service]).not.toHaveBeenCalled();
+    });
+
+    it.each(writeRoutes)("allows an instance admin: $name", async (route) => {
       const app = await createApp(instanceAdmin);
 
-      const deleted = await request(app).delete(`/api/routine-triggers/${trigger.id}`);
-      const rotated = await request(app)
-        .post(`/api/routine-triggers/${trigger.id}/rotate-secret`)
-        .send({});
+      const res = await send(app, route);
 
-      expect(deleted.status).toBe(204);
-      expect(rotated.status).toBe(200);
-      expect(mockRoutineService.deleteTrigger).toHaveBeenCalledWith(trigger.id);
-      expect(mockRoutineService.rotateTriggerSecret).toHaveBeenCalled();
+      expect(res.status).toBe(route.okStatus);
+      expect(mockAccessService.canUser).not.toHaveBeenCalled();
+      expect(mockRoutineService[route.service]).toHaveBeenCalled();
+    });
+
+    it.each(writeRoutes)("allows a member with tasks:assign: $name", async (route) => {
+      mockAccessService.canUser.mockResolvedValue(true);
+      const app = await createApp(memberWithoutAssign);
+
+      const res = await send(app, route);
+
+      expect(res.status).toBe(route.okStatus);
+      expect(mockRoutineService[route.service]).toHaveBeenCalled();
     });
 
     it("returns 404 for a missing routine before checking permissions", async () => {

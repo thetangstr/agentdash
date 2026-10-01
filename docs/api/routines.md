@@ -13,9 +13,9 @@ A routine is a standing instruction: each time it runs, it creates an issue from
 | --- | --- |
 | `listRoutines`, `getRoutine` | a person who is a member, or an agent in that company |
 | `createRoutine`, `runRoutine` | a person with the `tasks:assign` permission in the company — an agent gets 403 |
-| `updateRoutine` | a member; changing the assignee or activating the routine needs `tasks:assign`. An agent may update only a routine assigned to itself, and may not reassign or activate it. |
+| `updateRoutine` | a person with the `tasks:assign` permission in the company, for any change — an agent gets 403, even for a routine assigned to itself |
 
-Agents may not write standing instructions: creating a routine, running one, reassigning one or activating one answers 403 `Agents cannot create or change routines. Ask an owner, admin or operator.` to any agent. Instance admins and the local operator skip the `tasks:assign` check; anyone else without it gets 403 `Missing permission: tasks:assign`.
+Agents may not write standing instructions: every routine write (create, update, run, and trigger create, update, delete and secret rotation) answers 403 `Agents cannot create or change routines. Ask an owner, admin or operator.` to any agent, including one assigned to the routine. Every write needs `tasks:assign`: instance admins and the local operator skip that check, and anyone else without it gets 403 `Missing permission: tasks:assign`. A company import that contains recurring tasks applies the same rule, and the routines it creates arrive `paused`.
 
 Every call checks membership first (`assertCompanyAccess` in `server/src/routes/authz.ts`): a person who is not a member answers 403 `User does not have access to this company`, an agent from another company answers 403 `Agent key cannot access another company`, and a member whose membership is not active answers 403 `User does not have active company access` on any write.
 
@@ -136,8 +136,9 @@ curl -X PATCH https://your-instance.example/api/routines/$ROUTINE_ID \
 
 **Body** (`updateRoutineSchema`) — the fields under create, all optional. Rules that apply only to an update:
 
-- Setting `status` to `active` needs an assignee, and from any other status it needs `tasks:assign`.
-- Setting `assigneeAgentId` to a different agent needs `tasks:assign`. Clearing it on an active routine leaves the routine `paused`.
+- Every update needs `tasks:assign`, whichever fields it changes.
+- Setting `status` to `active` needs an assignee.
+- Clearing `assigneeAgentId` on an active routine leaves the routine `paused`.
 - If the routine has an enabled schedule trigger, every required variable must have a default, because a schedule supplies no values.
 
 **Response** `200` — the updated `Routine`.
@@ -145,9 +146,8 @@ curl -X PATCH https://your-instance.example/api/routines/$ROUTINE_ID \
 | Status | When |
 | --- | --- |
 | 400 | `Validation error` — the body fails the schema. |
-| 403 | `Agents can only manage routines assigned to themselves` — an agent, and the routine is assigned to someone else. |
-| 403 | `Agents cannot create or change routines. Ask an owner, admin or operator.` — an agent changed the assignee or activated the routine. |
-| 403 | `Missing permission: tasks:assign` — a person changed the assignee or activated the routine. |
+| 403 | `Agents cannot create or change routines. Ask an owner, admin or operator.` — the caller is an agent. |
+| 403 | `Missing permission: tasks:assign`. |
 | 403 | Not a member, an inactive membership, or an agent key for another company (messages above). |
 | 404 | `Routine not found`; or, for a changed reference, `Project not found`, `Assignee agent not found`, `Goal not found`, `Parent issue not found`. |
 | 409 | `Cannot assign routines to pending approval agents`, `Cannot assign routines to terminated agents`. |
@@ -185,7 +185,7 @@ curl -X POST https://your-instance.example/api/routines/$ROUTINE_ID/run \
 | Status | When |
 | --- | --- |
 | 400 | `Validation error` — the body fails the schema. |
-| 403 | `Agents can only manage routines assigned to themselves`, or `Agents cannot create or change routines. Ask an owner, admin or operator.` — the caller is an agent. |
+| 403 | `Agents cannot create or change routines. Ask an owner, admin or operator.` — the caller is an agent. |
 | 403 | `Missing permission: tasks:assign`. |
 | 403 | `Trigger does not belong to routine` — `triggerId` is another routine's trigger. |
 | 403 | Not a member, an inactive membership (messages above). |

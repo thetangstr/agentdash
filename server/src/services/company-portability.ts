@@ -44,7 +44,6 @@ import {
   PROJECT_STATUSES,
   ROUTINE_CATCH_UP_POLICIES,
   ROUTINE_CONCURRENCY_POLICIES,
-  ROUTINE_STATUSES,
   ROUTINE_TRIGGER_KINDS,
   ROUTINE_TRIGGER_SIGNING_MODES,
   deriveProjectUrlKey,
@@ -585,6 +584,13 @@ type ImportBehaviorOptions = {
    * project routes.
    */
   actorIsAgent?: boolean;
+  /**
+   * AgentDash: (#710) the standing-instruction guard for routines. Routes pass
+   * a closure over `assertCanWriteRoutines`; it is awaited before anything is
+   * written when the bundle contains recurring tasks. Omitted means allowed,
+   * for internal callers.
+   */
+  assertCanWriteRoutines?: () => Promise<void>;
 };
 
 type AgentLike = {
@@ -4129,6 +4135,17 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     const warnings = [...plan.preview.warnings];
     const include = plan.include;
 
+    // AgentDash: (#710) a recurring task is imported as a routine, which is a
+    // standing instruction. Checked up front, before anything is written, so a
+    // refusal leaves no partial import.
+    if (
+      options?.assertCanWriteRoutines
+      && include.issues
+      && (sourceManifest.issues ?? []).some((manifestIssue) => manifestIssue.recurring)
+    ) {
+      await options.assertCanWriteRoutines();
+    }
+
     // AgentDash (security, #719): an issue's assigneeAdapterOverrides.adapterConfig
     // merges into the assignee's run config at heartbeat, so an imported one
     // carries the same host-execution gate as an agent's adapterConfig. Checked
@@ -4751,6 +4768,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
               variables: null,
               triggers: [],
             };
+            if (manifestIssue.status !== "paused" && manifestIssue.status !== "archived") {
+              warnings.push(`Routine ${manifestIssue.slug} was imported paused; activate it to start scheduled runs.`);
+            }
             const createdRoutine = await routines.create(targetCompany.id, {
               projectId,
               goalId: null,
@@ -4761,9 +4781,11 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
               priority: manifestIssue.priority && ISSUE_PRIORITIES.includes(manifestIssue.priority as any)
                 ? manifestIssue.priority as typeof ISSUE_PRIORITIES[number]
                 : "medium",
-              status: manifestIssue.status && ROUTINE_STATUSES.includes(manifestIssue.status as any)
-                ? manifestIssue.status as typeof ROUTINE_STATUSES[number]
-                : "active",
+              // AgentDash: (#710) imported routines always arrive paused, so
+              // starting autonomous work from a package is a deliberate act in
+              // the target company, not a side effect of the import. An archived
+              // routine stays archived; neither status runs.
+              status: manifestIssue.status === "archived" ? "archived" : "paused",
               concurrencyPolicy:
                 routineDefinition.concurrencyPolicy && ROUTINE_CONCURRENCY_POLICIES.includes(routineDefinition.concurrencyPolicy as any)
                   ? routineDefinition.concurrencyPolicy as typeof ROUTINE_CONCURRENCY_POLICIES[number]
