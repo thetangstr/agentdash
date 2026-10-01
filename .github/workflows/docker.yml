@@ -1,71 +1,315 @@
 name: Docker
 
+# AgentDash (#775): every platform builds on its own native runner and a merge
+# job names the multi-arch index. The emulated (QEMU) arm64 build this replaces
+# never finished inside its 30-minute limit, so every push to main from late
+# August on was cancelled and `latest` / `sha-*` went stale.
+#
+#   push to main          amd64 + arm64 natively -> `latest` and `sha-<7>`
+#   pull_request          amd64 + arm64 natively, loaded and Hermes-smoke-tested
+#                         on each, never pushed
+#   workflow_dispatch     no input: the selected ref -> `sha-<7>` (plus `latest`
+#                         only from main)
+#                         release_tag: an EXISTING stable tag (vYYYY.MDD.P) that
+#                         has no image yet -> `vYYYY.MDD.P` and `YYYY.MDD.P`,
+#                         built from the tag's commit (backfill, e.g. tags cut
+#                         before #732). Never overwrites a release tag.
+#
+# New stable releases are imaged by release.yml (publish_stable_image*), right
+# after the gated tag push; this workflow has no `v*` tag trigger because
+# release.yml pushes tags with GITHUB_TOKEN, which never triggers workflows.
+
 on:
   push:
     branches:
       - "main"
-    tags:
-      - "v*"
   # AgentDash: build (never push) on pull requests so a Dockerfile regression is
   # caught before merge instead of silently failing on main.
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable tag to build a missing image for, e.g. v2026.924.0. Leave empty to build the selected branch (pushes sha-<7>, and latest only from main).
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
-  packages: write
+
+# Pull requests cancel superseded runs. Main and dispatches never cancel a run in
+# progress: they queue (GitHub keeps only the newest pending run), so `latest`
+# always ends on the newest commit and no build is thrown away half-done.
+concurrency:
+  group: docker-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE_REPO: ghcr.io/${{ github.repository }}
 
 jobs:
-  build-and-push:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: docker-${{ github.ref }}
-      cancel-in-progress: true
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+      version_label: ${{ steps.plan.outputs.version_label }}
+      tags: ${{ steps.plan.outputs.tags }}
     steps:
-      - name: Checkout
+      - name: Checkout workflow scripts
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: true
+
+      - name: Plan the build
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REPO: https://github.com/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            mode="pr"
+            source_sha="$SHA"
+            version_label="pr-${SHA::7}"
+            tags=""
+          elif [ -n "$RELEASE_TAG" ]; then
+            mode="release"
+            if [[ ! "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{3,4}\.[0-9]+$ ]]; then
+              echo "Error: release_tag must look like v2026.924.0 (got '$RELEASE_TAG')." >&2
+              exit 1
+            fi
+            # Peeled (^{}) line first: an annotated tag's commit, not the tag object.
+            refs="$(git ls-remote --tags "$SOURCE_REPO" "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")"
+            source_sha="$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ {print $1}')"
+            [ -n "$source_sha" ] || source_sha="$(printf '%s\n' "$refs" | awk '{print $1}' | head -1)"
+            if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Error: tag $RELEASE_TAG does not exist in $SOURCE_REPO." >&2
+              exit 1
+            fi
+            version_label="$RELEASE_TAG"
+            tags="$(node scripts/release-image.mjs tags "${RELEASE_TAG#v}" --repo "$IMAGE_REPO" | tr '\n' ' ')"
+          else
+            mode="branch"
+            source_sha="$SHA"
+            version_label="sha-${SHA::7}"
+            tags="${IMAGE_REPO}:sha-${SHA::7}"
+            if [ "$REF" = "refs/heads/main" ]; then
+              tags="${IMAGE_REPO}:latest ${tags}"
+            fi
+          fi
+          {
+            echo "mode=$mode"
+            echo "source_sha=$source_sha"
+            echo "version_label=$version_label"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+          echo "mode=$mode source=$source_sha tags=[$tags]"
+
+      # Release tags are immutable. Asked the way a cloud box asks (anonymous
+      # GHCR token, manifest HEAD), and anything but 200/404 is an error, never
+      # read as "missing".
+      - name: Refuse to rebuild an existing release image
+        if: steps.plan.outputs.mode == 'release'
+        env:
+          TAGS: ${{ steps.plan.outputs.tags }}
+        run: |
+          set -euo pipefail
+          repo="${IMAGE_REPO#ghcr.io/}"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)"
+          accept="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+          for ref in $TAGS; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -I -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" "https://ghcr.io/v2/${repo}/manifests/${ref##*:}")"
+            case "$code" in
+              404) echo "$ref: absent" ;;
+              200) echo "Error: $ref already exists in GHCR; release image tags are never overwritten." >&2; exit 1 ;;
+              *) echo "Error: GHCR answered HTTP $code for $ref; refusing to guess." >&2; exit 1 ;;
+            esac
+          done
+
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
 
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      # Pull requests: build this platform, load it, never push (the cache is
+      # read from main's but not written, so PRs do not evict it).
+      - name: Build (pull request, not pushed)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          # Pull requests build a single platform for speed; main and tags build both.
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name != 'pull_request' }}
-          # AgentDash (#721): pull requests load the single-platform image so the
-          # Hermes smoke test below can run it.
+          platforms: ${{ matrix.platform }}
+          push: false
+          # AgentDash (#721): load the image so the Hermes smoke test can run it.
           load: ${{ github.event_name == 'pull_request' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: agentdash-pr:${{ matrix.arch }}
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
 
       # AgentDash (#721): the image must carry a working, pinned Hermes whose
-      # per-agent profiles and wrappers land on the /paperclip Volume.
+      # per-agent profiles and wrappers land on the /paperclip Volume. Runs
+      # natively on both platforms.
       - name: Hermes smoke test
         if: github.event_name == 'pull_request'
+        run: bash scripts/docker/hermes-smoke.sh "agentdash-pr:${{ matrix.arch }}"
+
+      # Main and dispatches: push this platform by digest; the merge job tags it.
+      - name: Build and push by digest
+        id: build
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE_REPO }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version_label }}
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,scope=docker-${{ matrix.arch }},mode=max
+
+      - name: Export platform digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          IMAGE="$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -1)"
-          bash scripts/docker/hermes-smoke.sh "$IMAGE"
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: build produced no digest (got '$DIGEST')." >&2
+            exit 1
+          fi
+          mkdir -p "${{ runner.temp }}/digests"
+          touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
+
+      # Kept 1 day: rerunning only the merge job works within 24 hours; after
+      # that, rerun the whole workflow.
+      - name: Upload platform digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    if: github.event_name != 'pull_request'
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download platform digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: docker-digest-*
+          merge-multiple: true
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Create and verify the multi-arch manifest
+        env:
+          MODE: ${{ needs.prepare.outputs.mode }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: |
+          set -euo pipefail
+          read -r -a tags <<< "$TAGS"
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "Error: no tags planned for mode $MODE." >&2
+            exit 1
+          fi
+          # Release tags: check again right before writing (a release may have
+          # landed while this built). Only a clear "not found" counts as absent.
+          if [ "$MODE" = "release" ]; then
+            for tag in "${tags[@]}"; do
+              if out="$(docker buildx imagetools inspect "$tag" 2>&1)"; then
+                echo "Error: $tag already exists in GHCR; release image tags are never overwritten." >&2
+                exit 1
+              elif ! grep -qi "not found" <<< "$out"; then
+                printf 'Error: could not check %s:\n%s\n' "$tag" "$out" >&2
+                exit 1
+              fi
+            done
+          fi
+          sources=()
+          for file in "${{ runner.temp }}"/digests/*; do
+            sources+=("${IMAGE_REPO}@sha256:$(basename "$file")")
+          done
+          if [ "${#sources[@]}" -ne 2 ]; then
+            echo "Error: expected 2 platform digests, found ${#sources[@]}." >&2
+            exit 1
+          fi
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(-t "$tag")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: could not read the digest of ${tags[0]} (got '$digest')." >&2
+            exit 1
+          fi
+          for tag in "${tags[@]}"; do
+            tag_digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)"
+            if [ "$tag_digest" != "$digest" ]; then
+              echo "Error: $tag resolves to $tag_digest, expected $digest." >&2
+              exit 1
+            fi
+          done
+          docker buildx imagetools inspect "${IMAGE_REPO}@${digest}"
+          {
+            echo "### Image (${MODE})"
+            for tag in "${tags[@]}"; do echo "- \`$tag\`"; done
+            echo "- digest \`$digest\`"
+            if [ "$MODE" = "release" ]; then
+              echo ""
+              echo "Backfilled from the tag's commit. The GitHub Release body is not edited."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

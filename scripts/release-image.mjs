@@ -10,9 +10,10 @@
 //       the Markdown appended to the GitHub Release notes
 //
 // Tags: `v<version>` is canonical (it is the git tag, and what hosted boxes
-// deploy); `<version>` is kept because docker.yml's semver pattern and older
-// runbook copies use the no-v form. `latest` is never moved here: docker.yml
-// owns `latest` as the tip of main.
+// deploy); `<version>` is kept because older images and runbook copies use the
+// no-v form. `latest` is never moved here: docker.yml owns `latest` as the tip
+// of main. docker.yml's `release_tag` dispatch backfills a tag with no image
+// (#775) through these same names.
 
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
