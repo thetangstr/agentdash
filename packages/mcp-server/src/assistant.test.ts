@@ -259,20 +259,22 @@ describe("assistant toolset surface", () => {
     expect(setup).toContain("agentdash_pause_agent");
     expect(setup).toHaveLength(17);
     // M1's nine reads plus M3's five work tools (GH #678) plus M4's three
-    // gated tools (GH #679) — no grant scopes supplied means the
-    // stdio/operator context and the full surface.
-    expect(assistant).toHaveLength(17);
+    // gated tools (GH #679) plus the Ross request pair (Ross launch M2) — no
+    // grant scopes supplied means the stdio/operator context and the full surface.
+    expect(assistant).toHaveLength(19);
     expect(assistant).not.toContain("agentdash_setup_status");
     // The agent surface is the union it always was.
     expect(agent).toEqual(expect.arrayContaining(setup));
     expect(agent.length).toBeGreaterThan(setup.length + 9);
   });
 
-  it("a grant without agentdash:work is served only the nine read tools", () => {
+  it("a grant without agentdash:work is served only the ten read tools", () => {
     const client = new RealClient(CONFIG);
     // GH #745 review: the write surface is hidden, not merely gated.
     const readOnly = buildToolSurface(client, { ...CONFIG, assistantScopes: ["agentdash:read"] }, "assistant");
-    expect(readOnly.map((t) => t.name)).toHaveLength(9);
+    expect(readOnly.map((t) => t.name)).toHaveLength(10);
+    expect(readOnly.map((t) => t.name)).toContain("ross_request_status");
+    expect(readOnly.map((t) => t.name)).not.toContain("request_ross_assessment");
     for (const tool of readOnly) {
       expect(tool.annotations).toMatchObject({ readOnlyHint: true });
     }
@@ -281,7 +283,7 @@ describe("assistant toolset surface", () => {
       { ...CONFIG, assistantScopes: ["agentdash:read", "agentdash:work"] },
       "assistant",
     );
-    expect(workScoped.map((t) => t.name)).toHaveLength(14);
+    expect(workScoped.map((t) => t.name)).toHaveLength(16);
     // GH #679: the gated tools are a third class — hidden unless the grant
     // carries the opt-in decide scope.
     for (const name of ["prepare_decision", "request_hire", "confirm_action"]) {
@@ -293,7 +295,7 @@ describe("assistant toolset surface", () => {
       "assistant",
     );
     const decideNames = decideScoped.map((t) => t.name);
-    expect(decideNames).toHaveLength(12);
+    expect(decideNames).toHaveLength(13);
     expect(decideNames).toEqual(
       expect.arrayContaining(["prepare_decision", "request_hire", "confirm_action"]),
     );

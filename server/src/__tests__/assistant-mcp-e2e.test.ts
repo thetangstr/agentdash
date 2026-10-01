@@ -277,7 +277,8 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
     await client.connect(transport);
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
-    // M1's nine reads plus M3's five work tools (GH #678).
+    // M1's nine reads plus M3's five work tools (GH #678), plus the Ross
+    // request pair (Ross launch M2): one read, one work-class write.
     expect(names).toEqual([
       "assign_work",
       "comment_on_work",
@@ -289,6 +290,8 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       "list_pending_decisions",
       "list_projects",
       "list_team",
+      "request_ross_assessment",
+      "ross_request_status",
       "start_project",
       "update_work_item",
       "whats_new",
@@ -298,6 +301,7 @@ describeE2e("assistant MCP OAuth e2e (HTTPS + SDK client)", () => {
       "assign_work",
       "comment_on_work",
       "create_work_item",
+      "request_ross_assessment",
       "start_project",
       "update_work_item",
     ]);

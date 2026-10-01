@@ -260,7 +260,7 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
     return null;
   }
 
-  it("lists fourteen tools; the five work tools are not read-only and update_work_item is destructive", async () => {
+  it("lists sixteen tools; the work tools are not read-only and update_work_item is destructive", async () => {
     const { token } = await grantToken(["agentdash:read", "agentdash:work"]);
     const res = await fetch(`${baseUrl}/api/mcp/assistant`, {
       method: "POST",
@@ -273,7 +273,8 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
     });
     const body = await res.json();
     const tools = body.result.tools as Array<{ name: string; annotations?: Record<string, unknown> }>;
-    expect(tools).toHaveLength(14);
+    // Nine reads + five work tools + the Ross request pair (Ross launch M2).
+    expect(tools).toHaveLength(16);
     const byName = new Map(tools.map((t) => [t.name, t]));
     for (const name of ["start_project", "create_work_item", "assign_work", "comment_on_work", "update_work_item"]) {
       expect(byName.get(name)?.annotations?.readOnlyHint).toBe(false);
@@ -488,7 +489,8 @@ describeEmbeddedPostgres("assistant MCP work tools (M3)", () => {
     // GH #745 review: the work tools are hidden entirely for a read-only
     // grant — the tool name is unknown, not politely refused.
     const listed = await listTools(token);
-    expect(listed).toHaveLength(9);
+    // Nine reads + ross_request_status; request_ross_assessment is work-class.
+    expect(listed).toHaveLength(10);
     const names = listed.map((t) => t.name);
     for (const name of ["start_project", "create_work_item", "assign_work", "comment_on_work", "update_work_item"]) {
       expect(names).not.toContain(name);

@@ -1405,6 +1405,8 @@ export {
 export * from "./assistant-oauth.js";
 // AgentDash (recovery budget remediation): the issue-level exhausted marker.
 export * from "./recovery-budget.js";
+// AgentDash (Ross launch M2): the governed question-to-Ross request wire format.
+export * from "./ross-request.js";
 
 // AgentDash assistant MCP (M4, GH #679): the gated-action request bodies.
 export {
