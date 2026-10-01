@@ -354,8 +354,9 @@ function checkTop(stmt: unknown): void {
     case "CreateExtensionStmt": {
       // WITH SCHEMA stays allowed: backup-lib writes it to keep each extension
       // in its recorded schema, and backups already in storage rely on it. It
-      // is only safe on a server with the March-2018 search_path fix, which
-      // replayDump (sql-restore.ts) enforces via server_version_num.
+      // is only safe on a server with the CVE-2022-2625 / CVE-2023-39417
+      // search_path fixes, which replayDump (sql-restore.ts) enforces via
+      // server_version_num (>= 11.21 / 12.16 / 13.12 / 14.9 / 15.4, or 16+).
       fields(b, ["extname", "options"], w, { if_not_exists: true });
       if (b.if_not_exists !== true) fail(`${w}: only IF NOT EXISTS`);
       if (!EXTENSION_ALLOWLIST.has(String(b.extname))) fail(`extension ${String(b.extname)} is not on the allowlist`);

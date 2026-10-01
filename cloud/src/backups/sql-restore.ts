@@ -345,12 +345,16 @@ export async function replayRoleProblem(connectionString: string): Promise<strin
 /**
  * Dumps carry `CREATE EXTENSION … WITH SCHEMA` (backup-lib writes it to keep
  * each extension in its recorded schema, and backups already in storage rely
- * on it). That is safe only where the extension script's search_path cannot
- * be bent into the dump-named schema — the fix shipped in the March 2018
- * minors (10.3 / 9.6.8 / 9.5.12 / 9.4.17). Replay refuses anything older.
+ * on it). A dump-named schema must not give the extension script a hostile
+ * search_path — CVE-2022-2625 was fixed in 10.22 / 11.17 / 12.12 / 13.8 /
+ * 14.5 and CVE-2023-39417 in 11.21 / 12.16 / 13.12 / 14.9 / 15.4, with the
+ * 10.x line end-of-life and never fixed for the second. Replay therefore
+ * requires the later fix: 11.21 / 12.16 / 13.12 / 14.9 / 15.4 or any 16+.
  */
-function extensionSchemaSafe(versionNum: number): boolean {
-  return versionNum >= 100003 || (versionNum >= 90608 && versionNum < 100000) || (versionNum >= 90512 && versionNum < 90600) || (versionNum >= 90417 && versionNum < 90500);
+export function extensionSchemaSafe(versionNum: number): boolean {
+  if (versionNum >= 160000) return true;
+  const minMinor: Record<number, number> = { 11: 21, 12: 16, 13: 12, 14: 9, 15: 4 };
+  return versionNum % 10000 >= (minMinor[Math.floor(versionNum / 10000)] ?? Infinity);
 }
 
 /** Replay a dump that passed scanDump into a disposable database, as a plain non-superuser role. */
@@ -369,7 +373,7 @@ export async function replayDump(file: string, connectionString: string): Promis
   try {
     const [v] = await sql<Array<{ v: number }>>`select current_setting('server_version_num')::int as v`;
     if (!v || !extensionSchemaSafe(v.v)) {
-      throw new ReplayRefused(`the sandbox's PostgreSQL (server_version_num ${v?.v ?? "unreadable"}) predates the CREATE EXTENSION … WITH SCHEMA search_path fix; replay requires 9.4.17 / 9.5.12 / 9.6.8 / 10.3 or later`);
+      throw new ReplayRefused(`the sandbox's PostgreSQL (server_version_num ${v?.v ?? "unreadable"}) predates the CREATE EXTENSION … WITH SCHEMA search_path fixes (CVE-2022-2625, CVE-2023-39417); replay requires 11.21 / 12.16 / 13.12 / 14.9 / 15.4 / 16.0 or later`);
     }
     for await (const piece of statements(file)) {
       // Checked again: the file could have changed since the scan.

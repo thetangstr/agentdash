@@ -15,7 +15,7 @@ import { loadBackupConfig } from "../backups/config.js";
 import { createDecryptStream, createEncryptStream, ENVELOPE_MAGIC, FRAME_PLAINTEXT_BYTES, type BackupEnvelopeMeta } from "../backups/envelope.js";
 import { EMPTY_SHA256, S3Store, signV4, uriEncode } from "../backups/s3.js";
 import { isoWeek, selectPrunable } from "../backups/service.js";
-import { DumpTooLarge, MAX_LINE_BYTES, MAX_STATEMENT_LINES, parseCopyFromStdin, scanDump, statements } from "../backups/sql-restore.js";
+import { DumpTooLarge, extensionSchemaSafe, MAX_LINE_BYTES, MAX_STATEMENT_LINES, parseCopyFromStdin, scanDump, statements } from "../backups/sql-restore.js";
 import { checkStatement, initDumpGuard, MAX_STATEMENT_BYTES, STATEMENT_BREAKPOINT } from "../backups/dump-guard.js";
 import { ConfigError } from "../config.js";
 import { escrowKeyId } from "../railway/secrets.js";
@@ -237,6 +237,28 @@ describe("dump splitter (bounded, streaming)", () => {
       for await (const p of statements(f)) if (p.kind === "copy") for await (const _ of p.payload) void _;
     };
     await expect(drain()).rejects.toThrow(DumpTooLarge);
+  });
+});
+
+describe("extension WITH SCHEMA replay pin (CVE-2022-2625 + CVE-2023-39417)", () => {
+  it("allows exactly the patched minors — 11.21 / 12.16 / 13.12 / 14.9 / 15.4 — and 16+", () => {
+    const cases: Array<[number, boolean]> = [
+      [90624, false], // any 9.x: never fixed
+      [100022, false], // 10.22 has CVE-2022-2625 but the 10.x line is EOL, unfixed for CVE-2023-39417
+      [110020, false],
+      [110021, true], // 11.21
+      [120015, false],
+      [120016, true], // 12.16
+      [130011, false],
+      [130012, true], // 13.12
+      [140008, false],
+      [140009, true], // 14.9
+      [150003, false],
+      [150004, true], // 15.4
+      [160000, true], // any 16+
+      [170003, true],
+    ];
+    for (const [v, ok] of cases) expect(extensionSchemaSafe(v), `server_version_num ${v}`).toBe(ok);
   });
 });
 
