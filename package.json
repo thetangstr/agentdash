@@ -42,6 +42,7 @@
     "check:tokens": "node scripts/check-forbidden-tokens.mjs",
     "docs:dev": "cd docs && npx mintlify dev",
     "docs:search-index": "node scripts/docs/build-search-index.mjs",
+    "docs:mcp-reference": "node scripts/docs/generate-mcp-reference.mjs",
     "smoke:openclaw-join": "./scripts/smoke/openclaw-join.sh",
     "smoke:openclaw-docker-ui": "./scripts/smoke/openclaw-docker-ui.sh",
     "smoke:openclaw-sse-standalone": "./scripts/smoke/openclaw-sse-standalone.sh",

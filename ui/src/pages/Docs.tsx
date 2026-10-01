@@ -37,6 +37,24 @@ import {
 } from "@/lib/docs";
 import { docSlugFromPathname } from "@/lib/docs-nav";
 
+/**
+ * Two adjustments to MarkdownBody for reference pages, made here rather than
+ * in the generators so the markdown stays plain:
+ *  - table headers do not wrap, so a wide Type column cannot squeeze
+ *    "Required" into one letter per line, and a first column (a property
+ *    name) keeps 10rem, so `target` is not split mid-word (docs/mcp/tools/*.md);
+ *  - ```markdown blocks wrap, because they quote prompt text whose paragraphs
+ *    are single lines hundreds of characters long (docs/mcp/playbooks.md).
+ *    Other code keeps `white-space: pre`: a shell command must not reflow.
+ * The two whitespace rules are `!important`: index.css styles `.paperclip-markdown pre`
+ * outside any layer, which beats a layered utility at any specificity.
+ * Both table rules make a table wider than its content would need, so each
+ * table also scrolls inside its own container (`scrollableTables`) and the
+ * page itself never scrolls sideways on a phone.
+ */
+const DOC_BODY_CLASS =
+  "[&_th]:whitespace-nowrap! [&_td:first-child]:min-w-40 [&_pre:has(code.language-markdown)]:whitespace-pre-wrap!";
+
 export function docsHref(slug: string): string {
   return `/docs/${slug}`;
 }
@@ -236,7 +254,9 @@ function DocArticle({ docRef, tree }: { docRef: DocPageRef; tree: DocTab[] }) {
         <p className="text-sm text-destructive">This page could not be loaded. Reload to try again.</p>
       ) : null}
       {page ? (
-        <MarkdownBody linkIssueReferences={false}>{renderGuide(page.body, { instanceUrl })}</MarkdownBody>
+        <MarkdownBody linkIssueReferences={false} scrollableTables className={DOC_BODY_CLASS}>
+          {renderGuide(page.body, { instanceUrl })}
+        </MarkdownBody>
       ) : null}
       <nav aria-label="Pagination" className="mt-6 flex items-stretch justify-between gap-4 border-t border-border pt-4">
         {prev ? (

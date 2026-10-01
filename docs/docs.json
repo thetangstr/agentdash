@@ -138,8 +138,40 @@
         ]
       },
       {
+        "tab": "MCP",
+        "groups": [
+          {
+            "group": "Using the Server",
+            "pages": [
+              "mcp/overview",
+              "mcp/connecting",
+              "mcp/toolsets",
+              "mcp/resources",
+              "mcp/playbooks"
+            ]
+          },
+          {
+            "group": "Tool Reference",
+            "pages": [
+              "mcp/tools/agent",
+              "mcp/tools/setup",
+              "mcp/tools/assistant",
+              "mcp/tools/human",
+              "mcp/tools/bridge"
+            ]
+          }
+        ]
+      },
+      {
         "tab": "CLI",
         "groups": [
+          {
+            "group": "AgentDash CLIs",
+            "pages": [
+              "cli/agentdash-connect",
+              "cli/agentdash-mcp"
+            ]
+          },
           {
             "group": "CLI Reference",
             "pages": [

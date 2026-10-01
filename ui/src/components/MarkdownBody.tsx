@@ -28,6 +28,13 @@ interface MarkdownBodyProps {
   resolveImageSrc?: (src: string) => string | null;
   /** Called when a user clicks an inline image */
   onImageClick?: (src: string) => void;
+  /**
+   * Put each table in its own horizontal scroll container, so a table wider
+   * than the column scrolls inside itself instead of widening the page (the
+   * public docs' generated reference tables). Off by default: other callers
+   * keep their tables exactly as they render today.
+   */
+  scrollableTables?: boolean;
 }
 
 let mermaidLoaderPromise: Promise<typeof import("mermaid").default> | null = null;
@@ -328,6 +335,7 @@ export function MarkdownBody({
   linkIssueReferences = true,
   resolveImageSrc,
   onImageClick,
+  scrollableTables = false,
 }: MarkdownBodyProps) {
   const { theme } = useTheme();
   const issuePrefixes = useIssuePrefixes();
@@ -355,6 +363,15 @@ export function MarkdownBody({
         {blockquoteChildren}
       </blockquote>
     ),
+    ...(scrollableTables
+      ? {
+          table: ({ node: _node, children: tableChildren, ...tableProps }) => (
+            <div className="paperclip-markdown-table-scroll overflow-x-auto overscroll-x-contain">
+              <table {...tableProps}>{tableChildren}</table>
+            </div>
+          ),
+        }
+      : {}),
     td: ({ node: _node, style: tableCellStyle, children: tableCellChildren, ...tableCellProps }) => (
       <td {...tableCellProps} style={mergeWrapStyle(tableCellStyle as React.CSSProperties | undefined)}>
         {tableCellChildren}

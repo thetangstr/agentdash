@@ -114,6 +114,20 @@ jobs:
           fi
           echo "Lockfile matches the manifests."
 
+      - name: MCP reference matches the MCP server
+        # docs/mcp/** and docs/cli/agentdash-connect.md are generated from the
+        # MCP server's own tools/list, resource listings and instructions, and
+        # from packages/connect/README.md (scripts/docs/generate-mcp-reference.mjs).
+        # This regenerates them and fails on any difference, so a tool, schema,
+        # playbook or README change cannot ship a stale public reference.
+        # Unlike the checks above it needs packages: the generator bundles
+        # packages/mcp-server's source with that package's esbuild. The
+        # filtered install fetches mcp-server and its workspace dependencies
+        # only; the step above has just proven the lockfile current.
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts --filter "@agentdash/mcp-server..."
+          node scripts/ci/check-mcp-reference-drift.mjs && node --test scripts/ci/check-mcp-reference-drift.test.mjs
+
   # The test lane, split four ways.
   #
   # `pnpm test:run` starts 93 Vitest processes — one per non-server project, one

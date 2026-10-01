@@ -34,7 +34,11 @@ vi.mock("../api/issues", () => ({
   issuesApi: mockIssuesApi,
 }));
 
-function renderMarkdown(children: string, seededIssues: Array<{ identifier: string; status: string; title?: string }> = []) {
+function renderMarkdown(
+  children: string,
+  seededIssues: Array<{ identifier: string; status: string; title?: string }> = [],
+  props: { scrollableTables?: boolean } = {},
+) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -55,13 +59,21 @@ function renderMarkdown(children: string, seededIssues: Array<{ identifier: stri
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <MarkdownBody>{children}</MarkdownBody>
+        <MarkdownBody {...props}>{children}</MarkdownBody>
       </ThemeProvider>
     </QueryClientProvider>,
   );
 }
 
 describe("MarkdownBody", () => {
+  it("wraps each table in its own scroll container only when asked", () => {
+    const table = "| a | b |\n|---|---|\n| 1 | 2 |";
+    const wrapped = renderMarkdown(table, [], { scrollableTables: true });
+    expect(wrapped).toContain('<div class="paperclip-markdown-table-scroll overflow-x-auto overscroll-x-contain"><table>');
+    expect(renderMarkdown(table)).not.toContain("paperclip-markdown-table-scroll");
+    expect(renderMarkdown(table)).toContain("<table>");
+  });
+
   it("renders markdown images without a resolver", () => {
     const html = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
