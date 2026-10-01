@@ -127,10 +127,13 @@ describe("settings", () => {
     const svc = settingsService(db);
     await svc.set("daily_cap", "25", "test");
     await svc.set("waitlist_mode", false, "test");
-    await svc.set("target_release", "v2026.925.0", "test");
+    await svc.set("target_release", "v2026.1001.1", "test");
     expect(await svc.get("daily_cap")).toBe(25);
     expect(await svc.get("waitlist_mode")).toBe(false);
-    expect(await svc.get("target_release")).toBe("v2026.925.0");
+    expect(await svc.get("target_release")).toBe("v2026.1001.1");
+    // PR #941 review: never a release older than the claim-tracking floor.
+    await expect(svc.set("target_release", "v2026.925.0", "test")).rejects.toThrow(/v2026\.929\.0 or later/);
+    expect(await svc.get("target_release")).toBe("v2026.1001.1");
     await svc.set("target_release", "null", "test");
     expect(await svc.get("target_release")).toBeNull();
     await expect(svc.set("daily_cap", "-1", "test")).rejects.toThrow(/integer/);

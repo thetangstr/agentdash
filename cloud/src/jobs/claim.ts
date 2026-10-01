@@ -20,7 +20,16 @@ export type ClaimState = "claimed" | "unclaimed" | "unknown";
  * Null until that release is cut: set it, in the PR after the cut, to that
  * tag. Releases before it (v2026.927.0 and older) read only `?email=`.
  */
-export const CLAIM_EMAIL_IN_FRAGMENT_SINCE: string | null = null;
+export const CLAIM_EMAIL_IN_FRAGMENT_SINCE: string | null = "v2026.929.0";
+
+/**
+ * AgentDash (MVP launch, PR #941 review): the oldest stable release a new box
+ * may run. Older releases do not report `claimed` (SC-5/SC-6) or read the
+ * claim email from the fragment (#836), so the sweep would treat such a box as
+ * `unknown` forever: never marked active, its sign-up never closed. Both
+ * `target_release` and an operator's per-box tag are refused below this.
+ */
+export const MIN_BOX_RELEASE = "v2026.929.0";
 
 const RELEASE_RE = /^v(\d{4})\.(\d{3,4})\.(\d+)$/;
 
@@ -100,4 +109,10 @@ export async function probeClaim(
   }
   if (body.claimed === false) return { state: "unclaimed", health: body, reason: "box reports claimed=false" };
   return { state: "unknown", health: body, reason: "box does not report its claim state (needs SC-6)" };
+}
+
+/** True when `tag` is a stable release at or after MIN_BOX_RELEASE. */
+export function releaseMeetsBoxFloor(tag: string): boolean {
+  const c = compareReleases(tag, MIN_BOX_RELEASE);
+  return c !== null && c >= 0;
 }

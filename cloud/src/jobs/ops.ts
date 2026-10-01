@@ -11,6 +11,7 @@ import type { CloudDb } from "../db/client.js";
 import { accounts, boxEvents, boxes, jobs, type BoxPurpose } from "../db/schema.js";
 import { SlugRefused, validateNewSlug } from "../railway/slug.js";
 import { enqueueJob, type ProvisionRequestResult, requestProvision } from "./queue.js";
+import { MIN_BOX_RELEASE, releaseMeetsBoxFloor } from "./claim.js";
 
 export class BoxOpError extends Error {
   constructor(
@@ -82,6 +83,10 @@ export async function createBoxForOperator(
     throw err;
   }
   if (!EMAIL_RE.test(input.email)) throw new BoxOpError("email is not an email address", 400);
+  // AgentDash (PR #941 review): a box on a release before the claim-tracking floor is never marked active.
+  if (input.releaseTag && !releaseMeetsBoxFloor(input.releaseTag)) {
+    throw new BoxOpError(`release ${input.releaseTag} is older than ${MIN_BOX_RELEASE}, which new boxes need (claim tracking)`, 400);
+  }
   const boxId = await db.transaction(async (tx) => {
     const [taken] = await tx.select({ id: boxes.id }).from(boxes).where(eq(boxes.slug, input.slug));
     if (taken) throw new BoxOpError(`slug ${input.slug} is taken`, 409);

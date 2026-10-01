@@ -174,14 +174,14 @@ describe("audit tables are append-only", () => {
     const svc = settingsService(db);
     await svc.set("rollout_paused", "true", "admin-cli", { ip: "203.0.113.9" });
     await svc.set("rollout_paused", false, "admin-cli", { ip: "203.0.113.9" });
-    await svc.set("target_release", "v2026.925.0", "admin-cli");
+    await svc.set("target_release", "v2026.1001.1", "admin-cli");
     await svc.set("target_release", null, "admin-cli");
     const rows = await sql`select kind, actor, ip, detail from operator_audit where kind = 'setting_changed' and actor = 'admin-cli' order by id`;
     expect(rows.map((r) => ({ ip: r.ip, detail: r.detail }))).toEqual([
       { ip: "203.0.113.9", detail: { setting: "rollout_paused", from: false, to: true } },
       { ip: "203.0.113.9", detail: { setting: "rollout_paused", from: true, to: false } },
-      { ip: null, detail: { setting: "target_release", from: null, to: "v2026.925.0" } },
-      { ip: null, detail: { setting: "target_release", from: "v2026.925.0", to: null } },
+      { ip: null, detail: { setting: "target_release", from: null, to: "v2026.1001.1" } },
+      { ip: null, detail: { setting: "target_release", from: "v2026.1001.1", to: null } },
     ]);
   });
 
