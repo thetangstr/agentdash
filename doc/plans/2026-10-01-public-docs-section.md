@@ -1,6 +1,6 @@
 # Public documentation: a Docs / API / MCP section on www.agentdash.cloud
 
-2026-10-01 · Yang · **All four decisions recorded 2026-10-01; ready for build** · Asked for by the owner: "a documentation/api/mcp section on our pub site; it should cover the entirety of how to use our platform."
+2026-10-01 · Yang · **Built 2026-10-01 (#908, #911, #913, #914, #925 merged); go-live is draft #928, waiting on four owner decisions** · Asked for by the owner: "a documentation/api/mcp section on our pub site; it should cover the entirety of how to use our platform."
 
 **Recommendation.** Serve the docs from the app's own public shell at `www.agentdash.cloud/docs`, driven by the `docs/docs.json` navigation that already exists, with the guide renderer the product already ships. Generate the three references that cannot be kept current by hand — the MCP tool reference (from the zod tool definitions), the HTTP route index (from the route files), and an OpenAPI 3.1 contract for the public API (from the shared validators and types) — and put a drift check on each. The owner has decided the HTTP API is a product, so the API section is a versioned contract with a key-management page and a deprecation policy, not a description of internals. Rebrand and prune the inherited Mintlify tree before any of it is public. Four pull requests; nothing is public until the routing change in the last one.
 
@@ -67,13 +67,13 @@ Hand-written references for 599 endpoints and 124 tools will be wrong within a w
 
 ## Rollout
 
-1. **PR 1 — the shell, nothing public.** `pages/Docs.tsx`, nav from `docs/docs.json`, lazy loader, search index, tests (route tests in the style of `guides-routes.test.tsx`: visit every page in the nav, assert the heading renders and no `{{` token survives). `vercel.json` untouched, so the section is reachable only in local builds and on instances. *Estimate: 2 days.*
-2. **PR 2 — MCP and CLI.** Generator + drift check for the tool reference; `docs/mcp/*` pages for connecting, toolsets, resources, playbooks; `packages/mcp-server/README.md` rewritten to point at them; `agentdash-connect` README lifted into `docs/cli/`. *Estimate: 2 days.*
-3. **PR 3a — API foundations.** Route-index generator + drift check; `contract.json` seeded with the resources named above; the OpenAPI generator and its drift checks; Scalar embedded at `/docs/api/reference`; Authentication rewritten from `middleware/auth.ts`; Conventions page; API-keys page after reading `routes/access.ts`. *Estimate: 5 days.*
-   **PR 3b — API content.** One page per contract resource with purpose, examples and error cases; Human control and Bridge from `doc/HUMAN-CONTROL.md` and `routes/bridge.ts`; the versioning and deprecation policy (proposal: the contract is `v1`, additive changes ship freely, a removal or rename is announced in release notes one stable before it lands and the old shape is kept for 60 days); the API changelog wired to `releases/*.md`. *Estimate: 5 days.*
-4. **PR 4 — content pass and go-live.** Rebrand sweep of `docs/start`, `docs/guides`, `docs/deploy`, `docs/adapters`; Concepts pages; prune the private and engagement-specific files; the forbidden-token scan; `vercel.json` allowlist; `/mcp` marketing page links into `/docs/mcp`. *Estimate: 3 days.*
+1. **PR 1 — the shell, nothing public.** *Done: #908.* `pages/Docs.tsx`, nav from `docs/docs.json`, lazy loader, search index, tests (route tests in the style of `guides-routes.test.tsx`: visit every page in the nav, assert the heading renders and no `{{` token survives). `vercel.json` untouched, so the section is reachable only in local builds and on instances. *Estimate: 2 days.*
+2. **PR 2 — MCP and CLI.** *Done: #911.* Generator + drift check for the tool reference; `docs/mcp/*` pages for connecting, toolsets, resources, playbooks; `packages/mcp-server/README.md` rewritten to point at them; `agentdash-connect` README lifted into `docs/cli/`. *Estimate: 2 days.*
+3. **PR 3a — API foundations.** *Done: #913.* Route-index generator + drift check; `contract.json` seeded with the resources named above; the OpenAPI generator and its drift checks; Scalar embedded at `/docs/api/reference`; Authentication rewritten from `middleware/auth.ts`; Conventions page; API-keys page after reading `routes/access.ts`. *Estimate: 5 days.*
+   **PR 3b — API content.** *Done: #914.* One page per contract resource with purpose, examples and error cases; Human control and Bridge from `doc/HUMAN-CONTROL.md` and `routes/bridge.ts`; the versioning and deprecation policy (proposal: the contract is `v1`, additive changes ship freely, a removal or rename is announced in release notes one stable before it lands and the old shape is kept for 60 days); the API changelog wired to `releases/*.md`. *Estimate: 5 days.*
+4. **PR 4 — content pass.** *Done: #925 (the go-live routing and product links were split into #928, a draft, so the owner controls the moment).* Rebrand sweep of `docs/start`, `docs/guides`, `docs/deploy`, `docs/adapters`; Concepts pages; prune the private and engagement-specific files; the forbidden-token scan; `vercel.json` allowlist; `/mcp` marketing page links into `/docs/mcp`. *Estimate: 3 days.*
 
-Total: about 17 working days for one person — 10 for the docs, 7 more for the API contract. Estimate, not a measurement. PRs 2 and 3a are independent of each other once PR 1 is in; 3b follows 3a.
+Total: about 17 working days for one person — 10 for the docs, 7 more for the API contract. Estimate, not a measurement. Measured: the five content PRs were written, reviewed in a separate lane, and merged in one day (2026-10-01) by Claude Code executors on Opus with the owner deciding; each PR went through at least one review-and-fix round. PRs 2 and 3a are independent of each other once PR 1 is in; 3b follows 3a.
 
 ## Risks and what is left out
 
@@ -91,3 +91,11 @@ Recorded 2026-10-01 from the owner.
 2. **Get started leads with AgentDash Cloud.** Self-host is reached from Deploy.
 3. **The `agentdash_mk` profile is a client's and not public.** Its API page leaves the nav; the forbidden-token scan covers the profile name in user-facing pages.
 4. **The HTTP API is a product.** Decided 2026-10-01 over the proposal to treat MCP and webhooks as the only integration surface. Consequences: an OpenAPI 3.1 contract generated from the shared validators and types, a hand-maintained manifest naming what is in the contract, an API-keys page, a versioning and deprecation policy, and two more drift checks — PR 3 splits into 3a and 3b and the estimate rises by about seven days. The contract starts with the resources named in the API row and widens on request; everything else stays listed in the route index as internal.
+
+## What building it exposed (recorded 2026-10-01)
+
+- **Board API keys have no UI.** A person can mint one only through the CLI sign-in handshake (`routes/access.ts:2647-2778`), it expires in 30 days, has no scopes, and can only revoke itself. "API is a product" needs a key-management page — server and UI work outside this plan.
+- **Stewardship is a per-workspace capability.** A default Cloud workspace shows My Agent as "Available on request", so Get started cannot promise a terminal connection without the operator switching it on.
+- **Two pre-existing exposures in the main www bundle**, independent of the docs: a hard-coded client brief (`ui/src/components/UnprefixedBoardRedirect.tsx:49`) and the in-app changelog bundling `releases/*.md`. Owner decision pending.
+- **Server bugs filed from the contract work:** #916, #917, #918, #919, #920, #921, #926, #927; test flake #910; MCP schema bug #912.
+- **The generated references held.** The MCP reference is read from a running server over an in-memory transport; the route index, OpenAPI contract and changelog are regenerated in CI and fail on drift; a renamed route, a changed validator, or a route that refuses agents but is listed as agent-callable now fails the PR.
