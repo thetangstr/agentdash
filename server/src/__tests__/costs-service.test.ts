@@ -369,8 +369,7 @@ describe("cost routes", () => {
     const overview = source.slice(source.indexOf('router.get("/companies/:companyId/budgets/overview"'));
     const overviewBody = overview.slice(0, overview.indexOf("});"));
     expect(overviewBody, "budget overview must not surface restricted project names or spend")
-      .toContain("projectScopedVisibilityCondition(");
-    expect(overviewBody).toContain("budgetPoliciesTable.scopeId");
+      .toContain("budgetPolicyVisibilityCondition(req, companyId)");
 
     const treeSummary = source.slice(source.indexOf('router.get("/issues/:id/cost-summary"'));
     // The handler has an early 404 `});`, so bound it by the next route.

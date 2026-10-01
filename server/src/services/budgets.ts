@@ -886,7 +886,7 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
     getIncidentContext: async (
       companyId: string,
       incidentId: string,
-    ): Promise<{ agentScopeId: string | null; approvalId: string | null } | null> => {
+    ): Promise<{ agentScopeId: string | null; projectScopeId: string | null; approvalId: string | null } | null> => {
       const incident = await db
         .select()
         .from(budgetIncidents)
@@ -900,6 +900,8 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
         .then((rows) => rows[0] ?? null);
       return {
         agentScopeId: policy?.scopeType === "agent" ? policy.scopeId : null,
+        // AgentDash (GH #902): the route checks project visibility on this.
+        projectScopeId: incident.scopeType === "project" ? incident.scopeId : null,
         approvalId: incident.approvalId ?? null,
       };
     },

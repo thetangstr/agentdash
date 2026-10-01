@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals, bridgeTasks } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -289,9 +289,12 @@ export function approvalService(db: Db) {
   return {
     listPendingHireApprovalsForAgent,
 
-    list: (companyId: string, status?: string) => {
-      const conditions = [eq(approvals.companyId, companyId)];
+    // AgentDash (GH #902): `visibleWhere` is the caller's restricted-project
+    // condition over approvals (budget overrides name their project).
+    list: (companyId: string, status?: string, opts: { visibleWhere?: SQL } = {}) => {
+      const conditions: SQL[] = [eq(approvals.companyId, companyId)];
       if (status) conditions.push(eq(approvals.status, status));
+      if (opts.visibleWhere) conditions.push(opts.visibleWhere);
       return db.select().from(approvals).where(and(...conditions));
     },
 
