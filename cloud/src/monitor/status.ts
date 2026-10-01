@@ -157,10 +157,15 @@ export async function operatorSuspend(db: CloudDb, slug: string, actor: string):
 
 /** Operator wake: a resume job for a suspended box (the router queues the same job on a visit). */
 export async function operatorWake(db: CloudDb, slug: string, actor: string): Promise<{ jobId: string; created: boolean }> {
-  const [box] = await db.select().from(boxes).where(eq(boxes.slug, slug));
-  if (!box) throw new BoxOpError(`no box ${slug}`, 404);
-  if (box.state !== "suspended") throw new BoxOpError(`box ${slug} is ${box.state}; only a suspended box can be woken`, 409);
-  const { id, created } = await enqueueJob(db, { boxId: box.id, kind: "resume", payload: { requestedBy: actor } });
-  if (created) await db.insert(boxEvents).values({ boxId: box.id, kind: "wake_requested", actor, detail: { jobId: id } });
-  return { jobId: id, created };
+  return await db.transaction(async (tx) => {
+    const [box] = await tx.select().from(boxes).where(eq(boxes.slug, slug)).for("update");
+    if (!box) throw new BoxOpError(`no box ${slug}`, 404);
+    if (box.state !== "suspended") throw new BoxOpError(`box ${slug} is ${box.state}; only a suspended box can be woken`, 409);
+    // Like a visit through the router: the idle clock restarts under the row lock,
+    // so the idle sweep cannot move the box to pending_delete while it wakes.
+    await tx.update(boxes).set({ lastHumanRequestAt: new Date() }).where(eq(boxes.id, box.id));
+    const { id, created } = await enqueueJob(tx, { boxId: box.id, kind: "resume", payload: { requestedBy: actor } });
+    if (created) await tx.insert(boxEvents).values({ boxId: box.id, kind: "wake_requested", actor, detail: { jobId: id } });
+    return { jobId: id, created };
+  });
 }

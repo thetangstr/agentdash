@@ -119,3 +119,23 @@ END;
 $$;
 --> statement-breakpoint
 REVOKE ALL ON FUNCTION "prune_fleet_history"(integer) FROM PUBLIC;
+--> statement-breakpoint
+-- A visit to a suspended box is human activity: besides queueing the resume
+-- job (as in 0005), it restarts the idle clock, under the box's row lock, so
+-- the idle sweep's move to pending_delete (which requires the clock unchanged
+-- since it read the box) cannot race a wake. Same signature: grants are kept.
+CREATE OR REPLACE FUNCTION "edge_request_resume"("p_slug" text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+	b uuid;
+BEGIN
+	SELECT id INTO b FROM boxes WHERE slug = p_slug AND state = 'suspended' FOR UPDATE;
+	IF b IS NULL THEN
+		RETURN false;
+	END IF;
+	UPDATE boxes SET last_human_request_at = now() WHERE id = b;
+	INSERT INTO jobs (box_id, kind, payload) VALUES (b, 'resume', '{"requestedBy":"edge"}'::jsonb)
+	ON CONFLICT DO NOTHING;
+	RETURN true;
+END;
+$$;

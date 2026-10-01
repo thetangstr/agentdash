@@ -22,7 +22,8 @@ import { alertCenter, ALERT_FLAP_WINDOW_MS, ALERT_REPEAT_MS } from "../monitor/a
 import { checkCertificates, checkRouter5xx, checkSpend } from "../monitor/checks.js";
 import { HEALTH_FAILURE_THRESHOLD, pollFleetHealth } from "../monitor/health.js";
 import { DAY_MS, sweepIdle } from "../monitor/idle.js";
-import { loadMonitorConfig, pruneFleetHistory } from "../monitor/service.js";
+import { loadMonitorConfig, pruneFleetHistory, runExclusive } from "../monitor/service.js";
+import { boxProjectDescription } from "../railway/names.js";
 import { boxHealthReport, fleetStatus, operatorSuspend, operatorWake } from "../monitor/status.js";
 import { resumeHandler, suspendHandler } from "../monitor/suspend.js";
 import { parseSettingValue, SETTING_DEFAULTS, settingsService } from "../settings.js";
@@ -466,6 +467,34 @@ describe("Free idle policy (spec §5.2)", () => {
     expect(mail.messages).toHaveLength(2);
   });
 
+  it("never moves a box to pending_delete while it is waking (queued resume, router visit, operator wake)", async () => {
+    await setting("idle_delete_enabled", true);
+    const mail = recordingMailer();
+    const dueBox = async () => {
+      const b = await makeBox("suspended", { lastHumanRequestAt: idleAt(50), suspendedAt: idleAt(29), masterKeyEscrow: "sealed" });
+      return b;
+    };
+    const a = await dueBox(); // a resume already queued (e.g. a wake still deploying)
+    const b = await dueBox(); // a visit through the router
+    const c = await dueBox(); // an operator wake
+    await sweepIdle(deps(mail)); // deletion warnings
+    advance(15 * DAY_MS);
+    const [wake] = await db.insert(jobs).values({ boxId: a.id, kind: "resume" }).returning();
+    await db.update(jobs).set({ state: "running", lockedBy: "w", lockedUntil: new Date(Date.now() + 60_000) }).where(eq(jobs.id, wake!.id));
+    const [visited] = await edgeSql`select edge_request_resume(${b.slug}) as ok`;
+    expect(visited!.ok).toBe(true);
+    await operatorWake(db, c.slug, "test-operator");
+    expect(await sweepIdle(deps(mail))).toMatchObject({ deleteStarted: 0 });
+    for (const x of [a, b, c]) expect((await boxRow(x.id)).state).toBe("suspended");
+    // The visit and the operator wake restarted the idle clock.
+    expect((await boxRow(b.id)).lastHumanRequestAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    expect((await boxRow(c.id)).lastHumanRequestAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    // Control: with no wake, the same box does enter deletion.
+    await db.update(jobs).set({ state: "dead" }).where(eq(jobs.boxId, a.id));
+    expect(await sweepIdle(deps(mail))).toMatchObject({ deleteStarted: 1 });
+    expect((await boxRow(a.id)).state).toBe("pending_delete");
+  });
+
   it("does not enter deletion without the master key escrow; ops is told instead", async () => {
     await setting("idle_delete_enabled", true);
     const box = await makeBox("suspended", { lastHumanRequestAt: idleAt(50), suspendedAt: idleAt(29) });
@@ -516,6 +545,7 @@ describe("suspend and wake (jobs, the router's wake page, the operator)", () => 
     const { fake, project, env, web } = fakeWithBox(slug);
     const [acct] = await db.insert(accounts).values({ email: `wake${n}@example.test` }).returning();
     const [b] = await db.insert(boxes).values({ accountId: acct!.id, slug }).returning();
+    project.description = boxProjectDescription(b!.id);
     for (const s of ["provisioning", "awaiting_claim", "active", ...(state === "suspended" ? ["suspended"] : [])] as BoxState[]) {
       await db.update(boxes).set({ state: s }).where(eq(boxes.id, b!.id));
     }
@@ -523,7 +553,7 @@ describe("suspend and wake (jobs, the router's wake page, the operator)", () => 
       .update(boxes)
       .set({ projectId: project.id, environmentId: env, webServiceId: web.id, upstreamHost: web.domains[0], edgeSecretEnc: encryptField(KEYS, "edge-secret-fake-0123456789", "boxes.edge_secret_enc"), ...extra })
       .where(eq(boxes.id, b!.id));
-    return { box: await boxRow(b!.id), fake, web };
+    return { box: await boxRow(b!.id), fake, web, project };
   }
 
   function runner(fake: FakeRailwayBoxes) {
@@ -596,6 +626,32 @@ describe("suspend and wake (jobs, the router's wake page, the operator)", () => 
     expect(fake.ops().filter((o) => /Create|Delete/.test(o))).toEqual([]);
     const events = await db.select({ kind: boxEvents.kind }).from(boxEvents).where(eq(boxEvents.boxId, box.id));
     expect(events.map((e) => e.kind)).toEqual(expect.arrayContaining(["suspend_requested", "box_suspended", "box_resumed"]));
+  });
+
+  it("an idle suspend fails (box untouched) when the Free box moved to Pro after the sweep queued it", async () => {
+    const { box, fake, web } = await railwayBox("active", { lastHumanRequestAt: new Date(Date.now() - 30 * DAY_MS) });
+    const [job] = await db
+      .insert(jobs)
+      .values({ boxId: box.id, kind: "suspend", payload: { reason: "idle", requestedBy: "idle-policy", idleSince: box.lastHumanRequestAt!.toISOString() } })
+      .returning();
+    await db.update(boxes).set({ planTier: "pro" }).where(eq(boxes.id, box.id));
+    await runner(fake).runOnce();
+    expect((await db.select().from(jobs).where(eq(jobs.id, job!.id)))[0]!.state).toBe("dead");
+    expect((await boxRow(box.id)).state).toBe("active");
+    expect(web.deployments.map((d) => d.status)).toEqual(["SUCCESS"]);
+    expect(fake.ops()).not.toContain("deploymentRemove");
+  });
+
+  it("refuses to suspend a project that does not carry this box's control-plane tag", async () => {
+    const { box, fake, web, project } = await railwayBox("active");
+    project.description = "someone else's project";
+    const { jobId } = await operatorSuspend(db, box.slug, "test-operator");
+    await runner(fake).runOnce();
+    const [j] = await db.select().from(jobs).where(eq(jobs.id, jobId));
+    expect(j).toMatchObject({ state: "dead" });
+    expect(j!.lastError).toMatch(/control-plane tag/);
+    expect((await boxRow(box.id)).state).toBe("active");
+    expect(web.deployments.map((d) => d.status)).toEqual(["SUCCESS"]);
   });
 
   it("an idle suspend is dropped when the box was used after the sweep queued it", async () => {
@@ -671,6 +727,37 @@ describe("operator surface", () => {
     expect(parseSettingValue("spend_alarm_usd", "null")).toBeNull();
     expect(() => parseSettingValue("spend_alarm_usd", "-1")).toThrow(/dollar amount/);
     expect(() => parseSettingValue("spend_alarm_usd", "lots")).toThrow(/dollar amount/);
+  });
+
+  it("a monitor pass runs on one replica at a time (advisory lock)", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => (entered = r));
+    const first = runExclusive(db, 771_999, async () => {
+      entered();
+      await new Promise<void>((r) => (release = r));
+    });
+    await inside;
+    let ran = false;
+    expect(await runExclusive(db, 771_999, async () => void (ran = true))).toBe(false);
+    expect(ran).toBe(false);
+    release();
+    expect(await first).toBe(true);
+    expect(await runExclusive(db, 771_999, async () => void (ran = true))).toBe(true);
+  });
+
+  it("closes a box's health alerts once it is no longer active", async () => {
+    const box = await makeBox("active");
+    const alerts = alertCenter({ db, alerter, log, now });
+    const answers = new Map<string, number | "down">([[box.upstreamHost!, "down"]]);
+    for (let i = 0; i < 3; i++) await pollFleetHealth({ db, log, alerts, edgeDomain: EDGE_DOMAIN, fetch: healthFetch(answers), now }, "direct");
+    expect(sent.filter((a) => a.kind === "box_unhealthy")).toHaveLength(1);
+    await db.update(boxes).set({ state: "suspended" }).where(eq(boxes.id, box.id));
+    await pollFleetHealth({ db, log, alerts, edgeDomain: EDGE_DOMAIN, fetch: healthFetch(answers), now }, "direct");
+    expect(sent.at(-1)).toMatchObject({ kind: "box_unhealthy", resolved: true });
+    expect(sent.at(-1)!.detail).toMatch(/is suspended; no longer polled/);
+    const [row] = await db.select().from(fleetAlerts).where(eq(fleetAlerts.key, `health:direct:${box.id}`));
+    expect(row!.state).toBe("resolved");
   });
 
   it("history is pruned only through prune_fleet_history, never inside the last day", async () => {

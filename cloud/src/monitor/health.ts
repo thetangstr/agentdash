@@ -13,9 +13,9 @@
 // and ops is alerted (deduplicated by ./alert-center.ts); the first healthy
 // poll after that sends a recovery notice. Boxes with a live suspend, resume
 // or upgrade job are skipped: they are expected to be down.
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, like, ne, sql } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
-import { boxes, boxHealth, boxHealthChecks, type HealthPath, jobs } from "../db/schema.js";
+import { boxes, boxHealth, boxHealthChecks, fleetAlerts, type HealthPath, jobs } from "../db/schema.js";
 import type { Logger } from "../logger.js";
 import { redactString } from "../logger.js";
 import type { AlertCenter } from "./alert-center.js";
@@ -97,6 +97,14 @@ export interface PollSummary {
 export async function pollFleetHealth(deps: HealthPollDeps, path: HealthPath): Promise<PollSummary> {
   const now = deps.now ?? (() => new Date());
   const log = deps.log.child({ component: "health-poller", path });
+  // A box that was suspended, entered deletion or was deleted is not polled any more:
+  // close its health alerts instead of leaving them firing forever.
+  const stale = await deps.db
+    .select({ key: fleetAlerts.key, slug: boxes.slug, state: boxes.state })
+    .from(fleetAlerts)
+    .innerJoin(boxes, eq(boxes.id, fleetAlerts.boxId))
+    .where(and(eq(fleetAlerts.state, "firing"), like(fleetAlerts.key, `health:${path}:%`), ne(boxes.state, "active")));
+  for (const a of stale) await deps.alerts.resolve(a.key, `${a.slug} is ${a.state}; no longer polled`);
   const active = await deps.db
     .select({ id: boxes.id, slug: boxes.slug, upstreamHost: boxes.upstreamHost, lastHealth: boxes.lastHealth })
     .from(boxes)

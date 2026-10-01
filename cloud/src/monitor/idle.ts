@@ -187,8 +187,11 @@ export async function sweepIdle(deps: IdleDeps): Promise<IdleSummary> {
             .update(boxes)
             .set({ state: "pending_delete", deleteAfter, updatedAt: now })
             .where(and(eq(boxes.id, box.id), eq(boxes.state, "suspended"), eq(boxes.planTier, "free"),
-              // Untouched since the sweep read it (a wake in between keeps the box).
-              sql`date_trunc('milliseconds', ${boxes.lastHumanRequestAt}) is not distinct from ${box.lastHumanRequestAt?.toISOString() ?? null}::timestamptz`))
+              // Untouched since the sweep read it: a visit to the waking page touches
+              // last_human_request_at under the row lock (edge_request_resume, migration 0009).
+              sql`date_trunc('milliseconds', ${boxes.lastHumanRequestAt}) is not distinct from ${box.lastHumanRequestAt?.toISOString() ?? null}::timestamptz`,
+              // And no wake queued or deploying (an operator wake does not touch the idle clock).
+              sql`not exists (select 1 from jobs j where j.box_id = ${boxes.id} and j.kind = 'resume' and j.state in ('queued', 'running'))`))
             .returning({ id: boxes.id });
           if (r.length) {
             await tx.insert(boxEvents).values({

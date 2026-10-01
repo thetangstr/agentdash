@@ -69,16 +69,48 @@ export async function pruneFleetHistory(db: CloudDb, days = KEEP_HISTORY_DAYS): 
   return Number(rows[0]?.n ?? 0);
 }
 
+/** Advisory lock keys for the monitor passes: 771_000 plus a fixed per-pass offset (the same on every replica). */
+const MONITOR_LOCK_BASE = 771_000;
+const PASS_LOCK_OFFSETS: Record<string, number> = {
+  "direct health": 1,
+  "router health": 2,
+  "router 5xx": 3,
+  certificates: 4,
+  spend: 5,
+  "idle policy": 6,
+  prune: 7,
+};
+
+/**
+ * Run `pass` only if this replica takes the pass's advisory lock, so a second
+ * cloud-control replica never double-sends an idle email or double-counts a
+ * health failure. The lock is transaction-scoped: the transaction stays open
+ * (one pooled connection) for the length of the pass and releases it on any
+ * exit, including a crash. Returns false when another replica holds it.
+ */
+export async function runExclusive(db: CloudDb, key: number, pass: () => Promise<unknown>): Promise<boolean> {
+  return await db.transaction(async (tx) => {
+    const rows = (await tx.execute(sql`select pg_try_advisory_xact_lock(${key}) as ok`)) as unknown as Array<{ ok: boolean }>;
+    if (!rows[0]?.ok) return false;
+    await pass();
+    return true;
+  });
+}
+
 export function startMonitor(deps: MonitorDeps): Monitor {
   const log = deps.log.child({ component: "monitor" });
   const alerts = alertCenter({ db: deps.db, alerter: deps.alerter, log });
   const timers: NodeJS.Timeout[] = [];
   const every = (name: string, ms: number, pass: () => Promise<unknown>, runNow = true) => {
     let running = false;
+    const key = MONITOR_LOCK_BASE + PASS_LOCK_OFFSETS[name]!;
     const tick = () => {
       if (running) return;
       running = true;
-      void pass()
+      void runExclusive(deps.db, key, pass)
+        .then((ran) => {
+          if (!ran) log.debug(`${name} pass skipped: another replica holds it`);
+        })
         .catch((err: unknown) => log.error(`${name} pass failed`, { err }))
         .finally(() => {
           running = false;

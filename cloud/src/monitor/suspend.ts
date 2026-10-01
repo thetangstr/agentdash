@@ -17,7 +17,9 @@ import { FatalJobError, RetryableJobError } from "../jobs/errors.js";
 import type { JobContext, JobHandler } from "../jobs/runner.js";
 import { DEPLOY_FAILED, deployService, getProject, latestDeployment } from "../railway/api.js";
 import type { RailwayClient } from "../railway/client.js";
+import { assertBoxProjectName, boxProjectName, ProjectNameRefused, projectTag } from "../railway/names.js";
 import { probeHealth } from "./health.js";
+import { IDLE_POLICY_PLANS } from "./idle.js";
 
 type Opt = { signal?: AbortSignal };
 
@@ -43,7 +45,18 @@ async function railwayBox(ctx: JobContext, deps: { client: RailwayClient; worksp
   if (!box.projectId || !box.environmentId || !box.webServiceId) throw new FatalJobError(`box ${box.slug} has no recorded Railway web service`);
   const p = await getProject(deps.client, box.projectId, { signal: ctx.signal });
   if (p.workspaceId !== deps.workspaceId) throw new FatalJobError(`project ${p.id} is not in the boxes workspace`);
-  if (p.name !== `agentdash-box-${box.slug}`) throw new FatalJobError(`project ${p.id} is not named agentdash-box-${box.slug}; refusing to touch it`);
+  // The same guards as the guarded delete (../railway/delete.ts): the box-name rule and
+  // protected list, exactly this box's name, and this box's control-plane tag.
+  try {
+    assertBoxProjectName(p.name);
+  } catch (err) {
+    if (err instanceof ProjectNameRefused) throw new FatalJobError(err.message);
+    throw err;
+  }
+  if (p.name !== boxProjectName(box.slug)) throw new FatalJobError(`project ${p.id} is not named ${boxProjectName(box.slug)}; refusing to touch it`);
+  if (!(p.description ?? "").includes(projectTag(box.id))) {
+    throw new FatalJobError(`project ${p.id} does not carry this box's control-plane tag; refusing to touch it`);
+  }
   return { box, projectId: box.projectId, environmentId: box.environmentId, webServiceId: box.webServiceId };
 }
 
@@ -60,6 +73,11 @@ export function suspendHandler(deps: { client: RailwayClient; workspaceId: strin
           if (box.state === "suspended") return;
           if (box.state !== "active") throw new FatalJobError(`box ${box.slug} is ${box.state}; only an active box can be suspended`);
           const payload = ctx.job.payload ?? {};
+          const idle = payload.reason === "idle";
+          // The plan is rechecked now: a Free box that upgraded after the sweep queued it is exempt.
+          if (idle && !(IDLE_POLICY_PLANS as readonly string[]).includes(box.planTier)) {
+            throw new FatalJobError(`box ${box.slug} is on plan ${box.planTier}, which the idle policy exempts; not suspending`);
+          }
           // An idle suspend whose box was used after the sweep queued it is dropped.
           if (payload.reason === "idle" && typeof payload.idleSince === "string" && box.lastHumanRequestAt && box.lastHumanRequestAt.getTime() > Date.parse(payload.idleSince)) {
             await ctx.db.insert(boxEvents).values({ boxId: box.id, kind: "idle_suspend_skipped", actor: "suspend-job", detail: { reason: "used since queued" } });
@@ -69,8 +87,12 @@ export function suspendHandler(deps: { client: RailwayClient; workspaceId: strin
           const moved = await ctx.db
             .update(boxes)
             .set({ state: "suspended", suspendedAt: new Date(), updatedAt: new Date() })
-            .where(and(eq(boxes.id, box.id), eq(boxes.state, "active")))
+            .where(and(eq(boxes.id, box.id), eq(boxes.state, "active"), ...(idle ? [inArray(boxes.planTier, [...IDLE_POLICY_PLANS])] : [])))
             .returning({ id: boxes.id });
+          if (idle && !moved.length) {
+            const now = await ctx.box();
+            if (now.state === "active") throw new FatalJobError(`box ${box.slug} changed plan to ${now.planTier} while being suspended; not suspending`);
+          }
           if (moved.length) {
             await ctx.db.insert(boxEvents).values({
               boxId: box.id,
