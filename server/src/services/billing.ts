@@ -8,6 +8,18 @@ interface BillingConfig {
   // UI must hide checkout/trial CTAs — the stub answers 503 anyway, but an
   // offer that can only fail is a dead end.
   configured: boolean;
+  // AgentDash (SC-8, GH #769): the hosted box's slug. Omitted means
+  // process.env.AGENTDASH_BOX_SLUG. When set it is written as `box_slug` beside
+  // companyId in Stripe metadata, so the self-serve cloud's single account
+  // webhook endpoint can route each event back to this box.
+  boxSlug?: string | null;
+}
+
+// AgentDash (SC-8, GH #769): Stripe metadata for objects this instance
+// creates. `box_slug` only on hosted boxes (AGENTDASH_BOX_SLUG set).
+function stripeMetadata(companyId: string, config: BillingConfig): Record<string, string> {
+  const slug = (config.boxSlug === undefined ? process.env.AGENTDASH_BOX_SLUG : config.boxSlug)?.trim();
+  return slug ? { companyId, box_slug: slug } : { companyId };
 }
 
 interface CompaniesAdapter {
@@ -37,11 +49,12 @@ export function billingService(deps: Deps) {
       if (!customerId) {
         const customer = await deps.stripe.customers.create({
           name: company.name,
-          metadata: { companyId },
+          metadata: stripeMetadata(companyId, deps.config),
         });
         customerId = customer.id;
         await deps.companies.update(companyId, { stripeCustomerId: customerId });
       }
+      const metadata = stripeMetadata(companyId, deps.config);
       const session = await deps.stripe.checkout.sessions.create({
         mode: "subscription",
         customer: customerId,
@@ -60,8 +73,10 @@ export function billingService(deps: Deps) {
         subscription_data: {
           trial_period_days: deps.config.trialDays,
           trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
-          metadata: { companyId },
+          metadata,
         },
+        // AgentDash (SC-8, GH #769): the session too (checkout.session.* events), hosted boxes only.
+        ...(metadata.box_slug ? { metadata } : {}),
         success_url: `${deps.config.publicBaseUrl}/billing?session=success`,
         cancel_url: `${deps.config.publicBaseUrl}/billing?session=cancel`,
       });

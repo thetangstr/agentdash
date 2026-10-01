@@ -62,7 +62,17 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   backups run <slug>         back a box up now (runs in the background; check with backups list)
   backups download <id> <file>
                              save a backup's encrypted file; restore it offline with
-                             backup-restore decrypt (key machine), then replay (sandbox, no keys): runbook §7
+                             backup-restore decrypt (key machine), then replay (sandbox, no keys): runbook §8
+  stripe status              Stripe mode, endpoint secret, shared box key version, boxes behind, event counts
+  stripe events [state]      forwarded Stripe events (dead by default: the dead letters; pending, delivered, dropped, all)
+  stripe redeliver <evt_id>  put a dead or waiting event back on the queue with a fresh attempt budget
+  stripe rotate-box-key [--apply] [--redeploy] [--resume]
+                             read the new shared restricted key (rk_…) from stdin and upsert it, with each box's
+                             webhook secret, price and trial days, on every box; a DRY RUN unless --apply;
+                             --resume (no stdin) re-runs with the stored key to finish an interrupted rotation;
+                             --redeploy restarts each box now instead of at its next deploy
+  stripe endpoint ensure [--apply]
+                             create the account's one webhook endpoint (needs CLOUD_STRIPE_CONTROL_KEY); dry run unless --apply
 
 env: CLOUD_CONTROL_URL (default http://localhost:3200; https required for any non-local host),
      CLOUD_ADMIN_TOKEN (required)`;
@@ -258,6 +268,39 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
     await file.close();
     io.out(`wrote ${size} bytes to ${rest[1]} (sha256 ${got}; still encrypted: open it with the backup-restore tool)`);
     return 0;
+  }
+  // AgentDash (SC-8, GH #769): Stripe fan-out and the shared box key.
+  if (group === "stripe") {
+    const flags = new Set(rest.filter((a) => a.startsWith("--")));
+    const args = rest.filter((a) => !a.startsWith("--"));
+    if (action === "status" && !rest.length) return print(await call("GET", "/stripe/status"));
+    if (action === "events" && args.length <= 1 && !flags.size) return print(await call("GET", `/stripe/events?state=${encodeURIComponent(args[0] ?? "dead")}`));
+    if (action === "redeliver" && args.length === 1 && !flags.size) return print(await call("POST", `/stripe/events/${encodeURIComponent(args[0]!)}/redeliver`));
+    if (action === "endpoint" && args[0] === "ensure" && args.length === 1 && [...flags].every((f) => f === "--apply")) {
+      return print(await call("POST", "/stripe/endpoint", { apply: flags.has("--apply") }));
+    }
+    if (action === "rotate-box-key" && !args.length && [...flags].every((f) => ["--apply", "--redeploy", "--resume"].includes(f))) {
+      let key: string | undefined;
+      if (!flags.has("--resume")) {
+        if (!io.readStdin) {
+          io.err("rotate-box-key reads the new key from stdin (or pass --resume to finish with the stored key)");
+          return 2;
+        }
+        key = (await io.readStdin()).trim();
+        if (!key) {
+          io.err("no key on stdin; pipe the new restricted key in, or pass --resume");
+          return 2;
+        }
+      }
+      const r = await call("POST", "/stripe/box-key", { ...(key ? { key } : {}), apply: flags.has("--apply"), redeploy: flags.has("--redeploy") });
+      const code = print(r);
+      if (code === 0 && !flags.has("--apply")) io.err("dry run: nothing was stored or sent; re-run with --apply");
+      if (code === 0 && flags.has("--apply") && (r.json as { failed?: number }).failed) {
+        io.err("some boxes failed; fix the cause and run `stripe rotate-box-key --apply --resume` to finish");
+        return 1;
+      }
+      return code;
+    }
   }
   io.err(USAGE);
   return 64;

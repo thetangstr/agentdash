@@ -182,6 +182,9 @@ importers:
       embedded-postgres:
         specifier: ^18.1.0-beta.16
         version: 18.1.0-beta.16(patch_hash=55uhvnotpqyiy37rn3pqpukhei)
+      stripe:
+        specifier: ^22.1.0
+        version: 22.1.0(@types/node@24.12.0)
       supertest:
         specifier: ^7.0.0
         version: 7.2.2
