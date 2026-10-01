@@ -50,8 +50,11 @@ function deriveInitials(name: string) {
   return name.slice(0, 2).toUpperCase();
 }
 
-function deriveUserSlug(name: string | null | undefined, email: string | null | undefined, id: string | null | undefined) {
-  const candidates = [name, email?.split("@")[0], email, id];
+// AgentDash (GH #505): name or user id only -- never the email address, so a
+// profile URL that gets shared or logged carries no mailbox name. The server
+// resolves both (it matches the same slugified name / principal id).
+function deriveUserSlug(name: string | null | undefined, id: string | null | undefined) {
+  const candidates = [name, id];
   for (const candidate of candidates) {
     const slug = candidate
       ?.trim()
@@ -135,7 +138,7 @@ export function SidebarAccountMenu({
     session?.user.email?.trim() || (deploymentMode === "authenticated" ? "Signed in" : "Local workspace board");
   const accountBadge = deploymentMode === "authenticated" ? "Account" : "Local";
   const initials = deriveInitials(displayName);
-  const profileHref = `/u/${deriveUserSlug(session?.user.name, session?.user.email, session?.user.id)}`;
+  const profileHref = `/u/${deriveUserSlug(session?.user.name, session?.user.id)}`;
 
   function closeNavigationChrome() {
     setOpen(false);

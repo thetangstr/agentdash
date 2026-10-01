@@ -50,20 +50,44 @@ function slugifyUserPart(value: string | null | undefined) {
   return normalized || null;
 }
 
-function userSlugCandidates(row: CompanyUserRow) {
+/**
+ * AgentDash (GH #505): `includeEmail` is false for callers who may not read
+ * this member's address. Then the address is neither a slug we hand out (a
+ * nameless member's slug would otherwise be their mailbox name) nor a slug we
+ * accept (answering 200 vs 404 for `alice@corp.com` would tell the caller
+ * whether that address is a member). Name and principal id remain.
+ */
+function userSlugCandidates(row: CompanyUserRow, includeEmail: boolean) {
   const candidates = new Set<string>();
   const add = (value: string | null | undefined) => {
     const slug = slugifyUserPart(value);
     if (slug) candidates.add(slug);
   };
   add(row.name);
-  add(row.email?.split("@")[0]);
-  add(row.email);
+  if (includeEmail) {
+    add(row.email?.split("@")[0]);
+    add(row.email);
+  }
   add(row.principalId);
   return [...candidates];
 }
 
-async function resolveCompanyUser(db: Db, companyId: string, rawSlug: string): Promise<CompanyUserRow | null> {
+/**
+ * AgentDash (GH #505): whether this caller may see `row`'s email -- a member
+ * manager (`canViewEmails`), or the member themself.
+ */
+function emailVisibleFor(row: CompanyUserRow, canViewEmails: boolean, viewerUserId: string | null) {
+  return canViewEmails || (viewerUserId !== null && row.principalId === viewerUserId);
+}
+
+async function resolveCompanyUser(
+  db: Db,
+  companyId: string,
+  rawSlug: string,
+  // AgentDash (GH #505): which rows may be matched by their email.
+  canViewEmails: boolean,
+  viewerUserId: string | null,
+): Promise<CompanyUserRow | null> {
   const slug = slugifyUserPart(rawSlug);
   if (!slug) return null;
 
@@ -90,7 +114,11 @@ async function resolveCompanyUser(db: Db, companyId: string, rawSlug: string): P
     .orderBy(desc(companyMemberships.updatedAt))
     .limit(200);
 
-  return rows.find((row) => userSlugCandidates(row).includes(slug)) ?? null;
+  return (
+    rows.find((row) =>
+      userSlugCandidates(row, emailVisibleFor(row, canViewEmails, viewerUserId)).includes(slug),
+    ) ?? null
+  );
 }
 
 function userIssueInvolvementSql(companyId: string, userId: string) {
@@ -310,9 +338,14 @@ export function userProfileRoutes(db: Db) {
     const userSlug = req.params.userSlug as string;
     assertCompanyAccess(req, companyId);
 
-    const row = await resolveCompanyUser(db, companyId, userSlug);
+    // AgentDash (GH #505): decided before lookup, so an address cannot be
+    // used to probe membership; an email-shaped slug is simply not found.
+    const canViewEmails = await canViewMemberEmails(access, req, companyId);
+    const viewerUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
+    const row = await resolveCompanyUser(db, companyId, userSlug, canViewEmails, viewerUserId);
     if (!row) throw notFound("User not found");
-    const canonicalSlug = userSlugCandidates(row)[0] ?? row.principalId;
+    const canonicalSlug =
+      userSlugCandidates(row, emailVisibleFor(row, canViewEmails, viewerUserId))[0] ?? row.principalId;
     const userId = row.userId ?? row.principalId;
 
     const [everMeasured, stats, daily, recentIssues, recentActivity, topAgents, topProviders] = await Promise.all([
@@ -410,7 +443,7 @@ export function userProfileRoutes(db: Db) {
       slug: canonicalSlug,
       name: row.name,
       // AgentDash (GH #505): only for member managers, or the person themself.
-      email: visibleMemberEmail(req, await canViewMemberEmails(access, req, companyId), userId, row.email),
+      email: visibleMemberEmail(req, canViewEmails, userId, row.email),
       image: row.image,
       membershipRole: row.membershipRole,
       membershipStatus: row.status,
