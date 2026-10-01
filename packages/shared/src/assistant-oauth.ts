@@ -221,6 +221,15 @@ export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
     scope: ASSISTANT_SCOPE_WORK,
     bodyFields: ["body"],
   },
+  // AgentDash (Ross launch M2): request_ross_assessment — POST /issues/:id/ross-requests.
+  // One governed comment through the canonical comment pipeline; the route
+  // coalesces a same-author re-delivery under the issue lock.
+  {
+    method: "POST",
+    pattern: /^\/api\/issues\/[^/]+\/ross-requests$/,
+    scope: ASSISTANT_SCOPE_WORK,
+    bodyFields: ["requestKey", "question"],
+  },
   // GH #679 (M4): prepare_decision — POST /companies/:id/assistant/actions/prepare-decision
   {
     method: "POST",

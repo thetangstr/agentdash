@@ -1,4 +1,5 @@
 import { issueCurrentAuthority } from "../services/issue-current-authority.js";
+import { registerRossRequestRoutes } from "./ross-requests.js";
 import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
 import {
   issueCommentActions,
@@ -3611,6 +3612,11 @@ export function issueRoutes(
       }
     },
   );
+
+  // AgentDash (Ross launch M2): the governed question-to-Ross request. Defined
+  // on this router so router.param("id") applies identifier resolution and the
+  // A5 project rule (404) exactly as it does for /issues/:id/comments.
+  registerRossRequestRoutes(router, { db, heartbeat });
 
   return router;
 }

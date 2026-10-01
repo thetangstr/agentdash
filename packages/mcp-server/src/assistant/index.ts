@@ -5,11 +5,13 @@ import { AssistantContext } from "./context.js";
 import { assistantTools } from "./tools.js";
 import { assistantWorkTools } from "./work.js";
 import { assistantGatedTools } from "./gated.js";
+import { assistantRossRequestTools } from "./ross-request.js";
 
 /**
  * AgentDash assistant MCP (M1 reads GH #676, M3 work tools GH #678, M4 gated
- * tools GH #679): the person-facing toolset over the control-plane API — nine
- * read tools, five work tools, three gated-action tools. Selected by
+ * tools GH #679): the person-facing toolset over the control-plane API — ten
+ * read tools (incl. ross_request_status), six work tools (incl.
+ * request_ross_assessment, Ross launch M2), three gated-action tools. Selected by
  * `toolset: "assistant"` (stdio: AGENTDASH_TOOLSET=assistant).
  *
  * GH #745 review: a grant WITHOUT `agentdash:work` does not see the work
@@ -24,9 +26,12 @@ export function createAssistantToolDefinitions(
   config: { companyId: string | null; assistantScopes?: readonly string[] },
 ): ToolDefinition[] {
   const ctx = new AssistantContext(client, config.companyId);
-  const tools = [...assistantTools(client, ctx)];
+  // AgentDash (Ross launch M2): the governed Ross request. Its status read is
+  // a read tool every grant sees; filing a request is a work-class write.
+  const ross = assistantRossRequestTools(client, ctx);
+  const tools = [...assistantTools(client, ctx), ross.rossRequestStatus];
   if (!config.assistantScopes || config.assistantScopes.includes(ASSISTANT_SCOPE_WORK)) {
-    tools.push(...assistantWorkTools(client, ctx));
+    tools.push(...assistantWorkTools(client, ctx), ross.requestRossAssessment);
   }
   if (!config.assistantScopes || config.assistantScopes.includes(ASSISTANT_SCOPE_DECIDE)) {
     tools.push(...assistantGatedTools(client, ctx));

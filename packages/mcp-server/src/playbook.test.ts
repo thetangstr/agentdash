@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PLAYBOOK, STEWARD_PLAYBOOK, selectPlaybook } from "./playbook.js";
+import { ASSISTANT_PLAYBOOK, PLAYBOOK, STEWARD_PLAYBOOK, selectPlaybook } from "./playbook.js";
 
 /**
  * Two callers connect to this server and they need opposite instructions: the
@@ -87,5 +87,15 @@ describe("the steward contract", () => {
     expect(STEWARD_PLAYBOOK).not.toContain("sign the human up");
     expect(STEWARD_PLAYBOOK).not.toContain("agentdash_sign_up");
     expect(STEWARD_PLAYBOOK).not.toContain("install_checklist");
+  });
+});
+
+describe("the assistant contract: Ross requests (Ross launch M2)", () => {
+  it("names both Ross request tools and never lets a request pass for an answer", () => {
+    expect(ASSISTANT_PLAYBOOK).toContain("`request_ross_assessment`");
+    expect(ASSISTANT_PLAYBOOK).toContain("`ross_request_status`");
+    expect(ASSISTANT_PLAYBOOK).toContain("A request is not an answer.");
+    expect(ASSISTANT_PLAYBOOK).toContain("never say a model run started");
+    expect(ASSISTANT_PLAYBOOK).toContain("only with the SAME key");
   });
 });

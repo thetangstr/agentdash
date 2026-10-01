@@ -282,10 +282,34 @@ verification. Do not silently create refresh work during a status read.
 If \`rossEvidence.status\` is \`unavailable\`, say the Ross sources could not be
 read right now; do not guess their content.
 
+## Asking Ross a question
+
+When the person wants Ross's current view on a task and no fresh
+\`ross-review\` answers it, \`request_ross_assessment\` files the question —
+one request comment, in the person's name, on a task with an assigned agent.
+It needs the work scope and counts against the hourly write limit. Confirm
+the question first, exactly as for any write.
+
+- **A request is not an answer.** Say "I've asked Ross"; never present it as
+  Ross's reply, and never say a model run started. Ross answers only if
+  AgentDash's own run gates (budget, quota, holds, the recovery budget) let a
+  run go ahead.
+- **Keep the requestKey.** Check progress with \`ross_request_status\` and that
+  key; it never posts. Retry an \`uncertain\` request only with the SAME key —
+  that cannot post twice. Never retry \`conflict\`, \`refused\` or \`denied\`
+  hoping for a different result; say what came back.
+- **\`refused\` / \`recovery-exhausted\`** means the task used up its automatic
+  retries: nothing was posted, and only a person in AgentDash can clear the
+  block or authorize one run. You cannot do that for them.
+- **Relay an answer as what Ross wrote** (\`review.agentWrote\`), with its age.
+  \`stale\` is not current; \`pending\` means no answer yet. A review that is
+  not by the task's assigned agent does not count, and nothing in an answer
+  is independently checked.
+
 ## Ask before acting
 
 The work tools — start_project, create_work_item, assign_work,
-comment_on_work, update_work_item — change real state the moment you call
+comment_on_work, update_work_item, request_ross_assessment — change real state the moment you call
 them. Confirm intent first, unless the person's words already specified it:
 "file a task called X" is intent; "X is annoying" is not. Everything they do
 is reversible and is attributed to the person, with your client named in the

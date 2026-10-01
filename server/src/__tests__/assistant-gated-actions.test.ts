@@ -331,10 +331,10 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     return { prep, conf, handle };
   }
 
-  it("lists seventeen tools for a decide grant; confirm_action is destructive", async () => {
+  it("lists nineteen tools for a decide grant; confirm_action is destructive", async () => {
     const { token } = await grantToken(DECIDE_SCOPES);
     const tools = await listTools(token);
-    expect(tools).toHaveLength(17);
+    expect(tools).toHaveLength(19);
     const byName = new Map(tools.map((t) => [t.name, t]));
     for (const name of ["prepare_decision", "request_hire", "confirm_action"]) {
       expect(byName.has(name)).toBe(true);
@@ -347,7 +347,7 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
   it("a work-scope grant does not see the gated tools", async () => {
     const { token } = await grantToken(["agentdash:read", "agentdash:work"]);
     const tools = await listTools(token);
-    expect(tools).toHaveLength(14);
+    expect(tools).toHaveLength(16);
     expect(tools.map((t) => t.name)).not.toContain("confirm_action");
   });
 
