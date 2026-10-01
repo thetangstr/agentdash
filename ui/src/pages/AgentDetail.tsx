@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
 import { describeAgentKeyProvenance } from "@/lib/agent-key-provenance";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCapability } from "../hooks/useCapability";
 import {
   agentsApi,
   type AgentKey,
@@ -1686,6 +1687,19 @@ function AgentOverview({
     queryFn: () => accessApi.listUserDirectory(agent.companyId),
     enabled: !!agent.companyId,
   });
+  // Agent visibility (2026-09-30): an administrator's call; everyone else
+  // reads the resolved value. The server refuses the write for anyone else.
+  const visibilityQueryClient = useQueryClient();
+  const visibilityCapability = useCapability(agent.companyId, "agents:create");
+  const updateVisibility = useMutation({
+    mutationFn: (visibility: "company" | "owner" | null) =>
+      agentsApi.update(agentId, { visibility }, agent.companyId),
+    onSuccess: () => {
+      visibilityQueryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentRouteId) });
+      visibilityQueryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId) });
+      visibilityQueryClient.invalidateQueries({ queryKey: queryKeys.agents.list(agent.companyId) });
+    },
+  });
   const userProfiles = useMemo(
     () => buildCompanyUserProfileMap(companyMembers?.users),
     [companyMembers?.users],
@@ -1815,6 +1829,34 @@ function AgentOverview({
                 {agentKind(agent) === "autonomous"
                   ? "None — this agent runs without a person"
                   : "No steward assigned"}
+              </span>
+            )}
+          </SummaryRow>
+          <SummaryRow label="Visible to">
+            {/* Agent visibility (2026-09-30): an administrator's call; everyone
+                else reads the resolved value. The server refuses the write
+                for non-administrators, so the control is a courtesy, not the gate. */}
+            {visibilityCapability.membershipRole === "admin" || visibilityCapability.isInstanceAdmin ? (
+              <select
+                aria-label="Agent visibility"
+                className="rounded-md border bg-background px-2 py-1 text-xs"
+                value={agent.visibility ?? "inherit"}
+                disabled={updateVisibility.isPending}
+                onChange={(event) =>
+                  updateVisibility.mutate(event.target.value === "inherit" ? null : (event.target.value as "company" | "owner"))
+                }
+              >
+                <option value="inherit">Company default</option>
+                <option value="company">Everyone</option>
+                <option value="owner">Only the people who answer for it</option>
+              </select>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                {agent.visibility === "owner"
+                  ? "Only the people who answer for it"
+                  : agent.visibility === "company"
+                    ? "Everyone"
+                    : "Company default"}
               </span>
             )}
           </SummaryRow>

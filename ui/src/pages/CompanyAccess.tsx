@@ -10,6 +10,7 @@ import { ShieldCheck, Trash2, Users } from "lucide-react";
 import { accessApi, type CompanyMember } from "@/api/access";
 import { ChannelBindingsTable } from "@/components/access/ChannelBindingsTable";
 import { StewardshipAssignments } from "@/components/access/StewardshipAssignments";
+import { AgentVisibilitySetting } from "@/components/access/AgentVisibilitySetting";
 import { AvailableOnRequest } from "@/components/AvailableOnRequest";
 import { useStewardshipCapability } from "@/hooks/useStewardshipCapability";
 import { agentsApi } from "@/api/agents";
@@ -411,6 +412,16 @@ export function CompanyAccess() {
           is off the section says it is available on request. */}
       {selectedCompanyId ? (
         <>
+          <AgentVisibilitySetting
+            companyId={selectedCompanyId}
+            value={selectedCompany?.agentVisibilityDefault ?? "company"}
+            canManage={
+              // The server gates the write on company administrators; an
+              // instance admin without a membership (currentUserRole null,
+              // the amber note above) passes that gate too.
+              membersQuery.data ? membersQuery.data.access.currentUserRole === "admin" || !membersQuery.data.access.currentUserRole : false
+            }
+          />
           {stewardship === "off" ? (
             <section className="space-y-3 rounded-lg border p-4">
               <AvailableOnRequest compact title="Agent stewardship" capability="stewardship" />

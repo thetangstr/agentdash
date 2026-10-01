@@ -64,6 +64,8 @@ export interface Project {
   description: string | null;
   status: ProjectStatus;
   leadAgentId: string | null;
+  /** A5: open by default; 'restricted' limits visibility to the access list plus admins. */
+  visibility?: "company" | "restricted";
   targetDate: string | null;
   color: string | null;
   env: AgentEnvConfig | null;

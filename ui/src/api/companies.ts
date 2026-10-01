@@ -58,6 +58,7 @@ export const companiesApi = {
         | "attachmentMaxBytes"
         | "requireBoardApprovalForNewAgents"
         | "newIssuesStartAsTodo"
+        | "agentVisibilityDefault"
         | "feedbackDataSharingEnabled"
         | "brandColor"
         | "logoAssetId"

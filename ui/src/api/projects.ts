@@ -17,6 +17,11 @@ function projectPath(id: string, companyId?: string, suffix = "") {
   return withCompanyScope(`/projects/${encodeURIComponent(id)}${suffix}`, companyId);
 }
 
+export type ProjectAccessResponse = {
+  visibility: "company" | "restricted";
+  access: Array<{ principalType: "user" | "agent"; principalId: string; grantedByUserId: string | null }>;
+};
+
 export const projectsApi = {
   list: (companyId: string) => api.get<Project[]>(`/companies/${companyId}/projects`),
   get: (id: string, companyId?: string) => api.get<Project>(projectPath(id, companyId)),
@@ -24,6 +29,13 @@ export const projectsApi = {
     api.post<Project>(`/companies/${companyId}/projects`, data),
   update: (id: string, data: Record<string, unknown>, companyId?: string) =>
     api.patch<Project>(projectPath(id, companyId), data),
+  /** A5: who may see a restricted project. Humans and agents, replaced whole. */
+  getAccess: (id: string, companyId?: string) => api.get<ProjectAccessResponse>(projectPath(id, companyId, "/access")),
+  replaceAccess: (
+    id: string,
+    data: { access: Array<{ principalType: "user" | "agent"; principalId: string }> },
+    companyId?: string,
+  ) => api.put<ProjectAccessResponse>(projectPath(id, companyId, "/access"), data),
   listWorkspaces: (projectId: string, companyId?: string) =>
     api.get<ProjectWorkspace[]>(projectPath(projectId, companyId, "/workspaces")),
   createWorkspace: (projectId: string, data: Record<string, unknown>, companyId?: string) =>
