@@ -26,6 +26,8 @@ export type FoundationSelection = {
   native?: boolean;
   recovery?: boolean;
   skillKeys?: readonly string[];
+  /** Read-only operations hold the company row FOR KEY SHARE; writers take the company mutex. */
+  readOnly?: boolean;
 };
 type Collection = { witnesses: Map<string, BoardIdentityWitness>; sealed: boolean };
 const rowLock = (table: SQLWrapper, id: string) => sql`select id from ${table} where id = ${id} for share`;
@@ -299,12 +301,15 @@ export function foundationAuthority(req: Request) {
       };
     },
     async stage(executor: Db, selection: FoundationSelection) {
-      // Review P1 (#859): FOR KEY SHARE, not FOR UPDATE. Reads (readiness
-      // polling, question lists) and writes both come through here; the
-      // company row only has to stay present. Row witnesses below pin every
-      // fact the operation depends on, and FOR KEY SHARE does not conflict
-      // with the ordinary UPDATEs spend and heartbeat writers make.
-      const [company] = await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, selection.companyId)).for('key share');
+      // Review P1 (#859): never FOR UPDATE. A read (readiness polling,
+      // question lists, readback) holds the company row FOR KEY SHARE, which
+      // only keeps it present and does not conflict with spend/heartbeat
+      // writers. A write takes the same company mutex as every acceptance
+      // writer (FOR NO KEY UPDATE, #881) BEFORE any witness row lock, so it
+      // cannot deadlock against a writer that holds the mutex and then
+      // updates a witnessed row (e.g. an enrollment update during sharing).
+      const [company] = await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, selection.companyId))
+        .for(selection.readOnly ? 'key share' : 'no key update');
       if (!company) throw notFound('Company not found');
       const state: Collection = { witnesses: new Map(), sealed: false };
       await collect(executor, selection, state);

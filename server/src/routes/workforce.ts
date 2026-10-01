@@ -45,7 +45,7 @@ export function workforceRoutes(db: Db, options: { heartbeat?: Pick<ReturnType<t
     try {
       result = await db.transaction(async tx => {
         const executor = tx as unknown as Db;
-        const guard = await authority.stage(executor, { companyId: req.params.companyId as string, operationId, input, native: true });
+        const guard = await authority.stage(executor, { companyId: req.params.companyId as string, operationId, input, native: true, readOnly: !mutation });
         if (mutation) human(req); else access(req);
         await guard.seal();
         const value = await work(workforceService(executor), { executor, publications }, guard.checkTime);

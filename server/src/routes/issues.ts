@@ -2564,7 +2564,7 @@ export function issueRoutes(
     try {
       value = await db.transaction(async tx => {
         const executor = tx as unknown as Db;
-        const guard = await authority.stage(executor, { companyId, operationId, input, native: true });
+        const guard = await authority.stage(executor, { companyId, operationId, input, native: true, readOnly: !mutation });
         assertBoard(req); assertCompanyAccess(req, companyId);
         await guard.seal();
         const value = await work(executor, { executor, publications }, { assertSource: guard.assertSource, beforeWrite: guard.checkTime }, guard.visibleQuestion);
