@@ -80,10 +80,14 @@ export function verdictApprovalBridge(db: Db, deps: BridgeDeps) {
     }
 
     // Idempotency: if a closing verdict already exists for the issue, bail.
+    // GH #863 (#867 follow-up): only one recorded since this escalation was
+    // filed; a closing verdict from an earlier review round must not swallow
+    // the human's decision on this one.
     const closing = await deps.verdicts.closingVerdictFor(
       approval.companyId,
       "issue",
       issueId,
+      { since: approval.createdAt },
     );
     if (closing) {
       // We may have already mirrored this resolution in a previous tick.

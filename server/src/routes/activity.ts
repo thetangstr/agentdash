@@ -21,6 +21,7 @@ import {
   agentVisibilityCondition,
   issueVisibilityParam,
   projectScopedVisibilityCondition,
+  redactHiddenIssuesInActivityRows,
   resolveAgentVisibility,
   runVisibilityParam,
 } from "./visibility.js";
@@ -97,7 +98,8 @@ export function activityRoutes(db: Db) {
       ),
     };
     const result = await svc.list(filters);
-    res.json(result);
+    // GH #863: blocker and referenced-issue entries in details follow visibility.
+    res.json(await redactHiddenIssuesInActivityRows(db, req, companyId, result));
   });
 
   router.post("/companies/:companyId/activity", validate(createActivitySchema), async (req, res) => {
@@ -133,7 +135,8 @@ export function activityRoutes(db: Db) {
     }
     assertCompanyAccess(req, issue.companyId);
     const result = await svc.forIssue(issue.id);
-    res.json(result);
+    // GH #863: blocker and referenced-issue entries in details follow visibility.
+    res.json(await redactHiddenIssuesInActivityRows(db, req, issue.companyId, result));
   });
 
   router.get("/issues/:id/runs", async (req, res) => {

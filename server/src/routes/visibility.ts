@@ -510,6 +510,180 @@ export async function truncateAncestorsAtInvisible<A extends { id: string }>(
   return firstHidden === -1 ? ancestors : ancestors.slice(0, firstHidden);
 }
 
+interface BlockerAttentionSamples {
+  sampleBlockerIdentifier: string | null;
+  sampleStalledBlockerIdentifier: string | null;
+}
+
+interface IssueRefsOnRow {
+  parentId?: string | null;
+  blockerAttention?: BlockerAttentionSamples | null;
+}
+
+/**
+ * AgentDash (GH #863, #868 follow-up): the references a visible issue makes
+ * to OTHER issues outside its relation summaries.
+ *
+ * - `parentId`: a restricted parent's UUID is dropped (null), matching the
+ *   ancestor chain, which already stops at the first invisible ancestor.
+ * - `blockerAttention.sample*Identifier`: computed over the whole blocker
+ *   graph before any filtering, so it can name a restricted blocker anywhere
+ *   down the chain. A sample naming an issue the actor cannot see (or one
+ *   that no longer resolves in this company) is nulled. The counts and the
+ *   state stay: they describe whether this issue is really unblocked, which
+ *   its own status already says, and name nothing.
+ */
+export async function redactHiddenIssueRefsOnRows<R extends IssueRefsOnRow>(
+  db: Db,
+  req: Request,
+  companyId: string,
+  rows: R[],
+): Promise<R[]> {
+  if (rows.length === 0 || seesEverything(req, companyId)) return rows;
+  const parentIds = new Set<string>();
+  const sampleRefs = new Set<string>();
+  for (const row of rows) {
+    if (typeof row.parentId === "string") parentIds.add(row.parentId);
+    const attention = row.blockerAttention;
+    if (attention?.sampleBlockerIdentifier) sampleRefs.add(attention.sampleBlockerIdentifier);
+    if (attention?.sampleStalledBlockerIdentifier) sampleRefs.add(attention.sampleStalledBlockerIdentifier);
+  }
+  if (parentIds.size === 0 && sampleRefs.size === 0) return rows;
+
+  // Samples are identifiers (`ACME-12`), or a bare id when the blocker has none.
+  const sampleIdentifiers = [...sampleRefs].filter((ref) => !isCanonicalUuid(ref));
+  const idByRef = new Map<string, string>();
+  for (const ref of sampleRefs) if (isCanonicalUuid(ref)) idByRef.set(ref, ref);
+  if (sampleIdentifiers.length > 0) {
+    const resolved = await db
+      .select({ id: issues.id, identifier: issues.identifier })
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), inArray(issues.identifier, sampleIdentifiers)));
+    for (const row of resolved) if (row.identifier) idByRef.set(row.identifier, row.id);
+  }
+  const visible = await listVisibleIssueIds(db, req, companyId, [...parentIds, ...idByRef.values()]);
+  const sampleVisible = (ref: string | null) => {
+    if (!ref) return ref;
+    const id = idByRef.get(ref);
+    return id && visible.has(id) ? ref : null;
+  };
+
+  return rows.map((row) => {
+    let next = row;
+    if (typeof row.parentId === "string" && !visible.has(row.parentId)) {
+      next = { ...next, parentId: null };
+    }
+    const attention = row.blockerAttention;
+    if (attention) {
+      const sampleBlockerIdentifier = sampleVisible(attention.sampleBlockerIdentifier);
+      const sampleStalledBlockerIdentifier = sampleVisible(attention.sampleStalledBlockerIdentifier);
+      if (
+        sampleBlockerIdentifier !== attention.sampleBlockerIdentifier
+        || sampleStalledBlockerIdentifier !== attention.sampleStalledBlockerIdentifier
+      ) {
+        next = { ...next, blockerAttention: { ...attention, sampleBlockerIdentifier, sampleStalledBlockerIdentifier } };
+      }
+    }
+    return next;
+  });
+}
+
+/**
+ * AgentDash (GH #863, #868 follow-up): activity details that name OTHER
+ * issues. `issue.blockers_updated` stores each blocker's id, identifier and
+ * title, and `issue.updated` / `issue.created` store referenced issues the
+ * same way. Activity rows are filtered by the issue they are ABOUT, so a
+ * visible issue's row could still carry a restricted blocker's title. These
+ * keys are pruned to the issues the reader can see, read-side, because a row
+ * is written once and read by people with different access.
+ */
+const ACTIVITY_ISSUE_SUMMARY_KEYS = [
+  "blockedByIssues",
+  "addedBlockedByIssues",
+  "removedBlockedByIssues",
+  "addedReferencedIssues",
+  "removedReferencedIssues",
+  "currentReferencedIssues",
+] as const;
+const ACTIVITY_ISSUE_ID_KEYS = ["blockedByIssueIds", "addedBlockedByIssueIds", "removedBlockedByIssueIds"] as const;
+
+function asDetailsRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+/** Every issue id named under the related-issue keys of one activity `details`. */
+export function relatedIssueIdsInActivityDetails(details: unknown): string[] {
+  const record = asDetailsRecord(details);
+  if (!record) return [];
+  const ids = new Set<string>();
+  for (const key of ACTIVITY_ISSUE_SUMMARY_KEYS) {
+    const value = record[key];
+    if (!Array.isArray(value)) continue;
+    for (const entry of value) {
+      const id = asDetailsRecord(entry)?.id;
+      if (typeof id === "string") ids.add(id);
+    }
+  }
+  for (const key of ACTIVITY_ISSUE_ID_KEYS) {
+    const value = record[key];
+    if (!Array.isArray(value)) continue;
+    for (const id of value) if (typeof id === "string") ids.add(id);
+  }
+  // `issue.updated` keeps the previous values (e.g. the old blocker ids) under _previous.
+  if (asDetailsRecord(record._previous)) {
+    for (const id of relatedIssueIdsInActivityDetails(record._previous)) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * The same `details` with related-issue entries the reader cannot see
+ * removed. Returns the input object unchanged when nothing is hidden.
+ */
+export function pruneRelatedIssuesInActivityDetails<D>(details: D, visible: (issueId: string) => boolean): D {
+  const record = asDetailsRecord(details);
+  if (!record) return details;
+  let next: Record<string, unknown> | null = null;
+  for (const key of ACTIVITY_ISSUE_SUMMARY_KEYS) {
+    const value = record[key];
+    if (!Array.isArray(value)) continue;
+    const kept = value.filter((entry) => {
+      const id = asDetailsRecord(entry)?.id;
+      return typeof id === "string" && visible(id);
+    });
+    if (kept.length !== value.length) (next ??= { ...record })[key] = kept;
+  }
+  for (const key of ACTIVITY_ISSUE_ID_KEYS) {
+    const value = record[key];
+    if (!Array.isArray(value)) continue;
+    const kept = value.filter((id) => typeof id === "string" && visible(id));
+    if (kept.length !== value.length) (next ??= { ...record })[key] = kept;
+  }
+  if (asDetailsRecord(record._previous)) {
+    const previous = pruneRelatedIssuesInActivityDetails(record._previous, visible);
+    if (previous !== record._previous) (next ??= { ...record })._previous = previous;
+  }
+  return (next ?? details) as D;
+}
+
+/** REST read side: prune related issues in each activity row's `details`. */
+export async function redactHiddenIssuesInActivityRows<R extends { details?: unknown }>(
+  db: Db,
+  req: Request,
+  companyId: string,
+  rows: R[],
+): Promise<R[]> {
+  if (rows.length === 0 || seesEverything(req, companyId)) return rows;
+  const ids = new Set<string>();
+  for (const row of rows) for (const id of relatedIssueIdsInActivityDetails(row.details)) ids.add(id);
+  if (ids.size === 0) return rows;
+  const visible = await listVisibleIssueIds(db, req, companyId, ids);
+  return rows.map((row) => {
+    const details = pruneRelatedIssuesInActivityDetails(row.details, (id) => visible.has(id));
+    return details === row.details ? row : { ...row, details };
+  });
+}
+
 /** "Related work" (issue mentions, both directions) follows the same rule. */
 export async function filterVisibleReferenceSummary<
   I extends { issue: { id: string } },

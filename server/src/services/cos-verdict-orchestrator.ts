@@ -10,7 +10,7 @@ import {
 } from "@paperclipai/db";
 import { COS_REVIEW_DEFAULTS } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
-import { logActivity } from "./activity-log.js";
+import { insertActivity, logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import type { FeatureFlagsService } from "./feature-flags.js";
 import {
@@ -19,7 +19,7 @@ import {
   releaseNonRunnableReviewerItems,
 } from "./review-queue-assignments.js";
 import type { AutoHireReason, CosReviewerAutoHireService } from "./cos-reviewer-auto-hire.js";
-import { verdictsService, type VerdictsService } from "./verdicts.js";
+import { verdictsService, type VerdictsService, type VerdictsServiceDeps } from "./verdicts.js";
 
 interface OrchestratorDeps {
   verdicts: VerdictsService;
@@ -30,7 +30,7 @@ interface OrchestratorDeps {
    * transaction, so the escalation verdict commits or rolls back with its
    * approval. Defaults to `verdictsService(tx)`; unit tests inject a stub.
    */
-  verdictsFor?: (dbOrTx: Db) => VerdictsService;
+  verdictsFor?: (dbOrTx: Db, verdictDeps?: VerdictsServiceDeps) => VerdictsService;
 }
 
 /**
@@ -48,7 +48,8 @@ interface OrchestratorDeps {
  *    `verdict_escalation` approval row when the SLA timer fires.
  */
 export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
-  const verdictsFor = deps.verdictsFor ?? ((dbOrTx: Db) => verdictsService(dbOrTx));
+  const verdictsFor =
+    deps.verdictsFor ?? ((dbOrTx: Db, verdictDeps?: VerdictsServiceDeps) => verdictsService(dbOrTx, verdictDeps));
 
   function escalateAfterMs(): number {
     const raw = process.env.AGENTDASH_VERDICT_ESCALATE_AFTER_MS;
@@ -238,10 +239,12 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
       // on; the item is retried next cycle.
       try {
         // (a) Dequeue if a closing verdict already exists.
+        // GH #863 (#867 follow-up): only this review round's verdicts close it.
         const closing = await deps.verdicts.closingVerdictFor(
           companyId,
           "issue",
           item.issueId,
+          { since: item.enqueuedAt },
         );
         if (closing) {
           await dequeue(companyId, item.issueId);
@@ -426,12 +429,17 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
       return reason;
     };
 
+    // GH #863 (#867 follow-up): activity written inside the escalation
+    // transaction is published after it commits, never before.
+    const publications: ActivityPublication[] = [];
     const outcome = await withEscalationLock<EscalationOutcome>(issueId, async (tx) => {
-      const txVerdicts = verdictsFor(tx);
+      const txVerdicts = verdictsFor(tx, { onActivity: (publication) => publications.push(publication) });
       const txIssueApprovals = issueApprovalService(tx);
 
       // 1. Idempotency: bail if there's already a closing verdict.
-      const existing = await txVerdicts.closingVerdictFor(companyId, "issue", issueId);
+      const existing = await txVerdicts.closingVerdictFor(companyId, "issue", issueId, {
+        since: options.enqueuedAt,
+      });
       if (existing) return { kind: "closed" };
 
       // 1b. GH #701: an open verdict (escalated_to_human / revision_requested /
@@ -497,7 +505,7 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
         await txIssueApprovals.link(issueId, approval.id, {
           userId: accountableUserId,
         });
-        await logActivity(tx, {
+        publications.push(await insertActivity(tx, {
           companyId,
           actorType: "system",
           actorId: "cos_verdict_orchestrator",
@@ -512,7 +520,7 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
               : "sla_expired_unassigned",
             escalatedToUserId: accountableUserId,
           },
-        });
+        }));
         // Auto-hire re-evaluation (GH #701): the queue has work nobody can
         // review — grow the reviewer pool if the depth threshold and cap allow.
         return { kind: "escalated", hireReason: "queue_depth" };
@@ -562,7 +570,7 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
       // 4. Link the approval to the issue.
       await txIssueApprovals.link(issueId, approval.id, { agentId: reviewerAgentId });
 
-      await logActivity(tx, {
+      publications.push(await insertActivity(tx, {
         companyId,
         actorType: "system",
         actorId: "cos_verdict_orchestrator",
@@ -575,9 +583,12 @@ export function cosVerdictOrchestrator(db: Db, deps: OrchestratorDeps) {
           approvalId: approval.id,
           reason: "sla_expired",
         },
-      });
+      }));
       return { kind: "escalated", hireReason: null };
     });
+    // Committed: only now may the escalation's activity reach live events
+    // and plugins (a rolled-back escalation threw above and publishes nothing).
+    for (const publication of publications) publishActivity(publication);
 
     switch (outcome.kind) {
       case "closed":

@@ -10,8 +10,16 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mockLogActivity = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockPublishActivity = vi.hoisted(() => vi.fn());
 vi.mock("../services/activity-log.js", () => ({
   logActivity: mockLogActivity,
+  // GH #863: escalation activity is inserted in the transaction and published
+  // after commit; record the insert through the same spy.
+  insertActivity: vi.fn(async (db: unknown, input: unknown) => {
+    await mockLogActivity(db, input);
+    return { liveEvent: { input }, pluginEvent: null };
+  }),
+  publishActivity: mockPublishActivity,
   setPluginEventBus: vi.fn(),
   publishPluginDomainEvent: vi.fn(),
 }));
@@ -372,7 +380,9 @@ describe("cosVerdictOrchestrator.runReviewCycle", () => {
 
     await orch.runReviewCycle(C);
 
-    expect(deps.verdicts.closingVerdictFor).toHaveBeenCalledWith(C, "issue", ISSUE_ID);
+    expect(deps.verdicts.closingVerdictFor).toHaveBeenCalledWith(C, "issue", ISSUE_ID, {
+      since: queueRow.enqueuedAt,
+    });
     expect(stub.deletes).toHaveLength(1);
     // No verdict creation, no approval insert.
     expect(deps.verdicts.create).not.toHaveBeenCalled();

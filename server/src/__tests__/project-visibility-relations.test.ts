@@ -29,6 +29,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { issueRoutes } from "../routes/issues.js";
 import { companyRoutes } from "../routes/companies.js";
+import { activityRoutes } from "../routes/activity.js";
 import { errorHandler } from "../middleware/index.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -199,6 +200,7 @@ describeEmbeddedPostgres("restricted project visibility: relations, ancestors, b
     });
     app.use("/api", issueRoutes(db));
     app.use("/api/companies", companyRoutes(db));
+    app.use("/api", activityRoutes(db));
     app.use(errorHandler);
     return app;
   }
@@ -363,5 +365,89 @@ describeEmbeddedPostgres("restricted project visibility: relations, ancestors, b
     expect(trace.status).toBe(200);
     expect(trace.body.issueTitle).toBe("Secret blocker");
     expect((await request(sam).get(`/api/feedback-traces/${SECRET_TRACE}/bundle`)).status).toBe(200);
+  });
+
+  // GH #863 (#868 follow-ups): parentId, blockerAttention samples and the
+  // blockers_updated activity details named restricted issues.
+  it("parentId and blockerAttention samples: a restricted parent or blocker is not named off-list", async () => {
+    const blockedOpen = randomUUID();
+    const hiddenBlocker = randomUUID();
+    await db.insert(issues).values([
+      {
+        id: hiddenBlocker,
+        companyId: COMPANY,
+        projectId: SECRET_PROJECT,
+        identifier: "RELV-91",
+        title: "Secret blocker two",
+        status: "todo",
+      },
+      {
+        id: blockedOpen,
+        companyId: COMPANY,
+        projectId: OPEN_PROJECT,
+        parentId: SECRET_PARENT,
+        identifier: "RELV-92",
+        title: "Open blocked",
+        status: "blocked",
+      },
+    ]);
+    await db.insert(issueRelations).values({
+      companyId: COMPANY,
+      issueId: hiddenBlocker,
+      relatedIssueId: blockedOpen,
+      type: "blocks",
+    });
+
+    const surfaces = async (app: express.Express) => {
+      const detail = await request(app).get(`/api/issues/${blockedOpen}`);
+      const context = await request(app).get(`/api/issues/${blockedOpen}/heartbeat-context`);
+      const list = await request(app).get(`/api/companies/${COMPANY}/issues`);
+      const rows = Array.isArray(list.body) ? list.body : list.body.issues;
+      const row = rows.find((candidate: { id: string }) => candidate.id === blockedOpen);
+      return [
+        ["detail", detail.status, detail.body],
+        ["heartbeat-context", context.status, context.body.issue],
+        ["list", list.status, row],
+      ] as const;
+    };
+
+    for (const [who, actor] of offListActors()) {
+      for (const [surface, status, body] of await surfaces(appAs(actor))) {
+        const label = `${who}: ${surface}`;
+        expect(status, label).toBe(200);
+        expect(body.parentId, label).toBeNull();
+        expect(body.blockerAttention, label).toBeDefined();
+        expect(body.blockerAttention.sampleBlockerIdentifier, label).toBeNull();
+        // The counts still say it is really blocked; they name nothing.
+        expect(body.blockerAttention.unresolvedBlockerCount, label).toBe(1);
+        expect(JSON.stringify(body), label).not.toContain("RELV-91");
+        expect(JSON.stringify(body), label).not.toContain(SECRET_PARENT);
+      }
+    }
+    for (const [who, actor] of onListActors()) {
+      for (const [surface, status, body] of await surfaces(appAs(actor))) {
+        const label = `${who}: ${surface}`;
+        expect(status, label).toBe(200);
+        expect(body.parentId, label).toBe(SECRET_PARENT);
+        expect(body.blockerAttention.sampleBlockerIdentifier, label).toBe("RELV-91");
+      }
+    }
+  });
+
+  it("activity: a visible issue's blockers_updated entry does not name a restricted blocker off-list", async () => {
+    // The earlier off-list PATCH on OPEN_SHARED kept SECRET_BLOCKER, so its
+    // blockers_updated row lists it in blockedByIssues.
+    const member = appAs(asUser("member-user", "member"));
+    for (const path of [`/api/issues/${OPEN_SHARED}/activity`, `/api/companies/${COMPANY}/activity?entityType=issue&entityId=${OPEN_SHARED}`]) {
+      const res = await request(member).get(path);
+      expect(res.status, path).toBe(200);
+      const blockerRows = res.body.filter((row: { action: string }) => row.action === "issue.blockers_updated");
+      expect(blockerRows.length, path).toBeGreaterThan(0);
+      expectNoSecretTitles(res.body, path);
+      expect(JSON.stringify(res.body), path).not.toContain(SECRET_BLOCKER);
+    }
+
+    const sam = await request(appAs(asUser("sam", "member"))).get(`/api/issues/${OPEN_SHARED}/activity`);
+    expect(JSON.stringify(sam.body)).toContain("Secret blocker");
   });
 });

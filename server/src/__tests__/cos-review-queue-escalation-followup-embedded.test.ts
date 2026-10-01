@@ -34,6 +34,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { cosVerdictOrchestrator } from "../services/cos-verdict-orchestrator.js";
 import { verdictsService } from "../services/verdicts.js";
+import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -254,6 +255,62 @@ describeEmbeddedPostgres("review-queue escalation follow-up (embedded postgres)"
     expect(await approvalsFor(company.id)).toHaveLength(1);
   }, 60_000);
 
+  // GH #863 (#867 follow-up): closingVerdictFor was not round-scoped, so a
+  // round-1 `failed` verdict dequeued the revised round 2 before anyone
+  // reviewed it, and it never escalated.
+  it("a failed verdict from an earlier round does not dequeue the next round", async () => {
+    const company = await seedCompany();
+    const issue = await seedIssue(company.id);
+    await enqueueStranded(company.id, issue.id, minutesAgo(10), minutesAgo(9));
+    await db.insert(verdicts).values({
+      companyId: company.id,
+      entityType: "issue",
+      issueId: issue.id,
+      reviewerUserId: `user-${randomUUID()}`,
+      outcome: "failed",
+      createdAt: minutesAgo(5),
+    });
+
+    process.env.AGENTDASH_VERDICT_ESCALATE_AFTER_MS = "1";
+    const { orch } = orchestrator();
+    await orch.onIssueStatusChanged(issue.id, "in_progress", "in_review");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await orch.runReviewCycle(company.id);
+
+    const queue = await db
+      .select()
+      .from(issueReviewQueueState)
+      .where(eq(issueReviewQueueState.issueId, issue.id));
+    expect(queue).toHaveLength(1);
+    const rows = await verdictsFor(issue.id);
+    expect(rows.map((row) => row.outcome).sort()).toEqual(["escalated_to_human", "failed"]);
+    expect(await approvalsFor(company.id)).toHaveLength(1);
+  }, 60_000);
+
+  it("a closing verdict in the current round still dequeues the item", async () => {
+    const company = await seedCompany();
+    const issue = await seedIssue(company.id);
+    await enqueueStranded(company.id, issue.id, minutesAgo(10), minutesAgo(5));
+    await db.insert(verdicts).values({
+      companyId: company.id,
+      entityType: "issue",
+      issueId: issue.id,
+      reviewerUserId: `user-${randomUUID()}`,
+      outcome: "passed",
+      createdAt: minutesAgo(2),
+    });
+
+    const { orch } = orchestrator();
+    await orch.runReviewCycle(company.id);
+
+    const queue = await db
+      .select()
+      .from(issueReviewQueueState)
+      .where(eq(issueReviewQueueState.issueId, issue.id));
+    expect(queue).toHaveLength(0);
+    expect(await verdictsFor(issue.id)).toHaveLength(1);
+  }, 60_000);
+
   it("re-entering review starts a fresh SLA window instead of escalating at once", async () => {
     const company = await seedCompany();
     const issue = await seedIssue(company.id);
@@ -293,18 +350,33 @@ describeEmbeddedPostgres("review-queue escalation follow-up (embedded postgres)"
       FOR EACH ROW EXECUTE FUNCTION test_fail_approval_insert()
     `);
 
-    const { orch } = orchestrator();
-    await orch.runReviewCycle(company.id);
-    // The verdict rolled back with the failed approval.
-    expect(await verdictsFor(issue.id)).toHaveLength(0);
-    expect(await approvalsFor(company.id)).toHaveLength(0);
+    // GH #863 (#867 follow-up): activity written in the escalation
+    // transaction is published only after commit, so a rolled-back
+    // escalation never reaches live events.
+    const published: string[] = [];
+    const unsubscribe = subscribeCompanyLiveEvents(company.id, (event) => {
+      if (event.type === "activity.logged") published.push(String(event.payload.action));
+    });
 
-    await db.execute(sql`DROP TRIGGER test_fail_approval_insert ON approvals`);
-    await orch.runReviewCycle(company.id);
+    try {
+      const { orch } = orchestrator();
+      await orch.runReviewCycle(company.id);
+      // The verdict rolled back with the failed approval.
+      expect(await verdictsFor(issue.id)).toHaveLength(0);
+      expect(await approvalsFor(company.id)).toHaveLength(0);
+      expect(published).toEqual([]);
 
-    // The item was not silenced: it escalates once the insert succeeds.
-    expect(await verdictsFor(issue.id)).toHaveLength(1);
-    expect(await approvalsFor(company.id)).toHaveLength(1);
+      await db.execute(sql`DROP TRIGGER test_fail_approval_insert ON approvals`);
+      await orch.runReviewCycle(company.id);
+
+      // The item was not silenced: it escalates once the insert succeeds.
+      expect(await verdictsFor(issue.id)).toHaveLength(1);
+      expect(await approvalsFor(company.id)).toHaveLength(1);
+      // ...and its activity is published once it has committed.
+      expect(published.sort()).toEqual(["verdict_escalated", "verdict_recorded"]);
+    } finally {
+      unsubscribe();
+    }
   }, 60_000);
 
   it("two overlapping sweeps escalate an item only once", async () => {
