@@ -20,7 +20,7 @@ export type ClaimState = "claimed" | "unclaimed" | "unknown";
  * Null until that release is cut: set it, in the PR after the cut, to that
  * tag. Releases before it (v2026.927.0 and older) read only `?email=`.
  */
-export const CLAIM_EMAIL_IN_FRAGMENT_SINCE: string | null = null;
+export const CLAIM_EMAIL_IN_FRAGMENT_SINCE: string | null = "v2026.929.0";
 
 const RELEASE_RE = /^v(\d{4})\.(\d{3,4})\.(\d+)$/;
 

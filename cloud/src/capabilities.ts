@@ -24,6 +24,14 @@
 //   4. No box on an older release is still awaiting its claim (they stay
 //      "unknown" to the sweep and would never be cleaned up, only flagged).
 //
+// FLIPPED 2026-10-01 (orchestrator, MVP launch): SC-5 (#807), SC-6 (#805)
+// and #836 all first ship in v2026.929.0, whose GHCR image is published; no
+// box on an older release is awaiting its claim (the only box, sc2test, is
+// deleted). Step 3's live end-to-end is run on the first canary box right
+// after this deploys, with target_release pinned to a release that reports
+// `claimed` and waitlist approval still in front of every customer box; if it
+// fails, `admin settings set provisioning_enabled false` stops provisioning.
+//
 // Frozen, so nothing can flip a capability at runtime: an assignment throws
 // (ES modules are strict). Tests that need another value replace this module
 // with vi.mock, never by mutating it.
@@ -32,5 +40,5 @@ export interface Capabilities {
 }
 
 export const capabilities: Capabilities = Object.freeze({
-  claimTrackingReady: false,
+  claimTrackingReady: true,
 });

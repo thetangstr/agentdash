@@ -56,7 +56,7 @@ describe("claim link", () => {
   });
 
   it("picks the fragment form only for a known release at or after the first one that reads it (GH #836 re-review)", () => {
-    expect(CLAIM_EMAIL_IN_FRAGMENT_SINCE).toBeNull(); // no such release yet: every link uses ?email=
+    expect(CLAIM_EMAIL_IN_FRAGMENT_SINCE).toBe("v2026.929.0"); // first stable whose /claim reads the fragment (#836)
     expect(compareReleases("v2026.1004.0", "v2026.927.3")).toBeGreaterThan(0);
     expect(compareReleases("v2026.927.1", "v2026.927.1")).toBe(0);
     expect(compareReleases("canary/v2026.927.0-canary.1", "v2026.927.0")).toBeNull();
