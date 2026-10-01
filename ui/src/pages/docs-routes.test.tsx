@@ -32,7 +32,9 @@ vi.mock("@/components/MarkdownBody", () => ({
 // renderer; what it draws is Scalar's concern. Here it is a marker, so the test
 // can see that an `openapi` page mounts it and no other page does.
 vi.mock("@/components/docs/ApiReference", () => ({
-  default: () => <div data-testid="api-reference">API reference</div>,
+  default: ({ instanceUrl }: { instanceUrl: string | null }) => (
+    <div data-testid="api-reference" data-instance-url={instanceUrl ?? ""}>API reference</div>
+  ),
 }));
 
 // Link (from @/lib/router) reads the selected company to prefix board routes.
@@ -102,6 +104,7 @@ describe("docs URLs", () => {
       next: container.querySelector('a[rel="next"]')?.getAttribute("href") ?? null,
       text: container.textContent ?? "",
       apiReference: container.querySelector('[data-testid="api-reference"]') !== null,
+      apiReferenceInstance: container.querySelector('[data-testid="api-reference"]')?.getAttribute("data-instance-url") ?? null,
     };
   }
 
@@ -150,9 +153,12 @@ describe("docs URLs", () => {
   it("mounts the API reference on the openapi page, and only there", async () => {
     const reference = pages.find((page) => page.slug === "api/reference");
     expect(reference, "api/reference is in the nav").toBeDefined();
-    const rendered = await visit("/docs/api/reference", (current) => current.body !== "" && current.apiReference);
+    const rendered = await visit("/docs/api/reference", (current) => current.body !== "" && current.apiReferenceInstance === PUBLISHED);
     expect(rendered.heading).toBe(reference!.title);
     expect(rendered.apiReference).toBe(true);
+    // jsdom's host is not the public site, so "try it" is prefilled with the
+    // instance's published address — the same one {{instanceUrl}} resolves to.
+    expect(rendered.apiReferenceInstance).toBe(PUBLISHED);
     const other = await visit("/docs/api/authentication", (current) => current.body !== "");
     expect(other.apiReference).toBe(false);
   });

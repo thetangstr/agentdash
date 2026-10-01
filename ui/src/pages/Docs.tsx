@@ -36,6 +36,7 @@ import {
   type DocTab,
 } from "@/lib/docs";
 import { docSlugFromPathname } from "@/lib/docs-nav";
+import { referenceInstanceUrl } from "@/lib/api-reference-server";
 
 /**
  * Two adjustments to MarkdownBody for reference pages, made here rather than
@@ -271,7 +272,10 @@ function DocArticle({ docRef, tree }: { docRef: DocPageRef; tree: DocTab[] }) {
       ) : null}
       {page?.kind === "openapi" ? (
         <Suspense fallback={<p className="text-sm text-muted-foreground">Loading the API reference…</p>}>
-          <ApiReference dark={documentIsDark()} />
+          <ApiReference
+            dark={documentIsDark()}
+            instanceUrl={referenceInstanceUrl(typeof window !== "undefined" ? window.location.hostname : "", instanceUrl)}
+          />
         </Suspense>
       ) : null}
       <nav aria-label="Pagination" className="mt-6 flex items-stretch justify-between gap-4 border-t border-border pt-4">

@@ -36,12 +36,16 @@ const ROUTES_DIR_REL = "server/src/routes";
 const APP_REL = "server/src/app.ts";
 
 /**
- * Route files that serve a private product profile. Their routes are counted
- * but not listed: the route index is a public page, and these files' names and
- * paths name a client's profile, which the plan keeps off the site (Decisions,
- * item 3). The routes stay internal; nothing about them is promised.
+ * Route files whose routes are counted but not listed. The route index is a
+ * public page, and these files' names and paths name things kept off the site:
+ * a client's product profile (the plan's Decisions, item 3) or a specific
+ * engagement. The routes stay internal; nothing about them is promised. The
+ * value is the reason the page prints next to the count.
  */
-export const WITHHELD_ROUTE_FILES = ["agentdash-mk-inbox.ts"];
+export const WITHHELD_ROUTE_FILES = {
+  "agentdash-mk-inbox.ts": "serving a private product profile",
+  "ross-requests.ts": "engagement-specific",
+};
 
 // ---------------------------------------------------------------------------
 // Source scanning
@@ -266,7 +270,7 @@ export function collectRouteIndex(repoRoot) {
   const groups = [];
   const unparsed = [];
   const unmounted = [];
-  const withheld = { files: 0, routes: 0 };
+  const withheld = { files: 0, routes: 0, reasons: {} };
   for (const file of files) {
     const { routes, unparsed: missed } = extractRoutes(sources.get(file));
     for (const miss of missed) unparsed.push({ file, ...miss });
@@ -280,9 +284,13 @@ export function collectRouteIndex(repoRoot) {
     for (const prefix of prefixes) {
       for (const route of routes) full.push({ method: route.method, path: joinPath(prefix, route.path), line: route.line });
     }
-    if (WITHHELD_ROUTE_FILES.includes(file)) {
+    const reason = Object.hasOwn(WITHHELD_ROUTE_FILES, file) ? WITHHELD_ROUTE_FILES[file] : null;
+    if (reason) {
       withheld.files += 1;
       withheld.routes += full.length;
+      withheld.reasons[reason] ??= { files: 0, routes: 0 };
+      withheld.reasons[reason].files += 1;
+      withheld.reasons[reason].routes += full.length;
       continue;
     }
     groups.push({ file, prefixes, routes: full });
@@ -326,7 +334,7 @@ export function renderRouteIndex(index, contract) {
   );
   const digest = createHash("sha256")
     .update(index.groups.map((group) => group.routes.map((route) => `${group.file} ${route.method} ${route.path}`).join("\n")).join("\n"))
-    .update(`\nwithheld ${index.withheld.files} ${index.withheld.routes}`)
+    .update(`\nwithheld ${JSON.stringify(Object.entries(index.withheld.reasons ?? {}).sort())}`)
     .digest("hex")
     .slice(0, 12);
 
@@ -345,9 +353,9 @@ export function renderRouteIndex(index, contract) {
     "**Everything else is internal and may change without notice.** It is listed so you can see what exists, not so you can build on it. If you need one of these routes, ask for it to be added to the contract.",
     "",
   ];
-  if (index.withheld.routes > 0) {
+  for (const [reason, count] of Object.entries(index.withheld.reasons ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(
-      `${index.withheld.routes} route${index.withheld.routes === 1 ? "" : "s"} in ${index.withheld.files} file${index.withheld.files === 1 ? "" : "s"} serving a private product profile ${index.withheld.routes === 1 ? "is" : "are"} counted above but not listed.`,
+      `Withheld, ${reason}: ${count.routes} route${count.routes === 1 ? "" : "s"} in ${count.files} file${count.files === 1 ? "" : "s"}, counted above but not listed.`,
       "",
     );
   }

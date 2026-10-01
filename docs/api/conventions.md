@@ -3,7 +3,7 @@ title: Conventions
 summary: Ids, request and error format, visibility, pagination and rate limits — as the server implements them.
 ---
 
-What holds across the API. Each section names the file it was read from; where a number is given, it is the server's default, read from that file, and an instance's operator can change some of them.
+What holds for the whole API. Each section names the file it was read from; where a number is given, it is the server's default, read from that file, and an instance's operator can change some of them.
 
 ## Requests and responses
 

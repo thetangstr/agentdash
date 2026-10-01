@@ -705,7 +705,7 @@
         "Pagination",
         "Rate limits"
       ],
-      "firstParagraph": "What holds across the API. Each section names the file it was read from; where a number is given, it is the server's default, read from that file, and an instance's operator can change some of them."
+      "firstParagraph": "What holds for the whole API. Each section names the file it was read from; where a number is given, it is the server's default, read from that file, and an instance's operator can change some of them."
     },
     {
       "slug": "api/reference",
@@ -780,7 +780,6 @@
         "plugins",
         "projects",
         "quota",
-        "ross-requests",
         "routines",
         "secrets",
         "server-errors",
@@ -800,7 +799,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 604 routes in 81 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 274a6574fdca; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 604 routes in 81 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 332c58b58319; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "api/companies",

@@ -31,9 +31,12 @@ import {
   renderRouteIndex,
   routeKey,
 } from "../docs/generate-route-index.mjs";
+import { classifyContractRoutes } from "../docs/route-guards.mjs";
+import { securityFor } from "../docs/generate-openapi.mjs";
 
 const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const STABILITIES = new Set(["stable"]);
+const AUTH_VALUES = new Set(["any", "board", "board-key", "agent", "assistant", "bridge-endpoint", "public"]);
 const REQUIRED_FIELDS = ["tag", "operationId", "summary", "method", "path", "requestValidator", "responseType", "stability"];
 
 /** Shape errors in a parsed contract.json. */
@@ -50,6 +53,7 @@ export function checkContractShape(contract) {
     }
     if (route.method && !METHODS.has(route.method)) errors.push(`${where}: method ${route.method} is not one of ${[...METHODS].join(", ")}`);
     if (route.stability && !STABILITIES.has(route.stability)) errors.push(`${where}: stability ${route.stability} is not one of ${[...STABILITIES].join(", ")}`);
+    if ("auth" in (route ?? {}) && !AUTH_VALUES.has(route.auth)) errors.push(`${where}: auth ${route.auth} is not one of ${[...AUTH_VALUES].join(", ")}`);
     if (route.tag && !tags.has(route.tag)) errors.push(`${where}: tag ${route.tag} is not in \`tags\``);
     if (typeof route.summary === "string" && (route.summary.trim() === "" || route.summary.includes("\n"))) {
       errors.push(`${where}: summary must be one non-empty line`);
@@ -80,6 +84,39 @@ export function checkContractRoutesExist(contract, index) {
     );
 }
 
+/**
+ * (c) and (d): what the contract says about a route agrees with its handler.
+ * (c) A handler that refuses agents up front (route-guards.mjs) must not be
+ *     listed with an agent-key scheme — that would promise agents a 403.
+ * (d) `requestValidator` must be a schema the handler actually parses.
+ */
+export function checkContractAgainstHandlers(contract, classified) {
+  const errors = [];
+  for (const route of contract?.routes ?? []) {
+    const found = classified.get(routeKey(route.method, route.path));
+    if (!found) continue;
+    const where = `${route.operationId} (server/src/routes/${found.file}:${found.line})`;
+    let security;
+    try {
+      security = securityFor(route);
+    } catch (error) {
+      errors.push(`${where}: ${error.message}`);
+      continue;
+    }
+    if (found.boardOnly && security.some((requirement) => "bearerAgentKey" in requirement)) {
+      errors.push(
+        `${where}: the handler refuses agents before anything else, but the contract lists the agent-key scheme. Set "auth": "board" (or narrower).`,
+      );
+    }
+    if (route.requestValidator && !found.schemas.includes(route.requestValidator)) {
+      errors.push(
+        `${where}: requestValidator is ${route.requestValidator}, but the handler parses ${found.schemas.length > 0 ? found.schemas.join(", ") : "no named schema"}.`,
+      );
+    }
+  }
+  return errors;
+}
+
 /** (b): a committed generated file against a fresh one, by path. */
 export function compareGenerated(rel, committed, fresh, command) {
   if (committed === fresh) return [];
@@ -103,6 +140,7 @@ export async function runChecks(repoRoot, { routesOnly = false } = {}) {
 
   const index = collectRouteIndex(repoRoot);
   errors.push(...checkContractRoutesExist(contract, index));
+  errors.push(...checkContractAgainstHandlers(contract, classifyContractRoutes(repoRoot, contract, index)));
 
   const temp = mkdtempSync(path.join(tmpdir(), "api-reference-drift-"));
   try {

@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkContractRoutesExist, checkContractShape, compareGenerated, runChecks } from "./check-api-reference-drift.mjs";
+import { checkContractAgainstHandlers, checkContractRoutesExist, checkContractShape, compareGenerated, runChecks } from "./check-api-reference-drift.mjs";
+import { boardOnlyGuards, classifyContractRoutes, isBoardOnlyHandler, parsedSchemas } from "../docs/route-guards.mjs";
 import { collectRouteIndex, extractRoutes, renderRouteIndex, resolveMounts, stripComments } from "../docs/generate-route-index.mjs";
 // Only node builtins at the top level; the converters are imported lazily inside the build.
-import { REDACTED_ENUM_VALUES, openApiPath, redactEnums, requestComponentName } from "../docs/generate-openapi.mjs";
+import { AUTH_SECURITY, REDACTED_ENUM_VALUES, openApiPath, redactEnums, requestComponentName, securityFor } from "../docs/generate-openapi.mjs";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 
@@ -120,7 +121,7 @@ test("the route index renders deterministically and marks contract routes", () =
     groups: [{ file: "x.ts", prefixes: ["/api"], routes: [{ method: "GET", path: "/api/things", line: 1 }, { method: "POST", path: "/api/things", line: 2 }] }],
     unparsed: [],
     unmounted: [],
-    withheld: { files: 0, routes: 0 },
+    withheld: { files: 0, routes: 0, reasons: {} },
   };
   const contract = { tags: [{ name: "things", page: "api/things" }], routes: [{ tag: "things", operationId: "listThings", method: "GET", path: "/api/things" }] };
   const once = renderRouteIndex(index, contract);
@@ -183,4 +184,86 @@ test("OpenAPI helpers: Express paths, component names, and the private-profile r
 test("the committed OpenAPI document names no private profile", () => {
   const yaml = readFileSync(path.join(REPO_ROOT, "docs", "api", "openapi.yaml"), "utf8");
   for (const value of REDACTED_ENUM_VALUES) assert.equal(yaml.includes(value), false, value);
+});
+
+test("a board-only guard counts only when nothing can branch around it", () => {
+  const source = [
+    "function requireBoardUser(req) {",
+    "  assertBoard(req);",
+    "  return req.actor.userId;",
+    "}",
+    "function maybeBoard(req) {",
+    "  if (req.x) assertBoard(req);",
+    "}",
+    'router.get("/a", async (req, res) => {',
+    "  assertBoard(req);",
+    "});",
+    'router.get("/b", async (req, res) => {',
+    "  const thing = await load(req.params.id);",
+    "  if (!thing) {",
+    '    res.status(404).json({ error: "Not found" });',
+    "    return;",
+    "  }",
+    "  assertCanSetCompanyDirection(req, thing.companyId);",
+    "});",
+    'router.patch("/c", async (req, res) => {',
+    '  if (req.actor.type === "agent") {',
+    "    body = brandingSchema.parse(req.body);",
+    "  } else {",
+    "    assertBoard(req);",
+    "  }",
+    "});",
+    'router.post("/d", validate(createThingSchema), async (req, res) => {',
+    "  const userId = requireBoardUser(req);",
+    "});",
+    'router.post("/e", async (req, res) => {',
+    "  maybeBoard(req);",
+    "});",
+  ].join("\n");
+  const guards = boardOnlyGuards(source);
+  assert.ok(guards.includes("requireBoardUser"));
+  assert.ok(!guards.includes("maybeBoard"));
+  const lineOf = (path) => source.split("\n").findIndex((line) => line.includes(`"${path}"`)) + 1;
+  assert.equal(isBoardOnlyHandler(source, lineOf("/a"), guards), true, "a guard first");
+  assert.equal(isBoardOnlyHandler(source, lineOf("/b"), guards), true, "a guard after an early-return clause");
+  assert.equal(isBoardOnlyHandler(source, lineOf("/c"), guards), false, "a guard in one branch lets agents through the other");
+  assert.equal(isBoardOnlyHandler(source, lineOf("/d"), guards), true, "a local helper that opens with a guard");
+  assert.equal(isBoardOnlyHandler(source, lineOf("/e"), guards), false, "a helper whose guard is conditional");
+  assert.deepEqual(parsedSchemas(source, lineOf("/c")), ["brandingSchema"]);
+  assert.deepEqual(parsedSchemas(source, lineOf("/d")), ["createThingSchema"]);
+});
+
+test("the contract must not promise agents a route that refuses them, and must name the parsed schema", () => {
+  const contract = {
+    routes: [
+      { operationId: "boardOnly", method: "GET", path: "/api/a", requestValidator: null },
+      { operationId: "boardOnlyFixed", method: "GET", path: "/api/b", auth: "board", requestValidator: null },
+      { operationId: "wrongSchema", method: "POST", path: "/api/c", auth: "board", requestValidator: "createThingSchema" },
+    ],
+  };
+  const classified = new Map([
+    ["GET /api/a", { file: "x.ts", line: 1, boardOnly: true, schemas: [] }],
+    ["GET /api/b", { file: "x.ts", line: 2, boardOnly: true, schemas: [] }],
+    ["POST /api/c", { file: "x.ts", line: 3, boardOnly: false, schemas: ["createOtherSchema"] }],
+  ]);
+  const errors = checkContractAgainstHandlers(contract, classified);
+  assert.equal(errors.length, 2, errors.join("\n"));
+  assert.match(errors[0], /boardOnly \(server\/src\/routes\/x\.ts:1\): the handler refuses agents/);
+  assert.match(errors[1], /wrongSchema .*parses createOtherSchema/);
+});
+
+test("the real repo: every route whose handler refuses agents is board-only in the spec", () => {
+  const contract = JSON.parse(readFileSync(path.join(REPO_ROOT, "docs", "api", "contract.json"), "utf8"));
+  const classified = classifyContractRoutes(REPO_ROOT, contract, collectRouteIndex(REPO_ROOT));
+  assert.equal(classified.size, contract.routes.length, "every contract route was located in its file");
+  const boardOnly = contract.routes.filter((route) => classified.get(`${route.method} ${route.path}`).boardOnly);
+  assert.ok(boardOnly.length >= 15, `only ${boardOnly.length} board-only handlers found; the scan has stopped seeing guards`);
+  for (const route of boardOnly) {
+    assert.ok(!securityFor(route).some((requirement) => "bearerAgentKey" in requirement), route.operationId);
+  }
+  assert.deepEqual(checkContractAgainstHandlers(contract, classified), []);
+  // Human control authenticates through `capture()`, which takes a verified board key only.
+  for (const route of contract.routes.filter((candidate) => candidate.tag === "human-control")) {
+    assert.deepEqual(securityFor(route), AUTH_SECURITY["board-key"], route.operationId);
+  }
 });

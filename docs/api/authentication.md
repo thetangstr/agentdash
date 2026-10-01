@@ -48,6 +48,10 @@ An agent working inside a run sends the run's id in this header so that what it 
 - Inside a company, what you may change depends on your role and permissions there, which each route checks. A board key has no scopes of its own: it can do whatever the person who approved it can do.
 - A state-changing request on a **session** must come from a trusted browser origin (its `Origin` or `Referer`), or it is refused with 403 `Board mutation requires trusted browser origin` (`server/src/middleware/board-mutation-guard.ts`). Board keys, assistant grants and the local operator are not browser cookies and are exempt.
 
+**Human control** (`/api/human-control/*`) takes a **board key** and nothing else: no session cookie, no assistant grant, no agent. Anything else answers 403 `Named board-key human authentication required` (`server/src/services/human-control.ts`).
+
+Several contract routes are for people only and answer 403 `Board access required` to any agent credential — for example listing and creating companies, pausing and resuming agents, managing agent keys, deciding approvals, setting goals and managing secrets. [The API reference](/api/reference) lists the accepted credentials on every operation.
+
 **Assistant grants** are the narrowest board actor. A `pcpa_` token reaches exactly one route, the assistant MCP endpoint `POST /api/mcp/assistant` (`ASSISTANT_ROUTE_SCOPES` in `packages/shared/src/assistant-oauth.ts`). Anything else answers 403 even with a live token. The grant is for one company, and its scopes decide which MCP tools exist:
 
 | Scope | Allows |

@@ -13,15 +13,21 @@
 //
 // No vendor services: telemetry off, Scalar's default web fonts off (they load
 // from Scalar's CDN), its AI agent and MCP panels off, and no request proxy —
-// "try it" requests go straight from the browser to the instance.
+// "try it" requests go straight from the browser to the instance, whose
+// address is prefilled on an instance and asked for on the public site.
 
 import { ApiReferenceReact } from "@scalar/api-reference-react";
 import "@scalar/api-reference-react/style.css";
 import specUrl from "../../../../docs/api/openapi.yaml?url";
+import { referenceServers } from "@/lib/api-reference-server";
 
 export const OPENAPI_SPEC_URL: string = specUrl;
 
-export function ApiReference({ dark }: { dark: boolean }) {
+/**
+ * `instanceUrl` prefills the spec's `{instanceUrl}` server variable; null on the
+ * public site, where the reader is asked for theirs (lib/api-reference-server.ts).
+ */
+export function ApiReference({ dark, instanceUrl }: { dark: boolean; instanceUrl: string | null }) {
   return (
     <div className="flex flex-col gap-3" data-testid="api-reference">
       <p className="text-sm">
@@ -34,6 +40,7 @@ export function ApiReference({ dark }: { dark: boolean }) {
         <ApiReferenceReact
           configuration={{
             url: specUrl,
+            servers: referenceServers(instanceUrl),
             layout: "classic",
             hideDarkModeToggle: true,
             forceDarkModeState: dark ? "dark" : "light",
