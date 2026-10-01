@@ -34,6 +34,7 @@ import { DomainAlreadyClaimedError, SingleCompanyInstallationError } from "../se
 import type { StorageService } from "../storage/types.js";
 import {
   assertBoard,
+  assertCanWriteRoutines,
   assertCompanyAccess,
   assertCompanyAdministrator,
   assertInstanceAdmin,
@@ -301,8 +302,15 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     assertImportTargetAccess(req, req.body.target);
     assertImportSourceAllowed(req.body.source);
     const actor = getActorInfo(req);
+    const target = req.body.target;
     const result = await portability.importBundle(req.body, req.actor.type === "board" ? req.actor.userId : null, {
       allowHostExecutionConfig: actorMaySetHostExecutionConfig(req.actor),
+      // AgentDash: (#710) recurring tasks become routines. A new-company
+      // target is already instance-admin only; into an existing company the
+      // importer needs the same right as writing a routine directly.
+      assertCanWriteRoutines: target.mode === "existing_company"
+        ? () => assertCanWriteRoutines(access, req, target.companyId)
+        : undefined,
     });
     await logActivity(db, {
       companyId: result.company.id,
@@ -370,6 +378,9 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       sourceCompanyId: companyId,
       allowHostExecutionConfig: actorMaySetHostExecutionConfig(req.actor),
       actorIsAgent: req.actor.type === "agent",
+      // AgentDash: (#710) recurring tasks become routines; this route admitted
+      // any board member and CEO agents, so it applies the routine-write rule.
+      assertCanWriteRoutines: () => assertCanWriteRoutines(access, req, companyId),
     });
     await logActivity(db, {
       companyId: result.company.id,

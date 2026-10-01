@@ -1631,6 +1631,122 @@ describe("company portability", () => {
     expect(issueSvc.create).not.toHaveBeenCalled();
   });
 
+  // AgentDash: (#710) routines arriving through an import are standing
+  // instructions: the route's routine-write guard runs before anything is
+  // written, and the routines arrive paused.
+  describe("routine-write guard and paused import (#710)", () => {
+    function recurringBundle(routineStatus: string | null) {
+      return {
+        source: {
+          type: "inline" as const,
+          rootPath: "paperclip-demo",
+          files: {
+            "COMPANY.md": ["---", 'schema: "agentcompanies/v1"', 'name: "Imported Paperclip"', "---", ""].join("\n"),
+            "agents/claudecoder/AGENTS.md": ["---", 'name: "ClaudeCoder"', "---", "", "You write code.", ""].join("\n"),
+            "projects/launch/PROJECT.md": ["---", 'name: "Launch"', "---", ""].join("\n"),
+            "tasks/monday-review/TASK.md": [
+              "---",
+              'name: "Monday Review"',
+              'project: "launch"',
+              'assignee: "claudecoder"',
+              "recurring: true",
+              "---",
+              "",
+              "Review pipeline health.",
+              "",
+            ].join("\n"),
+            ".paperclip.yaml": [
+              'schema: "paperclip/v1"',
+              "routines:",
+              "  monday-review:",
+              ...(routineStatus ? [`    status: "${routineStatus}"`] : []),
+              "    triggers:",
+              "      - kind: schedule",
+              '        cronExpression: "0 9 * * 1"',
+              '        timezone: "UTC"',
+              "",
+            ].join("\n"),
+          },
+        },
+        include: { company: true, agents: true, projects: true, issues: true, skills: false },
+        target: { mode: "new_company" as const, newCompanyName: "Imported Paperclip" },
+        agents: "all" as const,
+        collisionStrategy: "rename" as const,
+      };
+    }
+
+    beforeEach(() => {
+      companySvc.create.mockResolvedValue({ id: "company-imported", name: "Imported Paperclip" });
+      accessSvc.ensureMembership.mockResolvedValue(undefined);
+      agentSvc.create.mockResolvedValue({ id: "agent-created", name: "ClaudeCoder" });
+      projectSvc.create.mockResolvedValue({ id: "project-created", name: "Launch", urlKey: "launch" });
+      agentSvc.list.mockResolvedValue([]);
+      projectSvc.list.mockResolvedValue([]);
+    });
+
+    it("refuses before writing anything when the routine-write guard rejects", async () => {
+      const portability = companyPortabilityService({} as any);
+      const guard = vi.fn().mockRejectedValue(new Error("Missing permission: tasks:assign"));
+
+      await expect(
+        portability.importBundle(recurringBundle("active"), "user-1", { assertCanWriteRoutines: guard }),
+      ).rejects.toThrow("Missing permission: tasks:assign");
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(companySvc.create).not.toHaveBeenCalled();
+      expect(agentSvc.create).not.toHaveBeenCalled();
+      expect(projectSvc.create).not.toHaveBeenCalled();
+      expect(routineSvc.create).not.toHaveBeenCalled();
+      expect(routineSvc.createTrigger).not.toHaveBeenCalled();
+    });
+
+    it("does not call the guard when the bundle has no recurring tasks", async () => {
+      const portability = companyPortabilityService({} as any);
+      const guard = vi.fn().mockRejectedValue(new Error("should not be called"));
+      const bundle = recurringBundle(null);
+      bundle.include = { ...bundle.include, issues: false };
+
+      await portability.importBundle(bundle, "user-1", { assertCanWriteRoutines: guard });
+
+      expect(guard).not.toHaveBeenCalled();
+      expect(routineSvc.create).not.toHaveBeenCalled();
+    });
+
+    it.each([["active"], [null]])(
+      "imports a routine whose manifest status is %s as paused, with a warning",
+      async (routineStatus) => {
+        const portability = companyPortabilityService({} as any);
+        const guard = vi.fn().mockResolvedValue(undefined);
+
+        const result = await portability.importBundle(recurringBundle(routineStatus), "user-1", {
+          assertCanWriteRoutines: guard,
+        });
+
+        expect(guard).toHaveBeenCalledTimes(1);
+        expect(routineSvc.create).toHaveBeenCalledWith(
+          "company-imported",
+          expect.objectContaining({ title: "Monday Review", status: "paused" }),
+          expect.any(Object),
+        );
+        expect(result.warnings).toContain(
+          "Routine monday-review was imported paused; activate it to start scheduled runs.",
+        );
+      },
+    );
+
+    it("keeps an archived routine archived", async () => {
+      const portability = companyPortabilityService({} as any);
+
+      await portability.importBundle(recurringBundle("archived"), "user-1");
+
+      expect(routineSvc.create).toHaveBeenCalledWith(
+        "company-imported",
+        expect.objectContaining({ status: "archived" }),
+        expect.any(Object),
+      );
+    });
+  });
+
   it("blocks agent imports on Free workspaces after the agent slot is used", async () => {
     enableBillingForFreeTierTest();
     companySvc.getById.mockResolvedValue({

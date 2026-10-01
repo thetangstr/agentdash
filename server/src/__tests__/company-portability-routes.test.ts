@@ -18,6 +18,7 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockAccessService = vi.hoisted(() => ({
   ensureMembership: vi.fn(),
+  canUser: vi.fn(),
 }));
 
 const mockBudgetService = vi.hoisted(() => ({
@@ -168,6 +169,7 @@ describe.sequential("company portability routes", () => {
       agents: [],
       warnings: [],
     });
+    mockAccessService.canUser.mockResolvedValue(false);
   });
 
   it.sequential("rejects non-CEO agents from CEO-safe export preview routes", async () => {
@@ -454,5 +456,102 @@ describe.sequential("company portability routes", () => {
     expect(res.status).toBe(403);
     expect(res.body.error).toContain("Instance admin");
     expect(mockCompanyPortabilityService.importBundle).not.toHaveBeenCalled();
+  });
+
+  // AgentDash: (#710) a recurring task in an import becomes a routine, so the
+  // import routes apply the routine-write rule. The service is mocked here; the
+  // mock calls the route's guard the way the real service does when the bundle
+  // holds a recurring task (that half is covered in company-portability.test.ts).
+  describe("routine-write guard on imports (#710)", () => {
+    const routineBundle = {
+      source: {
+        type: "inline",
+        files: {
+          "COMPANY.md": "---\nname: Test\n---\n",
+          "tasks/daily/TASK.md": "---\nname: Daily\nrecurring: true\n---\n",
+        },
+      },
+      include: { company: false, agents: false, projects: true, issues: true },
+      target: { mode: "existing_company", companyId },
+      collisionStrategy: "rename",
+    };
+    const memberWithoutAssign = {
+      type: "board",
+      userId: "user-1",
+      companyIds: [companyId],
+      source: "session",
+      isInstanceAdmin: false,
+    };
+    const importRoutes = [
+      ["safe", `/api/companies/${companyId}/imports/apply`],
+      ["board", "/api/companies/import"],
+    ] as const;
+
+    beforeEach(() => {
+      mockCompanyPortabilityService.importBundle.mockImplementation(
+        async (_input: unknown, _userId: unknown, options?: { assertCanWriteRoutines?: () => Promise<void> }) => {
+          await options?.assertCanWriteRoutines?.();
+          return { company: { id: companyId, action: "updated" }, agents: [], warnings: [] };
+        },
+      );
+    });
+
+    it.sequential("rejects a CEO agent importing a bundle with routines", async () => {
+      const app = await createApp({
+        type: "agent",
+        agentId: ceoAgentId,
+        companyId,
+        source: "agent_key",
+        runId: "run-1",
+      });
+
+      const res = await request(app)
+        .post(`/api/companies/${companyId}/imports/apply`)
+        .send(routineBundle);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain("Agents cannot create or change routines");
+      expect(mockLogActivity).not.toHaveBeenCalled();
+    });
+
+    it.sequential.each(importRoutes)(
+      "rejects a member without tasks:assign on the %s import route",
+      async (_label, path) => {
+        const app = await createApp(memberWithoutAssign);
+
+        const res = await request(app).post(path).send(routineBundle);
+
+        expect(res.status).toBe(403);
+        expect(res.body.error).toContain("tasks:assign");
+        expect(mockAccessService.canUser).toHaveBeenCalledWith(companyId, "user-1", "tasks:assign");
+        expect(mockLogActivity).not.toHaveBeenCalled();
+      },
+    );
+
+    it.sequential.each(importRoutes)(
+      "lets a member with tasks:assign import routines on the %s route",
+      async (_label, path) => {
+        mockAccessService.canUser.mockResolvedValue(true);
+        const app = await createApp(memberWithoutAssign);
+
+        const res = await request(app).post(path).send(routineBundle);
+
+        expect(res.status).toBe(200);
+        expect(mockCompanyPortabilityService.importBundle).toHaveBeenCalledWith(
+          expect.anything(),
+          "user-1",
+          expect.objectContaining({ assertCanWriteRoutines: expect.any(Function) }),
+        );
+      },
+    );
+
+    it.sequential.each(importRoutes)("lets an instance admin import routines on the %s route", async (_label, path) => {
+      const app = await createApp({ ...memberWithoutAssign, isInstanceAdmin: true });
+
+      const res = await request(app).post(path).send(routineBundle);
+
+      expect(res.status).toBe(200);
+      expect(mockAccessService.canUser).not.toHaveBeenCalled();
+    });
   });
 });

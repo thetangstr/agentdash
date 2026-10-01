@@ -840,8 +840,8 @@ Terminal states: `done`, `cancelled`
 | ------ | ---- | ----------- |
 | GET    | `/api/companies/:companyId/routines` | List all routines in company |
 | GET    | `/api/routines/:routineId` | Routine details including triggers |
-| POST   | `/api/companies/:companyId/routines` | Create routine (`assigneeAgentId` + `projectId` required; agents: own only) |
-| PATCH  | `/api/routines/:routineId` | Update routine (agents: own only, cannot reassign) |
+| POST   | `/api/companies/:companyId/routines` | Create routine (`assigneeAgentId` + `projectId` required; board with `tasks:assign` only) |
+| PATCH  | `/api/routines/:routineId` | Update routine (board with `tasks:assign` only; agents get 403) |
 | POST   | `/api/routines/:routineId/triggers` | Add trigger (`schedule`, `webhook`, or `api` kind) |
 | PATCH  | `/api/routine-triggers/:triggerId` | Update trigger (e.g. disable, change cron) |
 | DELETE | `/api/routine-triggers/:triggerId` | Delete trigger |

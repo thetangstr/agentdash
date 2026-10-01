@@ -200,7 +200,7 @@ If you are asked to install a skill for the company or an agent you MUST read:
 
 Routines are recurring tasks. Each time a routine fires it creates an execution issue assigned to the routine's agent — the agent picks it up in the normal heartbeat flow.
 
-- Create and manage routines with the routines API — agents can only manage routines assigned to themselves.
+- Routines are standing instructions set by humans. Agents can read routines but cannot create, edit, trigger or run them (every write returns 403). If a routine needs to change, ask an owner, admin or operator.
 - Add triggers per routine: `schedule` (cron), `webhook`, or `api` (manual).
 - Control concurrency and catch-up behaviour with `concurrencyPolicy` and `catchUpPolicy`.
 
