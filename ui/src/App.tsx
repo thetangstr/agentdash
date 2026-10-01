@@ -1,5 +1,6 @@
 import { WorkforceOnboarding } from "./pages/WorkforceOnboarding";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
+import { lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { healthApi } from "./api/health";
 import { queryKeys } from "./lib/queryKeys";
@@ -109,6 +110,11 @@ import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 import { legacyDecisionsRoutes } from "./lib/legacy-decisions-routes";
+import { docsRoutePaths } from "./lib/docs-nav";
+
+// Public docs (/docs) load on demand: the nav, the search index and every page
+// body stay out of the initial bundle.
+const Docs = lazy(() => import("./pages/Docs").then((module) => ({ default: module.Docs })));
 
 // AgentDash: billing page wrapper — pulls companyId from context.
 function BillingPageRoute() {
@@ -329,6 +335,15 @@ export function App() {
             /pricing, no auth, no company context. Renders on the marketing
             surface (MarketingShell), so it scrolls like / and /consulting. */}
         <Route path="mcp" element={<McpPage />} />
+        {/* AgentDash: PUBLIC docs — same public tier as /mcp, no auth, no
+            company context. Nav from docs/docs.json; see ui/src/lib/docs.ts.
+            One static route per page, because a docs/* splat ranks below
+            :companyPrefix/guides/:group/:slug (ui/src/lib/docs-nav.ts).
+            Not served on www.agentdash.cloud until vercel.json lets /docs
+            through (doc/plans/2026-10-01-public-docs-section.md, PR 4). */}
+        <Route path="docs" element={<Suspense fallback={null}><Docs /></Suspense>} />
+        {docsRoutePaths().map((path) => <Route key={path} path={path} element={<Suspense fallback={null}><Docs /></Suspense>} />)}
+        <Route path="docs/*" element={<Suspense fallback={null}><Docs /></Suspense>} />
         {/* AgentDash: PUBLIC legal pages (Terms / Privacy) — same public tier as
             /trial, /pricing, and /investors, no auth, no company context, each
             owns its own h-screen overflow-y-auto scroll region. */}
@@ -477,9 +492,13 @@ export function App() {
 // AgentDash: the public marketing surface does not depend on the API, so a
 // server outage must not blur the homepage with the dashboard's
 // "Connection Lost" overlay. Marketing routes render MarketingShell.
+function isDocsPath(pathname: string): boolean {
+  return pathname === "/docs" || pathname.startsWith("/docs/");
+}
 const MARKETING_PATHS = new Set(["/", "/demo", "/about", "/consulting", "/mcp", "/start", "/start/verify", "/start/progress", "/find"]);
 function ProductOnlyOverlay() {
   const location = useLocation();
-  if (MARKETING_PATHS.has(location.pathname.replace(/\/+$/, "") || "/")) return null;
+  const pathname = location.pathname.replace(/\/+$/, "") || "/";
+  if (MARKETING_PATHS.has(pathname) || isDocsPath(pathname)) return null;
   return <ServerUnreachableOverlay />;
 }

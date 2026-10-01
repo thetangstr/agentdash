@@ -44,7 +44,7 @@ const guideModules = import.meta.glob(
 
 const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-function parseFrontMatter(markdown: string): { fields: Record<string, string>; body: string } {
+export function parseFrontMatter(markdown: string): { fields: Record<string, string>; body: string } {
   const match = FRONT_MATTER.exec(markdown);
   if (!match) return { fields: {}, body: markdown };
   const fields: Record<string, string> = {};
