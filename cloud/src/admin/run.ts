@@ -1,12 +1,17 @@
 // AgentDash: the operator CLI's logic, separate from the process wrapper so
 // tests can drive it. It talks to /internal/* with the admin bearer and
 // refuses to run at all without one.
+import { createHash } from "node:crypto";
+import { parseEnvelopeHeader } from "../backups/envelope.js";
+
 export interface AdminIo {
   out: (line: string) => void;
   err: (line: string) => void;
   fetch: typeof fetch;
   /** Reads all of stdin (for `invites import`). */
   readStdin?: () => Promise<string>;
+  /** Opens a new file, mode 600, refusing to overwrite (for `backups download`); discard() removes it. */
+  openFile?: (path: string) => Promise<{ write(chunk: Uint8Array): Promise<void>; close(): Promise<void>; discard(): Promise<void> }>;
 }
 
 export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <command>
@@ -52,6 +57,12 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   waitlist approve <id>      approve a waiting entry (the person is emailed)
   waitlist approve-next <n>  approve the oldest n waiting entries
   waitlist release           give approved entries their job if provisioning is open now (also runs every minute)
+  backups status             off-box backup status for the fleet (last good backup, age, stale boxes)
+  backups list <slug>        a box's off-box backups, newest first
+  backups run <slug>         back a box up now (runs in the background; check with backups list)
+  backups download <id> <file>
+                             save a backup's encrypted file; restore it offline with
+                             backup-restore decrypt (key machine), then replay (sandbox, no keys): runbook §7
 
 env: CLOUD_CONTROL_URL (default http://localhost:3200; https required for any non-local host),
      CLOUD_ADMIN_TOKEN (required)`;
@@ -194,6 +205,59 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
   if (group === "waitlist" && action === "release" && rest.length === 0) return print(await call("POST", "/waitlist/release"));
   if (group === "waitlist" && action === "approve" && rest.length === 1) {
     return print(await call("POST", `/waitlist/${encodeURIComponent(rest[0]!)}/approve`));
+  }
+  // AgentDash (GH #733): off-box backups.
+  if (group === "backups" && action === "status" && rest.length === 0) return print(await call("GET", "/backups"));
+  if (group === "backups" && action === "list" && rest.length === 1) return print(await call("GET", `/boxes/${encodeURIComponent(rest[0]!)}/backups`));
+  if (group === "backups" && action === "run" && rest.length === 1) return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/backups`));
+  if (group === "backups" && action === "download" && rest.length === 2) {
+    if (!io.openFile) {
+      io.err("backups download needs a file writer");
+      return 2;
+    }
+    const id = rest[0]!;
+    const res = await io.fetch(`${base}/internal/backups/${encodeURIComponent(id)}/download`, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok || !res.body) {
+      io.err(`error ${res.status}: ${await res.text()}`);
+      return 1;
+    }
+    // Streamed to disk (a backup can be GiBs), hashed on the way, and the
+    // envelope header must name the backup asked for: the sealed box does not
+    // prove who produced an object, and bucket write access could swap one.
+    const file = await io.openFile(rest[1]!);
+    const hash = createHash("sha256");
+    let head = Buffer.alloc(0);
+    let headerChecked = false;
+    let size = 0;
+    const fail = async (msg: string) => {
+      await file.discard();
+      io.err(msg);
+      return 1;
+    };
+    try {
+      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+        hash.update(chunk);
+        size += chunk.length;
+        if (!headerChecked) {
+          head = Buffer.concat([head, chunk]);
+          const parsed = parseEnvelopeHeader(head);
+          if (parsed) {
+            headerChecked = true;
+            if (parsed.header.backupId !== id) return await fail(`refusing: the stored object is backup ${parsed.header.backupId}, not ${id}`);
+          } else if (head.length > 8 + 4 + 64 * 1024) return await fail("refusing: the stored object has no readable backup header");
+        }
+        await file.write(chunk);
+      }
+    } catch (err) {
+      return await fail(`download failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!headerChecked) return await fail("refusing: the stored object is too short to be a backup");
+    const want = res.headers.get("x-agentdash-backup-sha256");
+    const got = hash.digest("hex");
+    if (want && want !== got) return await fail(`download corrupted: sha256 ${got}, expected ${want}`);
+    await file.close();
+    io.out(`wrote ${size} bytes to ${rest[1]} (sha256 ${got}; still encrypted: open it with the backup-restore tool)`);
+    return 0;
   }
   io.err(USAGE);
   return 64;

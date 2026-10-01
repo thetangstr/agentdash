@@ -10,6 +10,7 @@ import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { configuredEdgeSecret, configuredEdgeSecrets, edgeGate } from "./middleware/edge-gate.js";
+import { backupExportRoutes, configuredBackupToken, type BackupExportService } from "./routes/agentdash-backup-export.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { requestActorSourceMiddleware } from "./lib/request-actor-source.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
@@ -244,6 +245,8 @@ export async function createApp(
       }): Promise<unknown>;
     };
     databaseBackupService?: InstanceDatabaseBackupService;
+    // AgentDash (GH #733): the off-box backup export for the cloud control plane.
+    backupExportService?: BackupExportService;
     deploymentMode: DeploymentMode;
     deploymentExposure: DeploymentExposure;
     allowedHostnames: string[];
@@ -298,6 +301,9 @@ export async function createApp(
   // the box (health excepted), and the client IP comes from the router. Runs
   // before logging and every rate limiter. No-op without AGENTDASH_EDGE_SECRET.
   app.use(edgeGate({ secret: configuredEdgeSecret(), previous: configuredEdgeSecrets()[1] ?? null }));
+  // AgentDash (GH #733): POST /api/agentdash/backup-export for the control
+  // plane's nightly off-box backup. Inert without AGENTDASH_BACKUP_TOKEN.
+  app.use(backupExportRoutes({ token: configuredBackupToken(), service: opts.backupExportService, release: process.env.AGENTDASH_RELEASE_TAG ?? null, log: logger }));
 
   // AgentDash: capture the raw request body so downstream webhook/connector
   // routes (Stripe, Slack) can verify HMAC signatures. Shared by both the JSON

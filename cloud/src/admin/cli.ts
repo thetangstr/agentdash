@@ -10,6 +10,23 @@ runAdmin(process.argv.slice(2), process.env, {
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
     return Buffer.concat(chunks).toString("utf8");
   },
+  openFile: async (path) => {
+    const { open, rm } = await import("node:fs/promises");
+    const fh = await open(path, "wx", 0o600);
+    let closed = false;
+    const close = async () => {
+      if (!closed) await fh.close();
+      closed = true;
+    };
+    return {
+      write: async (chunk) => void (await fh.write(chunk)),
+      close,
+      discard: async () => {
+        await close();
+        await rm(path, { force: true });
+      },
+    };
+  },
 }).then(
   (code) => process.exit(code),
   (err: unknown) => {

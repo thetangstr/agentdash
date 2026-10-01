@@ -11,12 +11,14 @@
     "start": "node dist/index.js",
     "admin": "tsx src/admin/cli.ts",
     "generate": "drizzle-kit generate",
-    "escrow": "tsx src/admin/escrow.ts"
+    "escrow": "tsx src/admin/escrow.ts",
+    "backup-restore": "tsx src/backups/restore-tool.ts"
   },
   "dependencies": {
     "disposable-email-domains-js": "^1.26.0",
     "drizzle-orm": "^0.45.2",
     "express": "^5.1.0",
+    "libpg-query": "18.1.5",
     "libsodium-wrappers": "^0.8.4",
     "postgres": "^3.4.5"
   },

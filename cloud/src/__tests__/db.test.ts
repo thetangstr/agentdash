@@ -29,6 +29,7 @@ describe("migrations", () => {
     );
     expect(rows.map((r) => r.table_name)).toEqual([
       "accounts",
+      "box_backups",
       "box_events",
       "box_health",
       "box_health_checks",

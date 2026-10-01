@@ -59,6 +59,7 @@ import type {
   InstanceDatabaseBackupTrigger,
 } from "./routes/instance-database-backups.js";
 import { CLAIM_ATTEMPT_HEADER } from "./lib/claim-code.js";
+import { createBackupExportService } from "./routes/agentdash-backup-export-service.js";
 import { configuredPublicBaseUrl } from "./lib/public-base-url.js";
 import { originBootReport, registerMintingOrigins } from "./lib/declared-origins.js";
 
@@ -752,6 +753,8 @@ export async function startServer(): Promise<StartedServer> {
     serverPort: listenPort,
     storageService,
     feedbackExportService: feedback,
+    // AgentDash (GH #733): the control plane's off-box backup export (needs AGENTDASH_BACKUP_TOKEN).
+    backupExportService: createBackupExportService({ db: db as any, connectionString: () => activeDatabaseConnectionString }),
     databaseBackupService: {
       runManualBackup: async () => {
         const result = await runServerDatabaseBackup("manual");

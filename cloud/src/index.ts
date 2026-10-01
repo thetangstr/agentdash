@@ -18,6 +18,7 @@ import { loadMonitorConfig, startMonitor } from "./monitor/service.js";
 import { resumeHandler, suspendHandler } from "./monitor/suspend.js";
 import { tickRollout } from "./jobs/rollout.js";
 import { upgradeHandler } from "./jobs/upgrade.js";
+import { setupBackups, startBackupScheduler } from "./backups/setup.js";
 
 const log = createLogger({ base: { service: "cloud-control" } });
 const SWEEP_MS = 10 * 60_000;
@@ -109,6 +110,29 @@ async function main() {
   else if (!config.resendApiKey) log.warn("CLOUD_RESEND_API_KEY is not set: /start and /find answer 503 until it is");
   if (!config.frontDoor.turnstileSecret) log.warn("Turnstile is not configured: every signup waits for operator approval");
   const frontDoor = makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
+
+  // AgentDash (GH #733): nightly encrypted off-box database backups. The
+  // events are logged here; SC-10's alerting subscribes through onEvent.
+  const backups = setupBackups({
+    db,
+    log,
+    dataKeys: config.dataKeys,
+    railway:
+      config.railwayToken && config.railwayWorkspaceId
+        ? { client: new RailwayClient({ token: config.railwayToken, log }), workspaceId: config.railwayWorkspaceId }
+        : null,
+    onEvent: (e) => {
+      if (e.kind === "backup_gave_up") log.error("backup event", { event: e });
+      else log.info("backup event", { event: e });
+    },
+  });
+  let stopBackups: (() => void) | null = null;
+  if (!backups) log.warn("off-box backups are not configured (CLOUD_BACKUP_S3_*): hosted boxes have only Railway snapshots");
+  else {
+    if (backups.config.usingEscrowKey) log.warn("CLOUD_BACKUP_PUBLIC_KEY is not set: backups are sealed to the escrow key");
+    if (backups.service) stopBackups = startBackupScheduler(backups.service, log);
+    else log.warn("off-box backups are configured but RAILWAY_API_TOKEN is not: the scheduler is idle");
+  }
   const passes = [
     setInterval(() => void frontDoor.sendReadyEmails().catch((err: unknown) => log.error("ready email pass failed", { err })), READY_MAIL_MS),
     setInterval(() => void frontDoor.releaseApproved().catch((err: unknown) => log.error("waitlist release pass failed", { err })), RELEASE_MS),
@@ -128,12 +152,13 @@ async function main() {
     config: loadMonitorConfig(process.env, config),
   });
 
-  const server = createApp({ db, config, log, frontDoor, alertTransports: transports }).listen(config.port, () => {
+  const server = createApp({ db, config, log, frontDoor, alertTransports: transports, ...(backups ? { backups: backups.routeDeps } : {}) }).listen(config.port, () => {
     log.info("listening", { port: config.port, release: config.release, railwayApi: config.railwayToken ? "configured" : "not configured" });
   });
   const shutdown = () => {
     if (sweep) clearInterval(sweep);
     if (rolloutTimer) clearInterval(rolloutTimer);
+    stopBackups?.();
     for (const t of passes) clearInterval(t);
     monitor.stop();
     void (runner?.stop() ?? Promise.resolve()).finally(() => {
