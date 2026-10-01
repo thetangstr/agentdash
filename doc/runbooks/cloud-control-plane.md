@@ -184,22 +184,48 @@ pnpm --filter @agentdash/cloud-control admin backups download <backup id> <file>
 
 **Alerts.** The service reports `backup_succeeded`, `backup_failed`, `backup_gave_up`, `backup_token_installed` and `backup_pruned` through its `onEvent` hook (logged today), and `staleBackups()` / `admin backups status` list active boxes with no good backup in `CLOUD_BACKUP_STALE_HOURS`. SC-10 wires those to the ops channel.
 
-**Restore test (monthly, and after any change here).** On the offline machine with the backup key directory:
+**Threat model for restores.** The box writes the dump, so a compromised tenant box controls its SQL. The envelope proves only that the control plane sealed what a box sent. It does not make the SQL benign, and it does not prove which box sent it. So:
+
+- **Decrypt and replay are separate steps on separate machines.** `decrypt` runs on the offline key machine and executes nothing. `replay` runs in a **disposable sandbox with no key material** (a throwaway VM or container, deleted afterwards), and it refuses `--key-dir`.
+- **No psql, ever.** Only backup-lib's statement format is accepted, and every statement must have one of the shapes backup-lib writes. The check refuses:
+  - `COPY … PROGRAM`, and `COPY` to or from a file;
+  - psql meta-commands;
+  - event triggers, `ALTER SYSTEM`, functions, roles and grants;
+  - dollar-quoted code, and server-side file, process and config functions;
+  - a second statement smuggled into one;
+  - extensions outside the allowlist (`pg_trgm`, `pgcrypto`, `uuid-ossp`, `citext`, `btree_gin`, `btree_gist`, `unaccent`, `fuzzystrmatch`, `vector`).
+
+  `decrypt` runs that check before it keeps the plaintext; `replay` runs it again on the whole file, then again per statement.
+- **Replay as a non-superuser** that owns a fresh database. The tool refuses a superuser, and a role with replication or bypass-RLS.
+- **Check the object is the one you asked for.** `admin backups download` refuses a stored object whose header names another backup id, and `decrypt --expect-slug … --expect-backup-id …` refuses a different box or backup.
+
+**Restore test (monthly, and after any change here).** On the offline **key** machine:
 
 ```sh
 pnpm --filter @agentdash/cloud-control admin backups list <random active slug>
 pnpm --filter @agentdash/cloud-control admin backups download <newest backup id> ./box.adbk
 pnpm --filter @agentdash/cloud-control backup-restore inspect --in ./box.adbk
-pnpm --filter @agentdash/cloud-control backup-restore restore --in ./box.adbk --key-dir <dir>
-rm -P ./box.adbk
+pnpm --filter @agentdash/cloud-control backup-restore decrypt --in ./box.adbk --key-dir <dir> --out ./box.sql.gz --expect-slug <slug> --expect-backup-id <id>
 ```
 
-`restore` decrypts into a mode-700 temp directory, restores into a **throwaway** embedded Postgres, compares the restored core-table counts with the counts the box reported at export time (the migration count must match), prints `RESTORE TEST PASSED` or `FAILED`, and deletes the database and the plaintext. Record the date, slug, backup id and timings on the ops log.
+`decrypt` writes `box.sql.gz` (mode 600) and `box.sql.gz.manifest.json` (the header: counts and release, no key). If it is interrupted, it removes the partial plaintext. Move those two files, **not the key directory**, to the sandbox, then `rm -P` them and `box.adbk` on the key machine.
 
-**Real restore (box database lost or corrupted).** Never restore over a live box: the tool refuses any target database that holds users or companies.
+In the **sandbox** (a disposable VM or container with a repository checkout and Node, and no keys or other credentials):
+
+```sh
+docker run -d --name restore-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=<random> postgres:18
+docker exec restore-pg psql -U postgres -c "create role restore login password '<random>' nosuperuser" \
+  -c "create database restore owner restore" -c "grant set on parameter session_replication_role to restore"
+pnpm --filter @agentdash/cloud-control backup-restore replay --dump ./box.sql.gz --into postgres://restore:<random>@127.0.0.1:55432/restore
+docker rm -f restore-pg
+```
+
+`replay` refuses a target that holds users or companies and replays as the non-superuser. It then compares the restored core-table counts with the manifest (the migration count must match) and prints `RESTORE TEST PASSED` or `FAILED`. Destroy the sandbox, and record the date, slug, backup id and timings in the ops log.
+
+**Real restore (box database lost or corrupted).** Never restore over a live box: `replay` refuses any target database that holds users or companies.
 
 1. Provision a throwaway replacement `<slug>-restore` on the same release (the slug rule leaves room for the suffix), and do not claim it.
 2. Recover the old box's master key from escrow (section 3) and set it, with the old `BETTER_AUTH_SECRET`, on the replacement.
-3. Open a temporary TCP proxy to the replacement's Postgres (as `backup-box.sh` does), then `backup-restore restore --in ./box.adbk --key-dir <dir> --into <its postgres URL>`. The guard passes because the replacement has no users; the dump drops and recreates every table it holds.
+3. Run `decrypt` on the key machine as above, then move the dump and manifest to a sandbox with no keys. Open a temporary TCP proxy to the replacement's Postgres (as `backup-box.sh` does). There, create a non-superuser `restore` role that owns a fresh database (with `SET` on `session_replication_role`), run `backup-restore replay --dump ./box.sql.gz --into <that role's URL>`, and point the replacement's `DATABASE_URL` at that database.
 4. Delete the proxy and redeploy the replacement. `curl -s https://<its railway host>/api/health` must answer `"status":"ok"`; then sign in as the customer's admin, and only then point the router and the box row at it.
 

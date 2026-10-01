@@ -35,6 +35,7 @@ export const BACKUP_COUNTS_HEADER = "x-agentdash-backup-counts";
 export const BACKUP_FORMAT_HEADER = "x-agentdash-backup-format";
 export const BACKUP_RELEASE_HEADER = "x-agentdash-backup-release";
 export const MIN_BACKUP_TOKEN_LENGTH = 32;
+export const DEFAULT_EXPORT_TIMEOUT_MS = 30 * 60_000;
 
 export type BackupCounts = Record<string, number | null>;
 
@@ -97,6 +98,8 @@ export function backupExportRoutes(opts: {
   service?: BackupExportService;
   release?: string | null;
   log?: { info(obj: unknown, msg: string): void; error(obj: unknown, msg: string): void };
+  /** Hard cap on producing the dump (default 30 minutes). */
+  timeoutMs?: number;
 }): RequestHandler {
   let inFlight = false;
   return (req, res, next) => {
@@ -118,41 +121,95 @@ export function backupExportRoutes(opts: {
     }
     inFlight = true;
     const started = Date.now();
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
+    // The slot is freed, and the dump removed, only once BOTH the dump has
+    // settled (or timed out) AND the response is closed, whichever comes
+    // last: a caller that hangs up mid-dump neither leaks the temp file nor
+    // leaves the next export stuck on 409 (security review of #899).
     let exported: BackupExport | null = null;
-    const finish = async (outcome: string) => {
-      if (exported) await exported.cleanup().catch(() => {});
+    let runSettled = false;
+    let timedOut = false;
+    let responseClosed = false;
+    let released = false;
+    let stream: ReturnType<typeof createReadStream> | null = null;
+    let outcome = "aborted";
+    const cleanupExport = () => {
+      const e = exported;
       exported = null;
-      if (inFlight) {
-        inFlight = false;
-        opts.log?.info({ outcome, durationMs: Date.now() - started }, "off-box backup export finished");
-      }
+      if (e) void e.cleanup().catch(() => {});
     };
+    const maybeRelease = () => {
+      if (released || !responseClosed || !(runSettled || timedOut)) return;
+      released = true;
+      if (runSettled) cleanupExport();
+      inFlight = false;
+      opts.log?.info({ outcome, durationMs: Date.now() - started }, "off-box backup export finished");
+    };
+    // Registered BEFORE the dump starts, so a disconnect during it is seen.
+    res.on("close", () => {
+      responseClosed = true;
+      stream?.destroy();
+      if (res.writableFinished && outcome === "streaming") outcome = "sent";
+      maybeRelease();
+    });
+
+    const run = opts.service!.run();
+    run.then(
+      (e) => {
+        exported = e;
+        runSettled = true;
+        // Nobody will stream it: the caller left, or the timeout already answered.
+        if (timedOut || responseClosed || req.destroyed || res.destroyed) cleanupExport();
+        maybeRelease();
+      },
+      () => {
+        runSettled = true;
+        maybeRelease();
+      },
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      timer.unref?.();
+    });
+
     void (async () => {
       try {
-        exported = await opts.service!.run();
-        const { size } = await stat(exported.file);
+        const first = await Promise.race([run, deadline]);
+        if (first === "timeout") {
+          timedOut = true;
+          outcome = "timeout";
+          opts.log?.error({ timeoutMs }, "off-box backup export timed out");
+          if (!res.headersSent && !res.destroyed) res.status(504).json({ error: "backup export timed out" });
+          else res.destroy();
+          maybeRelease();
+          return;
+        }
+        if (responseClosed || req.destroyed || res.destroyed || !exported) return;
+        const current: BackupExport = exported;
+        const { size } = await stat(current.file);
+        if (responseClosed || res.destroyed) return;
+        outcome = "streaming";
         res.status(200);
         res.setHeader("content-type", "application/gzip");
         res.setHeader("content-length", String(size));
         res.setHeader("cache-control", "no-store");
         res.setHeader(BACKUP_FORMAT_HEADER, BACKUP_EXPORT_FORMAT);
-        res.setHeader(BACKUP_COUNTS_HEADER, JSON.stringify(exported.counts));
+        res.setHeader(BACKUP_COUNTS_HEADER, JSON.stringify(current.counts));
         if (opts.release) res.setHeader(BACKUP_RELEASE_HEADER, opts.release);
-        const stream = createReadStream(exported.file);
-        res.on("close", () => {
-          stream.destroy();
-          void finish(res.writableFinished ? "sent" : "aborted");
-        });
+        stream = createReadStream(current.file);
         stream.on("error", (err) => {
           opts.log?.error({ err }, "off-box backup export stream failed");
           res.destroy(err);
         });
         stream.pipe(res);
       } catch (err) {
+        outcome = "failed";
         opts.log?.error({ err }, "off-box backup export failed");
-        await finish("failed");
-        if (!res.headersSent) res.status(500).json({ error: "backup export failed" });
+        if (!res.headersSent && !res.destroyed) res.status(500).json({ error: "backup export failed" });
         else res.destroy();
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     })();
   };

@@ -19,6 +19,8 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { pipeline } from "node:stream/promises";
+import zlib from "node:zlib";
 import { eq, sql } from "drizzle-orm";
 import express from "express";
 import sodium from "libsodium-wrappers";
@@ -29,6 +31,8 @@ import { backupRoutes } from "../backups/routes.js";
 import { S3Store, signV4 } from "../backups/s3.js";
 import { backupService, fleetBackupStatus, staleBackups, type BackupEvent, type BackupTokenSource, type BoxRow } from "../backups/service.js";
 import { runRestoreTool } from "../backups/restore-tool.js";
+import { createEncryptStream } from "../backups/envelope.js";
+import { STATEMENT_BREAKPOINT } from "../backups/dump-guard.js";
 import { encryptField, parseKeyring } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { accounts, boxBackups, boxEvents, boxes, type BoxState } from "../db/schema.js";
@@ -153,6 +157,23 @@ async function seedBoxDatabase(url: string) {
   }
   for (let i = 0; i < 12; i++) await s`insert into drizzle.__drizzle_migrations (hash, created_at) values (${`h${i}`}, ${1_700_000_000_000 + i})`;
   await s.end();
+}
+
+let sandboxSeq = 0;
+/** A disposable database owned by a fresh NON-superuser role (the sandbox's restore role, runbook §7). */
+async function sandboxDatabase(opts: { superuser?: boolean } = {}): Promise<string> {
+  const n = ++sandboxSeq;
+  const role = `restore_role_${n}`;
+  const dbName = `restore_db_${n}_${randomUUID().slice(0, 6)}`;
+  const a = postgres(`${pgBase}/postgres`, { max: 1, onnotice: () => {} });
+  try {
+    await a.unsafe(`create role ${role} login password 'sandbox' ${opts.superuser ? "superuser" : "nosuperuser"}`);
+    await a.unsafe(`create database ${dbName} owner ${role}`);
+    await a.unsafe(`grant set on parameter session_replication_role to ${role}`);
+  } finally {
+    await a.end();
+  }
+  return `postgres://${role}:sandbox@127.0.0.1:${new URL(pgBase).port}/${dbName}`;
 }
 
 async function snapshot(url: string) {
@@ -298,73 +319,115 @@ describe("off-box backup round trip", () => {
     expect(out.join("\n")).toContain(box.slug);
     expect(out.join("\n")).not.toContain("sealedDataKey");
 
-    // Restore into a throwaway database (a fresh database on the test server).
+    // Step 1, on the KEY machine: decrypt, check it is the backup asked for, and run the safety check.
     out.length = 0;
-    const throwawayName = `restore_${randomUUID().slice(0, 8)}`;
-    let stopped = false;
-    const code = await runRestoreTool(["restore", "--in", file, "--key-dir", keyDir, "--keep"], {
-      ...io,
-      startThrowaway: async () => {
-        const a = postgres(`${pgBase}/postgres`, { max: 1, onnotice: () => {} });
-        await a.unsafe(`create database ${throwawayName}`);
-        await a.end();
-        return { url: `${pgBase}/${throwawayName}`, stop: async () => void (stopped = true) };
-      },
-    });
-    expect(out.join("\n")).toContain("RESTORE TEST PASSED");
-    // backup-lib's pg_dump-less engine: statement breakpoints with COPY blocks.
-    expect(out.join("\n")).toMatch(/restored \d+ statement\(s\), [1-9]\d* COPY block\(s\) via statements/);
-    expect(code).toBe(0);
-    expect(stopped).toBe(false); // --keep
-    expect(fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith("agentdash-restore-") && fs.existsSync(path.join(os.tmpdir(), f, "dump.sql.gz")))).toEqual([]);
+    const dump = path.join(work, `${row!.id}.sql.gz`);
+    expect(await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", "someone-else"], io)).toBe(3);
+    expect(fs.existsSync(dump)).toBe(false);
+    const dc = await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", box.slug, "--expect-backup-id", row!.id], io);
+    expect(dc).toBe(0);
+    expect(out.join("\n")).toMatch(/safety check passed: \d+ statement\(s\), [1-9]\d* COPY block\(s\)/);
+    expect((fs.statSync(dump).mode & 0o777).toString(8)).toBe("600");
+    expect(JSON.parse(fs.readFileSync(`${dump}.manifest.json`, "utf8"))).toMatchObject({ backupId: row!.id, slug: box.slug, counts: { issues: 300 } });
+    expect(fs.existsSync(`${dump}.partial`)).toBe(false);
 
-    const restoredUrl = `${pgBase}/${throwawayName}`;
-    expect(await snapshot(restoredUrl)).toEqual(await snapshot(boxUrl));
+    // Step 2, in the SANDBOX: replay as a non-superuser, then verify. A superuser is refused.
+    out.length = 0;
+    const superTarget = await sandboxDatabase({ superuser: true });
+    await expect(runRestoreTool(["replay", "--dump", dump, "--into", superTarget], io)).rejects.toThrow(/superuser/);
+    const target = await sandboxDatabase();
+    const code = await runRestoreTool(["replay", "--dump", dump, "--into", target], io);
+    expect(out.join("\n")).toContain("RESTORE TEST PASSED");
+    expect(out.join("\n")).toMatch(/replayed \d+ statement\(s\), [1-9]\d* COPY block\(s\)/);
+    expect(code).toBe(0);
+    expect(await snapshot(target)).toEqual(await snapshot(boxUrl));
     // Sequences carry on where the source left off.
-    const r = postgres(restoredUrl, { max: 1, onnotice: () => {} });
+    const r = postgres(target, { max: 1, onnotice: () => {} });
     const [next] = await r`insert into issues (title) values ('after restore') returning id`;
     await r.end();
     expect(Number(next!.id)).toBe(301);
+    // Replay never takes key material.
+    expect(await runRestoreTool(["replay", "--dump", dump, "--into", target, "--key-dir", keyDir], io)).toBe(64);
   });
 
-  it("restores into the default throwaway embedded Postgres and removes it", async () => {
-    expect(roundTripFile).toBeTruthy();
-    const out: string[] = [];
-    const before = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith("agentdash-restore-pg-"));
-    const code = await runRestoreTool(["restore", "--in", roundTripFile, "--key-dir", keyDir], { out: (l) => out.push(l), err: (l) => out.push(`ERR ${l}`) });
-    expect(out.join("\n")).toContain("RESTORE TEST PASSED");
-    expect(code).toBe(0);
-    expect(fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith("agentdash-restore-pg-"))).toEqual(before);
-  }, 300_000);
-
   it("the wrong key cannot open a backup", async () => {
-    const box = await makeBox();
-    const row = await (await service().runManual(box.slug)).done;
-    const file = path.join(work, "wrong-key.adbk");
-    fs.writeFileSync(file, objects.get(`/agentdash-backups/boxes/${row!.objectPath}`)!);
     const otherDir = path.join(work, "other-keys");
     fs.mkdirSync(otherDir, { mode: 0o700 });
     const kp = sodium.crypto_box_keypair();
     fs.writeFileSync(path.join(otherDir, "escrow-public-key"), Buffer.from(kp.publicKey).toString("base64"));
     fs.writeFileSync(path.join(otherDir, "escrow-secret-key"), Buffer.from(kp.privateKey).toString("base64"));
-    await expect(runRestoreTool(["restore", "--in", file, "--key-dir", otherDir], { out: () => {}, err: () => {} })).rejects.toThrow(/sealed to backup key/);
+    const out = path.join(work, "wrong-key.sql.gz");
+    await expect(runRestoreTool(["decrypt", "--in", roundTripFile, "--key-dir", otherDir, "--out", out], { out: () => {}, err: () => {} })).rejects.toThrow(/sealed to backup key/);
+    expect(fs.existsSync(out) || fs.existsSync(`${out}.partial`)).toBe(false);
   });
 
-  it("refuses to restore over a database that looks like a live box", async () => {
-    const box = await makeBox();
-    const row = await (await service().runManual(box.slug)).done;
-    const file = path.join(work, "guard.adbk");
-    fs.writeFileSync(file, objects.get(`/agentdash-backups/boxes/${row!.objectPath}`)!);
+  it("refuses to replay over a database that looks like a live box", async () => {
+    const dump = path.join(work, "guard.sql.gz");
+    expect(await runRestoreTool(["decrypt", "--in", roundTripFile, "--key-dir", keyDir, "--out", dump], { out: () => {}, err: () => {} })).toBe(0);
     const errs: string[] = [];
     const before = await snapshot(boxUrl);
-    const code = await runRestoreTool(["restore", "--in", file, "--key-dir", keyDir, "--into", boxUrl], { out: () => {}, err: (l) => errs.push(l) });
+    const code = await runRestoreTool(["replay", "--dump", dump, "--into", boxUrl], { out: () => {}, err: (l) => errs.push(l) });
     expect(code).toBe(3);
     expect(errs.join(" ")).toMatch(/looks like a live box/);
     expect(await snapshot(boxUrl)).toEqual(before);
   });
+
+  it("a hostile dump from a compromised box is refused at decrypt and at replay, and runs nothing", async () => {
+    const pwned = path.join(work, "pwned");
+    const hostileSql = [
+      "BEGIN;",
+      'CREATE TABLE "public"."t" ("a" text);',
+      `COPY "public"."t" ("a") FROM PROGRAM 'touch ${pwned}';`,
+      "\\! touch " + pwned,
+      "CREATE EVENT TRIGGER e ON ddl_command_start EXECUTE FUNCTION f();",
+      "ALTER SYSTEM SET archive_command = 'x';",
+      "CREATE EXTENSION IF NOT EXISTS plpython3u;",
+      "COMMIT;",
+    ].join(`\n${STATEMENT_BREAKPOINT}\n`);
+    const plain = path.join(work, "hostile.sql.gz");
+    fs.writeFileSync(plain, zlib.gzipSync(hostileSql));
+    const sealed = path.join(work, "hostile.adbk");
+    const enc = await createEncryptStream(backupKeys.publicKey, { backupId: randomUUID(), boxId: randomUUID(), slug: "evil", createdAt: new Date().toISOString(), format: "paperclip-sql-gz-v1", release: null, counts: { migrations: 1 } });
+    await pipeline(fs.createReadStream(plain), enc, fs.createWriteStream(sealed));
+
+    const errs: string[] = [];
+    const out = path.join(work, "hostile-out.sql.gz");
+    expect(await runRestoreTool(["decrypt", "--in", sealed, "--key-dir", keyDir, "--out", out], { out: () => {}, err: (l) => errs.push(l) })).toBe(4);
+    expect(fs.existsSync(out) || fs.existsSync(`${out}.partial`)).toBe(false);
+    expect(errs.join(" ")).toMatch(/COPY other than/);
+    expect(errs.join(" ")).toMatch(/psql meta-command/);
+    expect(errs.join(" ")).toMatch(/extension plpython3u/);
+
+    const target = await sandboxDatabase();
+    await expect(runRestoreTool(["replay", "--dump", plain, "--into", target], { out: () => {}, err: () => {} })).rejects.toThrow(/safety check/);
+    const t = postgres(target, { max: 1, onnotice: () => {} });
+    const [exists] = await t`select to_regclass('public.t') is not null as present`;
+    await t.end();
+    expect(exists!.present).toBe(false);
+    expect(fs.existsSync(pwned)).toBe(false);
+  });
 });
 
 describe("failures and the event hook", () => {
+  it("an export reporting no applied migrations is not stored (junk must not push out good dailies)", async () => {
+    const junk = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/gzip", "x-agentdash-backup-counts": JSON.stringify({ users: 0, migrations: 0 }), "x-agentdash-backup-format": "paperclip-sql-gz-v1" });
+      res.end(Buffer.from("junk"));
+    });
+    await new Promise<void>((r) => junk.listen(0, "127.0.0.1", () => r()));
+    try {
+      const box = await makeBox("active", { upstreamHost: `127.0.0.1:${(junk.address() as AddressInfo).port}` });
+      const events: BackupEvent[] = [];
+      const puts = s3Requests.filter((r) => r.startsWith("PUT")).length;
+      expect(await (await service({ events }).runManual(box.slug)).done).toBeNull();
+      expect(events.map((e) => e.reason)).toEqual(["export_failed"]);
+      expect(events[0]!.error).toMatch(/no applied migrations/);
+      expect(s3Requests.filter((r) => r.startsWith("PUT")).length).toBe(puts);
+    } finally {
+      await new Promise((r) => junk.close(r));
+    }
+  });
+
   it("a box without a token gets one (live at its next deploy) and the backup fails for now", async () => {
     const box = await makeBox();
     const events: BackupEvent[] = [];

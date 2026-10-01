@@ -1,24 +1,38 @@
-// AgentDash (GH #733): load a box's gzipped SQL dump into a Postgres database
-// (the restore tool's target: a throwaway local database or an EMPTY
-// throwaway box). The dump is what packages/db/src/backup-lib.ts writes on a
-// box: without pg_dump (the box image ships none) it is the "statement
-// breakpoint" format, whose statements and COPY blocks this module replays
-// through postgres.js, the same way backup-lib's runDatabaseRestore does (the
-// control plane does not import the box's packages, so the parser is mirrored
-// here and the round-trip test runs it against backup-lib's real output). A
-// plain pg_dump file (no breakpoints) is piped to `psql` instead.
-import { spawn } from "node:child_process";
-import { createReadStream } from "node:fs";
+// AgentDash (GH #733): replay a box's decrypted dump into a DISPOSABLE
+// Postgres. The dump is box-written, so treat it as hostile (threat model in
+// ./dump-guard.ts):
+//   - only backup-lib's statement-breakpoint format is accepted; there is no
+//     psql path (psql meta-commands would run on this machine);
+//   - the whole file is checked statement by statement BEFORE anything runs,
+//     and each statement is checked again as it is sent;
+//   - the target role must not be a superuser (no COPY … PROGRAM, no
+//     server-side file access, no extension outside the trusted set);
+//   - statements go through postgres.js one at a time, COPY blocks through
+//     its COPY FROM STDIN stream. This mirrors backup-lib's runDatabaseRestore
+//     (the control plane does not import box packages).
+import { closeSync, createReadStream, openSync, readSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { createGunzip } from "node:zlib";
 import postgres from "postgres";
+import { checkStatement, STATEMENT_BREAKPOINT } from "./dump-guard.js";
 
-export const STATEMENT_BREAKPOINT = "-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
+export { STATEMENT_BREAKPOINT };
 const DETECT_BYTES = 64 * 1024;
+
+/** Gzip by content (magic 1f 8b), not by file name. */
+function isGzip(file: string): boolean {
+  const fd = openSync(file, "r");
+  try {
+    const b = Buffer.alloc(2);
+    return readSync(fd, b, 0, 2, 0) === 2 && b[0] === 0x1f && b[1] === 0x8b;
+  } finally {
+    closeSync(fd);
+  }
+}
 
 function open(file: string) {
   const raw = createReadStream(file);
-  return file.endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
+  return isGzip(file) ? raw.pipe(createGunzip()) : raw;
 }
 
 export async function hasStatementBreakpoints(file: string): Promise<boolean> {
@@ -36,7 +50,7 @@ export async function hasStatementBreakpoints(file: string): Promise<boolean> {
   }
 }
 
-async function* statements(file: string): AsyncGenerator<string> {
+export async function* statements(file: string): AsyncGenerator<string> {
   const stream = open(file);
   stream.setEncoding("utf8");
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
@@ -77,22 +91,67 @@ export function parseCopyFromStdin(statement: string): { command: string; payloa
   return { command: header.replace(/;$/, ""), payload: data.length ? `${data.join("\n")}\n` : "" };
 }
 
+export interface DumpScan {
+  statements: number;
+  copyBlocks: number;
+  /** The first refusals (statement index and reason). Empty means the dump may be replayed. */
+  refused: Array<{ index: number; reason: string }>;
+}
+
+/** Check a whole dump without running anything. */
+export async function scanDump(file: string): Promise<DumpScan> {
+  if (!(await hasStatementBreakpoints(file))) {
+    return { statements: 0, copyBlocks: 0, refused: [{ index: 0, reason: "not a backup-lib statement-breakpoint dump (plain pg_dump output is not replayed: it would need psql)" }] };
+  }
+  const scan: DumpScan = { statements: 0, copyBlocks: 0, refused: [] };
+  for await (const s of statements(file)) {
+    const reason = checkStatement(s);
+    if (reason && scan.refused.length < 20) scan.refused.push({ index: scan.statements, reason });
+    if (parseCopyFromStdin(s)) scan.copyBlocks++;
+    scan.statements++;
+  }
+  return scan;
+}
+
+export class ReplayRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReplayRefused";
+  }
+}
+
 export interface RestoreStats {
   statements: number;
   copyBlocks: number;
-  engine: "statements" | "psql";
 }
 
-/** Restore a dump into `connectionString`. Throws on the first failing statement (the dump runs in one transaction). */
-export async function restoreSqlDump(file: string, connectionString: string): Promise<RestoreStats> {
-  if (!(await hasStatementBreakpoints(file))) {
-    await restoreWithPsql(file, connectionString);
-    return { statements: 0, copyBlocks: 0, engine: "psql" };
+/** True when the connection's role is a superuser (or can become one). */
+export async function isSuperuser(connectionString: string): Promise<boolean> {
+  const sql = postgres(connectionString, { max: 1, connect_timeout: 10, onnotice: () => {} });
+  try {
+    const [r] = await sql<Array<{ s: boolean }>>`select rolsuper or rolreplication or rolbypassrls as s from pg_roles where rolname = current_user`;
+    return Boolean(r?.s);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+/** Replay a dump that passed scanDump into a disposable database, as a non-superuser. */
+export async function replayDump(file: string, connectionString: string): Promise<RestoreStats> {
+  if (await isSuperuser(connectionString)) {
+    throw new ReplayRefused("refusing to replay as a superuser: connect as the sandbox's non-superuser restore role (runbook §7)");
+  }
+  const scan = await scanDump(file);
+  if (scan.refused.length) {
+    throw new ReplayRefused(`the dump failed the safety check: ${scan.refused.map((r) => `#${r.index} ${r.reason}`).join("; ")}`);
   }
   const sql = postgres(connectionString, { max: 1, connect_timeout: 10, onnotice: () => {} });
-  const stats: RestoreStats = { statements: 0, copyBlocks: 0, engine: "statements" };
+  const stats: RestoreStats = { statements: 0, copyBlocks: 0 };
   try {
     for await (const s of statements(file)) {
+      // Checked again: the file could have changed since the scan.
+      const reason = checkStatement(s);
+      if (reason) throw new ReplayRefused(`statement #${stats.statements} failed the safety check: ${reason}`);
       const copy = parseCopyFromStdin(s);
       if (copy) {
         const writable = (await sql.unsafe(copy.command).writable()) as NodeJS.WritableStream;
@@ -110,24 +169,10 @@ export async function restoreSqlDump(file: string, connectionString: string): Pr
     }
     return stats;
   } catch (err) {
+    if (err instanceof ReplayRefused) throw err;
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`restore failed after ${stats.statements} statement(s): ${msg.replace(/postgres(ql)?:\/\/[^\s]+/g, "[url]")}`);
+    throw new Error(`replay failed after ${stats.statements} statement(s): ${msg.replace(/postgres(ql)?:\/\/[^\s]+/g, "[url]")}`);
   } finally {
     await sql.end({ timeout: 5 });
   }
-}
-
-async function restoreWithPsql(file: string, connectionString: string): Promise<void> {
-  const bin = process.env.PAPERCLIP_PSQL_PATH || "psql";
-  const child = spawn(bin, [`--dbname=${connectionString}`, "--set=ON_ERROR_STOP=1", "--quiet", "--no-psqlrc"], { stdio: ["pipe", "ignore", "pipe"] });
-  let stderr = "";
-  child.stderr?.on("data", (d: Buffer) => {
-    if (stderr.length < 8192) stderr += d.toString("utf8");
-  });
-  const exited = new Promise<void>((resolve, reject) => {
-    child.on("error", (err) => reject(new Error(`this dump is plain pg_dump output and needs psql (${(err as NodeJS.ErrnoException).code ?? err.message}); install psql or set PAPERCLIP_PSQL_PATH`)));
-    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`psql exited ${code}: ${stderr.trim().slice(0, 500)}`))));
-  });
-  open(file).pipe(child.stdin!);
-  await exited;
 }

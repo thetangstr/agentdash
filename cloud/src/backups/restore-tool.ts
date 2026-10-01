@@ -1,41 +1,37 @@
-// AgentDash (GH #733): the OFFLINE restore tool for off-box backups. Runs on
-// the operator's machine with the backup secret key, never in the control
-// plane (which holds only the public key and cannot decrypt a backup).
+// AgentDash (GH #733): the OFFLINE restore tool for off-box backups. The
+// control plane holds only the public key and cannot decrypt a backup.
+//
+// Decrypting and replaying are separate steps on purpose (security review of
+// #899): the dump is written by the box, so a compromised tenant controls its
+// SQL. The machine holding the backup secret key must never execute it.
 //
 //   inspect --in <file.adbk>
 //       print the backup's plain header (box, slug, time, key id, counts); no key needed
-//   restore --in <file.adbk> --key-dir <dir> [--into <postgres-url>] [--keep] [--health-url <url>]
-//       decrypt and restore, then verify:
-//         - without --into: into a THROWAWAY embedded Postgres in a temp
-//           directory, removed afterwards (--keep leaves it running and prints its URL);
-//         - with --into: into that database, which must hold no users and no
-//           companies (an empty database or a never-claimed throwaway box):
-//           it refuses anything that looks like a live box;
-//       verification compares the restored core-table counts with the counts
-//       the box reported at export time (the migration count must match);
-//       --health-url then requires GET <url> to answer 200 with status "ok"
-//       (a throwaway box pointed at the restored database).
-//
-// The decrypted dump exists only in a mode-700 temp directory and is deleted
-// on exit. Get the file with `admin backups download <backup id> <file>`.
-// Key directory: escrow-public-key and escrow-secret-key, as `escrow keygen` writes them.
+//   decrypt --in <file.adbk> --key-dir <dir> --out <dump.sql.gz>
+//           [--expect-slug <slug>] [--expect-backup-id <id>]
+//       on the KEY machine: decrypt (mode 600, never overwrites), check the
+//       header names the backup you asked for (the sealed box does not prove
+//       which box produced it, and anyone with bucket write access could swap
+//       objects), and run the replay safety check WITHOUT executing anything.
+//       Writes <dump>.manifest.json (the header, without the sealed key).
+//   replay --dump <dump.sql.gz> --into <postgres-url> [--manifest <file>] [--health-url <url>]
+//       in a DISPOSABLE sandbox with NO key material (runbook §7): replays the
+//       dump as a NON-superuser into an empty or never-claimed database
+//       (refuses a superuser, a target holding users or companies, and any
+//       statement failing ./dump-guard.ts), then checks the restored counts
+//       against the manifest (the migration count must match).
 import fs from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import postgres from "postgres";
 import { parseEscrowPublicKey } from "../railway/secrets.js";
 import { createDecryptStream, parseEnvelopeHeader, type BackupEnvelopeHeader } from "./envelope.js";
-import { restoreSqlDump } from "./sql-restore.js";
+import { replayDump, scanDump } from "./sql-restore.js";
 
 export interface RestoreIo {
   out: (l: string) => void;
   err: (l: string) => void;
   fetch?: typeof fetch;
-  /** Starts a throwaway Postgres; tests inject one. Default: embedded-postgres in a temp dir. */
-  startThrowaway?: () => Promise<{ url: string; stop(): Promise<void> }>;
 }
 
 const COUNT_TABLES: ReadonlyArray<readonly [string, string]> = [
@@ -77,44 +73,6 @@ export async function liveTargetReason(url: string): Promise<string | null> {
   return null;
 }
 
-async function freePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.unref();
-    s.on("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const a = s.address();
-      if (!a || typeof a === "string") return reject(new Error("no free port"));
-      s.close(() => resolve(a.port));
-    });
-  });
-}
-
-/** A throwaway embedded Postgres (embedded-postgres, a dev dependency: the tool runs from a repo checkout). */
-export async function startEmbeddedThrowaway(): Promise<{ url: string; stop(): Promise<void> }> {
-  type Pg = { initialise(): Promise<void>; start(): Promise<void>; stop(): Promise<void> };
-  const mod = (await import("embedded-postgres")) as unknown as { default: new (o: Record<string, unknown>) => Pg };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentdash-restore-pg-"));
-  const port = await freePort();
-  const password = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
-  const pg = new mod.default({ databaseDir: dir, user: "restore", password, port, persistent: false, initdbFlags: ["--encoding=UTF8", "--locale=C"], onLog: () => {}, onError: () => {} });
-  const stop = async () => {
-    await pg.stop().catch(() => {});
-    fs.rmSync(dir, { recursive: true, force: true });
-  };
-  try {
-    await pg.initialise();
-    await pg.start();
-    const admin = postgres(`postgres://restore:${password}@127.0.0.1:${port}/postgres`, { max: 1, onnotice: () => {} });
-    await admin.unsafe("create database restore_test");
-    await admin.end();
-  } catch (err) {
-    await stop();
-    throw err;
-  }
-  return { url: `postgres://restore:${password}@127.0.0.1:${port}/restore_test`, stop };
-}
-
 function readKeyDir(dir: string): { publicKey: Uint8Array; secretKey: Uint8Array } {
   const publicKey = parseEscrowPublicKey(fs.readFileSync(path.join(dir, "escrow-public-key"), "utf8"));
   const secretKey = new Uint8Array(Buffer.from(fs.readFileSync(path.join(dir, "escrow-secret-key"), "utf8").trim(), "base64"));
@@ -135,7 +93,13 @@ export function readEnvelopeHeaderFile(file: string): BackupEnvelopeHeader {
   }
 }
 
-/** Decrypt an envelope file to a gzipped dump file (mode 600). */
+/** The header as shown or written beside a dump: everything but the sealed data key. */
+export function publicHeader(h: BackupEnvelopeHeader): Omit<BackupEnvelopeHeader, "sealedDataKey"> {
+  const { sealedDataKey: _omit, ...shown } = h;
+  return shown;
+}
+
+/** Decrypt an envelope file to a gzipped dump file (mode 600, must not exist). */
 export async function decryptBackupFile(input: string, output: string, keys: { publicKey: Uint8Array; secretKey: Uint8Array }): Promise<BackupEnvelopeHeader> {
   let header: BackupEnvelopeHeader | null = null;
   const dec = await createDecryptStream(keys.publicKey, keys.secretKey, { onHeader: (h) => (header = h) });
@@ -144,64 +108,99 @@ export async function decryptBackupFile(input: string, output: string, keys: { p
   return header;
 }
 
+/** Remove `files` if the process is interrupted; returns the uninstaller. */
+function wipeOnSignal(files: string[]): () => void {
+  const handler = (sig: NodeJS.Signals) => {
+    for (const f of files) fs.rmSync(f, { force: true });
+    process.stderr.write(`backup-restore: interrupted (${sig}); removed the partial plaintext\n`);
+    process.exit(130);
+  };
+  process.once("SIGINT", handler);
+  process.once("SIGTERM", handler);
+  return () => {
+    process.off("SIGINT", handler);
+    process.off("SIGTERM", handler);
+  };
+}
+
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 }
 
 export const RESTORE_USAGE = `usage: backup-restore inspect --in <file.adbk>
-       backup-restore restore --in <file.adbk> --key-dir <dir> [--into <postgres-url>] [--keep] [--health-url <url>]`;
+       backup-restore decrypt --in <file.adbk> --key-dir <dir> --out <dump.sql.gz> [--expect-slug <slug>] [--expect-backup-id <id>]
+       backup-restore replay --dump <dump.sql.gz> --into <postgres-url> [--manifest <file>] [--health-url <url>]   (sandbox, no keys)`;
 
 export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<number> {
   const [cmd, ...rest] = argv;
-  const input = flag(rest, "--in");
-  if ((cmd !== "inspect" && cmd !== "restore") || !input) return (io.err(RESTORE_USAGE), 64);
   if (cmd === "inspect") {
-    const h = readEnvelopeHeaderFile(input);
-    const { sealedDataKey: _omit, ...shown } = h;
-    io.out(JSON.stringify(shown, null, 2));
+    const input = flag(rest, "--in");
+    if (!input) return (io.err(RESTORE_USAGE), 64);
+    io.out(JSON.stringify(publicHeader(readEnvelopeHeaderFile(input)), null, 2));
     return 0;
   }
-  const keyDir = flag(rest, "--key-dir");
-  if (!keyDir) return (io.err(RESTORE_USAGE), 64);
-  const into = flag(rest, "--into");
-  const healthUrl = flag(rest, "--health-url");
-  const keep = rest.includes("--keep");
-  const keys = readKeyDir(keyDir);
 
-  const work = await mkdtemp(path.join(os.tmpdir(), "agentdash-restore-"));
-  fs.chmodSync(work, 0o700);
-  let throwaway: { url: string; stop(): Promise<void> } | null = null;
-  try {
-    const dump = path.join(work, "dump.sql.gz");
-    const t0 = Date.now();
-    const header = await decryptBackupFile(input, dump, keys);
-    io.out(`decrypted backup ${header.backupId} of ${header.slug} (${header.createdAt}, release ${header.release ?? "unknown"}) in ${Date.now() - t0} ms`);
-
-    let target: string;
-    if (into) {
-      const reason = await liveTargetReason(into);
-      if (reason) {
-        io.err(`refusing to restore: ${reason}`);
-        return 3;
+  if (cmd === "decrypt") {
+    const input = flag(rest, "--in");
+    const keyDir = flag(rest, "--key-dir");
+    const out = flag(rest, "--out");
+    if (!input || !keyDir || !out) return (io.err(RESTORE_USAGE), 64);
+    const expectSlug = flag(rest, "--expect-slug");
+    const expectId = flag(rest, "--expect-backup-id");
+    // Check the plain header first, so a swapped object is refused before decrypting anything.
+    const plainHeader = readEnvelopeHeaderFile(input);
+    if (expectSlug && plainHeader.slug !== expectSlug) return (io.err(`refusing: this backup is of ${plainHeader.slug}, not ${expectSlug}`), 3);
+    if (expectId && plainHeader.backupId !== expectId) return (io.err(`refusing: this file is backup ${plainHeader.backupId}, not ${expectId}`), 3);
+    const partial = `${out}.partial`;
+    const unwipe = wipeOnSignal([partial]);
+    try {
+      const t0 = Date.now();
+      const header = await decryptBackupFile(input, partial, readKeyDir(keyDir));
+      // The header is authenticated by every frame: what decrypted must match what was checked.
+      if (header.backupId !== plainHeader.backupId || header.slug !== plainHeader.slug) throw new Error("the header changed during decryption");
+      const scan = await scanDump(partial);
+      if (scan.refused.length) {
+        fs.rmSync(partial, { force: true });
+        io.err(`refusing: the dump fails the replay safety check (a tampered or hostile dump): ${scan.refused.map((r) => `#${r.index} ${r.reason}`).join("; ")}`);
+        return 4;
       }
-      target = into;
-    } else {
-      throwaway = await (io.startThrowaway ?? startEmbeddedThrowaway)();
-      target = throwaway.url;
-      io.out("restoring into a throwaway Postgres");
+      fs.renameSync(partial, out);
+      fs.writeFileSync(`${out}.manifest.json`, JSON.stringify(publicHeader(header), null, 2), { mode: 0o600 });
+      io.out(`decrypted backup ${header.backupId} of ${header.slug} (${header.createdAt}, release ${header.release ?? "unknown"}) in ${Date.now() - t0} ms`);
+      io.out(`safety check passed: ${scan.statements} statement(s), ${scan.copyBlocks} COPY block(s). Replay it only in a sandbox without keys (runbook §7).`);
+      return 0;
+    } catch (err) {
+      fs.rmSync(partial, { force: true });
+      throw err;
+    } finally {
+      unwipe();
+    }
+  }
+
+  if (cmd === "replay") {
+    const dump = flag(rest, "--dump");
+    const into = flag(rest, "--into");
+    if (!dump || !into) return (io.err(RESTORE_USAGE), 64);
+    if (rest.includes("--key-dir")) return (io.err("refusing: replay never takes key material; decrypt on the key machine, replay in the sandbox"), 64);
+    const manifestFile = flag(rest, "--manifest") ?? `${dump}.manifest.json`;
+    const manifest = fs.existsSync(manifestFile) ? (JSON.parse(fs.readFileSync(manifestFile, "utf8")) as Pick<BackupEnvelopeHeader, "counts" | "slug" | "backupId">) : null;
+    const healthUrl = flag(rest, "--health-url");
+    const reason = await liveTargetReason(into);
+    if (reason) {
+      io.err(`refusing to replay: ${reason}`);
+      return 3;
     }
     const t1 = Date.now();
-    const stats = await restoreSqlDump(dump, target);
-    io.out(`restored ${stats.statements} statement(s), ${stats.copyBlocks} COPY block(s) via ${stats.engine} in ${Date.now() - t1} ms`);
-
-    const restored = await countCoreTables(target);
+    const stats = await replayDump(dump, into);
+    io.out(`replayed ${stats.statements} statement(s), ${stats.copyBlocks} COPY block(s) in ${Date.now() - t1} ms`);
+    const restored = await countCoreTables(into);
     const mismatches: string[] = [];
-    for (const [name, expected] of Object.entries(header.counts ?? {})) {
+    for (const [name, expected] of Object.entries(manifest?.counts ?? {})) {
       if (restored[name] !== expected) mismatches.push(`${name}: exported ${String(expected)}, restored ${String(restored[name])}`);
     }
-    const migrationsOk = header.counts?.migrations === undefined || restored.migrations === header.counts.migrations;
-    const hasData = Object.values(restored).some((v) => v !== null);
+    const migrationsOk = manifest ? manifest.counts?.migrations === restored.migrations : (restored.migrations ?? 0) > 0;
+    if (!manifest) io.err(`no manifest at ${manifestFile}: counts are not compared`);
     let healthOk = true;
     if (healthUrl) {
       try {
@@ -216,17 +215,13 @@ export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<num
     }
     io.out(`restored counts: ${JSON.stringify(restored)}`);
     if (mismatches.length) io.err(`count differences (writes between the count and the dump are possible): ${mismatches.join("; ")}`);
-    const ok = migrationsOk && hasData && healthOk;
+    const ok = migrationsOk && healthOk;
     io.out(ok ? "RESTORE TEST PASSED" : "RESTORE TEST FAILED");
-    if (throwaway && keep) {
-      io.out(`throwaway database left running (--keep): ${throwaway.url}`);
-      throwaway = null;
-    }
     return ok ? 0 : 1;
-  } finally {
-    await rm(work, { recursive: true, force: true }).catch(() => {});
-    if (throwaway) await throwaway.stop().catch(() => {});
   }
+
+  io.err(RESTORE_USAGE);
+  return 64;
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {

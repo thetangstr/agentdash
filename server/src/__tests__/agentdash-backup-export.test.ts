@@ -9,6 +9,8 @@
 // The control plane's round-trip test (cloud/src/__tests__/backups.test.ts)
 // drives this same route against a real dump and restores it.
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
@@ -55,9 +57,9 @@ function fakeService(opts: { fail?: boolean; gate?: Promise<void> } = {}) {
   return { service, calls };
 }
 
-function app(token: string | null, service?: BackupExportService) {
+function app(token: string | null, service?: BackupExportService, timeoutMs?: number) {
   const a = express();
-  a.use(backupExportRoutes({ token, service, release: "v2026.1001.0" }));
+  a.use(backupExportRoutes({ token, service, release: "v2026.1001.0", timeoutMs }));
   a.all("/{*rest}", (req, res) => res.status(404).json({ sawAuthorization: "authorization" in req.headers }));
   return a;
 }
@@ -113,6 +115,47 @@ describe("backup export route", () => {
     expect((await first).status).toBe(200);
     await new Promise((r) => setTimeout(r, 20));
     expect((await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`)).status).toBe(200);
+  });
+
+  it("a caller that hangs up mid-dump leaks no file and does not leave the next export on 409", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { service, calls } = fakeService({ gate });
+    const server = http.createServer(app(TOKEN, service));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const { port } = server.address() as AddressInfo;
+    try {
+      // Start an export, then drop the connection while the dump is still running.
+      const req = http.request({ host: "127.0.0.1", port, method: "POST", path: BACKUP_EXPORT_PATH, headers: { authorization: `Bearer ${TOKEN}` } });
+      req.on("error", () => {});
+      req.end();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.run).toBe(1);
+      req.destroy();
+      await new Promise((r) => setTimeout(r, 50));
+      // The dump finishes after the caller left: it is removed, and the slot is freed.
+      release();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.cleaned).toBe(1);
+      expect(dirs.every((d) => !fs.existsSync(d))).toBe(true);
+      const next = await fetch(`http://127.0.0.1:${port}${BACKUP_EXPORT_PATH}`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}` } });
+      expect(next.status).toBe(200);
+      await next.arrayBuffer();
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  });
+
+  it("a dump that runs past the hard timeout answers 504, frees the slot, and is removed when it ends", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = fakeService({ gate });
+    const a = app(TOKEN, slow.service, 50);
+    const res = await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`);
+    expect(res.status).toBe(504);
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(slow.calls.cleaned).toBe(1);
   });
 
   it("a failed export answers 500 without details and frees the slot", async () => {

@@ -12,6 +12,7 @@ import { createDecryptStream, createEncryptStream, ENVELOPE_MAGIC, FRAME_PLAINTE
 import { EMPTY_SHA256, S3Store, signV4, uriEncode } from "../backups/s3.js";
 import { isoWeek, selectPrunable } from "../backups/service.js";
 import { parseCopyFromStdin } from "../backups/sql-restore.js";
+import { checkStatement } from "../backups/dump-guard.js";
 import { ConfigError } from "../config.js";
 import { escrowKeyId } from "../railway/secrets.js";
 import { Secret } from "../secret.js";
@@ -60,8 +61,8 @@ function* chunks(b: Buffer): Generator<Buffer> {
   }
 }
 
-async function seal(plain: Buffer): Promise<Buffer> {
-  return await collect(plain, await createEncryptStream(keys.publicKey, META));
+async function seal(plain: Buffer, meta: BackupEnvelopeMeta = META): Promise<Buffer> {
+  return await collect(plain, await createEncryptStream(keys.publicKey, meta));
 }
 
 describe("SigV4", () => {
@@ -216,15 +217,27 @@ describe("admin CLI: backups", () => {
   const io = (responses: Record<string, { status: number; body: unknown; headers?: Record<string, string> }>) => {
     const calls: string[] = [];
     const out: string[] = [];
-    const files = new Map<string, Uint8Array>();
+    const files = new Map<string, Buffer[]>();
+    const discarded: string[] = [];
     return {
       calls,
       out,
       files,
+      discarded,
       io: {
         out: (l: string) => out.push(l),
         err: (l: string) => out.push(`ERR ${l}`),
-        writeFile: async (p: string, d: Uint8Array) => void files.set(p, d),
+        openFile: async (p: string) => {
+          files.set(p, []);
+          return {
+            write: async (c: Uint8Array) => void files.get(p)!.push(Buffer.from(c)),
+            close: async () => {},
+            discard: async () => {
+              files.delete(p);
+              discarded.push(p);
+            },
+          };
+        },
         fetch: (async (url: string, init?: RequestInit) => {
           const path = new URL(url).pathname;
           calls.push(`${init?.method ?? "GET"} ${path}`);
@@ -244,15 +257,71 @@ describe("admin CLI: backups", () => {
     expect(t.calls).toEqual(["GET /internal/backups", "GET /internal/boxes/acme/backups", "POST /internal/boxes/acme/backups"]);
   });
 
-  it("download checks the SHA-256 before writing", async () => {
-    const bytes = new Uint8Array([1, 2, 3, 4]);
-    const sha = createHash("sha256").update(bytes).digest("hex");
+  it("download streams to disk, checks the SHA-256, and refuses an object that is another backup", async () => {
     const id = "00000000-0000-4000-8000-000000000009";
+    const sealedFor = async (backupId: string) => new Uint8Array(await seal(Buffer.alloc(FRAME_PLAINTEXT_BYTES * 2, 3), { ...META, backupId }));
+    const bytes = await sealedFor(id);
+    const sha = createHash("sha256").update(bytes).digest("hex");
     const good = io({ [`/internal/backups/${id}/download`]: { status: 200, body: bytes, headers: { "x-agentdash-backup-sha256": sha } } });
     expect(await runAdmin(["backups", "download", id, "/tmp/x.adbk"], env, good.io)).toBe(0);
-    expect(good.files.get("/tmp/x.adbk")).toEqual(bytes);
+    expect(Buffer.concat(good.files.get("/tmp/x.adbk")!).equals(Buffer.from(bytes))).toBe(true);
+    expect(good.discarded).toEqual([]);
+
     const bad = io({ [`/internal/backups/${id}/download`]: { status: 200, body: bytes, headers: { "x-agentdash-backup-sha256": "0".repeat(64) } } });
     expect(await runAdmin(["backups", "download", id, "/tmp/y.adbk"], env, bad.io)).toBe(1);
-    expect(bad.files.size).toBe(0);
+    expect(bad.discarded).toEqual(["/tmp/y.adbk"]);
+
+    // A swapped object: a valid backup, but of another id.
+    const other = await sealedFor("00000000-0000-4000-8000-00000000000a");
+    const swapped = io({ [`/internal/backups/${id}/download`]: { status: 200, body: other, headers: { "x-agentdash-backup-sha256": createHash("sha256").update(other).digest("hex") } } });
+    expect(await runAdmin(["backups", "download", id, "/tmp/z.adbk"], env, swapped.io)).toBe(1);
+    expect(swapped.discarded).toEqual(["/tmp/z.adbk"]);
+    expect(swapped.out.join(" ")).toMatch(/is backup .*0000000a, not/);
+
+    const junk = io({ [`/internal/backups/${id}/download`]: { status: 200, body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) } });
+    expect(await runAdmin(["backups", "download", id, "/tmp/j.adbk"], env, junk.io)).toBe(1);
+    expect(junk.discarded).toEqual(["/tmp/j.adbk"]);
+  });
+});
+
+describe("dump guard", () => {
+  const ok = [
+    "BEGIN;",
+    "SET LOCAL session_replication_role = replica;",
+    'CREATE SCHEMA IF NOT EXISTS "drizzle";',
+    'CREATE TYPE "public"."issue_state" AS ENUM (\'open\', \'done\');',
+    "CREATE EXTENSION IF NOT EXISTS \"pg_trgm\" WITH SCHEMA \"public\";",
+    'DROP TABLE IF EXISTS "public"."issues" CASCADE;',
+    'CREATE TABLE "public"."issues" (\n  "id" bigint NOT NULL DEFAULT nextval(\'issues_id_seq\'::regclass),\n  "language" text\n);',
+    "CREATE INDEX issues_title_idx ON public.issues USING gin (title gin_trgm_ops);",
+    'ALTER TABLE "public"."a" ADD CONSTRAINT "a_fk" FOREIGN KEY ("b") REFERENCES "public"."b" ("id");',
+    "-- Data for: public.t (1 rows)\nCOPY \"public\".\"t\" (\"a\") FROM stdin;\nPROGRAM; DROP TABLE x; \\! rm -rf /\n\\.",
+    "INSERT INTO \"public\".\"t\" (\"a\") VALUES ('COPY x FROM PROGRAM ''rm''; DROP TABLE t; \\! ls');",
+    "SELECT setval('\"public\".\"issues_id_seq\"', 300, true);",
+    "COMMIT;",
+  ];
+  const bad: Array<[string, RegExp]> = [
+    ["COPY \"public\".\"t\" (\"a\") FROM PROGRAM 'id';", /COPY other than/],
+    ["COPY \"public\".\"t\" TO '/tmp/x';", /COPY other than/],
+    ["\\! touch /tmp/pwned", /psql meta-command|shape/],
+    ["CREATE EVENT TRIGGER e ON ddl_command_start EXECUTE FUNCTION f();", /shape/],
+    ["ALTER SYSTEM SET archive_command = 'x';", /shape/],
+    ["CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'select 1';", /shape/],
+    ["CREATE EXTENSION IF NOT EXISTS plpython3u;", /not on the allowlist/],
+    ["CREATE EXTENSION IF NOT EXISTS \"dblink\";", /not on the allowlist/],
+    ['CREATE TABLE "public"."t" ("a" int); COPY t FROM PROGRAM \'id\';', /PROGRAM|more than one/],
+    ['CREATE TABLE "public"."t" ("a" text DEFAULT pg_read_file(\'/etc/passwd\'));', /file, process or config/],
+    ['CREATE TABLE "public"."t" ("a" int CHECK (lo_import(\'/etc/passwd\') > 0));', /file, process or config/],
+    ['INSERT INTO "public"."t" ("a") VALUES ((SELECT set_config(\'x\', \'y\', false)));', /file, process or config/],
+    ["SET ROLE postgres;", /shape/],
+    ["GRANT ALL ON t TO PUBLIC;", /shape/],
+    ["SELECT setval('s', 1, true); SELECT pg_sleep(100);", /shape|more than one/],
+    ['CREATE TABLE "public"."t" ("a" text DEFAULT $x$evil$x$);', /dollar-quoted/],
+  ];
+  it("accepts every shape backup-lib writes, whatever the data says", () => {
+    for (const s of ok) expect(checkStatement(s), s).toBeNull();
+  });
+  it("refuses programs, files, psql escapes, event triggers, ALTER SYSTEM, unlisted extensions and smuggled statements", () => {
+    for (const [s, why] of bad) expect(checkStatement(s), s).toMatch(why);
   });
 });

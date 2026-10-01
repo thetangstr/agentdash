@@ -282,6 +282,11 @@ export function backupService(deps: BackupServiceDeps) {
       } catch {
         counts = {};
       }
+      // A box with no migrations applied is not a real export: storing it would push good dailies out of retention.
+      if (!(typeof counts.migrations === "number" && counts.migrations > 0)) {
+        await res.body.cancel().catch(() => {});
+        throw new BackupFailure("export_failed", "the export reports no applied migrations; refusing to store it as a backup");
+      }
       const format = res.headers.get("x-agentdash-backup-format") ?? "unknown";
       const release = res.headers.get("x-agentdash-backup-release");
       const created = now();
