@@ -3,6 +3,9 @@ import { and, eq, exists, inArray, isNull, or, sql, type SQL } from "drizzle-orm
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
+  agents,
+  agentStewardships,
+  companies,
   executionWorkspaces,
   feedbackExports,
   heartbeatRuns,
@@ -526,4 +529,241 @@ export async function assertFeedbackTraceVisible(
 ): Promise<void> {
   await assertIssueIdVisible(db, req, trace.issueId, "Feedback trace");
   await assertProjectIdVisible(db, req, "", trace.projectId, "Feedback trace");
+}
+
+/* ------------------------------------------------------------------------ */
+/* Agent visibility (2026-09-30): members see the agents they answer for.    */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * A second visibility rule, built to the same sentence as A5 and composed the
+ * same way: SQL into every list, 404 on every id route, admins exempt.
+ *
+ * Each agent resolves to 'company' or 'owner' — its own `agents.visibility`
+ * if set, else `companies.agent_visibility_default`. A 'company' agent is
+ * visible to every member. An 'owner' agent is visible to a member when:
+ *   - they answer for it (active stewardship, or `accountable_user_id`), or
+ *   - it reports, transitively, to an agent they answer for, or
+ *   - they created it.
+ * Admins, instance operators and the local board see everything. Agent
+ * actors are NOT subject to this rule: agents keep full org visibility (the
+ * spec's default), and A5 keeps governing them as before.
+ *
+ * The set is resolved once per request and cached on the request, because a
+ * list route composes several conditions synchronously (as `visibleWhere`)
+ * and the resolution needs one recursive query. `resolveAgentVisibility`
+ * must run before any condition below is built; building one without it is
+ * a wiring mistake and throws, rather than silently filtering nothing.
+ *
+ * The company default decides what an unattributed ISSUE means to a member:
+ *   - default 'owner'  : a member sees the issues attributed to a visible
+ *                        agent, their own issues, and every issue in a project
+ *                        they are listed on or created. Nothing else.
+ *   - default 'company': everything as today, minus issues attributed to an
+ *                        agent an admin marked 'owner'.
+ * Both compose with A5; the project rule is never relaxed.
+ */
+export type AgentVisibility = "company" | "owner";
+
+export type AgentVisibilityScope =
+  | { mode: "all" }
+  | { mode: "owner"; userId: string; companyDefault: AgentVisibility; visibleAgentIds: ReadonlySet<string> };
+
+const agentVisibilityScopes = new WeakMap<object, Map<string, AgentVisibilityScope>>();
+
+function cachedScope(req: Request, companyId: string): AgentVisibilityScope | undefined {
+  return agentVisibilityScopes.get(req)?.get(companyId);
+}
+
+function rememberScope(req: Request, companyId: string, scope: AgentVisibilityScope): AgentVisibilityScope {
+  let perCompany = agentVisibilityScopes.get(req);
+  if (!perCompany) {
+    perCompany = new Map();
+    agentVisibilityScopes.set(req, perCompany);
+  }
+  perCompany.set(companyId, scope);
+  return scope;
+}
+
+/** The human board actors the rule applies to; everyone else sees all agents. */
+function restrictedHumanUserId(req: Request, companyId: string): string | null {
+  if (req.actor.type !== "board" || !req.actor.userId) return null;
+  if (seesEverything(req, companyId)) return null;
+  return req.actor.userId;
+}
+
+/**
+ * Resolve, once per request, which agents of this company the actor may see.
+ * Cheap when nothing is restricted: one indexed existence check decides that
+ * the rule has nothing to do, and no set is built.
+ */
+export async function resolveAgentVisibility(
+  db: Pick<Db, "select" | "execute">,
+  req: Request,
+  companyId: string,
+): Promise<AgentVisibilityScope> {
+  const cached = cachedScope(req, companyId);
+  if (cached) return cached;
+
+  const userId = restrictedHumanUserId(req, companyId);
+  if (!userId) return rememberScope(req, companyId, { mode: "all" });
+
+  const company = await db
+    .select({ agentVisibilityDefault: companies.agentVisibilityDefault })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .then((rows) => rows[0] ?? null);
+  const companyDefault: AgentVisibility = company?.agentVisibilityDefault === "owner" ? "owner" : "company";
+
+  if (companyDefault === "company") {
+    const anyOwnerOnly = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.companyId, companyId), eq(agents.visibility, "owner")))
+      .limit(1)
+      .then((rows) => rows.length > 0);
+    if (!anyOwnerOnly) return rememberScope(req, companyId, { mode: "all" });
+  }
+
+  // One query. `answers_for` is the agents this person stewards or is
+  // accountable for; `line` walks reports_to downward from those only — an
+  // 'owner' agent reporting to a shared one must not become visible through
+  // the shared one. Created and effectively-'company' agents are added flat.
+  const rows = await db.execute<{ id: string }>(sql`
+    with recursive answers_for as (
+      select a.id from ${agents} a
+      where a.company_id = ${companyId}
+        and (
+          a.accountable_user_id = ${userId}
+          or exists (
+            select 1 from ${agentStewardships} s
+            where s.company_id = ${companyId} and s.agent_id = a.id
+              and s.user_id = ${userId} and s.ended_at is null
+          )
+        )
+    ),
+    line as (
+      select id from answers_for
+      union
+      select a.id from ${agents} a join line on a.reports_to = line.id
+      where a.company_id = ${companyId}
+    )
+    select id from line
+    union
+    select a.id from ${agents} a
+    where a.company_id = ${companyId}
+      and (
+        a.created_by_user_id = ${userId}
+        or coalesce(a.visibility, ${companyDefault}) = 'company'
+      )
+  `);
+  const ids = new Set<string>();
+  for (const row of rows as unknown as Iterable<{ id: string }>) ids.add(row.id);
+  return rememberScope(req, companyId, { mode: "owner", userId, companyDefault, visibleAgentIds: ids });
+}
+
+function requireScope(req: Request, companyId: string): AgentVisibilityScope {
+  const scope = cachedScope(req, companyId);
+  if (!scope) {
+    throw new Error(
+      "agent visibility: resolveAgentVisibility(db, req, companyId) must run before a condition is built",
+    );
+  }
+  return scope;
+}
+
+function inVisibleSet(col: SQL, ids: ReadonlySet<string>): SQL {
+  return ids.size === 0 ? sql`false` : inArray(col as never, [...ids]);
+}
+
+/**
+ * SQL condition for any table carrying an agent id column: rows about an
+ * agent the actor cannot see vanish. A NULL agent column is not about any
+ * agent and passes. `undefined` when the actor sees every agent.
+ */
+export function agentVisibilityCondition(
+  req: Request,
+  companyId: string,
+  agentIdColumn: SQL | { getSQL(): SQL },
+): SQL | undefined {
+  const scope = requireScope(req, companyId);
+  if (scope.mode === "all") return undefined;
+  const col = agentIdColumn as unknown as SQL;
+  return or(isNull(col as never), inVisibleSet(col, scope.visibleAgentIds));
+}
+
+/**
+ * SQL condition over `issues` composing A5 with the agent rule — see the
+ * module comment for what the company default means for unattributed issues.
+ */
+export function issueVisibilityCondition(req: Request, companyId: string): SQL | undefined {
+  const project = projectScopedVisibilityCondition(req, companyId, issues.projectId);
+  const scope = requireScope(req, companyId);
+  if (scope.mode === "all") return project;
+  const ids = scope.visibleAgentIds;
+  if (scope.companyDefault === "company") {
+    return and(
+      project,
+      or(isNull(issues.assigneeAgentId), inVisibleSet(issues.assigneeAgentId as unknown as SQL, ids)),
+      or(isNull(issues.createdByAgentId), inVisibleSet(issues.createdByAgentId as unknown as SQL, ids)),
+    );
+  }
+  const attributed = or(
+    inVisibleSet(issues.assigneeAgentId as unknown as SQL, ids),
+    inVisibleSet(issues.createdByAgentId as unknown as SQL, ids),
+  );
+  const mine = or(eq(issues.assigneeUserId, scope.userId), eq(issues.createdByUserId, scope.userId));
+  const listedProject = sql`exists (select 1 from ${projects} p
+      where p.id = ${issues.projectId} and (
+        p.created_by_user_id = ${scope.userId}
+        or exists (select 1 from ${projectAccess} pa where pa.project_id = p.id
+            and pa.principal_type = 'user' and pa.principal_id = ${scope.userId})))`;
+  return and(project, or(attributed, mine, listedProject));
+}
+
+/** Which of these agent ids may this actor see? Null means all of them. */
+export async function visibleAgentIdsFor(
+  db: Pick<Db, "select" | "execute">,
+  req: Request,
+  companyId: string,
+): Promise<ReadonlySet<string> | null> {
+  const scope = await resolveAgentVisibility(db, req, companyId);
+  return scope.mode === "all" ? null : scope.visibleAgentIds;
+}
+
+/**
+ * The guard behind every `/agents/:id/*` route: an agent the actor cannot
+ * see is nonexistent, so its detail, configuration, runs, memory and
+ * stewardship are too. Unknown ids pass through (the route answers 404);
+ * non-canonical ids are 404 here, as for issues.
+ */
+export async function assertAgentIdVisible(
+  db: Db,
+  req: Request,
+  agentId: string | null | undefined,
+  what = "Agent",
+): Promise<void> {
+  const id = typeof agentId === "string" ? agentId.trim() : "";
+  if (!isCanonicalUuid(id)) throw notFound(`${what} not found`);
+  const agent = await db
+    .select({ id: agents.id, companyId: agents.companyId })
+    .from(agents)
+    .where(eq(agents.id, id))
+    .then((rows) => rows[0] ?? null);
+  if (!agent) return;
+  const scope = await resolveAgentVisibility(db, req, agent.companyId);
+  if (scope.mode === "all" || scope.visibleAgentIds.has(agent.id)) return;
+  throw notFound(`${what} not found`);
+}
+
+/** `router.param(name, ...)` handler applying `assertAgentIdVisible`. */
+export function agentVisibilityParam(db: Db) {
+  return async (req: Request, _res: Response, next: NextFunction, rawId: unknown) => {
+    try {
+      await assertAgentIdVisible(db, req, typeof rawId === "string" ? rawId : null);
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
 }

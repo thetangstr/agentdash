@@ -77,6 +77,16 @@ export const agents = pgTable(
      * column directly.
      */
     accountableUserId: text("accountable_user_id"),
+    /**
+     * Agent visibility (2026-09-30): who may see this agent at all.
+     *
+     * NULL inherits `companies.agent_visibility_default`. 'company' means
+     * every member sees it (the inherited "full visibility" default);
+     * 'owner' means only admins and the people who answer for it — its
+     * steward or accountable human, their reports' line, its creator. The
+     * rule itself lives in server/src/routes/visibility.ts, beside A5.
+     */
+    visibility: text("visibility"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -87,6 +97,10 @@ export const agents = pgTable(
     autonomyCk: check(
       "agents_autonomy_ck",
       sql`${table.autonomy} in ('stewarded', 'autonomous')`,
+    ),
+    visibilityCk: check(
+      "agents_visibility_ck",
+      sql`${table.visibility} is null or ${table.visibility} in ('company', 'owner')`,
     ),
     /**
      * An agent nobody answers for must not exist.

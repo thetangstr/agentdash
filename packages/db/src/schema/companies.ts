@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex, index, varchar } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex, index, varchar, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { CompanyProductProfile } from "@paperclipai/shared";
 
@@ -28,6 +28,14 @@ export const companies = pgTable(
     // Off = `backlog` (parked, nobody woken); on = `todo` (the assignee is
     // woken and starts). An explicit status on create always wins.
     newIssuesStartAsTodo: boolean("new_issues_start_as_todo").notNull().default(false),
+    /**
+     * Agent visibility (2026-09-30): what an agent with no visibility of its
+     * own resolves to. 'company' is the inherited default — every member sees
+     * every agent — so nothing changes on upgrade. 'owner' makes members see
+     * only the agents they answer for, their reports' line, agents they
+     * created, and agents an admin marked 'company'. Admins always see all.
+     */
+    agentVisibilityDefault: text("agent_visibility_default").notNull().default("company"),
     feedbackDataSharingEnabled: boolean("feedback_data_sharing_enabled")
       .notNull()
       .default(false),
@@ -55,5 +63,9 @@ export const companies = pgTable(
       .on(table.emailDomain)
       .where(sql`${table.emailDomain} IS NOT NULL`),
     planTierIdx: index("companies_plan_tier_idx").on(table.planTier),
+    agentVisibilityDefaultCk: check(
+      "companies_agent_visibility_default_ck",
+      sql`${table.agentVisibilityDefault} in ('company', 'owner')`,
+    ),
   }),
 );
