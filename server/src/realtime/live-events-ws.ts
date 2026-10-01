@@ -64,6 +64,24 @@ interface UpgradeContext {
 // AgentDash (GH #708): policy-violation close code for a revoked subscriber.
 export const LIVE_EVENTS_REVOKED_CLOSE_CODE = 1008;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_RECHECK_TIMEOUT_MS = 5_000;
+const MAX_HEARTBEAT_CHECK_ERRORS = 3;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("live websocket re-authorization timed out")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 // Agents that REST auth refuses (middleware/auth.ts) cannot subscribe either.
 const INACTIVE_AGENT_STATUSES = new Set(["terminated", "pending_approval"]);
 
@@ -301,9 +319,12 @@ export function setupLiveEventsWebSocketServer(
     resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
     /** AgentDash (GH #708): heartbeat (ping + re-authorization) interval; tests only. */
     heartbeatIntervalMs?: number;
+    /** AgentDash (GH #708): a re-authorization slower than this counts as failed; tests only. */
+    recheckTimeoutMs?: number;
   },
 ) {
   const wss = new WebSocketServer({ noServer: true });
+  const recheckTimeoutMs = opts.recheckTimeoutMs ?? DEFAULT_RECHECK_TIMEOUT_MS;
   const cleanupByClient = new Map<WsSocket, () => void>();
   const aliveByClient = new Map<WsSocket, boolean>();
   // AgentDash (GH #830 part A follow-up): per-subscriber project visibility.
@@ -318,6 +339,8 @@ export function setupLiveEventsWebSocketServer(
     // An access-change re-check in flight. Events published after the change
     // wait for it, so none slips out between the commit and the close.
     pendingCheck: Promise<void> | null;
+    // Consecutive heartbeat re-checks that failed with a database error.
+    errorStreak: number;
   };
   const accessByClient = new Map<WsSocket, ClientAccess>();
 
@@ -339,29 +362,46 @@ export function setupLiveEventsWebSocketServer(
     }
   }
 
+  /**
+   * `failClosed`: a check that errors revokes the socket (access-change signals).
+   * Heartbeat checks fail open for a transient error, but revoke after
+   * MAX_HEARTBEAT_CHECK_ERRORS consecutive ones.
+   */
   async function recheckClient(
     socket: WsSocket,
     access: ClientAccess,
     reason: string,
-    memo?: Map<string, Promise<boolean>>,
+    opts: { memo?: Map<string, Promise<boolean>>; failClosed?: boolean } = {},
   ): Promise<boolean> {
     if (access.revoked) return false;
     let pending: Promise<boolean>;
-    if (memo) {
-      const key = credentialCacheKey(access.context);
-      pending = memo.get(key) ?? reauthorize(db, access.context);
-      memo.set(key, pending);
+    const key = credentialCacheKey(access.context);
+    const shared = opts.memo?.get(key);
+    if (shared) {
+      pending = shared;
     } else {
       pending = reauthorize(db, access.context);
+      opts.memo?.set(key, pending);
     }
     let allowed: boolean;
     try {
-      allowed = await pending;
+      allowed = await withTimeout(pending, recheckTimeoutMs);
     } catch (err) {
-      // A transient database error keeps the socket; the next heartbeat retries.
+      // A rejected or hung shared check must not poison later sockets this tick.
+      if (opts.memo?.get(key) === pending) opts.memo.delete(key);
       logger.warn({ err, companyId: access.context.companyId }, "live websocket re-authorization failed");
+      if (opts.failClosed) {
+        revokeClient(socket, access, `${reason} (re-authorization failed)`);
+        return false;
+      }
+      access.errorStreak += 1;
+      if (access.errorStreak >= MAX_HEARTBEAT_CHECK_ERRORS) {
+        revokeClient(socket, access, `${reason} (re-authorization failed ${access.errorStreak} times)`);
+        return false;
+      }
       return true;
     }
+    access.errorStreak = 0;
     if (!allowed) revokeClient(socket, access, reason);
     return allowed;
   }
@@ -369,11 +409,15 @@ export function setupLiveEventsWebSocketServer(
   const unsubscribeAccessChanges = subscribeLiveEventAccessChanges((change) => {
     for (const [socket, access] of accessByClient) {
       if (access.revoked || !accessChangeMatches(change, access.context)) continue;
-      const check: Promise<void> = recheckClient(socket, access, change.reason).then((allowed) => {
-        // Still allowed (e.g. admin demoted to member): apply the new role to the next event.
-        if (allowed) access.invalidateActor();
-        if (access.pendingCheck === check) access.pendingCheck = null;
-      });
+      // Chained: a second change waits for the first, none is overwritten.
+      const previous = access.pendingCheck ?? Promise.resolve();
+      const check: Promise<void> = previous
+        .then(() => recheckClient(socket, access, change.reason, { failClosed: true }))
+        .then((allowed) => {
+          // Still allowed (e.g. admin demoted to member): apply the new role to the next event.
+          if (allowed) access.invalidateActor();
+          if (access.pendingCheck === check) access.pendingCheck = null;
+        });
       access.pendingCheck = check;
     }
   });
@@ -387,7 +431,12 @@ export function setupLiveEventsWebSocketServer(
         continue;
       }
       const access = accessByClient.get(socket);
-      if (access) void recheckClient(socket, access, "heartbeat re-authorization", memo);
+      if (access) {
+        void recheckClient(socket, access, "heartbeat re-authorization", { memo }).then((allowed) => {
+          // Out-of-band role changes: the next event re-reads the actor.
+          if (allowed) access.invalidateActor();
+        });
+      }
       aliveByClient.set(socket, false);
       socket.ping();
     }
@@ -412,6 +461,7 @@ export function setupLiveEventsWebSocketServer(
       revoked: false,
       invalidateActor: shouldDeliver.invalidateActor,
       pendingCheck: null,
+      errorStreak: 0,
     };
     accessByClient.set(socket, access);
     let delivery: Promise<void> = Promise.resolve();

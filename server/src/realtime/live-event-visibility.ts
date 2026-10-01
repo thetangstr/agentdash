@@ -311,13 +311,17 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     const { companyId } = input;
     let actorReq: { value: Promise<Request>; expiresAt: number } | null = null;
     const decisions = new Map<string, { visible: boolean; generation: number; expiresAt: number }>();
+    // AgentDash (GH #708): bumped by invalidateActor so a decision computed from
+    // an actor loaded before the invalidation is not cached after it.
+    let actorEpoch = 0;
 
     function currentReq(): Promise<Request> {
       if (actorReq && actorReq.expiresAt > now()) return actorReq.value;
       const value = input.loadActor().then((actor) => ({ actor }) as unknown as Request);
-      actorReq = { value, expiresAt: now() + ACTOR_TTL_MS };
+      const entry = { value, expiresAt: now() + ACTOR_TTL_MS };
+      actorReq = entry;
       value.catch(() => {
-        actorReq = null;
+        if (actorReq === entry) actorReq = null;
       });
       return value;
     }
@@ -329,10 +333,11 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       // cannot reach this company's stream.
       if (!row) return true;
       const generation = generationOf(companyId);
+      const epoch = actorEpoch;
       const cached = decisions.get(projectId);
       if (cached && cached.generation === generation && cached.expiresAt > now()) return cached.visible;
       const visible = await isProjectVisible(db, req, row);
-      decisions.set(projectId, { visible, generation, expiresAt: now() + DECISION_TTL_MS });
+      if (epoch === actorEpoch) decisions.set(projectId, { visible, generation, expiresAt: now() + DECISION_TTL_MS });
       return visible;
     }
 
@@ -369,6 +374,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
      * instead of after ACTOR_TTL_MS.
      */
     function invalidateActor() {
+      actorEpoch += 1;
       actorReq = null;
       decisions.clear();
     }

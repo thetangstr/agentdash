@@ -4,17 +4,23 @@ import type { AddressInfo } from "node:net";
 import { createRequire } from "node:module";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { agentApiKeys, agents, companies, companyMemberships, createDb } from "@paperclipai/db";
+import { agentApiKeys, agents, companies, companyMemberships, createDb, instanceUserRoles } from "@paperclipai/db";
 import type { LiveEvent } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { setupLiveEventsWebSocketServer } from "../realtime/live-events-ws.js";
-import { liveEventAccessListenerCount } from "../realtime/live-events-access.js";
+import {
+  liveEventAccessListenerCount,
+  publishLiveEventAccessChange,
+  subscribeLiveEventAccessChanges,
+  type LiveEventAccessChange,
+} from "../realtime/live-events-access.js";
 import { publishLiveEvent } from "../services/live-events.js";
 import { accessService } from "../services/access.js";
 import { agentService } from "../services/agents.js";
+import { companyService } from "../services/companies.js";
 
 const require = createRequire(import.meta.url);
 const WebSocket = require("ws") as new (url: string, opts?: { headers?: Record<string, string> }) => {
@@ -46,6 +52,9 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
   let server: Server | null = null;
   let baseUrl = "";
+  let faultyServer: Server | null = null;
+  let faultyUrl = "";
+  let dbMode: "ok" | "error" | "hang" = "ok";
   const COMPANY = randomUUID();
   const OTHER_COMPANY = randomUUID();
 
@@ -57,10 +66,29 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   };
   const clients: Client[] = [];
 
+  /** The test database, except `select` errors or never settles while dbMode says so. */
+  function faultyDb() {
+    const hanging: unknown = new Proxy(function () {}, {
+      get: (_t, prop) => (prop === "then" ? () => undefined : () => hanging),
+      apply: () => hanging,
+    });
+    return new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "select" && dbMode !== "ok") {
+          return () => {
+            if (dbMode === "error") throw new Error("simulated database failure");
+            return hanging;
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  }
+
   const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 
-  async function connect(headers: Record<string, string>): Promise<Client> {
-    const ws = new WebSocket(`${baseUrl}/api/companies/${COMPANY}/events/ws`, { headers });
+  async function connect(headers: Record<string, string>, base = baseUrl): Promise<Client> {
+    const ws = new WebSocket(`${base}/api/companies/${COMPANY}/events/ws`, { headers });
     let resolveClosed: (code: number) => void = () => undefined;
     const client: Client = {
       events: [],
@@ -142,12 +170,29 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     });
     await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
     baseUrl = `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    // A second server whose database can be made to fail or hang on demand,
+    // to prove a change-triggered re-check fails closed.
+    faultyServer = createServer();
+    setupLiveEventsWebSocketServer(faultyServer, faultyDb(), {
+      deploymentMode: "authenticated",
+      heartbeatIntervalMs: HEARTBEAT_MS,
+      recheckTimeoutMs: 300,
+      resolveSessionFromHeaders: async (headers) => {
+        const userId = headers.get("x-test-user");
+        if (!userId) return null;
+        return { session: null, user: { id: userId, email: `${userId}@example.com`, name: userId } } as never;
+      },
+    });
+    await new Promise<void>((resolve) => faultyServer!.listen(0, "127.0.0.1", resolve));
+    faultyUrl = `ws://127.0.0.1:${(faultyServer.address() as AddressInfo).port}`;
   }, 60_000);
 
   afterAll(async () => {
     vi.useRealTimers();
     for (const client of clients) client.close();
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+    if (faultyServer) await new Promise<void>((resolve) => faultyServer!.close(() => resolve()));
     await tempDb?.cleanup();
   });
 
@@ -273,11 +318,101 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     expect(liveEventAccessListenerCount()).toBe(listenersBefore);
   });
 
+  it("closes immediately when the agent is deleted through the agent service", async () => {
+    const deleted = await addAgent();
+    const kept = await addAgent();
+
+    await agentService(db).remove(deleted.agentId);
+    expect(await closeCodeWithin(deleted.client, 5000)).toBe(1008);
+
+    const marker = await settle([kept.client]);
+    expect(sawMarker(deleted.client, marker)).toBe(false);
+    expect(kept.client.isOpen()).toBe(true);
+  });
+
+  it("closes an instance admin's socket when the admin role is demoted", async () => {
+    const userId = `user-${randomUUID()}`;
+    await db.insert(instanceUserRoles).values({ userId, role: "instance_admin" });
+    const admin = { userId, client: await connect({ "x-test-user": userId }) };
+    const kept = await addUser();
+
+    await accessService(db).demoteInstanceAdmin(admin.userId);
+    expect(await closeCodeWithin(admin.client, 5000)).toBe(1008);
+    expect(kept.client.isOpen()).toBe(true);
+  });
+
+  it("publishes a company access change on archive; REST keeps an archived company readable, so sockets stay open", async () => {
+    const archivedCompany = randomUUID();
+    await db.insert(companies).values({ id: archivedCompany, name: "Archive Co", issuePrefix: "ARC" });
+    const seen: LiveEventAccessChange[] = [];
+    const unsubscribe = subscribeLiveEventAccessChanges((change) => seen.push(change));
+    const user = await addUser();
+    try {
+      await companyService(db).archive(archivedCompany);
+      expect(seen).toContainEqual({ kind: "company", companyId: archivedCompany, reason: "company archived" });
+      // Parity: auth/authz do not consult companies.status, so archive alone revokes nothing.
+      await companyService(db).archive(COMPANY);
+      await settle([user.client]);
+      expect(user.client.isOpen()).toBe(true);
+    } finally {
+      unsubscribe();
+      await db.update(companies).set({ status: "active" }).where(eq(companies.id, COMPANY));
+    }
+  });
+
+  it("fails closed: a database error during a change-triggered check closes the socket", async () => {
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId: COMPANY, principalType: "user", principalId: userId, status: "active", membershipRole: "member" });
+    const client = await connect({ "x-test-user": userId }, faultyUrl);
+
+    dbMode = "error";
+    try {
+      publishLiveEventAccessChange({ kind: "user", userId, companyId: COMPANY, reason: "test change" });
+      expect(await closeCodeWithin(client, 5000)).toBe(1008);
+    } finally {
+      dbMode = "ok";
+    }
+  });
+
+  it("fails closed: a hung change-triggered check times out and closes the socket", async () => {
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId: COMPANY, principalType: "user", principalId: userId, status: "active", membershipRole: "member" });
+    const client = await connect({ "x-test-user": userId }, faultyUrl);
+
+    dbMode = "hang";
+    try {
+      publishLiveEventAccessChange({ kind: "user", userId, companyId: COMPANY, reason: "test change" });
+      expect(await closeCodeWithin(client, 5000)).toBe(1008);
+    } finally {
+      dbMode = "ok";
+    }
+  });
+
+  it("heartbeat re-checks fail open for a transient error but close after 3 consecutive errors", async () => {
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId: COMPANY, principalType: "user", principalId: userId, status: "active", membershipRole: "member" });
+    const client = await connect({ "x-test-user": userId }, faultyUrl);
+
+    dbMode = "error";
+    try {
+      for (let beat = 0; beat < 2; beat++) {
+        vi.advanceTimersByTime(HEARTBEAT_MS);
+        expect(await closeCodeWithin(client, 300)).toBeNull();
+        // answer the ping so the liveness check does not terminate the socket first
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      vi.advanceTimersByTime(HEARTBEAT_MS);
+      expect(await closeCodeWithin(client, 5000)).toBe(1008);
+    } finally {
+      dbMode = "ok";
+    }
+  });
+
   it("refuses a new socket for a terminated agent's key", async () => {
     const agentId = randomUUID();
     const token = `pcp_${randomUUID()}`;
     await db.insert(agents).values({ id: agentId, companyId: COMPANY, name: "Gone", role: "general", status: "terminated" });
     await db.insert(agentApiKeys).values({ agentId, companyId: COMPANY, name: "live", keyHash: hash(token) });
-    await expect(connect({ authorization: `Bearer ${token}` })).rejects.toThrow();
+    await expect(connect({ authorization: `Bearer ${token}` })).rejects.toThrow(/403/);
   });
 });

@@ -452,8 +452,8 @@ export function companyService(db: Db) {
         return enrichCompany(hydrated);
       }),
 
-    archive: (id: string) =>
-      db.transaction(async (tx) => {
+    archive: async (id: string) => {
+      const archived = await db.transaction(async (tx) => {
         const updated = await tx
           .update(companies)
           .set({ status: "archived", updatedAt: new Date() })
@@ -467,7 +467,11 @@ export function companyService(db: Db) {
         if (!row) return null;
         const [hydrated] = await hydrateCompanySpend([row], tx);
         return enrichCompany(hydrated);
-      }),
+      });
+      // AgentDash (GH #708): re-check the company's live sockets once the archive has committed.
+      if (archived) publishLiveEventAccessChange({ kind: "company", companyId: id, reason: "company archived" });
+      return archived;
+    },
 
     remove: async (id: string) => {
       let callbackCompleted = false;
