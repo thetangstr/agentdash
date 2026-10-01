@@ -86,6 +86,25 @@ export function allowedGitHubFetchHosts(env: NodeJS.ProcessEnv = process.env): S
     const host = hostFromSetting(setting);
     if (host) hosts.add(host);
   }
+  for (const host of privateGitHubFetchHosts(env)) hosts.add(host);
+  return hosts;
+}
+
+/**
+ * AgentDash: exact hostnames the operator has said may resolve to private
+ * addresses (an internal GitHub Enterprise on 10.x, say). Set with
+ * AGENTDASH_GITHUB_PRIVATE_HOSTS (comma-separated, exact names, no wildcards).
+ * Listing a host here also allows it. The relaxation is per hop: a redirect
+ * only gets it when the redirect target's exact hostname is listed too, and
+ * loopback, link-local/metadata, unspecified and multicast addresses stay
+ * blocked even for listed hosts.
+ */
+export function privateGitHubFetchHosts(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const hosts = new Set<string>();
+  for (const entry of (env.AGENTDASH_GITHUB_PRIVATE_HOSTS ?? "").split(",")) {
+    const host = hostFromSetting(entry);
+    if (host) hosts.add(host);
+  }
   return hosts;
 }
 
@@ -164,12 +183,14 @@ const BLOCKED_IPV6 = (() => {
   const v6: Array<[string, number]> = [
     ["::", 96], // unspecified, loopback and deprecated IPv4-compatible
     ["::ffff:0:0", 96], // IPv4-mapped — GitHub never publishes these
+    ["::ffff:0:0:0", 96], // IPv4-translated (SIIT) — embeds an arbitrary IPv4
     ["64:ff9b::", 96], // NAT64 — can reach internal IPv4
     ["64:ff9b:1::", 48], // local-use NAT64
     ["100::", 64], // discard-only
     ["2001::", 32], // Teredo
     ["2001:db8::", 32], // documentation
     ["2002::", 16], // 6to4 — embeds an arbitrary IPv4
+    ["3fff::", 20], // documentation (RFC 9637)
     ["fc00::", 7], // ULA
     ["fe80::", 10], // link-local
     ["fec0::", 10], // deprecated site-local
@@ -190,6 +211,51 @@ export function isNonPublicAddress(address: string): boolean {
     return BLOCKED_IPV6.check(ip, "ipv6");
   }
   // Not an IP literal at all: refuse rather than guess.
+  return true;
+}
+
+// Never reachable, not even for an operator-listed private host: loopback,
+// link-local (cloud metadata lives at 169.254.169.254), unspecified, multicast,
+// reserved, and IPv4 embedded in IPv6 (which could smuggle any of those).
+const ALWAYS_BLOCKED_IPV4 = (() => {
+  const list = new BlockList();
+  const v4: Array<[string, number]> = [
+    ["0.0.0.0", 8],
+    ["127.0.0.0", 8],
+    ["169.254.0.0", 16],
+    ["224.0.0.0", 4],
+    ["240.0.0.0", 4],
+  ];
+  for (const [net, prefix] of v4) list.addSubnet(net, prefix, "ipv4");
+  return list;
+})();
+
+const ALWAYS_BLOCKED_IPV6 = (() => {
+  const list = new BlockList();
+  const v6: Array<[string, number]> = [
+    ["::", 96],
+    ["::ffff:0:0", 96],
+    ["::ffff:0:0:0", 96],
+    ["64:ff9b::", 96],
+    ["2001::", 32],
+    ["2002::", 16],
+    ["fe80::", 10],
+    ["fec0::", 10],
+    ["ff00::", 8],
+  ];
+  for (const [net, prefix] of v6) list.addSubnet(net, prefix, "ipv6");
+  return list;
+})();
+
+/** True for addresses no host may reach, even one listed in AGENTDASH_GITHUB_PRIVATE_HOSTS. */
+export function isAlwaysBlockedAddress(address: string): boolean {
+  const ip = address.trim().replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  const family = isIP(ip);
+  if (family === 4) return ALWAYS_BLOCKED_IPV4.check(ip, "ipv4");
+  if (family === 6) {
+    if (/^(?:0{0,4}:){0,5}:?ffff:\d{1,3}\./.test(ip.toLowerCase())) return true;
+    return ALWAYS_BLOCKED_IPV6.check(ip, "ipv6");
+  }
   return true;
 }
 
@@ -243,22 +309,31 @@ async function defaultLookup(hostname: string): Promise<ResolvedAddress[]> {
   }
 }
 
-/** Request connected straight to the validated IP; Host header and TLS SNI keep the real hostname. */
+/**
+ * Options for a request connected straight to the validated IP. The Host header
+ * and TLS SNI keep the real hostname, so certificate verification (left at the
+ * Node default, never disabled) still checks the certificate against it.
+ */
+export function buildPinnedRequestOptions(request: GitHubTransportRequest) {
+  const tls = request.url.protocol === "https:";
+  return {
+    protocol: tls ? "https:" : "http:",
+    host: request.address.address,
+    family: request.address.family,
+    port: tls ? 443 : 80,
+    path: `${request.url.pathname}${request.url.search}`,
+    method: request.method,
+    headers: { ...request.headers, host: request.url.host },
+    ...(tls && isIP(request.url.hostname) === 0 ? { servername: request.url.hostname } : {}),
+    signal: request.signal,
+  };
+}
+
 function defaultTransport(request: GitHubTransportRequest): Promise<GitHubTransportResponse> {
   const tls = request.url.protocol === "https:";
   return new Promise((resolve, reject) => {
     const req = (tls ? httpsRequest : httpRequest)(
-      {
-        protocol: tls ? "https:" : "http:",
-        host: request.address.address,
-        family: request.address.family,
-        port: tls ? 443 : 80,
-        path: `${request.url.pathname}${request.url.search}`,
-        method: request.method,
-        headers: { ...request.headers, host: request.url.host },
-        ...(tls && isIP(request.url.hostname) === 0 ? { servername: request.url.hostname } : {}),
-        signal: request.signal,
-      },
+      buildPinnedRequestOptions(request),
       (res: IncomingMessage) => {
         resolve({
           status: res.statusCode ?? 502,
@@ -315,8 +390,15 @@ async function resolvePublicAddress(hostname: string, deps: GitHubFetchDeps): Pr
     throw unprocessable(`Could not resolve ${bare}`);
   }
   // Strict: one non-public answer is enough to refuse. A real GitHub host never
-  // mixes private and public records; a rebinding attacker does.
-  if (results.some((entry) => isNonPublicAddress(entry.address))) {
+  // mixes private and public records; a rebinding attacker does. A host the
+  // operator listed in AGENTDASH_GITHUB_PRIVATE_HOSTS (exact name, checked per
+  // hop) may resolve to private ranges, but never to loopback or link-local.
+  const privateAllowed =
+    deps.hostPolicy === "github" && privateGitHubFetchHosts(deps.env).has(normalizeHost(bare));
+  const refused = privateAllowed
+    ? results.some((entry) => isAlwaysBlockedAddress(entry.address))
+    : results.some((entry) => isNonPublicAddress(entry.address));
+  if (refused) {
     throw unprocessable(`Refusing to fetch from ${bare}: it resolves to a private or reserved address`, {
       code: "GITHUB_FETCH_PRIVATE_ADDRESS",
       host: bare,
@@ -402,7 +484,10 @@ export function createGitHubFetch(overrides: Partial<GitHubFetchDeps> = {}) {
           } catch {
             throw unprocessable(`Invalid redirect from ${url.hostname}`, { code: "GITHUB_FETCH_REDIRECT_BLOCKED" });
           }
-          const problem = gitHubUrlProblem(next, deps.env, deps.hostPolicy);
+          // Never downgrade: an https request may not be redirected to plain http.
+          const problem = url.protocol === "https:" && next.protocol !== "https:"
+            ? "redirect would downgrade HTTPS to HTTP"
+            : gitHubUrlProblem(next, deps.env, deps.hostPolicy);
           if (problem) {
             throw unprocessable(`Refusing redirect from ${url.hostname} to ${normalizeHost(next.hostname)}: ${problem}`, {
               code: "GITHUB_FETCH_REDIRECT_BLOCKED",
