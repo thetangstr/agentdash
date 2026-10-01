@@ -25,7 +25,11 @@ import {
   heartbeatService,
   logActivity,
 } from "../services/index.js";
-import { assertProjectIdVisible, projectScopedVisibilityCondition } from "./visibility.js";
+import {
+  assertProjectIdVisible,
+  budgetPolicyVisibilityCondition,
+  projectScopedVisibilityCondition,
+} from "./visibility.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { accessService } from "../services/access.js";
@@ -253,7 +257,11 @@ export function costRoutes(
     assertCompanyAccess(req, issue.companyId);
     // A5: an issue in a restricted project does not exist for off-list actors.
     await assertProjectIdVisible(db, req, issue.companyId, issue.projectId);
-    const summary = await costs.issueTreeSummary(issue.companyId, issue.id);
+    const summary = await costs.issueTreeSummary(issue.companyId, issue.id, {
+      // AgentDash (GH #902): restricted descendants do not count toward a
+      // visible parent's total.
+      visibleWhere: projectScopedVisibilityCondition(req, issue.companyId, issuesTable.projectId),
+    });
     res.json(summary);
   });
 
@@ -360,7 +368,11 @@ export function costRoutes(
   router.get("/companies/:companyId/budgets/overview", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const overview = await budgets.overview(companyId);
+    const overview = await budgets.overview(companyId, {
+      // AgentDash (GH #902): only project-scoped policies carry a project id;
+      // company/agent scopes stay visible, project ones follow the project rule.
+      visibleWhere: budgetPolicyVisibilityCondition(req, companyId),
+    });
     res.json(overview);
   });
 
@@ -371,6 +383,11 @@ export function costRoutes(
       assertBoard(req);
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      // AgentDash (GH #902): a policy on a project the actor cannot see is a
+      // write to a nonexistent project — 404, as every other project route.
+      if (req.body.scopeType === "project") {
+        await assertProjectIdVisible(db, req, companyId, req.body.scopeId, "Project");
+      }
       // An agent-scoped budget policy sets the same spend authority as the
       // agent budget field, so it is ceiling-bound on the same terms.
       if (req.body.scopeType === "agent" && typeof req.body.scopeId === "string") {
@@ -397,6 +414,10 @@ export function costRoutes(
       const incidentId = req.params.incidentId as string;
       assertCompanyAccess(req, companyId);
       const incidentContext = await budgets.getIncidentContext(companyId, incidentId);
+      // AgentDash (GH #902): an incident on a hidden project does not exist.
+      if (incidentContext?.projectScopeId) {
+        await assertProjectIdVisible(db, req, companyId, incidentContext.projectScopeId, "Budget incident");
+      }
 
       // Resolving an incident ALSO resolves the linked approval, whatever the
       // action. That is a decision, so it must satisfy the same actor rules as

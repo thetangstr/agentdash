@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, ne, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -311,11 +311,12 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
     return policy;
   }
 
-  async function listPolicyRows(companyId: string) {
+  async function listPolicyRows(companyId: string, visibleWhere?: SQL) {
+    // AgentDash: optional caller-supplied visibility condition (GH #902).
     return db
       .select()
       .from(budgetPolicies)
-      .where(eq(budgetPolicies.companyId, companyId))
+      .where(and(eq(budgetPolicies.companyId, companyId), visibleWhere))
       .orderBy(desc(budgetPolicies.updatedAt));
   }
 
@@ -631,14 +632,24 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
       return buildPolicySummary(row);
     },
 
-    overview: async (companyId: string): Promise<BudgetOverview> => {
-      const rows = await listPolicyRows(companyId);
+    // AgentDash (GH #902): `visibleWhere` is the caller's restricted-project
+    // condition over budget_policies — a project-scoped policy carries the
+    // project's name and observed spend, so a restricted project's policy (and
+    // its open incidents) must not surface to actors off the access list.
+    overview: async (companyId: string, opts: { visibleWhere?: SQL } = {}): Promise<BudgetOverview> => {
+      const rows = await listPolicyRows(companyId, opts.visibleWhere);
       const policies = await Promise.all(rows.map((row) => buildPolicySummary(row)));
-      const activeIncidentRows = await db
+      const allIncidentRows = await db
         .select()
         .from(budgetIncidents)
         .where(and(eq(budgetIncidents.companyId, companyId), eq(budgetIncidents.status, "open")))
         .orderBy(desc(budgetIncidents.createdAt));
+      // AgentDash: an incident belongs to exactly one policy and copies its
+      // scope, so it is visible exactly when its policy is.
+      const visiblePolicyIds = new Set(rows.map((row) => row.id));
+      const activeIncidentRows = opts.visibleWhere
+        ? allIncidentRows.filter((row) => visiblePolicyIds.has(row.policyId))
+        : allIncidentRows;
       const activeIncidents = await hydrateIncidentRows(activeIncidentRows);
       return {
         companyId,
@@ -875,7 +886,7 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
     getIncidentContext: async (
       companyId: string,
       incidentId: string,
-    ): Promise<{ agentScopeId: string | null; approvalId: string | null } | null> => {
+    ): Promise<{ agentScopeId: string | null; projectScopeId: string | null; approvalId: string | null } | null> => {
       const incident = await db
         .select()
         .from(budgetIncidents)
@@ -889,6 +900,8 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
         .then((rows) => rows[0] ?? null);
       return {
         agentScopeId: policy?.scopeType === "agent" ? policy.scopeId : null,
+        // AgentDash (GH #902): the route checks project visibility on this.
+        projectScopeId: incident.scopeType === "project" ? incident.scopeId : null,
         approvalId: incident.approvalId ?? null,
       };
     },

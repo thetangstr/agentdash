@@ -5,6 +5,8 @@ import { issues, agents } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import {
   agentVisibilityCondition,
+  approvalVisibilityCondition,
+  budgetPolicyVisibilityCondition,
   issueVisibilityCondition,
   projectScopedVisibilityCondition,
   resolveAgentVisibility,
@@ -21,6 +23,9 @@ export function dashboardRoutes(db: Db) {
     const summary = await svc.summary(companyId, {
       agentVisibleWhere: agentVisibilityCondition(req, companyId, agents.id),
       issueVisibleWhere: issueVisibilityCondition(req, companyId),
+      // AgentDash (GH #902): hidden projects' budgets stay out of the counts.
+      budgetVisibleWhere: budgetPolicyVisibilityCondition(req, companyId),
+      approvalVisibleWhere: approvalVisibilityCondition(req, companyId),
     });
     res.json(summary);
   });

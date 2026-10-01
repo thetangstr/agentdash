@@ -4,6 +4,8 @@ import type { Db } from "@paperclipai/db";
 import {
   activityLog,
   agents,
+  approvals,
+  budgetPolicies,
   agentStewardships,
   companies,
   executionWorkspaces,
@@ -376,6 +378,54 @@ export function activityVisibilityCondition(req: Request, companyId: string): SQ
     projectScopedVisibilityCondition(req, companyId, issues.projectId),
     projectScopedVisibilityCondition(req, companyId, projectEntityId),
   );
+}
+
+/**
+ * AgentDash (GH #902): SQL condition over `budget_policies`. Only a
+ * project-scoped policy carries a project id; company and agent scopes yield
+ * NULL and stay company-visible.
+ */
+export function budgetPolicyVisibilityCondition(req: Request, companyId: string): SQL | undefined {
+  return projectScopedVisibilityCondition(
+    req,
+    companyId,
+    sql`(case when ${budgetPolicies.scopeType} = 'project' then ${budgetPolicies.scopeId} end)`,
+  );
+}
+
+/**
+ * AgentDash (GH #902): the project a `budget_override_required` approval is
+ * about, from its payload; null for every other approval and every other
+ * budget scope.
+ */
+export function approvalBudgetProjectId(approval: { type: string; payload: unknown }): string | null {
+  if (approval.type !== "budget_override_required") return null;
+  const payload = (approval.payload ?? {}) as Record<string, unknown>;
+  if (payload.scopeType !== "project") return null;
+  return typeof payload.scopeId === "string" ? payload.scopeId : null;
+}
+
+/**
+ * AgentDash (GH #902): SQL condition over `approvals`. A
+ * `budget_override_required` approval carries the scope's name, id and
+ * observed spend in its payload, so for a project scope it follows the
+ * project rule; every other approval is untouched.
+ */
+export function approvalVisibilityCondition(req: Request, companyId: string): SQL | undefined {
+  const ref = sql`(${approvals.payload} ->> 'scopeId')`;
+  const budgetProjectId = sql`(case when ${approvals.type} = 'budget_override_required'
+      and (${approvals.payload} ->> 'scopeType') = 'project'
+      and ${ref} ~* ${CANONICAL_UUID_PATTERN} then ${ref}::uuid end)`;
+  return projectScopedVisibilityCondition(req, companyId, budgetProjectId);
+}
+
+/** AgentDash (GH #902): 404, never 403, for an approval about a hidden project. */
+export async function assertApprovalProjectVisible(
+  db: Db,
+  req: Request,
+  approval: { companyId: string; type: string; payload: unknown },
+): Promise<void> {
+  await assertProjectIdVisible(db, req, approval.companyId, approvalBudgetProjectId(approval), "Approval");
 }
 
 /**

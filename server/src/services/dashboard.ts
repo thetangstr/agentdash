@@ -192,7 +192,12 @@ export function dashboardService(db: Db) {
       };
     },
 
-    summary: async (companyId: string, opts: { agentVisibleWhere?: SQL; issueVisibleWhere?: SQL } = {}) => {
+    // AgentDash (GH #902): `budgetVisibleWhere` / `approvalVisibleWhere` keep
+    // hidden projects' budget policies, incidents and overrides out of counts.
+    summary: async (
+      companyId: string,
+      opts: { agentVisibleWhere?: SQL; issueVisibleWhere?: SQL; budgetVisibleWhere?: SQL; approvalVisibleWhere?: SQL } = {},
+    ) => {
       const company = await db
         .select()
         .from(companies)
@@ -217,7 +222,7 @@ export function dashboardService(db: Db) {
       const pendingApprovals = await db
         .select({ count: sql<number>`count(*)` })
         .from(approvals)
-        .where(and(eq(approvals.companyId, companyId), eq(approvals.status, "pending")))
+        .where(and(eq(approvals.companyId, companyId), eq(approvals.status, "pending"), opts.approvalVisibleWhere))
         .then((rows) => Number(rows[0]?.count ?? 0));
 
       const agentCounts: Record<string, number> = {
@@ -525,7 +530,7 @@ export function dashboardService(db: Db) {
         company.budgetMonthlyCents > 0
           ? (monthSpendCents / company.budgetMonthlyCents) * 100
           : 0;
-      const budgetOverview = await budgets.overview(companyId);
+      const budgetOverview = await budgets.overview(companyId, { visibleWhere: opts.budgetVisibleWhere });
 
       return {
         companyId,

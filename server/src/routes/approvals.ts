@@ -37,7 +37,9 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
+  approvalVisibilityCondition,
   assertAgentIdVisible,
+  assertApprovalProjectVisible,
   assertIssueIdVisible,
   filterVisibleByProject,
   visibleAgentIdsFor,
@@ -244,6 +246,8 @@ export function approvalRoutes(
       return null;
     }
     assertCompanyAccess(req, approval.companyId);
+    // AgentDash (GH #902): a budget override for a hidden project does not exist.
+    await assertApprovalProjectVisible(db, req, approval);
     return approval;
   }
 
@@ -303,7 +307,11 @@ export function approvalRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const status = req.query.status as string | undefined;
-    const result = await svc.list(companyId, status);
+    // AgentDash (GH #902): budget overrides for a restricted project carry its
+    // name, id and spend — they follow the project rule.
+    const result = await svc.list(companyId, status, {
+      visibleWhere: approvalVisibilityCondition(req, companyId),
+    });
     // Agent visibility (2026-09-30): a request raised by an agent the actor
     // cannot see is not theirs to know about.
     const visibleIds = await visibleAgentIdsFor(db, req, companyId);
@@ -325,6 +333,8 @@ export function approvalRoutes(
     if (approval.requestedByAgentId) {
       await assertAgentIdVisible(db, req, approval.requestedByAgentId, "Approval");
     }
+    // AgentDash (GH #902): 404 for a budget override on a hidden project.
+    await assertApprovalProjectVisible(db, req, approval);
     res.json(approvalResponse(approval));
   });
 
@@ -421,6 +431,7 @@ export function approvalRoutes(
       return;
     }
     assertCompanyAccess(req, approval.companyId);
+    await assertApprovalProjectVisible(db, req, approval); // AgentDash (GH #902)
     // A5 (GH #830): linked issues in a project the actor cannot see are absent.
     const issues = await filterVisibleByProject(db, req, await issueApprovalsSvc.listIssuesForApproval(id));
     res.json(issues);
@@ -682,6 +693,7 @@ export function approvalRoutes(
       return;
     }
     assertCompanyAccess(req, approval.companyId);
+    await assertApprovalProjectVisible(db, req, approval); // AgentDash (GH #902)
     const comments = await svc.listComments(id);
     res.json(comments);
   });
@@ -694,6 +706,7 @@ export function approvalRoutes(
       return;
     }
     assertCompanyAccess(req, approval.companyId);
+    await assertApprovalProjectVisible(db, req, approval); // AgentDash (GH #902)
     const actor = getActorInfo(req);
     const comment = await svc.addComment(id, req.body.body, {
       agentId: actor.agentId ?? undefined,
