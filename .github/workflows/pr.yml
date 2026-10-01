@@ -45,6 +45,14 @@ jobs:
         # scripts/ci/profile-ux-allowlist.json, which may only shrink.
         run: node scripts/ci/check-no-profile-ux.mjs && node --test scripts/ci/check-no-profile-ux.test.mjs
 
+      - name: API reference matches the server (route index + contract)
+        # doc/plans/2026-10-01-public-docs-section.md: every route in
+        # docs/api/contract.json must still be registered (a renamed contract
+        # route fails), and docs/api/route-index.md must be what the route files
+        # generate. Dependency-free; the OpenAPI half needs an install and runs
+        # in verify-build.
+        run: node scripts/ci/check-api-reference-drift.mjs --routes-only && node --test scripts/ci/check-api-reference-drift.test.mjs
+
       - name: Release log is complete and indexed
         # releases/*.md is the release log (GitHub Release bodies, in-app
         # Changelog). Fails when a stable tag has no notes, a note has no
@@ -207,6 +215,13 @@ jobs:
 
       - name: Verify deep-interview SKILL.md is in sync with the upstream pin
         run: pnpm verify-skill-md
+
+      - name: API reference matches the server (OpenAPI)
+        # The full drift check: regenerates docs/api/openapi.yaml from
+        # docs/api/contract.json and the shared validators and types, and fails
+        # when the committed file differs. See the policy job for the half that
+        # needs no install.
+        run: node scripts/ci/check-api-reference-drift.mjs
 
       - name: Typecheck
         run: pnpm typecheck

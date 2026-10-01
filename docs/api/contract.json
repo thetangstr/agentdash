@@ -1,0 +1,181 @@
+{
+  "$comment": "The public HTTP API contract, v1. Hand-maintained. Every route listed here is a promise: it is in docs/api/openapi.yaml and the rendered reference, and it is not removed or renamed without a deprecation cycle. Routes not listed are internal (docs/api/route-index.md). requestValidator names a zod schema exported by @paperclipai/shared; responseType names a TypeScript type exported by @paperclipai/shared; null means the schema is not generated yet. auth says who may call it (scripts/docs/generate-openapi.mjs AUTH_SECURITY): absent means a person or an agent; board = a person (board key or session); board-key = a person with a board key only; agent = an agent key; assistant = an OAuth assistant grant; bridge-endpoint = an enrolled machine; public = no credential. scripts/ci/check-api-reference-drift.mjs fails when a route whose handler refuses agents up front is not board-only here, or when requestValidator is not the schema the handler parses. description, query and headers are optional prose and parameters. Paths are Express-style, as the route index prints them. scripts/ci/check-api-reference-drift.mjs fails when a route here no longer exists. doc/plans/2026-10-01-public-docs-section.md.",
+  "version": "v1",
+  "tags": [
+    {
+      "name": "health",
+      "title": "Health",
+      "description": "Is the server up, and what version is it.",
+      "page": null
+    },
+    {
+      "name": "companies",
+      "title": "Companies",
+      "description": "The top-level tenant. Every other resource belongs to one company.",
+      "page": "api/companies"
+    },
+    {
+      "name": "agents",
+      "title": "Agents",
+      "description": "The AI employees of a company, their status, and their API keys.",
+      "page": "api/agents"
+    },
+    {
+      "name": "issues",
+      "title": "Issues",
+      "description": "Units of work: create, assign, check out, comment, release.",
+      "page": "api/issues"
+    },
+    {
+      "name": "projects",
+      "title": "Projects",
+      "description": "Groups of issues toward a deliverable.",
+      "page": "api/goals-and-projects"
+    },
+    {
+      "name": "goals",
+      "title": "Goals",
+      "description": "The outcomes a company's work rolls up to.",
+      "page": "api/goals-and-projects"
+    },
+    {
+      "name": "approvals",
+      "title": "Approvals",
+      "description": "Decisions a person must make before an agent may proceed.",
+      "page": "api/approvals"
+    },
+    {
+      "name": "routines",
+      "title": "Routines",
+      "description": "Recurring work that creates issues on a schedule or on demand.",
+      "page": "api/routines"
+    },
+    {
+      "name": "costs",
+      "title": "Costs",
+      "description": "Spend reporting by agents and the summaries built from it.",
+      "page": "api/costs"
+    },
+    {
+      "name": "activity",
+      "title": "Activity",
+      "description": "The company's audit log.",
+      "page": "api/activity"
+    },
+    {
+      "name": "dashboard",
+      "title": "Dashboard",
+      "description": "The company summary the dashboard shows.",
+      "page": "api/dashboard"
+    },
+    {
+      "name": "secrets",
+      "title": "Secrets",
+      "description": "Company secrets agents reference by id; values are never returned.",
+      "page": "api/secrets"
+    },
+    {
+      "name": "human-control",
+      "title": "Human control",
+      "description": "The operations a person's own assistant may discover, read, prepare and confirm on their behalf.",
+      "page": null
+    },
+    {
+      "name": "bridge",
+      "title": "Bridge",
+      "description": "The calls an enrolled machine makes to pick up and return work.",
+      "page": null
+    },
+    {
+      "name": "mcp",
+      "title": "MCP endpoints",
+      "description": "The Model Context Protocol endpoints, over streamable HTTP.",
+      "page": null
+    },
+    {
+      "name": "oauth",
+      "title": "OAuth metadata",
+      "description": "OAuth 2.1 discovery documents for the assistant MCP endpoint.",
+      "page": null
+    }
+  ],
+  "routes": [
+    { "tag": "health", "operationId": "getHealth", "summary": "Report whether the server is up, its version, and its degraded checks.", "method": "GET", "path": "/api/health", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "public" },
+
+    { "tag": "companies", "operationId": "listCompanies", "summary": "List the companies the signed-in person belongs to (all of them for an instance admin).", "method": "GET", "path": "/api/companies", "requestValidator": null, "responseType": "Company", "responseIsArray": true, "stability": "stable", "auth": "board" },
+    { "tag": "companies", "operationId": "getCompany", "summary": "Get one company.", "method": "GET", "path": "/api/companies/:companyId", "requestValidator": null, "responseType": "Company", "stability": "stable" },
+    { "tag": "companies", "operationId": "createCompany", "summary": "Create a company; the caller becomes its first member.", "method": "POST", "path": "/api/companies", "requestValidator": "createCompanySchema", "responseType": "Company", "successStatus": 201, "stability": "stable", "auth": "board" },
+    { "tag": "companies", "operationId": "updateCompany", "summary": "Update a company's settings. Any member may; agentVisibilityDefault needs an administrator; a CEO agent may change colour and logo only.", "method": "PATCH", "path": "/api/companies/:companyId", "requestValidator": "updateCompanySchema", "responseType": "Company", "stability": "stable", "description": "A person with access to the company may change its name, description, budget and other settings. Changing `agentVisibilityDefault` additionally needs a company administrator, and changing the product profile is gated separately. An agent may call this only if it is the company's CEO agent, and then only for the branding fields (colour and logo), parsed with `agentCompanyBrandingSchema`; any other agent gets 403." },
+
+    { "tag": "agents", "operationId": "listAgents", "summary": "List a company's agents; callers without configuration access get a redacted view.", "method": "GET", "path": "/api/companies/:companyId/agents", "requestValidator": null, "responseType": "Agent", "responseIsArray": true, "stability": "stable" },
+    { "tag": "agents", "operationId": "getCurrentAgent", "summary": "Get the agent the calling agent credential belongs to.", "method": "GET", "path": "/api/agents/me", "requestValidator": null, "responseType": "AgentDetail", "stability": "stable", "auth": "agent" },
+    { "tag": "agents", "operationId": "getAgent", "summary": "Get one agent, with its chain of command and access state.", "method": "GET", "path": "/api/agents/:id", "requestValidator": null, "responseType": "AgentDetail", "stability": "stable" },
+    { "tag": "agents", "operationId": "updateAgent", "summary": "Update an agent's name, title, adapter or runtime configuration.", "method": "PATCH", "path": "/api/agents/:id", "requestValidator": "updateAgentSchema", "responseType": "Agent", "stability": "stable" },
+    { "tag": "agents", "operationId": "pauseAgent", "summary": "Pause an agent so no new run starts.", "method": "POST", "path": "/api/agents/:id/pause", "requestValidator": null, "responseType": "Agent", "stability": "stable", "auth": "board" },
+    { "tag": "agents", "operationId": "resumeAgent", "summary": "Resume a paused agent.", "method": "POST", "path": "/api/agents/:id/resume", "requestValidator": null, "responseType": "Agent", "stability": "stable", "auth": "board" },
+    { "tag": "agents", "operationId": "listAgentKeys", "summary": "List an agent's API keys, active and revoked; never the key itself.", "method": "GET", "path": "/api/agents/:id/keys", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "board" },
+    { "tag": "agents", "operationId": "createAgentKey", "summary": "Mint an API key for a stewarded agent; the token is returned once.", "method": "POST", "path": "/api/agents/:id/keys", "requestValidator": "createAgentKeySchema", "responseType": "AgentKeyCreated", "successStatus": 201, "stability": "stable", "auth": "board" },
+    { "tag": "agents", "operationId": "revokeAgentKey", "summary": "Revoke one of an agent's API keys.", "method": "DELETE", "path": "/api/agents/:id/keys/:keyId", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "board" },
+
+    { "tag": "issues", "operationId": "listIssues", "summary": "List a company's issues the caller can see, filtered and paged with limit and offset.", "method": "GET", "path": "/api/companies/:companyId/issues", "query": [{ "name": "limit", "description": "Page size. Default 500; values above 1000 are treated as 1000; 0 or a non-integer is a 400.", "schema": { "type": "integer", "minimum": 1}}, { "name": "offset", "description": "Rows to skip. Default 0.", "schema": { "type": "integer", "minimum": 0}}, { "name": "q", "description": "Text search over the issue." }], "requestValidator": null, "responseType": "Issue", "responseIsArray": true, "stability": "stable" },
+    { "tag": "issues", "operationId": "getIssue", "summary": "Get one issue by id or identifier.", "method": "GET", "path": "/api/issues/:id", "requestValidator": null, "responseType": "Issue", "stability": "stable" },
+    { "tag": "issues", "operationId": "createIssue", "summary": "Create an issue in a company.", "method": "POST", "path": "/api/companies/:companyId/issues", "requestValidator": "createIssueSchema", "responseType": "Issue", "successStatus": 201, "stability": "stable" },
+    { "tag": "issues", "operationId": "updateIssue", "summary": "Update an issue's fields or status, optionally with a comment.", "method": "PATCH", "path": "/api/issues/:id", "requestValidator": "updateIssueRouteSchema", "responseType": "Issue", "stability": "stable" },
+    { "tag": "issues", "operationId": "checkoutIssue", "summary": "Claim an issue for an agent, if it is in one of the expected statuses.", "method": "POST", "path": "/api/issues/:id/checkout", "requestValidator": "checkoutIssueSchema", "responseType": "Issue", "stability": "stable" },
+    { "tag": "issues", "operationId": "releaseIssue", "summary": "Release an issue the caller has checked out.", "method": "POST", "path": "/api/issues/:id/release", "requestValidator": null, "responseType": "Issue", "stability": "stable", "description": "An agent key must send the run it is working in as `X-Paperclip-Run-Id`, or the request answers 401 `Agent run id required`. An agent run token carries its run and needs no header. People do not send it.", "headers": [{ "name": "X-Paperclip-Run-Id", "required": false, "description": "The run the agent is working in (UUID). Required for an agent key; not needed for an agent run token or a person.", "schema": { "type": "string", "format": "uuid" }}]},
+    { "tag": "issues", "operationId": "listIssueComments", "summary": "List an issue's comments.", "method": "GET", "path": "/api/issues/:id/comments", "requestValidator": null, "responseType": "IssueComment", "responseIsArray": true, "stability": "stable" },
+    { "tag": "issues", "operationId": "addIssueComment", "summary": "Add a comment to an issue.", "method": "POST", "path": "/api/issues/:id/comments", "requestValidator": "addIssueCommentSchema", "responseType": "IssueComment", "successStatus": 201, "stability": "stable" },
+
+    { "tag": "projects", "operationId": "listProjects", "summary": "List a company's projects the caller can see.", "method": "GET", "path": "/api/companies/:companyId/projects", "requestValidator": null, "responseType": "Project", "responseIsArray": true, "stability": "stable" },
+    { "tag": "projects", "operationId": "getProject", "summary": "Get one project.", "method": "GET", "path": "/api/projects/:id", "requestValidator": null, "responseType": "Project", "stability": "stable" },
+    { "tag": "projects", "operationId": "createProject", "summary": "Create a project in a company.", "method": "POST", "path": "/api/companies/:companyId/projects", "requestValidator": "createProjectSchema", "responseType": "Project", "successStatus": 201, "stability": "stable" },
+    { "tag": "projects", "operationId": "updateProject", "summary": "Update a project.", "method": "PATCH", "path": "/api/projects/:id", "requestValidator": "updateProjectSchema", "responseType": "Project", "stability": "stable" },
+
+    { "tag": "goals", "operationId": "listGoals", "summary": "List a company's goals.", "method": "GET", "path": "/api/companies/:companyId/goals", "requestValidator": null, "responseType": "Goal", "responseIsArray": true, "stability": "stable" },
+    { "tag": "goals", "operationId": "getGoal", "summary": "Get one goal.", "method": "GET", "path": "/api/goals/:id", "requestValidator": null, "responseType": "Goal", "stability": "stable" },
+    { "tag": "goals", "operationId": "createGoal", "summary": "Create a goal in a company.", "method": "POST", "path": "/api/companies/:companyId/goals", "requestValidator": "createGoalSchema", "responseType": "Goal", "successStatus": 201, "stability": "stable", "auth": "board" },
+    { "tag": "goals", "operationId": "updateGoal", "summary": "Update a goal.", "method": "PATCH", "path": "/api/goals/:id", "requestValidator": "updateGoalSchema", "responseType": "Goal", "stability": "stable", "auth": "board" },
+
+    { "tag": "approvals", "operationId": "listApprovals", "summary": "List a company's approvals the caller can see.", "method": "GET", "path": "/api/companies/:companyId/approvals", "requestValidator": null, "responseType": "Approval", "responseIsArray": true, "stability": "stable" },
+    { "tag": "approvals", "operationId": "getApproval", "summary": "Get one approval.", "method": "GET", "path": "/api/approvals/:id", "requestValidator": null, "responseType": "Approval", "stability": "stable" },
+    { "tag": "approvals", "operationId": "createApproval", "summary": "Request an approval in a company.", "method": "POST", "path": "/api/companies/:companyId/approvals", "requestValidator": "createApprovalSchema", "responseType": "Approval", "successStatus": 201, "stability": "stable" },
+    { "tag": "approvals", "operationId": "approveApproval", "summary": "Approve a pending approval.", "method": "POST", "path": "/api/approvals/:id/approve", "requestValidator": "resolveApprovalSchema", "responseType": "Approval", "stability": "stable", "auth": "board" },
+    { "tag": "approvals", "operationId": "rejectApproval", "summary": "Reject a pending approval.", "method": "POST", "path": "/api/approvals/:id/reject", "requestValidator": "resolveApprovalSchema", "responseType": "Approval", "stability": "stable", "auth": "board" },
+    { "tag": "approvals", "operationId": "requestApprovalRevision", "summary": "Send an approval back to its requester for revision.", "method": "POST", "path": "/api/approvals/:id/request-revision", "requestValidator": "requestApprovalRevisionSchema", "responseType": "Approval", "stability": "stable", "auth": "board" },
+
+    { "tag": "routines", "operationId": "listRoutines", "summary": "List a company's routines.", "method": "GET", "path": "/api/companies/:companyId/routines", "requestValidator": null, "responseType": "RoutineListItem", "responseIsArray": true, "stability": "stable" },
+    { "tag": "routines", "operationId": "getRoutine", "summary": "Get one routine with its triggers and recent runs.", "method": "GET", "path": "/api/routines/:id", "requestValidator": null, "responseType": "RoutineDetail", "stability": "stable" },
+    { "tag": "routines", "operationId": "createRoutine", "summary": "Create a routine in a company.", "method": "POST", "path": "/api/companies/:companyId/routines", "requestValidator": "createRoutineSchema", "responseType": "Routine", "successStatus": 201, "stability": "stable" },
+    { "tag": "routines", "operationId": "updateRoutine", "summary": "Update a routine.", "method": "PATCH", "path": "/api/routines/:id", "requestValidator": "updateRoutineSchema", "responseType": "Routine", "stability": "stable" },
+    { "tag": "routines", "operationId": "runRoutine", "summary": "Start a routine run now; answers 202 with the queued run.", "method": "POST", "path": "/api/routines/:id/run", "requestValidator": "runRoutineSchema", "responseType": "RoutineRun", "successStatus": 202, "stability": "stable" },
+
+    { "tag": "costs", "operationId": "reportCostEvent", "summary": "Report a cost event (tokens and spend for one call).", "method": "POST", "path": "/api/companies/:companyId/cost-events", "requestValidator": "createCostEventSchema", "responseType": "CostEvent", "successStatus": 201, "stability": "stable" },
+    { "tag": "costs", "operationId": "getCostSummary", "summary": "Company spend for a date range, against its budget. People need agents:create; agents may read it.", "method": "GET", "path": "/api/companies/:companyId/costs/summary", "requestValidator": null, "responseType": "CostSummary", "stability": "stable", "description": "Agents in the company may read this. A person needs the `agents:create` permission in the company (or to be an instance admin); anyone else gets 403 `Spend and billing are visible to administrators only.`" },
+    { "tag": "costs", "operationId": "getCostsByAgent", "summary": "Company spend for a date range, per agent. People need agents:create; agents may read it.", "method": "GET", "path": "/api/companies/:companyId/costs/by-agent", "requestValidator": null, "responseType": "CostByAgent", "responseIsArray": true, "stability": "stable", "description": "Agents in the company may read this. A person needs the `agents:create` permission in the company (or to be an instance admin); anyone else gets 403 `Spend and billing are visible to administrators only.`" },
+
+    { "tag": "activity", "operationId": "listActivity", "summary": "List a company's activity log, filtered by agent, entity or time.", "method": "GET", "path": "/api/companies/:companyId/activity", "query": [{ "name": "limit", "description": "Rows to return. Default 100, clamped to 1–500.", "schema": { "type": "integer" }}, { "name": "since", "description": "Only rows at or after this ISO 8601 timestamp; an unparseable value is a 400.", "schema": { "type": "string", "format": "date-time" }}, { "name": "agentId", "description": "Only rows about this agent." }, { "name": "entityType", "description": "Only rows about this kind of entity, such as issue." }, { "name": "entityId", "description": "Only rows about this entity." }], "requestValidator": null, "responseType": "ActivityEvent", "responseIsArray": true, "stability": "stable" },
+
+    { "tag": "dashboard", "operationId": "getDashboard", "summary": "The company summary: agents, tasks, spend and pending decisions.", "method": "GET", "path": "/api/companies/:companyId/dashboard", "requestValidator": null, "responseType": "DashboardSummary", "stability": "stable" },
+
+    { "tag": "secrets", "operationId": "listSecrets", "summary": "List a company's secrets (metadata only, never values).", "method": "GET", "path": "/api/companies/:companyId/secrets", "requestValidator": null, "responseType": "CompanySecret", "responseIsArray": true, "stability": "stable", "auth": "board" },
+    { "tag": "secrets", "operationId": "createSecret", "summary": "Create a secret in a company.", "method": "POST", "path": "/api/companies/:companyId/secrets", "requestValidator": "createSecretSchema", "responseType": "CompanySecret", "successStatus": 201, "stability": "stable", "auth": "board" },
+    { "tag": "secrets", "operationId": "rotateSecret", "summary": "Store a new value for a secret as its next version.", "method": "POST", "path": "/api/secrets/:id/rotate", "requestValidator": "rotateSecretSchema", "responseType": "CompanySecret", "stability": "stable", "auth": "board" },
+
+    { "tag": "human-control", "operationId": "getHumanControlIdentity", "summary": "Who the caller is, as the human-control surface sees them.", "method": "GET", "path": "/api/human-control/identity", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "board-key" },
+    { "tag": "human-control", "operationId": "discoverHumanOperations", "summary": "List the operations available to the caller on a target.", "method": "POST", "path": "/api/human-control/discover", "requestValidator": "humanDiscoverRequestSchema", "responseType": null, "stability": "stable", "auth": "board-key" },
+    { "tag": "human-control", "operationId": "readHumanOperation", "summary": "Run a read-only operation.", "method": "POST", "path": "/api/human-control/read", "requestValidator": "humanOperationRequestSchema", "responseType": null, "stability": "stable", "auth": "board-key" },
+    { "tag": "human-control", "operationId": "prepareHumanOperation", "summary": "Prepare a write operation and return a single-use handle for confirmation.", "method": "POST", "path": "/api/human-control/prepare", "requestValidator": "humanOperationRequestSchema", "responseType": null, "stability": "stable", "auth": "board-key" },
+    { "tag": "human-control", "operationId": "confirmHumanOperation", "summary": "Confirm a prepared operation by its handle.", "method": "POST", "path": "/api/human-control/confirm", "requestValidator": "humanConfirmRequestSchema", "responseType": null, "stability": "stable", "auth": "board-key" },
+
+    { "tag": "bridge", "operationId": "pollBridgeTask", "summary": "Claim the next task for this enrolled machine, or get { task: null }.", "method": "POST", "path": "/api/bridge/poll", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "bridge-endpoint" },
+    { "tag": "bridge", "operationId": "submitBridgeResult", "summary": "Return the result of a claimed task (taskId, resultToken, result).", "method": "POST", "path": "/api/bridge/result", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "bridge-endpoint" },
+    { "tag": "bridge", "operationId": "declineBridgeTask", "summary": "Decline a claimed task (taskId, resultToken, reason).", "method": "POST", "path": "/api/bridge/decline", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "bridge-endpoint" },
+
+    { "tag": "mcp", "operationId": "mcpAgent", "summary": "MCP over streamable HTTP for an agent key: JSON-RPC in, JSON-RPC out.", "method": "POST", "path": "/api/mcp", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "agent" },
+    { "tag": "mcp", "operationId": "mcpAssistant", "summary": "MCP over streamable HTTP for an assistant holding an OAuth grant.", "method": "POST", "path": "/api/mcp/assistant", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "assistant" },
+
+    { "tag": "oauth", "operationId": "getProtectedResourceMetadata", "summary": "RFC 9728 protected-resource metadata for the assistant MCP endpoint.", "method": "GET", "path": "/.well-known/oauth-protected-resource", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "public" },
+    { "tag": "oauth", "operationId": "getAssistantProtectedResourceMetadata", "summary": "The same metadata, at the path-suffixed location RFC 9728 clients try first.", "method": "GET", "path": "/.well-known/oauth-protected-resource/api/mcp/assistant", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "public" },
+    { "tag": "oauth", "operationId": "getAuthorizationServerMetadata", "summary": "RFC 8414 authorization-server metadata: issuer, endpoints, scopes, PKCE.", "method": "GET", "path": "/.well-known/oauth-authorization-server", "requestValidator": null, "responseType": null, "stability": "stable", "auth": "public" }
+  ]
+}

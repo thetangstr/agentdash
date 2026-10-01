@@ -14,7 +14,7 @@
 // Until vercel.json lets /docs through (PR 4), www.agentdash.cloud never serves
 // this route; it is reachable on instances and local builds only.
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate } from "@/lib/router";
@@ -36,6 +36,7 @@ import {
   type DocTab,
 } from "@/lib/docs";
 import { docSlugFromPathname } from "@/lib/docs-nav";
+import { referenceInstanceUrl } from "@/lib/api-reference-server";
 
 /**
  * Two adjustments to MarkdownBody for reference pages, made here rather than
@@ -54,6 +55,16 @@ import { docSlugFromPathname } from "@/lib/docs-nav";
  */
 const DOC_BODY_CLASS =
   "[&_th]:whitespace-nowrap! [&_td:first-child]:min-w-40 [&_pre:has(code.language-markdown)]:whitespace-pre-wrap!";
+
+// The API reference (Scalar) is its own lazy chunk: only a `kind: openapi`
+// page loads it. See components/docs/ApiReference.tsx.
+const ApiReference = lazy(() => import("@/components/docs/ApiReference"));
+
+function documentIsDark(): boolean {
+  // Read, not subscribed: the docs shell has no theme toggle, and the app's
+  // ThemeProvider sets this class before anything renders.
+  return typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+}
 
 export function docsHref(slug: string): string {
   return `/docs/${slug}`;
@@ -238,8 +249,9 @@ function DocArticle({ docRef, tree }: { docRef: DocPageRef; tree: DocTab[] }) {
   const title = page?.title ?? docRef.title;
   useDocumentMeta(`${title} — AgentDash Docs`, page?.summary || "AgentDash documentation.");
 
+  const wide = page?.kind === "openapi";
   return (
-    <article className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+    <article className={cn("mx-auto flex w-full flex-col gap-4", !wide && "max-w-3xl")}>
       <nav className="text-xs text-muted-foreground" aria-label="Breadcrumb">
         <span>{docRef.tab}</span>
         <span className="mx-1">/</span>
@@ -257,6 +269,14 @@ function DocArticle({ docRef, tree }: { docRef: DocPageRef; tree: DocTab[] }) {
         <MarkdownBody linkIssueReferences={false} scrollableTables className={DOC_BODY_CLASS}>
           {renderGuide(page.body, { instanceUrl })}
         </MarkdownBody>
+      ) : null}
+      {page?.kind === "openapi" ? (
+        <Suspense fallback={<p className="text-sm text-muted-foreground">Loading the API reference…</p>}>
+          <ApiReference
+            dark={documentIsDark()}
+            instanceUrl={referenceInstanceUrl(typeof window !== "undefined" ? window.location.hostname : "", instanceUrl)}
+          />
+        </Suspense>
       ) : null}
       <nav aria-label="Pagination" className="mt-6 flex items-stretch justify-between gap-4 border-t border-border pt-4">
         {prev ? (

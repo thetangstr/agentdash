@@ -106,7 +106,15 @@ describe("docs: markdown normalisation", () => {
     const tree = docsTree();
     const ref = listDocPages(tree)[0]!;
     const page = parseDocPage({ ...ref, file: "x/y.mdx" }, '---\ntitle: T\ndescription: "D"\n---\nimport A from "a";\n\nBody.', tree);
-    expect(page).toMatchObject({ title: "T", summary: "D", body: "Body." });
+    expect(page).toMatchObject({ title: "T", summary: "D", kind: "markdown", body: "Body." });
+  });
+
+  it("reads `kind: openapi` from front matter, and only that value", () => {
+    const tree = docsTree();
+    const ref = listDocPages(tree)[0]!;
+    expect(parseDocPage(ref, "---\ntitle: R\nkind: openapi\n---\nIntro.", tree).kind).toBe("openapi");
+    expect(parseDocPage(ref, "---\ntitle: R\nkind: something-else\n---\nIntro.", tree).kind).toBe("markdown");
+    expect(findDocPage("api/reference"), "the API reference is a bundled page").not.toBeNull();
   });
 });
 
@@ -267,11 +275,16 @@ describe("docs: the bundled set", () => {
     }
   });
 
-  it("contains no forbidden token — pages, nav and search index", () => {
+  // The scan hashes one window per word start per token length over every
+  // bundled page, ~1.5 s locally and ~7 s on a slow CI runner; the timeout is
+  // a margin for the runner, not a budget for the scan to grow into.
+  it("contains no forbidden token — pages, nav and search index", { timeout: 20_000 }, () => {
     const targets = new Map(sources);
     targets.set("docs/docs.json", readFileSync(path.join(DOCS_DIR, "docs.json"), "utf8"));
     targets.set("ui/src/generated/docs-search-index.json", JSON.stringify(searchIndex));
     targets.set("ui/src/generated/docs-routes.json", JSON.stringify(docsRoutes));
+    // Shipped as a static asset by the API reference page (components/docs/ApiReference.tsx).
+    targets.set("docs/api/openapi.yaml", readFileSync(path.join(DOCS_DIR, "api", "openapi.yaml"), "utf8"));
     for (const [name, text] of targets) {
       expect(forbiddenTokenOffsets(text), name).toEqual([]);
     }
@@ -283,11 +296,16 @@ describe("docs: the bundled set", () => {
  * site. Stored as SHA-256 of the lowercase token, with its length, only so the
  * tokens are not printed in clear in this file and its diffs. This is NOT a
  * secret: the tokens are short and guessable, and anyone with a guess list can
- * recover them from these hashes. The scan hashes every window of each length
- * across the page's lowercase text — deterministic, and a token is found
- * wherever it sits (inside a word, a hostname, an address). Hyphenated
- * spellings are listed separately; a bare short name is not, where it would
- * match inside ordinary words.
+ * recover them from these hashes. Every token starts with a letter or digit,
+ * so the scan hashes, for each token length, the window at every word start
+ * in the page's lowercase text: the start of the text, or a letter or digit
+ * right after anything else (a space, `.`, `@`, `/`, `(`, `-`, `_`, …). That
+ * finds a token wherever it begins a word — on its own, in a hostname, an
+ * address, a path or an identifier — and costs roughly a tenth of hashing
+ * every window. It does not find a token glued onto the end of a longer run
+ * of letters and digits (`xtoken`). Hyphenated spellings are listed
+ * separately; a bare short name is not, where it would match inside ordinary
+ * words.
  */
 const FORBIDDEN_TOKENS: ReadonlyArray<{ length: number; sha256: string }> = [
   { length: 7, sha256: "4998fa28eb8d38a27eff147fb68e1ad03ea01658fb5eec10aabadbaf37ffe565" },
@@ -300,13 +318,25 @@ const FORBIDDEN_TOKENS: ReadonlyArray<{ length: number; sha256: string }> = [
   { length: 12, sha256: "68b7730d0f4346654432e894c673760d287e3ee7a7509c4c6f802f216301c4b7" },
   { length: 12, sha256: "b9dd1da230753160f70e3864d24aa0bd1ca81cd8bceaf3709fd41e09d55214b1" },
   { length: 12, sha256: "53ac39752d14c82c6972e6acd2f56dbfbaeeccb41e7e6371e95799d1ad09dad8" },
+  { length: 13, sha256: "37c999ba9fb7fc5b18a5786b2399cb2711ea412cc1de92246a6725712e56c21a" },
 ];
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-/** Offsets at which a window of `text` hashes to one of `tokens`. */
+const ALNUM = /[a-z0-9]/;
+
+/** Offsets where a word starts: a letter or digit at the start of the text or after a non-alphanumeric character. */
+function wordStarts(lower: string): number[] {
+  const starts: number[] = [];
+  for (let i = 0; i < lower.length; i += 1) {
+    if (ALNUM.test(lower[i]!) && (i === 0 || !ALNUM.test(lower[i - 1]!))) starts.push(i);
+  }
+  return starts;
+}
+
+/** Offsets at which a window starting a word in `text` hashes to one of `tokens`. */
 function forbiddenTokenOffsets(
   text: string,
   tokens: ReadonlyArray<{ length: number; sha256: string }> = FORBIDDEN_TOKENS,
@@ -318,8 +348,10 @@ function forbiddenTokenOffsets(
     byLength.get(token.length)!.add(token.sha256);
   }
   const offsets: number[] = [];
+  const starts = wordStarts(lower);
   for (const [length, hashes] of byLength) {
-    for (let i = 0; i + length <= lower.length; i += 1) {
+    for (const i of starts) {
+      if (i + length > lower.length) break;
       if (hashes.has(sha256(lower.slice(i, i + length)))) offsets.push(i);
     }
   }
@@ -332,6 +364,26 @@ describe("docs: the forbidden-token scan itself", () => {
     expect(forbiddenTokenOffsets("hay NEEDLE hay", needle)).toEqual([4]);
     expect(forbiddenTokenOffsets("x@needle.example", needle)).toEqual([2]);
     expect(forbiddenTokenOffsets("haystack only", needle)).toEqual([]);
+  });
+
+  it("finds a token embedded mid-page, wherever a word starts", () => {
+    const needle = [{ length: 6, sha256: sha256("needle") }];
+    const page = `${"Lorem ipsum dolor sit amet. ".repeat(400)}See needle-host.example for details. ${"More text. ".repeat(400)}`;
+    const at = page.toLowerCase().indexOf("needle");
+    expect(forbiddenTokenOffsets(page, needle)).toEqual([at]);
+    // A hyphenated token starts a word too.
+    const hyphenated = [{ length: 9, sha256: sha256("needle-mk") }];
+    expect(forbiddenTokenOffsets("the needle-mk profile", hyphenated)).toEqual([4]);
+  });
+
+  it("still finds a token right after punctuation", () => {
+    const needle = [{ length: 6, sha256: sha256("needle") }];
+    for (const before of ["(", "/", "[", '"', "`", "_", "-", ".", ":", "=", "#"]) {
+      const text = `see ${before}needle) here`;
+      expect(forbiddenTokenOffsets(text, needle), before).toEqual([4 + before.length]);
+    }
+    expect(forbiddenTokenOffsets("https://needle.example/path", needle)).toEqual([8]);
+    expect(forbiddenTokenOffsets("/api/needle", needle)).toEqual([5]);
   });
 
   it("holds well-formed hashes", () => {

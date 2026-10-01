@@ -117,18 +117,33 @@
         ]
       },
       {
-        "tab": "API Reference",
+        "tab": "API",
         "groups": [
           {
-            "group": "REST API",
+            "group": "Using the API",
             "pages": [
-              "api/overview",
+              "api/index",
               "api/authentication",
+              "api/api-keys",
+              "api/conventions"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "api/reference",
+              "api/route-index"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
               "api/companies",
               "api/agents",
               "api/issues",
               "api/approvals",
               "api/goals-and-projects",
+              "api/routines",
               "api/costs",
               "api/secrets",
               "api/activity",

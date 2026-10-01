@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { companies, issues, issueExecutionDecisions, issueThreadInteractions, type Db } from "@paperclipai/db";
-import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueSchema } from "@paperclipai/shared";
+import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueRouteSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
 import { issueService } from "./issues.js";
@@ -21,7 +21,8 @@ import {
 } from "./issue-mutation-actions.js";
 import type { heartbeatService } from "./heartbeat.js";
 
-export const updateIssueRouteSchema = updateIssueSchema.extend({ interrupt: z.boolean().optional() });
+// The route schema is shared so the API contract can name it; re-exported for existing importers.
+export { updateIssueRouteSchema };
 type Issue = typeof issues.$inferSelect;
 type Intent = z.infer<typeof updateIssueRouteSchema>;
 type Runtime = Pick<ReturnType<typeof heartbeatService>, "cancelRun" | "wakeup" | "reportRunActivity">;

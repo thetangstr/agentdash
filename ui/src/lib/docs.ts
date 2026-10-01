@@ -48,7 +48,7 @@ const docModules = import.meta.glob(
     "../../../docs/guides/agent-developer/{how-agents-work,heartbeat-protocol,writing-a-skill,task-workflow,comments-and-communication,handling-approvals,cost-reporting}.{md,mdx}",
     "../../../docs/deploy/{overview,local-development,tailscale-private-access,docker,deployment-modes,database,secrets,storage,environment-variables}.{md,mdx}",
     "../../../docs/adapters/{overview,claude-local,codex-local,process,http,external-adapters,adapter-ui-parser,creating-an-adapter}.{md,mdx}",
-    "../../../docs/api/{overview,authentication,companies,agents,issues,approvals,goals-and-projects,costs,secrets,activity,dashboard}.{md,mdx}",
+    "../../../docs/api/{index,authentication,api-keys,conventions,reference,route-index,companies,agents,issues,approvals,goals-and-projects,routines,costs,secrets,activity,dashboard}.{md,mdx}",
     "../../../docs/mcp/{overview,connecting,toolsets,resources,playbooks}.{md,mdx}",
     "../../../docs/mcp/tools/{agent,setup,assistant,human,bridge}.{md,mdx}",
     "../../../docs/cli/{agentdash-connect,agentdash-mcp,overview,setup-commands,control-plane-commands}.{md,mdx}",
@@ -202,10 +202,19 @@ export function neighbours(
 // Pages
 // ---------------------------------------------------------------------------
 
+/**
+ * What renders a page. Almost every page is `markdown`. A page whose front
+ * matter says `kind: openapi` is still a markdown file (it has a title, an
+ * intro, a place in the nav and the search index) and additionally renders the
+ * API reference below its body — see Docs.tsx.
+ */
+export type DocPageKind = "markdown" | "openapi";
+
 export interface DocPage {
   ref: DocPageRef;
   title: string;
   summary: string;
+  kind: DocPageKind;
   /** Markdown ready for MarkdownBody, tokens NOT yet substituted. */
   body: string;
 }
@@ -229,6 +238,7 @@ export function parseDocPage(ref: DocPageRef, markdown: string, tree: DocTab[] =
     ref,
     title: fields.title || ref.title,
     summary: fields.summary || fields.description || "",
+    kind: fields.kind === "openapi" ? "openapi" : "markdown",
     body: rewriteDocLinks(
       normalizeDocMarkdown(body, { mdx: ref.file.endsWith(".mdx") }),
       ref.slug,

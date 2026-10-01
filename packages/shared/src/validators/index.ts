@@ -206,6 +206,7 @@ export {
   createChildIssueSchema,
   createIssueLabelSchema,
   updateIssueSchema,
+  updateIssueRouteSchema,
   issueExecutionPolicySchema,
   issueExecutionStateSchema,
   issueReviewRequestSchema,

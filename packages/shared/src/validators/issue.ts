@@ -275,6 +275,14 @@ export const updateIssueSchema = createIssueBaseSchema.omit({
   hiddenAt: z.string().datetime().nullable().optional(),
 });
 
+/**
+ * The schema `PATCH /api/issues/:id` parses. It lived in
+ * server/src/services/issue-patch-actions.ts; it is here so the public API
+ * contract (docs/api/contract.json) can name the schema the route really uses.
+ * Same shape as before the move.
+ */
+export const updateIssueRouteSchema = updateIssueSchema.extend({ interrupt: z.boolean().optional() });
+
 export type UpdateIssue = z.infer<typeof updateIssueSchema>;
 export type IssueExecutionWorkspaceSettings = z.infer<typeof issueExecutionWorkspaceSettingsSchema>;
 
