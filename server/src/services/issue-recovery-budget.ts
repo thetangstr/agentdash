@@ -41,6 +41,53 @@ export function hasExhaustedRecoveryBudget(executionState: unknown): boolean {
   return readIssueRecoveryBudget(executionState) !== null;
 }
 
+/**
+ * AgentDash (GH #891 F-A): the one run that may own an exhausted issue is the
+ * run a named-human permit bound and the claim gate already let through —
+ * the permit is `consumed`, names this exact run, and pins this agent. Every
+ * other run (a timer run, another issue's run, a sibling) and every caller
+ * without a run is refused, whatever status the issue is in. Mirrors the
+ * heartbeat claim gate (`enforceTaskRecoveryBudget`): there the permit is
+ * `authorized` and the claim consumes it; after the claim it reads `consumed`.
+ */
+export function exhaustedRecoveryBudgetAllowsRun(
+  executionState: unknown,
+  input: { runId: string | null | undefined; agentId: string },
+): boolean {
+  if (!hasExhaustedRecoveryBudget(executionState)) return true;
+  if (!input.runId) return false;
+  const record = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const remediation = record(record(record(executionState)?.recoveryBudget)?.remediation);
+  return Boolean(
+    remediation &&
+      remediation.status === "consumed" &&
+      remediation.runId === input.runId &&
+      remediation.assigneeAgentId === input.agentId,
+  );
+}
+
+/**
+ * The same rule as {@link exhaustedRecoveryBudgetAllowsRun}, as a WHERE
+ * fragment, so the write that hands an issue to a run re-checks it atomically.
+ */
+export function exhaustedRecoveryBudgetAllowsRunSql(runId: string | null | undefined, agentId: string) {
+  const notExhausted = sql`coalesce(${issues.executionState} -> 'recoveryBudget' ->> 'status', '') <> 'exhausted'`;
+  if (!runId) return notExhausted;
+  return or(
+    notExhausted,
+    and(
+      sql`${issues.executionState} -> 'recoveryBudget' -> 'remediation' ->> 'status' = 'consumed'`,
+      sql`${issues.executionState} -> 'recoveryBudget' -> 'remediation' ->> 'runId' = ${runId}`,
+      sql`${issues.executionState} -> 'recoveryBudget' -> 'remediation' ->> 'assigneeAgentId' = ${agentId}`,
+    ),
+  )!;
+}
+
+export const EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL =
+  "This issue's automatic-retry budget is exhausted. Only the one run a board user authorized for it can take it; " +
+  "a board user can authorize one run or clear the block from the issue page.";
+
 function withoutRecoveryBudget(executionState: unknown): Record<string, unknown> | null {
   if (typeof executionState !== "object" || executionState === null || Array.isArray(executionState)) {
     return null;
@@ -74,9 +121,9 @@ export function recoveryBudgetNotice(issueId: string, executionState: unknown): 
     exhaustedBy: budget.exhaustedBy,
     message:
       "This issue's automatic-retry budget is still exhausted. Changing its status, commenting or reassigning it " +
-      "does not clear the block and no ordinary run will start — only the exact bound run a confirmed " +
-      "task_recovery.remediate permit names can proceed. Use \"Clear recovery block & retry\" to clear it, " +
-      "or authorize one bound run via task_recovery.remediate.",
+      "does not clear the block and no ordinary run will start — only the one run a board user authorizes can " +
+      "proceed. On the issue page, use \"Clear recovery block & retry\" to clear it, or \"Authorize one run\" " +
+      "to let exactly one run go ahead while the block stays.",
     clearPath: `/api/issues/${issueId}/recovery-budget/clear`,
   };
 }
@@ -166,7 +213,7 @@ export async function clearIssueRecoveryBudget(
         .set({
           status: "cancelled",
           finishedAt: now,
-          error: "task_recovery.remediate permit superseded by explicit recovery-budget clear",
+          error: "The one-run authorization was superseded when a board user cleared the recovery block",
           errorCode: "task_recovery_permit_superseded",
         })
         .where(
@@ -180,7 +227,7 @@ export async function clearIssueRecoveryBudget(
       if (boundRun?.wakeupRequestId) {
         await tx
           .update(agentWakeupRequests)
-          .set({ status: "skipped", finishedAt: now, error: "task_recovery.remediate permit superseded by explicit recovery-budget clear" })
+          .set({ status: "skipped", finishedAt: now, error: "The one-run authorization was superseded when a board user cleared the recovery block" })
           .where(eq(agentWakeupRequests.id, boundRun.wakeupRequestId));
       }
       await logActivity(tx as unknown as Db, {
@@ -352,7 +399,7 @@ export async function reblockExhaustedIssue(
           `${RECOVERY_BUDGET_REBLOCK_COMMENT_PREFIX}: this issue's automatic-retry budget is exhausted` +
           `${usage ? ` (${usage})` : ""}, but it was in \`${current.status}\`, where it looked like live work. ` +
           "Moved it back to `blocked`. No automatic retry will start until a board user clears the recovery block with " +
-          "\"Clear recovery block & retry\" on this issue or authorizes one bound run via task_recovery.remediate; " +
+          "\"Clear recovery block & retry\" on this issue or authorizes exactly one run with \"Authorize one run\"; " +
           "moving it out of `blocked`, commenting or reassigning does not clear it.",
       });
     }

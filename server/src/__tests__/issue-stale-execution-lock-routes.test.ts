@@ -291,4 +291,80 @@ describeEmbeddedPostgres("stale issue execution lock routes", () => {
       },
     });
   });
+
+  // AgentDash (GH #891 F-A): an exhausted issue is never handed to a run the
+  // recovery permit did not bind — not by checkout, not by agent PATCH into
+  // in_progress, not by stale-lock adoption on an ordinary mutation.
+  describe("exhausted recovery budget", () => {
+    const exhaustedState = {
+      recoveryBudget: {
+        status: "exhausted",
+        exhaustedBy: ["cost"],
+        exhaustedAt: "2026-03-20T00:00:00.000Z",
+        sourceRunId: null,
+        refusedRunId: null,
+      },
+    };
+
+    it("refuses checkout from an agent's unrelated live run", async () => {
+      const { companyId, agentId, currentRunId } = await seedCompanyAgentAndRuns();
+      const issueId = randomUUID();
+      await db.insert(issues).values({
+        id: issueId, companyId, title: "Exhausted", status: "blocked", priority: "high",
+        assigneeAgentId: agentId, executionState: exhaustedState,
+      });
+      const res = await request(createApp(agentActor(companyId, agentId, currentRunId)))
+        .post(`/api/issues/${issueId}/checkout`)
+        .send({ agentId, expectedStatuses: ["blocked"] });
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body.details?.code ?? res.body.code).toBe("task_recovery_budget_exhausted");
+      const [row] = await db.select().from(issues).where(eq(issues.id, issueId));
+      expect(row.status).toBe("blocked");
+      expect(row.checkoutRunId).toBeNull();
+    });
+
+    it("refuses an agent PATCH that moves it into in_progress", async () => {
+      const { companyId, agentId, currentRunId } = await seedCompanyAgentAndRuns();
+      const issueId = randomUUID();
+      await db.insert(issues).values({
+        id: issueId, companyId, title: "Exhausted", status: "blocked", priority: "high",
+        assigneeAgentId: agentId, executionState: exhaustedState,
+      });
+      const res = await request(createApp(agentActor(companyId, agentId, currentRunId)))
+        .patch(`/api/issues/${issueId}`)
+        .send({ status: "in_progress" });
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      const [row] = await db.select().from(issues).where(eq(issues.id, issueId));
+      expect(row.status).toBe("blocked");
+    });
+
+    it("refuses lock adoption by an agent mutation on an in_progress exhausted issue", async () => {
+      const { companyId, agentId, failedRunId, currentRunId } = await seedCompanyAgentAndRuns();
+      const issueId = randomUUID();
+      await db.insert(issues).values({
+        id: issueId, companyId, title: "Exhausted", status: "in_progress", priority: "high",
+        assigneeAgentId: agentId, checkoutRunId: null, executionRunId: failedRunId, executionState: exhaustedState,
+      });
+      const res = await request(createApp(agentActor(companyId, agentId, currentRunId)))
+        .patch(`/api/issues/${issueId}`)
+        .send({ title: "Taking it over" });
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      const [row] = await db.select().from(issues).where(eq(issues.id, issueId));
+      expect(row.title).toBe("Exhausted");
+      expect(row.checkoutRunId).toBeNull();
+    });
+
+    it("still lets a board user move an exhausted issue (no implicit clear, no takeover)", async () => {
+      const { companyId, agentId } = await seedCompanyAgentAndRuns();
+      const issueId = randomUUID();
+      await db.insert(issues).values({
+        id: issueId, companyId, title: "Exhausted", status: "blocked", priority: "high",
+        assigneeAgentId: agentId, executionState: exhaustedState,
+      });
+      const res = await request(createApp(boardActor(companyId)))
+        .patch(`/api/issues/${issueId}`)
+        .send({ title: "Renamed by a person" });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    });
+  });
 });

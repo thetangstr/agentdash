@@ -122,6 +122,8 @@ import {
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 import {
   clearIssueRecoveryBudget,
+  EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL,
+  exhaustedRecoveryBudgetAllowsRun,
   hasExhaustedRecoveryBudget,
   recoveryBudgetNotice,
 } from "../services/issue-recovery-budget.js";
@@ -2122,6 +2124,14 @@ export function issueRoutes(
           if (req.actor.type === "agent" && intent.assigneeAdapterOverrides !== undefined) throw new IssueCommentPolicyRefusal(403, {
             error: "Agent-authenticated callers cannot change assigneeAdapterOverrides; only a human with agent-configuration authority may change adapter or model configuration" });
           await assertAgentIssueMutationAllowed(req, res, current, policyDb);
+          // AgentDash (GH #891 F-A): an agent cannot move an exhausted issue
+          // into in_progress (the first half of taking it over) unless its run
+          // is the one a board user authorized. Checkout and lock adoption
+          // refuse the same way in services/issues.ts.
+          if (req.actor.type === "agent" && intent.status === "in_progress" && current.status !== "in_progress"
+            && !exhaustedRecoveryBudgetAllowsRun(current.executionState, { runId: getActorInfo(req).runId, agentId: req.actor.agentId ?? "" })) {
+            throw new IssueCommentPolicyRefusal(409, { error: EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL, code: "task_recovery_budget_exhausted" });
+          }
           if (intent.executionWorkspaceSettings?.environmentId) await assertEnvironmentSelectionForCompany(environmentService(policyDb),
             current.companyId, intent.executionWorkspaceSettings.environmentId, { allowedDrivers: ["local", "ssh", "sandbox"] });
           const { comment, reviewRequest, reopen: _reopen, resume: _resume, interrupt: _interrupt, hiddenAt: _hiddenAt, ...fields } = intent;

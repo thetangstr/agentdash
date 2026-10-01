@@ -6,8 +6,8 @@
 // from human-question recovery: a question recovers blocked INPUT; this
 // authorizes one bounded EXECUTION attempt against an exhausted budget.
 import { z } from 'zod';
-import { and, eq, sql } from 'drizzle-orm';
-import { agents, companyMemberships, heartbeatRuns, issues } from '@paperclipai/db';
+import { and, eq, isNull, sql } from 'drizzle-orm';
+import { agentStewardships, agents, companyMemberships, heartbeatRuns, issues, principalPermissionGrants } from '@paperclipai/db';
 import {
   humanJsonSchema,
   taskRecoveryExhaustedIssueSchema,
@@ -21,6 +21,7 @@ import {
 } from '@paperclipai/shared';
 import { conflict, forbidden, notFound } from '../../errors.js';
 import { assertProjectIdVisible } from '../../routes/visibility.js';
+import { actorHumanRole } from '../../routes/authz.js';
 import { insertActivity } from '../activity-log.js';
 import type { heartbeatService } from '../heartbeat.js';
 import type { HumanOperation, HumanOperationContext, HumanRecoveryReference } from '../human-control.js';
@@ -64,6 +65,63 @@ async function loadIssue(ctx: HumanOperationContext, issueId: string) {
   if (!member) throw forbidden('Active named company membership required');
   await assertProjectIdVisible(ctx.db, ctx.req, companyId, issue.projectId);
   return issue;
+}
+
+/**
+ * AgentDash (GH #891, F4 decision): who may authorize a run on an exhausted
+ * issue. Seeing the issue is not enough — letting an agent spend past its
+ * exhausted recovery budget is a decision about that agent, so it needs the
+ * authority to manage the issue's assignee agent:
+ *   - a company admin (or an instance admin), or
+ *   - a person with the agents:create grant (the agent-administrator
+ *     predicate used across governance), or
+ *   - the agent's own people: its active steward, its accountable human, or
+ *     the person who created it.
+ * A plain member with none of those (including a legacy "viewer" row, which
+ * normalizes to member) can see the banner but cannot authorize. The rows read
+ * here are witnessed by the human-control authority stage (agent, stewardship,
+ * membership and agents:create grant), so a change between review and
+ * confirmation refuses the confirmation.
+ */
+export async function assertCanAuthorizeTaskRecovery(
+  ctx: HumanOperationContext,
+  issue: Pick<typeof issues.$inferSelect, 'companyId' | 'assigneeAgentId'>,
+) {
+  const req = ctx.req;
+  const userId = req.actor.userId;
+  if (!userId) throw forbidden('A named board user is required to authorize a run');
+  if (req.actor.isInstanceAdmin) return;
+  if (actorHumanRole(req, issue.companyId) === 'admin') return;
+  const [grant] = await ctx.db
+    .select({ id: principalPermissionGrants.id })
+    .from(principalPermissionGrants)
+    .where(and(
+      eq(principalPermissionGrants.companyId, issue.companyId),
+      eq(principalPermissionGrants.principalType, 'user'),
+      eq(principalPermissionGrants.principalId, userId),
+      eq(principalPermissionGrants.permissionKey, 'agents:create'),
+    ));
+  if (grant) return;
+  if (issue.assigneeAgentId) {
+    const [agent] = await ctx.db
+      .select({ createdByUserId: agents.createdByUserId, accountableUserId: agents.accountableUserId })
+      .from(agents)
+      .where(and(eq(agents.id, issue.assigneeAgentId), eq(agents.companyId, issue.companyId)));
+    if (agent && (agent.createdByUserId === userId || agent.accountableUserId === userId)) return;
+    const [steward] = await ctx.db
+      .select({ id: agentStewardships.id })
+      .from(agentStewardships)
+      .where(and(
+        eq(agentStewardships.companyId, issue.companyId),
+        eq(agentStewardships.agentId, issue.assigneeAgentId),
+        eq(agentStewardships.userId, userId),
+        isNull(agentStewardships.endedAt),
+      ));
+    if (steward) return;
+  }
+  throw forbidden(
+    "Only a company admin, or a person who manages this issue's agent (its steward, accountable person or creator), can authorize a run.",
+  );
 }
 
 async function projectIssue(ctx: HumanOperationContext, issue: typeof issues.$inferSelect) {
@@ -132,7 +190,8 @@ export function taskRecoveryHumanOperations(heartbeat: TaskRecoveryHeartbeat): H
         actionId: operationId.slice('task_recovery.'.length),
         targetKind: 'company',
         behavior: handler.read ? 'read' : 'prepare_confirm',
-        authority: 'company_access',
+        // GH #891 (F4): authorizing needs authority over the issue's agent.
+        authority: operationId === 'task_recovery.remediate' ? 'agent_management' : 'company_access',
         confirmation: handler.read ? 'none' : 'human_readback',
         inputSchema: humanJsonSchema(input),
         outputSchema: humanJsonSchema(output),
@@ -148,6 +207,7 @@ export function taskRecoveryHumanOperations(heartbeat: TaskRecoveryHeartbeat): H
         if (marker.status !== 'exhausted') {
           throw conflict('Issue recovery budget is not exhausted; there is nothing to remediate.');
         }
+        await assertCanAuthorizeTaskRecovery(ctx, issue);
         // AgentDash (review F1): an authorized permit does not refuse resolve.
         // Liveness is enforced under the issue lock at confirmation, where a
         // dead permit (expired, or its bound run terminal/cancelled before
@@ -217,6 +277,9 @@ export function taskRecoveryHumanOperations(heartbeat: TaskRecoveryHeartbeat): H
           }
 
           const now = new Date();
+          // AgentDash (GH #891): which transport confirmed it. Attribution is
+          // the authenticated user either way; neither is consent evidence.
+          const authorizedVia = ctx.req.actor.source === 'session' ? 'session' as const : 'board_key' as const;
 
           // AgentDash (review F1): an earlier authorized permit may be dead —
           // expired, or its bound run cancelled/terminal before it could be
@@ -309,6 +372,7 @@ export function taskRecoveryHumanOperations(heartbeat: TaskRecoveryHeartbeat): H
               : [],
             authorizedByUserId: ctx.req.actor.userId!,
             actionHandleId: actionId,
+            authorizedVia,
             authorizedAt: now.toISOString(),
             expiresAt: expiresAt.toISOString(),
             outcomeCriteria,
@@ -349,6 +413,7 @@ export function taskRecoveryHumanOperations(heartbeat: TaskRecoveryHeartbeat): H
               runId: run.id,
               wakeupRequestId: wakeupRequest.id,
               actionHandleId: actionId,
+              grantedVia: authorizedVia, // key must not contain "auth" (activity redaction)
               expiresAt: permit.expiresAt,
               sourceRunId: permit.sourceRunId,
               refusedRunId: permit.refusedRunId,

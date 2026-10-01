@@ -1329,6 +1329,59 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(sibling?.errorCode).toBe("task_recovery_budget_exhausted");
   });
 
+  it("publishes the exhaustion trip's run event and live events only after the claim transaction commits (GH #891)", async () => {
+    const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("cost");
+    const { subscribeCompanyLiveEvents } = await import("../services/live-events.ts");
+    // Each published event triggers a read on the main pool, which only sees
+    // committed rows: an event sent from inside the claim transaction would
+    // observe the issue without its marker / the run still queued.
+    const observations: Promise<{ type: string; marker: unknown; runStatus: string | null }>[] = [];
+    const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+      const relevant =
+        (event.type === "heartbeat.run.status" && payload.status === "cancelled") ||
+        event.type === "heartbeat.run.event" ||
+        (event.type === "activity.logged" && payload.action === "issue.recovery_budget_exhausted");
+      if (!relevant) return;
+      const runId = typeof payload.runId === "string" ? payload.runId : null;
+      observations.push((async () => {
+        const [issue] = await db.select({ executionState: issues.executionState }).from(issues).where(eq(issues.id, issueId));
+        const [run] = runId
+          ? await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns).where(eq(heartbeatRuns.id, runId))
+          : [];
+        return {
+          type: event.type,
+          marker: (issue?.executionState as Record<string, unknown> | null)?.recoveryBudget ?? null,
+          runStatus: run?.status ?? null,
+        };
+      })());
+    });
+    try {
+      const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+      await heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_continuation_needed",
+        payload: { issueId, retryOfRunId: parentRunId },
+        contextSnapshot: { issueId, taskId: issueId, retryOfRunId: parentRunId },
+        requestedByActorType: "system",
+        requestedByActorId: "heartbeat",
+      });
+    } finally {
+      unsubscribe();
+    }
+    const seen = await Promise.all(observations);
+    expect(seen.map((value) => value.type)).toEqual(expect.arrayContaining([
+      "heartbeat.run.status",
+      "heartbeat.run.event",
+      "activity.logged",
+    ]));
+    for (const value of seen) {
+      expect(value.marker, value.type).toMatchObject({ status: "exhausted" });
+      if (value.runStatus !== null) expect(value.runStatus, value.type).toBe("cancelled");
+    }
+  });
+
   it("serializes concurrent exhaustion comment repair across agent start locks", async () => {
     const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("cost");
     const secondAgentId = randomUUID();

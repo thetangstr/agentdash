@@ -3038,6 +3038,19 @@ export function IssueDetail() {
         executionState={issue.executionState}
         isClearing={clearRecoveryBudget.isPending}
         onClear={() => clearRecoveryBudget.mutate()}
+        // AgentDash (GH #891): only a signed-in board user with access to this
+        // company is offered "Authorize one run"; the server still decides
+        // (admin or someone who manages the agent) and explains a refusal.
+        onPreviewAuthorizeRun={currentUserId && canManageTreeControl
+          ? () => issuesApi.previewRecoveryRunAuthorization(issue.id)
+          : undefined}
+        onAuthorizeRun={currentUserId && canManageTreeControl ? async (preconditions) => {
+          await issuesApi.authorizeRecoveryRun(issue.id, preconditions);
+          queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId!) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issueId!) });
+          invalidateIssueCollections();
+          pushToast({ title: "One run authorized", body: "The assigned agent's run will start shortly.", tone: "success" });
+        } : undefined}
       />
       {activePauseHold && (
         <div className="rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
