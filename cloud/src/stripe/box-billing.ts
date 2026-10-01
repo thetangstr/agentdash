@@ -222,7 +222,14 @@ export async function syncFleetBilling(deps: SyncDeps, input: SyncInput): Promis
     const bad = checkBoxStripeKey(key, cfg.stripeMode);
     if (bad) throw new BoxKeyRotationError(`the new key ${bad}`);
     keyState = (await store.matches(BOX_STRIPE_KEY, key)) ? "unchanged" : "new";
-    if (input.apply && keyState === "new") await store.set(BOX_STRIPE_KEY, key, input.actor, input.ip ?? null);
+    if (input.apply && keyState === "new") {
+      // Fail closed before the key is committed: an apply that cannot finish
+      // (no price id, no Railway client) must not record a version no box is
+      // sent (SC-8 review).
+      if (!cfg.stripeProPriceId) throw new BoxKeyRotationError("CLOUD_STRIPE_PRO_PRICE_ID is not set on the control plane", 409);
+      if (!deps.client) throw new BoxKeyRotationError("no Railway token is configured on the control plane; only a dry run is possible", 409);
+      await store.set(BOX_STRIPE_KEY, key, input.actor, input.ip ?? null);
+    }
   }
   if (!cfg.stripeProPriceId) throw new BoxKeyRotationError("CLOUD_STRIPE_PRO_PRICE_ID is not set on the control plane", 409);
   const info = await store.info(BOX_STRIPE_KEY);

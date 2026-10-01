@@ -9,7 +9,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runAdmin } from "../admin/run.js";
 import { createCloudDb, migrateWithRoles, type CloudDb } from "../db/client.js";
-import { accounts, boxEvents, boxes, boxHealth, boxHealthChecks, boxIdleNotices, boxUpgrades, fleetAlerts, jobs, monitorReadings, operatorAudit, type BoxState } from "../db/schema.js";
+import { accounts, boxEvents, boxes, boxHealth, boxHealthChecks, boxIdleNotices, boxUpgrades, fleetAlerts, jobs, monitorReadings, operatorAudit, stripeEvents, type BoxState } from "../db/schema.js";
 import { createEdgeServer } from "../edge/proxy.js";
 import { pgRouteSource, RouteTable } from "../edge/routes.js";
 import { EdgeStats } from "../edge/stats.js";
@@ -432,6 +432,46 @@ describe("Free idle policy (spec §5.2)", () => {
     expect(mail.messages).toHaveLength(0);
     for (const b of [pro, trial]) expect(await suspendJobs(b.id)).toHaveLength(0);
     expect((await boxRow(proSuspended.id)).state).toBe("suspended");
+  });
+
+  it("treats a lapsed or canceled Pro subscription (pro_canceled) as subject to the policy (SC-8 review)", async () => {
+    await setting("idle_suspend_enabled", true);
+    const lapsed = await makeBox("active", { planTier: "pro_canceled", lastHumanRequestAt: idleAt(40) });
+    const mail = recordingMailer();
+    expect(await sweepIdle(deps(mail))).toMatchObject({ examined: 1, suspendWarned: 1 });
+    expect(mail.messages[0]).toMatchObject({ kind: "idle_suspend_warning", to: lapsed.email });
+    advance(6 * DAY_MS);
+    expect(await sweepIdle(deps(mail))).toMatchObject({ suspendQueued: 0 });
+    advance(DAY_MS); // 7 days after the warning
+    expect(await sweepIdle(deps(mail))).toMatchObject({ suspendQueued: 1 });
+    expect(await suspendJobs(lapsed.id)).toHaveLength(1);
+  });
+
+  it("never warns, suspends or deletes a box while a Stripe routing conflict naming it is held (SC-8 review)", async () => {
+    await setting("idle_suspend_enabled", true);
+    await setting("idle_delete_enabled", true);
+    // The paying box: its checkout.session.completed is the held row, so plan_tier is still free.
+    const heldActive = await makeBox("active", { lastHumanRequestAt: idleAt(40) });
+    const heldSuspended = await makeBox("suspended", { lastHumanRequestAt: idleAt(50), masterKeyEscrow: "sealed" });
+    const clean = await makeBox("active", { lastHumanRequestAt: idleAt(40) });
+    await db.insert(stripeEvents).values([
+      { eventId: "evt_held_active", eventType: "checkout.session.completed", livemode: true, boxSlug: heldActive.slug, state: "dead", reason: "box_bound_to_another_customer" },
+      { eventId: "evt_held_suspended", eventType: "checkout.session.completed", livemode: true, boxSlug: heldSuspended.slug, boxId: heldActive.id, state: "dead", reason: "customer_bound_to_another_box" },
+    ]);
+    const mail = recordingMailer();
+    expect(await sweepIdle(deps(mail))).toMatchObject({ examined: 3, suspendWarned: 1, deleteWarned: 0, blocked: 2 });
+    expect(mail.messages).toHaveLength(1);
+    expect(mail.messages[0]).toMatchObject({ kind: "idle_suspend_warning", to: clean.email });
+    expect(await suspendJobs(heldActive.id)).toHaveLength(0);
+    expect((await boxRow(heldSuspended.id)).state).toBe("suspended");
+    const held = sent.filter((a) => a.kind === "idle_policy" && /held Stripe routing conflict/.test(a.subject));
+    expect(held.map((a) => a.slug).sort()).toEqual([heldActive.slug, heldSuspended.slug].sort());
+
+    // Ops resolves the held row (redeliver moves it out of dead): the box is subject to the policy again.
+    await db.update(stripeEvents).set({ state: "pending" }).where(eq(stripeEvents.eventId, "evt_held_active"));
+    expect(await sweepIdle(deps(mail))).toMatchObject({ suspendWarned: 1, blocked: 1 });
+    expect(mail.messages.at(-1)).toMatchObject({ to: heldActive.email });
+    await db.delete(stripeEvents);
   });
 
   it("exempts demo, canary and internal boxes, and skips a box whose upgrade is queued or in flight", async () => {

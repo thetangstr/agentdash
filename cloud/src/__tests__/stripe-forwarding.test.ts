@@ -730,6 +730,24 @@ describe("rotate-box-key", () => {
     await db.update(boxes).set({ purpose: "customer" }).where(inArray(boxes.id, [demo.id, internal.id, canary.id]));
   });
 
+  it("an apply that cannot finish does not store the new key (SC-8 review)", async () => {
+    await db.execute(sql`delete from fleet_secrets`);
+    const store = fleetSecretStore(db, KEYS);
+    const { fake } = fakeRailwayForVars();
+    await expect(
+      syncFleetBilling(
+        { db, keys: KEYS, billing: { ...billing, stripeProPriceId: null }, store, client: fake.client({ log }), workspaceId: FAKE_WORKSPACE, log },
+        { newKey: SHARED_KEY, apply: true, actor: "t" },
+      ),
+    ).rejects.toThrow(/CLOUD_STRIPE_PRO_PRICE_ID/);
+    const auditsBefore = (await db.select().from(operatorAudit).where(eq(operatorAudit.kind, "fleet_secret_changed"))).length;
+    await expect(
+      syncFleetBilling({ db, keys: KEYS, billing, store, client: null, workspaceId: FAKE_WORKSPACE, log }, { newKey: SHARED_KEY, apply: true, actor: "t" }),
+    ).rejects.toThrow(/no Railway token/);
+    expect(await store.info(BOX_STRIPE_KEY)).toBeNull();
+    expect((await db.select().from(operatorAudit).where(eq(operatorAudit.kind, "fleet_secret_changed"))).length).toBe(auditsBefore);
+  });
+
   it("refuses a wrong-mode key and a run with no key stored", async () => {
     await db.execute(sql`delete from fleet_secrets`);
     const deps = { db, keys: KEYS, billing, store: fleetSecretStore(db, KEYS), client: null, workspaceId: FAKE_WORKSPACE, log };

@@ -8,12 +8,17 @@
 //
 // "Idle" counts from the last human request through the router
 // (`last_human_request_at`, never health polls or the assistant endpoint),
-// or the claim, or creation, whichever is latest known. Only `plan_tier =
-// 'free'` boxes are subject; Pro and trialing boxes are exempt, and a lapsed
-// trial is Free again once its plan says so. Only `purpose = 'customer'`
-// boxes are subject either: demo, canary and internal boxes are ops-managed
-// (SC-12). A box with a live upgrade row (queued/running/rolling_back) is
-// skipped for the sweep while its upgrade is in flight.
+// or the claim, or creation, whichever is latest known. Only `plan_tier`
+// `free` and `pro_canceled` boxes are subject — a canceled or lapsed Pro
+// subscription is Free for this policy (SC-8 review: a lapsed trial must
+// not stay exempt forever); paying, trialing and past-due boxes are exempt.
+// Only `purpose = 'customer'` boxes are subject either: demo, canary and
+// internal boxes are ops-managed (SC-12). A box with a live upgrade row
+// (queued/running/rolling_back) is skipped for the sweep while its upgrade
+// is in flight. A box with a held Stripe routing conflict (a dead
+// `stripe_events` row carrying a binding-conflict reason, SC-8) is left
+// alone entirely: its `plan_tier` may be stale because its real checkout is
+// the held event, so the sweep alerts ops instead of acting.
 //
 // Safety:
 //   - idle_suspend_enabled and idle_delete_enabled are both OFF by default.
@@ -45,8 +50,8 @@ export const DELETE_NOTICE_DAYS = IDLE_DAYS.delete - IDLE_DAYS.deleteWarning;
 export const FINAL_SNAPSHOT_KEEP_DAYS = 30;
 export const IDLE_SWEEP_MS = 60 * 60_000;
 
-/** Plans the policy applies to. Anything else (pro, trialing, …) is exempt. */
-export const IDLE_POLICY_PLANS = ["free"] as const;
+/** Plans the policy applies to: free, and a Pro subscription that lapsed or was canceled. Anything else is exempt. */
+export const IDLE_POLICY_PLANS = ["free", "pro_canceled"] as const;
 
 /** Purposes the policy applies to. demo/canary/internal boxes are ops-managed and exempt (SC-12). */
 export const IDLE_POLICY_PURPOSES = ["customer"] as const;
@@ -116,7 +121,16 @@ export async function sweepIdle(deps: IdleDeps): Promise<IdleSummary> {
   if (!settings.idle_suspend_enabled && !settings.idle_delete_enabled) return summary;
 
   const rows = await deps.db
-    .select({ box: boxes, email: accounts.email })
+    .select({
+      box: boxes,
+      email: accounts.email,
+      // A Stripe event naming this box is held as a routing conflict (dead,
+      // with a binding-conflict reason; SC-8). The box's own checkout may be
+      // that event, so plan_tier can be stale and the box must not be warned,
+      // suspended or deleted while the conflict stands. Matching by slug: the
+      // held row's box_id is the *other* box (or null), never the named one.
+      heldStripeConflict: sql<boolean>`exists (select 1 from stripe_events e where e.box_slug = ${boxes.slug} and e.state = 'dead' and e.reason in ('customer_bound_to_another_box', 'box_bound_to_another_customer'))`,
+    })
     .from(boxes)
     .innerJoin(accounts, eq(accounts.id, boxes.accountId))
     .where(
@@ -154,11 +168,30 @@ export async function sweepIdle(deps: IdleDeps): Promise<IdleSummary> {
     return true;
   };
 
-  for (const { box, email } of rows) {
+  for (const { box, email, heldStripeConflict } of rows) {
     summary.examined += 1;
     const since = idleSince(box);
     const days = idleDays(box, now);
     try {
+      if (heldStripeConflict) {
+        // Exempt until an operator resolves the conflict (redelivery clears the
+        // dead row); alert only once the box is far enough along for a step to
+        // matter, so a fresh box does not page anyone.
+        const due =
+          (box.state === "active" && settings.idle_suspend_enabled && days >= IDLE_DAYS.suspendWarning) ||
+          (box.state === "suspended" && settings.idle_delete_enabled && days >= IDLE_DAYS.deleteWarning);
+        if (due) {
+          summary.blocked += 1;
+          await deps.alerts.fire(`idle_stripe_conflict:${box.id}`, {
+            kind: "idle_policy",
+            subject: `box ${box.slug} (idle ${Math.floor(days)} days, plan ${box.planTier}) has a held Stripe routing conflict; the idle policy is not touching it`,
+            boxId: box.id,
+            slug: box.slug,
+            detail: "its real checkout may be the held event, so plan_tier can be stale; resolve the binding and redeliver (`admin stripe events dead`, `admin stripe redeliver`) and the policy applies again",
+          });
+        }
+        continue;
+      }
       if (box.state === "active" && settings.idle_suspend_enabled) {
         const warned = await notice(deps.db, box.id, "suspend_warning", since);
         if (!warned) {
@@ -207,12 +240,14 @@ export async function sweepIdle(deps: IdleDeps): Promise<IdleSummary> {
           const r = await tx
             .update(boxes)
             .set({ state: "pending_delete", deleteAfter, updatedAt: now })
-            .where(and(eq(boxes.id, box.id), eq(boxes.state, "suspended"), eq(boxes.planTier, "free"),
+            .where(and(eq(boxes.id, box.id), eq(boxes.state, "suspended"), inArray(boxes.planTier, [...IDLE_POLICY_PLANS]),
               // Untouched since the sweep read it: a visit to the waking page touches
               // last_human_request_at under the row lock (edge_request_resume, migration 0009).
               sql`date_trunc('milliseconds', ${boxes.lastHumanRequestAt}) is not distinct from ${box.lastHumanRequestAt?.toISOString() ?? null}::timestamptz`,
               // And no wake queued or deploying (an operator wake does not touch the idle clock).
-              sql`not exists (select 1 from jobs j where j.box_id = ${boxes.id} and j.kind = 'resume' and j.state in ('queued', 'running'))`))
+              sql`not exists (select 1 from jobs j where j.box_id = ${boxes.id} and j.kind = 'resume' and j.state in ('queued', 'running'))`,
+              // And no Stripe routing conflict was held since the sweep read the row (SC-8 review).
+              sql`not exists (select 1 from stripe_events e where e.box_slug = ${boxes.slug} and e.state = 'dead' and e.reason in ('customer_bound_to_another_box', 'box_bound_to_another_customer'))`))
             .returning({ id: boxes.id });
           if (r.length) {
             await tx.insert(boxEvents).values({
