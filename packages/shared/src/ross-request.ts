@@ -39,6 +39,19 @@ export function anchoredRossRequestQuestion(body: string, requestKey: string): s
   return body.slice(marker.length).replace(/^\n/, "").trim();
 }
 
+/**
+ * Keep a request scoped to the task's assignee. The comment pipeline wakes
+ * every agent a comment @-mentions (`@Name`, or an `agent://` / `user://`
+ * mention link), so a Ross question must not carry mention syntax: links keep
+ * their label text, and a mention-shaped `@` is removed (`@Priya` → `Priya`).
+ * An email-like `a@b` is left alone — it is not mention syntax.
+ */
+export function stripRossRequestMentions(question: string): string {
+  return question
+    .replace(/\[([^\]]*)\]\((?:agent|user):\/\/[^)\s]*\)/gi, "$1")
+    .replace(/\B@(?=[^\s@,!?.])/g, "");
+}
+
 export const submitRossRequestSchema = z
   .object({
     requestKey: z.string().regex(ROSS_REQUEST_KEY_PATTERN, "requestKey must be 8-64 of [a-z0-9-], starting alphanumeric"),

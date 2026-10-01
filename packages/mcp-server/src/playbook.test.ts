@@ -97,5 +97,6 @@ describe("the assistant contract: Ross requests (Ross launch M2)", () => {
     expect(ASSISTANT_PLAYBOOK).toContain("A request is not an answer.");
     expect(ASSISTANT_PLAYBOOK).toContain("never say a model run started");
     expect(ASSISTANT_PLAYBOOK).toContain("only with the SAME key");
+    expect(ASSISTANT_PLAYBOOK).toContain("Ross can't be asked on a closed task; reopen it first if you mean to.");
   });
 });

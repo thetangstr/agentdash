@@ -50,6 +50,7 @@ interface SubmitResponse {
   receipt?: { commentId: string; requestedAt: string; reused: boolean };
   baselineRevisionId?: string | null;
   reopened?: boolean;
+  mentionsStripped?: boolean;
   attribution?: {
     actorUserId: string;
     authorUserId: string | null;
@@ -85,7 +86,8 @@ const REVIEW_RELAY_LIMIT = 2000;
 
 const INFERENCE_NOTE = {
   state: "delegated-to-native-run-gates",
-  startedByThisCall: false,
+  // This call posts a comment; it observes no run admission.
+  runAdmission: "not_observed",
   note: "Filing a request is a comment, not a model run. Ross answers only if the server's own run gates (budget, quota, ownership, holds, recovery budget) admit a run.",
 } as const;
 
@@ -122,7 +124,13 @@ const SUBMIT_SUMMARY: Record<Exclude<ContractStatus, "submitted" | "coalesced">,
       ? `That request key was already used on ${ref} for a different question. Nothing was posted — ask again without a key to file it fresh.`
       : `Someone else's comment on ${ref} already carries that request key, so I did not post. Ask again without a key to file it fresh.`,
   refused: (ref, reason) =>
-    reason === "recovery-exhausted"
+    reason === "task-closed"
+      ? `${ref} is closed, so I did not ask Ross — asking would have reopened it. Reopen it first if you mean to. Nothing was posted.`
+      : reason === "task-blocked"
+        ? `${ref} is blocked, so I did not ask Ross — asking could have unblocked and reopened it. Resolve or unblock it first. Nothing was posted.`
+        : reason === "question-mentions-agents"
+          ? `That question would have notified other agents, so nothing was posted on ${ref}. Ask it without @-mentions.`
+          : reason === "recovery-exhausted"
       ? `${ref} has used up its automatic-retry budget, so a request could not start any run. Nothing was posted. A person has to clear the recovery block, or authorize one run, in AgentDash first.`
       : reason === "no-assigned-agent"
         ? `${ref} has no assigned agent to answer, so nothing was posted.`
@@ -208,7 +216,7 @@ export function assistantRossRequestTools(client: PaperclipApiClient, ctx: Assis
       const summary =
         status === "coalesced"
           ? `That request was already on ${label} — I did not post it again. Ross's answer will appear there; ask me for its status. ${link}`
-          : `Asked Ross on ${label}, in your name. That is a request, not an answer — Ross replies only if AgentDash lets a run go ahead. Ask me for its status later. ${link}`;
+          : `Asked Ross on ${label}, in your name. That is a request, not an answer — Ross replies only if AgentDash lets a run go ahead.${response.mentionsStripped ? " I removed @-mentions so only Ross is notified." : ""} Ask me for its status later. ${link}`;
       return ok({
         summary,
         data: redactAssistantValue({
@@ -218,6 +226,7 @@ export function assistantRossRequestTools(client: PaperclipApiClient, ctx: Assis
           receipt: response.receipt,
           baselineRevisionId: response.baselineRevisionId ?? null,
           reopened: response.reopened ?? false,
+          mentionsStripped: response.mentionsStripped ?? false,
           attribution: response.attribution
             ? {
                 verified: response.attribution.verified,

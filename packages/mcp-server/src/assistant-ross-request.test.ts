@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { PaperclipApiClient } from "./client.js";
 import { PaperclipApiError } from "./client.js";
 import { createAssistantToolDefinitions } from "./assistant/index.js";
+import { stripRossRequestMentions } from "@paperclipai/shared";
+
+describe("stripRossRequestMentions (keeps a request scoped to the assignee)", () => {
+  it("removes @-mention syntax and mention links but leaves emails and text", () => {
+    expect(stripRossRequestMentions("@Priya should we ship? cc @Theo")).toBe("Priya should we ship? cc Theo");
+    expect(stripRossRequestMentions("Ask [@Echo](agent://11111111-1111-4111-8111-111111111111) and [Kai](user://u-1)")).toBe("Ask Echo and Kai");
+    expect(stripRossRequestMentions("mail ops@example.com")).toBe("mail ops@example.com");
+    expect(stripRossRequestMentions("plain question")).toBe("plain question");
+  });
+});
 
 /**
  * AgentDash (Ross launch M2): the assistant's governed Ross request. Pins the
@@ -106,7 +116,7 @@ describe("request_ross_assessment", () => {
     expect(out.data?.requestStatus).toBe("submitted");
     expect(out.data?.requestKey).toBe(body.requestKey);
     expect(out.data?.receipt).toMatchObject({ commentId: "comment-1" });
-    expect(out.data?.inference).toMatchObject({ state: "delegated-to-native-run-gates", startedByThisCall: false });
+    expect(out.data?.inference).toMatchObject({ state: "delegated-to-native-run-gates", runAdmission: "not_observed" });
     expect(out.data?.wake).toEqual({ assignee: "requested", automatic: true });
     expect(out.data?.attribution).toMatchObject({ verified: true, credential: "assistant_grant" });
     expect(out.summary).toMatch(/request, not an answer/);
@@ -128,6 +138,9 @@ describe("request_ross_assessment", () => {
 
   it.each([
     [409, { status: "refused", reason: "recovery-exhausted" }, "refused", "recovery-exhausted", "refused"],
+    [409, { status: "refused", reason: "task-closed" }, "refused", "task-closed", "refused"],
+    [409, { status: "refused", reason: "task-blocked" }, "refused", "task-blocked", "refused"],
+    [422, { status: "refused", reason: "question-mentions-agents" }, "refused", "question-mentions-agents", "refused"],
     [409, { status: "conflict", reason: "request-key-carries-different-question" }, "conflict", "request-key-carries-different-question", "refused"],
     [409, { status: "conflict", reason: "request-key-contested-by-foreign-comment" }, "conflict", "request-key-contested-by-foreign-comment", "refused"],
     [422, { status: "unavailable", reason: "no-assigned-agent" }, "unavailable", "no-assigned-agent", "refused"],
@@ -142,7 +155,9 @@ describe("request_ross_assessment", () => {
     expect(out.data?.requestStatus).toBe(requestStatus);
     expect(out.data?.reason).toBe(reason);
     expect(out.data?.posted).toBe(false);
-    expect(out.data?.inference).toMatchObject({ startedByThisCall: false, state: "not-requested" });
+    expect(out.summary).toMatch(/Nothing was posted|nothing was posted|did not post|cannot file requests/);
+    if (reason === "task-closed") expect(out.summary).toMatch(/Reopen it first if you mean to/);
+    expect(out.data?.inference).toMatchObject({ runAdmission: "not_observed", state: "not-requested" });
   });
 
   it("an ambiguous write is uncertain, never a refusal that hides a possible post", async () => {

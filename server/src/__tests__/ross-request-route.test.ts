@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { and, eq, sql } from "drizzle-orm";
 import {
   activityLog,
+  agentApiKeys,
   agents,
   agentWakeupRequests,
   assistantAccessTokens,
@@ -221,7 +222,7 @@ describeEmbeddedPostgres("Ross request route + MCP tools (Ross launch M2)", () =
     const out = await callTool(token, "request_ross_assessment", { ref: issue.id, question: "Should we cut scope to ship Friday?" });
     expect(out.status).toBe("ok");
     expect(out.data?.requestStatus).toBe("submitted");
-    expect(out.data?.inference).toMatchObject({ state: "delegated-to-native-run-gates", startedByThisCall: false });
+    expect(out.data?.inference).toMatchObject({ state: "delegated-to-native-run-gates", runAdmission: "not_observed" });
     expect(out.data?.attribution).toMatchObject({ verified: true, credential: "assistant_grant" });
     expect(out.data?.wake).toMatchObject({ automatic: true });
     const requestKey = out.data?.requestKey as string;
@@ -401,5 +402,81 @@ describeEmbeddedPostgres("Ross request route + MCP tools (Ross launch M2)", () =
     expect(res.status).toBe(403);
     expect((await res.json()).error).toBe("assistant_write_field_forbidden");
     expect(await commentsOn(issue.id)).toHaveLength(0);
+  });
+
+  it("an agent key is denied — a request is person-authored only", async () => {
+    const issue = await seedIssue();
+    const token = `pcp_${randomBytes(24).toString("base64url")}`;
+    await db.insert(agentApiKeys).values({ companyId, agentId: otherAgentId, name: "echo key", keyHash: createHash("sha256").update(token).digest("hex") });
+    const post = await fetch(`${baseUrl}/api/issues/${issue.id}/ross-requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ requestKey: "req-agent-00001", question: "Let me in?" }),
+    });
+    expect(post.status).toBe(403);
+    expect((await post.json()).status).toBe("denied");
+    const get = await fetch(`${baseUrl}/api/issues/${issue.id}/ross-requests/req-agent-00001`, { headers: { authorization: `Bearer ${token}` } });
+    expect(get.status).toBe(403);
+    expect(await commentsOn(issue.id)).toHaveLength(0);
+  });
+
+  it("another person reusing someone's key gets conflict, never their receipt", async () => {
+    const issue = await seedIssue();
+    const owner = await grantToken(["agentdash:read", "agentdash:work"]);
+    const filed = await callTool(owner.token, "request_ross_assessment", { ref: issue.id, question: "Owner's question", requestKey: "req-shared-0001" });
+    expect(filed.data?.requestStatus).toBe("submitted");
+
+    const member = await grantToken(["agentdash:read", "agentdash:work"], MEMBER_ID);
+    const reuse = await callTool(member.token, "request_ross_assessment", { ref: issue.id, question: "Owner's question", requestKey: "req-shared-0001" });
+    expect(reuse.data?.requestStatus).toBe("conflict");
+    expect(reuse.data?.reason).toBe("request-key-contested-by-foreign-comment");
+    expect(reuse.data?.receipt).toBeUndefined();
+    const status = await callTool(member.token, "ross_request_status", { ref: issue.id, requestKey: "req-shared-0001" });
+    expect(status.data?.requestStatus).toBe("conflict");
+    expect(await commentsOn(issue.id)).toHaveLength(1);
+  });
+
+  it("the status read on a restricted-project issue is 404 for a member off its access list", async () => {
+    const hidden = await seedIssue({ projectId: restrictedProjectId });
+    const { grant } = await grantToken(["agentdash:read"], MEMBER_ID);
+    const res = await fetch(`${baseUrl}/api/issues/${hidden.id}/ross-requests/req-hidden-0002`, {
+      headers: { authorization: `Bearer ${loopbackFor(grant.id, ["agentdash:read"], MEMBER_ID, "member")}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("closed and blocked tasks refuse before writing, so asking never reopens a task", async () => {
+    const { token } = await grantToken(["agentdash:read", "agentdash:work"]);
+    for (const [status, reason] of [["done", "task-closed"], ["cancelled", "task-closed"], ["blocked", "task-blocked"]] as const) {
+      const issue = await seedIssue({ status });
+      const out = await callTool(token, "request_ross_assessment", { ref: issue.id, question: "Still relevant?" });
+      expect(out.status).toBe("refused");
+      expect(out.data?.requestStatus).toBe("refused");
+      expect(out.data?.reason).toBe(reason);
+      expect(out.data?.posted).toBe(false);
+      if (reason === "task-closed") expect(out.summary).toMatch(/Reopen it first if you mean to/);
+      expect(await commentsOn(issue.id)).toHaveLength(0);
+      const after = await db.select().from(issues).where(eq(issues.id, issue.id)).then((r) => r[0]!);
+      expect(after.status).toBe(status);
+    }
+  });
+
+  it("@-mentions are stripped so only the assignee is woken", async () => {
+    const issue = await seedIssue();
+    const { token } = await grantToken(["agentdash:read", "agentdash:work"]);
+    const out = await callTool(token, "request_ross_assessment", {
+      ref: issue.id,
+      question: `@Echo and [@Echo](agent://${otherAgentId}) — should we ship?`,
+    });
+    expect(out.data?.requestStatus).toBe("submitted");
+    expect(out.data?.mentionsStripped).toBe(true);
+    const [row] = await commentsOn(issue.id);
+    expect(row!.body).toBe(`[ross-assessment-request:${out.data?.requestKey}]\nEcho and Echo — should we ship?`);
+    await wakeFor(row!.id);
+    const echoWakes = await db
+      .select()
+      .from(agentWakeupRequests)
+      .where(and(eq(agentWakeupRequests.agentId, otherAgentId), sql`${agentWakeupRequests.payload} ->> 'commentId' = ${row!.id}`));
+    expect(echoWakes).toHaveLength(0);
   });
 });

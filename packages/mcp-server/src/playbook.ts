@@ -298,6 +298,12 @@ the question first, exactly as for any write.
   key; it never posts. Retry an \`uncertain\` request only with the SAME key —
   that cannot post twice. Never retry \`conflict\`, \`refused\` or \`denied\`
   hoping for a different result; say what came back.
+- **Ross can't be asked on a closed task; reopen it first if you mean to.**
+  Done, cancelled and blocked tasks come back \`refused\` (\`task-closed\` /
+  \`task-blocked\`) with nothing posted — asking never reopens a task as a
+  side effect. Reopening is a separate change the person must want.
+- **Only Ross is notified.** @-mentions are removed from the question, so a
+  request never wakes other agents.
 - **\`refused\` / \`recovery-exhausted\`** means the task used up its automatic
   retries: nothing was posted, and only a person in AgentDash can clear the
   block or authorize one run. You cannot do that for them.

@@ -6,6 +6,7 @@ import {
   isClosedIsolatedExecutionWorkspace,
   readIssueRecoveryBudget,
   ROSS_REQUEST_KEY_PATTERN,
+  stripRossRequestMentions,
   submitRossRequestSchema,
   type RossRequestSubmitStatus,
 } from "@paperclipai/shared";
@@ -94,8 +95,15 @@ export function registerRossRequestRoutes(router: Router, deps: { db: Db; heartb
       res.status(403).json({ error: "ross_request_person_only", status: "denied", reason: "person-actor-required", ...base });
       return;
     }
-    const body = buildRossRequestBody(requestKey, question);
-    const normalizedQuestion = question.trim();
+    // Scope the request to the assignee: the comment pipeline wakes every
+    // agent a comment @-mentions, so mention syntax is removed before posting.
+    const normalizedQuestion = stripRossRequestMentions(question).trim();
+    if (!normalizedQuestion) {
+      res.status(422).json({ error: "ross_request_refused", status: "refused", reason: "empty-question", ...base });
+      return;
+    }
+    const mentionsStripped = normalizedQuestion !== question.trim();
+    const body = buildRossRequestBody(requestKey, normalizedQuestion);
     const actions = issueCommentActions(db, heartbeat);
     try {
       const accepted = await actions.accept({
@@ -129,9 +137,6 @@ export function registerRossRequestRoutes(router: Router, deps: { db: Db; heartb
           if (contested) {
             throw new RossRequestOutcome(409, { status: "conflict", reason: "request-key-contested-by-foreign-comment", ...base });
           }
-          if (!current.assigneeAgentId) {
-            throw new RossRequestOutcome(422, { status: "unavailable", reason: "no-assigned-agent", ...base });
-          }
           if (readIssueRecoveryBudget(current.executionState)) {
             throw new RossRequestOutcome(409, {
               status: "refused",
@@ -142,11 +147,46 @@ export function registerRossRequestRoutes(router: Router, deps: { db: Db; heartb
                 "A person must clear the recovery block, or authorize one bound run, first. Nothing was posted; the request key stays unused.",
             });
           }
+          // A person's comment on a done/cancelled task (or an unblocked
+          // blocked one) implicitly reopens it in the comment pipeline. Asking
+          // Ross must never change a task's state as a side effect the person
+          // did not review, so closed and blocked tasks refuse before writing.
+          if (current.status === "done" || current.status === "cancelled") {
+            throw new RossRequestOutcome(409, {
+              status: "refused",
+              reason: "task-closed",
+              ...base,
+              detail: "Ross can't be asked on a closed task. Reopen it first if you mean to. Nothing was posted.",
+            });
+          }
+          if (current.status === "blocked") {
+            throw new RossRequestOutcome(409, {
+              status: "refused",
+              reason: "task-blocked",
+              ...base,
+              detail: "Ross can't be asked on a blocked task, because the request could unblock and reopen it. Resolve or unblock it first. Nothing was posted.",
+            });
+          }
+          if (!current.assigneeAgentId) {
+            throw new RossRequestOutcome(422, { status: "unavailable", reason: "no-assigned-agent", ...base });
+          }
+          // Defence in depth for the mention strip above: the body must wake
+          // no agent but the assignee.
+          const mentioned = await issueService(policyDb).findMentionedAgents(current.companyId, body);
+          if (mentioned.length > 0) {
+            throw new RossRequestOutcome(422, { status: "refused", reason: "question-mentions-agents", ...base });
+          }
         },
       });
       const effects = await actions.dispatch(accepted);
       const assigneeId = accepted.currentIssue.assigneeAgentId;
       const wakeOutcome = effects.outcomes.find((outcome) => outcome.effect === "wakeup" && outcome.targetId === assigneeId);
+      // Unlike POST /comments (500 "read before retrying"), unresolved effects
+      // still answer 201 submitted: the comment IS committed and its id is
+      // the receipt, and a retry with the same requestKey coalesces onto it
+      // under the issue lock, so there is no duplicate-post hazard to warn
+      // about. The uncertainty is the wake, and `wake.assignee` reports it
+      // as "unknown" rather than "requested".
       if (effects.unresolved) {
         logger.warn({ issueId: issue.id, mutationId: accepted.mutationId, effects: effects.outcomes },
           "ross request accepted with unresolved effects");
@@ -160,6 +200,7 @@ export function registerRossRequestRoutes(router: Router, deps: { db: Db; heartb
         receipt: { commentId: comment.id, requestedAt: new Date(comment.createdAt).toISOString(), reused: false },
         baselineRevisionId: review?.revisionId ?? null,
         reopened: accepted.plan.reopened,
+        mentionsStripped,
         attribution: {
           actorUserId,
           authorUserId: comment.authorUserId ?? null,
@@ -175,7 +216,9 @@ export function registerRossRequestRoutes(router: Router, deps: { db: Db; heartb
         },
         inference: {
           state: "delegated-to-native-run-gates",
-          startedByThisCall: false,
+          // This call posts a comment and observes no run admission; whether
+          // a run starts is decided later by the heartbeat gates.
+          runAdmission: "not_observed",
           guarantee: "A model call begins only if native heartbeat admission (budget, quota, ownership, holds, recovery budget) admits a run.",
         },
       });
@@ -186,7 +229,7 @@ export function registerRossRequestRoutes(router: Router, deps: { db: Db; heartb
           reason: "identical-request-already-recorded",
           ...base,
           receipt: { commentId: err.commentId, requestedAt: err.requestedAt.toISOString(), reused: true },
-          inference: { state: "delegated-to-native-run-gates", startedByThisCall: false },
+          inference: { state: "delegated-to-native-run-gates", runAdmission: "not_observed" },
         });
         return;
       }
