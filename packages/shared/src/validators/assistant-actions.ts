@@ -1,3 +1,4 @@
+import { workforceTemplateIdSchema } from "./workforce.js";
 import { z } from "zod";
 
 /**
@@ -17,6 +18,7 @@ export const assistantPrepareDecisionSchema = z.object({
 export type AssistantPrepareDecision = z.infer<typeof assistantPrepareDecisionSchema>;
 
 export const assistantPrepareHireSchema = z.object({
+  workforceTemplateId: workforceTemplateIdSchema.optional(),
   role: z.string().trim().min(1).max(120),
   reason: z.string().trim().min(1).max(1000),
   /** Optional human-name hint ("Quinn"); the role title is used without one. */

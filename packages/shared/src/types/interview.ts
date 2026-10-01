@@ -22,6 +22,7 @@ export const FIXED_QUESTIONS = [
 ] as const;
 
 export interface AgentProposal {
+  workforceTemplateId?: "marketing-content" | "sales-support";
   name: string;
   role: string;
   oneLineOkr: string;

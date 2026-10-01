@@ -1,3 +1,4 @@
+import { PendingQuestionRow } from "../components/WorkforceQuestions";
 // AgentDash: one-UX (doc/plans/2026-09-30-one-ux.md) — the one Dashboard every
 // company lands on at /dashboard, titled "Home" to match the sidebar.
 //
@@ -136,6 +137,7 @@ function WaitingOnYouBlock({
   /** Items Decisions shows beyond its main list (steward asks, questions, failed runs, …). */
   otherCount: number;
 }) {
+  const { selectedCompanyId } = useCompany();
   const decisions = data?.decisions ?? [];
   const tasks = data?.tasksAssignedToYou ?? [];
   const shownDecisions = decisions.slice(0, HOME_LIST_LIMIT);
@@ -184,6 +186,8 @@ function WaitingOnYouBlock({
           </li>
         ))}
       </ul>
+      {selectedCompanyId && <ul className="divide-y border-t">{data?.pendingQuestions?.slice(0, HOME_LIST_LIMIT).map(question => <PendingQuestionRow key={`${selectedCompanyId}:${question.interactionId}`} companyId={selectedCompanyId} question={question}/>)}</ul>}
+      <MoreLine count={(data?.pendingQuestionsTotal ?? 0) - Math.min(data?.pendingQuestions?.length ?? 0, HOME_LIST_LIMIT)} to="/decisions" noun="questions"/>
       {/* UX-7 (#788): the rest of this list lives on the Decisions page now. */}
       <MoreLine count={moreDecisions} to="/decisions" noun={moreDecisions === 1 ? "decision" : "decisions"} />
       <ul className={shownDecisions.length > 0 ? "divide-y divide-border border-t border-border" : "divide-y divide-border"}>

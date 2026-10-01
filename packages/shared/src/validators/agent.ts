@@ -1,3 +1,4 @@
+import { workforceTemplateIdSchema } from "./workforce.js";
 import { z } from "zod";
 import {
   AGENT_AUTONOMY_KINDS,
@@ -118,6 +119,7 @@ export const agentRuntimeConfigSchema = z.object({
 }).catchall(z.unknown());
 
 const createAgentBaseSchema = z.object({
+  workforceTemplateId: workforceTemplateIdSchema.optional(),
   name: z.string().min(1),
   role: z.enum(AGENT_ROLES).optional().default("general"),
   title: z.string().optional().nullable(),
@@ -216,10 +218,11 @@ export const createAgentHireSchema = z.preprocess(normalizeAgentAdapterAliases, 
 export type CreateAgentHire = z.infer<typeof createAgentHireSchema>;
 
 export const updateAgentSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema
-  .omit({ permissions: true })
+  .omit({ permissions: true, workforceTemplateId: true })
   .partial()
   .extend({
     permissions: z.never().optional(),
+    workforceTemplateId: z.never().optional(),
     /*
      * Stewardship is not settable here, and these two exist only so the route
      * can say so.

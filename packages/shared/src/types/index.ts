@@ -360,7 +360,7 @@ export type {
   DashboardRunActivityDay,
   DashboardSummary,
   WaitingOnYou,
-  WaitingOnYouDecision,
+  WaitingOnYouDecision, WaitingOnYouQuestion,
   WaitingOnYouTask,
   WorkingNow,
   WorkingNowItem,

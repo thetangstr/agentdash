@@ -1,3 +1,4 @@
+import { workforceIssueInputs } from './workforce-inputs.js';
 import { Buffer } from "node:buffer";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
@@ -2545,6 +2546,16 @@ export function issueService(db: Db) {
       await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId, tx);
     }
 
+    if (issueData.status === "done") {
+      // SELECT-only in planning; canonical update holds the refreshed target lock.
+      const input = await workforceIssueInputs(tx as Db, existing.companyId, existing.assigneeAgentId, existing.id);
+      if (input.pendingQuestionIds.length || input.missingFactKeys.length) {
+        throw conflict("Required workforce input is unresolved", {
+          pendingQuestionIds: input.pendingQuestionIds,
+          missingFactKeys: input.missingFactKeys,
+        });
+      }
+    }
     const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
     const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
       getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),

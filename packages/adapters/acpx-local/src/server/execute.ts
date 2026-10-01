@@ -19,6 +19,7 @@ import {
   parseObject,
   readPaperclipRuntimeSkillEntries,
   renderAgentDirectivesPrompt,
+  renderWorkforcePrompt,
   renderPaperclipWakePrompt,
   renderTemplate,
   resolvePaperclipDesiredSkillNames,
@@ -828,10 +829,12 @@ async function buildPrompt(ctx: AdapterExecutionContext, resumedSession: boolean
   // prompt is suppressed — because a constraint the agent stops being told
   // about stops being a constraint.
   const agentDirectivesNote = renderAgentDirectivesPrompt(context.paperclipAgentDirectives);
+  const workforceNote = renderWorkforcePrompt(context.paperclipWorkforce);
   const prompt = joinPromptSections([
     promptInstructionsPrefix,
     renderedBootstrapPrompt,
     agentDirectivesNote,
+    workforceNote,
     wakePrompt,
     sessionHandoffNote,
     taskContextNote,

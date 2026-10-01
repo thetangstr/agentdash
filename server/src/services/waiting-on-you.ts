@@ -1,3 +1,8 @@
+import type { Request } from 'express';
+import { and, asc, eq, isNull, notInArray, sql } from 'drizzle-orm';
+import { authUsers, companyMemberships, issues, issueThreadInteractions } from '@paperclipai/db';
+import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion } from '@paperclipai/shared';
+import { projectScopedVisibilityCondition } from '../routes/visibility.js';
 import type { Db } from "@paperclipai/db";
 import { assistantDigestService } from "./assistant-digest.js";
 import { approvalAuthorityService } from "./approval-authority.js";
@@ -27,10 +32,11 @@ import {
  *      approvals, most urgent first by the board's risk order, then longest
  *      wait; and
  *   2. open issues (not done, not cancelled, not hidden) assigned to the
- *      person (`assistantDigestService.tasksAssignedTo`).
+ *      person (`assistantDigestService.tasksAssignedTo`); and
+ *   3. pending questions pinned to that active human, within issue visibility.
  *
  * A user-less board actor (the local bootstrap operator) answers for the whole
- * company, the same reading the digest gives that actor.
+ * company for approvals and assigned issues. Named questions require a user identity.
  */
 
 export {
@@ -50,7 +56,39 @@ export function waitingOnYouService(db: Db) {
   const approvals = approvalService(db);
   const issueApprovals = issueApprovalService(db);
 
+  async function pendingQuestions(companyId: string, actor: WaitingOnYouActor, page: { offset?: number; limit?: number } = {}, actualRequest?: Request): Promise<{ items: WaitingOnYouQuestion[]; total: number }> {
+    // A memberless local operator has no named answer identity. It does not
+    // inherit someone else's questions or become an arbitrary answer owner.
+    if (!actor.userId) return { items: [] as WaitingOnYouQuestion[], total: 0 };
+    const ownerId = sql<string>`${issueThreadInteractions.payload} ->> 'answerOwnerUserId'`;
+    const visibility = projectScopedVisibilityCondition(actualRequest ?? { actor: { ...actor, type: 'board' } } as Request, companyId, issues.projectId);
+    const rows = await db.select({
+      interactionId: issueThreadInteractions.id, issueId: issues.id, identifier: issues.identifier,
+      issueTitle: issues.title, title: issueThreadInteractions.title, payload: issueThreadInteractions.payload,
+      createdAt: issueThreadInteractions.createdAt, ownerName: authUsers.name, total: sql<number>`count(*) over()`,
+    }).from(issueThreadInteractions)
+      .innerJoin(issues, and(eq(issues.id, issueThreadInteractions.issueId), eq(issues.companyId, companyId)))
+      .innerJoin(companyMemberships, and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, actor.userId), eq(companyMemberships.status, 'active')))
+      .leftJoin(authUsers, eq(authUsers.id, actor.userId))
+      .where(and(eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.kind, 'ask_user_questions'), eq(issueThreadInteractions.status, 'pending'), eq(ownerId, actor.userId), isNull(issues.hiddenAt), notInArray(issues.status, ['done', 'cancelled']), visibility))
+      .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id)).limit(page.limit ?? 50).offset(page.offset ?? 0);
+    // An exhausted page still reports the full authorized count.
+    const total = rows[0] ? Number(rows[0].total) : (page.offset ?? 0) > 0
+      ? (await pendingQuestions(companyId, actor, { offset: 0, limit: 1 }, actualRequest)).total
+      : 0;
+    return {
+      total,
+      items: rows.map(row => ({
+        interactionId: row.interactionId, issueId: row.issueId, identifier: row.identifier,
+        issueTitle: row.issueTitle, title: row.title ?? 'Input requested',
+        questionSummary: askUserQuestionsPayloadSchema.parse(row.payload).questions.map(q => q.prompt).join(' ').slice(0, 1000),
+        waitingSince: row.createdAt.toISOString(), answerOwnerUserId: actor.userId!, answerOwnerName: row.ownerName ?? actor.userId!,
+      })),
+    };
+  }
+
   return {
+    pendingQuestions,
     /**
      * The pending-decisions payload: approvals with `canDecide` computed per
      * row by probing the one authority service, plus the person's open
@@ -104,8 +142,11 @@ export function waitingOnYouService(db: Db) {
       );
 
       const tasks = await digest.tasksAssignedTo(companyId, userId);
+      const questions = await pendingQuestions(companyId, actor);
       return {
         decisions,
+        pendingQuestions: questions.items,
+        pendingQuestionsTotal: questions.total,
         total: ranked.length,
         shown: decisions.length,
         // UX-7 (#788): the manual/machine split is decided here, not in any

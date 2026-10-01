@@ -1,3 +1,4 @@
+import { workforceTemplateIdSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import type { PaperclipApiClient } from "../client.js";
 import { PaperclipApiError } from "../client.js";
@@ -56,7 +57,7 @@ interface PrepareHireResponse {
   expiresAt?: string;
   wouldNeedApproval?: boolean;
   effects?: string[];
-  hire?: { name: string; role: string; adapterType: string };
+  hire?: { name: string; role: string; adapterType: string; workforceTemplateId?: string; workforceTemplateVersion?: number };
   code?: string;
   reason?: string;
 }
@@ -210,12 +211,13 @@ export function assistantGatedTools(client: PaperclipApiClient, ctx: AssistantCo
     "request_hire",
     "AgentDash: get ready to ask for a new agent — a role and why. Returns a read-back and a one-time handle; nothing is filed until confirm_action.",
     z.object({
+      workforceTemplateId: workforceTemplateIdSchema.optional().describe("Explicit workforce catalog selection; omit for custom or ambiguous roles. Requires company admin authority."),
       role: z.string().min(1).max(120).describe("What kind of agent — designer, QA, whatever the person asked for"),
       reason: z.string().min(1).max(1000).describe("Why they are needed — the approver reads this"),
       project: refInput("A project").optional().describe("The project the hire is for"),
       nameHint: z.string().min(1).max(120).optional().describe("A name for the agent, if the person gave one"),
     }),
-    async ({ role, reason, project, nameHint }) => {
+    async ({ role, reason, project, nameHint, workforceTemplateId }) => {
       let projectId: string | null = null;
       if (project) {
         const resolution = await resolveProjectRef(client, companyId(), project);
@@ -233,6 +235,7 @@ export function assistantGatedTools(client: PaperclipApiClient, ctx: AssistantCo
             body: {
               role,
               reason,
+              ...(workforceTemplateId ? { workforceTemplateId } : {}),
               ...(nameHint ? { name: nameHint } : {}),
               ...(projectId ? { projectId } : {}),
             },

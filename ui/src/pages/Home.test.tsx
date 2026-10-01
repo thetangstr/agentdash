@@ -81,6 +81,8 @@ const firstRunNotApplicable = {
 };
 
 const waiting: WaitingOnYou = {
+  pendingQuestions: [],
+  pendingQuestionsTotal: 0,
   decisions: [
     {
       approvalId: "appr-1",

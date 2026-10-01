@@ -79,5 +79,5 @@
 - [ ] I have updated relevant documentation to reflect my changes
 - [ ] I have considered and documented any risks above
 - [ ] If this is upstream-derived, I have followed `doc/UPSTREAM-POLICY.md` and recorded the upstream SHA/reason/verification
-- [ ] If this changes agent-facing behavior, I have updated all four prompt surfaces or explained why they do not apply
+- [ ] If this changes agent-facing behavior, I have updated both prompt surfaces (default AGENTS.md and agent-creator-from-proposal.ts) or explained why they do not apply
 - [ ] I will address all Greptile and reviewer comments before requesting merge

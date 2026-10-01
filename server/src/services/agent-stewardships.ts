@@ -1,3 +1,4 @@
+import { assertActivityAcceptance, type ActivityAcceptance } from './activity-log.js';
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -12,7 +13,7 @@ import {
 import { conflict, notFound } from "../errors.js";
 import { normalizeAgentAutonomy } from "./agent-accountability.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
-import { logActivity } from "./activity-log.js";
+import { logActivity, insertActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 
 type AgentStewardshipRow = typeof agentStewardships.$inferSelect;
 
@@ -183,9 +184,14 @@ async function auditRevocations(
     bindings: Array<{ id: string; agentId: string; provider: string }>;
     endpoints: Array<{ id: string; label: string }>;
   },
+  publications?: ActivityPublication[],
 ) {
+  const audit = async (input: Parameters<typeof logActivity>[1]) => {
+    if (publications) publications.push(await insertActivity(database, input));
+    else await logActivity(database as unknown as Db, input);
+  };
   for (const binding of input.bindings) {
-    await logActivity(database as unknown as Db, {
+    await audit({
       companyId: input.companyId,
       actorType: "user",
       actorId: input.actorUserId ?? "board",
@@ -197,7 +203,7 @@ async function auditRevocations(
     });
   }
   for (const endpoint of input.endpoints) {
-    await logActivity(database as unknown as Db, {
+    await audit({
       companyId: input.companyId,
       actorType: "user",
       actorId: input.actorUserId ?? "board",
@@ -236,6 +242,10 @@ async function auditRevocations(
 export async function endStewardshipForTerminatedAgent(
   database: StewardshipDb,
   input: { companyId: string; agentId: string; endedByUserId: string | null },
+  // AgentDash: publish-after-commit. When the caller passes a list, audit rows
+  // are inserted on its transaction and their live events are queued here; the
+  // caller publishes them only after the transaction commits.
+  publications?: ActivityPublication[],
 ): Promise<AgentStewardshipRow[]> {
   const now = new Date();
   const ended = await database
@@ -274,11 +284,11 @@ export async function endStewardshipForTerminatedAgent(
       reason: "agent_terminated",
       bindings: revokedBindings,
       endpoints: [],
-    });
+    }, publications);
 
-    await logActivity(database as unknown as Db, {
+    const endedAudit = {
       companyId: input.companyId,
-      actorType: "user",
+      actorType: "user" as const,
       actorId: input.endedByUserId ?? "board",
       action: "agent.stewardship_ended",
       entityType: "agent_stewardship",
@@ -288,13 +298,26 @@ export async function endStewardshipForTerminatedAgent(
         userId: stewardship.userId,
         reason: "agent_terminated",
       },
-    });
+    };
+    if (publications) publications.push(await insertActivity(database, endedAudit));
+    else await logActivity(database as unknown as Db, endedAudit);
   }
 
   return ended;
 }
 
 export function agentStewardshipService(db: Db) {
+  async function accept<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db, publications: ActivityPublication[]) => Promise<T>): Promise<T> {
+    if (supplied !== undefined) {
+      assertActivityAcceptance(supplied);
+      return work(supplied.executor, supplied.publications);
+    }
+    const publications: ActivityPublication[] = [];
+    const result = await db.transaction(tx => work(tx as unknown as Db, publications));
+    for (const publication of publications) publishActivity(publication);
+    return result;
+  }
+
 
   /**
    * The person's current pairing, ignoring one that points at a terminated
@@ -432,14 +455,15 @@ export function agentStewardshipService(db: Db) {
       .orderBy(desc(agentStewardships.startedAt));
   }
 
-  async function assign(companyId: string, input: AssignInput): Promise<AgentStewardshipRow> {
+  async function assign(companyId: string, input: AssignInput, acceptance?: ActivityAcceptance, beforeWrite?: () => void): Promise<AgentStewardshipRow> {
     const now = new Date();
 
     try {
-      return await db.transaction(async (tx) => {
+      return await accept(acceptance, async (tx, publications) => {
         await lockActiveUserMember(tx, companyId, input.userId);
         await lockAssignableCompanyAgent(tx, companyId, input.agentId);
 
+        beforeWrite?.();
         const row = await tx
           .insert(agentStewardships)
           .values({
@@ -454,7 +478,7 @@ export function agentStewardshipService(db: Db) {
           .returning()
           .then((rows) => rows[0]!);
 
-        await logActivity(tx as unknown as Db, {
+        publications.push(await insertActivity(tx, {
           companyId,
           actorType: "user",
           actorId: input.assignedByUserId ?? "board",
@@ -466,7 +490,7 @@ export function agentStewardshipService(db: Db) {
             userId: input.userId,
             agentId: input.agentId,
           },
-        });
+        }));
 
         return row;
       });
@@ -478,12 +502,12 @@ export function agentStewardshipService(db: Db) {
     }
   }
 
-  async function transfer(companyId: string, agentId: string, input: TransferInput): Promise<AgentStewardshipRow> {
+  async function transfer(companyId: string, agentId: string, input: TransferInput, acceptance?: ActivityAcceptance, beforeWrite?: () => void): Promise<AgentStewardshipRow> {
     const transferReason = normalizeReason(input.transferReason);
     const now = new Date();
 
     try {
-      return await db.transaction(async (tx) => {
+      return await accept(acceptance, async (tx, publications) => {
         const lockResult = await tx.execute(sql`
           select pg_try_advisory_xact_lock(hashtextextended(${`${companyId}:${agentId}`}, 0)) as locked
         `);
@@ -526,6 +550,7 @@ export function agentStewardshipService(db: Db) {
           throw conflict("Agent is already stewarded by this user");
         }
 
+        beforeWrite?.();
         await tx
           .update(agentStewardships)
           .set({
@@ -598,9 +623,9 @@ export function agentStewardshipService(db: Db) {
           reason: "stewardship_transferred",
           bindings: revokedBindings,
           endpoints: revokedEndpoints,
-        });
+        }, publications);
 
-        await logActivity(tx as unknown as Db, {
+        publications.push(await insertActivity(tx, {
           companyId,
           actorType: "user",
           actorId: input.transferredByUserId ?? "board",
@@ -614,7 +639,7 @@ export function agentStewardshipService(db: Db) {
             previousStewardshipId: active.id,
             transferReason,
           },
-        });
+        }));
 
         return next;
       });

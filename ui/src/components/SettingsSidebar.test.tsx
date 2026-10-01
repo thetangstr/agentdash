@@ -147,8 +147,9 @@ describe("SettingsSidebar", () => {
     // Members & access carries the pending join-request count.
     expect(groupLinks("workspace")[1]?.label).toBe("Members & access2");
 
-    // Heartbeats is instance-admin only (its API is), so a member sees three.
+    // Heartbeats is instance-admin only (its API is), so a member sees four.
     expect(groupLinks("agents")).toEqual([
+      { label: "Workforce roles", href: "/workforce" },
       { label: "Skills", href: "/skills" },
       { label: "Environments", href: "/company/settings/environments" },
       { label: "Adapters", href: "/instance/settings/adapters" },
@@ -192,7 +193,7 @@ describe("SettingsSidebar", () => {
       { id: "p-1", packageName: "@acme/plugin", manifestJson: { displayName: "Acme" } },
     ]);
     const root = await render();
-    expect(groupLinks("agents").map((l) => l.label)).toEqual(["Skills", "Environments", "Adapters", "Heartbeats"]);
+    expect(groupLinks("agents").map((l) => l.label)).toEqual(["Workforce roles", "Skills", "Environments", "Adapters", "Heartbeats"]);
     expect(groupLinks("instance")).toEqual([
       { label: "General", href: "/instance/settings/general" },
       { label: "Access", href: "/instance/settings/access" },

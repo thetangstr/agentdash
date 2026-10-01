@@ -30,6 +30,17 @@ describe("paperclip MCP tools", () => {
     vi.restoreAllMocks();
   });
 
+  it("agentdashHireAgent preserves explicit workforce selection and refuses unknown IDs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ agent: { id: "new-agent" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const tool = getTool("agentdashHireAgent");
+    await tool.execute({ name: "Writer", adapterType: "codex_local", workforceTemplateId: "marketing-content" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({ workforceTemplateId: "marketing-content" });
+    const refused = await tool.execute({ name: "Writer", adapterType: "codex_local", workforceTemplateId: "unknown" });
+    expect(refused.content[0]?.text).toContain("workforceTemplateId");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("adds auth headers and run id to mutating requests", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockJsonResponse({ ok: true }),

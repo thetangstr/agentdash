@@ -630,6 +630,7 @@ type IssueDetailChatTabProps = {
   onSubmitInteractionAnswers: (
     interaction: IssueThreadInteraction,
     answers: AskUserQuestionsAnswer[],
+    shareWithCompany?: boolean,
   ) => Promise<void>;
   onCancelInteraction: (interaction: AskUserQuestionsInteraction) => Promise<void>;
 };
@@ -872,8 +873,8 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         stopRunVariant="pause"
         onAcceptInteraction={onAcceptInteraction}
         onRejectInteraction={onRejectInteraction}
-        onSubmitInteractionAnswers={(interaction, answers) =>
-          onSubmitInteractionAnswers(interaction, answers)
+        onSubmitInteractionAnswers={(interaction, answers, shareWithCompany) =>
+          onSubmitInteractionAnswers(interaction, answers, shareWithCompany)
         }
         onCancelInteraction={onCancelInteraction}
         onCancelRun={runningIssueRun && onPauseWorkRun
@@ -1993,10 +1994,12 @@ export function IssueDetail() {
     mutationFn: ({
       interaction,
       answers,
+      shareWithCompany,
     }: {
       interaction: IssueThreadInteraction;
       answers: AskUserQuestionsAnswer[];
-    }) => issuesApi.respondToInteraction(issueId!, interaction.id, { answers }),
+      shareWithCompany?: boolean;
+    }) => issuesApi.respondToInteraction(issueId!, interaction.id, { answers, shareWithCompany }),
     onSuccess: (interaction) => {
       upsertInteractionInCache(interaction);
       invalidateIssueDetail();
@@ -2810,8 +2813,9 @@ export function IssueDetail() {
   const handleSubmitInteractionAnswers = useCallback(async (
     interaction: IssueThreadInteraction,
     answers: AskUserQuestionsAnswer[],
+    shareWithCompany?: boolean,
   ) => {
-    await answerInteraction.mutateAsync({ interaction, answers });
+    await answerInteraction.mutateAsync({ interaction, answers, shareWithCompany });
   }, [answerInteraction]);
   const handleCancelInteraction = useCallback(async (interaction: AskUserQuestionsInteraction) => {
     await cancelInteraction.mutateAsync({ interaction });

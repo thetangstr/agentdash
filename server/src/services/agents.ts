@@ -1,3 +1,7 @@
+import { publishActivity, type ActivityPublication } from "./activity-log.js";
+import { workforceService } from "./workforce.js";
+import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
+import { supportsWorkforcePrompt, workforceTemplateIdSchema } from "@paperclipai/shared";
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -63,6 +67,8 @@ export interface RevisionMetadata {
 }
 
 export interface UpdateAgentOptions {
+  // AgentDash: synchronous first-write check for supplied human acceptance.
+  beforeWrite?: () => void;
   recordRevision?: RevisionMetadata;
 }
 
@@ -337,9 +343,17 @@ export function agentService(db: Db) {
     id: string,
     data: Partial<typeof agents.$inferInsert>,
     options?: UpdateAgentOptions,
-  ) {
+    connection: Db = db,
+  ): Promise<ReturnType<typeof normalizeAgentRow> | null> {
+    if (data.adapterType && !supportsWorkforcePrompt(data.adapterType) && connection === db) {
+      return db.transaction(tx => updateAgent(id, data, options, tx as unknown as Db));
+    }
     const existing = await getById(id);
     if (!existing) return null;
+    if (data.adapterType && !supportsWorkforcePrompt(data.adapterType)) {
+      await connection.select({ id: agents.id }).from(agents).where(eq(agents.id, id)).for('update');
+      if (await workforceService(connection).getEnrollment(existing.companyId, id)) throw unprocessable('Enrolled workforce agents require a verified native runtime; custom process/HTTP/plugin runners are unsupported');
+    }
 
     if (existing.status === "terminated" && data.status && data.status !== "terminated") {
       throw conflict("Terminated agents cannot be resumed");
@@ -374,6 +388,13 @@ export function agentService(db: Db) {
     }
 
     const normalizedPatch = { ...data } as Partial<typeof agents.$inferInsert>;
+    // AgentDash: an explicit PATCH pause supersedes a pending onboarding pause,
+    // even if both requests occur in the same millisecond.
+    if (data.status === 'paused' && isPlainRecord(existing.metadata)
+      && existing.metadata.onboardingMaterialization === 'pending') {
+      normalizedPatch.pauseReason = 'manual';
+      normalizedPatch.pausedAt = new Date(Math.max(Date.now(), (existing.pausedAt?.getTime() ?? 0) + 1));
+    }
     if (data.permissions !== undefined) {
       const role = (data.role ?? existing.role) as string;
       normalizedPatch.permissions = normalizeAgentPermissions(data.permissions, role);
@@ -382,7 +403,8 @@ export function agentService(db: Db) {
     const shouldRecordRevision = Boolean(options?.recordRevision) && hasConfigPatchFields(normalizedPatch);
     const beforeConfig = shouldRecordRevision ? buildConfigSnapshot(existing) : null;
 
-    const updated = await db
+    options?.beforeWrite?.();
+    const updated = await connection
       .update(agents)
       .set({ ...normalizedPatch, updatedAt: new Date() })
       .where(eq(agents.id, id))
@@ -394,7 +416,7 @@ export function agentService(db: Db) {
       const afterConfig = buildConfigSnapshot(normalizedUpdated);
       const changedKeys = diffConfigSnapshot(beforeConfig, afterConfig);
       if (changedKeys.length > 0) {
-        await db.insert(agentConfigRevisions).values({
+        await connection.insert(agentConfigRevisions).values({
           companyId: normalizedUpdated.companyId,
           agentId: normalizedUpdated.id,
           createdByAgentId: options?.recordRevision?.createdByAgentId ?? null,
@@ -424,7 +446,24 @@ export function agentService(db: Db) {
 
     getById,
 
-    create: async (companyId: string, data: Omit<typeof agents.$inferInsert, "companyId">) => {
+    create: async (companyId: string, input: Omit<typeof agents.$inferInsert, "companyId"> & { workforceTemplateId?: string }, acceptance?: ActivityAcceptance): Promise<ReturnType<typeof normalizeAgentRow>> => {
+      // AgentDash: enrollment shares the actual caller acceptance; root calls own commit.
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      const { workforceTemplateId, ...data } = input;
+      if (workforceTemplateId !== undefined) {
+        workforceTemplateIdSchema.parse(workforceTemplateId);
+        const create = async (accepted: ActivityAcceptance) => {
+          const created = await agentService(accepted.executor).create(companyId, data);
+          await workforceService(accepted.executor).enroll(companyId, created.id, { templateId: workforceTemplateId as "marketing-content" | "sales-support" }, {}, accepted);
+          return created;
+        };
+        if (acceptance) return create(acceptance);
+        const publications: ActivityPublication[] = [];
+        const created = await db.transaction(tx => create({ executor: tx as unknown as Db, publications }));
+        for (const publication of publications) publishActivity(publication);
+        return created;
+      }
+      if (acceptance) return agentService(acceptance.executor).create(companyId, data);
       if (data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
       }
@@ -448,6 +487,20 @@ export function agentService(db: Db) {
     },
 
     update: updateAgent,
+
+    // AgentDash: only the onboarding pause instance may be completed/released.
+    completeMaterialization: async (id: string, pausedAt: Date, adapterConfig?: Record<string, unknown>, release = false) => db.transaction(async tx => {
+      const [current] = await tx.select().from(agents).where(eq(agents.id, id)).for('update');
+      const metadata = current && isPlainRecord(current.metadata) ? current.metadata : {};
+      if (!current || current.status !== 'paused' || current.pauseReason !== 'system'
+        || current.pausedAt?.getTime() !== pausedAt.getTime() || metadata.onboardingMaterialization !== 'pending') {
+        throw conflict('Hire configuration requires review; the original materialization pause changed');
+      }
+      return agentService(tx as unknown as Db).update(id, {
+        ...(adapterConfig ? { adapterConfig: { ...current.adapterConfig, ...adapterConfig } } : {}),
+        ...(release ? { status: 'idle', pauseReason: null, pausedAt: null, metadata: { ...metadata, onboardingMaterialization: 'complete' } } : {}),
+      });
+    }),
 
     pause: async (id: string, reason: "manual" | "budget" | "system" | "mandate" = "manual") => {
       const existing = await getById(id);
@@ -514,6 +567,7 @@ export function agentService(db: Db) {
       const existing = await getById(id);
       if (!existing) return null;
 
+      const terminationPublications: ActivityPublication[] = [];
       const terminated = await db.transaction(async (tx) => {
         const updated = await tx
           .update(agents)
@@ -544,10 +598,11 @@ export function agentService(db: Db) {
           companyId: existing.companyId,
           agentId: id,
           endedByUserId: options.endedByUserId ?? null,
-        });
+        }, terminationPublications);
         return true;
       });
       if (!terminated) return getById(id);
+      for (const publication of terminationPublications) publishActivity(publication);
 
       // AgentDash: a terminated reviewer cannot review. Retire its queue
       // assignment here — inside terminate, not at the call sites — so every

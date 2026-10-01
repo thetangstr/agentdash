@@ -7,6 +7,8 @@ import express, { type Express } from "express";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import {
+  instanceUserRoles,
+  workforceEnrollments,
   activityLog,
   agents,
   agentStewardships,
@@ -625,6 +627,47 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     expect(prep.status).toBe("refused");
     expect(prep.summary).toContain("not the person who can decide");
     expect((await readApproval(approval.id))!.status).toBe("pending");
+  });
+
+  it("pins a selected workforce template/version through assistant prepare, isolation, confirm and replay", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES);
+    const prep = envelope(await callTool(token, "request_hire", { role: "writer", reason: "campaign", nameHint: "TemplateWriter", workforceTemplateId: "marketing-content" }));
+    expect(prep.status, prep.summary).toBe("ok");
+    const handle = prep.data!.handle as string;
+    expect((await handleRowFor(handle))!.payload).toMatchObject({ workforceTemplateId: "marketing-content", workforceTemplateVersion: 1 });
+    expect(prep.summary).toContain("Marketing");
+    const foreign = await grantToken(DECIDE_SCOPES, otherCompanyId);
+    expect(envelope(await callTool(foreign.token, "confirm_action", { handle })).status).toBe("refused");
+    const conf = envelope(await callTool(token, "confirm_action", { handle, personSaid: "yes", workforceTemplateId: "sales-support" }));
+    expect(conf.status, conf.summary).toBe("ok");
+    const rows = await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.companyId, companyId));
+    expect(rows.find(row => row.templateId === "marketing-content")).toMatchObject({ templateVersion: 1, skillInstallError: null });
+    expect(rows.find(row => row.templateId === "marketing-content")!.installedSkillKeys).toHaveLength(1);
+    expect(envelope(await callTool(token, "confirm_action", { handle })).status).toBe("refused");
+  });
+
+  it("honors existing instance-admin direction authority for a selected assistant hire", async () => {
+    await db.insert(instanceUserRoles).values({ userId: MEMBER_USER_ID, role: "instance_admin" });
+    try {
+      const { token } = await grantToken(DECIDE_SCOPES, companyId, { userId: MEMBER_USER_ID });
+      const prep = envelope(await callTool(token, "request_hire", { role: "writer", reason: "campaign", workforceTemplateId: "marketing-content" }));
+      expect(prep.status, prep.summary).toBe("ok");
+      expect(envelope(await callTool(token, "confirm_action", { handle: prep.data!.handle })).status).toBe("ok");
+    } finally { await db.delete(instanceUserRoles).where(eq(instanceUserRoles.userId, MEMBER_USER_ID)); }
+  });
+
+  it("refuses member selection and rechecks direction authority at assistant confirmation", async () => {
+    const member = await grantToken(DECIDE_SCOPES, companyId, { userId: MEMBER_USER_ID });
+    expect(envelope(await callTool(member.token, "request_hire", { role: "writer", reason: "campaign", workforceTemplateId: "marketing-content" })).status).toBe("refused");
+    const { token } = await grantToken(DECIDE_SCOPES);
+    const prep = envelope(await callTool(token, "request_hire", { role: "writer", reason: "campaign", workforceTemplateId: "marketing-content" }));
+    expect(prep.status, prep.summary).toBe("ok");
+    await db.update(companyMemberships).set({ membershipRole: "member" }).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, USER_ID)));
+    try {
+      expect(envelope(await callTool(token, "confirm_action", { handle: prep.data!.handle })).status).toBe("refused");
+    } finally {
+      await db.update(companyMemberships).set({ membershipRole: "admin" }).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, USER_ID)));
+    }
   });
 
   it("request_hire confirms into an active agent with membership and attribution", async () => {

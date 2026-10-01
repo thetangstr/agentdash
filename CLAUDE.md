@@ -198,7 +198,7 @@ Deployment: XS/S auto-ship after local test. M+ requires human verification. XL 
 
 ## Agent-facing feature convention
 
-Project conventions for adding agent-facing features (new endpoints, state transitions, gates, failure modes — DoD/verdict-style additions) live in repo-root [`AGENTS.md`](AGENTS.md), the harness-agnostic file read by Codex, Cursor, Aider, Continue, and other tools. When extending Paperclip's worker prompts, follow the rule there: update all four prompt surfaces (`server/src/onboarding-assets/{default,ceo,chief_of_staff}/AGENTS.md` plus `server/src/services/agent-creator-from-proposal.ts`). CI enforces this via `.github/workflows/agents-md-drift-check.yml`.
+Project conventions for adding agent-facing features (new endpoints, state transitions, gates, failure modes — DoD/verdict-style additions) live in repo-root [`AGENTS.md`](AGENTS.md), the harness-agnostic file read by Codex, Cursor, Aider, Continue, and other tools. When extending Paperclip's worker prompts, follow the rule there: update both prompt surfaces (`server/src/onboarding-assets/default/AGENTS.md`, which every role loads, plus `server/src/services/agent-creator-from-proposal.ts`). CI enforces this via `.github/workflows/agents-md-drift-check.yml`.
 
 ## Upstream Policy
 

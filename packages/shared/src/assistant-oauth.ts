@@ -235,7 +235,7 @@ export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
     pattern: /^\/api\/companies\/[^/]+\/assistant\/actions\/prepare-hire$/,
     scope: ASSISTANT_SCOPE_DECIDE,
     consumesWriteAllowance: false,
-    bodyFields: ["role", "reason", "name", "projectId"],
+    bodyFields: ["role", "reason", "name", "projectId", "workforceTemplateId"],
   },
   // confirm_action — POST /companies/:id/assistant/actions/confirm
   {

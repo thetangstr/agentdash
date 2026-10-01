@@ -3,7 +3,7 @@ import express from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { activityLog, agents, companies, companyMemberships, createDb, heartbeatRuns, issues } from "@paperclipai/db";
+import { activityLog, agents, companies, companyMemberships, createDb, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { issueRoutes } from "../routes/issues.js";
@@ -85,5 +85,34 @@ describe("workspace recovery clear", () => {
     const res = await request(app(admin(f.company.id))).post(url).send({ agentId: f.agent.id });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(await workspacePersistenceHold(db, f.company.id, f.agent.id, null)).toBeNull();
+  });
+
+  it("accepts an issue identifier and clears by row id", async () => {
+    const f = await fixture();
+    const [withIdentifier] = await db.update(issues).set({ identifier: `WSR-${Math.floor(Math.random() * 1e6)}` })
+      .where(eq(issues.id, f.issue.id)).returning();
+    const res = await request(app(member(f.company.id))).post(`/api/companies/${f.company.id}/workspace-recovery/clear`)
+      .send({ issueId: withIdentifier.identifier });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.runIds).toEqual([f.run.id]);
+  });
+
+  it("answers 404 for an issue in a restricted project the caller cannot see", async () => {
+    const f = await fixture();
+    const [secret] = await db.insert(projects).values({ companyId: f.company.id, name: "Restricted", visibility: "restricted" }).returning();
+    await db.update(issues).set({ projectId: secret.id }).where(eq(issues.id, f.issue.id));
+    const res = await request(app(member(f.company.id))).post(`/api/companies/${f.company.id}/workspace-recovery/clear`)
+      .send({ issueId: f.issue.id });
+    expect(res.status).toBe(404);
+    expect(await workspacePersistenceHold(db, f.company.id, f.agent.id, f.issue.id)).not.toBeNull();
+  });
+
+  it("answers 404 for an issue or agent from another company", async () => {
+    const f = await fixture(), other = await fixture(false);
+    const url = `/api/companies/${f.company.id}/workspace-recovery/clear`;
+    expect((await request(app(admin(f.company.id))).post(url).send({ issueId: other.issue.id })).status).toBe(404);
+    expect((await request(app(admin(f.company.id))).post(url).send({ agentId: other.agent.id })).status).toBe(404);
+    expect((await request(app(admin(f.company.id))).post(url).send({ agentId: "not-a-uuid" })).status).toBe(404);
+    expect(await workspacePersistenceHold(db, other.company.id, other.agent.id, null)).not.toBeNull();
   });
 });

@@ -1,8 +1,13 @@
+import { workforceService } from "./workforce.js";
+import { type ActivityAcceptance } from "./activity-log.js";
+import { normalizeHumanRole } from "./company-member-roles.js";
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, gt, isNotNull, isNull, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, assistantActionHandles, assistantGrants, companies, projects } from "@paperclipai/db";
 import {
+  resolveWorkforceTemplate,
+  supportsWorkforcePrompt,
   AGENT_ROLES,
   ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR,
   ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR,
@@ -13,7 +18,7 @@ import { approvalAuthorityService, type ApprovalDecisionActor } from "./approval
 import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
 import { agentService } from "./agents.js";
 import { approvalService } from "./approvals.js";
-import { logActivity } from "./activity-log.js";
+import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import { DECIDABLE_STATUSES } from "./steward-inbox.js";
 import { effectsFor, hireApprovalCreatesAgent } from "./waiting-on-you-rules.js";
 import type { AssistantDecision } from "./waiting-on-you-rules.js";
@@ -98,6 +103,8 @@ interface DecisionHandlePayload {
 }
 
 interface HireHandlePayload {
+  workforceTemplateId?: string;
+  workforceTemplateVersion?: number;
   name: string;
   role: string;
   title: string;
@@ -354,10 +361,17 @@ export function assistantGatedActionsService(
    * default resolved HERE, and adapterConfig stays empty — an assistant can
    * never pick the binary, argv, env or cwd an agent runs with.
    */
+  // AgentDash: template selection is company direction, independently of hiring permission.
+  async function canSelectWorkforceTemplate(companyId: string, actor: AssistantGatedActor) {
+    if (await access.isInstanceAdmin(actor.userId)) return true;
+    const membership = (await access.listActiveUserMemberships(companyId)).find(member => member.principalId === actor.userId);
+    return !!membership && normalizeHumanRole(membership.membershipRole) === "admin";
+  }
+
   async function prepareHire(
     companyId: string,
     actor: AssistantGatedActor,
-    input: { role: string; reason: string; name?: string | null; projectId?: string | null },
+    input: { role: string; reason: string; name?: string | null; projectId?: string | null; workforceTemplateId?: string },
   ): Promise<
     GatedResult<{
       readBack: string;
@@ -365,7 +379,7 @@ export function assistantGatedActionsService(
       expiresAt: string;
       wouldNeedApproval: boolean;
       effects: string[];
-      hire: { name: string; role: string; adapterType: string };
+      hire: { name: string; role: string; adapterType: string; workforceTemplateId?: string; workforceTemplateVersion?: number };
     }>
   > {
     const role = input.role.trim();
@@ -407,17 +421,25 @@ export function assistantGatedActionsService(
     const name = input.name?.trim() || titleCase(role);
     const title = titleCase(role);
     const adapterType = defaultAgentPlanAdapterType();
+    const template = input.workforceTemplateId === undefined ? null : resolveWorkforceTemplate(input.workforceTemplateId);
+    if (input.workforceTemplateId !== undefined) {
+      if (!template || !supportsWorkforcePrompt(adapterType)) return { ok: false, code: "invalid", reason: "Unknown workforce template or unsupported runtime.", status: 400 };
+      if (!(await canSelectWorkforceTemplate(companyId, actor))) return { ok: false, code: "not_authorized", reason: "Only an admin can select a workforce template.", status: 403 };
+    }
+    const selection = template ? { workforceTemplateId: template.id, workforceTemplateVersion: template.version } : {};
+    const templateClause = template ? ` using ${template.name} v${template.version}` : "";
     const projectClause = project ? ` for the ${project.name} project` : "";
 
     const readBack = wouldNeedApproval
-      ? `File a hire request for ${name}, ${title.toLowerCase()}${projectClause}: "${reason}". The agent is created pending approval — nothing runs until someone approves it on the board.`
-      : `Hire ${name} as ${title.toLowerCase()}${projectClause}: "${reason}". They are created active and can be assigned work immediately.`;
+      ? `File a hire request for ${name}, ${title.toLowerCase()}${templateClause}${projectClause}: "${reason}". The agent is created pending approval — nothing runs until someone approves it on the board.`
+      : `Hire ${name} as ${title.toLowerCase()}${templateClause}${projectClause}: "${reason}". They are created active and can be assigned work immediately.`;
 
     const handle = await mintHandle({
       companyId,
       actor,
       kind: "hire_request",
       payload: {
+        ...selection,
         name,
         role: normalizeRequestedRole(role),
         title,
@@ -442,7 +464,7 @@ export function assistantGatedActionsService(
             `Creates ${name} on the ${adapterType} adapter`,
             `${name} starts idle and can be assigned work immediately`,
           ],
-      hire: { name, role: title, adapterType },
+      hire: { name, role: title, adapterType, ...selection },
     };
   }
 
@@ -866,6 +888,12 @@ export function assistantGatedActionsService(
     decisionsNeedTap: boolean,
   ): ReturnType<typeof confirm> {
     const payload = record.payload as unknown as HireHandlePayload;
+    if (payload.workforceTemplateId !== undefined) {
+      if (!(await canSelectWorkforceTemplate(companyId, actor))) return { ok: false, code: "not_authorized", reason: "Only an admin can select a workforce template — nothing was filed.", status: 403 };
+      if (payload.workforceTemplateVersion !== 1 || !resolveWorkforceTemplate(payload.workforceTemplateId, payload.workforceTemplateVersion) || !supportsWorkforcePrompt(payload.adapterType)) {
+        return { ok: false, code: "invalid", reason: "The prepared workforce template is no longer supported. Prepare the hire again.", status: 409 };
+      }
+    }
 
     if (decisionsNeedTap) {
       const link = absoluteUrl("/agents/new");
@@ -921,9 +949,11 @@ export function assistantGatedActionsService(
       .then((rows) => rows[0] ?? null);
     const requiresApproval = company?.requireBoardApprovalForNewAgents === true;
 
+    const publications: ActivityPublication[] = [];
     const created = await (async () => {
-      const create = (txDb: Db) =>
+      const create = (txDb: Db, acceptance?: ActivityAcceptance) =>
         agentService(txDb).create(companyId, {
+          workforceTemplateId: payload.workforceTemplateId,
           name: payload.name,
           role: payload.role,
           title: payload.title,
@@ -945,7 +975,7 @@ export function assistantGatedActionsService(
             projectId: payload.projectId,
           },
           createdByUserId: actor.userId,
-        });
+        }, acceptance);
       if (isBillingDisabled()) return create(db);
       return withCompanyTierCapacityLock(db, companyId, async (txDb) => {
         const blocked = await exceededFreeTierCapacityAction(
@@ -954,9 +984,11 @@ export function assistantGatedActionsService(
           { agents: 1 },
         );
         if (blocked) return { blocked };
-        return create(txDb);
+        return create(txDb, { executor: txDb, publications });
       });
     })();
+
+    for (const publication of publications) publishActivity(publication);
 
     if ("blocked" in (created as { blocked?: unknown })) {
       const cap = freeTierCapExceededPayload((created as { blocked: "invite" | "hire" }).blocked);
@@ -983,6 +1015,10 @@ export function assistantGatedActionsService(
         // created and the file can be written from the board.
         logger.warn({ err, agentId: agent.id }, "assistant hire: instructions bundle not materialized");
       }
+    }
+
+    if (payload.workforceTemplateId) {
+      await workforceService(db).ensureSkillsInstalled(companyId, agent.id, { userId: actor.userId });
     }
 
     let approval: ApprovalRow | null = null;

@@ -1,3 +1,4 @@
+import { isPrivateHumanInputRoute, redactHumanRequestBody } from "./redact-sensitive.js";
 import type { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 import { HttpError } from "../errors.js";
@@ -44,7 +45,7 @@ function attachErrorContext(
     error: payload,
     method: req.method,
     url: req.originalUrl,
-    reqBody: req.body,
+    reqBody: redactHumanRequestBody(req.originalUrl, req.body),
     reqParams: req.params,
     reqQuery: req.query,
   } satisfies ErrorContext;
@@ -59,6 +60,15 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ) {
+  // AgentDash: database/adapter exceptions can embed source text in their
+  // message or query. The error sink receives only a safe error on private paths.
+  if (isPrivateHumanInputRoute(req.originalUrl) && !(err instanceof ZodError)) {
+    if (err instanceof HttpError) {
+      if (err.status >= 500) err = new HttpError(err.status, 'Private human operation failed');
+    } else {
+      err = new Error('Private human operation failed');
+    }
+  }
   if (err instanceof HttpError) {
     if (err.status >= 500) {
       attachErrorContext(

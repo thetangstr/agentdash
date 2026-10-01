@@ -1,5 +1,6 @@
 import { ChangeEvent, useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@/lib/router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES,
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
@@ -11,6 +12,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { companiesApi } from "../api/companies";
 import { accessApi } from "../api/access";
+import { healthApi } from "../api/health";
 import { assetsApi } from "../api/assets";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
@@ -40,6 +42,16 @@ export function CompanySettings() {
   } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
+  const { data: health } = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+  // AgentDash (GH #789): on hosted boxes the adapter form is only linked from
+  // here — the hire path goes through the CoS. The same for every company
+  // (doc/plans/2026-09-30-one-ux.md).
+  const hostedHirePath = health?.hostedBox === true;
   // General settings local state
   const [companyName, setCompanyName] = useState("");
   const [description, setDescription] = useState("");
@@ -539,6 +551,24 @@ export function CompanySettings() {
 
       {/* AgentDash (GH #785): the optional readiness assessment, for every company */}
       <ReadinessAssessmentCard />
+
+      {/* AgentDash (GH #789): on hosted boxes the adapter form is only linked
+          from here — the default hire path goes through the CoS. */}
+      {hostedHirePath && (
+        <div className="space-y-4">
+          <div className="rounded-md border border-border px-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              Hiring works through your Chief of Staff. The adapter configuration
+              form is kept here for operators who need it.
+            </p>
+            <div className="mt-3">
+              <Button size="sm" variant="outline" asChild>
+                <Link to="/agents/new">New agent (advanced)</Link>
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Import / Export */}
       <div className="space-y-4">

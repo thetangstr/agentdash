@@ -1,3 +1,4 @@
+import { WorkforceOnboarding } from "./pages/WorkforceOnboarding";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { healthApi } from "./api/health";
@@ -148,6 +149,7 @@ function boardRoutes() {
       <Route path="plugins/:pluginId" element={<PluginPage />} />
       <Route path="billing" element={<BillingPageRoute />} />
       <Route path="org" element={<OrgChart />} />
+      <Route path="workforce" element={<WorkforceOnboarding />} />
       <Route path="agents" element={<Navigate to="/agents/all" replace />} />
       <Route path="agents/all" element={<Agents />} />
       <Route path="agents/active" element={<Agents />} />
@@ -440,6 +442,7 @@ export function App() {
           <Route path="company/import" element={<UnprefixedBoardRedirect />} />
           <Route path="design-guide" element={<UnprefixedBoardRedirect />} />
           <Route path="design-guide/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="workforce" element={<UnprefixedBoardRedirect />} />
           <Route path="agents" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/new" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/:agentId" element={<UnprefixedBoardRedirect />} />

@@ -9,6 +9,7 @@ import { issueService } from '../services/issues.js';
 import { issuePatchActions, type IssuePatchContext } from '../services/issue-patch-actions.js';
 import { issueThreadInteractionService } from '../services/issue-thread-interactions.js';
 import { issueTreeControlService } from '../services/issue-tree-control.js';
+import { workforceService } from '../services/workforce.js';
 import { featureFlagsService } from '../services/feature-flags.js';
 import { goalService } from '../services/goals.js';
 import { actorMiddleware } from '../middleware/auth.js';
@@ -26,6 +27,7 @@ vi.mock('../services/heartbeat.js', () => ({ heartbeatService: (db: Db) => ({
   wakeup: effects.wake, reportRunActivity: effects.report,
 }) }));
 function gate() { let open!: () => void; const promise = new Promise<void>(r => { open = r; }); return { promise, open }; }
+const qInput = { kind: 'ask_user_questions' as const, payload: { version: 1 as const, questions: [{ id: 'launch', prompt: 'When?', selectionMode: 'text' as const, required: true, options: [] }] } };
 const cInput = { kind: 'request_confirmation' as const, payload: { version: 1 as const, prompt: 'Proceed?', supersedeOnUserComment: true } };
 
 describe('composed predicate acceptance over canonical HTTP and real PostgreSQL', () => {
@@ -88,7 +90,7 @@ describe('composed predicate acceptance over canonical HTTP and real PostgreSQL'
     return { issue: (await db.select().from(issues).where(eq(issues.id, f.issue.id)))[0], run: (await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.run.id)))[0], comments: await db.select().from(issueComments).where(eq(issueComments.issueId, f.issue.id)), audits: await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)) };
   }
 
-  it.each(['blocks-add', 'blocks-clear', 'confirmation-create', 'confirmation-reject', 'dod-insert', 'dod-definition', 'hold-create', 'hold-release', 'goal-first', 'goal-preferred', 'project-fallback'] as const)('%s orders both writer-first and acceptance-first with durable effects', async kind => {
+  it.each(['blocks-add', 'blocks-clear', 'question-create', 'question-answer', 'question-cancel', 'question-replace', 'confirmation-create', 'confirmation-reject', 'dod-insert', 'dod-definition', 'brief', 'hold-create', 'hold-release', 'goal-first', 'goal-preferred', 'project-fallback'] as const)('%s orders both writer-first and acceptance-first with durable effects', async kind => {
     for (const order of ['writer-first', 'acceptance-first'] as const) {
       const f = await fixture(), entered = gate(), proceed = gate(), writerReady = gate();
       const actor = { userId: f.userId }, treeActor = { actorType: 'user' as const, actorId: f.userId, userId: f.userId };
@@ -100,6 +102,14 @@ describe('composed predicate acceptance over canonical HTTP and real PostgreSQL'
         if (kind === 'blocks-clear') await db.insert(issueRelations).values({ companyId: f.company.id, issueId: f.blocker.id, relatedIssueId: f.issue.id, type: 'blocks' });
         intent.status = 'in_progress'; expectedWriterFirst = kind === 'blocks-add' ? 422 : 200; expectedAcceptanceFirst = kind === 'blocks-clear' ? 422 : 200;
         write = c => issueService(c).update(f.issue.id, { blockedByIssueIds: kind === 'blocks-add' ? [f.blocker.id] : [] });
+      } else if (kind.startsWith('question') || kind === 'brief') {
+        await workforceService(db).enroll(f.company.id, f.agent.id, { templateId: 'marketing-content' }, actor);
+        await workforceService(db).updateBrief(f.company.id, { expectedRevision: 0, sources: [], facts: ['offer', 'audience', 'brandVoice', 'approvedClaims'].map(key => ({ key, value: 'Ready', sourceReference: 'Human supplied' })) }, actor);
+        const svc = issueThreadInteractionService(db);
+        const q = kind === 'question-create' || kind === 'brief' ? null : await svc.create(f.issue, qInput, actor);
+        if (kind === 'question-replace') await svc.cancelQuestions(f.issue, q!.id, {}, actor);
+        intent.status = 'done'; expectedWriterFirst = kind === 'question-answer' ? 200 : 409; expectedAcceptanceFirst = kind === 'question-create' || kind === 'brief' ? 200 : 409;
+        write = c => kind === 'brief' ? workforceService(c).updateBrief(f.company.id, { expectedRevision: 1, sources: [], facts: [] }, actor) : kind === 'question-create' ? issueThreadInteractionService(c).create(f.issue, qInput, actor) : kind === 'question-answer' ? issueThreadInteractionService(c).answerQuestions(f.issue, q!.id, { answers: [{ questionId: 'launch', optionIds: [], text: 'Tomorrow' }] }, actor) : kind === 'question-cancel' ? issueThreadInteractionService(c).cancelQuestions(f.issue, q!.id, {}, actor) : issueThreadInteractionService(c).create(f.issue, { ...qInput, payload: { ...qInput.payload, replacesInteractionId: q!.id } }, actor);
       } else if (kind.startsWith('confirmation')) {
         const c = kind === 'confirmation-create' ? null : await issueThreadInteractionService(db).create(f.issue, cInput, actor);
         write = connection => kind === 'confirmation-create' ? issueThreadInteractionService(connection).create(f.issue, cInput, actor) : issueThreadInteractionService(connection).rejectInteraction(f.issue, c!.id, {}, actor);
@@ -159,7 +169,7 @@ describe('composed predicate acceptance over canonical HTTP and real PostgreSQL'
       } finally { proceed.open(); }
       const response = await request;
       const outcome = await writerOutcome;
-      if (order === 'acceptance-first' && ['confirmation-reject'].includes(kind)) {
+      if (order === 'acceptance-first' && ['question-create', 'confirmation-reject'].includes(kind)) {
         expect(outcome).toMatchObject({ error: { status: 409 } });
       } else {
         expect(outcome, `${kind}/${order} competing writer must commit`).not.toHaveProperty('error');

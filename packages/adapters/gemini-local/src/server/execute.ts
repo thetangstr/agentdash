@@ -40,6 +40,7 @@ import {
   parseObject,
   renderTemplate,
   renderAgentDirectivesPrompt,
+  renderWorkforcePrompt,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -441,10 +442,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // prompt is suppressed — because a constraint the agent stops being told
   // about stops being a constraint.
   const agentDirectivesNote = renderAgentDirectivesPrompt(context.paperclipAgentDirectives);
+  const workforceNote = renderWorkforcePrompt(context.paperclipWorkforce);
   const prompt = joinPromptSections([
     instructionsPrefix,
     renderedBootstrapPrompt,
     agentDirectivesNote,
+    workforceNote,
     wakePrompt,
     sessionHandoffNote,
     paperclipEnvNote,

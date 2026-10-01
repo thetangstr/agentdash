@@ -111,7 +111,10 @@ vi.mock("detect-port", () => ({
   default: detectPortMock,
 }));
 
-vi.mock("@paperclipai/db", () => ({
+// Real table objects for import-time schema references (the workforce
+// services reach documents/workforce tables when the server module loads).
+vi.mock("@paperclipai/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@paperclipai/db")>()),
   createDb: createDbMock,
   ensurePostgresDatabase: vi.fn(),
   getPostgresDataDirectory: vi.fn(),
