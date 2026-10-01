@@ -248,13 +248,20 @@ function formatBackupSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)}M`;
 }
 
+// AgentDash (GH #940 review): an escape-string literal instead of a
+// dollar-quoted one. The `$paperclip$` tag closed early on a value ending in
+// `$paperclip` ("hello $paperclip" broke the restore). E'…' with `\`, `'`, CR
+// and LF escaped means the same under either standard_conforming_strings
+// setting, and keeps the literal on one line, so the line-based restore can
+// neither mangle a CR nor mistake part of a value for a statement breakpoint.
 function formatSqlLiteral(value: string): string {
-  const sanitized = value.replace(/\u0000/g, "");
-  let tag = "$paperclip$";
-  while (sanitized.includes(tag)) {
-    tag = `$paperclip_${Math.random().toString(36).slice(2, 8)}$`;
-  }
-  return `${tag}${sanitized}${tag}`;
+  const escaped = value
+    .replace(/\u0000/g, "")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "''")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n");
+  return `E'${escaped}'`;
 }
 
 function normalizeTableNameSet(values: string[] | undefined): Set<string> {

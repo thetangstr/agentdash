@@ -447,7 +447,7 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
           SELECT "id"::text AS "id", ${columns.map((column) => `"${column}"::text AS "${column}"`).join(", ")},
                  "secret"::text AS "secret"
           FROM "public"."typed_rows"
-          ORDER BY "id"
+          ORDER BY "typed_rows"."id"
         `);
 
       try {
@@ -488,8 +488,29 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
           );
           INSERT INTO "public"."typed_rows" ("id", "secret") VALUES (2, 'also-secret');
         `);
+        // Quoting edge cases (GH #940 review): a value ending in the old
+        // dollar-quote tag's prefix closed the literal early, and a lone CR or a
+        // line equal to the restore's statement breakpoint must not split or
+        // rewrite a value.
+        const trickyNotes = [
+          "hello $paperclip",
+          "$paperclip$",
+          "x$",
+          "$$",
+          "",
+          "lone\rcarriage return",
+          "before\n-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900\nafter",
+          "it's \\ E'escaped' \\n not a newline",
+        ];
+        for (const [index, note] of trickyNotes.entries()) {
+          await sourceSql`
+            INSERT INTO "public"."typed_rows" ("id", "note", "text_list")
+            VALUES (${100 + index}, ${note}, ARRAY[${note}]::text[])
+          `;
+        }
 
         const sourceRows = await selectCanonicalRows(sourceSql);
+        expect(sourceRows.slice(2).map((row) => row.note)).toEqual(trickyNotes);
 
         const result = await runDatabaseBackup({
           connectionString: sourceConnectionString,
