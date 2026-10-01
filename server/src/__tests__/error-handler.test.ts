@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../errors.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { recordServerError } from "../observability/error-sink.js";
+import { logger } from "../middleware/logger.js";
 
 vi.mock("../observability/error-sink.js", () => ({ recordServerError: vi.fn() }));
+vi.mock("../middleware/logger.js", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
 /** The shape drizzle >=0.45 throws: the driver error sits on `.cause`. */
 function drizzleWrapped(code: string, message: string): Error {
@@ -79,6 +81,38 @@ describe("errorHandler", () => {
     expect(res.json).toHaveBeenCalledWith({ error: "Invalid identifier" });
     expect(res.__errorContext).toBeUndefined();
     expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("logs the 400-mapped uuid cast at warn with the route and the names of the non-uuid parameters", () => {
+    const req = {
+      method: "GET",
+      originalUrl: "/api/issues/ACME-12/comments?cursor=not-a-uuid",
+      baseUrl: "/api",
+      route: { path: "/issues/:id/comments" },
+      params: { id: "ACME-12" },
+      query: { cursor: "not-a-uuid", limit: "10" },
+      body: {},
+    } as unknown as Request;
+    const res = makeRes() as any;
+    vi.mocked(logger.warn).mockClear();
+
+    errorHandler(
+      drizzleWrapped("22P02", 'invalid input syntax for type uuid: "ACME-12"'),
+      req,
+      res,
+      vi.fn() as unknown as NextFunction,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [fields] = vi.mocked(logger.warn).mock.calls[0]! as unknown as [Record<string, unknown>];
+    expect(fields).toEqual({
+      method: "GET",
+      route: "/api/issues/:id/comments",
+      path: "/api/issues/ACME-12/comments",
+      nonUuidParams: ["id"],
+      nonUuidQuery: ["cursor", "limit"],
+    });
   });
 
   it("keeps other 22P02 casts a recorded 500, since those are usually the server's own bug", () => {

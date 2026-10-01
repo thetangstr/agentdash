@@ -570,6 +570,7 @@ export async function startServer(): Promise<StartedServer> {
       allowedHostnames: config.allowedHostnames,
       authPublicBaseUrl: config.authPublicBaseUrl,
       env: process.env,
+      ssoProviders: Object.keys((await import("./auth/social-providers.js")).buildSocialProviders()),
     });
     for (const warning of originReport.warnings) logger.warn({ originsMode: trusted.mode }, `[origins] ${warning}`);
     for (const note of originReport.info) logger.info({ originsMode: trusted.mode }, `[origins] ${note}`);

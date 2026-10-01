@@ -135,6 +135,25 @@ describe("issue-reference", () => {
       }
     });
 
+    // GH #863 item 3: a company prefix that is all hex looks like a UUID group.
+    it("links glued identifiers for a known all-hex company prefix", () => {
+      for (const prefix of ["ABC", "CAF", "FAB", "BED", "DEF"]) {
+        const options = { issuePrefixes: [prefix] };
+        expect(linkedUrlsIn(`Branch ${prefix}-12-fix-login is up.`, options).urls).toEqual([`/issues/${prefix}-12`]);
+        expect(linkedUrlsIn(`Opened re-${prefix}-12 today.`, options).urls).toEqual([`/issues/${prefix}-12`]);
+        expect(linkedUrlsIn(`See ${prefix}-12.`, options).urls).toEqual([`/issues/${prefix}-12`]);
+      }
+    });
+
+    it("still skips a known all-hex prefix that sits inside a complete UUID", () => {
+      const text = "Run 3f9a1c7e-bd42-4916-a8c3-5e0f2b7d9c14 and 3f9a1c7e-cafe-4916-a8c3-5e0f2b7d9c14 done; see CAFE-7.";
+      expect(linkedUrlsIn(text, { issuePrefixes: ["CAFE", "BD42"] }).urls).toEqual(["/issues/CAFE-7"]);
+    });
+
+    it("keeps the neighbour guard for an all-hex prefix with no company context", () => {
+      expect(linkedUrlsIn("Opened re-ABC-12 today.").urls).toEqual([]);
+    });
+
     it("still links explicit issue paths whatever the prefix", () => {
       expect(linkedUrlsIn("See /issues/PAP-1179.", { issuePrefixes: ["ACME"] }).urls).toEqual(["/issues/PAP-1179"]);
       expect(parseIssueReferenceFromHref("issue://PAP-1310", { issuePrefixes: ["ACME"] })).toEqual({

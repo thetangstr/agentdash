@@ -69,6 +69,7 @@ const REASON_TEXT: Record<string, string> = {
   connection_unavailable: "the connection is revoked or not active",
   connection_unreadable: "the connection's credential could not be read",
   executor_error: "the executor hit an internal error; check the execution record before retrying",
+  executor_error_before_send: "the executor hit an internal error before the send was attempted",
   transport_failure: "the connection to the provider dropped before it answered",
   provider_timeout: "the provider did not answer in time",
   // Payload refusals (checkConnectorSendPayload problems), worded for the
@@ -222,6 +223,12 @@ export function connectorSendExecutionService(db: Db) {
     // Set once this call owns the attempt (no execution row existed), so an
     // error before then reports nothing rather than a duplicate outcome.
     let attempted = false;
+    // AgentDash (GH #863 item 5): set only once the claim row is written, the
+    // point after which the provider may have been called. An error before it
+    // (a transient DB error on a check or on the claim insert itself) sent
+    // nothing and left no row to reconcile, so it must not be reported as
+    // "outcome unknown, do not refile".
+    let claimWritten = false;
     try {
       const approval = await db
         .select()
@@ -390,6 +397,7 @@ export function connectorSendExecutionService(db: Db) {
         throw error;
       }
       if (!claimed) return null;
+      claimWritten = true;
 
       const properties = (payload.properties ?? {}) as Record<string, unknown>;
       const result = await hubspot.executeWrite({
@@ -447,6 +455,15 @@ export function connectorSendExecutionService(db: Db) {
       // failed), nothing was tried and there is no execution row, so there is
       // no outcome to report and the wake stays a plain approval.
       if (!attempted) return null;
+      if (!claimWritten) {
+        return {
+          outcome: "failed",
+          refused: false,
+          reason: "executor_error_before_send",
+          provider: attemptedProvider,
+          detail: null,
+        };
+      }
       return {
         outcome: "outcome_unknown",
         refused: false,

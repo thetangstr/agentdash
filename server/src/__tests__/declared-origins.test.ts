@@ -273,6 +273,57 @@ describe("boot lint", () => {
       expect.stringMatching(/Deprecated origin variables folded into the declared set: PAPERCLIP_AUTH_PUBLIC_BASE_URL, PAPERCLIP_ALLOWED_HOSTNAMES/),
     ]);
   });
+
+  // GH #863 item 1.
+  function declaredReport(env: OriginEnv, ssoProviders?: string[]) {
+    const config = configFrom(env);
+    return originBootReport({
+      canonical: config.canonicalOrigin,
+      declaredOrigins: config.declaredOrigins,
+      allowedHostnames: config.allowedHostnames,
+      authPublicBaseUrl: config.authPublicBaseUrl,
+      env,
+      ssoProviders,
+    });
+  }
+
+  it("warns that TLS-door users are signed out once when the legacy auth URL was http", () => {
+    const env: OriginEnv = {
+      PAPERCLIP_CANONICAL_ORIGIN: `https://${TAILNET}:3112`,
+      PAPERCLIP_ORIGINS: `https://${TAILNET}:3112,http://${LAN_IP}:3102`,
+      PAPERCLIP_PUBLIC_URL: `http://${LAN_IP}:3102`,
+    };
+    const report = declaredReport(env);
+    expect(report.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/TLS door\(s\) https:\/\/office-mini\.tail0000\.ts\.net:3112 now use the __Secure- cookie name.*signed out once/),
+      ]),
+    );
+  });
+
+  it("says nothing about a sign-out when the legacy auth URL was already https", () => {
+    const env: OriginEnv = {
+      PAPERCLIP_CANONICAL_ORIGIN: `https://${TAILNET}:3112`,
+      PAPERCLIP_ORIGINS: `https://${TAILNET}:3112`,
+      PAPERCLIP_AUTH_PUBLIC_BASE_URL: `https://${TAILNET}:3112`,
+    };
+    expect(declaredReport(env).warnings.join("\n")).not.toMatch(/signed out once/);
+  });
+
+  it("warns that SSO only completes from the canonical scheme when another scheme is declared", () => {
+    const env: OriginEnv = {
+      PAPERCLIP_CANONICAL_ORIGIN: `https://${TAILNET}:3112`,
+      PAPERCLIP_ORIGINS: `https://${TAILNET}:3112,http://${LAN_IP}:3102`,
+      PAPERCLIP_AUTH_PUBLIC_BASE_URL: `https://${TAILNET}:3112`,
+    };
+    expect(declaredReport(env).warnings.join("\n")).not.toMatch(/Single sign-on/);
+    const warnings = declaredReport(env, ["google"]).warnings;
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(new RegExp(`Single sign-on \\(google\\) only completes when started on the canonical origin .*started on http://${LAN_IP.replace(/\./g, "\\.")}:3102`)),
+      ]),
+    );
+  });
 });
 
 describe("minting per audience", () => {
