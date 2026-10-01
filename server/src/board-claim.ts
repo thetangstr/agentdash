@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+// AgentDash (GH #708): ownership claim changes admin roles and memberships.
+import { publishLiveEventAccessChange } from "./realtime/live-events-access.js";
 import { isAllInterfacesHost } from "@paperclipai/shared";
 import type { DeploymentMode } from "@paperclipai/shared";
 
@@ -142,6 +144,10 @@ export async function claimBoardOwnership(
       }
     }
   });
+
+  // AgentDash (GH #708): the local board user lost instance admin; the claimant gained access.
+  publishLiveEventAccessChange({ kind: "user", userId: LOCAL_BOARD_USER_ID, reason: "board ownership claimed" });
+  publishLiveEventAccessChange({ kind: "user", userId: opts.userId, reason: "board ownership claimed" });
 
   if (activeChallenge && activeChallenge.token === opts.token) {
     activeChallenge.claimedAt = new Date();

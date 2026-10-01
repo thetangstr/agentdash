@@ -311,18 +311,22 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     const { companyId } = input;
     let actorReq: { value: Promise<Request>; expiresAt: number } | null = null;
     const decisions = new Map<string, { visible: boolean; generation: number; expiresAt: number }>();
+    // AgentDash (GH #708): bumped by invalidateActor so a decision computed from
+    // an actor loaded before the invalidation is not cached after it.
+    let actorEpoch = 0;
 
     function currentReq(): Promise<Request> {
       if (actorReq && actorReq.expiresAt > now()) return actorReq.value;
       const value = input.loadActor().then((actor) => ({ actor }) as unknown as Request);
-      actorReq = { value, expiresAt: now() + ACTOR_TTL_MS };
+      const entry = { value, expiresAt: now() + ACTOR_TTL_MS };
+      actorReq = entry;
       value.catch(() => {
-        actorReq = null;
+        if (actorReq === entry) actorReq = null;
       });
       return value;
     }
 
-    async function projectVisible(req: Request, projectId: string): Promise<boolean> {
+    async function projectVisible(req: Request, projectId: string, epoch: number): Promise<boolean> {
       const row = (await loadCompanyProjects(companyId)).get(projectId);
       // Unknown here means another company or a dangling id; isProjectIdVisible
       // treats a dangling reference as company-visible, and a foreign project
@@ -332,7 +336,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       const cached = decisions.get(projectId);
       if (cached && cached.generation === generation && cached.expiresAt > now()) return cached.visible;
       const visible = await isProjectVisible(db, req, row);
-      decisions.set(projectId, { visible, generation, expiresAt: now() + DECISION_TTL_MS });
+      if (epoch === actorEpoch) decisions.set(projectId, { visible, generation, expiresAt: now() + DECISION_TTL_MS });
       return visible;
     }
 
@@ -349,6 +353,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       const details = payload?.details;
       const related = relatedIssueIdsInActivityDetails(details);
       if (related.length === 0) return event;
+      const epoch = actorEpoch; // before the actor is read: see projectVisible
       const req = await currentReq();
       if (seesEverything(req, companyId)) return event;
       const projectsById = await projectsOfIssues(related.filter((id) => isCanonicalUuid(id)));
@@ -356,16 +361,30 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       for (const [issueId, projectId] of projectsById) {
         // Unknown issue: fail closed. No project: company-visible.
         if (projectId === undefined) continue;
-        if (projectId === null || (await projectVisible(req, projectId))) visible.add(issueId);
+        if (projectId === null || (await projectVisible(req, projectId, epoch))) visible.add(issueId);
       }
       const pruned = pruneRelatedIssuesInActivityDetails(details, (id) => visible.has(id));
       if (pruned === details) return event;
       return { ...event, payload: { ...payload, details: pruned } };
     }
 
-    return Object.assign(shouldDeliver, { redactForSubscriber });
+    /**
+     * AgentDash (GH #708): forget the cached actor and project decisions, so a
+     * role change (e.g. admin demoted to member) applies to the next event
+     * instead of after ACTOR_TTL_MS.
+     */
+    function invalidateActor() {
+      actorEpoch += 1;
+      actorReq = null;
+      decisions.clear();
+    }
+
+    return Object.assign(shouldDeliver, { redactForSubscriber, invalidateActor });
 
     async function shouldDeliver(event: LiveEvent): Promise<boolean> {
+      // AgentDash (GH #708): the epoch is read before any actor is loaded, so an
+      // invalidation at any later await keeps this call's decisions out of the cache.
+      const epoch = actorEpoch;
       // Agent visibility (2026-09-30): an event about an agent the subscriber
       // cannot see is not delivered, whatever project it is in. The scope is
       // cached on the actor request, which currentReq() keeps for ACTOR_TTL_MS.
@@ -386,7 +405,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
         return ![...rows.values()].some((row) => row.visibility === "restricted");
       }
       for (const projectId of ref.projectIds) {
-        if (!(await projectVisible(req, projectId))) return false;
+        if (!(await projectVisible(req, projectId, epoch))) return false;
       }
       return true;
     }
