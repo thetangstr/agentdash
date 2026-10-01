@@ -13,7 +13,7 @@
 //
 // Usage: node scripts/docs/build-search-index.mjs [--check]
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -182,6 +182,15 @@ function main() {
   console.log(`Wrote ${SEARCH_INDEX_REL}.`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Entry guard: resolve symlinks on both sides, or a symlinked invocation
+// silently skips main() (scripts/entry-guard.test.mjs; cf. #666).
+function realOrResolved(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+if (process.argv[1] && realOrResolved(process.argv[1]) === realOrResolved(fileURLToPath(import.meta.url))) {
   main();
 }
