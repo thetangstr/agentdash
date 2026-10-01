@@ -9,7 +9,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runAdmin } from "../admin/run.js";
 import { createCloudDb, migrateWithRoles, type CloudDb } from "../db/client.js";
-import { accounts, boxEvents, boxes, boxHealth, boxHealthChecks, boxIdleNotices, fleetAlerts, jobs, monitorReadings, operatorAudit, type BoxState } from "../db/schema.js";
+import { accounts, boxEvents, boxes, boxHealth, boxHealthChecks, boxIdleNotices, boxUpgrades, fleetAlerts, jobs, monitorReadings, operatorAudit, type BoxState } from "../db/schema.js";
 import { createEdgeServer } from "../edge/proxy.js";
 import { pgRouteSource, RouteTable } from "../edge/routes.js";
 import { EdgeStats } from "../edge/stats.js";
@@ -434,6 +434,27 @@ describe("Free idle policy (spec §5.2)", () => {
     expect((await boxRow(proSuspended.id)).state).toBe("suspended");
   });
 
+  it("exempts demo, canary and internal boxes, and skips a box whose upgrade is queued or in flight", async () => {
+    await setting("idle_suspend_enabled", true);
+    const demo = await makeBox("active", { purpose: "demo", lastHumanRequestAt: idleAt(40) });
+    const canary = await makeBox("active", { purpose: "canary", lastHumanRequestAt: idleAt(40) });
+    const internal = await makeBox("active", { purpose: "internal", lastHumanRequestAt: idleAt(40) });
+    const queued = await makeBox("active", { lastHumanRequestAt: idleAt(40) });
+    const running = await makeBox("active", { lastHumanRequestAt: idleAt(40) });
+    // A finished upgrade does not shield the box: this one is still examined.
+    const done = await makeBox("active", { lastHumanRequestAt: idleAt(14) });
+    await db.insert(boxUpgrades).values([
+      { boxId: queued.id, state: "queued", toTag: "v2026.1001.0", toDigest: "sha256:aa" },
+      { boxId: running.id, state: "running", toTag: "v2026.1001.0", toDigest: "sha256:bb" },
+      { boxId: done.id, state: "succeeded", toTag: "v2026.930.0", toDigest: "sha256:cc", finishedAt: now() },
+    ]);
+    const mail = recordingMailer();
+    expect(await sweepIdle(deps(mail))).toMatchObject({ examined: 1, suspendWarned: 1 });
+    expect(mail.messages).toHaveLength(1);
+    expect(mail.messages[0]).toMatchObject({ to: done.email });
+    for (const b of [demo, canary, internal, queued, running]) expect(await suspendJobs(b.id)).toHaveLength(0);
+  });
+
   it("enabled late: a long-idle box is warned first and suspended only 7 days after the email", async () => {
     await setting("idle_suspend_enabled", true);
     const box = await makeBox("active", { lastHumanRequestAt: idleAt(40) });
@@ -652,6 +673,37 @@ describe("suspend and wake (jobs, the router's wake page, the operator)", () => 
     expect(j!.lastError).toMatch(/control-plane tag/);
     expect((await boxRow(box.id)).state).toBe("active");
     expect(web.deployments.map((d) => d.status)).toEqual(["SUCCESS"]);
+  });
+
+  it("an idle suspend is dropped when an upgrade went live after the sweep queued it", async () => {
+    const { box, fake, web } = await railwayBox("active", { lastHumanRequestAt: new Date(Date.now() - 30 * DAY_MS) });
+    await db.insert(jobs).values({ boxId: box.id, kind: "suspend", payload: { reason: "idle", requestedBy: "idle-policy", idleSince: box.lastHumanRequestAt!.toISOString() } });
+    // The rollout queued the upgrade after the sweep; the runner's per-box lock does not
+    // cover a merely-queued upgrade, so the suspend rechecks and yields.
+    const [up] = await db.insert(boxUpgrades).values({ boxId: box.id, state: "queued", toTag: "v2026.1001.0", toDigest: "sha256:dd" }).returning();
+    const [job] = await db.select().from(jobs).where(eq(jobs.boxId, box.id));
+    expect(await runner(fake).runOnce()).toBe(job!.id);
+    expect((await db.select().from(jobs).where(eq(jobs.id, job!.id)))[0]!.state).toBe("succeeded");
+    expect((await boxRow(box.id)).state).toBe("active");
+    expect(web.deployments.map((d) => d.status)).toEqual(["SUCCESS"]);
+    expect(fake.ops()).not.toContain("deploymentRemove");
+    const events = await db.select({ kind: boxEvents.kind, detail: boxEvents.detail }).from(boxEvents).where(eq(boxEvents.boxId, box.id));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "idle_suspend_skipped", detail: expect.objectContaining({ upgradeId: up!.id }) }));
+  });
+
+  it("an idle suspend fails (box untouched) when the box's purpose is ops-managed", async () => {
+    const { box, fake, web } = await railwayBox("active", { purpose: "demo", lastHumanRequestAt: new Date(Date.now() - 30 * DAY_MS) });
+    const [job] = await db
+      .insert(jobs)
+      .values({ boxId: box.id, kind: "suspend", payload: { reason: "idle", requestedBy: "idle-policy", idleSince: box.lastHumanRequestAt!.toISOString() } })
+      .returning();
+    await runner(fake).runOnce();
+    const [j] = await db.select().from(jobs).where(eq(jobs.id, job!.id));
+    expect(j).toMatchObject({ state: "dead" });
+    expect(j!.lastError).toMatch(/purpose demo/);
+    expect((await boxRow(box.id)).state).toBe("active");
+    expect(web.deployments.map((d) => d.status)).toEqual(["SUCCESS"]);
+    expect(fake.ops()).not.toContain("deploymentRemove");
   });
 
   it("an idle suspend is dropped when the box was used after the sweep queued it", async () => {

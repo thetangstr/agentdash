@@ -10,7 +10,10 @@
 // (`last_human_request_at`, never health polls or the assistant endpoint),
 // or the claim, or creation, whichever is latest known. Only `plan_tier =
 // 'free'` boxes are subject; Pro and trialing boxes are exempt, and a lapsed
-// trial is Free again once its plan says so.
+// trial is Free again once its plan says so. Only `purpose = 'customer'`
+// boxes are subject either: demo, canary and internal boxes are ops-managed
+// (SC-12). A box with a live upgrade row (queued/running/rolling_back) is
+// skipped for the sweep while its upgrade is in flight.
 //
 // Safety:
 //   - idle_suspend_enabled and idle_delete_enabled are both OFF by default.
@@ -26,7 +29,7 @@
 //     does not start.
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
-import { accounts, boxEvents, boxes, boxIdleNotices, type IdleNoticeKind } from "../db/schema.js";
+import { accounts, BOX_UPGRADE_LIVE_STATES, boxEvents, boxes, boxIdleNotices, type IdleNoticeKind } from "../db/schema.js";
 import { emails, type Mailer } from "../front-door/mailer.js";
 import { enqueueJob } from "../jobs/queue.js";
 import type { Logger } from "../logger.js";
@@ -44,6 +47,9 @@ export const IDLE_SWEEP_MS = 60 * 60_000;
 
 /** Plans the policy applies to. Anything else (pro, trialing, …) is exempt. */
 export const IDLE_POLICY_PLANS = ["free"] as const;
+
+/** Purposes the policy applies to. demo/canary/internal boxes are ops-managed and exempt (SC-12). */
+export const IDLE_POLICY_PURPOSES = ["customer"] as const;
 
 export interface IdleDeps {
   db: CloudDb;
@@ -75,11 +81,12 @@ export function idleDays(box: Pick<BoxRow, "lastHumanRequestAt" | "claimedAt" | 
 
 /** What the policy would do next for a box, for `box health` and `fleet status`. */
 export function nextIdleStep(
-  box: Pick<BoxRow, "state" | "planTier" | "lastHumanRequestAt" | "claimedAt" | "createdAt">,
+  box: Pick<BoxRow, "state" | "planTier" | "purpose" | "lastHumanRequestAt" | "claimedAt" | "createdAt">,
   now: Date,
   settings: { idle_suspend_enabled: boolean; idle_delete_enabled: boolean },
 ): string {
   if (!(IDLE_POLICY_PLANS as readonly string[]).includes(box.planTier)) return `exempt (plan ${box.planTier})`;
+  if (!(IDLE_POLICY_PURPOSES as readonly string[]).includes(box.purpose)) return `exempt (purpose ${box.purpose})`;
   const since = idleSince(box).getTime();
   const at = (days: number) => new Date(since + days * DAY_MS).toISOString();
   if (box.state === "active") {
@@ -112,7 +119,21 @@ export async function sweepIdle(deps: IdleDeps): Promise<IdleSummary> {
     .select({ box: boxes, email: accounts.email })
     .from(boxes)
     .innerJoin(accounts, eq(accounts.id, boxes.accountId))
-    .where(and(inArray(boxes.planTier, [...IDLE_POLICY_PLANS]), inArray(boxes.state, ["active", "suspended"])));
+    .where(
+      and(
+        inArray(boxes.planTier, [...IDLE_POLICY_PLANS]),
+        inArray(boxes.purpose, [...IDLE_POLICY_PURPOSES]),
+        inArray(boxes.state, ["active", "suspended"]),
+        // A box whose upgrade is queued, running or rolling back is left alone (the
+        // box_upgrades_one_live_per_box_uq "live" states, SC-12). The upgrade's own
+        // prepare step skips a suspended box, so pausing it first only wastes the slot;
+        // the sweep picks the box up again once the upgrade row is done.
+        sql`not exists (select 1 from box_upgrades u where u.box_id = ${boxes.id} and u.state in (${sql.join(
+          BOX_UPGRADE_LIVE_STATES.map((s) => sql`${s}`),
+          sql`, `,
+        )}))`,
+      ),
+    );
   const url = (slug: string) => `https://${slug}.${deps.edgeDomain}`;
 
   const sendNotice = async (box: BoxRow, email: string, kind: IdleNoticeKind, since: Date, stepAt: Date): Promise<boolean> => {
