@@ -106,14 +106,14 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
     await tempDb?.cleanup();
   });
 
-  function createApp() {
+  function createApp(actorOverride?: Record<string, unknown>) {
     if (!userProfileRoutes || !errorHandler) {
       throw new Error("user profile route test dependencies were not loaded");
     }
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
-      (req as any).actor = {
+      (req as any).actor = actorOverride ?? {
         type: "board",
         source: "local_implicit",
         userId,
@@ -215,6 +215,21 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
     expect(response.body.topAgents[0]).toMatchObject({ agentId, agentName: "Coder", costCents: 42 });
     expect(response.body.topProviders[0]).toMatchObject({ provider: "openai", model: "gpt-test", costCents: 42 });
     expect(response.body.measured, "a company with a cost event has been measured").toBe(true);
+  });
+
+  // AgentDash (GH #505): a profile is readable by anything with company access,
+  // but the address is not -- agents get the person, never the email.
+  it("keeps the email for the local board but never returns it to an agent", async () => {
+    const board = await request(createApp()).get(`/api/companies/${companyId}/users/dotta/profile`);
+    expect(board.status).toBe(200);
+    expect(board.body.user.email).toBe("dotta@example.com");
+
+    const agent = await request(
+      createApp({ type: "agent", agentId, companyId, source: "agent_key" }),
+    ).get(`/api/companies/${companyId}/users/dotta/profile`);
+    expect(agent.status).toBe(200);
+    expect(agent.body.user.name).toBe("Dotta");
+    expect(agent.body.user.email).toBeNull();
   });
 
   /**

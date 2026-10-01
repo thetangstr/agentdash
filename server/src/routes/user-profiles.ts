@@ -18,6 +18,9 @@ import type {
 } from "@paperclipai/shared";
 import { notFound } from "../errors.js";
 import { assertCompanyAccess } from "./authz.js";
+// AgentDash (GH #505): member emails reach only callers allowed to read them.
+import { accessService } from "../services/access.js";
+import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 
 type CompanyUserRow = {
   id: string;
@@ -299,6 +302,8 @@ async function loadDailyStats(db: Db, companyId: string, userId: string): Promis
 
 export function userProfileRoutes(db: Db) {
   const router = Router();
+  // AgentDash (GH #505): gates the profile's `email` field.
+  const access = accessService(db);
 
   router.get("/companies/:companyId/users/:userSlug/profile", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -404,7 +409,8 @@ export function userProfileRoutes(db: Db) {
       id: userId,
       slug: canonicalSlug,
       name: row.name,
-      email: row.email,
+      // AgentDash (GH #505): only for member managers, or the person themself.
+      email: visibleMemberEmail(req, await canViewMemberEmails(access, req, companyId), userId, row.email),
       image: row.image,
       membershipRole: row.membershipRole,
       membershipStatus: row.status,

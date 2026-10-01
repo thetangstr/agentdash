@@ -39,8 +39,11 @@ and the comments before concluding anything is missing.
 **Then look properly.**
 
 - People: `GET $PAPERCLIP_API_URL/api/companies/{companyId}/people` resolves
-  names, email addresses and membership status. Never infer an address from a
-  name pattern.
+  names to `userId` and membership status. Refer to a person by `userId` and
+  name. Agents are not given member email addresses: `email` is always `null`
+  for you there, on `user-directory`, and on an agent's `steward` /
+  `accountable` fields. That is policy, not missing data. Never infer an
+  address from a name pattern, and never ask for or record one.
 - Anything else: find the endpoint before deciding there isn't one. "No such API
   exists" is a claim about this codebase, and it is usually wrong.
 

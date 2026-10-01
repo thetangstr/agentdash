@@ -272,6 +272,8 @@ describeEmbeddedPostgres("agent steward visibility", () => {
     );
     expect(byName.get("Casper")).toMatchObject({ userId: titus, name: "Titus" });
     expect(byName.get("Sam's Agent")).toMatchObject({ userId: sam, name: "Sam" });
+    // AgentDash (GH #505): names travel to agents; addresses do not.
+    expect(JSON.stringify(res.body)).not.toMatch(/@example\.com/);
   });
 
   it("keeps the steward on the restricted list view that redacts adapter config", async () => {
@@ -360,11 +362,39 @@ describeEmbeddedPostgres("agent steward visibility", () => {
     );
 
     expect(res.status).toBe(200);
+    // AgentDash (GH #505): the agent gets the person -- id and name -- but
+    // never the address.
     expect(res.body.steward).toMatchObject({
       userId: titus,
       name: "Titus",
+      email: null,
+    });
+    expect(res.body.accountable?.email ?? null).toBeNull();
+    expect(JSON.stringify(res.body)).not.toContain("titus@example.com");
+  });
+
+  it("keeps the steward's email for the local board, which manages members (GH #505)", async () => {
+    const company = await createCompany(db);
+    const titus = await createUserMember(db, company.id, {
+      name: "Titus",
       email: "titus@example.com",
     });
+    const casper = await createAgent(db, company.id, "Casper");
+    const service = agentStewardshipService(db);
+    await service.assign(company.id, { agentId: casper.id, userId: titus, assignedByUserId: titus });
+
+    const app = await createApp(db, {
+      type: "board",
+      userId: "local-board",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/agents/${casper.id}`),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.steward).toMatchObject({ userId: titus, email: "titus@example.com" });
   });
 
   it("tells an agent its own steward through the route whoami reads", async () => {
@@ -381,7 +411,7 @@ describeEmbeddedPostgres("agent steward visibility", () => {
     const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/agents/me"));
 
     expect(res.status).toBe(200);
-    expect(res.body.steward).toMatchObject({ userId: titus, name: "Titus" });
+    expect(res.body.steward).toMatchObject({ userId: titus, name: "Titus", email: null });
   });
 
   it("reports a null steward rather than omitting the field when nobody holds one", async () => {

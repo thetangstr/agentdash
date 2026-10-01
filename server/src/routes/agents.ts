@@ -81,6 +81,8 @@ import {
 import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo,
   assertCompanyAdministrator,
 } from "./authz.js";
+// AgentDash (GH #505): member emails reach only callers allowed to read them.
+import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import {
   agentVisibilityCondition,
   assertAgentIdVisible,
@@ -592,11 +594,10 @@ export function agentRoutes(
    * product writes talks about "your steward". Carrying the steward on the
    * read paths agents actually call is what makes that name available.
    *
-   * `name` and `email` come from the same auth user row that
-   * `/companies/:companyId/user-directory` already returns to any caller with
-   * company access — including agent keys, which pass `assertCompanyAccess` for
-   * their own company. So this widens no one's view of contact details; it only
-   * puts the person next to the agent they are accountable for.
+   * AgentDash (GH #505): `name` travels to every reader; `email` only to
+   * callers who may read member emails (see member-email-visibility.ts), the
+   * same rule `/companies/:companyId/user-directory` applies. Agent keys get
+   * the steward's id and name, never the address.
    */
   /**
    * The readiness verdict, sent alongside the evidence it judges.
@@ -635,20 +636,32 @@ export function agentRoutes(
     return { ...agent, harnessReadiness: readiness };
   }
 
-  async function attachHumanContext<T extends { id: string }>(companyId: string, rows: T[]) {
+  /**
+   * AgentDash (GH #505): the person-shaped fields on agent read paths carry an
+   * email only for callers allowed to read member emails. Returns a function
+   * that blanks `email` on a steward / accountable party for everyone else.
+   */
+  async function memberEmailFilter(req: Request, companyId: string) {
+    const canView = await canViewMemberEmails(access, req, companyId);
+    return <P extends { userId: string; email: string | null }>(party: P | null): P | null =>
+      party ? { ...party, email: visibleMemberEmail(req, canView, party.userId, party.email) } : null;
+  }
+
+  async function attachHumanContext<T extends { id: string }>(req: Request, companyId: string, rows: T[]) {
     const agentIds = rows.map((row) => row.id);
-    const [stewardsByAgentId, accountabilityByAgentId] = await Promise.all([
+    const [stewardsByAgentId, accountabilityByAgentId, filterEmail] = await Promise.all([
       stewardships.activeStewardsByAgentIds(companyId, agentIds),
       accountability.resolveForAgents(companyId, agentIds),
+      memberEmailFilter(req, companyId),
     ]);
     return rows.map((row) => ({
       ...row,
-      steward: stewardsByAgentId.get(row.id) ?? null,
+      steward: filterEmail(stewardsByAgentId.get(row.id) ?? null),
       // Who answers for this agent, and why them. Carried next to `steward`
       // rather than derived by each reader: for an autonomous agent the answer
       // is somebody who does not steward it, and a board or another agent that
       // has to infer that from two nullable fields will infer it differently.
-      accountable: toAccountableParty(accountabilityByAgentId.get(row.id) ?? null),
+      accountable: filterEmail(toAccountableParty(accountabilityByAgentId.get(row.id) ?? null)),
     }));
   }
 
@@ -742,6 +755,9 @@ export function agentRoutes(
 
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
+    // AgentDash (GH #505): the caller, so steward/accountable emails follow
+    // the member-email rule. Required, so no call site can forget it.
+    req: Request,
     options?: { restricted?: boolean },
   ) {
     // OBS-2: the ceiling's figures are configuration — the restricted view
@@ -755,7 +771,7 @@ export function agentRoutes(
           liftsAt: tokenCeilingStatus.liftsAt,
         }
       : null;
-    const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime] = await Promise.all([
+    const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime, filterEmail] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
@@ -778,6 +794,7 @@ export function agentRoutes(
             ? agent.runtimeConfig as Record<string, unknown>
             : {},
       }),
+      memberEmailFilter(req, agent.companyId),
     ]);
 
     return {
@@ -791,11 +808,12 @@ export function agentRoutes(
       // Present and null when nobody stewards this agent, never absent: an
       // agent reading a missing key cannot tell "unstewarded" from "this
       // build does not report stewards".
-      steward,
+      // AgentDash (GH #505): email blanked unless the caller may read it.
+      steward: filterEmail(steward),
       // Same contract, and the field that makes an autonomous agent legible:
       // `steward` is null for one of those by definition, so `steward: null`
       // alone cannot tell a reader whether anybody is answerable.
-      accountable: toAccountableParty(accountableFor),
+      accountable: filterEmail(toAccountableParty(accountableFor)),
       access: accessState,
       // Derived from runs, not from stored claims. See buildAgentRunHealth.
       runHealth,
@@ -2164,7 +2182,7 @@ export function agentRoutes(
       .map((agent) => withHarnessReadiness(agent));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
-      res.json(await attachHumanContext(companyId, result));
+      res.json(await attachHumanContext(req, companyId, result));
       return;
     }
     // The restricted view redacts adapter and runtime configuration, which is
@@ -2172,6 +2190,7 @@ export function agentRoutes(
     // chart — so it survives the redaction rather than being stripped with it.
     res.json(
       await attachHumanContext(
+        req,
         companyId,
         // Non-null: every row came from `svc.list`, and the redactor only
         // returns null for a null input.
@@ -2298,7 +2317,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    res.json(await buildAgentDetail(agent));
+    res.json(await buildAgentDetail(agent, req));
   });
 
   router.get("/agents/me/inbox-lite", async (req, res) => {
@@ -2369,10 +2388,10 @@ export function agentRoutes(
       ? true
       : await actorCanReadConfigurationsForCompany(req, agent.companyId);
     if (!canReadSensitiveDetail) {
-      res.json(await buildAgentDetail(agent, { restricted: true }));
+      res.json(await buildAgentDetail(agent, req, { restricted: true }));
       return;
     }
-    res.json(await buildAgentDetail(agent));
+    res.json(await buildAgentDetail(agent, req));
   });
 
   router.get("/agents/:id/configuration", async (req, res) => {
@@ -3191,7 +3210,7 @@ export function agentRoutes(
       },
     });
 
-    res.json(await buildAgentDetail(agent));
+    res.json(await buildAgentDetail(agent, req));
   });
 
   /**
@@ -3249,7 +3268,7 @@ export function agentRoutes(
         details: { maxDailyTokens: req.body.maxDailyTokens },
       });
 
-      res.json(await buildAgentDetail(agent));
+      res.json(await buildAgentDetail(agent, req));
     },
   );
 

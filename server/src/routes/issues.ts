@@ -103,6 +103,8 @@ import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, reportAuthzRefusal } from "./authz.js";
+// AgentDash (GH #505): member emails reach only callers allowed to read them.
+import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import { clearWorkspacePersistenceHold } from "../services/workspace-persistence-recovery.js";
 import {
   WorkspaceFileError,
@@ -964,8 +966,25 @@ export function issueRoutes(
     });
     // A5: a visible issue's blockedBy must not name an invisible blocker.
     // GH #863: and its parentId / blockerAttention samples must not name one either.
+    // AgentDash (GH #505): the steward chip names the person; its email goes
+    // only to callers allowed to read member emails.
+    const canViewEmails = await canViewMemberEmails(access, req, companyId);
+    const emailScoped = canViewEmails
+      ? result
+      : result.map((row) => {
+          const steward = (row as { assigneeSteward?: { userId: string; email: string | null } | null })
+            .assigneeSteward;
+          if (!steward) return row;
+          return {
+            ...row,
+            assigneeSteward: {
+              ...steward,
+              email: visibleMemberEmail(req, false, steward.userId, steward.email),
+            },
+          };
+        });
     res.json(
-      await redactHiddenIssueRefsOnRows(db, req, companyId, await filterVisibleBlockedByOnRows(db, req, companyId, result)),
+      await redactHiddenIssueRefsOnRows(db, req, companyId, await filterVisibleBlockedByOnRows(db, req, companyId, emailScoped)),
     );
   });
 
