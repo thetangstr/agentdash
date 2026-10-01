@@ -159,7 +159,6 @@ async function main() {
   ];
   for (const t of passes) t.unref();
 
-<<<<<<< HEAD
   // AgentDash (SC-10, GH #771): fleet health, alerts, the Free idle policy and the spend alarm.
   const monitor = startMonitor({
     db,

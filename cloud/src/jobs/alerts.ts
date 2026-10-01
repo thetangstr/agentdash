@@ -7,7 +7,6 @@ import { redact, redactString } from "../logger.js";
 import type { Secret } from "../secret.js";
 
 export interface Alert {
-<<<<<<< HEAD
   kind:
     | "job_failed"
     | "job_dead"
