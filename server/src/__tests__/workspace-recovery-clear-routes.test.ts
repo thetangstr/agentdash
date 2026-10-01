@@ -113,6 +113,8 @@ describe("workspace recovery clear", () => {
     expect((await request(app(admin(f.company.id))).post(url).send({ issueId: other.issue.id })).status).toBe(404);
     expect((await request(app(admin(f.company.id))).post(url).send({ agentId: other.agent.id })).status).toBe(404);
     expect((await request(app(admin(f.company.id))).post(url).send({ agentId: "not-a-uuid" })).status).toBe(404);
+    expect((await request(app(member(f.company.id))).post(url).send({ issueId: "" })).status).toBe(400);
+    expect((await request(app(admin(f.company.id))).post(url).send({ agentId: "  " })).status).toBe(400);
     expect(await workspacePersistenceHold(db, other.company.id, other.agent.id, null)).not.toBeNull();
   });
 });

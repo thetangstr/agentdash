@@ -1108,6 +1108,20 @@ export async function startServer(): Promise<StartedServer> {
     webhookHandle.unref?.();
   }
 
+  // AgentDash (human control plane, review P2 #859): retention sweep for
+  // human action handles, which carry answer text in payload/result.
+  {
+    const { humanActionHandleService } = await import("./services/human-action-handles.js");
+    const handles = humanActionHandleService(db as any);
+    const sweepHandles = () => {
+      void handles.sweep().catch((err) => {
+        logger.warn({ err }, "human action handle sweep failed");
+      });
+    };
+    sweepHandles();
+    setInterval(sweepHandles, 60 * 60 * 1000).unref?.();
+  }
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 

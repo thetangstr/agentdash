@@ -22,14 +22,17 @@ vi.mock("../routes/visibility.js", async (importOriginal) => ({
 // workforce-questions and issue-current-authority tests; this suite keeps the
 // route/wake composition and models the authority as an always-current guard.
 vi.mock("../services/human-control/authority.js", () => ({
-  foundationAuthority: () => ({
+  foundationAuthority: (req: { actor: { source?: string } }) => {
+    if (req.actor.source === "assistant_grant") throw Object.assign(new Error("Unauthorized"), { status: 401 });
+    return ({
     stage: async () => ({
       seal: async () => undefined,
       checkTime: () => undefined,
       assertSource: async () => undefined,
       visibleQuestion: async () => undefined,
     }),
-  }),
+  });
+  },
 }));
 vi.mock("../services/activity-log.js", () => ({
   logActivity: (...args: unknown[]) => mockLogActivity(...args),
@@ -329,6 +332,28 @@ describe.sequential("issue thread interaction routes", () => {
       updatedAt: "2026-04-20T12:05:00.000Z",
       resolvedAt: "2026-04-20T12:05:00.000Z",
     });
+  });
+
+  it("lets an assistant grant list and answer ordinary questions but hides private ones (#882 review P2)", async () => {
+    const ordinary = { id: "interaction-2", issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", kind: "ask_user_questions", status: "pending",
+      payload: { version: 1, questions: [{ id: "scope", prompt: "Scope?", selectionMode: "single", options: [{ id: "phase-1", label: "Phase 1" }] }] } };
+    const privateQuestion = { id: "interaction-9", issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", kind: "ask_user_questions", status: "pending",
+      payload: { version: 1, answerOwnerUserId: "owner", questions: [{ id: "offer", prompt: "Offer?", selectionMode: "text", options: [] }] } };
+    mockInteractionService.listForIssue.mockResolvedValue([{ id: "interaction-1", kind: "suggest_tasks", status: "pending" }, ordinary, privateQuestion]);
+    const app = await createApp({ type: "board", userId: "local-board", companyIds: ["company-1"], source: "assistant_grant", isInstanceAdmin: false });
+    const listed = await request(app).get("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions");
+    expect(listed.status).toBe(200);
+    expect(listed.body.map((row: { id: string }) => row.id)).toEqual(["interaction-1", "interaction-2"]);
+
+    mockInteractionService.getById.mockResolvedValueOnce(ordinary);
+    const answered = await request(app).post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-2/respond")
+      .send({ answers: [{ questionId: "scope", optionIds: ["phase-1"] }] });
+    expect(answered.status, JSON.stringify(answered.body)).toBe(200);
+
+    mockInteractionService.getById.mockResolvedValueOnce(privateQuestion);
+    const refused = await request(app).post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-9/respond")
+      .send({ answers: [{ questionId: "offer", optionIds: [], text: "x" }] });
+    expect(refused.status).toBe(404);
   });
 
   it("lists and creates board-authored interactions", async () => {

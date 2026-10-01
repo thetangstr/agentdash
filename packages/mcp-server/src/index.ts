@@ -1,3 +1,5 @@
+import { humanJsonSchema } from '@paperclipai/shared';
+import { HUMAN_PLAYBOOK, humanTools, verifyHumanConnection } from './human.js';
 /**
  * AgentDash MCP Server
  *
@@ -53,9 +55,9 @@ export const SERVER_VERSION = "0.3.0";
  * relays to a person. stdio picks via AGENTDASH_TOOLSET; /api/mcp stays
  * `agent`.
  */
-export type AgentDashToolset = "setup" | "agent" | "assistant";
+export type AgentDashToolset = "setup" | "agent" | "assistant" | "human";
 
-export const AGENTDASH_TOOLSETS: readonly AgentDashToolset[] = ["setup", "agent", "assistant"];
+export const AGENTDASH_TOOLSETS: readonly AgentDashToolset[] = ["setup", "agent", "assistant", "human"];
 
 export function parseToolset(raw: string | undefined | null): AgentDashToolset {
   const normalized = raw?.trim().toLowerCase();
@@ -82,6 +84,7 @@ export function buildToolSurface(
   config: PaperclipMcpConfig,
   toolset: AgentDashToolset = "agent",
 ): ToolDefinition[] {
+  if (toolset === "human") return humanTools(config);
   if (!isControlPlaneCredential(config.apiKey)) return [...bridgeTools(client)];
   // No bridge tools on a control-plane credential — the exclusion cuts BOTH
   // ways. Every /bridge/* route requires a bridge-endpoint actor, so each of
@@ -135,19 +138,20 @@ export function createAgentDashServer(
       // it to go provision a company instead of doing the work it was given.
       // The assistant toolset gets its own contract: relaying to a person,
       // not doing the work.
-      instructions: selectPlaybook({ agentId: config.agentId, toolset }),
+      instructions: toolset === "human" ? HUMAN_PLAYBOOK : selectPlaybook({ agentId: config.agentId, toolset }),
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => ({
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    if (toolset === "human") await verifyHumanConnection(config);
+    return { tools: tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
-      inputSchema: toolInputSchema(tool.schema),
+      inputSchema: toolset === "human" ? humanJsonSchema(tool.schema) : toolInputSchema(tool.schema),
       ...(tool.annotations ? { annotations: tool.annotations } : {}),
       ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
-    })),
-  }));
+    })), };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
@@ -169,7 +173,7 @@ export function createAgentDashServer(
   // forbids on this surface. Only the playbook survives: it is the contract
   // the assistant is supposed to read. Listings advertise nothing else and
   // reads of anything else fail closed.
-  const assistantOnly = toolset === "assistant";
+  const assistantOnly = toolset === "assistant" || toolset === "human";
   const resources = assistantOnly
     ? listResources().filter((resource) => resource.uri === "agentdash://playbook")
     : listResources();
@@ -198,7 +202,7 @@ export function createAgentDashServer(
     if (derivation) return derivation;
     if (uri === "agentdash://playbook") {
       return {
-        contents: [{ uri, mimeType: "text/markdown", text: selectPlaybook({ agentId: config.agentId, toolset }) }],
+        contents: [{ uri, mimeType: "text/markdown", text: toolset === "human" ? HUMAN_PLAYBOOK : selectPlaybook({ agentId: config.agentId, toolset }) }],
       };
     }
     if (uri === "agentdash://dashboard") {
@@ -247,6 +251,7 @@ export function createAgentDashServer(
 export async function runServer(): Promise<void> {
   const config = readConfigFromEnv();
   const toolset = parseToolset(process.env.AGENTDASH_TOOLSET);
+  if (toolset === "human") await verifyHumanConnection(config);
   const server = createAgentDashServer(config, { toolset });
   const transport = new StdioServerTransport();
   await server.connect(transport);

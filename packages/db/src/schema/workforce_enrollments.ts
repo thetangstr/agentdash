@@ -17,4 +17,6 @@ export const workforceEnrollments = pgTable('workforce_enrollments', {
   skillInstallError: text('skill_install_error'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, t => [uniqueIndex('workforce_enrollments_agent_unique').on(t.agentId), index('workforce_enrollments_company_idx').on(t.companyId)]);
+}, t => [uniqueIndex('workforce_enrollments_agent_unique').on(t.agentId), index('workforce_enrollments_company_idx').on(t.companyId),
+  // FK lookups on goal/issue deletion (ON DELETE SET NULL); added in 0141.
+  index('workforce_enrollments_goal_idx').on(t.goalId), index('workforce_enrollments_first_job_issue_idx').on(t.firstJobIssueId)]);
