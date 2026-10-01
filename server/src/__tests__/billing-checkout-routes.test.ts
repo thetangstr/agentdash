@@ -349,4 +349,16 @@ describe("billing mutations require owner or admin", () => {
 
     expect(res.status).toBe(403);
   });
+
+  // AgentDash: admins can name any id — a nonexistent one must answer 404,
+  // not surface the service's missing-company branch as a 500.
+  it("404s status for a nonexistent company instead of a 500", async () => {
+    mockCompanyService.getById.mockResolvedValue(null);
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 14, { isInstanceAdmin: true, companyIds: null });
+
+    const res = await request(app).get("/api/billing/status?companyId=no-such-company");
+
+    expect(res.status).toBe(404);
+  });
 });

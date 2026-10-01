@@ -5,9 +5,10 @@ import { workforceService } from "../services/workforce.js";
 import { type ActivityAcceptance } from "../services/activity-log.js";
 import { loadDefaultAgentInstructionsBundle } from "../services/default-agent-instructions.js";
 import { Router } from "express";
+import { createHash } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import { authUsers, activityLog, assistantConversations, assistantMessages, companies as companiesTable, companyMemberships, deepInterviewStates, instanceUserRoles } from "@paperclipai/db";
-import { and, desc, eq, gt, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import {
   onboardingOrchestrator,
   cosInterview,
@@ -80,6 +81,18 @@ const MAX_INVITE_BATCH = 25;
 
 /** Per company+requester cooldown on the "let admins know" nudge (GH #794). */
 const MODEL_KEY_REQUEST_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Advisory-lock key per (company, requester) for the nudge critical section —
+ * same sha256→48-bit derivation as `companyTierCapacityLockKey`, so it stays
+ * inside signed bigint range and can never collide with that lock's keys.
+ */
+function modelKeyRequestLockKey(companyId: string, requesterId: string): number {
+  return Number.parseInt(
+    createHash("sha256").update(`model-key-req:${companyId}:${requesterId}`).digest("hex").slice(0, 12),
+    16,
+  );
+}
 
 type OnboardingTierCapacityServices = {
   companies: {
@@ -1266,76 +1279,89 @@ No greetings. No markdown headings outside the JSON block.`;
     assertCompanyAccess(req, companyId);
 
     // Cooldown: one nudge per company per requester per window, backed by the
-    // activity rows this route already writes — durable across restarts and
-    // checked before any mailer call so a member cannot spam administrators.
-    const recentRequest = await db
-      .select({ createdAt: activityLog.createdAt })
-      .from(activityLog)
-      .where(
-        and(
-          eq(activityLog.companyId, companyId),
-          eq(activityLog.action, "model_key.requested"),
-          eq(activityLog.actorId, requesterId),
-          gt(activityLog.createdAt, new Date(Date.now() - MODEL_KEY_REQUEST_COOLDOWN_MS)),
-        ),
-      )
-      .orderBy(desc(activityLog.createdAt))
-      .limit(1);
-    if (recentRequest.length > 0) {
-      const retryAfterSeconds = Math.max(
-        1,
-        Math.ceil((recentRequest[0]!.createdAt.getTime() + MODEL_KEY_REQUEST_COOLDOWN_MS - Date.now()) / 1000),
+    // activity rows this route writes — durable across restarts. The whole
+    // critical section runs under an advisory lock keyed on
+    // (company, requester): the row is checked AND written inside one
+    // transaction, so a parallel burst queues on the lock and the loser sees
+    // the fresh row instead of every request slipping through the check
+    // before the winner logs it. The lock key is scoped per requester, so
+    // unrelated nudges never contend. Sends run inside the txn deliberately —
+    // if the mailer throws, the marker rolls back and the requester is not
+    // left on a cooldown for nudges nobody received.
+    const results = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${modelKeyRequestLockKey(companyId, requesterId)})`,
       );
-      throw new HttpError(
-        429,
-        "The people who can fix this have already been told — give them a little while.",
-        { retryAfterSeconds },
+      const recentRequest = await tx
+        .select({ createdAt: activityLog.createdAt })
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.companyId, companyId),
+            eq(activityLog.action, "model_key.requested"),
+            eq(activityLog.actorId, requesterId),
+            gt(activityLog.createdAt, new Date(Date.now() - MODEL_KEY_REQUEST_COOLDOWN_MS)),
+          ),
+        )
+        .orderBy(desc(activityLog.createdAt))
+        .limit(1);
+      if (recentRequest.length > 0) {
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((recentRequest[0]!.createdAt.getTime() + MODEL_KEY_REQUEST_COOLDOWN_MS - Date.now()) / 1000),
+        );
+        throw new HttpError(
+          429,
+          "The people who can fix this have already been told — give them a little while.",
+          { retryAfterSeconds },
+        );
+      }
+
+      const [contacts, requesterRows, companyRows] = await Promise.all([
+        modelKeyContacts(tx as unknown as Db, companyId),
+        tx
+          .select({ id: authUsers.id, name: authUsers.name })
+          .from(authUsers)
+          .where(eq(authUsers.id, requesterId)),
+        tx
+          .select({ name: companiesTable.name })
+          .from(companiesTable)
+          .where(eq(companiesTable.id, companyId))
+          .limit(1),
+      ]);
+      const requesterName = requesterRows[0]?.name ?? null;
+      const companyName = companyRows[0]?.name ?? null;
+
+      // The link lands in an admin's inbox — it must name the address the
+      // operator advertises, never the caller's Host header (link injection,
+      // same class of bug as #539). With no public URL configured the path is
+      // sent on its own; the mailer is normally absent there too.
+      const settingsUrl = absoluteUrl("/company/settings/model-key") ?? "/company/settings/model-key";
+
+      const recipients = contacts.filter(
+        (contact) => contact.email && contact.userId !== requesterId && (contact.canFix || !contacts.some((c) => c.canFix)),
       );
-    }
+      const sent: Array<{ name: string | null; status: string }> = [];
+      for (const contact of recipients) {
+        const { subject, html, text } = modelKeyRequestEmailTemplate({
+          settingsUrl,
+          companyName,
+          requesterName,
+        });
+        const outcome = await sendEmail({ to: contact.email!, subject, html, text });
+        sent.push({ name: contact.name, status: outcome.status });
+      }
 
-    const [contacts, requesterRows, companyRows] = await Promise.all([
-      modelKeyContacts(db, companyId),
-      db
-        .select({ id: authUsers.id, name: authUsers.name })
-        .from(authUsers)
-        .where(eq(authUsers.id, requesterId)),
-      db
-        .select({ name: companiesTable.name })
-        .from(companiesTable)
-        .where(eq(companiesTable.id, companyId))
-        .limit(1),
-    ]);
-    const requesterName = requesterRows[0]?.name ?? null;
-    const companyName = companyRows[0]?.name ?? null;
-
-    // The link lands in an admin's inbox — it must name the address the
-    // operator advertises, never the caller's Host header (link injection,
-    // same class of bug as #539). With no public URL configured the path is
-    // sent on its own; the mailer is normally absent there too.
-    const settingsUrl = absoluteUrl("/company/settings/model-key") ?? "/company/settings/model-key";
-
-    const recipients = contacts.filter(
-      (contact) => contact.email && contact.userId !== requesterId && (contact.canFix || !contacts.some((c) => c.canFix)),
-    );
-    const results: Array<{ name: string | null; status: string }> = [];
-    for (const contact of recipients) {
-      const { subject, html, text } = modelKeyRequestEmailTemplate({
-        settingsUrl,
-        companyName,
-        requesterName,
+      await logActivity(tx as unknown as Db, {
+        companyId,
+        actorType: "user",
+        actorId: requesterId,
+        action: "model_key.requested",
+        entityType: "company",
+        entityId: companyId,
+        details: { recipientCount: sent.length },
       });
-      const outcome = await sendEmail({ to: contact.email!, subject, html, text });
-      results.push({ name: contact.name, status: outcome.status });
-    }
-
-    await logActivity(db, {
-      companyId,
-      actorType: "user",
-      actorId: requesterId,
-      action: "model_key.requested",
-      entityType: "company",
-      entityId: companyId,
-      details: { recipientCount: results.length },
+      return sent;
     });
 
     res.json({ results });
