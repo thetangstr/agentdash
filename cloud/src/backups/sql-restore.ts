@@ -14,7 +14,7 @@ import { closeSync, createReadStream, openSync, readSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { createGunzip } from "node:zlib";
 import postgres from "postgres";
-import { checkStatement, STATEMENT_BREAKPOINT } from "./dump-guard.js";
+import { checkStatement, initDumpGuard, STATEMENT_BREAKPOINT } from "./dump-guard.js";
 
 export { STATEMENT_BREAKPOINT };
 const DETECT_BYTES = 64 * 1024;
@@ -100,6 +100,7 @@ export interface DumpScan {
 
 /** Check a whole dump without running anything. */
 export async function scanDump(file: string): Promise<DumpScan> {
+  await initDumpGuard();
   if (!(await hasStatementBreakpoints(file))) {
     return { statements: 0, copyBlocks: 0, refused: [{ index: 0, reason: "not a backup-lib statement-breakpoint dump (plain pg_dump output is not replayed: it would need psql)" }] };
   }
@@ -113,6 +114,15 @@ export async function scanDump(file: string): Promise<DumpScan> {
   return scan;
 }
 
+/**
+ * postgres.js runs `unsafe(text)` without parameters over the SIMPLE protocol,
+ * which executes every statement in the string. `simple: false` forces the
+ * extended protocol (Parse/Bind/Execute), where the server refuses more than
+ * one statement ("cannot insert multiple commands into a prepared statement").
+ * The option exists at runtime but not in the package's types.
+ */
+export const EXTENDED_PROTOCOL = { simple: false, prepare: false } as unknown as postgres.UnsafeQueryOptions;
+
 export class ReplayRefused extends Error {
   constructor(message: string) {
     super(message);
@@ -125,21 +135,39 @@ export interface RestoreStats {
   copyBlocks: number;
 }
 
-/** True when the connection's role is a superuser (or can become one). */
-export async function isSuperuser(connectionString: string): Promise<boolean> {
+/**
+ * Why the connection's role is too powerful to replay a hostile dump, or
+ * null. The sandbox's restore role must be a plain login role: no superuser,
+ * CREATEROLE, CREATEDB, replication or BYPASSRLS, and a member of NO other
+ * role (which rules out pg_read_server_files, pg_write_server_files,
+ * pg_execute_server_program, any superuser role and any other grant).
+ */
+export async function replayRoleProblem(connectionString: string): Promise<string | null> {
   const sql = postgres(connectionString, { max: 1, connect_timeout: 10, onnotice: () => {} });
   try {
-    const [r] = await sql<Array<{ s: boolean }>>`select rolsuper or rolreplication or rolbypassrls as s from pg_roles where rolname = current_user`;
-    return Boolean(r?.s);
+    const [r] = await sql<Array<Record<string, boolean | number>>>`
+      select r.rolsuper as super, r.rolcreaterole as createrole, r.rolcreatedb as createdb,
+             r.rolreplication as replication, r.rolbypassrls as bypassrls,
+             pg_has_role(current_user, 'pg_read_server_files', 'MEMBER') as read_files,
+             pg_has_role(current_user, 'pg_write_server_files', 'MEMBER') as write_files,
+             pg_has_role(current_user, 'pg_execute_server_program', 'MEMBER') as exec_program,
+             (select count(*)::int from pg_auth_members m where m.member = r.oid) as memberships,
+             exists (select 1 from pg_roles s where s.rolsuper and s.oid <> r.oid and pg_has_role(current_user, s.oid, 'MEMBER')) as reaches_super
+        from pg_roles r where r.rolname = current_user`;
+    if (!r) return "could not read the current role";
+    const bad = Object.entries(r).filter(([k, v]) => (k === "memberships" ? Number(v) > 0 : v === true)).map(([k]) => k);
+    return bad.length ? `the restore role has ${bad.join(", ")}` : null;
   } finally {
     await sql.end({ timeout: 5 });
   }
 }
 
-/** Replay a dump that passed scanDump into a disposable database, as a non-superuser. */
+/** Replay a dump that passed scanDump into a disposable database, as a plain non-superuser role. */
 export async function replayDump(file: string, connectionString: string): Promise<RestoreStats> {
-  if (await isSuperuser(connectionString)) {
-    throw new ReplayRefused("refusing to replay as a superuser: connect as the sandbox's non-superuser restore role (runbook §7)");
+  await initDumpGuard();
+  const problem = await replayRoleProblem(connectionString);
+  if (problem) {
+    throw new ReplayRefused(`refusing to replay: ${problem}. Connect as the sandbox's plain restore role (not a superuser, member of no role; runbook §7)`);
   }
   const scan = await scanDump(file);
   if (scan.refused.length) {
@@ -153,8 +181,10 @@ export async function replayDump(file: string, connectionString: string): Promis
       const reason = checkStatement(s);
       if (reason) throw new ReplayRefused(`statement #${stats.statements} failed the safety check: ${reason}`);
       const copy = parseCopyFromStdin(s);
+      // Extended protocol (simple: false): the server accepts exactly ONE
+      // statement per call, so nothing the parser did not see can ride along.
       if (copy) {
-        const writable = (await sql.unsafe(copy.command).writable()) as NodeJS.WritableStream;
+        const writable = (await sql.unsafe(copy.command, [], EXTENDED_PROTOCOL).writable()) as NodeJS.WritableStream;
         await new Promise<void>((resolve, reject) => {
           writable.on("error", reject);
           writable.on("finish", resolve);
@@ -163,7 +193,7 @@ export async function replayDump(file: string, connectionString: string): Promis
         });
         stats.copyBlocks++;
       } else {
-        await sql.unsafe(s);
+        await sql.unsafe(s, [], EXTENDED_PROTOCOL);
       }
       stats.statements++;
     }

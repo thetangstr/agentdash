@@ -154,7 +154,7 @@ Three layers protect a hosted box's data, from fastest restore to most independe
 
 The server's hourly backup on the box's own Volume stays, but it is not off-box.
 
-**How the nightly backup works.** From `CLOUD_BACKUP_HOUR_UTC` (default 08:00 UTC, before the 02:00 Pacific upgrade window), the control plane claims one row per active box per UTC day in `box_backups`, reads the box's `AGENTDASH_BACKUP_TOKEN` from Railway (in memory only), and calls `POST /api/agentdash/backup-export` on the box's Railway host with that token and the box's edge secret. The box writes a fresh dump (the same library as its hourly backup) to a temp directory and streams it; the control plane encrypts it on the fly to the **backup public key** (libsodium sealed data key plus XChaCha20-Poly1305 secretstream, header authenticated), uploads it, records its size and SHA-256, and prunes the box to 7 daily plus 4 weekly backups. A failure is retried 30 minutes later, up to 3 times a day. **The control plane cannot decrypt a backup**: like the master key escrow (section 3), only the offline secret key opens one.
+**How the nightly backup works.** From `CLOUD_BACKUP_HOUR_UTC` (default 08:00 UTC, before the 02:00 Pacific upgrade window), the control plane claims one row per active box per UTC day in `box_backups`, reads the box's `AGENTDASH_BACKUP_TOKEN` from Railway (in memory only), and calls `POST /api/agentdash/backup-export` on the box's Railway host with that token and the box's edge secret. The box writes a fresh dump (the same library as its hourly backup) to a temp directory and streams it; the control plane encrypts it on the fly to the **backup public key** (libsodium sealed data key plus XChaCha20-Poly1305 secretstream, header authenticated), uploads it, records its size and SHA-256, and prunes the box to 7 daily plus 4 weekly backups. A failure is retried 30 minutes later, up to 3 times a day. On the box, an export is capped at 30 minutes: the route answers 504 and ends the dump's own database sessions. It refuses a second export until the first has really stopped, waiting at most 60 seconds more, so dumps never stack. An export that reports no applied migrations is never stored, so it cannot push good dailies out of retention. **The control plane cannot decrypt a backup**: like the master key escrow (section 3), only the offline secret key opens one.
 
 **Boxes made before this change** have no `AGENTDASH_BACKUP_TOKEN` and run a release without the export route. The first backup attempt sets the token with `skipDeploys` (box event `backup_token_installed`) and fails with `token_pending_deploy`; once the box's next deploy runs a release with the route, backups start. New boxes get the token at provisioning.
 
@@ -187,17 +187,24 @@ pnpm --filter @agentdash/cloud-control admin backups download <backup id> <file>
 **Threat model for restores.** The box writes the dump, so a compromised tenant box controls its SQL. The envelope proves only that the control plane sealed what a box sent. It does not make the SQL benign, and it does not prove which box sent it. So:
 
 - **Decrypt and replay are separate steps on separate machines.** `decrypt` runs on the offline key machine and executes nothing. `replay` runs in a **disposable sandbox with no key material** (a throwaway VM or container, deleted afterwards), and it refuses `--key-dir`.
-- **No psql, ever.** Only backup-lib's statement format is accepted, and every statement must have one of the shapes backup-lib writes. The check refuses:
-  - `COPY … PROGRAM`, and `COPY` to or from a file;
-  - psql meta-commands;
-  - event triggers, `ALTER SYSTEM`, functions, roles and grants;
-  - dollar-quoted code, and server-side file, process and config functions;
-  - a second statement smuggled into one;
-  - extensions outside the allowlist (`pg_trgm`, `pgcrypto`, `uuid-ossp`, `citext`, `btree_gin`, `btree_gist`, `unaccent`, `fuzzystrmatch`, `vector`).
+- **Parsed by the real Postgres parser, never by patterns.** Only backup-lib's statement format is accepted, and there is no psql path. Every statement is parsed with libpg_query (the `libpg-query` package, MIT, WebAssembly, so no native build), and must be exactly one statement whose syntax tree matches, node for node and field for field, a shape backup-lib writes. The allowed shapes:
+  - `BEGIN`, `COMMIT`, and `SET LOCAL` of two settings;
+  - `CREATE SCHEMA IF NOT EXISTS`, enum types, `CREATE EXTENSION IF NOT EXISTS` for an allowlisted extension;
+  - `DROP TABLE` or `DROP SEQUENCE IF EXISTS`, `CREATE SEQUENCE`, `ALTER SEQUENCE … OWNED BY`;
+  - `CREATE TABLE` with columns and NOT NULL, DEFAULT, PRIMARY KEY or UNIQUE (never `AS SELECT`), and `CREATE INDEX`;
+  - `ALTER TABLE` with exactly one `ADD CONSTRAINT` (primary key, unique or foreign key);
+  - `INSERT … VALUES` with constants only, `SELECT setval(<literals>)`, and `COPY <table> (<columns>) FROM STDIN`.
 
-  `decrypt` runs that check before it keeps the plaintext; `replay` runs it again on the whole file, then again per statement.
-- **Replay as a non-superuser** that owns a fresh database. The tool refuses a superuser, and a role with replication or bypass-RLS.
-- **Check the object is the one you asked for.** `admin backups download` refuses a stored object whose header names another backup id, and `decrypt --expect-slug … --expect-backup-id …` refuses a different box or backup.
+  Anything else is refused: an unknown field, a function outside a short allowlist (`nextval`, `now`, `gen_random_uuid`, `lower`, …), a qualified function or operator, a subquery, a second statement. Quoting, comments and spacing cannot hide anything from a parser. Statements over 16 MiB are refused.
+- **One statement per protocol message.** Each statement runs over the extended protocol, where the server itself refuses more than one statement.
+
+  `decrypt` runs the check before it keeps the plaintext; `replay` runs it again on the whole file, then again per statement.
+- **Replay as a plain role.** It must own the sandbox databases and be a member of no role. The tool refuses superuser, CREATEROLE, CREATEDB, replication and bypass-RLS, membership of `pg_read_server_files`, `pg_write_server_files` or `pg_execute_server_program`, and any membership at all.
+- **Verify the schema before any promotion.** The applied migrations are read from the restored `drizzle.__drizzle_migrations`, never from the box-written header, and every hash must be one of this repository's migration files.
+  - The tool builds a **reference** database from exactly those migrations, in a second empty sandbox database (`--reference`).
+  - It compares the two catalogs: tables, columns, defaults, constraints, indexes, sequences, types, triggers, rules, views, functions, policies, row-level security, extensions, event triggers, casts, operators, languages, foreign servers, publications, owners and ACLs. Any object in the restore that our migrations do not create fails the restore.
+  - backup-lib's engine does not carry CHECK constraints, views, functions or triggers. The tool then re-creates those from the **reference** (our migrations, never the dump), and the schema must match exactly.
+- **Check the object is the one you asked for.** `admin backups download` refuses a stored object whose header names another backup id. `decrypt` requires `--expect-slug` and `--expect-backup-id`, never overwrites its output, and prints box-written text only with control characters stripped.
 
 **Restore test (monthly, and after any change here).** On the offline **key** machine:
 
@@ -214,18 +221,20 @@ In the **sandbox** (a disposable VM or container with a repository checkout and 
 
 ```sh
 docker run -d --name restore-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=<random> postgres:18
-docker exec restore-pg psql -U postgres -c "create role restore login password '<random>' nosuperuser" \
-  -c "create database restore owner restore" -c "grant set on parameter session_replication_role to restore"
-pnpm --filter @agentdash/cloud-control backup-restore replay --dump ./box.sql.gz --into postgres://restore:<random>@127.0.0.1:55432/restore
+docker exec restore-pg psql -U postgres -c "create role restore login password '<random>' nosuperuser nocreatedb nocreaterole" \
+  -c "create database restore owner restore" -c "create database reference owner restore" \
+  -c "grant set on parameter session_replication_role to restore"
+pnpm --filter @agentdash/cloud-control backup-restore replay --dump ./box.sql.gz \
+  --into postgres://restore:<random>@127.0.0.1:55432/restore --reference postgres://restore:<random>@127.0.0.1:55432/reference
 docker rm -f restore-pg
 ```
 
-`replay` refuses a target that holds users or companies and replays as the non-superuser. It then compares the restored core-table counts with the manifest (the migration count must match) and prints `RESTORE TEST PASSED` or `FAILED`. Destroy the sandbox, and record the date, slug, backup id and timings in the ops log.
+`replay` refuses a target that holds users or companies, and replays as the plain role. It then checks the schema against our migrations (and re-creates what the dump format does not carry), reports the restored counts beside the box's own, and prints `RESTORE TEST PASSED` or `FAILED`. Destroy the sandbox, and record the date, slug, backup id and timings in the ops log.
 
 **Real restore (box database lost or corrupted).** Never restore over a live box: `replay` refuses any target database that holds users or companies.
 
 1. Provision a throwaway replacement `<slug>-restore` on the same release (the slug rule leaves room for the suffix), and do not claim it.
 2. Recover the old box's master key from escrow (section 3) and set it, with the old `BETTER_AUTH_SECRET`, on the replacement.
-3. Run `decrypt` on the key machine as above, then move the dump and manifest to a sandbox with no keys. Open a temporary TCP proxy to the replacement's Postgres (as `backup-box.sh` does). There, create a non-superuser `restore` role that owns a fresh database (with `SET` on `session_replication_role`), run `backup-restore replay --dump ./box.sql.gz --into <that role's URL>`, and point the replacement's `DATABASE_URL` at that database.
+3. Run `decrypt` on the key machine as above, then move the dump and manifest to a sandbox with no keys. Open a temporary TCP proxy to the replacement's Postgres (as `backup-box.sh` does). There, create a plain `restore` role (as in the sandbox block above) that owns two fresh databases, one to restore into and one for the reference schema, and grant it `SET` on `session_replication_role`. Run `backup-restore replay --dump ./box.sql.gz --into <restore db URL> --reference <reference db URL>`. Only after `RESTORE TEST PASSED`, point the replacement's `DATABASE_URL` at the restored database.
 4. Delete the proxy and redeploy the replacement. `curl -s https://<its railway host>/api/health` must answer `"status":"ok"`; then sign in as the customer's admin, and only then point the router and the box row at it.
 

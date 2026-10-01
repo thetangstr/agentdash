@@ -22,11 +22,13 @@
 //       against the manifest (the migration count must match).
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import postgres from "postgres";
 import { parseEscrowPublicKey } from "../railway/secrets.js";
 import { createDecryptStream, parseEnvelopeHeader, type BackupEnvelopeHeader } from "./envelope.js";
 import { replayDump, scanDump } from "./sql-restore.js";
+import { verifyRestoredSchema } from "./schema-verify.js";
 
 export interface RestoreIo {
   out: (l: string) => void;
@@ -128,16 +130,35 @@ function flag(args: string[], name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
+/** Strip control characters (terminal escapes) from box-written text before it is printed. */
+export function sanitize(value: unknown): string {
+  return String(value ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, "?").slice(0, 200);
+}
+
+/** The header with every box-written string sanitised, for printing and the manifest. */
+export function printableHeader(h: BackupEnvelopeHeader): Record<string, unknown> {
+  const shown = publicHeader(h) as Record<string, unknown>;
+  const counts: Record<string, number | null> = {};
+  for (const [k, v] of Object.entries(h.counts ?? {}).slice(0, 20)) counts[sanitize(k)] = typeof v === "number" ? v : null;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(shown)) out[k] = k === "counts" ? counts : typeof v === "number" || v === null ? v : sanitize(v);
+  return out;
+}
+
+/** Default: this repository's box migrations (the restore tool runs from a checkout). */
+export const DEFAULT_MIGRATIONS_DIR = fileURLToPath(new URL("../../../packages/db/src/migrations", import.meta.url));
+
 export const RESTORE_USAGE = `usage: backup-restore inspect --in <file.adbk>
-       backup-restore decrypt --in <file.adbk> --key-dir <dir> --out <dump.sql.gz> [--expect-slug <slug>] [--expect-backup-id <id>]
-       backup-restore replay --dump <dump.sql.gz> --into <postgres-url> [--manifest <file>] [--health-url <url>]   (sandbox, no keys)`;
+       backup-restore decrypt --in <file.adbk> --key-dir <dir> --out <dump.sql.gz> --expect-slug <slug> --expect-backup-id <id>
+       backup-restore replay --dump <dump.sql.gz> --into <postgres-url> --reference <empty-postgres-url>
+                             [--manifest <file>] [--migrations-dir <dir>] [--health-url <url>]   (sandbox, no keys)`;
 
 export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<number> {
   const [cmd, ...rest] = argv;
   if (cmd === "inspect") {
     const input = flag(rest, "--in");
     if (!input) return (io.err(RESTORE_USAGE), 64);
-    io.out(JSON.stringify(publicHeader(readEnvelopeHeaderFile(input)), null, 2));
+    io.out(JSON.stringify(printableHeader(readEnvelopeHeaderFile(input)), null, 2));
     return 0;
   }
 
@@ -145,35 +166,42 @@ export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<num
     const input = flag(rest, "--in");
     const keyDir = flag(rest, "--key-dir");
     const out = flag(rest, "--out");
-    if (!input || !keyDir || !out) return (io.err(RESTORE_USAGE), 64);
     const expectSlug = flag(rest, "--expect-slug");
     const expectId = flag(rest, "--expect-backup-id");
+    // Both expectations are required: the sealed box does not prove which box produced an object.
+    if (!input || !keyDir || !out || !expectSlug || !expectId) return (io.err(RESTORE_USAGE), 64);
+    const manifestPath = `${out}.manifest.json`;
+    for (const f of [out, manifestPath]) if (fs.existsSync(f)) return (io.err(`refusing: ${f} already exists (decrypt never overwrites)`), 3);
     // Check the plain header first, so a swapped object is refused before decrypting anything.
     const plainHeader = readEnvelopeHeaderFile(input);
-    if (expectSlug && plainHeader.slug !== expectSlug) return (io.err(`refusing: this backup is of ${plainHeader.slug}, not ${expectSlug}`), 3);
-    if (expectId && plainHeader.backupId !== expectId) return (io.err(`refusing: this file is backup ${plainHeader.backupId}, not ${expectId}`), 3);
+    if (plainHeader.slug !== expectSlug) return (io.err(`refusing: this backup is of ${sanitize(plainHeader.slug)}, not ${sanitize(expectSlug)}`), 3);
+    if (plainHeader.backupId !== expectId) return (io.err(`refusing: this file is backup ${sanitize(plainHeader.backupId)}, not ${sanitize(expectId)}`), 3);
     const partial = `${out}.partial`;
     const unwipe = wipeOnSignal([partial]);
+    let keep = false;
     try {
       const t0 = Date.now();
       const header = await decryptBackupFile(input, partial, readKeyDir(keyDir));
-      // The header is authenticated by every frame: what decrypted must match what was checked.
+      // Every frame authenticates the header: what decrypted must be what was checked.
       if (header.backupId !== plainHeader.backupId || header.slug !== plainHeader.slug) throw new Error("the header changed during decryption");
       const scan = await scanDump(partial);
       if (scan.refused.length) {
-        fs.rmSync(partial, { force: true });
-        io.err(`refusing: the dump fails the replay safety check (a tampered or hostile dump): ${scan.refused.map((r) => `#${r.index} ${r.reason}`).join("; ")}`);
+        io.err(`refusing: the dump fails the replay safety check (a tampered or hostile dump): ${scan.refused.map((r) => `#${r.index} ${sanitize(r.reason)}`).join("; ")}`);
         return 4;
       }
-      fs.renameSync(partial, out);
-      fs.writeFileSync(`${out}.manifest.json`, JSON.stringify(publicHeader(header), null, 2), { mode: 0o600 });
-      io.out(`decrypted backup ${header.backupId} of ${header.slug} (${header.createdAt}, release ${header.release ?? "unknown"}) in ${Date.now() - t0} ms`);
+      // link() refuses an existing target, so a file created meanwhile is never replaced.
+      fs.linkSync(partial, out);
+      keep = true;
+      fs.writeFileSync(manifestPath, JSON.stringify(printableHeader(header), null, 2), { mode: 0o600, flag: "wx" });
+      const h = printableHeader(header);
+      io.out(`decrypted backup ${String(h.backupId)} of ${String(h.slug)} (${String(h.createdAt)}, release ${String(h.release ?? "unknown")}) in ${Date.now() - t0} ms`);
       io.out(`safety check passed: ${scan.statements} statement(s), ${scan.copyBlocks} COPY block(s). Replay it only in a sandbox without keys (runbook §7).`);
       return 0;
     } catch (err) {
-      fs.rmSync(partial, { force: true });
+      if (keep) fs.rmSync(out, { force: true });
       throw err;
     } finally {
+      fs.rmSync(partial, { force: true });
       unwipe();
     }
   }
@@ -181,10 +209,13 @@ export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<num
   if (cmd === "replay") {
     const dump = flag(rest, "--dump");
     const into = flag(rest, "--into");
-    if (!dump || !into) return (io.err(RESTORE_USAGE), 64);
+    const reference = flag(rest, "--reference");
+    if (!dump || !into || !reference) return (io.err(RESTORE_USAGE), 64);
     if (rest.includes("--key-dir")) return (io.err("refusing: replay never takes key material; decrypt on the key machine, replay in the sandbox"), 64);
+    if (reference === into) return (io.err("refusing: --reference must be a second, empty database"), 64);
+    const migrationsDir = flag(rest, "--migrations-dir") ?? DEFAULT_MIGRATIONS_DIR;
     const manifestFile = flag(rest, "--manifest") ?? `${dump}.manifest.json`;
-    const manifest = fs.existsSync(manifestFile) ? (JSON.parse(fs.readFileSync(manifestFile, "utf8")) as Pick<BackupEnvelopeHeader, "counts" | "slug" | "backupId">) : null;
+    const manifest = fs.existsSync(manifestFile) ? (JSON.parse(fs.readFileSync(manifestFile, "utf8")) as { counts?: Record<string, number | null> }) : null;
     const healthUrl = flag(rest, "--health-url");
     const reason = await liveTargetReason(into);
     if (reason) {
@@ -194,28 +225,46 @@ export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<num
     const t1 = Date.now();
     const stats = await replayDump(dump, into);
     io.out(`replayed ${stats.statements} statement(s), ${stats.copyBlocks} COPY block(s) in ${Date.now() - t1} ms`);
+
+    // Before any promotion: the schema must be what OUR migrations (as recorded in the restored table) create.
+    const t2 = Date.now();
+    const v = await verifyRestoredSchema({ restoredUrl: into, referenceUrl: reference, migrationsDir });
+    io.out(`schema check against ${v.appliedMigrations} of our migrations in ${Date.now() - t2} ms: ${v.ok ? "no unexplained objects" : "FAILED"}`);
+    if (v.repaired.length) {
+      io.out(`re-created ${v.repaired.length} object(s) the dump format does not carry (CHECK constraints, views, functions, triggers), from our migrations only; the schema now matches exactly`);
+    }
+    for (const p of v.problems) io.err(`schema: ${sanitize(p)}`);
+    for (const e of v.extra.slice(0, 50)) io.err(`  unexplained ${sanitize(e)}`);
+    if (v.missing.length) {
+      const byCategory = new Map<string, number>();
+      for (const m of v.missing) byCategory.set(m.split(":")[0]!, (byCategory.get(m.split(":")[0]!) ?? 0) + 1);
+      io.err(
+        `note: ${v.missing.length} object(s) our migrations create are not in the restore (${[...byCategory].map(([c, n]) => `${c} ${n}`).join(", ")}): ` +
+          "these could not be re-created from our migrations.",
+      );
+      for (const m of v.missing.slice(0, 100)) io.err(`  missing ${sanitize(m)}`);
+    }
+
     const restored = await countCoreTables(into);
     const mismatches: string[] = [];
     for (const [name, expected] of Object.entries(manifest?.counts ?? {})) {
-      if (restored[name] !== expected) mismatches.push(`${name}: exported ${String(expected)}, restored ${String(restored[name])}`);
+      if (restored[name] !== expected) mismatches.push(`${sanitize(name)}: exported ${String(expected)}, restored ${String(restored[name])}`);
     }
-    const migrationsOk = manifest ? manifest.counts?.migrations === restored.migrations : (restored.migrations ?? 0) > 0;
-    if (!manifest) io.err(`no manifest at ${manifestFile}: counts are not compared`);
     let healthOk = true;
     if (healthUrl) {
       try {
         const res = await (io.fetch ?? fetch)(healthUrl, { signal: AbortSignal.timeout(15_000) });
         const body = (await res.json().catch(() => ({}))) as { status?: string };
         healthOk = res.ok && body.status === "ok";
-        io.out(`health ${healthUrl}: HTTP ${res.status}, status ${String(body.status)}`);
+        io.out(`health ${healthUrl}: HTTP ${res.status}, status ${sanitize(body.status)}`);
       } catch (err) {
         healthOk = false;
         io.err(`health check failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     io.out(`restored counts: ${JSON.stringify(restored)}`);
-    if (mismatches.length) io.err(`count differences (writes between the count and the dump are possible): ${mismatches.join("; ")}`);
-    const ok = migrationsOk && healthOk;
+    if (mismatches.length) io.err(`count differences from the box's report (informational): ${mismatches.join("; ")}`);
+    const ok = v.ok && healthOk;
     io.out(ok ? "RESTORE TEST PASSED" : "RESTORE TEST FAILED");
     return ok ? 0 : 1;
   }

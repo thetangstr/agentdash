@@ -31,8 +31,10 @@ import { backupRoutes } from "../backups/routes.js";
 import { S3Store, signV4 } from "../backups/s3.js";
 import { backupService, fleetBackupStatus, staleBackups, type BackupEvent, type BackupTokenSource, type BoxRow } from "../backups/service.js";
 import { runRestoreTool } from "../backups/restore-tool.js";
+import { buildReference, loadBoxMigrations, type BoxMigration } from "../backups/schema-verify.js";
 import { createEncryptStream } from "../backups/envelope.js";
 import { STATEMENT_BREAKPOINT } from "../backups/dump-guard.js";
+import { EXTENDED_PROTOCOL } from "../backups/sql-restore.js";
 import { encryptField, parseKeyring } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { accounts, boxBackups, boxEvents, boxes, type BoxState } from "../db/schema.js";
@@ -56,6 +58,7 @@ let keyDir: string;
 let work: string;
 let seq = 0;
 let roundTripFile = "";
+let roundTripDump = "";
 
 // ---- fake S3 ---------------------------------------------------------------
 const objects = new Map<string, Buffer>();
@@ -136,55 +139,57 @@ async function startFakeBox(): Promise<void> {
   boxHost = `127.0.0.1:${(boxServer.address() as AddressInfo).port}`;
 }
 
+const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../packages/db/src/migrations");
+let ourMigrations: BoxMigration[] = [];
+
+/** A box database with OUR real schema (every migration in packages/db), then customer data. */
 async function seedBoxDatabase(url: string) {
+  ourMigrations = loadBoxMigrations(MIGRATIONS_DIR);
+  await buildReference(url, ourMigrations);
   const s = postgres(url, { max: 1, onnotice: () => {} });
-  await s.unsafe(`
-    create type issue_state as enum ('open', 'done');
-    create table companies (id uuid primary key default gen_random_uuid(), name text not null, meta jsonb);
-    create table "user" (id text primary key, email text not null, created_at timestamptz not null default now());
-    create table agents (id serial primary key, company_id uuid references companies(id), name text, config jsonb);
-    create table issues (id bigserial primary key, title text, body text, state issue_state not null default 'open');
-    create table company_memberships (company_id uuid references companies(id), user_id text references "user"(id));
-    create schema drizzle;
-    create table drizzle.__drizzle_migrations (id serial primary key, hash text not null, created_at bigint);
-  `);
-  const [co] = await s`insert into companies (name, meta) values ('Acme', ${s.json({ plan: "pro", nested: { a: [1, 2] } })}) returning id`;
-  await s`insert into "user" (id, email) values ('u1', 'founder@acme.test'), ('u2', 'ops@acme.test')`;
-  await s`insert into company_memberships values (${co!.id}, 'u1'), (${co!.id}, 'u2')`;
-  await s`insert into agents (company_id, name, config) values (${co!.id}, 'Chief of Staff', ${s.json({ model: "x" })}), (${co!.id}, 'Builder', null)`;
+  const [co] = await s`insert into companies (name) values ('Acme') returning id`;
+  await s`insert into "user" (id, name, email, created_at, updated_at) values ('u1', 'Founder', 'founder@acme.test', now(), now()), ('u2', 'Ops', 'ops@acme.test', now(), now())`;
+  await s`insert into company_memberships (company_id, principal_type, principal_id) values (${co!.id}, 'user', 'u1'), (${co!.id}, 'user', 'u2')`;
+  await s`insert into agents (company_id, name) values (${co!.id}, 'Chief of Staff'), (${co!.id}, 'Builder')`;
   for (let i = 0; i < 300; i++) {
-    await s`insert into issues (title, body, state) values (${`issue ${i}`}, ${i % 7 === 0 ? null : `line one\ttab\nline two \\ backslash ünïcödé ${MARKER} ${i}`}, ${i % 3 === 0 ? "done" : "open"})`;
+    await s`insert into issues (company_id, title) values (${co!.id}, ${i % 7 === 0 ? `issue ${i}` : `line one\ttab\nline two \\ backslash ünïcödé '; DROP TABLE x; -- ${MARKER} ${i}`})`;
   }
-  for (let i = 0; i < 12; i++) await s`insert into drizzle.__drizzle_migrations (hash, created_at) values (${`h${i}`}, ${1_700_000_000_000 + i})`;
   await s.end();
 }
 
 let sandboxSeq = 0;
-/** A disposable database owned by a fresh NON-superuser role (the sandbox's restore role, runbook §7). */
-async function sandboxDatabase(opts: { superuser?: boolean } = {}): Promise<string> {
+/**
+ * A sandbox as runbook §7 sets one up: a fresh plain role (not a superuser,
+ * member of no role) owning two empty databases, one to replay into and one
+ * for the reference schema.
+ */
+async function sandboxDatabase(opts: { superuser?: boolean; grantRole?: string; createrole?: boolean } = {}): Promise<{ url: string; reference: string }> {
   const n = ++sandboxSeq;
   const role = `restore_role_${n}`;
   const dbName = `restore_db_${n}_${randomUUID().slice(0, 6)}`;
   const a = postgres(`${pgBase}/postgres`, { max: 1, onnotice: () => {} });
   try {
-    await a.unsafe(`create role ${role} login password 'sandbox' ${opts.superuser ? "superuser" : "nosuperuser"}`);
+    await a.unsafe(`create role ${role} login password 'sandbox' ${opts.superuser ? "superuser" : "nosuperuser"} ${opts.createrole ? "createrole" : ""}`);
+    if (opts.grantRole) await a.unsafe(`grant ${opts.grantRole} to ${role}`);
     await a.unsafe(`create database ${dbName} owner ${role}`);
+    await a.unsafe(`create database ${dbName}_ref owner ${role}`);
     await a.unsafe(`grant set on parameter session_replication_role to ${role}`);
   } finally {
     await a.end();
   }
-  return `postgres://${role}:sandbox@127.0.0.1:${new URL(pgBase).port}/${dbName}`;
+  const base = `postgres://${role}:sandbox@127.0.0.1:${new URL(pgBase).port}`;
+  return { url: `${base}/${dbName}`, reference: `${base}/${dbName}_ref` };
 }
 
 async function snapshot(url: string) {
   const s = postgres(url, { max: 1, onnotice: () => {} });
   try {
     return {
-      companies: await s`select id, name, meta from companies order by id`,
-      users: await s`select id, email, created_at from "user" order by id`,
+      companies: await s`select * from companies order by id`,
+      users: await s`select * from "user" order by id`,
       agents: await s`select * from agents order by id`,
-      issues: await s`select id, title, body, state::text from issues order by id`,
-      memberships: await s`select * from company_memberships order by user_id`,
+      issues: await s`select * from issues order by id`,
+      memberships: await s`select * from company_memberships order by principal_id`,
       migrations: await s`select * from drizzle.__drizzle_migrations order by id`,
     };
   } finally {
@@ -278,15 +283,39 @@ async function rowsFor(boxId: string) {
   return await db.select().from(boxBackups).where(eq(boxBackups.boxId, boxId));
 }
 
+const silent = { out: () => {}, err: () => {} };
+
+/** Decrypt the round-trip backup again into a fresh file (decrypt never overwrites). */
+let decryptSeq = 0;
+async function freshDump(): Promise<string> {
+  const header = JSON.parse(fs.readFileSync(`${roundTripDump}.manifest.json`, "utf8")) as { slug: string; backupId: string };
+  const out = path.join(work, `dump-${++decryptSeq}.sql.gz`);
+  expect(await runRestoreTool(["decrypt", "--in", roundTripFile, "--key-dir", keyDir, "--out", out, "--expect-slug", header.slug, "--expect-backup-id", header.backupId], silent)).toBe(0);
+  return out;
+}
+
+/** Rewrite a decrypted dump's SQL (a box that is lying), keeping the format. */
+function tamper(dump: string, edit: (sql: string) => string): string {
+  const out = path.join(work, `tampered-${++decryptSeq}.sql.gz`);
+  fs.writeFileSync(out, zlib.gzipSync(edit(zlib.gunzipSync(fs.readFileSync(dump)).toString("utf8"))));
+  return out;
+}
+
+const beforeCommit = (extra: string) => (sql: string) => {
+  const at = sql.lastIndexOf("\nCOMMIT;");
+  if (at < 0) throw new Error("no COMMIT in the dump");
+  return `${sql.slice(0, at)}\n${extra}\n${STATEMENT_BREAKPOINT}${sql.slice(at)}`;
+};
+
 describe("off-box backup round trip", () => {
-  it("dump → encrypt → upload → download → decrypt → restore reproduces the box database", async () => {
+  it("dump → encrypt → upload → download → decrypt → replay (sandbox) → schema check reproduces the box database", async () => {
     const box = await makeBox();
     const events: BackupEvent[] = [];
     const svc = service({ events });
     const { done } = await svc.runManual(box.slug);
     const row = await done;
     expect(row?.state).toBe("succeeded");
-    expect(row).toMatchObject({ trigger: "manual", format: "paperclip-sql-gz-v1", release: "v2026.1001.0", counts: { companies: 1, users: 2, agents: 2, issues: 300, memberships: 2, migrations: 12 } });
+    expect(row).toMatchObject({ trigger: "manual", format: "paperclip-sql-gz-v1", release: "v2026.1001.0", counts: { companies: 1, users: 2, agents: 2, issues: 300, memberships: 2, migrations: ourMigrations.length } });
     expect(row!.objectPath).toMatch(new RegExp(`^${box.slug}/${box.id}/\\d{4}-\\d{2}-\\d{2}/.+\\.adbk$`));
     expect(events.map((e) => e.kind)).toEqual(["backup_succeeded"]);
     expect(JSON.stringify(events)).not.toContain(TOKEN);
@@ -319,35 +348,42 @@ describe("off-box backup round trip", () => {
     expect(out.join("\n")).toContain(box.slug);
     expect(out.join("\n")).not.toContain("sealedDataKey");
 
-    // Step 1, on the KEY machine: decrypt, check it is the backup asked for, and run the safety check.
+    // Step 1, on the KEY machine: decrypt (both expectations required), parse-check, never overwrite.
     out.length = 0;
     const dump = path.join(work, `${row!.id}.sql.gz`);
-    expect(await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", "someone-else"], io)).toBe(3);
+    expect(await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", box.slug], io)).toBe(64);
+    expect(await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", "someone-else", "--expect-backup-id", row!.id], io)).toBe(3);
     expect(fs.existsSync(dump)).toBe(false);
-    const dc = await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", box.slug, "--expect-backup-id", row!.id], io);
-    expect(dc).toBe(0);
+    const dcode = await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", box.slug, "--expect-backup-id", row!.id], io);
+    expect(dcode).toBe(0);
     expect(out.join("\n")).toMatch(/safety check passed: \d+ statement\(s\), [1-9]\d* COPY block\(s\)/);
     expect((fs.statSync(dump).mode & 0o777).toString(8)).toBe("600");
     expect(JSON.parse(fs.readFileSync(`${dump}.manifest.json`, "utf8"))).toMatchObject({ backupId: row!.id, slug: box.slug, counts: { issues: 300 } });
     expect(fs.existsSync(`${dump}.partial`)).toBe(false);
+    roundTripDump = dump;
+    // Never overwrites an existing output.
+    const before = fs.readFileSync(dump);
+    expect(await runRestoreTool(["decrypt", "--in", file, "--key-dir", keyDir, "--out", dump, "--expect-slug", box.slug, "--expect-backup-id", row!.id], io)).toBe(3);
+    expect(fs.readFileSync(dump).equals(before)).toBe(true);
 
-    // Step 2, in the SANDBOX: replay as a non-superuser, then verify. A superuser is refused.
+    // Step 2, in the SANDBOX: replay as the plain restore role, then the schema check against our migrations.
     out.length = 0;
-    const superTarget = await sandboxDatabase({ superuser: true });
-    await expect(runRestoreTool(["replay", "--dump", dump, "--into", superTarget], io)).rejects.toThrow(/superuser/);
     const target = await sandboxDatabase();
-    const code = await runRestoreTool(["replay", "--dump", dump, "--into", target], io);
-    expect(out.join("\n")).toContain("RESTORE TEST PASSED");
+    const code = await runRestoreTool(["replay", "--dump", dump, "--into", target.url, "--reference", target.reference, "--migrations-dir", MIGRATIONS_DIR], io);
+    expect(out.join("\n")).toMatch(/re-created \d+ object\(s\) .*the schema now matches exactly/);
     expect(out.join("\n")).toMatch(/replayed \d+ statement\(s\), [1-9]\d* COPY block\(s\)/);
+    expect(out.join("\n")).toMatch(new RegExp(`schema check against ${ourMigrations.length} of our migrations .*no unexplained objects`));
+    expect(out.join("\n")).toContain("RESTORE TEST PASSED");
     expect(code).toBe(0);
-    expect(await snapshot(target)).toEqual(await snapshot(boxUrl));
+    expect(await snapshot(target.url)).toEqual(await snapshot(boxUrl));
     // Sequences carry on where the source left off.
-    const r = postgres(target, { max: 1, onnotice: () => {} });
-    const [next] = await r`insert into issues (title) values ('after restore') returning id`;
+    const r = postgres(target.url, { max: 1, onnotice: () => {} });
+    const [next] = await r`insert into drizzle.__drizzle_migrations (hash) values ('x') returning id`;
     await r.end();
-    expect(Number(next!.id)).toBe(301);
-    // Replay never takes key material.
-    expect(await runRestoreTool(["replay", "--dump", dump, "--into", target, "--key-dir", keyDir], io)).toBe(64);
+    expect(Number(next!.id)).toBe(ourMigrations.length + 1);
+    // Replay never takes key material, and needs a separate reference database.
+    expect(await runRestoreTool(["replay", "--dump", dump, "--into", target.url, "--reference", target.reference, "--key-dir", keyDir], io)).toBe(64);
+    expect(await runRestoreTool(["replay", "--dump", dump, "--into", target.url], io)).toBe(64);
   });
 
   it("the wrong key cannot open a backup", async () => {
@@ -356,20 +392,68 @@ describe("off-box backup round trip", () => {
     const kp = sodium.crypto_box_keypair();
     fs.writeFileSync(path.join(otherDir, "escrow-public-key"), Buffer.from(kp.publicKey).toString("base64"));
     fs.writeFileSync(path.join(otherDir, "escrow-secret-key"), Buffer.from(kp.privateKey).toString("base64"));
+    const header = JSON.parse(fs.readFileSync(`${roundTripDump}.manifest.json`, "utf8")) as { slug: string; backupId: string };
     const out = path.join(work, "wrong-key.sql.gz");
-    await expect(runRestoreTool(["decrypt", "--in", roundTripFile, "--key-dir", otherDir, "--out", out], { out: () => {}, err: () => {} })).rejects.toThrow(/sealed to backup key/);
+    await expect(runRestoreTool(["decrypt", "--in", roundTripFile, "--key-dir", otherDir, "--out", out, "--expect-slug", header.slug, "--expect-backup-id", header.backupId], silent)).rejects.toThrow(/sealed to backup key/);
     expect(fs.existsSync(out) || fs.existsSync(`${out}.partial`)).toBe(false);
   });
 
   it("refuses to replay over a database that looks like a live box", async () => {
-    const dump = path.join(work, "guard.sql.gz");
-    expect(await runRestoreTool(["decrypt", "--in", roundTripFile, "--key-dir", keyDir, "--out", dump], { out: () => {}, err: () => {} })).toBe(0);
+    const dump = await freshDump();
     const errs: string[] = [];
     const before = await snapshot(boxUrl);
-    const code = await runRestoreTool(["replay", "--dump", dump, "--into", boxUrl], { out: () => {}, err: (l) => errs.push(l) });
+    const target = await sandboxDatabase();
+    const code = await runRestoreTool(["replay", "--dump", dump, "--into", boxUrl, "--reference", target.reference], { out: () => {}, err: (l) => errs.push(l) });
     expect(code).toBe(3);
     expect(errs.join(" ")).toMatch(/looks like a live box/);
     expect(await snapshot(boxUrl)).toEqual(before);
+  });
+
+  it("refuses every over-powered sandbox role", async () => {
+    const dump = await freshDump();
+    for (const [opts, why] of [
+      [{ superuser: true }, /super/],
+      [{ createrole: true }, /createrole/],
+      [{ grantRole: "pg_read_server_files" }, /read_files/],
+      [{ grantRole: "pg_write_server_files" }, /write_files/],
+      [{ grantRole: "pg_execute_server_program" }, /exec_program/],
+    ] as const) {
+      const t = await sandboxDatabase(opts);
+      await expect(runRestoreTool(["replay", "--dump", dump, "--into", t.url, "--reference", t.reference], silent), JSON.stringify(opts)).rejects.toThrow(why);
+      const c = postgres(t.url, { max: 1, onnotice: () => {} });
+      const [n] = await c`select count(*)::int as n from pg_class where relnamespace = 'public'::regnamespace`;
+      await c.end();
+      expect(n!.n).toBe(0); // nothing ran
+    }
+  });
+
+  it("a dump that parses but adds objects our migrations do not create fails the schema check", async () => {
+    const dump = await freshDump();
+    const cases: Array<[string, (sql: string) => string, RegExp]> = [
+      ["an extra table", beforeCommit('CREATE TABLE "public"."backdoor" ("a" text);'), /relation: r:public\.backdoor/],
+      ["an extra index", beforeCommit('CREATE INDEX "sneaky_idx" ON "public"."issues" USING btree ("title");'), /index: CREATE INDEX sneaky_idx/],
+      ["an extra unique constraint", beforeCommit('ALTER TABLE "public"."companies" ADD CONSTRAINT "companies_name_uq" UNIQUE ("name");'), /constraint: public\.companies:u/],
+      ["a changed column default", (sql) => sql.replace(/CREATE TABLE "public"\."companies" \(/, 'CREATE TABLE "public"."companies" (\n  "extra" text DEFAULT \'x\',\n'), /column: public\.companies\.extra|default: public\.companies\.extra/],
+    ];
+    for (const [name, edit, why] of cases) {
+      expect(edit(zlib.gunzipSync(fs.readFileSync(dump)).toString("utf8")), name).not.toBe(zlib.gunzipSync(fs.readFileSync(dump)).toString("utf8"));
+      const t = await sandboxDatabase();
+      const errs: string[] = [];
+      const code = await runRestoreTool(["replay", "--dump", tamper(dump, edit), "--into", t.url, "--reference", t.reference, "--migrations-dir", MIGRATIONS_DIR], { out: () => {}, err: (l) => errs.push(l) });
+      expect(code, name).toBe(1);
+      expect(errs.join("\n"), name).toMatch(why);
+    }
+  });
+
+  it("the applied migrations come from the restored table and must be ours", async () => {
+    const dump = await freshDump();
+    // The box claims a migration that is not in this repository: refused, whatever its header says.
+    const forged = tamper(dump, (sql) => sql.replace(/(COPY "drizzle"\."__drizzle_migrations" \([^)]*\) FROM stdin;\n)/, `$1999999\t${"f".repeat(64)}\t1\n`));
+    expect(forged).not.toBe(dump);
+    const t = await sandboxDatabase();
+    const errs: string[] = [];
+    expect(await runRestoreTool(["replay", "--dump", forged, "--into", t.url, "--reference", t.reference, "--migrations-dir", MIGRATIONS_DIR], { out: () => {}, err: (l) => errs.push(l) })).toBe(1);
+    expect(errs.join("\n")).toMatch(/not in this repository/);
   });
 
   it("a hostile dump from a compromised box is refused at decrypt and at replay, and runs nothing", async () => {
@@ -382,29 +466,55 @@ describe("off-box backup round trip", () => {
       "CREATE EVENT TRIGGER e ON ddl_command_start EXECUTE FUNCTION f();",
       "ALTER SYSTEM SET archive_command = 'x';",
       "CREATE EXTENSION IF NOT EXISTS plpython3u;",
+      // Bypasses of the old regex guard: a quote in a comment hiding a second statement, a quoted function name, a comment before "(".
+      "INSERT INTO \"public\".\"t\" (\"a\") VALUES ('x') -- '\n; SELECT pg_read_file('/etc/passwd'); -- '",
+      'CREATE TABLE "public"."t2" ("a" text DEFAULT "pg_read_file"(\'/etc/passwd\'));',
+      "CREATE TABLE \"public\".\"t3\" (\"a\" text DEFAULT pg_read_file/**/('/etc/passwd'));",
+      'CREATE TABLE "public"."t4" AS SELECT 1 AS a;',
+      'INSERT INTO "public"."t" ("a") SELECT current_setting(\'data_directory\');',
+      'ALTER TABLE "public"."t" ADD CONSTRAINT "c" UNIQUE ("a"), OWNER TO postgres;',
       "COMMIT;",
     ].join(`\n${STATEMENT_BREAKPOINT}\n`);
     const plain = path.join(work, "hostile.sql.gz");
     fs.writeFileSync(plain, zlib.gzipSync(hostileSql));
     const sealed = path.join(work, "hostile.adbk");
-    const enc = await createEncryptStream(backupKeys.publicKey, { backupId: randomUUID(), boxId: randomUUID(), slug: "evil", createdAt: new Date().toISOString(), format: "paperclip-sql-gz-v1", release: null, counts: { migrations: 1 } });
+    const backupId = randomUUID();
+    const enc = await createEncryptStream(backupKeys.publicKey, { backupId, boxId: randomUUID(), slug: "evil\u001b[2J", createdAt: new Date().toISOString(), format: "paperclip-sql-gz-v1", release: null, counts: { migrations: 1 } });
     await pipeline(fs.createReadStream(plain), enc, fs.createWriteStream(sealed));
+
+    // inspect prints box-written text without control characters.
+    const shown: string[] = [];
+    expect(await runRestoreTool(["inspect", "--in", sealed], { out: (l) => shown.push(l), err: () => {} })).toBe(0);
+    expect(shown.join("")).not.toContain("\u001b");
 
     const errs: string[] = [];
     const out = path.join(work, "hostile-out.sql.gz");
-    expect(await runRestoreTool(["decrypt", "--in", sealed, "--key-dir", keyDir, "--out", out], { out: () => {}, err: (l) => errs.push(l) })).toBe(4);
+    expect(await runRestoreTool(["decrypt", "--in", sealed, "--key-dir", keyDir, "--out", out, "--expect-slug", "evil\u001b[2J", "--expect-backup-id", backupId], { out: () => {}, err: (l) => errs.push(l) })).toBe(4);
     expect(fs.existsSync(out) || fs.existsSync(`${out}.partial`)).toBe(false);
-    expect(errs.join(" ")).toMatch(/COPY other than/);
-    expect(errs.join(" ")).toMatch(/psql meta-command/);
-    expect(errs.join(" ")).toMatch(/extension plpython3u/);
+    const msg = errs.join(" ");
+    for (const why of [/COPY|is_program|filename|field/, /does not parse/, /CreateEventTrigStmt/, /AlterSystemStmt/, /extension plpython3u/, /more than one statement/, /pg_read_file\(\) is not allowed/, /CreateTableAsStmt/, /only INSERT … VALUES|field/]) {
+      expect(msg).toMatch(why);
+    }
 
     const target = await sandboxDatabase();
-    await expect(runRestoreTool(["replay", "--dump", plain, "--into", target], { out: () => {}, err: () => {} })).rejects.toThrow(/safety check/);
-    const t = postgres(target, { max: 1, onnotice: () => {} });
+    await expect(runRestoreTool(["replay", "--dump", plain, "--into", target.url, "--reference", target.reference], silent)).rejects.toThrow(/safety check/);
+    const t = postgres(target.url, { max: 1, onnotice: () => {} });
     const [exists] = await t`select to_regclass('public.t') is not null as present`;
     await t.end();
     expect(exists!.present).toBe(false);
     expect(fs.existsSync(pwned)).toBe(false);
+  });
+
+  it("replay runs one statement per protocol message", async () => {
+    const target = await sandboxDatabase();
+    const c = postgres(target.url, { max: 1, onnotice: () => {} });
+    try {
+      await expect(c.unsafe("select 1; create table smuggled (a int)", [], EXTENDED_PROTOCOL)).rejects.toThrow(/multiple commands/);
+      const [n] = await c`select to_regclass('public.smuggled') is not null as present`;
+      expect(n!.present).toBe(false);
+    } finally {
+      await c.end();
+    }
   });
 });
 

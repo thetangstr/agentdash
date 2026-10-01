@@ -49,6 +49,8 @@ export interface BackupExport {
 
 export interface BackupExportService {
   run(): Promise<BackupExport>;
+  /** Stop the running dump (called on the hard timeout); it must then settle soon. */
+  abort?(): Promise<void>;
 }
 
 /** The configured export token, or null when the export is off (unset or too short). */
@@ -98,8 +100,10 @@ export function backupExportRoutes(opts: {
   service?: BackupExportService;
   release?: string | null;
   log?: { info(obj: unknown, msg: string): void; error(obj: unknown, msg: string): void };
-  /** Hard cap on producing the dump (default 30 minutes). */
+  /** Hard cap on producing the dump (default 30 minutes); the dump is then aborted. */
   timeoutMs?: number;
+  /** How long an aborted dump may take to settle before its slot is given up (default 60 s). */
+  abortGraceMs?: number;
 }): RequestHandler {
   let inFlight = false;
   return (req, res, next) => {
@@ -138,8 +142,12 @@ export function backupExportRoutes(opts: {
       exported = null;
       if (e) void e.cleanup().catch(() => {});
     };
+    // After a timeout the dump is aborted (its database sessions terminated)
+    // and the slot stays taken until it actually settles, so dumps never stack;
+    // only if it has not settled within the grace period is the slot given up.
+    let abandoned = false;
     const maybeRelease = () => {
-      if (released || !responseClosed || !(runSettled || timedOut)) return;
+      if (released || !responseClosed || !(runSettled || abandoned)) return;
       released = true;
       if (runSettled) cleanupExport();
       inFlight = false;
@@ -182,6 +190,12 @@ export function backupExportRoutes(opts: {
           opts.log?.error({ timeoutMs }, "off-box backup export timed out");
           if (!res.headersSent && !res.destroyed) res.status(504).json({ error: "backup export timed out" });
           else res.destroy();
+          void opts.service!.abort?.().catch((err: unknown) => opts.log?.error({ err }, "off-box backup export abort failed"));
+          const grace = setTimeout(() => {
+            abandoned = true;
+            maybeRelease();
+          }, opts.abortGraceMs ?? 60_000);
+          grace.unref?.();
           maybeRelease();
           return;
         }

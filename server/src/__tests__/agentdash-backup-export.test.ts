@@ -26,6 +26,7 @@ import {
   configuredBackupToken,
   type BackupExportService,
 } from "../routes/agentdash-backup-export.js";
+import { withApplicationName } from "../routes/agentdash-backup-export-service.js";
 
 const TOKEN = "t".repeat(64);
 const dirs: string[] = [];
@@ -146,16 +147,43 @@ describe("backup export route", () => {
     }
   });
 
-  it("a dump that runs past the hard timeout answers 504, frees the slot, and is removed when it ends", async () => {
+  it("a dump past the hard timeout answers 504, is aborted, and holds the slot until it has actually stopped", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const slow = fakeService({ gate });
+    let aborted = 0;
+    // Aborting stops the dump a little later (as terminating its sessions does).
+    slow.service.abort = async () => {
+      aborted++;
+      setTimeout(release, 100);
+    };
     const a = app(TOKEN, slow.service, 50);
     const res = await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`);
     expect(res.status).toBe(504);
-    release();
-    await new Promise((r) => setTimeout(r, 50));
+    expect(aborted).toBe(1);
+    // Still stopping: no second dump may start next to it.
+    expect((await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`)).status).toBe(409);
+    await new Promise((r) => setTimeout(r, 200));
     expect(slow.calls.cleaned).toBe(1);
+    // Stopped and cleaned up: the next export runs (and times out again here).
+    expect((await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`)).status).not.toBe(409);
+  });
+
+  it("an aborted dump that never settles gives the slot up after the grace period", async () => {
+    const stuck = fakeService({ gate: new Promise<void>(() => {}) });
+    const a = express();
+    a.use(backupExportRoutes({ token: TOKEN, service: stuck.service, timeoutMs: 30, abortGraceMs: 60 }));
+    expect((await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`)).status).toBe(504);
+    expect((await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`)).status).toBe(409);
+    await new Promise((r) => setTimeout(r, 120));
+    expect((await request(a).post(BACKUP_EXPORT_PATH).set("authorization", `Bearer ${TOKEN}`)).status).toBe(504);
+  });
+
+  it("tags the export's database sessions so a timeout can end exactly those", () => {
+    expect(withApplicationName("postgres://u:p@127.0.0.1:5432/db", "agentdash_offbox_export_0123456789ab")).toBe(
+      "postgres://u:p@127.0.0.1:5432/db?application_name=agentdash_offbox_export_0123456789ab",
+    );
+    expect(withApplicationName("postgres://u:p@h/db?sslmode=require", "x")).toContain("sslmode=require&application_name=x");
   });
 
   it("a failed export answers 500 without details and frees the slot", async () => {

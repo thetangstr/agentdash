@@ -802,11 +802,15 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       schema_name: string;
       tablename: string;
       column_names: string[];
+      nulls_not_distinct: boolean;
     }[]>`
       SELECT c.conname AS constraint_name,
              n.nspname AS schema_name,
              t.relname AS tablename,
-             array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS column_names
+             array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS column_names,
+             -- AgentDash (GH #733): keep UNIQUE NULLS NOT DISTINCT (PG15+); read from the
+             -- definition so older servers, which lack the catalog column, still work.
+             bool_or(pg_get_constraintdef(c.oid) ILIKE 'UNIQUE NULLS NOT DISTINCT%') AS nulls_not_distinct
       FROM pg_constraint c
       JOIN pg_class t ON t.oid = c.conrelid
       JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -822,7 +826,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("-- Unique constraints");
       for (const u of uniques) {
         const cols = u.column_names.map((c) => `"${c}"`).join(", ");
-        emitStatement(`ALTER TABLE ${quoteQualifiedName(u.schema_name, u.tablename)} ADD CONSTRAINT "${u.constraint_name}" UNIQUE (${cols});`);
+        emitStatement(`ALTER TABLE ${quoteQualifiedName(u.schema_name, u.tablename)} ADD CONSTRAINT "${u.constraint_name}" UNIQUE${u.nulls_not_distinct ? " NULLS NOT DISTINCT" : ""} (${cols});`);
       }
       emit("");
     }

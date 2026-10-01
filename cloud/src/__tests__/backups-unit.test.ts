@@ -12,7 +12,7 @@ import { createDecryptStream, createEncryptStream, ENVELOPE_MAGIC, FRAME_PLAINTE
 import { EMPTY_SHA256, S3Store, signV4, uriEncode } from "../backups/s3.js";
 import { isoWeek, selectPrunable } from "../backups/service.js";
 import { parseCopyFromStdin } from "../backups/sql-restore.js";
-import { checkStatement } from "../backups/dump-guard.js";
+import { checkStatement, initDumpGuard, MAX_STATEMENT_BYTES } from "../backups/dump-guard.js";
 import { ConfigError } from "../config.js";
 import { escrowKeyId } from "../railway/secrets.js";
 import { Secret } from "../secret.js";
@@ -284,44 +284,86 @@ describe("admin CLI: backups", () => {
   });
 });
 
-describe("dump guard", () => {
+describe("dump guard (libpg_query AST allowlist)", () => {
+  beforeAll(async () => {
+    await initDumpGuard();
+  });
   const ok = [
     "BEGIN;",
     "SET LOCAL session_replication_role = replica;",
+    "SET LOCAL client_min_messages = warning;",
     'CREATE SCHEMA IF NOT EXISTS "drizzle";',
     'CREATE TYPE "public"."issue_state" AS ENUM (\'open\', \'done\');',
-    "CREATE EXTENSION IF NOT EXISTS \"pg_trgm\" WITH SCHEMA \"public\";",
+    'CREATE EXTENSION IF NOT EXISTS "pg_trgm" WITH SCHEMA "public";',
     'DROP TABLE IF EXISTS "public"."issues" CASCADE;',
-    'CREATE TABLE "public"."issues" (\n  "id" bigint NOT NULL DEFAULT nextval(\'issues_id_seq\'::regclass),\n  "language" text\n);',
+    'DROP SEQUENCE IF EXISTS "public"."s" CASCADE;',
+    'CREATE SEQUENCE "public"."s" AS bigint INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 1 NO CYCLE;',
+    'ALTER SEQUENCE "public"."s" OWNED BY "public"."t"."id";',
+    'CREATE TABLE "public"."issues" (\n  "id" bigint NOT NULL DEFAULT nextval(\'issues_id_seq\'::regclass),\n  "language" text,\n  "uid" uuid DEFAULT gen_random_uuid() NOT NULL,\n  "at" timestamp with time zone DEFAULT now(),\n  "meta" jsonb DEFAULT \'{}\'::jsonb,\n  PRIMARY KEY ("id")\n);',
     "CREATE INDEX issues_title_idx ON public.issues USING gin (title gin_trgm_ops);",
-    'ALTER TABLE "public"."a" ADD CONSTRAINT "a_fk" FOREIGN KEY ("b") REFERENCES "public"."b" ("id");',
+    "CREATE UNIQUE INDEX u ON public.issues USING btree (lower(email)) WHERE ((status <> ALL (ARRAY['a'::text, 'b'::text])) AND (deleted_at IS NULL));",
+    'ALTER TABLE "public"."a" ADD CONSTRAINT "a_fk" FOREIGN KEY ("b") REFERENCES "public"."b" ("id") ON DELETE CASCADE;',
+    'ALTER TABLE "public"."a" ADD CONSTRAINT "a_u" UNIQUE NULLS NOT DISTINCT ("b", "c");',
     "-- Data for: public.t (1 rows)\nCOPY \"public\".\"t\" (\"a\") FROM stdin;\nPROGRAM; DROP TABLE x; \\! rm -rf /\n\\.",
-    "INSERT INTO \"public\".\"t\" (\"a\") VALUES ('COPY x FROM PROGRAM ''rm''; DROP TABLE t; \\! ls');",
+    "INSERT INTO \"public\".\"t\" (\"a\", \"b\") VALUES ($paperclip$COPY x FROM PROGRAM 'rm'; DROP TABLE t; \\! ls$paperclip$, NULL);",
     "SELECT setval('\"public\".\"issues_id_seq\"', 300, true);",
     "COMMIT;",
   ];
+  // Each one a bypass found in review of the old regex guard, or a statement kind it let through by prefix.
   const bad: Array<[string, RegExp]> = [
-    ["COPY \"public\".\"t\" (\"a\") FROM PROGRAM 'id';", /COPY other than/],
-    ["COPY \"public\".\"t\" TO '/tmp/x';", /COPY other than/],
-    ["\\! touch /tmp/pwned", /psql meta-command|shape/],
-    ["CREATE EVENT TRIGGER e ON ddl_command_start EXECUTE FUNCTION f();", /shape/],
-    ["ALTER SYSTEM SET archive_command = 'x';", /shape/],
-    ["CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'select 1';", /shape/],
+    ["INSERT INTO \"public\".\"t\" (\"a\") VALUES ('x') -- '\n; SELECT pg_read_file('/etc/passwd'); -- '", /more than one statement/],
+    ["INSERT INTO \"public\".\"t\" (\"a\") VALUES ('x') /* ' */; DROP TABLE \"public\".\"t\"; /* ' */", /more than one statement/],
+    ['CREATE TABLE "public"."t" ("a" text DEFAULT "pg_read_file"(\'/etc/passwd\'));', /function pg_read_file\(\) is not allowed/],
+    ['CREATE TABLE "public"."t" ("a" oid DEFAULT pg_catalog."lo_import"(\'/etc/passwd\'));', /function lo_import\(\) is not allowed/],
+    ["CREATE TABLE \"public\".\"t\" (\"a\" text DEFAULT pg_read_file/**/('/etc/passwd'));", /function pg_read_file\(\) is not allowed/],
+    ['CREATE TABLE "public"."t" ("a" text DEFAULT public.helper());', /schema-qualified function/],
+    ['CREATE TABLE "public"."t" AS SELECT pg_read_file(\'/etc/passwd\') AS a;', /CreateTableAsStmt/],
+    ['INSERT INTO "public"."t" ("a") SELECT current_setting(\'data_directory\');', /field targetList|only INSERT … VALUES/],
+    ["INSERT INTO \"public\".\"t\" (\"a\") VALUES (pg_read_file('/etc/passwd'));", /not a constant/],
+    ['INSERT INTO "public"."t" ("a") VALUES (\'x\') RETURNING *;', /field returning/],
+    ['INSERT INTO "public"."t" ("a") VALUES (\'x\') ON CONFLICT DO NOTHING;', /field onConflictClause/],
+    ['ALTER TABLE "public"."t" ADD CONSTRAINT "c" UNIQUE ("a"), OWNER TO postgres;', /exactly one subcommand/],
+    ['ALTER TABLE "public"."t" ADD CONSTRAINT "c" CHECK (pg_read_file(\'/x\') <> \'\');', /CONSTR_CHECK is not allowed/],
+    ['ALTER TABLE "public"."t" ENABLE ROW LEVEL SECURITY;', /only ADD CONSTRAINT|subtype/],
+    ["COPY \"public\".\"t\" (\"a\") FROM PROGRAM 'id';", /field is_program|does not parse|field filename/],
+    ["COPY \"public\".\"t\" (\"a\") FROM '/etc/passwd';", /field filename/],
+    ["COPY \"public\".\"t\" TO '/tmp/x';", /field filename|only COPY … FROM STDIN|is_from/],
+    ["COPY (SELECT 1) TO STDOUT;", /field query|is_from|only COPY/],
+    ["\\! touch /tmp/pwned", /does not parse/],
+    ["CREATE EVENT TRIGGER e ON ddl_command_start EXECUTE FUNCTION f();", /CreateEventTrigStmt/],
+    ["ALTER SYSTEM SET archive_command = 'x';", /AlterSystemStmt/],
+    ["CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'select 1';", /CreateFunctionStmt/],
+    ["CREATE TRIGGER t BEFORE INSERT ON x FOR EACH ROW EXECUTE FUNCTION f();", /CreateTrigStmt/],
+    ["CREATE RULE r AS ON INSERT TO t DO ALSO NOTIFY x;", /RuleStmt/],
+    ["CREATE VIEW v AS SELECT pg_read_file('/etc/passwd');", /ViewStmt/],
+    ["CREATE POLICY p ON t USING (true);", /CreatePolicyStmt/],
+    ["DO $$ BEGIN PERFORM 1; END $$;", /DoStmt/],
+    ["GRANT ALL ON t TO PUBLIC;", /GrantStmt/],
+    ["SET ROLE postgres;", /VariableSetStmt|only SET LOCAL/],
+    ["SET LOCAL search_path = evil;", /only SET LOCAL/],
+    ["SET session_replication_role = replica;", /is_local|only SET LOCAL/],
     ["CREATE EXTENSION IF NOT EXISTS plpython3u;", /not on the allowlist/],
-    ["CREATE EXTENSION IF NOT EXISTS \"dblink\";", /not on the allowlist/],
-    ['CREATE TABLE "public"."t" ("a" int); COPY t FROM PROGRAM \'id\';', /PROGRAM|more than one/],
-    ['CREATE TABLE "public"."t" ("a" text DEFAULT pg_read_file(\'/etc/passwd\'));', /file, process or config/],
-    ['CREATE TABLE "public"."t" ("a" int CHECK (lo_import(\'/etc/passwd\') > 0));', /file, process or config/],
-    ['INSERT INTO "public"."t" ("a") VALUES ((SELECT set_config(\'x\', \'y\', false)));', /file, process or config/],
-    ["SET ROLE postgres;", /shape/],
-    ["GRANT ALL ON t TO PUBLIC;", /shape/],
-    ["SELECT setval('s', 1, true); SELECT pg_sleep(100);", /shape|more than one/],
-    ['CREATE TABLE "public"."t" ("a" text DEFAULT $x$evil$x$);', /dollar-quoted/],
+    ['CREATE EXTENSION IF NOT EXISTS "dblink";', /not on the allowlist/],
+    ["CREATE EXTENSION pg_trgm;", /only IF NOT EXISTS/],
+    ["SELECT setval('s', 1, true); SELECT pg_sleep(100);", /more than one statement/],
+    ["SELECT pg_sleep(100);", /only SELECT setval/],
+    ["SELECT setval('s', (SELECT 1), true);", /A_Const|SubLink/],
+    ['CREATE TABLE "public"."t" ("a" text DEFAULT (SELECT 1));', /SubLink is not allowed/],
+    ['CREATE TABLE "public"."t" ("a" int) INHERITS ("public"."u");', /field inhRelations/],
+    ['CREATE TABLE "public"."t" ("a" int GENERATED ALWAYS AS (pg_backend_pid()) STORED);', /CONSTR_GENERATED|generated/],
+    ['CREATE INDEX i ON public.t USING btree ((pg_read_file(\'/x\')));', /function pg_read_file\(\) is not allowed/],
+    ['DROP TABLE "public"."t";', /only IF EXISTS/],
+    ['DROP FUNCTION IF EXISTS f();', /only tables and sequences/],
+    ['CREATE TEMP TABLE "t" ("a" int);', /relpersistence/],
   ];
   it("accepts every shape backup-lib writes, whatever the data says", () => {
     for (const s of ok) expect(checkStatement(s), s).toBeNull();
   });
-  it("refuses programs, files, psql escapes, event triggers, ALTER SYSTEM, unlisted extensions and smuggled statements", () => {
-    for (const [s, why] of bad) expect(checkStatement(s), s).toMatch(why);
+  it("refuses each review bypass and every statement kind backup-lib never writes", () => {
+    const wrong = bad.map(([s, why]) => [s, checkStatement(s), why] as const).filter(([, got, why]) => !got || !why.test(got));
+    expect(wrong).toEqual([]);
+  });
+  it("caps statement size", () => {
+    expect(checkStatement(`INSERT INTO "public"."t" ("a") VALUES ('${"x".repeat(MAX_STATEMENT_BYTES)}');`)).toMatch(/larger than/);
   });
 });
