@@ -5,7 +5,7 @@ export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
   approve_ceo_strategy: "CEO Strategy",
   budget_override_required: "Budget Override",
-  request_board_approval: "Board Approval",
+  request_board_approval: "Approval",
   mandate_violation: "Mandate escalation",
 };
 

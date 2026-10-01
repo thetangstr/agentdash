@@ -102,6 +102,11 @@
       "permanent": false
     },
     {
+      "source": "/assess",
+      "destination": "/start",
+      "permanent": false
+    },
+    {
       "source": "/share/:path*",
       "destination": "/",
       "permanent": false

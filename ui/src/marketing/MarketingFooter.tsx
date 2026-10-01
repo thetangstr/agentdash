@@ -31,7 +31,6 @@ export function MarketingFooter() {
             <ul>
               <li><a href="/about">About</a></li>
               <li><a href="/consulting">Consulting</a></li>
-              <li><a href="/assess">Readiness assessment</a></li>
               <li><a href={`mailto:${CONTACT_EMAIL}`}>Contact</a></li>
             </ul>
           </div>

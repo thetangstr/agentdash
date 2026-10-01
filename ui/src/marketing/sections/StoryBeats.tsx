@@ -93,7 +93,7 @@ export function StoryBeats() {
               </div>
               <div className="mkt-mini-comment mkt-mini-comment--routine">
                 <b>Tally</b> <span>Research pod · routine</span>
-                <p>Weekly spend: 2.1M tokens, $61.40. Source: cost ledger.</p>
+                <p>Weekly spend: 2.1M tokens, within the budget you set. Source: cost ledger.</p>
               </div>
               <div className="mkt-mini-comment mkt-mini-comment--gate">
                 <b>Marlow</b> <span>Delivery agent · steward Jonah</span>

@@ -118,7 +118,7 @@ export const SCENARIOS: Scenario[] = [
       },
       {
         kind: "comment", delay: 1200, issueId: `${P}-41`, actor: "tally", viaRoutine: true,
-        text: "Weekly spend: 2.1M tokens, $61.40, 68% on delivery work. Source: cost ledger.",
+        text: "Weekly spend: 2.1M tokens, 68% on delivery work, within the budget you set. Source: cost ledger.",
       },
       { kind: "status", delay: 600, issueId: `${P}-44`, status: "in_progress" },
       {
@@ -166,7 +166,7 @@ export const SCENARIOS: Scenario[] = [
             "Delivery: 5 of 6 projects on track. Atlas awaiting the email in your outbox.",
             "Platform: 3 incidents, all under 2h. Two repos without CI flagged.",
             "People: 2 roles blocking delivery, 4 candidates waiting on us.",
-            "Spend: 2.1M tokens, $61.40 this week, 68% on delivery.",
+            "Spend: 2.1M tokens this week, 68% on delivery, within the budget you set.",
           ],
           contributors: ["quill", "marlow", "ada", "reyes", "tally"],
         },
@@ -179,7 +179,7 @@ export const SCENARIOS: Scenario[] = [
             "Delivery: 5 of 6 projects on track. Atlas: no update since the 22nd, gap flagged for you.",
             "Platform: 3 incidents, all under 2h. Two repos without CI flagged.",
             "People: 2 roles blocking delivery, 4 candidates waiting on us.",
-            "Spend: 2.1M tokens, $61.40 this week, 68% on delivery.",
+            "Spend: 2.1M tokens this week, 68% on delivery, within the budget you set.",
           ],
           contributors: ["quill", "marlow", "ada", "reyes", "tally"],
         },

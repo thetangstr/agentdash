@@ -37,7 +37,7 @@ const ASKS: Record<string, string> = {
   hire_agent: "wants to hire another agent",
   approve_ceo_strategy: "wants sign-off on the strategy",
   budget_override_required: "has run out of budget and cannot continue",
-  request_board_approval: "wants board approval",
+  request_board_approval: "wants your approval",
   mandate_violation: "did something its mandate does not allow",
   connector_send: "wants to send something outside the company",
   inbound_content_review: "wants to release content that was held back",
