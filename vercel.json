@@ -107,7 +107,7 @@
       "permanent": false
     },
     {
-      "source": "/:path((?!(?:demo|consulting|about|mcp|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
+      "source": "/:path((?!(?:demo|consulting|about|mcp|docs|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
       "destination": "/find",
       "permanent": false
     }

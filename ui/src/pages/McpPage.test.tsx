@@ -77,6 +77,12 @@ describe("McpPage", () => {
     expect(container.textContent).toContain("Team runs with approval gates");
   });
 
+  it("links to the MCP documentation", () => {
+    render();
+    expect(container.querySelector('a[href="/docs/mcp/overview"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/docs/mcp/connecting"]')).not.toBeNull();
+  });
+
   it("links to pricing and the GitHub repo", () => {
     render();
     expect(container.querySelector('a[href="/pricing"]')).not.toBeNull();
