@@ -89,6 +89,8 @@ export interface EdgeServerOptions {
   /** For the router's own health check on its Railway domain. */
   status?: () => Record<string, unknown>;
   limits?: Partial<EdgeLimits>;
+  /** AgentDash (SC-10, GH #771): called once per response on a box host; true when the visitor got a 5xx error (./stats.ts). */
+  recordResponse?: (serverError: boolean) => void;
 }
 
 const HOP_BY_HOP = new Set([
@@ -218,7 +220,7 @@ function activityCounts(path: string): boolean {
 
 type Decision =
   | { kind: "proxy"; route: EdgeRoute & { upstreamHost: string }; secret: string; slug: string; publicHost: string }
-  | { kind: "page"; status: number; html: string; headers?: Record<string, string>; resume?: string }
+  | { kind: "page"; status: number; html: string; headers?: Record<string, string>; resume?: string; fault?: boolean }
   | { kind: "self" };
 
 function rawResponse(status: number, extra = ""): string {
@@ -271,7 +273,7 @@ export function createEdgeServer(opts: EdgeServerOptions): http.Server {
     const publicHost = `${slug}.${opts.edgeDomain}`;
     if (!SLUG_RE.test(slug) || isReservedSlug(slug)) return { kind: "page", status: 404, html: notFoundPage(publicHost, findUrl) };
     if (opts.routeAgeMs && opts.routeAgeMs() > limits.maxRouteAgeMs) {
-      return { kind: "page", status: 503, html: unavailablePage(), headers: { "retry-after": "30" } };
+      return { kind: "page", status: 503, html: unavailablePage(), headers: { "retry-after": "30" }, fault: true };
     }
     const route = await opts.routes.lookup(slug);
     if (!route) return { kind: "page", status: 404, html: notFoundPage(publicHost, findUrl) };
@@ -295,6 +297,7 @@ export function createEdgeServer(opts: EdgeServerOptions): http.Server {
 
   function sendPage(res: ServerResponse, d: Extract<Decision, { kind: "page" }>) {
     if (d.resume) maybeResume(d.resume);
+    opts.recordResponse?.(d.fault === true);
     res.writeHead(d.status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...(d.headers ?? {}) });
     res.end(d.html);
   }
@@ -309,6 +312,7 @@ export function createEdgeServer(opts: EdgeServerOptions): http.Server {
       d = await decide(req);
     } catch (err) {
       log.error("route decision failed", { err });
+      opts.recordResponse?.(true);
       return plain(res, 500, "edge error");
     }
     if (d.kind === "self") {
@@ -346,6 +350,7 @@ export function createEdgeServer(opts: EdgeServerOptions): http.Server {
           if (value === undefined || HOP_BY_HOP.has(name.toLowerCase())) continue;
           out[name] = name.toLowerCase() === "set-cookie" ? [value].flat().map(hostOnlyCookie) : value;
         }
+        opts.recordResponse?.((upRes.statusCode ?? 502) >= 500);
         res.writeHead(upRes.statusCode ?? 502, upRes.statusMessage, out);
         res.flushHeaders();
         upRes.pipe(res);
@@ -356,6 +361,7 @@ export function createEdgeServer(opts: EdgeServerOptions): http.Server {
     upstream.on("error", (err) => {
       log.warn("upstream request failed", { slug: d.slug, err });
       if (!res.headersSent) {
+        opts.recordResponse?.(true);
         res.writeHead(502, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
         res.end(badGatewayPage(d.slug));
       } else {

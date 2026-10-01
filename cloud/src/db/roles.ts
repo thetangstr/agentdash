@@ -32,7 +32,8 @@ export const RUNTIME_ROLE = "cloud_app";
 /** Append-only tables: the runtime role may only read and add rows. */
 export const AUDIT_TABLES = ["operator_audit", "box_events"] as const;
 /** SECURITY DEFINER functions the runtime role may execute (and nothing else). */
-export const RUNTIME_FUNCTIONS = ["prune_rate_events(integer)"] as const;
+// AgentDash (SC-10, GH #771): prune_fleet_history deletes only old health, edge-stat and reading rows.
+export const RUNTIME_FUNCTIONS = ["prune_rate_events(integer)", "prune_fleet_history(integer)"] as const;
 
 type Sql = postgres.Sql | postgres.ReservedSql;
 
@@ -258,12 +259,14 @@ export async function pendingMigrations(sql: Sql, migrationsFolder: string): Pro
 //   cloud_edge  LOGIN. What the router connects as: SELECT on the edge_routes
 //               view (slug, state, upstream host, encrypted edge secret) and
 //               EXECUTE on edge_record_activity and edge_request_resume, the
-//               two SECURITY DEFINER functions of migration 0005. No table
+//               two SECURITY DEFINER functions of migration 0005, and
+//               edge_record_stats (migration 0009, SC-10). No table
 //               privilege at all, no membership, owns nothing.
 
 export const EDGE_ROLE = "cloud_edge";
 export const EDGE_VIEW = "edge_routes";
-export const EDGE_FUNCTIONS = ["edge_record_activity(text[])", "edge_request_resume(text)"] as const;
+// AgentDash (SC-10, GH #771): edge_record_stats adds one row of request counts (migration 0009).
+export const EDGE_FUNCTIONS = ["edge_record_activity(text[])", "edge_request_resume(text)", "edge_record_stats(text,integer,integer)"] as const;
 
 /** Create the router's role if missing and (re)set its password (as a SCRAM verifier). */
 export async function ensureEdgeRole(sql: Sql, password: string): Promise<void> {

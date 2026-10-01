@@ -19,6 +19,13 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   boxes retry <slug>         resume a failed box's provision job at its failed step
   boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
   fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
+  fleet status               fleet summary: boxes, health, firing alerts, failed jobs, router 5xx,
+                             certificates, spend, idle policy
+  box health <slug>          one box: health per path, recent polls, alerts, idle state and next step
+  box suspend <slug>         queue a suspend (web deployment removed; data stays)
+  box wake <slug>            queue a resume for a suspended box
+  alerts list                firing alerts
+  alerts test                send a test alert on every configured transport and report each
   invites list               list self-hosted invite codes (ids and labels; codes are never stored)
   invites import [label] [--allow-short]
                              read codes from stdin (commas or newlines) and store their hashes;
@@ -108,6 +115,14 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
     return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));
   }
   if (group === "fleet" && action === "edge-backfill") return print(await call("POST", "/fleet/edge-backfill"));
+  // AgentDash (SC-10, GH #771): fleet monitoring.
+  if (group === "fleet" && action === "status" && rest.length === 0) return print(await call("GET", "/fleet/status"));
+  if (group === "box" && (action === "health" || action === "suspend" || action === "wake") && rest.length === 1) {
+    const slug = encodeURIComponent(rest[0]!);
+    return print(action === "health" ? await call("GET", `/boxes/${slug}/health`) : await call("POST", `/boxes/${slug}/${action}`));
+  }
+  if (group === "alerts" && action === "list" && rest.length === 0) return print(await call("GET", "/alerts"));
+  if (group === "alerts" && action === "test" && rest.length === 0) return print(await call("POST", "/alerts/test"));
   if (group === "invites" && action === "list") return print(await call("GET", "/invites"));
   if (group === "invites" && action === "import") {
     const allowShort = rest.includes("--allow-short");

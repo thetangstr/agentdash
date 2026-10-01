@@ -18,6 +18,21 @@ export const SETTING_DEFAULTS = {
   // release tag's commit on Railway instead. Off by default: boxes are
   // image-only unless an operator allows the slower fallback.
   allow_source_fallback: false,
+  // AgentDash (SC-10, GH #771): the Free idle policy (spec §5.2). Both OFF
+  // until an operator turns them on: with suspend off no Free box is warned
+  // or paused; with delete off no paused box is warned about deletion or
+  // moved into the deletion flow. Each email is sent only when the step it
+  // announces is enabled, so no customer is told about a step that will not happen.
+  idle_suspend_enabled: false,
+  idle_delete_enabled: false,
+  // The spend alarm (spec §5.1): above this monthly figure (USD) the kill
+  // switch is tripped and ops is paged. Null: no alarm.
+  spend_alarm_usd: null as number | null,
+  // The monthly cost of one running and one suspended box (USD), for the
+  // spend estimate while no Railway usage reading is wired. Null: the spend
+  // reading is "not available" (no number is invented).
+  spend_estimate_box_usd: null as number | null,
+  spend_estimate_suspended_box_usd: null as number | null,
 };
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
@@ -52,7 +67,17 @@ export function parseSettingValue(key: SettingKey, raw: unknown): Settings[Setti
     case "waitlist_mode":
     case "rollout_paused":
     case "allow_source_fallback":
+    case "idle_suspend_enabled":
+    case "idle_delete_enabled":
       return asBool(raw);
+    case "spend_alarm_usd":
+    case "spend_estimate_box_usd":
+    case "spend_estimate_suspended_box_usd": {
+      if (raw === null || raw === "" || raw === "null") return null;
+      const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\d+(\.\d{1,2})?$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isFinite(n) || n < 0 || n > 1_000_000) throw new SettingValidationError(`${key} must be a dollar amount from 0 to 1000000, or null`);
+      return n;
+    }
     case "daily_cap":
       return asInt(raw, 0, 1000);
     case "max_concurrent_jobs":

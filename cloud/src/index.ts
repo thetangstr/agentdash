@@ -14,6 +14,8 @@ import { capabilities } from "./capabilities.js";
 import { createLogger } from "./logger.js";
 import { RailwayClient } from "./railway/client.js";
 import { provisionHandler } from "./railway/provisioner.js";
+import { loadMonitorConfig, startMonitor } from "./monitor/service.js";
+import { resumeHandler, suspendHandler } from "./monitor/suspend.js";
 
 const log = createLogger({ base: { service: "cloud-control" } });
 const SWEEP_MS = 10 * 60_000;
@@ -42,12 +44,13 @@ async function main() {
   }
   const { db, close } = createCloudDb(config.databaseUrl.reveal());
 
-  const alerters: Alerter[] = [logAlerter(log)];
-  if (config.alertWebhookUrl) alerters.push(webhookAlerter(config.alertWebhookUrl, { log }));
+  // AgentDash (SC-10, GH #771): named, so `admin alerts test` can report each transport.
+  const transports: Array<{ name: string; alerter: Alerter }> = [{ name: "log", alerter: logAlerter(log) }];
+  if (config.alertWebhookUrl) transports.push({ name: "webhook", alerter: webhookAlerter(config.alertWebhookUrl, { log }) });
   if (config.resendApiKey && config.alertEmailFrom && config.alertEmailTo.length) {
-    alerters.push(resendEmailAlerter({ apiKey: config.resendApiKey, from: config.alertEmailFrom, to: config.alertEmailTo }));
+    transports.push({ name: "email", alerter: resendEmailAlerter({ apiKey: config.resendApiKey, from: config.alertEmailFrom, to: config.alertEmailTo }) });
   }
-  const alerter = combineAlerters(log, alerters);
+  const alerter = combineAlerters(log, transports.map((t) => t.alerter));
 
   let runner: JobRunner | null = null;
   let sweep: NodeJS.Timeout | null = null;
@@ -69,6 +72,9 @@ async function main() {
         provision,
         deleteHandler({ client, workspaceId: config.railwayWorkspaceId }),
         closeSignupHandler({ client, workspaceId: config.railwayWorkspaceId }),
+        // AgentDash (SC-10, GH #771): suspend (web deployment removed) and wake.
+        suspendHandler({ client, workspaceId: config.railwayWorkspaceId }),
+        resumeHandler({ client, workspaceId: config.railwayWorkspaceId }),
       ] });
     runner.start();
     const runSweep = () => void sweepCleanup(db, log, { alerter }).catch((err: unknown) => log.error("cleanup sweep failed", { err }));
@@ -94,12 +100,24 @@ async function main() {
   ];
   for (const t of passes) t.unref();
 
-  const server = createApp({ db, config, log, frontDoor }).listen(config.port, () => {
+  // AgentDash (SC-10, GH #771): fleet health, alerts, the Free idle policy and the spend alarm.
+  const monitor = startMonitor({
+    db,
+    log,
+    alerter,
+    mailer: mailerFromConfig(config, log),
+    edgeDomain: config.edgeDomain,
+    edgeLive: config.edgeLive,
+    config: loadMonitorConfig(process.env, config),
+  });
+
+  const server = createApp({ db, config, log, frontDoor, alertTransports: transports }).listen(config.port, () => {
     log.info("listening", { port: config.port, release: config.release, railwayApi: config.railwayToken ? "configured" : "not configured" });
   });
   const shutdown = () => {
     if (sweep) clearInterval(sweep);
     for (const t of passes) clearInterval(t);
+    monitor.stop();
     void (runner?.stop() ?? Promise.resolve()).finally(() => {
       server.close(() => void close().finally(() => process.exit(0)));
     });
