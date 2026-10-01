@@ -66,6 +66,44 @@ type ExtensionDefinition = {
   schema_name: string;
 };
 
+// AgentDash (GH #907): schema objects the pg_dump-less engine used to drop.
+type FunctionDefinition = {
+  schema_name: string;
+  function_name: string;
+  definition: string;
+  uses_row_type: boolean;
+};
+
+type CheckConstraintDefinition = {
+  schema_name: string;
+  tablename: string;
+  constraint_name: string;
+  definition: string;
+};
+
+type ViewDefinition = {
+  oid: string;
+  schema_name: string;
+  view_name: string;
+  relkind: "v" | "m";
+  definition: string;
+  reloptions: string[] | null;
+  depends_on: string[];
+};
+
+type TriggerDefinition = {
+  schema_name: string;
+  tablename: string;
+  definition: string;
+};
+
+type SchemaObjectDefinitions = {
+  functions: FunctionDefinition[];
+  checks: CheckConstraintDefinition[];
+  views: ViewDefinition[];
+  triggers: TriggerDefinition[];
+};
+
 const DEFAULT_BACKUP_WRITE_BUFFER_BYTES = 1024 * 1024;
 const BACKUP_DATA_CURSOR_ROWS = 100;
 const BACKUP_CLI_STDERR_BYTES = 64 * 1024;
@@ -409,6 +447,127 @@ async function* readRestoreStatements(backupFile: string): AsyncGenerator<string
   }
 }
 
+// AgentDash (GH #907): read CHECK constraints, views, functions and triggers
+// from the catalog so a pg_dump-less backup is self-contained. Definitions
+// come from pg_get_*def() under `search_path = pg_catalog`, so every name the
+// server prints is schema-qualified (as pg_dump does) and replays correctly
+// whatever search_path the restore session has. Extension-owned objects are
+// left to CREATE EXTENSION.
+async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Promise<SchemaObjectDefinitions> {
+  await sql`SELECT set_config('search_path', 'pg_catalog', false)`;
+  try {
+    const functions = await sql<FunctionDefinition[]>`
+      SELECT n.nspname AS schema_name,
+             p.proname AS function_name,
+             pg_get_functiondef(p.oid) AS definition,
+             EXISTS (
+               SELECT 1
+               FROM pg_type t
+               LEFT JOIN pg_type et ON et.oid = t.typelem AND t.typelem <> 0
+               WHERE (t.oid = p.prorettype
+                      OR t.oid = ANY(p.proargtypes::oid[])
+                      OR t.oid = ANY(coalesce(p.proallargtypes, '{}'::oid[])))
+                 AND (t.typrelid <> 0 OR coalesce(et.typrelid, 0) <> 0)
+             ) AS uses_row_type
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+        AND p.prokind IN ('f', 'p')
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_depend d
+          WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+        )
+      ORDER BY n.nspname, p.proname, p.oid
+    `;
+    const checks = await sql<CheckConstraintDefinition[]>`
+      SELECT n.nspname AS schema_name,
+             t.relname AS tablename,
+             c.conname AS constraint_name,
+             pg_get_constraintdef(c.oid) AS definition
+      FROM pg_constraint c
+      JOIN pg_class t ON t.oid = c.conrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE c.contype = 'c'
+        AND c.conislocal
+        AND t.relkind IN ('r', 'p')
+        AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+      ORDER BY n.nspname, t.relname, c.conname
+    `;
+    const views = await sql<ViewDefinition[]>`
+      SELECT v.oid::text AS oid,
+             n.nspname AS schema_name,
+             v.relname AS view_name,
+             v.relkind::text AS relkind,
+             pg_get_viewdef(v.oid) AS definition,
+             v.reloptions::text[] AS reloptions,
+             ARRAY(
+               SELECT DISTINCT d.refobjid::text
+               FROM pg_rewrite r
+               JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = r.oid
+               WHERE r.ev_class = v.oid
+                 AND d.refclassid = 'pg_class'::regclass
+                 AND d.refobjid <> v.oid
+             ) AS depends_on
+      FROM pg_class v
+      JOIN pg_namespace n ON n.oid = v.relnamespace
+      WHERE v.relkind IN ('v', 'm')
+        AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_depend d
+          WHERE d.classid = 'pg_class'::regclass AND d.objid = v.oid AND d.deptype = 'e'
+        )
+      ORDER BY n.nspname, v.relname
+    `;
+    const triggers = await sql<TriggerDefinition[]>`
+      SELECT n.nspname AS schema_name,
+             c.relname AS tablename,
+             pg_get_triggerdef(t.oid) AS definition
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE NOT t.tgisinternal
+        AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+      ORDER BY n.nspname, c.relname, t.tgname
+    `;
+    return { functions: [...functions], checks: [...checks], views: [...views], triggers: [...triggers] };
+  } finally {
+    await sql`RESET search_path`;
+  }
+}
+
+/** AgentDash (GH #907): views in an order where each one follows the views it reads from. */
+function orderViewsByDependency(views: ViewDefinition[]): ViewDefinition[] {
+  const byOid = new Map(views.map((view) => [view.oid, view]));
+  const ordered: ViewDefinition[] = [];
+  const state = new Map<string, "visiting" | "done">();
+  const visit = (view: ViewDefinition) => {
+    const seen = state.get(view.oid);
+    if (seen === "done" || seen === "visiting") return;
+    state.set(view.oid, "visiting");
+    for (const dep of view.depends_on) {
+      const target = byOid.get(dep);
+      if (target) visit(target);
+    }
+    state.set(view.oid, "done");
+    ordered.push(view);
+  };
+  for (const view of views) visit(view);
+  return ordered;
+}
+
+function stripTrailingSemicolon(definition: string): string {
+  return definition.trim().replace(/;+\s*$/, "").trimEnd();
+}
+
+function viewStatement(view: ViewDefinition): string {
+  const name = quoteQualifiedName(view.schema_name, view.view_name);
+  const options = view.reloptions && view.reloptions.length > 0 ? ` WITH (${view.reloptions.join(", ")})` : "";
+  const body = stripTrailingSemicolon(view.definition);
+  return view.relkind === "m"
+    ? `CREATE MATERIALIZED VIEW ${name}${options} AS\n${body}\nWITH DATA;`
+    : `CREATE OR REPLACE VIEW ${name}${options} AS\n${body};`;
+}
+
 export function createBufferedTextFileWriter(filePath: string, maxBufferedBytes = DEFAULT_BACKUP_WRITE_BUFFER_BYTES) {
   const filePromise = openFile(filePath, "w");
   const flushThreshold = Math.max(1, Math.trunc(maxBufferedBytes));
@@ -571,6 +730,35 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     const includedTableNames = new Set(tables.map(({ schema_name, tablename }) => tableKey(schema_name, tablename)));
     const includedSchemas = new Set(tables.map(({ schema_name }) => schema_name));
 
+    // AgentDash (GH #907): CHECK constraints, views, functions and triggers,
+    // read once up front and emitted below in dependency-safe order.
+    const schemaObjects = await readSchemaObjectDefinitions(sql);
+    const leadingFunctions = schemaObjects.functions.filter((fn) => !fn.uses_row_type);
+    const rowTypeFunctions = schemaObjects.functions.filter((fn) => fn.uses_row_type);
+    const checkConstraints = schemaObjects.checks.filter((check) => includedTableNames.has(tableKey(check.schema_name, check.tablename)));
+    const views = orderViewsByDependency(schemaObjects.views);
+    const viewNames = new Set(views.map((view) => tableKey(view.schema_name, view.view_name)));
+    const triggers = schemaObjects.triggers.filter((trigger) => {
+      const key = tableKey(trigger.schema_name, trigger.tablename);
+      return includedTableNames.has(key) || viewNames.has(key);
+    });
+    for (const fn of schemaObjects.functions) includedSchemas.add(fn.schema_name);
+    for (const view of views) includedSchemas.add(view.schema_name);
+    const emitFunctions = (functions: FunctionDefinition[]) => {
+      for (const fn of functions) {
+        emit(`-- Function: ${fn.schema_name}.${fn.function_name}`);
+        emitStatement(`${stripTrailingSemicolon(fn.definition)};`);
+      }
+      emit("");
+    };
+    if (schemaObjects.functions.length > 0) {
+      // Function bodies are checked when they run, not when they are created,
+      // so a body may name tables that the restore creates later (pg_dump does
+      // the same).
+      emitStatement("SET LOCAL check_function_bodies = false;");
+      emit("");
+    }
+
     // Get all enums
     const enums = await sql<{ schema_name: string; typname: string; labels: string[] }[]>`
       SELECT n.nspname AS schema_name, t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder) AS labels
@@ -644,6 +832,14 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         );
       }
       emit("");
+    }
+
+    // AgentDash (GH #907): functions before tables, so column defaults, CHECK
+    // constraints and index expressions can call them. Functions whose
+    // signature uses a table's row type wait until the tables exist.
+    if (leadingFunctions.length > 0) {
+      emit("-- Functions");
+      emitFunctions(leadingFunctions);
     }
 
     if (sequences.length > 0) {
@@ -732,6 +928,11 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit(");");
       emitStatementBoundary();
       emit("");
+    }
+
+    if (rowTypeFunctions.length > 0) {
+      emit("-- Functions using table row types");
+      emitFunctions(rowTypeFunctions);
     }
 
     const ownedSequences = sequences.filter((seq) => seq.owner_table && seq.owner_column);
@@ -831,6 +1032,18 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
+    // AgentDash (GH #907): CHECK constraints, before the data so every loaded
+    // row is checked exactly as on the source. NOT VALID ones stay NOT VALID.
+    if (checkConstraints.length > 0) {
+      emit("-- Check constraints");
+      for (const check of checkConstraints) {
+        emitStatement(
+          `ALTER TABLE ${quoteQualifiedName(check.schema_name, check.tablename)} ADD CONSTRAINT ${quoteIdentifier(check.constraint_name)} ${check.definition};`,
+        );
+      }
+      emit("");
+    }
+
     // Indexes (non-primary, non-unique-constraint)
     const allIndexes = await sql<{ schema_name: string; tablename: string; indexdef: string }[]>`
       SELECT schemaname AS schema_name, tablename, indexdef
@@ -922,6 +1135,25 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         if (val[0] && !skipSequenceValue) {
           emitStatement(`SELECT setval('${qualifiedSequenceName.replaceAll("'", "''")}', ${val[0].last_value}, ${val[0].is_called ? "true" : "false"});`);
         }
+      }
+      emit("");
+    }
+
+    // AgentDash (GH #907): views (each after the views it reads), then
+    // triggers, after the data so no trigger sees the restore's own writes.
+    if (views.length > 0) {
+      emit("-- Views");
+      for (const view of views) {
+        emit(`-- View: ${view.schema_name}.${view.view_name}`);
+        emitStatement(viewStatement(view));
+      }
+      emit("");
+    }
+
+    if (triggers.length > 0) {
+      emit("-- Triggers");
+      for (const trigger of triggers) {
+        emitStatement(`${stripTrailingSemicolon(trigger.definition)};`);
       }
       emit("");
     }

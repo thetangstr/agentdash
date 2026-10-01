@@ -195,7 +195,7 @@ export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<num
       fs.writeFileSync(manifestPath, JSON.stringify(printableHeader(header), null, 2), { mode: 0o600, flag: "wx" });
       const h = printableHeader(header);
       io.out(`decrypted backup ${String(h.backupId)} of ${String(h.slug)} (${String(h.createdAt)}, release ${String(h.release ?? "unknown")}) in ${Date.now() - t0} ms`);
-      io.out(`safety check passed: ${scan.statements} statement(s), ${scan.copyBlocks} COPY block(s). Replay it only in a sandbox without keys (runbook §7).`);
+      io.out(`safety check passed: ${scan.statements} statement(s), ${scan.copyBlocks} COPY block(s), ${scan.skipped} schema object(s) that replay skips. Replay it only in a sandbox without keys (runbook §7).`);
       return 0;
     } catch (err) {
       if (keep) fs.rmSync(out, { force: true });
@@ -224,14 +224,14 @@ export async function runRestoreTool(argv: string[], io: RestoreIo): Promise<num
     }
     const t1 = Date.now();
     const stats = await replayDump(dump, into);
-    io.out(`replayed ${stats.statements} statement(s), ${stats.copyBlocks} COPY block(s) in ${Date.now() - t1} ms`);
+    io.out(`replayed ${stats.statements} statement(s), ${stats.copyBlocks} COPY block(s), skipped ${stats.skipped} schema object(s) in ${Date.now() - t1} ms`);
 
     // Before any promotion: the schema must be what OUR migrations (as recorded in the restored table) create.
     const t2 = Date.now();
     const v = await verifyRestoredSchema({ restoredUrl: into, referenceUrl: reference, migrationsDir });
     io.out(`schema check against ${v.appliedMigrations} of our migrations in ${Date.now() - t2} ms: ${v.ok ? "no unexplained objects" : "FAILED"}`);
     if (v.repaired.length) {
-      io.out(`re-created ${v.repaired.length} object(s) the dump format does not carry (CHECK constraints, views, functions, triggers), from our migrations only; the schema now matches exactly`);
+      io.out(`re-created ${v.repaired.length} object(s) replay does not run from a dump (CHECK constraints, views, functions, triggers), from our migrations only; the schema now matches exactly`);
     }
     for (const p of v.problems) io.err(`schema: ${sanitize(p)}`);
     for (const e of v.extra.slice(0, 50)) io.err(`  unexplained ${sanitize(e)}`);

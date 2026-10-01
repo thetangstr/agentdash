@@ -372,6 +372,10 @@ describe("off-box backup round trip", () => {
     const code = await runRestoreTool(["replay", "--dump", dump, "--into", target.url, "--reference", target.reference, "--migrations-dir", MIGRATIONS_DIR], io);
     expect(out.join("\n")).toMatch(/re-created \d+ object\(s\) .*the schema now matches exactly/);
     expect(out.join("\n")).toMatch(/replayed \d+ statement\(s\), [1-9]\d* COPY block\(s\)/);
+    // AgentDash (GH #907): the dump now carries CHECK constraints, views, functions and
+    // triggers; replay skips every one of them (box-written code never runs) and the
+    // schema check re-creates them from our migrations.
+    expect(out.join("\n")).toMatch(/skipped [1-9]\d* schema object\(s\)/);
     expect(out.join("\n")).toMatch(new RegExp(`schema check against ${ourMigrations.length} of our migrations .*no unexplained objects`));
     expect(out.join("\n")).toContain("RESTORE TEST PASSED");
     expect(code).toBe(0);

@@ -16,8 +16,9 @@
 //      triggers, casts, operators, languages, foreign servers, publications,
 //      owners and ACLs. Any object in the restored database that the
 //      reference does not have fails the check. Objects the reference has and
-//      the restore lacks are reported (backup-lib's pg_dump-less engine does
-//      not carry functions, triggers or CHECK constraints) but do not fail it.
+//      the restore lacks are reported (replay never runs a dump's functions,
+//      triggers, views or CHECK constraints, and older dumps do not carry
+//      them; GH #907) but do not fail it.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -187,8 +188,8 @@ export interface SchemaVerification extends SchemaComparison {
 
 /** The whole post-restore check: migrations from the restored table, a reference from our files, a catalog diff. */
 /**
- * Re-create, in the restored database, the objects backup-lib's engine does
- * not carry (CHECK constraints, views, functions, triggers), taking their
+ * Re-create, in the restored database, the objects replay does not run
+ * from a dump (CHECK constraints, views, functions, triggers; GH #907), taking their
  * definitions ONLY from the reference database, which was built from our own
  * migrations. Nothing here comes from the dump. Run only after the restore
  * passed the "no unexplained objects" check. Returns what it created.
@@ -230,7 +231,7 @@ export async function repairFromReference(restoredUrl: string, referenceUrl: str
 /**
  * The whole post-restore check: migrations from the restored table, a
  * reference from our files, a catalog diff (any unexplained object fails),
- * then the trusted re-creation of what the dump format does not carry, and a
+ * then the trusted re-creation of what replay does not run from a dump, and a
  * second diff that must now be exact.
  */
 export async function verifyRestoredSchema(opts: { restoredUrl: string; referenceUrl: string; migrationsDir: string; repair?: boolean }): Promise<SchemaVerification & { repaired: string[] }> {

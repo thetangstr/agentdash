@@ -401,6 +401,125 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     60_000,
   );
 
+  // AgentDash (GH #907): the pg_dump-less engine used to drop CHECK
+  // constraints, views, functions and triggers (the evaluation ledger's
+  // immutability trigger among them), so a restore came back weaker than the
+  // source. Round trip a fully migrated database the way a box does it (no
+  // pg_dump, no psql) and require the catalogs to match.
+  it(
+    "round-trips CHECK constraints, views, functions, triggers and NULLS NOT DISTINCT without pg_dump or psql",
+    async () => {
+      const sourceConnectionString = await createTempDatabase();
+      const restoreConnectionString = await createSiblingDatabase(
+        sourceConnectionString,
+        "paperclip_schema_objects_restore_target",
+      );
+      const backupDir = createTempDir("paperclip-db-schema-objects-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+      const savedEnv = {
+        PAPERCLIP_PG_DUMP_PATH: process.env.PAPERCLIP_PG_DUMP_PATH,
+        PAPERCLIP_PSQL_PATH: process.env.PAPERCLIP_PSQL_PATH,
+      };
+      // As on a box or a Mac mini on embedded Postgres: neither binary exists.
+      process.env.PAPERCLIP_PG_DUMP_PATH = path.join(os.tmpdir(), "no-such-pg_dump");
+      process.env.PAPERCLIP_PSQL_PATH = path.join(os.tmpdir(), "no-such-psql");
+
+      const catalog = async (sql: ReturnType<typeof postgres>) => {
+        const rows = async (text: string) => (await sql.unsafe<{ e: string }[]>(text)).map((row) => row.e).sort();
+        const userNs = `n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'`;
+        return {
+          checks: await rows(`
+            SELECT n.nspname || '.' || t.relname || '.' || c.conname || ' ' || pg_get_constraintdef(c.oid) AS e
+            FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE c.contype = 'c' AND ${userNs}`),
+          views: await rows(`
+            SELECT n.nspname || '.' || c.relname || ' = ' || pg_get_viewdef(c.oid) AS e
+            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('v', 'm') AND ${userNs}`),
+          functions: await rows(`
+            SELECT pg_get_functiondef(p.oid) AS e
+            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE p.prokind IN ('f', 'p') AND ${userNs}
+              AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')`),
+          triggers: await rows(`SELECT pg_get_triggerdef(t.oid) AS e FROM pg_trigger t WHERE NOT t.tgisinternal`),
+          nullsNotDistinct: await rows(`
+            SELECT pg_get_indexdef(i.indexrelid) AS e
+            FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE ${userNs} AND pg_get_indexdef(i.indexrelid) ILIKE '%NULLS NOT DISTINCT%'`),
+          constraints: await rows(`
+            SELECT n.nspname || '.' || t.relname || '.' || c.conname || ' ' || c.contype::text || ' ' || pg_get_constraintdef(c.oid) AS e
+            FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE c.contype IN ('p', 'u', 'f', 'c') AND ${userNs}`),
+          indexes: await rows(`
+            SELECT pg_get_indexdef(i.indexrelid) AS e
+            FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE ${userNs}`),
+        };
+      };
+
+      try {
+        const [company] = await sourceSql<{ id: string }[]>`
+          INSERT INTO companies (name) VALUES ('Ledger Co') RETURNING id
+        `;
+        await sourceSql`
+          INSERT INTO evaluation_events
+            (company_id, actor_type, source_table, source_id, source_version, event_type, event_time, dedupe_key)
+          VALUES
+            (${company!.id}, 'system', 'issues', 'issue-1', 'v1', 'issue.created', now(), 'dedupe-1')
+        `;
+
+        const result = await runDatabaseBackup({
+          connectionString: sourceConnectionString,
+          backupDir,
+          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          filenamePrefix: "paperclip-schema-objects-test",
+        });
+        await runDatabaseRestore({
+          connectionString: restoreConnectionString,
+          backupFile: result.backupFile,
+        });
+
+        const source = await catalog(sourceSql);
+        const restored = await catalog(restoreSql);
+
+        // The migrated schema really has each kind of object, so equality is not vacuous.
+        expect(source.checks.length).toBeGreaterThan(0);
+        expect(source.views.some((view) => view.startsWith("public.issue_review_timeline_v ="))).toBe(true);
+        expect(source.functions.some((fn) => fn.includes("evaluation_events_immutable"))).toBe(true);
+        expect(source.triggers.some((trigger) => trigger.includes("evaluation_events_no_update_trg"))).toBe(true);
+        expect(source.triggers.some((trigger) => trigger.includes("evaluation_events_no_delete_trg"))).toBe(true);
+        expect(source.nullsNotDistinct.some((index) => index.includes("plugin_state_unique_entry_idx"))).toBe(true);
+
+        expect(restored.checks).toEqual(source.checks);
+        expect(restored.views).toEqual(source.views);
+        expect(restored.functions).toEqual(source.functions);
+        expect(restored.triggers).toEqual(source.triggers);
+        expect(restored.nullsNotDistinct).toEqual(source.nullsNotDistinct);
+        expect(restored.constraints).toEqual(source.constraints);
+        expect(restored.indexes).toEqual(source.indexes);
+
+        // The ledger row came back, and the immutability trigger still guards it.
+        const [ledger] = await restoreSql<{ n: number }[]>`SELECT count(*)::int AS n FROM evaluation_events`;
+        expect(ledger?.n).toBe(1);
+        await expect(
+          restoreSql`UPDATE evaluation_events SET event_type = 'tampered'`,
+        ).rejects.toThrow(/append-only: UPDATE refused/);
+        await expect(restoreSql`DELETE FROM evaluation_events`).rejects.toThrow(/append-only: DELETE refused/);
+        // The view answers queries against the restored tables.
+        await expect(restoreSql`SELECT count(*) FROM issue_review_timeline_v`).resolves.toBeDefined();
+      } finally {
+        process.env.PAPERCLIP_PG_DUMP_PATH = savedEnv.PAPERCLIP_PG_DUMP_PATH;
+        process.env.PAPERCLIP_PSQL_PATH = savedEnv.PAPERCLIP_PSQL_PATH;
+        if (savedEnv.PAPERCLIP_PG_DUMP_PATH === undefined) delete process.env.PAPERCLIP_PG_DUMP_PATH;
+        if (savedEnv.PAPERCLIP_PSQL_PATH === undefined) delete process.env.PAPERCLIP_PSQL_PATH;
+        await sourceSql.end();
+        await restoreSql.end();
+      }
+    },
+    180_000,
+  );
+
   it(
     "restores legacy public-only backups without migration history",
     async () => {
