@@ -1,6 +1,6 @@
 # Public documentation: a Docs / API / MCP section on www.agentdash.cloud
 
-2026-10-01 · Yang · **Draft for review** · Asked for by the owner: "a documentation/api/mcp section on our pub site; it should cover the entirety of how to use our platform."
+2026-10-01 · Yang · **Decisions 1–3 recorded 2026-10-01; question 4 awaiting the owner** · Asked for by the owner: "a documentation/api/mcp section on our pub site; it should cover the entirety of how to use our platform."
 
 **Recommendation.** Serve the docs from the app's own public shell at `www.agentdash.cloud/docs`, driven by the `docs/docs.json` navigation that already exists, with the guide renderer the product already ships. Generate the two references that cannot be kept current by hand — the MCP tool reference (from the zod tool definitions) and the HTTP route index (from the route files) — and put a drift check on each. Rebrand and prune the inherited Mintlify tree before any of it is public. Four pull requests; nothing is public until the routing change in the last one.
 
@@ -13,11 +13,11 @@
 - **MCP.** `packages/mcp-server` serves four toolsets — `agent` (76 tools), `setup` (17), `assistant` (17: read, work, gated), `human` (6) — plus an 8-tool bridge set, over stdio or streamable HTTP (`POST /api/mcp`, `POST /api/mcp/assistant` with OAuth 2.1). Every tool is defined with a zod input schema and an inline description. Its README describes two toolsets with a `paperclip*` prefix that no longer exists.
 - **CLI.** `agentdash-connect` (npm, 0.3.0) has a current 213-line README and per-version notes. It is the only package AgentDash publishes.
 - **Release notes.** `releases/*.md` are already parsed into the in-app changelog by `ui/src/lib/release-notes.ts`.
-- **Private material that must stay off the site:** `doc/customers/**`, `sites/mkthink-docs/**`, `deploy/**` (names a customer instance), `doc/{IT-REQUEST,IT-REQUEST-EMAIL,SOP-onsite,MCP-LAUNCH}.md`. To review before publishing: `docs/deploy/ross-private-host.md` and `docs/api/agentdash-mk.md` (both tied to specific engagements or profiles).
+- **Private material that must stay off the site:** `doc/customers/**`, `sites/mkthink-docs/**`, `deploy/**` (names a customer instance), `doc/{IT-REQUEST,IT-REQUEST-EMAIL,SOP-onsite,MCP-LAUNCH}.md`. Also off the site, decided 2026-10-01: `docs/api/agentdash-mk.md` — the `agentdash_mk` profile belongs to a client and is not public; the Concepts page says only that product profiles exist. `docs/deploy/ross-private-host.md` is treated the same way unless the owner says otherwise.
 
 ## The decision: where the docs live
 
-Three ways to serve them. The recommendation is the first.
+Three ways to serve them. **Decided 2026-10-01: the first.**
 
 1. **In the app shell at `/docs`** *(recommended)*. A `Docs` route family in `App.tsx` beside the marketing pages; the sidebar built from `docs/docs.json`; pages loaded lazily with `import.meta.glob("../../docs/**/*.{md,mdx}", { query: "?raw", import: "default" })` and rendered by the existing `MarkdownBody`. One repo, one deploy, one renderer, one navigation file. The in-app guides and the public docs become the same files, so a guide a steward reads inside their instance is the page a prospect reads on the site. Cost: a markdown renderer in the marketing bundle (already there for guides), client-side search to build (a static index over headings and first paragraphs; ~a day), no API playground.
 2. **Mintlify hosting at `docs.agentdash.cloud`.** The config exists; Mintlify renders OpenAPI and ships search. Cost: a second vendor and deploy, a subdomain, the `{{instanceUrl}}` token has no meaning there, and the in-app guides stay a separate render path. Reasonable if the API playground matters more than one deploy.
@@ -31,7 +31,7 @@ Top-level nav, in reading order. Every page is a markdown file under `docs/`; th
 
 | Section | Pages | Source today | Work |
 |---|---|---|---|
-| **Get started** | What AgentDash is · Install (hosted vs self-host) · Your first company and agent · Connect your terminal | `docs/start/*` (5) | Rebrand, merge `first-agent` into the nav, rewrite the opening page for AgentDash |
+| **Get started** | What AgentDash is · Start on AgentDash Cloud · Your first company and agent · Connect your terminal · (Self-host is a link to Deploy, not the main path) | `docs/start/*` (5) | Rebrand, merge `first-agent` into the nav, rewrite the opening page for AgentDash |
 | **Concepts** | Companies · Agents, roles and autonomy · Stewardship · Issues, projects, goals · Approvals and Decisions · Mandates and directives · Heartbeats and runs · Workforce roles · Agent visibility · Product profiles | `docs/start/core-concepts.md`, `doc/SPEC.md`, `docs/guides/board-operator/agent-kinds-and-stewardship.md` | One page per concept, each citing the schema file it describes; most are new |
 | **Guides** | Steward (4) · Board operator (13) · Agent developer (7) | `docs/guides/**` | Rebrand; fix the two duplicate nav entries; add the two unlisted pages or delete them |
 | **Deploy** | Docker image · Mac mini (launchd) · VPS · Railway · Backups · OTA updates and rollback · Instance settings | `docs/deploy/*` (12), `doc/DOCKER.md`, `doc/DEPLOYMENT-MODES.md` | Prune to what AgentDash supports; `ross-private-host` reviewed or dropped |
@@ -80,9 +80,11 @@ Total: about 10 working days for one person, most of it writing. Estimate, not a
 - **Bundle size.** 128 markdown files lazily imported add nothing to the initial bundle; the search index is one JSON fetch. Measure in PR 1.
 - **Not in scope:** an API playground, SDK generation, versioned docs per release, translations, a comments/feedback widget. Each can be added on top of the same files.
 
-## Open questions for the owner
+## Decisions
 
-1. **Hosting:** in-app at `/docs` (recommended) or Mintlify at `docs.agentdash.cloud`?
-2. **Audience emphasis:** hosted cloud first or self-host first in Get started? Today the marketing site sells hosted; the deploy docs are self-host.
-3. **Is the `agentdash_mk` product profile public?** If not, `docs/api/agentdash-mk.md` is dropped from the nav and the Concepts page says only that profiles exist.
-4. **Does a third party ever call the HTTP API directly?** If yes, OpenAPI moves up to phase 3; if the API is only for our own MCP and UI, the route index is enough.
+Recorded 2026-10-01 from the owner.
+
+1. **Hosting: in-app at `/docs`.** Mintlify stays a local preview only.
+2. **Get started leads with AgentDash Cloud.** Self-host is reached from Deploy.
+3. **The `agentdash_mk` profile is a client's and not public.** Its API page leaves the nav; the forbidden-token scan covers the profile name in user-facing pages.
+4. **Is the HTTP API a product for third parties?** Open. The proposal: no — integrations go through MCP and webhooks; the docs state auth, errors and visibility, name a small supported subset (health, companies, agents, issues, projects, approvals, human-control, bridge) as stable, publish the generated route index, and label the rest internal. OpenAPI is generated for a subset the day a customer asks for an API key for their own code. Saying yes instead adds a full typed reference and a versioning policy — several weeks beyond this plan and an ongoing cost.
