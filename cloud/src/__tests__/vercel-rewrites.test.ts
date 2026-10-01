@@ -81,10 +81,14 @@ describe("vercel.json rewrites", () => {
 
 describe("vercel.json redirects for the old app (GH #837 review)", () => {
   it("keeps the marketing site, the new signup pages and static files", () => {
-    for (const path of ["/", "/demo", "/consulting", "/about", "/mcp", "/start", "/start/verify", "/start/progress", "/find", "/terms", "/privacy", "/pricing", "/investors", "/assess", "/assess/history",
+    for (const path of ["/", "/demo", "/consulting", "/about", "/mcp", "/start", "/start/verify", "/start/progress", "/find", "/terms", "/privacy", "/pricing", "/investors", "/assess/history",
       "/assets/index-abc123.js", "/brands/logo.svg", "/favicon.ico", "/sw.js", "/site.webmanifest", "/apple-touch-icon.png", "/api/cloud/config", "/api/invites/validate"]) {
       expect(redirectFor(path), path).toBeNull();
     }
+  });
+
+  it("sends /assess to /start until assess is re-homed (GH #838)", () => {
+    expect(redirectFor("/assess")).toBe("/start");
   });
 
   it("sends the old app's sign-in routes to /find and its sign-up routes to /start", () => {

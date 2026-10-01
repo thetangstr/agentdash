@@ -5,7 +5,7 @@ const LINES = [
   "Delivery: 5 of 6 projects on track. Atlas awaiting the email in your outbox.",
   "Platform: 3 incidents, all under 2h. Two repos without CI flagged.",
   "People: 2 roles blocking delivery, 4 candidates waiting on us.",
-  "Spend: 2.1M tokens, $61.40 this week, 68% on delivery.",
+  "Spend: 2.1M tokens this week, 68% on delivery, within the budget you set.",
 ];
 
 const BY = [

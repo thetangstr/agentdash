@@ -206,6 +206,8 @@ Boxes do not auto-deploy. `.github/workflows/deploy.yml` targets only the old `a
 - **Suspend an idle Free box:** `cd ~/.agentdash-boxes/<slug> && railway down --service web --yes`. Always name `--service web`: the linked service could be Postgres. Data stays in Postgres and the Volume. **Resume:** `scripts/hosted/provision-box.sh --slug <slug> --release <tag> --redeploy`. Tested on a throwaway box on 2026-09-25: after the down, `/api/health` answered 404; the redeploy brought it back healthy in about 50 seconds with the claimed company intact.
 - **Delete a box:** take a final backup and restore-test it, keep it for 30 days, then delete the project in the Railway dashboard (Settings, Danger). The scripts deliberately have no delete command.
 
+**Design-partner support** (who to email, what to check first, escalation): [hosted-box-support.md](hosted-box-support.md).
+
 **Known gaps (tracked on #675):**
 
 - **Browser sign-up cannot send an invite code.** `Auth.tsx` and `InviteLanding.tsx` post only name, email and password, so with the gate on, a teammate following a company invite is refused. The fix is #731. Until then teammates need the procedure in section 7.

@@ -101,8 +101,8 @@ export function LiveBriefing() {
           <span className="mkt-brief__metric-label">tasks</span>
         </span>
         <span className="mkt-brief__metric">
-          <strong>$182</strong>
-          <span className="mkt-brief__metric-label">spent</span>
+          <strong>0.9M</strong>
+          <span className="mkt-brief__metric-label">tokens</span>
         </span>
         <span className="mkt-brief__metric">
           <strong>3</strong>

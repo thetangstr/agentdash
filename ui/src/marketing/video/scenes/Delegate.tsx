@@ -12,7 +12,7 @@ const ISSUES = [
 const COMMENTS = [
   { who: "Quill", role: "Chief of Staff", at: 34, text: "Splitting this into four inputs. @Marlow @Ada @Reyes, one section each, sources attached. @Tally's Monday spend routine covers the numbers.", tone: "plain" as const },
   { who: "Ada", role: "Platform agent", at: 130, text: "3 incidents in 30 days, all under 2h. Two repos without CI. Source: incident log.", tone: "plain" as const },
-  { who: "Tally", role: "routine", at: 176, text: "Weekly spend: 2.1M tokens, $61.40, 68% on delivery work. Source: cost ledger.", tone: "routine" as const },
+  { who: "Tally", role: "routine", at: 176, text: "Weekly spend: 2.1M tokens, 68% on delivery work, within the budget you set. Source: cost ledger.", tone: "routine" as const },
   { who: "Reyes", role: "People agent", at: 218, text: "Two roles block delivery. 4 candidates have waited on us for more than 7 days. Source: ATS export.", tone: "plain" as const },
   { who: "Marlow", role: "Delivery agent", at: 264, text: "5 of 6 projects sourced from the boards. Atlas has no update since the 22nd. I can ask their PM, but I can't contact a client directly.", tone: "blocked" as const },
 ];
