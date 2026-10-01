@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import Stripe from "stripe";
 import request from "supertest";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAdmin } from "../admin/run.js";
 import { createApp } from "../app.js";
@@ -707,6 +707,27 @@ describe("rotate-box-key", () => {
     expect(upserts.length).toBeGreaterThanOrEqual(3);
     expect(upserts.every((u) => u.variables.STRIPE_SECRET_KEY === SHARED_KEY_2 && u.skipDeploys === false)).toBe(true);
     noSecretInLogs(SHARED_KEY, SHARED_KEY_2, a.boxSecret, generated);
+  });
+
+  it("demo and internal boxes are left out of the fleet sync (GH #861: they never bill)", async () => {
+    await db.execute(sql`delete from fleet_secrets`);
+    const demo = await makeBox("active");
+    const internal = await makeBox("active");
+    const canary = await makeBox("active");
+    await db.update(boxes).set({ purpose: "demo" }).where(eq(boxes.id, demo.id));
+    await db.update(boxes).set({ purpose: "internal" }).where(eq(boxes.id, internal.id));
+    await db.update(boxes).set({ purpose: "canary" }).where(eq(boxes.id, canary.id));
+    const { fake, upserts } = fakeRailwayForVars();
+    const r = await syncFleetBilling(
+      { db, keys: KEYS, billing, store: fleetSecretStore(db, KEYS), client: fake.client({ log }), workspaceId: FAKE_WORKSPACE, log },
+      { newKey: SHARED_KEY, apply: true, actor: "test" },
+    );
+    for (const skipped of [demo, internal]) {
+      expect(r.boxes.find((b) => b.slug === skipped.slug)).toBeUndefined();
+      expect(upserts.some((u) => u.serviceId === `svc-${skipped.slug}`)).toBe(false);
+    }
+    expect(upserts.some((u) => u.serviceId === `svc-${canary.slug}`)).toBe(true);
+    await db.update(boxes).set({ purpose: "customer" }).where(inArray(boxes.id, [demo.id, internal.id, canary.id]));
   });
 
   it("refuses a wrong-mode key and a run with no key stored", async () => {

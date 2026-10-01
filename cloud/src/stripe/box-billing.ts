@@ -29,6 +29,12 @@ import { BOX_STRIPE_KEY, type FleetSecretStore } from "./fleet-secrets.js";
 export const WEBHOOK_SECRET_AAD = "boxes.stripe_webhook_secret_enc";
 /** Boxes that hold (or are about to hold) a running web service. */
 export const BILLING_SYNC_STATES = ["provisioning", "awaiting_claim", "active", "suspended"] as const;
+/** AgentDash (GH #861): purposes that take the fleet billing config. `demo`
+ * and `internal` boxes never bill (NON_BILLING_PURPOSES in
+ * ../railway/box-extras.ts); a purpose not listed here is not pushed Stripe
+ * config until the choice is made for it. `canary` keeps billing so the first
+ * rollout wave exercises the real path. */
+export const BILLING_SYNC_PURPOSES = ["customer", "canary"] as const;
 
 /** A box's own webhook signing secret. Stripe's format; constructEvent uses the whole string as the HMAC key. */
 export function newBoxWebhookSecret(): string {
@@ -233,6 +239,7 @@ export async function syncFleetBilling(deps: SyncDeps, input: SyncInput): Promis
     .where(
       and(
         inArray(boxes.state, [...BILLING_SYNC_STATES]),
+        inArray(boxes.purpose, [...BILLING_SYNC_PURPOSES]),
         isNotNull(boxes.projectId),
         isNotNull(boxes.environmentId),
         isNotNull(boxes.webServiceId),

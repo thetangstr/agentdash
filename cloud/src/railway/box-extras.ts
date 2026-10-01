@@ -9,7 +9,7 @@
 import { eq } from "drizzle-orm";
 import type { DataKeyring } from "../crypto.js";
 import type { CloudDb } from "../db/client.js";
-import { boxEvents, boxes } from "../db/schema.js";
+import { boxEvents, boxes, type BoxPurpose } from "../db/schema.js";
 import { provisionBoxResendKey, type ResendKeysClient } from "../email/resend-keys.js";
 import type { BoxRow } from "../jobs/runner.js";
 import type { Logger } from "../logger.js";
@@ -30,6 +30,13 @@ export interface BoxExtras {
   prepare(input: BoxExtrasInput): Promise<{ vars: Record<string, string>; commit(): Promise<void> }>;
 }
 
+// AgentDash (GH #861 + SC-8): purposes that never bill. A `demo` or
+// `internal` box is ours, not a customer's: it gets AGENTDASH_BILLING_DISABLED
+// instead of Stripe config, and the fleet sync leaves it alone
+// (BILLING_SYNC_PURPOSES in ../stripe/box-billing.ts). `canary` keeps billing
+// so the first wave exercises the real upgrade path.
+const NON_BILLING_PURPOSES = new Set<BoxPurpose>(["demo", "internal"]);
+
 export function billingAndMailExtras(deps: {
   keys: DataKeyring;
   billing: BillingConfig;
@@ -42,8 +49,12 @@ export function billingAndMailExtras(deps: {
       const vars: Record<string, string> = {};
       const sentAt = new Date();
       const skipped: string[] = [];
+      const noBilling = NON_BILLING_PURPOSES.has(box.purpose);
       const { billing: fleet, missing } = await currentFleetBilling(deps.store, deps.billing);
-      if (fleet) {
+      if (noBilling) {
+        vars.AGENTDASH_BILLING_DISABLED = "true";
+        skipped.push("billing");
+      } else if (fleet) {
         Object.assign(vars, stripeVariables(fleet, await ensureBoxWebhookSecret(db, deps.keys, box)));
       } else {
         skipped.push("stripe");
@@ -63,7 +74,7 @@ export function billingAndMailExtras(deps: {
         vars,
         async commit() {
           // Pending until the box's next successful deploy (the provision's own deploy step), see promoteDeployedBillingRevs.
-          if (fleet) {
+          if (fleet && !noBilling) {
             await db.update(boxes).set({ stripeConfigPendingRev: fleet.rev, stripeConfigPendingSince: sentAt, updatedAt: new Date() }).where(eq(boxes.id, box.id));
           }
           if (skipped.length) {
