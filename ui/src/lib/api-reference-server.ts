@@ -42,3 +42,17 @@ export function referenceServers(instanceUrl: string | null) {
     },
   ];
 }
+
+/**
+ * The operation part of a reference anchor: the contract's `operationId`.
+ *
+ * Scalar's default anchor is `#tag/<tag>/<METHOD><path>`, which changes when a
+ * path parameter is renamed and is awkward to link to. With this, an operation
+ * lives at `/docs/api/reference#tag/<tag>/<operationId>` — the form the
+ * resource pages link to, and the one scripts/ci/check-api-reference-drift.mjs
+ * holds them to. Every contract route has an operationId; the fallback is
+ * Scalar's own form, for safety only.
+ */
+export function referenceOperationSlug(input: { operationId?: string; method: string; path: string }): string {
+  return input.operationId || `${input.method.toUpperCase()}${input.path}`;
+}

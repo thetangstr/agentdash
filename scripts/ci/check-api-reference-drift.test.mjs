@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkContractAgainstHandlers, checkContractRoutesExist, checkContractShape, compareGenerated, runChecks } from "./check-api-reference-drift.mjs";
+import { checkContractAgainstHandlers, checkContractRoutesExist, checkContractShape, checkResourcePages, compareGenerated, readApiPages, runChecks } from "./check-api-reference-drift.mjs";
+import { WITHHELD_LINE_RULES, buildApiChangelog, cleanLine, isApiLine, parseRelease, renderApiChangelog, selectApiChanges, withheldReason } from "../docs/generate-api-changelog.mjs";
 import { boardOnlyGuards, classifyContractRoutes, isBoardOnlyHandler, parsedSchemas } from "../docs/route-guards.mjs";
 import { collectRouteIndex, extractRoutes, renderRouteIndex, resolveMounts, stripComments } from "../docs/generate-route-index.mjs";
 // Only node builtins at the top level; the converters are imported lazily inside the build.
@@ -126,7 +127,7 @@ test("the route index renders deterministically and marks contract routes", () =
   const contract = { tags: [{ name: "things", page: "api/things" }], routes: [{ tag: "things", operationId: "listThings", method: "GET", path: "/api/things" }] };
   const once = renderRouteIndex(index, contract);
   assert.equal(once, renderRouteIndex(index, contract));
-  assert.match(once, /\| GET \| `\/api\/things` \| contract: \[`listThings`\]\(\/api\/reference\) · \[guide\]\(\/api\/things\) \|/);
+  assert.match(once, /\| GET \| `\/api\/things` \| contract: \[`listThings`\]\(\/api\/reference#tag\/things\/listThings\) · \[guide\]\(\/api\/things\) \|/);
   assert.match(once, /\| POST \| `\/api\/things` \| internal \|/);
   assert.match(once, /\*\*Measured:\*\* 2 routes in 1 route files/);
   assert.doesNotMatch(once, /\b[0-9a-f]{40}\b/, "no commit hash: it would change on the commit that adds the file");
@@ -152,7 +153,7 @@ test("a renamed contract route fails the whole check", async () => {
   // A copy of just the inputs, with one contract route renamed in its file.
   const root = mkdtempSync(path.join(tmpdir(), "api-drift-test-"));
   try {
-    for (const rel of ["server/src/routes", "server/src/app.ts", "docs/api/contract.json", "docs/api/route-index.md"]) {
+    for (const rel of ["server/src/routes", "server/src/app.ts", "docs/api", "releases"]) {
       cpSync(path.join(REPO_ROOT, rel), path.join(root, rel), { recursive: true });
     }
     const goals = path.join(root, "server/src/routes/goals.ts");
@@ -266,4 +267,126 @@ test("the real repo: every route whose handler refuses agents is board-only in t
   for (const route of contract.routes.filter((candidate) => candidate.tag === "human-control")) {
     assert.deepEqual(securityFor(route), AUTH_SECURITY["board-key"], route.operationId);
   }
+});
+
+// ---------------------------------------------------------------------------
+// (e) resource pages
+// ---------------------------------------------------------------------------
+
+test("every contract tag has a page that links each of its operations, and no page links a stale anchor (e)", () => {
+  const contract = {
+    tags: [{ name: "things", page: "api/things" }, { name: "widgets", page: "api/widgets" }, { name: "gadgets", page: null }],
+    routes: [
+      { tag: "things", operationId: "listThings" },
+      { tag: "things", operationId: "getThing" },
+      { tag: "widgets", operationId: "listWidgets" },
+    ],
+  };
+  const pages = new Map([
+    ["api/things", "[`listThings`](/api/reference#tag/things/listThings) and nothing about the other one"],
+    ["api/index", "[gone](/api/reference#tag/things/deleteThing) [nope](/api/reference#tag/nothing) [ok](/api/reference#tag/things)"],
+  ]);
+  const text = checkResourcePages(contract, pages).join("\n");
+  assert.match(text, /getThing: docs\/api\/things\.md does not link it as \/api\/reference#tag\/things\/getThing/);
+  assert.match(text, /tag widgets: its page docs\/api\/widgets\.md does not exist/);
+  assert.match(text, /tag gadgets: no `page`/);
+  assert.match(text, /docs\/api\/index\.md links \/api\/reference#tag\/things\/deleteThing, which is not a contract operation/);
+  assert.match(text, /docs\/api\/index\.md links \/api\/reference#tag\/nothing, which is not a contract tag/);
+  assert.doesNotMatch(text, /listThings/);
+});
+
+test("the real repo: every contract operation is documented on its resource page", () => {
+  const contract = JSON.parse(readFileSync(path.join(REPO_ROOT, "docs", "api", "contract.json"), "utf8"));
+  assert.deepEqual(checkResourcePages(contract, readApiPages(REPO_ROOT)), []);
+});
+
+// ---------------------------------------------------------------------------
+// (f) the generated API changelog
+// ---------------------------------------------------------------------------
+
+const NOTE = (version, date, body, marker = `> Released: ${date}.`) => ({ file: `${version}.md`, markdown: `# ${version}\n\n${marker}\n\nIntro prose naming GET /api/ignored is not a bullet.\n\n${body}\n` });
+
+test("changelog: a bullet at any depth is one line, with its wrapped continuation", () => {
+  const note = parseRelease([
+    "# v1.0.0",
+    "> Released: 2026-01-02.",
+    "## Changed",
+    "- **Lead** (#1). Top level",
+    "  wrapped onto a second line.",
+    "  - A child about `GET /api/x`.",
+    "### Subheading keeps the section",
+    "- Another.",
+  ].join("\n"));
+  assert.equal(note.releasedAt, "2026-01-02");
+  assert.deepEqual(note.items.map((item) => item.raw), ["**Lead** (#1). Top level wrapped onto a second line.", "A child about `GET /api/x`.", "Another."]);
+  assert.equal(note.items[1].parent, note.items[0]);
+  assert.equal(note.items[2].section, "Changed");
+});
+
+test("changelog: the word rule keeps API lines and ignores PR numbers, versions and counts", () => {
+  for (const line of [
+    "`/api/health` reports more",
+    "`POST /issues/:id/release` changed",
+    "now answers `404`",
+    "returns 409 when taken",
+    "send `X-Paperclip-Run-Id`",
+    "parsed by `createIssueSchema`",
+    "a new route",
+    "the endpoint moved",
+    "the API is stricter",
+    "OpenAPI document",
+    "the contract widens",
+  ]) assert.equal(isApiLine(line), true, line);
+  assert.equal(isApiLine("calls getHealth twice", ["getHealth"]), true);
+  for (const line of ["Fixed in #404 and #500", "Upgrade to v2026.403.0", "1,404 tests pass", "rapid sidebar", "the router file"]) {
+    assert.equal(isApiLine(line), false, line);
+  }
+});
+
+test("changelog: newest first; withdrawn, upstream and test lines skipped; deprecations kept whole; private lines withheld and counted", () => {
+  const privateWord = "MK";
+  assert.ok(WITHHELD_LINE_RULES.some((rule) => rule.pattern.test(privateWord)));
+  const selection = selectApiChanges([
+    NOTE("v1.0.0", "2026-01-01", "## Fixed\n\n- `GET /api/a` answers 404.\n- A UI-only fix."),
+    NOTE("v1.1.0", "2026-02-01", `## Changed\n\n- **Shell** for everyone.\n  - \`GET /api/b\` answers 404 now.\n- ${privateWord} companies get a new route.\n\n## Deprecated\n\n- The old field goes away on 2026-04-01.\n\n## Tests\n\n- 12 route tests.`),
+    NOTE("v1.0.1", "2026-01-15", "## Fixed\n\n- `GET /api/c`", "> Withdrawn, never released."),
+    NOTE("v0.9.0", "2025-12-01", "## Fixed\n\n- `GET /api/d`", "> Upstream: inherited."),
+  ]);
+  assert.deepEqual(selection.releases.map((release) => release.version), ["v1.1.0", "v1.0.0"]);
+  assert.deepEqual(selection.releases[0].kept.map((line) => line.text), ["**Shell:** `GET /api/b` answers 404 now.", "The old field goes away on 2026-04-01."]);
+  assert.deepEqual(selection.releases[1].kept.map((line) => line.text), ["`GET /api/a` answers 404."]);
+  assert.deepEqual(Object.values(selection.withheld), [1]);
+  assert.equal(selection.skippedWithdrawn, 1);
+  assert.equal(selection.skippedUpstream, 1);
+  const page = renderApiChangelog(selection);
+  assert.equal(page, renderApiChangelog(selection), "deterministic");
+  assert.match(page, /^## v1\.1\.0 — 2026-02-01$/m);
+  assert.match(page, /1 line withheld/);
+  assert.doesNotMatch(page, new RegExp(`\\b${privateWord}\\b`));
+  assert.doesNotMatch(page, /\/api\/(c|d|ignored)\b/);
+});
+
+test("the real repo: the committed changelog is current and carries no withheld word", () => {
+  const { markdown, selection } = buildApiChangelog(REPO_ROOT);
+  assert.equal(readFileSync(path.join(REPO_ROOT, "docs", "api", "changelog.md"), "utf8"), markdown);
+  const body = markdown.split("\n").filter((line) => line.startsWith("- "));
+  for (const line of body) assert.equal(withheldReason(line), null, line);
+  assert.ok(selection.releases.length > 0);
+});
+
+test("changelog: withheld spellings, interface names, numbered items, attribution and old breaking headings", () => {
+  for (const text of ["run paperclipai db:backup", "@paperclipai/shared", "PaperclipAI", "fix-paperclip", "MK_PROFILE", "an mk_profile company"]) {
+    assert.notEqual(withheldReason(text), null, text);
+  }
+  for (const text of ["send X-Paperclip-Run-Id", "set PAPERCLIP_PUBLIC_URL", "mkdir -p", "make it so"]) {
+    assert.equal(withheldReason(text), null, text);
+  }
+  assert.ok(WITHHELD_LINE_RULES.length >= 4);
+  assert.equal(cleanLine("Fixed (#531, @someone). See (@other) [docs](x.md)"), "Fixed (#531). See docs");
+  const note = parseRelease("# v1.0.0\n> Released: 2026-01-02.\n## Upgrade Guide\n1. Confirm `GET /api/health` answers 200.\n2) Then restart.");
+  assert.deepEqual(note.items.map((item) => item.raw), ["Confirm `GET /api/health` answers 200.", "Then restart."]);
+  const selection = selectApiChanges([
+    NOTE("v1.0.0", "2026-01-01", "## Behaviour Changes You Must Read First\n\n- Agents now start paused.\n\n## Testing\n\n- The route suite grew."),
+  ]);
+  assert.deepEqual(selection.releases[0].kept.map((line) => line.text), ["Agents now start paused."]);
 });

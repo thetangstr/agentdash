@@ -30,7 +30,7 @@ The server tries, in order:
 5. **An agent key.** Revoked keys do not resolve, and neither does a key whose agent is terminated or still pending approval.
 6. **An agent run token** (a signed JWT). Same agent-status rules.
 
-A credential that does not resolve leaves the request **unauthenticated** — the route answers 401. Sending any explicit credential switches off the implicit local operator: in `local_trusted` mode a wrong key is unauthenticated, not the operator.
+A credential that does not resolve leaves the request **unauthenticated** — the route answers 401. The bridge routes are the exception: without a live endpoint token they answer 403 `Bridge endpoint authentication required` ([Bridge](/api/bridge)). Sending any explicit credential switches off the implicit local operator: in `local_trusted` mode a wrong key is unauthenticated, not the operator.
 
 ### `x-agent-key`
 
@@ -50,7 +50,7 @@ An agent working inside a run sends the run's id in this header so that what it 
 
 **Human control** (`/api/human-control/*`) takes a **board key** and nothing else: no session cookie, no assistant grant, no agent. Anything else answers 403 `Named board-key human authentication required` (`server/src/services/human-control.ts`).
 
-Several contract routes are for people only and answer 403 `Board access required` to any agent credential — for example listing and creating companies, pausing and resuming agents, managing agent keys, deciding approvals, setting goals and managing secrets. [The API reference](/api/reference) lists the accepted credentials on every operation.
+Several contract routes are for people only and answer 403 to any agent credential — usually `Board access required`, as for listing and creating companies, pausing and resuming agents, managing agent keys, deciding approvals and managing secrets. Goals and projects refuse agents with their own message (`Agents cannot change company direction…`, `Agents cannot create projects.`). [The API reference](/api/reference) lists the accepted credentials on every operation, and each resource page lists who may call it.
 
 **Assistant grants** are the narrowest board actor. A `pcpa_` token reaches exactly one route, the assistant MCP endpoint `POST /api/mcp/assistant` (`ASSISTANT_ROUTE_SCOPES` in `packages/shared/src/assistant-oauth.ts`). Anything else answers 403 even with a live token. The grant is for one company, and its scopes decide which MCP tools exist:
 

@@ -59,7 +59,7 @@ tags:
     description: Company secrets agents reference by id; values are never returned.
   - name: human-control
     x-displayName: Human control
-    description: The operations a person's own assistant may discover, read, prepare and confirm on their behalf.
+    description: "Operations a named person runs with their own board key: discover, read, prepare, confirm."
   - name: bridge
     x-displayName: Bridge
     description: The calls an enrolled machine makes to pick up and return work.
@@ -746,6 +746,13 @@ paths:
           description: Issue id (UUID) or identifier, such as `ENG-12`.
           schema:
             type: string
+        - name: X-Paperclip-Run-Id
+          in: header
+          required: false
+          description: The run the agent is working in (UUID). Required for an agent key; not needed for an agent run token or a person.
+          schema:
+            type: string
+            format: uuid
       requestBody:
         required: true
         content:
@@ -773,6 +780,7 @@ paths:
           $ref: "#/components/responses/Unprocessable"
         "429":
           $ref: "#/components/responses/RateLimited"
+      description: An agent key must send the run it is working in as `X-Paperclip-Run-Id`, or the request answers 401 `Agent run id required`. An agent run token carries its run and needs no header. People do not send it.
       security:
         - bearerBoardKey: []
         - bearerAgentKey: []
@@ -987,7 +995,6 @@ paths:
           $ref: "#/components/responses/RateLimited"
       security:
         - bearerBoardKey: []
-        - bearerAgentKey: []
         - session: []
       x-stability: stable
   /api/projects/{id}:
@@ -1066,7 +1073,6 @@ paths:
           $ref: "#/components/responses/RateLimited"
       security:
         - bearerBoardKey: []
-        - bearerAgentKey: []
         - session: []
       x-stability: stable
   /api/companies/{companyId}/goals:
@@ -1553,7 +1559,6 @@ paths:
           $ref: "#/components/responses/RateLimited"
       security:
         - bearerBoardKey: []
-        - bearerAgentKey: []
         - session: []
       x-stability: stable
   /api/routines/{id}:
@@ -1677,7 +1682,6 @@ paths:
           $ref: "#/components/responses/RateLimited"
       security:
         - bearerBoardKey: []
-        - bearerAgentKey: []
         - session: []
       x-stability: stable
   /api/companies/{companyId}/cost-events:
