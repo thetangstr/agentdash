@@ -5,6 +5,7 @@ import type { CloudDb } from "./db/client.js";
 import { capabilities } from "./capabilities.js";
 import { operatorAudit, settings } from "./db/schema.js";
 import { isTimeZone, WINDOW_RE } from "./jobs/upgrade-window.js";
+import { MIN_BOX_RELEASE, releaseMeetsBoxFloor } from "./jobs/claim.js";
 
 export const SETTING_DEFAULTS = {
   // Kill switch. Off on a fresh deploy: nothing is provisioned until an
@@ -91,6 +92,10 @@ export function parseSettingValue(key: SettingKey, raw: unknown): Settings[Setti
       if (raw === null || raw === "" || raw === "null") return null;
       if (typeof raw !== "string" || !RELEASE_TAG_RE.test(raw)) {
         throw new SettingValidationError("target_release must be a stable tag like v2026.925.0, or null");
+      }
+      // AgentDash (PR #941 review): never point new boxes at a release that cannot report its claim.
+      if (!releaseMeetsBoxFloor(raw)) {
+        throw new SettingValidationError(`target_release must be ${MIN_BOX_RELEASE} or later (older releases do not report their claim state)`);
       }
       return raw;
     }

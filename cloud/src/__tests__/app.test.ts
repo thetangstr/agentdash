@@ -168,7 +168,9 @@ describe("/internal/boxes create (GH #763)", () => {
     expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "x" })).status).toBe(400);
     expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "admin", email: "o@example.test" })).status).toBe(400);
     expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "opbox", email: "o@example.test", releaseTag: "latest" })).status).toBe(400);
-    const created = await request(app).post("/internal/boxes").set(auth).send({ slug: "opbox", email: "o@example.test", releaseTag: "v2026.925.0" });
+    // PR #941 review: a release before the claim-tracking floor is refused.
+    expect((await request(app).post("/internal/boxes").set(auth).send({ slug: "opbox", email: "o@example.test", releaseTag: "v2026.925.0" })).status).toBe(400);
+    const created = await request(app).post("/internal/boxes").set(auth).send({ slug: "opbox", email: "o@example.test", releaseTag: "v2026.1001.1" });
     expect(created.status).toBe(201);
     // Provisioning is off by default: the box waits on the waitlist.
     expect(created.body.provisioning).toEqual({ outcome: "waitlisted", reason: "kill_switch" });
