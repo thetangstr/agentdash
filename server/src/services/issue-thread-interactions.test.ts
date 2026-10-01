@@ -10,14 +10,20 @@ vi.mock("./issues.js", () => ({
 
 type SelectRow = Record<string, unknown>;
 
-function createSelectChain(rows: SelectRow[]) {
+// Row-lock reads (`.for(...)`) are the acceptance mutex: they return a
+// locked row and do not consume the scripted read sequence.
+function createSelectChain(rows: () => SelectRow[], onLock: () => void) {
   return {
     from() {
       return {
         where() {
           return {
+            for() {
+              onLock();
+              return Promise.resolve([{ id: "locked" }]);
+            },
             then(callback: (rows: SelectRow[]) => unknown) {
-              return Promise.resolve(callback(rows));
+              return Promise.resolve(callback(rows()));
             },
           };
         },
@@ -38,7 +44,11 @@ function createFakeDb(args: {
   const db: any = {
     select: vi.fn(() => {
       selectCallCount += 1;
-      return createSelectChain(selectCallCount === 1 ? [interactionRow] : (args.parentRows ?? []));
+      const call = selectCallCount;
+      return createSelectChain(
+        () => (call === 1 ? [interactionRow] : (args.parentRows ?? [])),
+        () => { selectCallCount -= 1; },
+      );
     }),
     update: vi.fn((table: unknown) => ({
       set(values: Record<string, unknown>) {
@@ -108,7 +118,7 @@ describe("issueThreadInteractionService", () => {
     };
 
     const db: any = {
-      select: vi.fn(() => createSelectChain([existingRow])),
+      select: vi.fn(() => createSelectChain(() => [existingRow], () => undefined)),
       insert: vi.fn(),
       update: vi.fn(),
     };

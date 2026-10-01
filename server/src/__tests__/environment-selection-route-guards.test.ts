@@ -1,3 +1,9 @@
+// Current credential/row witnesses are covered by issue-current-authority.test.ts with real HTTP and PostgreSQL.
+vi.mock("../services/issue-current-authority.js", () => ({ issueCurrentAuthority: () => undefined }));
+import { installPatchServiceMocks, patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
+// Current credential/row witnesses are covered by issue-current-authority.test.ts with real HTTP and PostgreSQL.
+vi.mock("../services/issue-current-authority.js", () => ({ issueCurrentAuthority: () => undefined }));
+import { patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
 import type { Server } from "node:http";
 import express from "express";
 import request from "supertest";
@@ -31,6 +37,10 @@ const mockProjectService = vi.hoisted(() => ({
 }));
 
 const mockIssueService = vi.hoisted(() => ({
+  lockBlockerIssues: vi.fn(async () => undefined),
+  prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
+  lockBlockerIssues: vi.fn(async () => undefined),
+  prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
   create: vi.fn(),
   getById: vi.fn(),
   update: vi.fn(),
@@ -66,6 +76,18 @@ const mockSecretService = vi.hoisted(() => ({
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
+// The PATCH composer imports these services directly; route them to the same
+// doubles the index mock provides (static import, so hoisted vi.mock).
+vi.mock("../services/cos-verdict-orchestrator.js", () => ({ cosVerdictOrchestrator: () => ({ onIssueStatusChanged: async () => undefined }) }));
+vi.mock("../services/issues.js", async () => ({ issueService: (await import("../services/index.js")).issueService }));
+vi.mock("../services/agents.js", async () => ({ agentService: (await import("../services/index.js")).agentService }));
+vi.mock("../services/issue-references.js", async () => ({ issueReferenceService: (await import("../services/index.js")).issueReferenceService }));
+vi.mock("../services/routines.js", async () => ({ routineService: (await import("../services/index.js")).routineService }));
+vi.mock("../services/issue-thread-interactions.js", () => ({ issueThreadInteractionService: () => ({ expireRequestConfirmationsSupersededByComment: async () => [] }) }));
+vi.mock("../services/activity-log.js", async () => {
+  const { logActivity } = await import("../services/index.js");
+  return { logActivity, insertActivity: async (tx: unknown, input: unknown) => { await (logActivity as (a: unknown, b: unknown) => unknown)(tx, input); return {}; }, publishActivity: () => undefined };
+});
 vi.mock("../services/index.js", () => ({
   agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
@@ -98,7 +120,7 @@ vi.mock("../services/index.js", () => ({
     unlink: vi.fn(),
   }),
   documentService: () => ({}),
-  routineService: () => ({}),
+  routineService: () => ({ syncRunStatusForIssue: async () => undefined }),
   workProductService: () => ({}),
 }));
 
@@ -142,7 +164,7 @@ function createProjectApp() {
 
 function createIssueApp() {
   issueServer ??= buildApp((expressApp) => {
-    expressApp.use("/api", issueRoutes({} as any, {} as any));
+    expressApp.use("/api", issueRoutes(patchTransactionFixture(() => mockIssueService.getById()) as any, {} as any));
   }).listen(0);
   return issueServer;
 }
@@ -397,7 +419,7 @@ describe.sequential("execution environment route guards", () => {
         },
       });
 
-    expect(res.status).not.toBe(422);
-    expect(mockIssueService.update).toHaveBeenCalled();
+    expect(res.status, JSON.stringify(res.body)).not.toBe(422);
+    expect(mockIssueService.update, JSON.stringify(res.body)).toHaveBeenCalled();
   });
 });
