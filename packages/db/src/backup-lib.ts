@@ -312,14 +312,20 @@ function hasBackupTransforms(opts: RunDatabaseBackupOptions): boolean {
     Object.keys(opts.nullifyColumns ?? {}).length > 0;
 }
 
-function formatSqlValue(rawValue: unknown, columnName: string | undefined, nullifiedColumns: Set<string>): string {
-  const val = columnName && nullifiedColumns.has(columnName) ? null : rawValue;
-  if (val === null || val === undefined) return "NULL";
-  if (typeof val === "boolean") return val ? "true" : "false";
-  if (typeof val === "number") return String(val);
-  if (val instanceof Date) return formatSqlLiteral(val.toISOString());
-  if (typeof val === "object") return formatSqlLiteral(JSON.stringify(val));
-  return formatSqlLiteral(String(val));
+// AgentDash (GH #940): the INSERT path reads every column as `col::text`
+// (Postgres's own canonical text output) and writes it back as a literal cast
+// to the column's type (`format_type(atttypid, atttypmod)`, read under
+// `search_path = pg_catalog` so user types come back schema-qualified; a
+// domain is cast to its base type). The text form round-trips through the
+// type's input function, so bytea, `timestamp without time zone`, arrays,
+// json/jsonb, numeric precision, intervals, enums and domain values are
+// restored exactly. The old version turned
+// postgres.js's JS values back into SQL and corrupted bytea (Buffer JSON),
+// shifted naive timestamps by the host time zone and wrote arrays as JSON
+// (`malformed array literal`).
+function formatSqlValue(textValue: string | null | undefined, typeName: string, nullified: boolean): string {
+  if (nullified || textValue === null || textValue === undefined) return "NULL";
+  return `${formatSqlLiteral(textValue)}::${typeName}`;
 }
 
 function appendCapturedStderr(previous: string, chunk: Buffer | string): string {
@@ -1218,14 +1224,58 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         continue;
       }
 
+      // AgentDash (GH #940): read each column's exact type, then select every
+      // column as text so formatSqlValue never sees a JS-converted value.
+      await sql`SELECT set_config('search_path', 'pg_catalog', false)`;
+      let columnTypes: { column_name: string; type_name: string }[];
+      try {
+        // A domain is unwrapped to its base type (through nested domains): the
+        // table DDL above writes a domain column as its base type, and a base
+        // value still assigns to a domain column if the domain is restored.
+        columnTypes = await sql<{ column_name: string; type_name: string }[]>`
+          WITH RECURSIVE resolved AS (
+            SELECT a.attname, a.atttypid AS type_oid, a.atttypmod AS type_mod, 0 AS depth
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = ${schema_name} AND c.relname = ${tablename}
+              AND a.attnum > 0 AND NOT a.attisdropped
+            UNION ALL
+            SELECT r.attname, t.typbasetype, t.typtypmod, r.depth + 1
+            FROM resolved r
+            JOIN pg_type t ON t.oid = r.type_oid
+            WHERE t.typtype = 'd'
+          )
+          SELECT DISTINCT ON (attname) attname AS column_name, format_type(type_oid, type_mod) AS type_name
+          FROM resolved
+          ORDER BY attname, depth DESC
+        `;
+      } finally {
+        await sql`RESET search_path`;
+      }
+      const typeByColumn = new Map(columnTypes.map((entry) => [entry.column_name, entry.type_name]));
+      const insertColumns = cols.map((col) => {
+        const typeName = typeByColumn.get(col.column_name);
+        if (!typeName) {
+          throw new Error(`Backup could not resolve the type of column ${schema_name}.${tablename}.${col.column_name}`);
+        }
+        const nullified = nullifiedColumns.has(col.column_name);
+        return {
+          typeName,
+          nullified,
+          // A nullified column is never read, so its contents never leave the database.
+          selectExpression: nullified ? "NULL::text" : `${quoteIdentifier(col.column_name)}::text`,
+        };
+      });
+
       const rowCursor = sql
-        .unsafe(`SELECT * FROM ${qualifiedTableName}`)
+        .unsafe(`SELECT ${insertColumns.map((col) => col.selectExpression).join(", ")} FROM ${qualifiedTableName}`)
         .values()
-        .cursor(BACKUP_DATA_CURSOR_ROWS) as AsyncIterable<unknown[][]>;
+        .cursor(BACKUP_DATA_CURSOR_ROWS) as AsyncIterable<(string | null)[][]>;
       for await (const rows of rowCursor) {
         for (const row of rows) {
-          const values = row.map((rawValue, index) =>
-            formatSqlValue(rawValue, cols[index]?.column_name, nullifiedColumns),
+          const values = row.map((textValue, index) =>
+            formatSqlValue(textValue, insertColumns[index]!.typeName, insertColumns[index]!.nullified),
           );
           emitStatement(`INSERT INTO ${qualifiedTableName} (${colNames}) VALUES (${values.join(", ")});`);
         }

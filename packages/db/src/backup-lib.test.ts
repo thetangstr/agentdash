@@ -401,6 +401,127 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
     60_000,
   );
 
+  // AgentDash (GH #940): the INSERT path (backupEngine "javascript" and any
+  // nullified table, which is how worktree seeds are written) used to rebuild
+  // SQL from postgres.js's JS values: bytea became Buffer JSON, naive
+  // timestamps shifted by the host time zone and arrays failed to restore.
+  // Run with the process away from UTC so a time zone shift cannot hide, using
+  // the same options the worktree seed passes, and require every value to come
+  // back with the same canonical text.
+  it(
+    "round-trips bytea, timestamps, arrays, jsonb, numeric, interval, enums and NULLs through the INSERT path away from UTC",
+    async () => {
+      const previousTz = process.env.TZ;
+      process.env.TZ = "America/Los_Angeles";
+      cleanups.push(() => {
+        if (previousTz === undefined) delete process.env.TZ;
+        else process.env.TZ = previousTz;
+      });
+      expect(new Date(2026, 0, 15, 12).getTimezoneOffset()).not.toBe(0);
+
+      const sourceConnectionString = await createTempDatabase();
+      const restoreConnectionString = await createSiblingDatabase(
+        sourceConnectionString,
+        "paperclip_restore_insert_types_target",
+      );
+      const backupDir = createTempDir("paperclip-db-insert-types-backup-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+
+      const columns = [
+        "raw_bytes",
+        "naive_ts",
+        "zoned_ts",
+        "int_list",
+        "text_list",
+        "doc",
+        "amount",
+        "span",
+        "mood",
+        "mood_list",
+        "short_code",
+        "note",
+      ];
+      const selectCanonicalRows = (db: ReturnType<typeof postgres>) =>
+        db.unsafe<Record<string, string | null>[]>(`
+          SELECT "id"::text AS "id", ${columns.map((column) => `"${column}"::text AS "${column}"`).join(", ")},
+                 "secret"::text AS "secret"
+          FROM "public"."typed_rows"
+          ORDER BY "id"
+        `);
+
+      try {
+        await sourceSql.unsafe(`
+          CREATE TYPE "public"."row_mood" AS ENUM ('calm', 'it''s "busy"');
+          CREATE DOMAIN "public"."short_code" AS varchar(8) CHECK (VALUE <> '');
+          CREATE TABLE "public"."typed_rows" (
+            "id" integer PRIMARY KEY,
+            "raw_bytes" bytea,
+            "naive_ts" timestamp without time zone,
+            "zoned_ts" timestamp with time zone,
+            "int_list" integer[],
+            "text_list" text[],
+            "doc" jsonb,
+            "amount" numeric(20,10),
+            "span" interval,
+            "mood" "public"."row_mood",
+            "mood_list" "public"."row_mood"[],
+            "short_code" "public"."short_code",
+            "note" text,
+            "secret" text
+          );
+          INSERT INTO "public"."typed_rows" VALUES (
+            1,
+            '\\x00015c27ff'::bytea,
+            '2026-01-15 12:34:56.789012',
+            '2026-07-04 23:59:59.5+05:30',
+            ARRAY[1, -2, NULL, 2147483647],
+            ARRAY['plain', 'it''s "quoted"', 'back\\slash', 'comma,brace{}', NULL, ''],
+            '{"nested": {"list": [1, 2.50, "x"]}, "quote": "it''s \\"q\\""}'::jsonb,
+            1234567890.0123456789,
+            '1 year 2 mons 3 days 04:05:06.789',
+            'it''s "busy"',
+            ARRAY['calm', 'it''s "busy"']::"public"."row_mood"[],
+            'AB-12',
+            E'line one\\nline "two"\\r\\n\\\\backslash and it''s $paperclip$ tag',
+            'do-not-copy'
+          );
+          INSERT INTO "public"."typed_rows" ("id", "secret") VALUES (2, 'also-secret');
+        `);
+
+        const sourceRows = await selectCanonicalRows(sourceSql);
+
+        const result = await runDatabaseBackup({
+          connectionString: sourceConnectionString,
+          backupDir,
+          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          filenamePrefix: "paperclip-insert-types-test",
+          // The worktree seed's options: INSERT engine plus a nullified column.
+          backupEngine: "javascript",
+          nullifyColumns: { typed_rows: ["secret"] },
+        });
+
+        await runDatabaseRestore({
+          connectionString: restoreConnectionString,
+          backupFile: result.backupFile,
+        });
+
+        const restoredRows = await selectCanonicalRows(restoreSql);
+        expect(restoredRows).toEqual(sourceRows.map((row) => ({ ...row, secret: null })));
+        expect(restoredRows[0]).toMatchObject({
+          raw_bytes: "\\x00015c27ff",
+          naive_ts: "2026-01-15 12:34:56.789012",
+          int_list: "{1,-2,NULL,2147483647}",
+          amount: "1234567890.0123456789",
+        });
+      } finally {
+        await sourceSql.end();
+        await restoreSql.end();
+      }
+    },
+    60_000,
+  );
+
   // AgentDash (GH #907): the pg_dump-less engine used to drop CHECK
   // constraints, views, functions and triggers (the evaluation ledger's
   // immutability trigger among them), so a restore came back weaker than the
