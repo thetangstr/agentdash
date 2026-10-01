@@ -42,8 +42,9 @@ export function docsHref(slug: string): string {
 }
 
 export function Docs() {
-  // Read from the pathname, not a route param: App.tsx registers one static
-  // route per page (see docs-nav.ts), so there is no splat to read.
+  // Read from the pathname, not a route param: App.tsx reaches this from
+  // `docs/*` and from the mirrored board paths (see docs-nav.ts), whose params
+  // differ.
   const slug = docSlugFromPathname(useLocation().pathname);
   const tree = docsTree();
   const first = listDocPages(tree)[0] ?? null;

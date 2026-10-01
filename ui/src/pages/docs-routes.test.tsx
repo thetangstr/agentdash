@@ -13,7 +13,7 @@ import { createRoot } from "react-dom/client";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, matchRoutes, useLocation, type RouteObject } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const PUBLISHED = "http://10.0.0.5:3102";
@@ -38,20 +38,22 @@ vi.mock("@/context/CompanyContext", () => ({
 
 const { Docs } = await import("./Docs");
 const { listDocPages, loadDocSource, INSTANCE_URL_TOKEN } = await import("@/lib/docs");
-const { docsRoutePaths } = await import("@/lib/docs-nav");
-const { LEGACY_DECISIONS_PATHS } = await import("@/lib/legacy-decisions-routes");
 
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{location.pathname}</div>;
 }
 
-/** The same route lines as App.tsx. Checked below. */
+/**
+ * The same route lines as App.tsx, checked below. App also mirrors every board
+ * path under docs/ so no board route outranks a docs URL; that needs App's own
+ * boardRoutes(), so it is tested against the real App in
+ * docs-app-routes.test.tsx. Mounted alone, `docs/*` reaches every page.
+ */
 function DocsRoutes() {
   return (
     <Routes>
       <Route path="docs" element={<Suspense fallback={null}><Docs /></Suspense>} />
-      {docsRoutePaths().map((path) => <Route key={path} path={path} element={<Suspense fallback={null}><Docs /></Suspense>} />)}
       <Route path="docs/*" element={<Suspense fallback={null}><Docs /></Suspense>} />
     </Routes>
   );
@@ -185,59 +187,14 @@ describe("docs URLs", () => {
     for (const line of [
       'const Docs = lazy(() => import("./pages/Docs").then((module) => ({ default: module.Docs })));',
       '<Route path="docs" element={<Suspense fallback={null}><Docs /></Suspense>} />',
-      "{docsRoutePaths().map((path) => <Route key={path} path={path} element={<Suspense fallback={null}><Docs /></Suspense>} />)}",
+      "const DOCS_SHADOW_ROUTE_PATHS = docsShadowRoutePaths(boardRoutes());",
+      "{DOCS_SHADOW_ROUTE_PATHS.map((path) => <Route key={path} path={path} element={<Suspense fallback={null}><Docs /></Suspense>} />)}",
       '<Route path="docs/*" element={<Suspense fallback={null}><Docs /></Suspense>} />',
     ]) {
       expect(appSource, line).toContain(line);
     }
     // Public tier: the docs routes sit before CloudAccessGate, like /mcp.
     expect(appSource.indexOf('<Route path="docs/*"')).toBeLessThan(appSource.indexOf("<Route element={<CloudAccessGate />}>"));
-  });
-
-  /**
-   * The test above mounts the docs routes alone; App mounts them beside the
-   * board. React Router ranks a route by its segments, not by where it is
-   * written, so this matches every docs URL against App's own paths: the
-   * board's (under `:companyPrefix`, read from boardRoutes()) and the
-   * top-level ones. A docs URL that a board route outranks would send a
-   * visitor to the sign-in gate looking for a company called DOCS.
-   */
-  it("wins every docs URL against App's board and top-level routes", () => {
-    const appSource = readAppSource();
-    const boardStart = appSource.indexOf("function boardRoutes() {");
-    const boardEnd = appSource.indexOf("\n}\n", boardStart);
-    expect(boardStart).toBeGreaterThan(-1);
-    const boardSource = appSource.slice(boardStart, boardEnd);
-    const appBody = appSource.slice(appSource.indexOf("export function App() {"));
-    const pathsIn = (source: string) =>
-      Array.from(source.matchAll(/<Route\s+path="([^"]+)"/g), (match) => match[1]!);
-    const boardPaths = [...pathsIn(boardSource), ...LEGACY_DECISIONS_PATHS];
-    const topLevel = pathsIn(appBody).filter((candidate) => !candidate.startsWith("docs"));
-    expect(boardPaths).toContain("guides/:group/:slug");
-
-    const board: RouteObject = {
-      id: "board",
-      path: ":companyPrefix",
-      children: boardPaths.map((candidate, index) => ({ id: `board:${candidate}:${index}`, path: candidate })),
-    };
-    const others: RouteObject[] = topLevel.map((candidate, index) => ({ id: `top:${candidate}:${index}`, path: candidate }));
-    const docsRoutes: RouteObject[] = [
-      { id: "docs-landing", path: "docs" },
-      ...docsRoutePaths().map((candidate) => ({ id: "docs-page", path: candidate })),
-      { id: "docs-splat", path: "docs/*" },
-    ];
-    const leaf = (routes: RouteObject[], url: string) => matchRoutes(routes, url)?.at(-1)?.route.id ?? null;
-
-    const routes = [...docsRoutes, ...others, board];
-    expect(leaf(routes, "/docs")).toBe("docs-landing");
-    for (const page of pages) {
-      expect(leaf(routes, `/docs/${page.slug}`), page.slug).toBe("docs-page");
-    }
-
-    // Why the per-page routes exist: with the splat alone, a guide URL is
-    // read as a company called DOCS.
-    const splatOnly = [{ id: "docs-splat", path: "docs/*" }, ...others, board];
-    expect(leaf(splatOnly, "/docs/guides/steward/your-inbox")).toMatch(/^board:/);
   });
 });
 

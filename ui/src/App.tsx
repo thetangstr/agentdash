@@ -110,7 +110,7 @@ import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 import { legacyDecisionsRoutes } from "./lib/legacy-decisions-routes";
-import { docsRoutePaths } from "./lib/docs-nav";
+import { docsShadowRoutePaths } from "./lib/docs-nav";
 
 // Public docs (/docs) load on demand: the nav, the search index and every page
 // body stay out of the initial bundle.
@@ -228,6 +228,9 @@ function boardRoutes() {
   );
 }
 
+// Every board path, mirrored under docs/ — see docs-nav.ts for why.
+const DOCS_SHADOW_ROUTE_PATHS = docsShadowRoutePaths(boardRoutes());
+
 function LegacySettingsRedirect() {
   const location = useLocation();
   return <Navigate to={`/instance/settings/general${location.search}${location.hash}`} replace />;
@@ -337,12 +340,12 @@ export function App() {
         <Route path="mcp" element={<McpPage />} />
         {/* AgentDash: PUBLIC docs — same public tier as /mcp, no auth, no
             company context. Nav from docs/docs.json; see ui/src/lib/docs.ts.
-            One static route per page, because a docs/* splat ranks below
-            :companyPrefix/guides/:group/:slug (ui/src/lib/docs-nav.ts).
+            DOCS_SHADOW_ROUTE_PATHS mirrors every board path under docs/, so
+            no :companyPrefix route outranks a /docs URL (ui/src/lib/docs-nav.ts).
             Not served on www.agentdash.cloud until vercel.json lets /docs
             through (doc/plans/2026-10-01-public-docs-section.md, PR 4). */}
         <Route path="docs" element={<Suspense fallback={null}><Docs /></Suspense>} />
-        {docsRoutePaths().map((path) => <Route key={path} path={path} element={<Suspense fallback={null}><Docs /></Suspense>} />)}
+        {DOCS_SHADOW_ROUTE_PATHS.map((path) => <Route key={path} path={path} element={<Suspense fallback={null}><Docs /></Suspense>} />)}
         <Route path="docs/*" element={<Suspense fallback={null}><Docs /></Suspense>} />
         {/* AgentDash: PUBLIC legal pages (Terms / Privacy) — same public tier as
             /trial, /pricing, and /investors, no auth, no company context, each

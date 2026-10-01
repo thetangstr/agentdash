@@ -1,74 +1,48 @@
 /**
- * The small, eager half of the public docs: which pages exist and what is
- * never published. App.tsx imports this to register one route per page, so it
- * must stay free of page bodies and the search index — those live behind the
- * lazy `docs.ts`.
+ * The eager half of the public docs: only what App.tsx needs to route /docs.
+ * App imports this at startup, so it is in the initial chunk every visitor to
+ * www.agentdash.cloud downloads — it must carry no page list, no nav and no
+ * denylist. Those live behind the lazy `docs.ts`; the denylist lives only in
+ * `scripts/docs/build-search-index.mjs` and the tests.
  *
- * Why a route per page rather than one `docs/*` splat: React Router ranks a
- * splat below any route with more matched segments, so `/docs/guides/x/y` was
- * taken by the board's `:companyPrefix/guides/:group/:slug` (a company called
- * DOCS) and sent a visitor to the sign-in gate. A fully static path outranks
- * every board route. `docs-routes.test.tsx` checks each URL against App's own
- * route paths.
+ * Why /docs needs more than `docs` and `docs/*`: React Router ranks routes by
+ * their segments, not by where they are written, and a splat ranks low. So
+ * `/docs/dashboard` went to the board's `:companyPrefix/dashboard`, and
+ * `/docs/guides/x/y` to `:companyPrefix/guides/:group/:slug` — a company
+ * called DOCS, behind the sign-in gate. For every board path `P` this
+ * registers `docs/P` as a docs route. It matches exactly the URLs
+ * `:companyPrefix/P` would match there, and always ranks above it: a static
+ * `docs` segment outranks a dynamic `:companyPrefix`, and the rest is the same.
+ * So the board can never claim a /docs URL, whatever board routes are added
+ * later, and the docs page decides from the pathname whether it is a page or
+ * not found. `docs-routes.test.tsx` checks this against App's real routes.
  */
 
-import docsConfig from "../../../docs/docs.json";
+import type { ReactNode } from "react";
+import { createRoutesFromChildren, type RouteObject } from "react-router-dom";
 
-/**
- * Docs-relative paths (no extension) that are never bundled, even when the nav
- * lists them. An entry ending in `/` is a directory prefix. Mirrored in
- * `scripts/docs/build-search-index.mjs` and in the glob negations in
- * `docs.ts`; `docs.test.ts` keeps all three equal.
- */
-export const DOCS_PATH_DENYLIST: readonly string[] = [
-  "api/agentdash-mk",
-  "deploy/ross-private-host",
-  "superpowers/",
-  "agents/",
-  "design/",
-  "specs/",
-  "plans/",
-];
-
-/** A docs.json page entry: a path string, or (Mintlify) a nested group. */
-type RawNavEntry = string | { group?: string; pages?: RawNavEntry[] };
-
-export interface DocsConfig {
-  navigation?: {
-    tabs?: Array<{ tab?: string; groups?: Array<{ group?: string; pages?: RawNavEntry[] }> }>;
-  };
-}
-
-export function isDeniedDocPath(page: string): boolean {
-  return DOCS_PATH_DENYLIST.some((entry) =>
-    entry.endsWith("/") ? page.startsWith(entry) : page === entry,
-  );
-}
-
-/** Every page entry the nav lists, in reading order, duplicates kept. Nested groups are flattened. */
-export function navPageEntries(config: DocsConfig): string[] {
-  const out: string[] = [];
-  const walk = (pages: RawNavEntry[] | undefined) => {
-    for (const entry of pages ?? []) {
-      if (typeof entry === "string") out.push(entry);
-      else if (entry && Array.isArray(entry.pages)) walk(entry.pages);
-    }
-  };
-  for (const tab of config.navigation?.tabs ?? []) {
-    for (const group of tab.groups ?? []) walk(group.pages);
-  }
-  return out;
-}
-
-/** `docs/<slug>` for every public page, in nav order — App.tsx's route paths. */
-export function docsRoutePaths(config: DocsConfig = docsConfig as DocsConfig): string[] {
+function routePaths(routes: RouteObject[], parent = ""): string[] {
   const paths: string[] = [];
-  for (const slug of navPageEntries(config)) {
-    if (isDeniedDocPath(slug)) continue;
-    const path = `docs/${slug}`;
-    if (!paths.includes(path)) paths.push(path);
+  for (const route of routes) {
+    const full = route.path ? (parent ? `${parent}/${route.path}` : route.path) : parent;
+    if (route.path) paths.push(full);
+    if (route.children) paths.push(...routePaths(route.children, full));
   }
   return paths;
+}
+
+/**
+ * `docs/<P>` for every path `P` in the board's route elements (the children of
+ * `:companyPrefix`). The board's own `*` is skipped: App declares `docs/*`.
+ */
+export function docsShadowRoutePaths(boardRouteElements: ReactNode): string[] {
+  const out: string[] = [];
+  for (const path of routePaths(createRoutesFromChildren(boardRouteElements))) {
+    if (path === "*") continue;
+    const shadow = `docs/${path.replace(/^\/+/, "")}`;
+    if (!out.includes(shadow)) out.push(shadow);
+  }
+  return out;
 }
 
 /** The page slug for a pathname under /docs: `/docs/start/quickstart/` → `start/quickstart`. */

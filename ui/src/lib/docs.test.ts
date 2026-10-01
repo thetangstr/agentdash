@@ -4,17 +4,17 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import docsConfig from "../../../docs/docs.json";
 import searchIndex from "@/generated/docs-search-index.json";
+import docsRoutes from "@/generated/docs-routes.json";
+// The denylist has one copy, in the generator script; UI runtime code never
+// imports it, so it is never in a shipped chunk.
+import { DOCS_PATH_DENYLIST, isDeniedDocPath } from "../../../scripts/docs/build-search-index.mjs";
 import {
-  DOCS_PATH_DENYLIST as SCRIPT_DENYLIST,
-} from "../../../scripts/docs/build-search-index.mjs";
-import {
-  DOCS_PATH_DENYLIST,
   INSTANCE_URL_TOKEN,
+  PUBLIC_DOC_SLUGS,
   buildDocsTree,
-  bundledDocFiles,
   docsTree,
   findDocPage,
-  isDeniedDocPath,
+  globbedDocFiles,
   listDocPages,
   loadDocPage,
   loadDocSource,
@@ -27,7 +27,7 @@ import {
   type DocsConfig,
 } from "./docs";
 import { tokensIn } from "./guides";
-import { docSlugFromPathname, docsRoutePaths } from "./docs-nav";
+import { docSlugFromPathname } from "./docs-nav";
 
 // vitest's cwd is ui/ locally but the repo root in CI's sharded run.
 const REPO_ROOT = [process.cwd(), path.join(process.cwd(), "..")].find((candidate) =>
@@ -111,17 +111,18 @@ describe("docs: markdown normalisation", () => {
 });
 
 describe("docs: the nav tree", () => {
-  it("drops denied pages, missing files, duplicates and the groups and tabs they empty", () => {
+  it("drops non-public pages, missing files, duplicates and the groups and tabs they empty", () => {
     const tree = buildDocsTree(
       {
         navigation: {
           tabs: [
             { tab: "A", groups: [{ group: "G", pages: ["a/one", "a/two", "a/one", { group: "nested", pages: ["a/three"] }] }] },
-            { tab: "B", groups: [{ group: "H", pages: ["api/agentdash-mk", "superpowers/x"] }] },
+            { tab: "B", groups: [{ group: "H", pages: ["b/private", "b/other"] }] },
           ],
         },
       },
-      ["a/one.md", "a/three.mdx", "api/agentdash-mk.md", "superpowers/x.md"],
+      ["a/one.md", "a/three.mdx", "b/private.md", "b/other.md"],
+      new Set(["a/one", "a/two", "a/three"]),
     );
     expect(tree.map((tab) => tab.title)).toEqual(["A"]);
     expect(tree[0]!.groups[0]!.pages.map((page) => [page.slug, page.file])).toEqual([
@@ -130,8 +131,8 @@ describe("docs: the nav tree", () => {
     ]);
   });
 
-  it("registers one route per bundled page, and none for anything else", () => {
-    expect(docsRoutePaths()).toEqual(listDocPages().map((page) => `docs/${page.slug}`));
+  it("serves exactly the generated public slugs, in nav order", () => {
+    expect(listDocPages().map((page) => page.slug)).toEqual(docsRoutes.slugs);
     expect(docSlugFromPathname("/docs/start/quickstart/")).toBe("start/quickstart");
     expect(docSlugFromPathname("/docs")).toBe("");
     expect(docSlugFromPathname("/docs/")).toBe("");
@@ -174,18 +175,23 @@ describe("docs: the bundled set", () => {
     expect(new Set(pages.map((page) => page.slug)).size).toBe(pages.length);
   });
 
-  it("bundles exactly the nav minus the denylist — the glob and docs.json agree", () => {
+  // globbedDocFiles() is the raw glob, unfiltered: every key is a chunk Vite
+  // emits, so this is what actually ships, not what the UI chooses to show.
+  it("globs exactly the nav minus the denylist — every emitted chunk is a public page", () => {
     const expected = entries
       .filter((entry) => !isDeniedDocPath(entry))
       .map((entry) => [`${entry}.md`, `${entry}.mdx`].find((file) => existsSync(path.join(DOCS_DIR, file)))!)
       .sort();
-    expect(bundledDocFiles()).toEqual(expected);
+    expect(globbedDocFiles()).toEqual(expected);
     expect(pages.map((page) => page.file).sort()).toEqual(expected);
   });
 
-  it("bundles no denied path", () => {
-    for (const file of bundledDocFiles()) {
+  it("globs no denied path, and lists none as public", () => {
+    for (const file of globbedDocFiles()) {
       expect(isDeniedDocPath(file.replace(/\.mdx?$/, "")), file).toBe(false);
+    }
+    for (const slug of PUBLIC_DOC_SLUGS) {
+      expect(isDeniedDocPath(slug), slug).toBe(false);
     }
   });
 
@@ -205,8 +211,23 @@ describe("docs: the bundled set", () => {
     }
   });
 
-  it("keeps the glob's negations and the search-index script's denylist in step with DOCS_PATH_DENYLIST", () => {
-    expect(SCRIPT_DENYLIST).toEqual([...DOCS_PATH_DENYLIST]);
+  it("never names a denied file in UI runtime code — only in the glob's compile-time negations", () => {
+    // Anything in ui/src outside a test can end up in a chunk anyone can read.
+    // Directory entries (`plans/`) are too generic to scan for; file entries are not.
+    const files = listSource(path.join(REPO_ROOT, "ui", "src"));
+    for (const entry of DOCS_PATH_DENYLIST.filter((candidate) => !candidate.endsWith("/"))) {
+      for (const file of files) {
+        const lines = readFileSync(file, "utf8").split("\n");
+        lines.forEach((line, index) => {
+          if (!line.includes(entry)) return;
+          const negation = line.trim() === `"!../../../docs/${entry}.{md,mdx}",`;
+          expect(negation, `${path.relative(REPO_ROOT, file)}:${index + 1} names ${entry}`).toBe(true);
+        });
+      }
+    }
+  });
+
+  it("covers every denylist entry with a negation in the glob", () => {
     const source = readFileSync(path.join(REPO_ROOT, "ui", "src", "lib", "docs.ts"), "utf8");
     for (const entry of DOCS_PATH_DENYLIST) {
       const negation = entry.endsWith("/")
@@ -250,6 +271,7 @@ describe("docs: the bundled set", () => {
     const targets = new Map(sources);
     targets.set("docs/docs.json", readFileSync(path.join(DOCS_DIR, "docs.json"), "utf8"));
     targets.set("ui/src/generated/docs-search-index.json", JSON.stringify(searchIndex));
+    targets.set("ui/src/generated/docs-routes.json", JSON.stringify(docsRoutes));
     for (const [name, text] of targets) {
       expect(forbiddenTokenOffsets(text), name).toEqual([]);
     }
@@ -258,10 +280,14 @@ describe("docs: the bundled set", () => {
 
 /**
  * Customer, instance and people identifiers that must never be on the public
- * site. Stored as SHA-256 of the lowercase token, with its length, so this file
- * does not itself publish the list. The scan hashes every window of each length
+ * site. Stored as SHA-256 of the lowercase token, with its length, only so the
+ * tokens are not printed in clear in this file and its diffs. This is NOT a
+ * secret: the tokens are short and guessable, and anyone with a guess list can
+ * recover them from these hashes. The scan hashes every window of each length
  * across the page's lowercase text — deterministic, and a token is found
- * wherever it sits (inside a word, a hostname, an address).
+ * wherever it sits (inside a word, a hostname, an address). Hyphenated
+ * spellings are listed separately; a bare short name is not, where it would
+ * match inside ordinary words.
  */
 const FORBIDDEN_TOKENS: ReadonlyArray<{ length: number; sha256: string }> = [
   { length: 7, sha256: "4998fa28eb8d38a27eff147fb68e1ad03ea01658fb5eec10aabadbaf37ffe565" },
@@ -271,6 +297,8 @@ const FORBIDDEN_TOKENS: ReadonlyArray<{ length: number; sha256: string }> = [
   { length: 6, sha256: "0c59fcbbac92f38fa899db945fa4e6d4b252a224b7003eb7839c80f7899544fc" },
   { length: 5, sha256: "b9cbfe962ddda6952b584988cbf7d074a35ec1e99ef71853447cb0eb91bb6547" },
   { length: 5, sha256: "2d07d002c88b7c7546f7c81175b0fd8ef3843654895574b81ba28573d4373a96" },
+  { length: 12, sha256: "68b7730d0f4346654432e894c673760d287e3ee7a7509c4c6f802f216301c4b7" },
+  { length: 12, sha256: "b9dd1da230753160f70e3864d24aa0bd1ca81cd8bceaf3709fd41e09d55214b1" },
 ];
 
 function sha256(text: string): string {
@@ -336,6 +364,17 @@ describe("docs: search", () => {
     expect(searchDocs("connect your terminal")[0]?.entry.slug).toBe("guides/steward/connect-your-terminal");
   });
 });
+
+/** Non-test .ts/.tsx/.js files under `dir`. */
+function listSource(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...listSource(full));
+    else if (/\.(tsx?|jsx?|mjs)$/.test(entry) && !/\.test\.|\.spec\.|\.stories\./.test(entry)) out.push(full);
+  }
+  return out;
+}
 
 function listMarkdown(dir: string): string[] {
   const out: string[] = [];

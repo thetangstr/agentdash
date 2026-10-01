@@ -1,13 +1,20 @@
 #!/usr/bin/env node
-// Build the public docs search index: ui/src/generated/docs-search-index.json.
+// Build the public docs' generated files:
+//   ui/src/generated/docs-search-index.json — the search index;
+//   ui/src/generated/docs-routes.json       — the ordered list of public slugs.
 //
 // One entry per page the public docs bundle (doc/plans/2026-10-01-public-docs-section.md):
 // the pages docs/docs.json lists, minus the denylist. Each entry carries the
 // slug, the title, the section headings and the first paragraph — enough for a
 // client-side matcher and for the nav to show titles without loading a page.
 //
-// The output is committed. ui/src/lib/docs-search-index.test.ts rebuilds it in
-// memory and fails when the committed file is stale, so a docs edit that is not
+// The slug list exists so the UI never needs the denylist at runtime: the UI
+// keeps a page only if its slug is on this list, and the denylist itself lives
+// here and in the tests — never in a shipped chunk, where anyone could read the
+// private file names it exists to hide.
+//
+// Both outputs are committed. ui/src/lib/docs-search-index.test.ts rebuilds them
+// in memory and fails when a committed file is stale, so a docs edit that is not
 // followed by `pnpm docs:search-index` fails CI rather than shipping a search
 // that points at headings that no longer exist.
 //
@@ -19,8 +26,9 @@ import { fileURLToPath } from "node:url";
 
 /**
  * Docs-relative paths that are never bundled, even if docs.json lists them.
- * An entry ending in `/` is a directory prefix. Must equal DOCS_PATH_DENYLIST
- * in ui/src/lib/docs-nav.ts — ui/src/lib/docs.test.ts checks that.
+ * An entry ending in `/` is a directory prefix. The one copy: the UI tests
+ * import it from here, and ui/src/lib/docs.ts's glob negations must cover it
+ * (ui/src/lib/docs.test.ts checks that). Do not import this from UI code.
  */
 export const DOCS_PATH_DENYLIST = [
   "api/agentdash-mk",
@@ -33,6 +41,7 @@ export const DOCS_PATH_DENYLIST = [
 ];
 
 export const SEARCH_INDEX_REL = "ui/src/generated/docs-search-index.json";
+export const ROUTES_REL = "ui/src/generated/docs-routes.json";
 
 const FIRST_PARAGRAPH_MAX = 280;
 
@@ -164,22 +173,39 @@ export function buildDocsSearchIndex(repoRoot) {
   return `${JSON.stringify({ source: "docs/docs.json", pages }, null, 2)}\n`;
 }
 
+/** The public slugs, in nav order: the only list of pages the UI trusts. */
+export function buildDocsRoutes(repoRoot) {
+  const slugs = collectBundledPages(repoRoot).map(({ slug }) => slug);
+  return `${JSON.stringify({ source: "docs/docs.json", slugs }, null, 2)}\n`;
+}
+
 function main() {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const target = path.join(repoRoot, SEARCH_INDEX_REL);
-  const next = buildDocsSearchIndex(repoRoot);
+  const outputs = [
+    [SEARCH_INDEX_REL, buildDocsSearchIndex(repoRoot)],
+    [ROUTES_REL, buildDocsRoutes(repoRoot)],
+  ];
   if (process.argv.includes("--check")) {
-    const current = existsSync(target) ? readFileSync(target, "utf8") : "";
-    if (current !== next) {
-      console.error(`${SEARCH_INDEX_REL} is stale. Run: node scripts/docs/build-search-index.mjs`);
-      process.exit(1);
+    let stale = false;
+    for (const [rel, next] of outputs) {
+      const target = path.join(repoRoot, rel);
+      const current = existsSync(target) ? readFileSync(target, "utf8") : "";
+      if (current !== next) {
+        console.error(`${rel} is stale. Run: node scripts/docs/build-search-index.mjs`);
+        stale = true;
+      } else {
+        console.log(`${rel} is current.`);
+      }
     }
-    console.log(`${SEARCH_INDEX_REL} is current.`);
+    if (stale) process.exit(1);
     return;
   }
-  mkdirSync(path.dirname(target), { recursive: true });
-  writeFileSync(target, next);
-  console.log(`Wrote ${SEARCH_INDEX_REL}.`);
+  for (const [rel, next] of outputs) {
+    const target = path.join(repoRoot, rel);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, next);
+    console.log(`Wrote ${rel}.`);
+  }
 }
 
 // Entry guard: resolve symlinks on both sides, or a symlinked invocation
