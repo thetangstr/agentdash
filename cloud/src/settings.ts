@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import type { CloudDb } from "./db/client.js";
 import { capabilities } from "./capabilities.js";
 import { operatorAudit, settings } from "./db/schema.js";
+import { isTimeZone, WINDOW_RE } from "./jobs/upgrade-window.js";
 
 export const SETTING_DEFAULTS = {
   // Kill switch. Off on a fresh deploy: nothing is provisioned until an
@@ -33,6 +34,10 @@ export const SETTING_DEFAULTS = {
   // reading is "not available" (no number is invented).
   spend_estimate_box_usd: null as number | null,
   spend_estimate_suspended_box_usd: null as number | null,
+  // AgentDash (SC-12, GH #773): the nightly window rollout waves start in
+  // (spec §6.1). "HH:MM-HH:MM" in upgrade_window_tz, or null for always open.
+  upgrade_window: "02:00-05:00" as string | null,
+  upgrade_window_tz: "America/Los_Angeles",
 };
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
@@ -86,6 +91,20 @@ export function parseSettingValue(key: SettingKey, raw: unknown): Settings[Setti
       if (raw === null || raw === "" || raw === "null") return null;
       if (typeof raw !== "string" || !RELEASE_TAG_RE.test(raw)) {
         throw new SettingValidationError("target_release must be a stable tag like v2026.925.0, or null");
+      }
+      return raw;
+    }
+    // AgentDash (SC-12, GH #773).
+    case "upgrade_window": {
+      if (raw === null || raw === "" || raw === "null" || raw === "always") return null;
+      if (typeof raw !== "string" || !WINDOW_RE.test(raw) || raw.slice(0, 5) === raw.slice(6)) {
+        throw new SettingValidationError("upgrade_window must look like 02:00-05:00 (24-hour, may wrap midnight), or null for always open");
+      }
+      return raw;
+    }
+    case "upgrade_window_tz": {
+      if (typeof raw !== "string" || !raw.includes("/") || !isTimeZone(raw)) {
+        throw new SettingValidationError("upgrade_window_tz must be an IANA time zone like America/Los_Angeles");
       }
       return raw;
     }

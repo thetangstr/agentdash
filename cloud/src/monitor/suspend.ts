@@ -12,14 +12,14 @@
 // a live suspend job waits for it. Postgres is never suspended (off until a
 // suspend-and-resume test on Postgres passes, spec §5.2).
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { boxEvents, boxes, boxHealth, jobs } from "../db/schema.js";
+import { BOX_UPGRADE_LIVE_STATES, boxEvents, boxes, boxHealth, boxUpgrades, jobs } from "../db/schema.js";
 import { FatalJobError, RetryableJobError } from "../jobs/errors.js";
 import type { JobContext, JobHandler } from "../jobs/runner.js";
 import { DEPLOY_FAILED, deployService, getProject, latestDeployment } from "../railway/api.js";
 import type { RailwayClient } from "../railway/client.js";
 import { assertBoxProjectName, boxProjectName, ProjectNameRefused, projectTag } from "../railway/names.js";
 import { probeHealth } from "./health.js";
-import { IDLE_POLICY_PLANS } from "./idle.js";
+import { IDLE_POLICY_PLANS, IDLE_POLICY_PURPOSES } from "./idle.js";
 
 type Opt = { signal?: AbortSignal };
 
@@ -78,6 +78,25 @@ export function suspendHandler(deps: { client: RailwayClient; workspaceId: strin
           if (idle && !(IDLE_POLICY_PLANS as readonly string[]).includes(box.planTier)) {
             throw new FatalJobError(`box ${box.slug} is on plan ${box.planTier}, which the idle policy exempts; not suspending`);
           }
+          // So is the purpose (SC-12): demo/canary/internal boxes are ops-managed.
+          if (idle && !(IDLE_POLICY_PURPOSES as readonly string[]).includes(box.purpose)) {
+            throw new FatalJobError(`box ${box.slug} has purpose ${box.purpose}, which the idle policy exempts; not suspending`);
+          }
+          // And the upgrade table: a live row queued between the sweep and this run means the
+          // upgrade wins. The runner's per-box lock only covers a running/rolling_back upgrade,
+          // not a queued one, so it is rechecked here; the next sweep re-queues the pause.
+          if (idle) {
+            const [up] = await ctx.db
+              .select({ id: boxUpgrades.id })
+              .from(boxUpgrades)
+              .where(and(eq(boxUpgrades.boxId, box.id), inArray(boxUpgrades.state, [...BOX_UPGRADE_LIVE_STATES])));
+            if (up) {
+              await ctx.db
+                .insert(boxEvents)
+                .values({ boxId: box.id, kind: "idle_suspend_skipped", actor: "suspend-job", detail: { reason: "upgrade in flight", upgradeId: up.id } });
+              return;
+            }
+          }
           // An idle suspend whose box was used after the sweep queued it is dropped.
           if (payload.reason === "idle" && typeof payload.idleSince === "string" && box.lastHumanRequestAt && box.lastHumanRequestAt.getTime() > Date.parse(payload.idleSince)) {
             await ctx.db.insert(boxEvents).values({ boxId: box.id, kind: "idle_suspend_skipped", actor: "suspend-job", detail: { reason: "used since queued" } });
@@ -87,7 +106,7 @@ export function suspendHandler(deps: { client: RailwayClient; workspaceId: strin
           const moved = await ctx.db
             .update(boxes)
             .set({ state: "suspended", suspendedAt: new Date(), updatedAt: new Date() })
-            .where(and(eq(boxes.id, box.id), eq(boxes.state, "active"), ...(idle ? [inArray(boxes.planTier, [...IDLE_POLICY_PLANS])] : [])))
+            .where(and(eq(boxes.id, box.id), eq(boxes.state, "active"), ...(idle ? [inArray(boxes.planTier, [...IDLE_POLICY_PLANS]), inArray(boxes.purpose, [...IDLE_POLICY_PURPOSES])] : [])))
             .returning({ id: boxes.id });
           if (idle && !moved.length) {
             const now = await ctx.box();

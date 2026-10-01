@@ -53,8 +53,8 @@ import { validateNewSlug, validateSlug } from "./slug.js";
 
 /** Railway's Postgres image, major pinned (spike §2.2: the template now defaults to 18). */
 export const PG_IMAGE = "ghcr.io/railwayapp-templates/postgres-ssl:17";
-const PG_MOUNT = "/var/lib/postgresql/data";
-const WEB_MOUNT = "/paperclip";
+export const PG_MOUNT = "/var/lib/postgresql/data";
+export const WEB_MOUNT = "/paperclip";
 const WEB_PORT = 3100;
 const CLAIM_DAYS = 7;
 /** Secrets a deployed box must already have; generating new ones would lock users out or orphan stored secrets. */

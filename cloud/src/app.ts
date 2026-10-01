@@ -73,6 +73,8 @@ export function createApp(opts: {
   app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log, {
     frontDoor,
     invites: inviteService(db, config.dataKeys),
+    // AgentDash (SC-12, GH #773): rollouts resolve the release's GHCR digest.
+    fleet: { imageRepo: config.boxImageRepo, sourceRepo: config.boxSourceRepo },
     // AgentDash (#807 review): the fleet step for when the edge router goes live.
     ...(config.railwayToken && config.railwayWorkspaceId
       ? {

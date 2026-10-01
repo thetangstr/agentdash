@@ -13,9 +13,24 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
 
   settings get [key]         show all settings, or one
   settings set <key> <value> change a setting (true/false, integers, a release tag, or null)
-  boxes list                 list boxes
-  boxes create <slug> <email> [release]
-                             create a box for <email> and request provisioning (kill switch and cap apply)
+  boxes list [--purpose <p>] list boxes (optionally only customer, demo, canary or internal ones)
+  boxes create <slug> <email> [release] [--purpose <p>]
+                             create a box for <email> and request provisioning (kill switch and cap apply);
+                             --purpose demo boxes are created with hold_upgrades on
+  boxes purpose <slug> <p>   set a box's purpose (canary boxes are the first wave of every rollout)
+  boxes hold <slug>          hold upgrades for a box (rollouts skip it)
+  boxes unhold <slug>        let a box be upgraded again
+  boxes upgrade <slug> [release] [--now]
+                             upgrade one box to release (default target_release), at the next window
+                             opening, or at once with --now
+  rollout status             the latest rollout, its waves and the upgrade window
+  rollout start [--now]      roll target_release out: canary, then 10% oldest-first, then batches of 5,
+                             in the nightly window (--now: start waves outside the window)
+  rollout pause [reason]     stop starting new upgrades (sets rollout_paused)
+  rollout resume [--now]     clear rollout_paused; failed boxes stay held until unheld; the rest waits for
+                             the window again unless --now
+  rollout cancel             drop the rollout's remaining planned boxes
+  rollout tick               run one orchestrator pass now (it also runs every minute)
   boxes retry <slug>         resume a failed box's provision job at its failed step
   boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
   fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
@@ -107,9 +122,36 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
   if (group === "settings" && action === "set" && rest.length === 2) {
     return print(await call("PUT", `/settings/${encodeURIComponent(rest[0]!)}`, { value: rest[1] }));
   }
-  if (group === "boxes" && action === "list") return print(await call("GET", "/boxes"));
-  if (group === "boxes" && action === "create" && (rest.length === 2 || rest.length === 3)) {
-    return print(await call("POST", "/boxes", { slug: rest[0], email: rest[1], ...(rest[2] ? { releaseTag: rest[2] } : {}) }));
+  // AgentDash (GH #861, SC-12 GH #773): --purpose <p> and --now flags.
+  const purposeAt = rest.indexOf("--purpose");
+  const purpose = purposeAt >= 0 ? rest[purposeAt + 1] : undefined;
+  const now = rest.includes("--now");
+  const args = rest.filter((a, i) => a !== "--now" && !(purposeAt >= 0 && (i === purposeAt || i === purposeAt + 1)));
+  if (purposeAt >= 0 && (!purpose || purpose.startsWith("--"))) {
+    io.err("--purpose needs a value: customer, demo, canary or internal");
+    return 64;
+  }
+  if (group === "boxes" && action === "list" && args.length === 0 && !now) {
+    return print(await call("GET", purpose ? `/boxes?purpose=${encodeURIComponent(purpose)}` : "/boxes"));
+  }
+  if (group === "boxes" && action === "create" && (args.length === 2 || args.length === 3) && !now) {
+    return print(await call("POST", "/boxes", { slug: args[0], email: args[1], ...(args[2] ? { releaseTag: args[2] } : {}), ...(purpose ? { purpose } : {}) }));
+  }
+  if (group === "boxes" && action === "purpose" && rest.length === 2) {
+    return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/purpose`, { purpose: rest[1] }));
+  }
+  if (group === "boxes" && (action === "hold" || action === "unhold") && rest.length === 1) {
+    return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));
+  }
+  if (group === "boxes" && action === "upgrade" && purposeAt < 0 && (args.length === 1 || args.length === 2)) {
+    return print(await call("POST", `/boxes/${encodeURIComponent(args[0]!)}/upgrade`, { ...(args[1] ? { releaseTag: args[1] } : {}), now }));
+  }
+  if (group === "rollout" && purposeAt < 0) {
+    if (action === "status" && args.length === 0) return print(await call("GET", "/rollout"));
+    if (action === "start" && args.length === 0) return print(await call("POST", "/rollout/start", { now }));
+    if (action === "pause" && args.length <= 1) return print(await call("POST", "/rollout/pause", args[0] ? { reason: args[0] } : {}));
+    if (action === "resume" && args.length === 0) return print(await call("POST", "/rollout/resume", { now }));
+    if ((action === "cancel" || action === "tick") && args.length === 0) return print(await call("POST", `/rollout/${action}`));
   }
   if (group === "boxes" && (action === "retry" || action === "abandon") && rest.length === 1) {
     return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));

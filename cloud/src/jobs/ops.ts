@@ -8,7 +8,7 @@
 //            the SC-2 live test) through the same enqueue rules as a signup.
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
-import { accounts, boxEvents, boxes, jobs } from "../db/schema.js";
+import { accounts, boxEvents, boxes, jobs, type BoxPurpose } from "../db/schema.js";
 import { SlugRefused, validateNewSlug } from "../railway/slug.js";
 import { enqueueJob, type ProvisionRequestResult, requestProvision } from "./queue.js";
 
@@ -72,7 +72,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** An operator-created box for `email`: account (verified by the operator) plus box, then the usual enqueue rules. */
 export async function createBoxForOperator(
   db: CloudDb,
-  input: { slug: string; email: string; releaseTag?: string | null },
+  input: { slug: string; email: string; releaseTag?: string | null; purpose?: BoxPurpose },
   actor: string,
 ): Promise<{ boxId: string; provisioning: ProvisionRequestResult }> {
   try {
@@ -93,9 +93,15 @@ export async function createBoxForOperator(
     }
     const [box] = await tx
       .insert(boxes)
-      .values({ accountId: acct.id, slug: input.slug, ...(input.releaseTag ? { releaseTag: input.releaseTag } : {}) })
+      .values({
+        accountId: acct.id,
+        slug: input.slug,
+        ...(input.releaseTag ? { releaseTag: input.releaseTag } : {}),
+        // AgentDash (GH #861): a demo box is frozen on its release until an operator unholds it.
+        ...(input.purpose ? { purpose: input.purpose, holdUpgrades: input.purpose === "demo" } : {}),
+      })
       .returning({ id: boxes.id });
-    await tx.insert(boxEvents).values({ boxId: box!.id, kind: "box_created", actor, detail: { by: "operator" } });
+    await tx.insert(boxEvents).values({ boxId: box!.id, kind: "box_created", actor, detail: { by: "operator", purpose: input.purpose ?? "customer" } });
     return box!.id;
   });
   const provisioning = await requestProvision(db, boxId, { actor, approved: true });
