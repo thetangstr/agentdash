@@ -70,10 +70,12 @@ export function ownershipHumanOperations(): HumanOperation[] {
     authorize: ctx => assertOwnershipManagement(ctx.db, ctx.req, humanCompany(ctx)),
     async resolve(ctx, p) {
       const companyId = humanCompany(ctx);
-      if (ctx.lock && typeof p.userId === 'string') await ctx.db.select({ id: companyMemberships.id }).from(companyMemberships).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, p.userId))).for('update');
+      // #883 review: agent before membership, matching the witness order
+      // (02:agent < 09:membership); the reverse order could deadlock.
       const query = ctx.db.select().from(agents).where(and(eq(agents.id, p.agentId as string), eq(agents.companyId, companyId)));
       const [agent] = await (ctx.lock ? query.for('update') : query);
       if (!agent) throw notFound('Agent not found');
+      if (ctx.lock && typeof p.userId === 'string') await ctx.db.select({ id: companyMemberships.id }).from(companyMemberships).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, p.userId))).for('update');
       const svc = agentStewardshipService(ctx.db), active = await svc.activeByAgent(companyId, agent.id);
       if (operationId === 'human_questions.owner.assign') {
         if (await agentConfigurationAuthority(ctx.db, ctx.req, agent) !== 'admin') throw forbidden('Only agent administrators may change accountability');

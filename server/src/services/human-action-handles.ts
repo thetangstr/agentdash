@@ -10,14 +10,16 @@ type Binding = { userId: string; keyId: string; target: HumanTarget };
 
 // Review P2 (#859): handles carry answer text in payload/result. A terminal
 // handle is kept for a day after it expires (readback of "what happened"),
-// a recovery_required one for a week (the recovery window); then it is
-// deleted. An expired prepared handle is marked expired and its payload is
-// cleared at once: it can never be confirmed.
+// a recovery_required one for seven days after its expiry (the recovery
+// window); then it is deleted. The sweep marks an expired prepared handle
+// expired and clears its payload; get() does the same when it finds an
+// expired prepared handle first. The row itself is deleted a day after expiry.
 export const HUMAN_ACTION_HANDLE_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const HUMAN_ACTION_HANDLE_RECOVERY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export function humanActionHandleService(db: Db) {
   async function reject(id: string, status: 'denied' | 'stale' | 'expired') {
-    await db.update(humanActionHandles).set({ status, consumedAt: new Date() })
+    // An expired handle can never be confirmed, so its private payload goes now.
+    await db.update(humanActionHandles).set({ status, consumedAt: new Date(), ...(status === 'expired' ? { payload: {}, preconditions: {} } : {}) })
       .where(and(eq(humanActionHandles.id, id), eq(humanActionHandles.status, 'prepared')));
   }
   return {

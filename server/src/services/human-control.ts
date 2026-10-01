@@ -200,6 +200,17 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
         if (op.afterCommit) await handles.finish(row.id, { result: { value: output } });
         return { status: 'completed', actionId: row.id, result: output };
       } catch (error) {
+        // #883 review: a database error raised inside the transaction callback
+        // (deadlock, serialization failure, constraint) rolled the transaction
+        // back, so nothing committed and the handle is refused as stale rather
+        // than left recovery_required. An error after the callback completed
+        // (the COMMIT itself) stays uncertain.
+        const sqlState = (error as { code?: unknown; cause?: { code?: unknown } }).code ?? (error as { cause?: { code?: unknown } }).cause?.code;
+        const rolledBack = typeof sqlState === 'string' && /^[0-9A-Z]{5}$/.test(sqlState);
+        if (!committed && !callbackCompleted && rolledBack) {
+          await handles.refuseClaimed(row.id, 'stale');
+          throw conflict('Human action was not applied; prepare it again', { status: 'stale', actionId: row.id });
+        }
         if (!committed && !callbackCompleted && [400,401,403,404,409,422].includes((error as {status:number}).status)) {
           await handles.refuseClaimed(row.id, [401,403].includes((error as {status:number}).status) ? 'denied' : 'stale');
           throw error;

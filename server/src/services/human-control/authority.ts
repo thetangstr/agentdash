@@ -354,6 +354,11 @@ export function foundationAuthority(req: Request) {
       // writer (FOR NO KEY UPDATE, #881) BEFORE any witness row lock, so it
       // cannot deadlock against a writer that holds the mutex and then
       // updates a witnessed row (e.g. an enrollment update during sharing).
+      // #883 review: refuse a company the caller cannot reach BEFORE any
+      // company lock, so a foreign company id cannot hold another company's
+      // write mutex even briefly. Instance administrators keep the canonical
+      // stewardship/discover exception (re-checked under witnesses below).
+      if (!req.actor.isInstanceAdmin) assertCompanyAccess(req, selection.companyId);
       const [company] = await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, selection.companyId))
         .for(selection.readOnly ? 'key share' : 'no key update');
       if (!company) throw notFound('Company not found');

@@ -78,6 +78,28 @@ describe('human control HTTP contract with current named authority', () => {
     for (const token of ['', 'pcp_bad', 'pcpa_invalid', 'pcin_invalid', 'endpoint-invalid']) expect((await call(token, '/identity')).status).toBeGreaterThanOrEqual(400);
     const noKey = await fetch(`${base}/identity`); expect(noKey.status).toBe(403);
   });
+  it('refuses a foreign company prepare before taking that company\'s write lock (#883 review)', async () => {
+    const h = await human(), other = await human();
+    let release!: () => void;
+    const holding = new Promise<void>(resolve => { release = resolve; });
+    // A writer holds the foreign company's mutex. If prepare took the write
+    // lock before the access check it would queue behind this transaction.
+    let locked!: () => void;
+    const lockTaken = new Promise<void>(resolve => { locked = resolve; });
+    const writer = db.transaction(async tx => {
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, other.company.id)).for('no key update');
+      locked();
+      await holding;
+    });
+    await lockTaken;
+    try {
+      const started = Date.now();
+      const refused = await call(h.token, '/prepare', action({ kind: 'company', companyId: other.company.id }));
+      expect([403, 404]).toContain(refused.status);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(await db.select().from(humanActionHandles).where(eq(humanActionHandles.actorUserId, h.userId))).toEqual([]);
+    } finally { release(); await writer; }
+  });
   it('prepares without mutation, shows full readback and confirms only once on the pinned target', async () => {
     expect(bridgeAvailable).toBe(true);
     const h = await human(), other = await human();
@@ -438,6 +460,23 @@ describe('human control HTTP contract with current named authority', () => {
     } finally { failAfterWake = false; await bridge.close(); }
   });
 
+  it('marks the handle stale, not recovery_required, when a database error rolls the confirm back (#883 review)', async () => {
+    const h = await human();
+    const prepared = await call(h.token, '/prepare', action(h.target));
+    expect(prepared.status).toBe(200);
+    const realFactory = workforceModule.workforceService;
+    const spy = vi.spyOn(workforceModule, 'workforceService').mockImplementation(connection => {
+      const service = realFactory(connection);
+      return { ...service, updateBrief: async () => { throw Object.assign(new Error('deadlock detected'), { code: '40P01' }); } };
+    });
+    try {
+      const confirmed = await call(h.token, '/confirm', { target: h.target, handle: prepared.body.handle });
+      expect(confirmed.status).toBe(409);
+      expect(confirmed.body.details).toMatchObject({ status: 'stale', actionId: prepared.body.id });
+      expect((await db.select().from(humanActionHandles).where(eq(humanActionHandles.id, prepared.body.id)))[0].status).toBe('stale');
+      expect((await realFactory(db).getBrief(h.company.id)).revision).toBe(0);
+    } finally { spy.mockRestore(); }
+  });
   it('I3 persists the scoped enrollment before skill installation and exposes only an authorized SDK recovery reference', async () => {
     const h = await human();
     const [worker] = await db.insert(agents).values({ companyId: h.company.id, name: 'Skill recovery worker', adapterType: 'codex_local' }).returning();

@@ -76,6 +76,7 @@ describe('durable human confirmation handles', () => {
     const expiring = await svc.prepare({ ...binding, operationId: 'workforce.brief.publish', version: 1, payload: {}, preconditions: {} });
     await db.update(database.humanActionHandles).set({ expiresAt: new Date(0) }).where(eq(database.humanActionHandles.id, expiring.id));
     expect((await svc.get(expiring.handle, binding)).status).toBe('expired');
+    expect((await db.select().from(database.humanActionHandles).where(eq(database.humanActionHandles.id, expiring.id)))[0].payload).toEqual({});
     expect(await svc.claim(expiring.id)).toBeNull();
   });
 });
