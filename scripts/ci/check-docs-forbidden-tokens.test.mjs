@@ -36,6 +36,16 @@ test("the scan finds a hashed token at a word start, case-insensitively", () => 
   assert.deepEqual(forbiddenTokenOffsets("haystack only", needle), []);
 });
 
+test("a short listed name matches only where a word starts with it", () => {
+  // The name is already public in this repo's paths (scripts/ross/); the test
+  // pins that word-start windows keep a 4-letter token off ordinary words.
+  for (const fine of ["across the board", "gross margin", "crossover", "Across."]) {
+    assert.deepEqual(forbiddenTokenOffsets(fine), [], fine);
+  }
+  assert.equal(forbiddenTokenOffsets("Ask Ross first.").length, 1);
+  assert.equal(scanText("docs/x.md", "Line one.\nAsk Ross first.\n")[0]?.line, 2);
+});
+
 test("masking code keeps line numbers and blanks fences and spans", () => {
   const text = "a `b` c\n```sh\nd\n```\ne";
   const masked = maskCode(text);

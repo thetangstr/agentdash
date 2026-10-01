@@ -27,12 +27,12 @@ Each agent resolves to its own `visibility`, or the company default if that is n
 
 Who is exempt: company admins, instance admins and the local board see everything. Agents are not subject to the rule; they keep full visibility of their company. The rule applies to a person's session, board key and assistant grant.
 
-Issues follow the agents. When the company default is `owner`, a member sees an issue when a visible agent is assigned to it or created it, when they are assigned to it or created it, or when it is in a project they are listed on. When the default is `company`, a member sees every issue except those attributed to an agent hidden from them. The restricted-project rule still applies on top.
+Issues follow the agents. When the company default is `owner`, a member sees an issue when a visible agent is assigned to it or created it, when they are assigned to it or created it, or when it is in a project they created or are listed on. When the default is `company`, a member sees every issue except those attributed to an agent hidden from them. The restricted-project rule still applies on top.
 
 ## Hidden means 404, not 403
 
 A hidden agent answers **404** `Agent not found` on every `/api/agents/{id}` route, exactly as an id that does not exist (`assertAgentIdVisible`). Lists leave it out. A 403 would confirm the id is real, which is itself the leak.
 
-An unpaired stewarded agent in `owner` mode is visible to admins only until someone is paired with it.
+An unpaired stewarded agent in `owner` mode is visible only to admins and to the person who created it (`created_by_user_id`) until someone is paired with it.
 
 See also: [Agent kinds and stewardship](/guides/board-operator/agent-kinds-and-stewardship) · [Onboard a steward](/guides/board-operator/onboard-a-steward) · [Agents API](/api/agents) · [Conventions](/api/conventions) · [Stewardship](/concepts/stewardship)
