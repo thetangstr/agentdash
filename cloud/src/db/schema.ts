@@ -651,6 +651,8 @@ export const boxUpgrades = pgTable(
     snapshots: jsonb("snapshots").$type<Record<string, unknown>>(),
     deploymentId: text("deployment_id"),
     rollbackDeploymentId: text("rollback_deployment_id"),
+    /** When the rollback was asked of Railway, so a retry waits for it instead of asking twice. */
+    rollbackRequestedAt: timestamp("rollback_requested_at", { withTimezone: true }),
     /** Why it was skipped, failed or rolled back (redacted). */
     error: text("error"),
     lastHealth: jsonb("last_health").$type<Record<string, unknown>>(),

@@ -269,9 +269,13 @@ export async function pauseRollout(db: CloudDb, actor: string, reason = "paused 
   return { rolloutPaused: true, reason };
 }
 
-export async function resumeRollout(db: CloudDb, actor: string): Promise<Record<string, unknown>> {
+/**
+ * Clear the pause. A rollout started with "now" goes back to the nightly window
+ * after a pause: an operator who wants the rest outside the window says so again.
+ */
+export async function resumeRollout(db: CloudDb, actor: string, opts: { now?: boolean } = {}): Promise<Record<string, unknown>> {
   await settingsService(db).set("rollout_paused", false, actor);
-  await db.update(rollouts).set({ pausedReason: null, updatedAt: new Date() }).where(eq(rollouts.state, "running"));
+  await db.update(rollouts).set({ pausedReason: null, ignoreWindow: opts.now === true, updatedAt: new Date() }).where(eq(rollouts.state, "running"));
   const held = await db
     .select({ slug: boxes.slug })
     .from(boxUpgrades)

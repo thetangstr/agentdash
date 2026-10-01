@@ -16,6 +16,7 @@ CREATE TABLE "box_upgrades" (
 	"snapshots" jsonb,
 	"deployment_id" text,
 	"rollback_deployment_id" text,
+	"rollback_requested_at" timestamp with time zone,
 	"error" text,
 	"last_health" jsonb,
 	"started_at" timestamp with time zone,

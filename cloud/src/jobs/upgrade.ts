@@ -29,10 +29,14 @@ import { and, eq } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
 import { boxEvents, boxes, boxUpgrades, BOX_UPGRADE_DONE_STATES, rollouts, type BoxUpgradeState } from "../db/schema.js";
 import { redactString } from "../logger.js";
-import { DEPLOY_FAILED, deployService, getProject,latestDeployment, type ProjectDetail, updateServiceInstance, upsertVariables, variableNames } from "../railway/api.js";
+import { DEPLOY_FAILED, deleteDeploymentTrigger, deploymentTriggerIds, deployService, getProject, latestDeployment, type ProjectDetail, updateServiceInstance, upsertVariables, variableNames } from "../railway/api.js";
 import type { RailwayClient } from "../railway/client.js";
 import { GUARDED_SECRETS, PG_MOUNT, publicHost, WEB_MOUNT } from "../railway/provisioner.js";
-import { createVolumeBackup, getDeployment, rollbackDeployment } from "../railway/upgrade-api.js";
+import { createVolumeBackup, deployedArtifact, getDeployment, rollbackDeployment } from "../railway/upgrade-api.js";
+import { assertBoxProjectName, boxProjectName, ProjectNameRefused, projectTag } from "../railway/names.js";
+
+/** How long a rollback request may stay unlisted before the job asks Railway again. */
+const ROLLBACK_REQUEST_GRACE_MS = 3 * 60_000;
 import { settingsService } from "../settings.js";
 import type { Alerter } from "./alerts.js";
 import { FatalJobError } from "./errors.js";
@@ -57,7 +61,10 @@ export interface UpgradeDeps {
   edgeHealthWaitMs?: number;
 }
 
-/** Box states an upgrade may touch. A suspended box is upgraded after it resumes. */
+/**
+ * Box states an upgrade may touch. A suspended box is skipped (a rollout lists it as such);
+ * upgrade it with `boxes upgrade` once it is active again.
+ */
 export const UPGRADABLE_BOX_STATES = ["active", "awaiting_claim"] as const;
 
 const sleep = (ms: number, signal: AbortSignal) =>
@@ -106,7 +113,8 @@ export async function holdAndPause(db: CloudDb, up: UpgradeRow, reason: string, 
 }
 
 interface HealthExpect {
-  tag: string;
+  /** The release tag health must report; null when the box reported none (an old box rolled back). */
+  tag: string | null;
   commit: string | null;
 }
 
@@ -122,7 +130,8 @@ export function judgeHealth(status: number, body: Record<string, unknown> | null
   if (body.deploymentMode !== undefined && body.deploymentMode !== "authenticated") {
     return { ok: false, definitive: true, why: `deploymentMode=${String(body.deploymentMode)}`, body };
   }
-  if (body.releaseTag !== want.tag) return { ok: false, definitive: false, why: `releaseTag=${String(body.releaseTag ?? "none")}, expected ${want.tag}`, body };
+  const reported = typeof body.releaseTag === "string" && body.releaseTag !== "" ? body.releaseTag : null;
+  if (reported !== want.tag) return { ok: false, definitive: false, why: `releaseTag=${reported ?? "none"}, expected ${want.tag ?? "none"}`, body };
   const commit = typeof body.releaseCommit === "string" ? body.releaseCommit.toLowerCase() : null;
   if (commit && want.commit) {
     const w = want.commit.toLowerCase();
@@ -154,12 +163,38 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
     return row;
   };
 
+  // Every read of the recorded project re-checks the guards the provisioner and the delete path
+  // use (names.ts): the boxes workspace, a box project name (never a protected one), and this
+  // box's control-plane tag. A mistyped workspace or token can never point an upgrade elsewhere.
   const project = async (box: BoxRow, signal: AbortSignal) => {
     const p = await getProject(client, box.projectId!, { signal });
     if (p.workspaceId !== deps.workspaceId) {
       throw new FatalJobError(`recorded project ${p.id} is not in the boxes workspace; refusing to act on it`);
     }
+    try {
+      assertBoxProjectName(p.name);
+    } catch (err) {
+      if (err instanceof ProjectNameRefused) throw new FatalJobError(err.message);
+      throw err;
+    }
+    if (p.name !== boxProjectName(box.slug) || !(p.description ?? "").includes(projectTag(box.id))) {
+      throw new FatalJobError(`recorded project ${p.id} is not ${boxProjectName(box.slug)} with this box's tag; refusing to act on it`);
+    }
     return p;
+  };
+
+  /** The deployment must run exactly the expected artifact, per Railway's own record of it. */
+  const checkArtifact = async (ctx: JobContext, id: string, want: { digest: string | null; commit: string | null }): Promise<string | null> => {
+    const d = await getDeployment(client, id, { signal: ctx.signal });
+    const got = deployedArtifact(d?.meta ?? null);
+    if (want.digest && !got.digests.includes(want.digest)) {
+      return `deployment ${id} runs ${got.digests.length ? got.digests.join(", ") : "no recorded image digest"}, expected ${want.digest}`;
+    }
+    if (want.commit && got.commit && !(want.commit.toLowerCase().startsWith(got.commit) || got.commit.startsWith(want.commit.toLowerCase()))) {
+      return `deployment ${id} built commit ${got.commit}, expected ${want.commit}`;
+    }
+    if (want.commit && !want.digest && !got.commit) return `deployment ${id} records no commit, expected ${want.commit}`;
+    return null;
   };
 
   const event = (db: CloudDb, boxId: string, kind: string, detail: Record<string, unknown>) =>
@@ -204,7 +239,7 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
         }
         if (last.ok) break;
         if (last.definitive) return { ...last, why: `${url}: ${last.why}` };
-        if (Date.now() - started > capMs) return { ...last, why: `${url} did not report ${want.tag} within ${Math.round(capMs / 60_000)} min (${last.why})` };
+        if (Date.now() - started > capMs) return { ...last, why: `${url} did not report ${want.tag ?? "no release tag"} within ${Math.round(capMs / 60_000)} min (${last.why})` };
         await sleep(pollMs, ctx.signal);
       }
     }
@@ -321,7 +356,8 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
           // after the deploy call) is adopted, never doubled.
           const latest = await latestDeployment(client, box.projectId!, box.environmentId!, box.webServiceId!, { signal: ctx.signal });
           const since = up.startedAt ? up.startedAt.getTime() - 1000 : Number.POSITIVE_INFINITY;
-          if (latest && latest.id !== up.fromDeploymentId && Date.parse(latest.createdAt) >= since && !DEPLOY_FAILED.has(latest.status)) {
+          // A FAILED one is adopted too: it is this upgrade's deploy, and it leads to the rollback.
+          if (latest && latest.id !== up.fromDeploymentId && Date.parse(latest.createdAt) >= since) {
             id = latest.id;
           } else {
             id = await deployService(client,box.webServiceId!, box.environmentId!, null, { signal: ctx.signal });
@@ -330,6 +366,9 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
         }
         const r = await awaitDeployment(ctx, id, deployWaitMs);
         if (!r.ok) return void (await startRollback(ctx, { ...up, deploymentId: id }, r.why));
+        // Health reads AGENTDASH_RELEASE_TAG, which this job sets itself; the image is proven here.
+        const wrong = await checkArtifact(ctx, id, { digest: up.toDigest, commit: null });
+        if (wrong) return void (await startRollback(ctx, { ...up, deploymentId: id }, wrong));
         await event(ctx.db, box.id, "upgrade_deployed", { upgradeId: up.id, deploymentId: id });
       }),
 
@@ -356,19 +395,37 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
         const P = box.projectId!;
         const E = box.environmentId!;
         const W = box.webServiceId!;
-        const source =
-          up.fromBuildSource === "source" ? { repo: deps.sourceRepo } : up.fromDigest ? { image: `${deps.imageRepo}@${up.fromDigest}` } : null;
+        await project(box, ctx.signal);
+        // A source-built box goes back to its pinned commit, never the repository's HEAD.
+        const fromSource = up.fromBuildSource === "source";
+        const source = fromSource ? { repo: deps.sourceRepo } : up.fromDigest ? { image: `${deps.imageRepo}@${up.fromDigest}` } : null;
         if (source) await updateServiceInstance(client, W, E, { source }, { signal: ctx.signal });
-        if (up.fromTag) await upsertVariables(client, P, E, W, { AGENTDASH_RELEASE_TAG: up.fromTag }, { signal: ctx.signal });
+        if (fromSource) {
+          // Setting a repository source adds a push trigger; a source-built box must never redeploy on a push.
+          for (const t of await deploymentTriggerIds(client, P, E, W, { signal: ctx.signal })) await deleteDeploymentTrigger(client, t, { signal: ctx.signal });
+        }
+        // The previous value, or empty when the box had none (health then reports no tag, as before).
+        await upsertVariables(client, P, E, W, { AGENTDASH_RELEASE_TAG: up.fromTag ?? "" }, { signal: ctx.signal });
         if (!up.deploymentId || up.rollbackDeploymentId) return;
         if (!up.fromDeploymentId) throw new FatalJobError("no previous deployment recorded to roll back to");
         const isRollback = (d: { id: string; createdAt: string } | null) =>
           d !== null && d.id !== up.deploymentId && d.id !== up.fromDeploymentId && Date.parse(d.createdAt) >= (up.startedAt?.getTime() ?? 0) - 1000;
         let latest = await latestDeployment(client, P, E, W, { signal: ctx.signal });
         if (!isRollback(latest)) {
-          await rollbackDeployment(client, up.fromDeploymentId, { signal: ctx.signal });
-          latest = await latestDeployment(client, P, E, W, { signal: ctx.signal });
-          if (!isRollback(latest)) throw new Error("Railway did not list the rollback deployment yet; retrying");
+          // Ask Railway once; a retry waits for the deployment that request made, and asks
+          // again only if none has appeared after ROLLBACK_REQUEST_GRACE_MS.
+          const askedAt = up.rollbackRequestedAt?.getTime() ?? null;
+          if (askedAt === null || Date.now() - askedAt > ROLLBACK_REQUEST_GRACE_MS) {
+            await patchUpgrade(ctx.db, up.id, { rollbackRequestedAt: new Date() });
+            if (fromSource && up.fromSourceCommit) {
+              const id = await deployService(client, W, E, up.fromSourceCommit, { signal: ctx.signal });
+              await patchUpgrade(ctx.db, up.id, { rollbackDeploymentId: id });
+              return;
+            }
+            await rollbackDeployment(client, up.fromDeploymentId, { signal: ctx.signal });
+            latest = await latestDeployment(client, P, E, W, { signal: ctx.signal });
+          }
+          if (!isRollback(latest)) throw new Error("Railway does not list the rollback deployment yet; retrying");
         }
         await patchUpgrade(ctx.db, up.id, { rollbackDeploymentId: latest!.id });
       }),
@@ -378,8 +435,15 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
         if (up.rollbackDeploymentId) {
           const d = await awaitDeployment(ctx, up.rollbackDeploymentId, deployWaitMs);
           if (!d.ok) why = `rollback ${d.why}`;
+          if (!why) {
+            const wrong = await checkArtifact(ctx, up.rollbackDeploymentId, {
+              digest: up.fromBuildSource === "source" ? null : up.fromDigest,
+              commit: up.fromBuildSource === "source" ? up.fromSourceCommit : null,
+            });
+            if (wrong) why = `rollback ${wrong}`;
+          }
         }
-        if (!why && up.deploymentId && up.fromTag) {
+        if (!why && up.deploymentId) {
           const h = await awaitRelease(ctx, box, { tag: up.fromTag, commit: null });
           if (!h.ok) why = `rollback health: ${h.why}`;
         }

@@ -27,7 +27,8 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   rollout start [--now]      roll target_release out: canary, then 10% oldest-first, then batches of 5,
                              in the nightly window (--now: start waves outside the window)
   rollout pause [reason]     stop starting new upgrades (sets rollout_paused)
-  rollout resume             clear rollout_paused; failed boxes stay held until unheld
+  rollout resume [--now]     clear rollout_paused; failed boxes stay held until unheld; the rest waits for
+                             the window again unless --now
   rollout cancel             drop the rollout's remaining planned boxes
   rollout tick               run one orchestrator pass now (it also runs every minute)
   boxes retry <slug>         resume a failed box's provision job at its failed step
@@ -149,7 +150,8 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
     if (action === "status" && args.length === 0) return print(await call("GET", "/rollout"));
     if (action === "start" && args.length === 0) return print(await call("POST", "/rollout/start", { now }));
     if (action === "pause" && args.length <= 1) return print(await call("POST", "/rollout/pause", args[0] ? { reason: args[0] } : {}));
-    if ((action === "resume" || action === "cancel" || action === "tick") && args.length === 0) return print(await call("POST", `/rollout/${action}`));
+    if (action === "resume" && args.length === 0) return print(await call("POST", "/rollout/resume", { now }));
+    if ((action === "cancel" || action === "tick") && args.length === 0) return print(await call("POST", `/rollout/${action}`));
   }
   if (group === "boxes" && (action === "retry" || action === "abandon") && rest.length === 1) {
     return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));

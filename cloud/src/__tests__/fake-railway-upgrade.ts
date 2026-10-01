@@ -9,6 +9,8 @@ import { type BoxFakeOptions, type FakeService, FakeRailwayBoxes } from "./fake-
 export interface DeploySnapshot {
   serviceId: string;
   image: string | null;
+  repo?: string | null;
+  commit?: string | null;
   variables: Record<string, string>;
   rollbackOf?: string;
 }
@@ -26,6 +28,8 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
   /** Statuses the next deployments reach, in order (then opts.deployOutcome, then SUCCESS). */
   readonly nextOutcomes: string[] = [];
   healthHook: HealthHook | null = null;
+  /** Rewrites what deployment(id) reports in `meta` (e.g. a different image than the one asked for). */
+  metaHook: ((meta: Record<string, unknown>, snap: DeploySnapshot | null) => Record<string, unknown> | null) | null = null;
 
   constructor(opts: BoxFakeOptions = {}) {
     super(opts);
@@ -36,7 +40,11 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
         resolve: (v) => {
           for (const s of this.services.values()) {
             const d = s.deployments.find((x) => x.id === v.id);
-            if (d) return { deployment: { id: d.id, status: d.status, createdAt: d.createdAt } };
+            if (d) {
+              const snap = this.snapshots.get(d.id);
+              const meta = snap?.image ? { image: snap.image } : { repo: snap?.repo ?? null, commitHash: snap?.commit ?? d.commitSha };
+              return { deployment: { id: d.id, status: d.status, createdAt: d.createdAt, meta: this.metaHook?.(meta, snap ?? null) ?? meta } };
+            }
           }
           return { deployment: null };
         },
@@ -71,7 +79,7 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
     const id = this.nextId("dep");
     const status = this.nextOutcomes.shift() ?? this.opts.deployOutcome ?? "SUCCESS";
     s.deployments.push({ id, status, createdAt: new Date().toISOString(), commitSha });
-    this.snapshots.set(id, { serviceId: s.id, image: s.source?.image ?? null, variables: { ...s.variables } });
+    this.snapshots.set(id, { serviceId: s.id, image: s.source?.image ?? null, repo: s.source?.repo ?? null, commit: commitSha, variables: { ...s.variables } });
     return id;
   }
 

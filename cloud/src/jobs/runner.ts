@@ -21,6 +21,9 @@
 //     error and writes a box event.
 //   - Kill switch: while provisioning_enabled is false the runner claims no
 //     provision job (other kinds keep running).
+//   - Per box: a job is not claimed while another job of the same box holds a
+//     live lease, nor (unless it is the upgrade itself) while the box has an
+//     upgrade running or rolling back (SC-12, GH #773).
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
@@ -218,6 +221,13 @@ export class JobRunner {
           select id from jobs
            where kind in (${kindList})
              and ((state = 'queued' and run_after <= now()) or (state = 'running' and locked_until < now()))
+             -- AgentDash (SC-12, GH #773): one job at a time per box, whatever its kind, and no
+             -- other kind on a box whose upgrade is mid-flight (between its retries, too).
+             and not exists (
+               select 1 from jobs o
+                where o.box_id = jobs.box_id and o.id <> jobs.id and o.state = 'running' and o.locked_until > now())
+             and (kind = 'upgrade' or not exists (
+               select 1 from box_upgrades u where u.box_id = jobs.box_id and u.state in ('running', 'rolling_back')))
            order by run_after, created_at
            limit 1
            for update skip locked

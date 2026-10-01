@@ -391,6 +391,118 @@ describe("upgrading one box", () => {
   });
 });
 
+// ---- Review fixes (#898) -----------------------------------------------------
+
+const MUTATIONS = ["serviceInstanceUpdate", "variableCollectionUpsert", "volumeInstanceBackupCreate", "serviceInstanceDeployV2", "deploymentRollback"];
+
+describe("upgrade guards", () => {
+  it.each([
+    ["a project without this box's tag", (p: { description: string | null }) => void (p.description = "someone else's project")],
+    ["a protected project", (p: { name: string }) => void (p.name = "agentdash")],
+  ])("refuses %s before changing anything", async (_label, tamper) => {
+    const env = setup();
+    const box = await activeBox(env);
+    tamper(env.fake.projects.get(box.projectId!)! as never);
+    const from = env.fake.calls.length;
+    await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state).toBe("failed");
+    expect(up.error).toMatch(/refusing/);
+    expect(env.fake.calls.slice(from).map((c) => c.op).filter((op) => MUTATIONS.includes(op))).toEqual([]);
+    expect(env.fake.backupsTaken).toEqual([]);
+    expect((await boxRow(box.id)).holdUpgrades).toBe(true);
+  });
+
+  it("rolls back when Railway's record of the deployment names another image than the release's digest", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    // Health would report the new tag (the job set the variable), but the deployment runs the old image.
+    env.fake.metaHook = (meta) => (String(meta.image ?? "").includes(digestFor(NEW)) ? { image: `${IMAGE_REPO}@${digestFor(OLD)}` } : null);
+    await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("rolled_back");
+    expect(up.error).toBe(`deployment ${up.deploymentId} runs ${digestFor(OLD)}, expected ${digestFor(NEW)}`);
+    expect((await boxRow(box.id)).releaseTag).toBe(OLD);
+  });
+
+  it("rolls a box that reported no release tag back to no tag, and verifies it by digest", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const web = env.fake.webOf(box.slug);
+    delete web.variables.AGENTDASH_RELEASE_TAG;
+    env.fake.deploy(web, null);
+    await db.update(boxes).set({ releaseTag: null }).where(eq(boxes.id, box.id));
+    env.fake.nextOutcomes.push("FAILED");
+    await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("rolled_back");
+    expect(web.variables.AGENTDASH_RELEASE_TAG).toBe("");
+    expect(env.fake.running(web)!.image).toBe(`${IMAGE_REPO}@${digestFor(OLD)}`);
+  });
+
+  it("rolls a source-built box back to its pinned commit, never the repository's HEAD", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const web = env.fake.webOf(box.slug);
+    const commit = "a".repeat(40);
+    web.source = { repo: SOURCE_REPO };
+    env.fake.deploy(web, commit);
+    await db.update(boxes).set({ buildSource: "source", sourceCommit: commit, imageDigest: null }).where(eq(boxes.id, box.id));
+    env.fake.nextOutcomes.push("FAILED");
+    await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("rolled_back");
+    expect(web.source).toEqual({ repo: SOURCE_REPO });
+    expect(web.triggers).toEqual([]);
+    expect(web.deployments.at(-1)).toMatchObject({ id: up.rollbackDeploymentId, commitSha: commit, status: "SUCCESS" });
+    expect(env.fake.calls.some((c) => c.op === "deploymentRollback")).toBe(false);
+  });
+
+  it("asks Railway for a rollback once, and again only after the grace period", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const web = env.fake.webOf(box.slug);
+    const r = await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, String(r.jobId)));
+    const ctx: JobContext = { db, job: job!, log, signal: new AbortController().signal, box: () => boxRow(box.id) };
+    const run = (name: string) => env.upgrade.steps.find((s) => s.name === name)!.run(ctx);
+    for (const name of ["prepare", "snapshot", "point", "variables"]) await run(name);
+    const up = await upgradeOf(box.id);
+    const dep = env.fake.deploy(web, null);
+    // A rollback was asked for a moment ago and Railway does not list it yet: do not ask again.
+    await db.update(boxUpgrades).set({ state: "rolling_back", deploymentId: dep, rollbackRequestedAt: new Date() }).where(eq(boxUpgrades.id, up.id));
+    await expect(run("rollback")).rejects.toThrow(/does not list the rollback deployment yet/);
+    expect(env.fake.calls.filter((c) => c.op === "deploymentRollback")).toHaveLength(0);
+    await db.update(boxUpgrades).set({ rollbackRequestedAt: new Date(Date.now() - 10 * 60_000) }).where(eq(boxUpgrades.id, up.id));
+    await run("rollback");
+    await run("rollback");
+    expect(env.fake.calls.filter((c) => c.op === "deploymentRollback")).toHaveLength(1);
+    expect((await upgradeOf(box.id)).rollbackDeploymentId).toBe(web.deployments.at(-1)!.id);
+  });
+
+  it("serialises jobs per box: nothing else runs on a box mid-upgrade, or while another of its jobs holds a lease", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    let ran = 0;
+    const runner = new JobRunner({ db, log, handlers: [{ kind: "close_signup", steps: [{ name: "x", timeoutMs: 5_000, run: async () => void (ran += 1) }] }] });
+    const [up] = await db.insert(boxUpgrades).values({ boxId: box.id, state: "running", toTag: NEW, toDigest: digestFor(NEW) }).returning();
+    const { enqueueJob } = await import("../jobs/queue.js");
+    await enqueueJob(db, { boxId: box.id, kind: "close_signup" });
+    expect(await runner.runOnce()).toBeNull();
+    await db.update(boxUpgrades).set({ state: "succeeded" }).where(eq(boxUpgrades.id, up!.id));
+    const other = await enqueueJob(db, { boxId: box.id, kind: "delete" });
+    await db.update(jobs).set({ state: "running", lockedBy: "w-other", lockedUntil: new Date(Date.now() + 60_000) }).where(eq(jobs.id, other.id));
+    expect(await runner.runOnce()).toBeNull();
+    await db.update(jobs).set({ state: "dead" }).where(eq(jobs.id, other.id));
+    expect(await runner.runOnce()).not.toBeNull();
+    expect(ran).toBe(1);
+  });
+});
+
 // ---- Rollouts --------------------------------------------------------------
 
 describe("a fleet rollout", () => {
@@ -460,7 +572,7 @@ describe("a fleet rollout", () => {
     expect(status.rollout.pausedReason).toMatch(new RegExp(`^${failed.slug}: deployment .* ended FAILED`));
 
     // Resume: the failed box stays held; the rest of wave 2, then wave 3, then done.
-    expect(await resumeRollout(db, "test")).toMatchObject({ rolloutPaused: false, stillHeld: [failed.slug] });
+    expect(await resumeRollout(db, "test", { now: true })).toMatchObject({ rolloutPaused: false, stillHeld: [failed.slug] });
     expect(await tickRollout(db)).toMatchObject({ action: "started_wave", wave: 2, queued: slugs.slice(3, 6) });
     await drain(env.runner);
     expect(await tickRollout(db)).toMatchObject({ action: "started_wave", wave: 3, queued: [slugs[6]] });
@@ -512,6 +624,11 @@ describe("a fleet rollout", () => {
     expect(await settingsService(db).get("rollout_paused")).toBe(true);
     const [r] = await db.select().from(rollouts).where(eq(rollouts.id, String(started.rolloutId)));
     expect(r!.pausedReason).toMatch(/ended dead without settling: boom/);
+    // Started with "now", but a plain resume sends the rest back to the nightly window.
+    expect(r!.ignoreWindow).toBe(true);
+    await resumeRollout(db, "test");
+    const [after] = await db.select().from(rollouts).where(eq(rollouts.id, String(started.rolloutId)));
+    expect(after).toMatchObject({ ignoreWindow: false, pausedReason: null });
   });
 });
 
@@ -522,6 +639,11 @@ describe("operator routes for purpose, hold, upgrade and rollout", () => {
     const env = setup();
     const app = express();
     app.use(express.json());
+    // What requireAdmin records for an allow-listed caller.
+    app.use((_req, res, next) => {
+      res.locals.adminIp = "10.0.0.9";
+      next();
+    });
     app.use("/internal", internalRoutes(db, log, { fleet: env.resolver }));
     const slug = `demo-${randomUUID().slice(0, 6)}`;
     const created = await request(app).post("/internal/boxes").send({ slug, email: `${slug}@example.test`, purpose: "demo" });
@@ -533,6 +655,8 @@ describe("operator routes for purpose, hold, upgrade and rollout", () => {
     expect((await request(app).post(`/internal/boxes/${slug}/purpose`).send({ purpose: "canary" })).body).toMatchObject({ purpose: "canary", previous: "demo" });
     expect((await request(app).post(`/internal/boxes/${slug}/unhold`)).body).toEqual({ holdUpgrades: false });
     expect((await request(app).post(`/internal/boxes/${slug}/hold`)).body).toEqual({ holdUpgrades: true });
+    const [held] = await db.select().from(boxEvents).where(and(eq(boxEvents.kind, "upgrades_held"), eq(boxEvents.actor, "admin-cli@10.0.0.9")));
+    expect(held).toBeTruthy();
     expect((await request(app).post(`/internal/boxes/no-such-box/hold`)).status).toBe(404);
     // The box is still provisioning, so it cannot be upgraded.
     expect((await request(app).post(`/internal/boxes/${slug}/upgrade`).send({ now: true })).status).toBe(409);
