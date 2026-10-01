@@ -31,6 +31,8 @@ A body that fails its schema answers 400 with the failing fields:
 { "error": "Validation error", "details": [{ "code": "invalid_type", "expected": "string", "received": "undefined", "path": ["title"], "message": "Required" }] }
 ```
 
+A body that is not JSON at all answers **500** `Internal server error` today, not 400: the JSON body parser's error reaches the error handler unmapped (`server/src/middleware/error-handler.ts`). This is filed as a server bug; do not rely on the 500.
+
 Some errors add `details` or a machine-readable `code`. Match on the status code, then on `code` where one is documented; the `error` text is for people and may change.
 
 | Status | Means |

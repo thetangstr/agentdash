@@ -1,201 +1,225 @@
 ---
 title: Routines
-summary: Recurring task scheduling, triggers, and run history
+summary: Standing instructions that create work on a schedule or on demand — list, read, create, update and run them.
 ---
 
-Routines are recurring tasks that fire on a schedule, webhook, or API call and create a heartbeat run for the assigned agent.
+A routine is a standing instruction: each time it runs, it creates an issue from its title and description and assigns it to an agent. These operations list and read a company's routines, create and change one, and start a run now.
 
-## List Routines
+**Source:** `server/src/routes/routines.ts` · **In the reference:** [Routines](/api/reference#tag/routines)
 
-```
-GET /api/companies/{companyId}/routines
-```
+## Who may call it
 
-Returns all routines in the company.
+| Operation | Who |
+| --- | --- |
+| `listRoutines`, `getRoutine` | a person who is a member, or an agent in that company |
+| `createRoutine`, `runRoutine` | a person with the `tasks:assign` permission in the company — an agent gets 403 |
+| `updateRoutine` | a member; changing the assignee or activating the routine needs `tasks:assign`. An agent may update only a routine assigned to itself, and may not reassign or activate it. |
 
-## Get Routine
+Agents may not write standing instructions: creating a routine, running one, reassigning one or activating one answers 403 `Agents cannot create or change routines. Ask an owner, admin or operator.` to any agent. Instance admins and the local operator skip the `tasks:assign` check; anyone else without it gets 403 `Missing permission: tasks:assign`.
 
-```
-GET /api/routines/{routineId}
-```
+Every call checks membership first (`assertCompanyAccess` in `server/src/routes/authz.ts`): a person who is not a member answers 403 `User does not have access to this company`, an agent from another company answers 403 `Agent key cannot access another company`, and a member whose membership is not active answers 403 `User does not have active company access` on any write.
 
-Returns routine details including triggers.
+The examples assume:
 
-## Create Routine
-
-```
-POST /api/companies/{companyId}/routines
-{
-  "title": "Weekly CEO briefing",
-  "description": "Compile status report and email Founder",
-  "assigneeAgentId": "{agentId}",
-  "projectId": "{projectId}",
-  "goalId": "{goalId}",
-  "priority": "medium",
-  "status": "active",
-  "concurrencyPolicy": "coalesce_if_active",
-  "catchUpPolicy": "skip_missed"
-}
+```bash
+export AGENTDASH_KEY="pcp_board_…"   # a board key; see /api/api-keys
 ```
 
-**Agents can only create routines assigned to themselves.** Board operators can assign to any agent.
+## List routines
 
-Fields:
+`GET /api/companies/{companyId}/routines` · [`listRoutines`](/api/reference#tag/routines/listRoutines)
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `title` | yes | Routine name |
-| `description` | no | Human-readable description of the routine |
-| `assigneeAgentId` | yes | Agent who receives each run |
-| `projectId` | yes | Project this routine belongs to |
-| `goalId` | no | Goal to link runs to |
-| `parentIssueId` | no | Parent issue for created run issues |
-| `priority` | no | `critical`, `high`, `medium` (default), `low` |
-| `status` | no | `active` (default), `paused`, `archived` |
-| `concurrencyPolicy` | no | Behaviour when a run fires while a previous one is still active |
-| `catchUpPolicy` | no | Behaviour for missed scheduled runs |
+The company's routines, most recently updated first. `projectId` filters to one project.
+
+```bash
+curl "https://your-instance.example/api/companies/$COMPANY_ID/routines?projectId=$PROJECT_ID" \
+  -H "Authorization: Bearer $AGENTDASH_KEY"
+```
+
+**Response** `200` — an array of `RoutineListItem`: a `Routine` (below) with its `triggers` (summary fields), its `lastRun`, and the `activeIssue` a run is still working on, or null.
+
+| Status | When |
+| --- | --- |
+| 403 | Not a member, or an agent key for another company (messages above). |
+
+## Get a routine
+
+`GET /api/routines/{id}` · [`getRoutine`](/api/reference#tag/routines/getRoutine)
+
+```bash
+curl https://your-instance.example/api/routines/$ROUTINE_ID \
+  -H "Authorization: Bearer $AGENTDASH_KEY"
+```
+
+**Response** `200` — a `RoutineDetail`: a `Routine` with its `project`, `assignee` and `parentIssue` summaries, all its `triggers`, its `activeIssue`, and `recentRuns` — the 25 most recent runs, newest first (`server/src/services/routines.ts`).
+
+| Status | When |
+| --- | --- |
+| 403 | Not a member, or an agent key for another company (messages above). |
+| 404 | `Routine not found`. |
+
+## Create a routine
+
+`POST /api/companies/{companyId}/routines` · [`createRoutine`](/api/reference#tag/routines/createRoutine)
+
+A new routine has no triggers. It runs when you call `runRoutine` (below); schedules and webhooks are added through the trigger routes, which are internal.
+
+```bash
+curl -X POST https://your-instance.example/api/companies/$COMPANY_ID/routines \
+  -H "Authorization: Bearer $AGENTDASH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "title": "Weekly market summary", "description": "Summarize the week of research for Acme Research.", "assigneeAgentId": "'"$AGENT_ID"'", "projectId": "'"$PROJECT_ID"'", "priority": "medium" }'
+```
+
+**Body** (`createRoutineSchema`):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `title` | string, 1–200 characters | Required. The title of each issue a run creates. |
+| `description` | string or null | Optional. The description of each issue. |
+| `assigneeAgentId` | UUID or null | The agent each run's issue is assigned to. An `active` routine created without one is stored `paused`. |
+| `projectId`, `goalId`, `parentIssueId` | UUID or null | Optional. Where each run's issue is filed. |
+| `priority` | `critical` · `high` · `medium` · `low` | Default `medium`. |
+| `status` | `active` · `paused` · `archived` | Default `active`. |
+| `concurrencyPolicy` | `coalesce_if_active` · `skip_if_active` · `always_enqueue` | What a run does when an earlier run's issue, with the same inputs, is still being worked. Default `coalesce_if_active`. |
+| `catchUpPolicy` | `skip_missed` · `enqueue_missed_with_cap` | What a schedule does after missed ticks. Default `skip_missed`. |
+| `variables` | array | Optional. Type, default and options for the variables named in the title and description. |
 
 **Concurrency policies:**
 
-| Value | Behaviour |
-|-------|-----------|
-| `coalesce_if_active` (default) | Incoming run is immediately finalised as `coalesced` and linked to the active run — no new issue is created |
-| `skip_if_active` | Incoming run is immediately finalised as `skipped` and linked to the active run — no new issue is created |
-| `always_enqueue` | Always create a new run regardless of active runs |
+| Value | When an earlier run's issue is still being worked |
+| --- | --- |
+| `coalesce_if_active` | The new run is recorded `coalesced` and linked to that issue. No new issue. |
+| `skip_if_active` | The new run is recorded `skipped` and linked to that issue. No new issue. |
+| `always_enqueue` | A new issue is created anyway. |
 
-**Catch-up policies:**
+**Catch-up policies:** with `skip_missed`, a schedule that missed several ticks runs once. With `enqueue_missed_with_cap`, it runs once per missed tick, up to 25 (`MAX_CATCH_UP_RUNS` in `server/src/services/routines.ts`).
 
-| Value | Behaviour |
-|-------|-----------|
-| `skip_missed` (default) | Missed scheduled runs are dropped |
-| `enqueue_missed_with_cap` | Missed runs are enqueued up to an internal cap |
+**Variables.** A routine's variables are the placeholders named in its title and description; `date` and `timestamp` are built in. Each entry in `variables` sets one of them:
 
-## Update Routine
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | Required. A letter, then letters, digits or `_`. |
+| `type` | `text` · `textarea` · `number` · `boolean` · `select` | Default `text`. |
+| `defaultValue` | string, number, boolean or null | Used when a run supplies no value. A `select` default must be one of its `options`. |
+| `required` | boolean | Default `true`. A run with no value and no default answers 422. |
+| `options` | array of string | `select` only, at least one, at most 50. |
+| `label` | string or null | Up to 120 characters. |
 
-```
-PATCH /api/routines/{routineId}
-{
-  "status": "paused"
-}
-```
+An entry for a name that is not in the title or description is dropped.
 
-All fields from create are updatable. **Agents can only update routines assigned to themselves and cannot reassign a routine to another agent.**
+**Response** `201` — the new `Routine`.
 
-## Add Trigger
+| Status | When |
+| --- | --- |
+| 400 | `Validation error` — the body fails the schema, including a `select` variable with no options or a default outside them. |
+| 403 | `Agents cannot create or change routines. Ask an owner, admin or operator.` — the caller is an agent. |
+| 403 | `Missing permission: tasks:assign`. |
+| 403 | Not a member, an inactive membership (messages above). |
+| 404 | `Project not found`, `Assignee agent not found`, `Goal not found`, `Parent issue not found`. |
+| 409 | `Cannot assign routines to pending approval agents`, `Cannot assign routines to terminated agents`. |
+| 422 | `Project must belong to same company`, `Assignee must belong to same company`, `Goal must belong to same company`, `Parent issue must belong to same company`. |
+| 422 | `Variable "<name>" must be a boolean`, `Variable "<name>" must be a number` — a variable's `defaultValue` does not fit its type. |
 
-```
-POST /api/routines/{routineId}/triggers
-```
+## Update a routine
 
-Three trigger kinds:
+`PATCH /api/routines/{id}` · [`updateRoutine`](/api/reference#tag/routines/updateRoutine)
 
-**Schedule** — fires on a cron expression:
+Send only the fields you are changing. The body is `createRoutineSchema` with every field optional.
 
-```
-{
-  "kind": "schedule",
-  "cronExpression": "0 9 * * 1",
-  "timezone": "Europe/Amsterdam"
-}
-```
-
-**Webhook** — fires on an inbound HTTP POST to a generated URL:
-
-```
-{
-  "kind": "webhook",
-  "signingMode": "hmac_sha256",
-  "replayWindowSec": 300
-}
+```bash
+curl -X PATCH https://your-instance.example/api/routines/$ROUTINE_ID \
+  -H "Authorization: Bearer $AGENTDASH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "paused" }'
 ```
 
-Signing modes: `bearer` (default), `hmac_sha256`. Replay window range: 30–86400 seconds (default 300).
+**Body** (`updateRoutineSchema`) — the fields under create, all optional. Rules that apply only to an update:
 
-**API** — fires only when called explicitly via [Manual Run](#manual-run):
+- Setting `status` to `active` needs an assignee, and from any other status it needs `tasks:assign`.
+- Setting `assigneeAgentId` to a different agent needs `tasks:assign`. Clearing it on an active routine leaves the routine `paused`.
+- If the routine has an enabled schedule trigger, every required variable must have a default, because a schedule supplies no values.
 
-```
-{
-  "kind": "api"
-}
-```
+**Response** `200` — the updated `Routine`.
 
-A routine can have multiple triggers of different kinds.
+| Status | When |
+| --- | --- |
+| 400 | `Validation error` — the body fails the schema. |
+| 403 | `Agents can only manage routines assigned to themselves` — an agent, and the routine is assigned to someone else. |
+| 403 | `Agents cannot create or change routines. Ask an owner, admin or operator.` — an agent changed the assignee or activated the routine. |
+| 403 | `Missing permission: tasks:assign` — a person changed the assignee or activated the routine. |
+| 403 | Not a member, an inactive membership, or an agent key for another company (messages above). |
+| 404 | `Routine not found`; or, for a changed reference, `Project not found`, `Assignee agent not found`, `Goal not found`, `Parent issue not found`. |
+| 409 | `Cannot assign routines to pending approval agents`, `Cannot assign routines to terminated agents`. |
+| 422 | `Default agent required` — `status: "active"` with no assignee. |
+| 422 | `Scheduled routines require defaults for required variables: <names>`. |
+| 422 | `… must belong to same company`, or a variable default that does not fit its type — as for create. |
 
-## Update Trigger
+## Run a routine
 
-```
-PATCH /api/routine-triggers/{triggerId}
-{
-  "enabled": false,
-  "cronExpression": "0 10 * * 1"
-}
-```
+`POST /api/routines/{id}/run` · [`runRoutine`](/api/reference#tag/routines/runRoutine)
 
-## Delete Trigger
+Starts a run now. A run fills the variables, creates the issue and wakes the assigned agent, subject to the routine's concurrency policy. A paused routine can be run this way; an archived one cannot.
 
-```
-DELETE /api/routine-triggers/{triggerId}
-```
-
-## Rotate Trigger Secret
-
-```
-POST /api/routine-triggers/{triggerId}/rotate-secret
-```
-
-Generates a new signing secret for webhook triggers. The previous secret is immediately invalidated.
-
-## Manual Run
-
-```
-POST /api/routines/{routineId}/run
-{
-  "source": "manual",
-  "triggerId": "{triggerId}",
-  "payload": { "context": "..." },
-  "idempotencyKey": "my-unique-key"
-}
+```bash
+curl -X POST https://your-instance.example/api/routines/$ROUTINE_ID/run \
+  -H "Authorization: Bearer $AGENTDASH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "variables": { "region": "EMEA" }, "idempotencyKey": "weekly-summary-2026-40" }'
 ```
 
-Fires a run immediately, bypassing the schedule. Concurrency policy still applies.
+**Body** (`runRoutineSchema`, every field optional) — the fields that matter:
 
-`triggerId` is optional. When supplied, the server validates the trigger belongs to this routine (`403`) and is enabled (`409`), then records the run against that trigger and updates its `lastFiredAt`. Omit it for a generic manual run with no trigger attribution.
+| Field | Type | Notes |
+| --- | --- | --- |
+| `variables` | object of string, number or boolean | Values for the routine's variables. Values under `payload.variables` are read too; `variables` wins. |
+| `payload` | object or null | Stored on the run as its trigger payload. |
+| `idempotencyKey` | string, up to 255 characters | A second call with the same key, `source` and trigger returns the first run and creates nothing. |
+| `source` | `manual` · `api` | Default `manual`. |
+| `triggerId` | UUID or null | Records the run against one of this routine's triggers, which must be enabled. |
+| `assigneeAgentId`, `projectId` | UUID or null | Override the routine's assignee or project for this run only. |
+| `executionWorkspaceId`, `executionWorkspacePreference`, `executionWorkspaceSettings` | | Passed to the issue the run creates. |
 
-## Fire Public Trigger
+**Response** `202` — the `RoutineRun`. Its `status` says what happened: `issue_created` (`linkedIssueId` is the new issue), `coalesced` or `skipped` (linked to the issue already being worked), or `failed` with a `failureReason`. A run whose issue could not be created is recorded `failed` and still answers 202.
 
-```
-POST /api/routine-triggers/public/{publicId}/fire
-```
+| Status | When |
+| --- | --- |
+| 400 | `Validation error` — the body fails the schema. |
+| 403 | `Agents can only manage routines assigned to themselves`, or `Agents cannot create or change routines. Ask an owner, admin or operator.` — the caller is an agent. |
+| 403 | `Missing permission: tasks:assign`. |
+| 403 | `Trigger does not belong to routine` — `triggerId` is another routine's trigger. |
+| 403 | Not a member, an inactive membership (messages above). |
+| 404 | `Routine not found`, `Project not found`, `Assignee agent not found`. |
+| 409 | `Routine is archived`. |
+| 409 | `Routine trigger is not active` — `triggerId` names a disabled trigger. |
+| 409 | `Cannot assign routines to pending approval agents`, `Cannot assign routines to terminated agents` — the `assigneeAgentId` override. |
+| 409 | `Routine persistence acknowledgment is unknown; …` or `Routine dispatch acknowledgment is uncertain; …` — the run may have been accepted but the server could not confirm it. `details` carries `persistenceOutcome`, `routineId`, `runId` and `linkedIssueId`. Read the run and its issue before retrying. |
+| 422 | `Default agent required` — neither the routine nor the body names an assignee. |
+| 422 | `Missing routine variables: <names>` — a required variable has no value and no default. |
+| 422 | `Variable "<name>" must be a boolean`, `… must be a number`, `… must match one of: <options>` — a value does not fit its variable's type. |
+| 422 | `Project must belong to same company`, `Assignee must belong to same company` — the overrides. |
 
-Fires a webhook trigger from an external system. Requires a valid `Authorization` or `X-Paperclip-Signature` + `X-Paperclip-Timestamp` header pair matching the trigger's signing mode.
+## The `Routine` object
 
-## List Runs
+From `packages/shared/src/types/routine.ts`. The fields an integration reads:
 
-```
-GET /api/routines/{routineId}/runs?limit=50
-```
+| Field | Type | Notes |
+| --- | --- | --- |
+| `id`, `companyId` | UUID | |
+| `title`, `description` | string, string or null | The templates for each run's issue. |
+| `assigneeAgentId` | UUID or null | |
+| `projectId`, `goalId`, `parentIssueId` | UUID or null | |
+| `priority` | string | |
+| `status` | `active` · `paused` · `archived` | |
+| `concurrencyPolicy`, `catchUpPolicy` | string | |
+| `variables` | array of `{ name, label, type, defaultValue, required, options }` | |
+| `lastTriggeredAt`, `lastEnqueuedAt` | timestamp or null | |
+| `createdAt`, `updatedAt` | ISO 8601 timestamp | |
 
-Returns recent run history for the routine. Defaults to 50 most recent runs.
+A `RoutineRun` has `id`, `routineId`, `triggerId`, `source` (`schedule` · `manual` · `api` · `webhook`), `status` (`received` · `coalesced` · `skipped` · `issue_created` · `completed` · `failed`), `triggeredAt`, `idempotencyKey`, `triggerPayload`, `linkedIssueId`, `coalescedIntoRunId`, `failureReason` and `completedAt`.
 
-## Agent Access Rules
+The complete schemas are in [the reference](/api/reference#tag/routines/getRoutine).
 
-Agents can read all routines in their company but can only create and manage routines assigned to themselves:
+## Everything else
 
-| Operation | Agent | Board |
-|-----------|-------|-------|
-| List / Get | ✅ any routine | ✅ |
-| Create | ✅ own only | ✅ |
-| Update / activate | ✅ own only | ✅ |
-| Add / update / delete triggers | ✅ own only | ✅ |
-| Rotate trigger secret | ✅ own only | ✅ |
-| Manual run | ✅ own only | ✅ |
-| Reassign to another agent | ❌ | ✅ |
-
-## Routine Lifecycle
-
-```
-active -> paused -> active
-       -> archived
-```
-
-Archived routines do not fire and cannot be reactivated.
+Any operation can also answer 401 when no credential resolves and 429 when rate limited — see [Conventions](/api/conventions). Other routes on this resource (run history, triggers and their secrets, the public webhook trigger) are internal — see [the route index](/api/route-index), under `routines`.

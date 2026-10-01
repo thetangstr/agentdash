@@ -77,7 +77,13 @@ Paperclip releases, not on `origin`, and are not part of this log.
 3. `.github/workflows/release.yml` publishes the file as the GitHub Release
    body, and the UI bundles it into the in-app Changelog
    (`ui/src/lib/release-notes.ts`).
-4. If a cut is cancelled after its notes merged, replace the `> Released:`
+4. A change to the public API contract that removes, renames or narrows
+   something goes under a `## Deprecated` or `## Breaking` heading when it is
+   announced, and `## Removed` or `## Breaking` when it lands
+   (`docs/api/versioning.md`). Then run
+   `node scripts/docs/generate-api-changelog.mjs`: `docs/api/changelog.md` is
+   generated from these files, and CI fails while it is stale.
+5. If a cut is cancelled after its notes merged, replace the `> Released:`
    line with `> Withdrawn, never released.` and a sentence on what happened,
    and move its row to the withdrawn table.
 

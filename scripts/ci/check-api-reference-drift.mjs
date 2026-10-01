@@ -11,7 +11,15 @@
 //       temp dir reproduces the committed files byte for byte — a changed
 //       route, validator or type fails until the reference is regenerated.
 // Plus the contract's own shape: unique operationIds, known tags, the fields
-// every entry must carry.
+// every entry must carry. And, for the hand-written half of the reference
+// (PR 3b):
+//   (e) every contract tag names its resource page, the page exists, and it
+//       links each of the tag's operations to its anchor on the rendered
+//       reference — a new contract operation fails until it is documented;
+//       every reference anchor any API page links to is a real operation;
+//   (f) regenerating docs/api/changelog.md from releases/*.md reproduces the
+//       committed file — a new release note fails until the changelog is
+//       regenerated.
 //
 // `--routes-only` runs everything except the OpenAPI regeneration, which needs
 // the workspace installed (it loads @paperclipai/shared through tsx and the two
@@ -20,7 +28,7 @@
 //
 // Usage: node scripts/ci/check-api-reference-drift.mjs [--routes-only] [--root <repo>]
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -28,10 +36,12 @@ import {
   CONTRACT_REL,
   ROUTE_INDEX_REL,
   collectRouteIndex,
+  referenceAnchor,
   renderRouteIndex,
   routeKey,
 } from "../docs/generate-route-index.mjs";
 import { classifyContractRoutes } from "../docs/route-guards.mjs";
+import { API_CHANGELOG_REL, buildApiChangelog } from "../docs/generate-api-changelog.mjs";
 import { securityFor } from "../docs/generate-openapi.mjs";
 
 const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -117,6 +127,56 @@ export function checkContractAgainstHandlers(contract, classified) {
   return errors;
 }
 
+const REFERENCE_LINK = /\]\(\/api\/reference#tag\/([^/)\s]+)(?:\/([^)\s]+))?\)/g;
+
+/**
+ * (e): the resource pages against the contract. `pages` maps a docs-relative
+ * slug (`api/agents`) to its markdown, or is missing the slug when there is no
+ * file. Every API page is passed, so a stale anchor on any of them fails.
+ */
+export function checkResourcePages(contract, pages) {
+  const errors = [];
+  const tags = new Set((contract?.tags ?? []).map((tag) => tag.name));
+  const operations = new Set((contract?.routes ?? []).map((route) => `${route.tag}/${route.operationId}`));
+  for (const tag of contract?.tags ?? []) {
+    if (!tag.page) {
+      errors.push(`tag ${tag.name}: no \`page\` in docs/api/contract.json. Every contract resource has a page.`);
+      continue;
+    }
+    const source = pages.get(tag.page);
+    if (source === undefined) {
+      errors.push(`tag ${tag.name}: its page docs/${tag.page}.md does not exist.`);
+      continue;
+    }
+    for (const route of (contract.routes ?? []).filter((entry) => entry.tag === tag.name)) {
+      const anchor = referenceAnchor(route.tag, route.operationId);
+      if (!source.includes(`](${anchor})`)) {
+        errors.push(`${route.operationId}: docs/${tag.page}.md does not link it as ${anchor}. Document the operation on its resource page.`);
+      }
+    }
+  }
+  for (const [slug, source] of pages) {
+    for (const match of source.matchAll(REFERENCE_LINK)) {
+      const [, tag, operationId] = match;
+      if (!tags.has(tag)) errors.push(`docs/${slug}.md links /api/reference#tag/${tag}, which is not a contract tag.`);
+      else if (operationId && !operations.has(`${tag}/${operationId}`)) {
+        errors.push(`docs/${slug}.md links /api/reference#tag/${tag}/${operationId}, which is not a contract operation.`);
+      }
+    }
+  }
+  return errors;
+}
+
+/** Every `docs/api/*.md` page, by slug. */
+export function readApiPages(repoRoot) {
+  const dir = path.join(repoRoot, "docs", "api");
+  const pages = new Map();
+  for (const file of readdirSync(dir).filter((name) => name.endsWith(".md"))) {
+    pages.set(`api/${file.replace(/\.md$/, "")}`, readFileSync(path.join(dir, file), "utf8"));
+  }
+  return pages;
+}
+
 /** (b): a committed generated file against a fresh one, by path. */
 export function compareGenerated(rel, committed, fresh, command) {
   if (committed === fresh) return [];
@@ -141,6 +201,16 @@ export async function runChecks(repoRoot, { routesOnly = false } = {}) {
   const index = collectRouteIndex(repoRoot);
   errors.push(...checkContractRoutesExist(contract, index));
   errors.push(...checkContractAgainstHandlers(contract, classifyContractRoutes(repoRoot, contract, index)));
+
+  errors.push(...checkResourcePages(contract, readApiPages(repoRoot)));
+  errors.push(
+    ...compareGenerated(
+      API_CHANGELOG_REL,
+      readOrNull(path.join(repoRoot, API_CHANGELOG_REL)),
+      buildApiChangelog(repoRoot).markdown,
+      "node scripts/docs/generate-api-changelog.mjs",
+    ),
+  );
 
   const temp = mkdtempSync(path.join(tmpdir(), "api-reference-drift-"));
   try {
@@ -194,7 +264,7 @@ async function main() {
     for (const error of errors) console.error(`  - ${error}`);
     process.exit(1);
   }
-  console.log(`API reference is current: ${contractRoutes} contract routes, all registered.`);
+  console.log(`API reference is current: ${contractRoutes} contract routes, all registered and documented; changelog current.`);
 }
 
 // Entry guard: resolve symlinks on both sides, or a symlinked invocation

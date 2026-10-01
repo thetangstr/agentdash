@@ -45,6 +45,7 @@
     "docs:mcp-reference": "node scripts/docs/generate-mcp-reference.mjs",
     "docs:route-index": "node scripts/docs/generate-route-index.mjs",
     "docs:openapi": "node scripts/docs/generate-openapi.mjs",
+    "docs:api-changelog": "node scripts/docs/generate-api-changelog.mjs",
     "check:api-reference": "node scripts/ci/check-api-reference-drift.mjs",
     "smoke:openclaw-join": "./scripts/smoke/openclaw-join.sh",
     "smoke:openclaw-docker-ui": "./scripts/smoke/openclaw-docker-ui.sh",

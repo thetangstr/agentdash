@@ -67,7 +67,7 @@ Source: `server/src/routes/activity.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/companies/:companyId/activity` | contract: [`listActivity`](/api/reference) · [guide](/api/activity) |
+| GET | `/api/companies/:companyId/activity` | contract: [`listActivity`](/api/reference#tag/activity/listActivity) · [guide](/api/activity) |
 | POST | `/api/companies/:companyId/activity` | internal |
 | GET | `/api/issues/:id/activity` | internal |
 | GET | `/api/issues/:id/runs` | internal |
@@ -167,16 +167,16 @@ Source: `server/src/routes/agents.ts` · mounted at `/api`
 | POST | `/api/companies/:companyId/adapters/:type/test-environment` | internal |
 | GET | `/api/agents/:id/skills` | internal |
 | POST | `/api/agents/:id/skills/sync` | internal |
-| GET | `/api/companies/:companyId/agents` | contract: [`listAgents`](/api/reference) · [guide](/api/agents) |
+| GET | `/api/companies/:companyId/agents` | contract: [`listAgents`](/api/reference#tag/agents/listAgents) · [guide](/api/agents) |
 | GET | `/api/instance/scheduler-heartbeats` | internal |
 | GET | `/api/companies/:companyId/org` | internal |
 | GET | `/api/companies/:companyId/org.svg` | internal |
 | GET | `/api/companies/:companyId/org.png` | internal |
 | GET | `/api/companies/:companyId/agent-configurations` | internal |
-| GET | `/api/agents/me` | contract: [`getCurrentAgent`](/api/reference) · [guide](/api/agents) |
+| GET | `/api/agents/me` | contract: [`getCurrentAgent`](/api/reference#tag/agents/getCurrentAgent) · [guide](/api/agents) |
 | GET | `/api/agents/me/inbox-lite` | internal |
 | GET | `/api/agents/me/inbox/mine` | internal |
-| GET | `/api/agents/:id` | contract: [`getAgent`](/api/reference) · [guide](/api/agents) |
+| GET | `/api/agents/:id` | contract: [`getAgent`](/api/reference#tag/agents/getAgent) · [guide](/api/agents) |
 | GET | `/api/agents/:id/configuration` | internal |
 | GET | `/api/agents/:id/config-revisions` | internal |
 | GET | `/api/agents/:id/config-revisions/:revisionId` | internal |
@@ -197,16 +197,16 @@ Source: `server/src/routes/agents.ts` · mounted at `/api`
 | DELETE | `/api/agents/:id/instructions-bundle/file` | internal |
 | POST | `/api/companies/:companyId/agents/:agentId/refresh-instructions` | internal |
 | POST | `/api/companies/:companyId/agents/refresh-instructions` | internal |
-| PATCH | `/api/agents/:id` | contract: [`updateAgent`](/api/reference) · [guide](/api/agents) |
-| POST | `/api/agents/:id/pause` | contract: [`pauseAgent`](/api/reference) · [guide](/api/agents) |
-| POST | `/api/agents/:id/resume` | contract: [`resumeAgent`](/api/reference) · [guide](/api/agents) |
+| PATCH | `/api/agents/:id` | contract: [`updateAgent`](/api/reference#tag/agents/updateAgent) · [guide](/api/agents) |
+| POST | `/api/agents/:id/pause` | contract: [`pauseAgent`](/api/reference#tag/agents/pauseAgent) · [guide](/api/agents) |
+| POST | `/api/agents/:id/resume` | contract: [`resumeAgent`](/api/reference#tag/agents/resumeAgent) · [guide](/api/agents) |
 | POST | `/api/agents/:id/approve` | internal |
 | POST | `/api/agents/:id/terminate` | internal |
 | DELETE | `/api/agents/:id` | internal |
-| GET | `/api/agents/:id/keys` | contract: [`listAgentKeys`](/api/reference) · [guide](/api/agents) |
-| POST | `/api/agents/:id/keys` | contract: [`createAgentKey`](/api/reference) · [guide](/api/agents) |
+| GET | `/api/agents/:id/keys` | contract: [`listAgentKeys`](/api/reference#tag/agents/listAgentKeys) · [guide](/api/agents) |
+| POST | `/api/agents/:id/keys` | contract: [`createAgentKey`](/api/reference#tag/agents/createAgentKey) · [guide](/api/agents) |
 | POST | `/api/agents/:id/connect-codes` | internal |
-| DELETE | `/api/agents/:id/keys/:keyId` | contract: [`revokeAgentKey`](/api/reference) · [guide](/api/agents) |
+| DELETE | `/api/agents/:id/keys/:keyId` | contract: [`revokeAgentKey`](/api/reference#tag/agents/revokeAgentKey) · [guide](/api/agents) |
 | POST | `/api/agents/:id/wakeup` | internal |
 | POST | `/api/agents/:id/heartbeat/invoke` | internal |
 | POST | `/api/agents/:id/claude-login` | internal |
@@ -228,14 +228,14 @@ Source: `server/src/routes/approvals.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/companies/:companyId/approvals` | contract: [`listApprovals`](/api/reference) · [guide](/api/approvals) |
-| GET | `/api/approvals/:id` | contract: [`getApproval`](/api/reference) · [guide](/api/approvals) |
-| POST | `/api/companies/:companyId/approvals` | contract: [`createApproval`](/api/reference) · [guide](/api/approvals) |
+| GET | `/api/companies/:companyId/approvals` | contract: [`listApprovals`](/api/reference#tag/approvals/listApprovals) · [guide](/api/approvals) |
+| GET | `/api/approvals/:id` | contract: [`getApproval`](/api/reference#tag/approvals/getApproval) · [guide](/api/approvals) |
+| POST | `/api/companies/:companyId/approvals` | contract: [`createApproval`](/api/reference#tag/approvals/createApproval) · [guide](/api/approvals) |
 | GET | `/api/approvals/:id/issues` | internal |
-| POST | `/api/approvals/:id/approve` | contract: [`approveApproval`](/api/reference) · [guide](/api/approvals) |
-| POST | `/api/approvals/:id/reject` | contract: [`rejectApproval`](/api/reference) · [guide](/api/approvals) |
+| POST | `/api/approvals/:id/approve` | contract: [`approveApproval`](/api/reference#tag/approvals/approveApproval) · [guide](/api/approvals) |
+| POST | `/api/approvals/:id/reject` | contract: [`rejectApproval`](/api/reference#tag/approvals/rejectApproval) · [guide](/api/approvals) |
 | POST | `/api/approvals/:id/override` | internal |
-| POST | `/api/approvals/:id/request-revision` | contract: [`requestApprovalRevision`](/api/reference) · [guide](/api/approvals) |
+| POST | `/api/approvals/:id/request-revision` | contract: [`requestApprovalRevision`](/api/reference#tag/approvals/requestApprovalRevision) · [guide](/api/approvals) |
 | POST | `/api/approvals/:id/resubmit` | internal |
 | GET | `/api/approvals/:id/comments` | internal |
 | POST | `/api/approvals/:id/comments` | internal |
@@ -311,15 +311,15 @@ Source: `server/src/routes/bridge.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| POST | `/api/bridge/poll` | contract: [`pollBridgeTask`](/api/reference) |
+| POST | `/api/bridge/poll` | contract: [`pollBridgeTask`](/api/reference#tag/bridge/pollBridgeTask) · [guide](/api/bridge) |
 | POST | `/api/bridge/inbox/sync` | internal |
 | POST | `/api/bridge/inbox/ack` | internal |
 | POST | `/api/bridge/inbox/decide` | internal |
 | POST | `/api/bridge/inbox/agents` | internal |
 | POST | `/api/bridge/inbox/propose` | internal |
 | POST | `/api/bridge/inbox/confirm` | internal |
-| POST | `/api/bridge/result` | contract: [`submitBridgeResult`](/api/reference) |
-| POST | `/api/bridge/decline` | contract: [`declineBridgeTask`](/api/reference) |
+| POST | `/api/bridge/result` | contract: [`submitBridgeResult`](/api/reference#tag/bridge/submitBridgeResult) · [guide](/api/bridge) |
+| POST | `/api/bridge/decline` | contract: [`declineBridgeTask`](/api/reference#tag/bridge/declineBridgeTask) · [guide](/api/bridge) |
 | GET | `/api/companies/:companyId/me/bridge/endpoints` | internal |
 | POST | `/api/companies/:companyId/me/bridge/endpoints` | internal |
 | POST | `/api/companies/:companyId/bridge/endpoints/:endpointId/approve` | internal |
@@ -333,10 +333,10 @@ Source: `server/src/routes/companies.ts` · mounted at `/api/companies`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/companies` | contract: [`listCompanies`](/api/reference) · [guide](/api/companies) |
+| GET | `/api/companies` | contract: [`listCompanies`](/api/reference#tag/companies/listCompanies) · [guide](/api/companies) |
 | GET | `/api/companies/stats` | internal |
 | GET | `/api/companies/issues` | internal |
-| GET | `/api/companies/:companyId` | contract: [`getCompany`](/api/reference) · [guide](/api/companies) |
+| GET | `/api/companies/:companyId` | contract: [`getCompany`](/api/reference#tag/companies/getCompany) · [guide](/api/companies) |
 | GET | `/api/companies/:companyId/feedback-traces` | internal |
 | POST | `/api/companies/:companyId/export` | internal |
 | POST | `/api/companies/import/preview` | internal |
@@ -345,8 +345,8 @@ Source: `server/src/routes/companies.ts` · mounted at `/api/companies`
 | POST | `/api/companies/:companyId/exports` | internal |
 | POST | `/api/companies/:companyId/imports/preview` | internal |
 | POST | `/api/companies/:companyId/imports/apply` | internal |
-| POST | `/api/companies` | contract: [`createCompany`](/api/reference) · [guide](/api/companies) |
-| PATCH | `/api/companies/:companyId` | contract: [`updateCompany`](/api/reference) · [guide](/api/companies) |
+| POST | `/api/companies` | contract: [`createCompany`](/api/reference#tag/companies/createCompany) · [guide](/api/companies) |
+| PATCH | `/api/companies/:companyId` | contract: [`updateCompany`](/api/reference#tag/companies/updateCompany) · [guide](/api/companies) |
 | PATCH | `/api/companies/:companyId/branding` | internal |
 | POST | `/api/companies/:companyId/archive` | internal |
 | DELETE | `/api/companies/:companyId` | internal |
@@ -420,12 +420,12 @@ Source: `server/src/routes/costs.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| POST | `/api/companies/:companyId/cost-events` | contract: [`reportCostEvent`](/api/reference) · [guide](/api/costs) |
+| POST | `/api/companies/:companyId/cost-events` | contract: [`reportCostEvent`](/api/reference#tag/costs/reportCostEvent) · [guide](/api/costs) |
 | POST | `/api/companies/:companyId/finance-events` | internal |
-| GET | `/api/companies/:companyId/costs/summary` | contract: [`getCostSummary`](/api/reference) · [guide](/api/costs) |
+| GET | `/api/companies/:companyId/costs/summary` | contract: [`getCostSummary`](/api/reference#tag/costs/getCostSummary) · [guide](/api/costs) |
 | GET | `/api/companies/:companyId/costs/run-activity` | internal |
 | GET | `/api/issues/:id/cost-summary` | internal |
-| GET | `/api/companies/:companyId/costs/by-agent` | contract: [`getCostsByAgent`](/api/reference) · [guide](/api/costs) |
+| GET | `/api/companies/:companyId/costs/by-agent` | contract: [`getCostsByAgent`](/api/reference#tag/costs/getCostsByAgent) · [guide](/api/costs) |
 | GET | `/api/companies/:companyId/costs/by-agent-model` | internal |
 | GET | `/api/companies/:companyId/costs/by-provider` | internal |
 | GET | `/api/companies/:companyId/costs/by-biller` | internal |
@@ -451,7 +451,7 @@ Source: `server/src/routes/dashboard.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/companies/:companyId/dashboard` | contract: [`getDashboard`](/api/reference) · [guide](/api/dashboard) |
+| GET | `/api/companies/:companyId/dashboard` | contract: [`getDashboard`](/api/reference#tag/dashboard/getDashboard) · [guide](/api/dashboard) |
 | GET | `/api/companies/:companyId/dashboard/working-now` | internal |
 
 ## deliverables
@@ -583,10 +583,10 @@ Source: `server/src/routes/goals.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/companies/:companyId/goals` | contract: [`listGoals`](/api/reference) · [guide](/api/goals-and-projects) |
-| GET | `/api/goals/:id` | contract: [`getGoal`](/api/reference) · [guide](/api/goals-and-projects) |
-| POST | `/api/companies/:companyId/goals` | contract: [`createGoal`](/api/reference) · [guide](/api/goals-and-projects) |
-| PATCH | `/api/goals/:id` | contract: [`updateGoal`](/api/reference) · [guide](/api/goals-and-projects) |
+| GET | `/api/companies/:companyId/goals` | contract: [`listGoals`](/api/reference#tag/goals/listGoals) · [guide](/api/goals) |
+| GET | `/api/goals/:id` | contract: [`getGoal`](/api/reference#tag/goals/getGoal) · [guide](/api/goals) |
+| POST | `/api/companies/:companyId/goals` | contract: [`createGoal`](/api/reference#tag/goals/createGoal) · [guide](/api/goals) |
+| PATCH | `/api/goals/:id` | contract: [`updateGoal`](/api/reference#tag/goals/updateGoal) · [guide](/api/goals) |
 | DELETE | `/api/goals/:id` | internal |
 | PUT | `/api/companies/:companyId/goals/:goalId/metric-definition` | internal |
 
@@ -604,7 +604,7 @@ Source: `server/src/routes/health.ts` · mounted at `/api/health`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/health` | contract: [`getHealth`](/api/reference) |
+| GET | `/api/health` | contract: [`getHealth`](/api/reference#tag/health/getHealth) · [guide](/api/health) |
 
 ## hubspot-connector
 
@@ -640,11 +640,11 @@ Source: `server/src/routes/human-control.ts` · mounted at `/api/human-control`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/human-control/identity` | contract: [`getHumanControlIdentity`](/api/reference) |
-| POST | `/api/human-control/discover` | contract: [`discoverHumanOperations`](/api/reference) |
-| POST | `/api/human-control/read` | contract: [`readHumanOperation`](/api/reference) |
-| POST | `/api/human-control/prepare` | contract: [`prepareHumanOperation`](/api/reference) |
-| POST | `/api/human-control/confirm` | contract: [`confirmHumanOperation`](/api/reference) |
+| GET | `/api/human-control/identity` | contract: [`getHumanControlIdentity`](/api/reference#tag/human-control/getHumanControlIdentity) · [guide](/api/human-control) |
+| POST | `/api/human-control/discover` | contract: [`discoverHumanOperations`](/api/reference#tag/human-control/discoverHumanOperations) · [guide](/api/human-control) |
+| POST | `/api/human-control/read` | contract: [`readHumanOperation`](/api/reference#tag/human-control/readHumanOperation) · [guide](/api/human-control) |
+| POST | `/api/human-control/prepare` | contract: [`prepareHumanOperation`](/api/reference#tag/human-control/prepareHumanOperation) · [guide](/api/human-control) |
+| POST | `/api/human-control/confirm` | contract: [`confirmHumanOperation`](/api/reference#tag/human-control/confirmHumanOperation) · [guide](/api/human-control) |
 | POST | `/api/human-control/issues/:issueId/recovery-run/preview` | internal |
 | POST | `/api/human-control/issues/:issueId/recovery-run/authorize` | internal |
 
@@ -715,12 +715,12 @@ Source: `server/src/routes/issues.ts` · mounted at `/api`
 | Method | Path | Status |
 | --- | --- | --- |
 | GET | `/api/issues` | internal |
-| GET | `/api/companies/:companyId/issues` | contract: [`listIssues`](/api/reference) · [guide](/api/issues) |
+| GET | `/api/companies/:companyId/issues` | contract: [`listIssues`](/api/reference#tag/issues/listIssues) · [guide](/api/issues) |
 | GET | `/api/companies/:companyId/labels` | internal |
 | POST | `/api/companies/:companyId/labels` | internal |
 | DELETE | `/api/labels/:labelId` | internal |
 | GET | `/api/issues/:id/heartbeat-context` | internal |
-| GET | `/api/issues/:id` | contract: [`getIssue`](/api/reference) · [guide](/api/issues) |
+| GET | `/api/issues/:id` | contract: [`getIssue`](/api/reference#tag/issues/getIssue) · [guide](/api/issues) |
 | GET | `/api/issues/:id/child-contributions` | internal |
 | GET | `/api/companies/:companyId/work-products` | internal |
 | GET | `/api/issues/:id/work-products` | internal |
@@ -740,16 +740,16 @@ Source: `server/src/routes/issues.ts` · mounted at `/api`
 | GET | `/api/issues/:id/approvals` | internal |
 | POST | `/api/issues/:id/approvals` | internal |
 | DELETE | `/api/issues/:id/approvals/:approvalId` | internal |
-| POST | `/api/companies/:companyId/issues` | contract: [`createIssue`](/api/reference) · [guide](/api/issues) |
+| POST | `/api/companies/:companyId/issues` | contract: [`createIssue`](/api/reference#tag/issues/createIssue) · [guide](/api/issues) |
 | POST | `/api/issues/:id/children` | internal |
-| PATCH | `/api/issues/:id` | contract: [`updateIssue`](/api/reference) · [guide](/api/issues) |
+| PATCH | `/api/issues/:id` | contract: [`updateIssue`](/api/reference#tag/issues/updateIssue) · [guide](/api/issues) |
 | DELETE | `/api/issues/:id` | internal |
-| POST | `/api/issues/:id/checkout` | contract: [`checkoutIssue`](/api/reference) · [guide](/api/issues) |
-| POST | `/api/issues/:id/release` | contract: [`releaseIssue`](/api/reference) · [guide](/api/issues) |
+| POST | `/api/issues/:id/checkout` | contract: [`checkoutIssue`](/api/reference#tag/issues/checkoutIssue) · [guide](/api/issues) |
+| POST | `/api/issues/:id/release` | contract: [`releaseIssue`](/api/reference#tag/issues/releaseIssue) · [guide](/api/issues) |
 | POST | `/api/issues/:id/admin/force-release` | internal |
 | POST | `/api/companies/:companyId/workspace-recovery/clear` | internal |
 | POST | `/api/issues/:id/recovery-budget/clear` | internal |
-| GET | `/api/issues/:id/comments` | contract: [`listIssueComments`](/api/reference) · [guide](/api/issues) |
+| GET | `/api/issues/:id/comments` | contract: [`listIssueComments`](/api/reference#tag/issues/listIssueComments) · [guide](/api/issues) |
 | GET | `/api/issues/:id/interactions` | internal |
 | POST | `/api/issues/:id/interactions` | internal |
 | POST | `/api/issues/:id/interactions/:interactionId/accept` | internal |
@@ -762,7 +762,7 @@ Source: `server/src/routes/issues.ts` · mounted at `/api`
 | GET | `/api/issues/:id/feedback-traces` | internal |
 | GET | `/api/feedback-traces/:traceId` | internal |
 | GET | `/api/feedback-traces/:traceId/bundle` | internal |
-| POST | `/api/issues/:id/comments` | contract: [`addIssueComment`](/api/reference) · [guide](/api/issues) |
+| POST | `/api/issues/:id/comments` | contract: [`addIssueComment`](/api/reference#tag/issues/addIssueComment) · [guide](/api/issues) |
 | POST | `/api/issues/:id/feedback-votes` | internal |
 | GET | `/api/issues/:id/attachments` | internal |
 | POST | `/api/companies/:companyId/issues/:issueId/attachments` | internal |
@@ -816,8 +816,8 @@ Source: `server/src/routes/mcp.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| POST | `/api/mcp` | contract: [`mcpAgent`](/api/reference) |
-| POST | `/api/mcp/assistant` | contract: [`mcpAssistant`](/api/reference) |
+| POST | `/api/mcp` | contract: [`mcpAgent`](/api/reference#tag/mcp/mcpAgent) · [guide](/api/mcp) |
+| POST | `/api/mcp/assistant` | contract: [`mcpAssistant`](/api/reference#tag/mcp/mcpAssistant) · [guide](/api/mcp) |
 | GET | `/api/mcp` | internal |
 | DELETE | `/api/mcp` | internal |
 | GET | `/api/mcp/assistant` | internal |
@@ -847,9 +847,9 @@ Source: `server/src/routes/oauth.ts` · mounted at `/`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/.well-known/oauth-protected-resource` | contract: [`getProtectedResourceMetadata`](/api/reference) |
-| GET | `/.well-known/oauth-protected-resource/api/mcp/assistant` | contract: [`getAssistantProtectedResourceMetadata`](/api/reference) |
-| GET | `/.well-known/oauth-authorization-server` | contract: [`getAuthorizationServerMetadata`](/api/reference) |
+| GET | `/.well-known/oauth-protected-resource` | contract: [`getProtectedResourceMetadata`](/api/reference#tag/oauth/getProtectedResourceMetadata) · [guide](/api/oauth) |
+| GET | `/.well-known/oauth-protected-resource/api/mcp/assistant` | contract: [`getAssistantProtectedResourceMetadata`](/api/reference#tag/oauth/getAssistantProtectedResourceMetadata) · [guide](/api/oauth) |
+| GET | `/.well-known/oauth-authorization-server` | contract: [`getAuthorizationServerMetadata`](/api/reference#tag/oauth/getAuthorizationServerMetadata) · [guide](/api/oauth) |
 | POST | `/oauth/register` | internal |
 | GET | `/oauth/authorize` | internal |
 | GET | `/oauth/consent/:requestId` | internal |
@@ -947,10 +947,10 @@ Source: `server/src/routes/projects.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/companies/:companyId/projects` | contract: [`listProjects`](/api/reference) · [guide](/api/goals-and-projects) |
-| GET | `/api/projects/:id` | contract: [`getProject`](/api/reference) · [guide](/api/goals-and-projects) |
-| POST | `/api/companies/:companyId/projects` | contract: [`createProject`](/api/reference) · [guide](/api/goals-and-projects) |
-| PATCH | `/api/projects/:id` | contract: [`updateProject`](/api/reference) · [guide](/api/goals-and-projects) |
+| GET | `/api/companies/:companyId/projects` | contract: [`listProjects`](/api/reference#tag/projects/listProjects) · [guide](/api/projects) |
+| GET | `/api/projects/:id` | contract: [`getProject`](/api/reference#tag/projects/getProject) · [guide](/api/projects) |
+| POST | `/api/companies/:companyId/projects` | contract: [`createProject`](/api/reference#tag/projects/createProject) · [guide](/api/projects) |
+| PATCH | `/api/projects/:id` | contract: [`updateProject`](/api/reference#tag/projects/updateProject) · [guide](/api/projects) |
 | GET | `/api/projects/:id/workspaces` | internal |
 | POST | `/api/projects/:id/workspaces` | internal |
 | PATCH | `/api/projects/:id/workspaces/:workspaceId` | internal |
@@ -976,16 +976,16 @@ Source: `server/src/routes/routines.ts` · mounted at `/api`
 
 | Method | Path | Status |
 | --- | --- | --- |
-| GET | `/api/companies/:companyId/routines` | contract: [`listRoutines`](/api/reference) · [guide](/api/routines) |
-| POST | `/api/companies/:companyId/routines` | contract: [`createRoutine`](/api/reference) · [guide](/api/routines) |
-| GET | `/api/routines/:id` | contract: [`getRoutine`](/api/reference) · [guide](/api/routines) |
-| PATCH | `/api/routines/:id` | contract: [`updateRoutine`](/api/reference) · [guide](/api/routines) |
+| GET | `/api/companies/:companyId/routines` | contract: [`listRoutines`](/api/reference#tag/routines/listRoutines) · [guide](/api/routines) |
+| POST | `/api/companies/:companyId/routines` | contract: [`createRoutine`](/api/reference#tag/routines/createRoutine) · [guide](/api/routines) |
+| GET | `/api/routines/:id` | contract: [`getRoutine`](/api/reference#tag/routines/getRoutine) · [guide](/api/routines) |
+| PATCH | `/api/routines/:id` | contract: [`updateRoutine`](/api/reference#tag/routines/updateRoutine) · [guide](/api/routines) |
 | GET | `/api/routines/:id/runs` | internal |
 | POST | `/api/routines/:id/triggers` | internal |
 | PATCH | `/api/routine-triggers/:id` | internal |
 | DELETE | `/api/routine-triggers/:id` | internal |
 | POST | `/api/routine-triggers/:id/rotate-secret` | internal |
-| POST | `/api/routines/:id/run` | contract: [`runRoutine`](/api/reference) · [guide](/api/routines) |
+| POST | `/api/routines/:id/run` | contract: [`runRoutine`](/api/reference#tag/routines/runRoutine) · [guide](/api/routines) |
 | POST | `/api/routine-triggers/public/:publicId/fire` | internal |
 
 ## secrets
@@ -995,9 +995,9 @@ Source: `server/src/routes/secrets.ts` · mounted at `/api`
 | Method | Path | Status |
 | --- | --- | --- |
 | GET | `/api/companies/:companyId/secret-providers` | internal |
-| GET | `/api/companies/:companyId/secrets` | contract: [`listSecrets`](/api/reference) · [guide](/api/secrets) |
-| POST | `/api/companies/:companyId/secrets` | contract: [`createSecret`](/api/reference) · [guide](/api/secrets) |
-| POST | `/api/secrets/:id/rotate` | contract: [`rotateSecret`](/api/reference) · [guide](/api/secrets) |
+| GET | `/api/companies/:companyId/secrets` | contract: [`listSecrets`](/api/reference#tag/secrets/listSecrets) · [guide](/api/secrets) |
+| POST | `/api/companies/:companyId/secrets` | contract: [`createSecret`](/api/reference#tag/secrets/createSecret) · [guide](/api/secrets) |
+| POST | `/api/secrets/:id/rotate` | contract: [`rotateSecret`](/api/reference#tag/secrets/rotateSecret) · [guide](/api/secrets) |
 | PATCH | `/api/secrets/:id` | internal |
 | DELETE | `/api/secrets/:id` | internal |
 

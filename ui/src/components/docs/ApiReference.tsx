@@ -19,7 +19,7 @@
 import { ApiReferenceReact } from "@scalar/api-reference-react";
 import "@scalar/api-reference-react/style.css";
 import specUrl from "../../../../docs/api/openapi.yaml?url";
-import { referenceServers } from "@/lib/api-reference-server";
+import { referenceOperationSlug, referenceServers } from "@/lib/api-reference-server";
 
 export const OPENAPI_SPEC_URL: string = specUrl;
 
@@ -42,6 +42,8 @@ export function ApiReference({ dark, instanceUrl }: { dark: boolean; instanceUrl
             url: specUrl,
             servers: referenceServers(instanceUrl),
             layout: "classic",
+            // Anchors are #tag/<tag>/<operationId>; the resource pages link to them.
+            generateOperationSlug: referenceOperationSlug,
             hideDarkModeToggle: true,
             forceDarkModeState: dark ? "dark" : "light",
             withDefaultFonts: false,

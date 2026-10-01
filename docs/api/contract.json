@@ -6,7 +6,7 @@
       "name": "health",
       "title": "Health",
       "description": "Is the server up, and what version is it.",
-      "page": null
+      "page": "api/health"
     },
     {
       "name": "companies",
@@ -30,13 +30,13 @@
       "name": "projects",
       "title": "Projects",
       "description": "Groups of issues toward a deliverable.",
-      "page": "api/goals-and-projects"
+      "page": "api/projects"
     },
     {
       "name": "goals",
       "title": "Goals",
       "description": "The outcomes a company's work rolls up to.",
-      "page": "api/goals-and-projects"
+      "page": "api/goals"
     },
     {
       "name": "approvals",
@@ -77,26 +77,26 @@
     {
       "name": "human-control",
       "title": "Human control",
-      "description": "The operations a person's own assistant may discover, read, prepare and confirm on their behalf.",
-      "page": null
+      "description": "Operations a named person runs with their own board key: discover, read, prepare, confirm.",
+      "page": "api/human-control"
     },
     {
       "name": "bridge",
       "title": "Bridge",
       "description": "The calls an enrolled machine makes to pick up and return work.",
-      "page": null
+      "page": "api/bridge"
     },
     {
       "name": "mcp",
       "title": "MCP endpoints",
       "description": "The Model Context Protocol endpoints, over streamable HTTP.",
-      "page": null
+      "page": "api/mcp"
     },
     {
       "name": "oauth",
       "title": "OAuth metadata",
       "description": "OAuth 2.1 discovery documents for the assistant MCP endpoint.",
-      "page": null
+      "page": "api/oauth"
     }
   ],
   "routes": [
@@ -121,15 +121,15 @@
     { "tag": "issues", "operationId": "getIssue", "summary": "Get one issue by id or identifier.", "method": "GET", "path": "/api/issues/:id", "requestValidator": null, "responseType": "Issue", "stability": "stable" },
     { "tag": "issues", "operationId": "createIssue", "summary": "Create an issue in a company.", "method": "POST", "path": "/api/companies/:companyId/issues", "requestValidator": "createIssueSchema", "responseType": "Issue", "successStatus": 201, "stability": "stable" },
     { "tag": "issues", "operationId": "updateIssue", "summary": "Update an issue's fields or status, optionally with a comment.", "method": "PATCH", "path": "/api/issues/:id", "requestValidator": "updateIssueRouteSchema", "responseType": "Issue", "stability": "stable" },
-    { "tag": "issues", "operationId": "checkoutIssue", "summary": "Claim an issue for an agent, if it is in one of the expected statuses.", "method": "POST", "path": "/api/issues/:id/checkout", "requestValidator": "checkoutIssueSchema", "responseType": "Issue", "stability": "stable" },
+    { "tag": "issues", "operationId": "checkoutIssue", "summary": "Claim an issue for an agent, if it is in one of the expected statuses.", "method": "POST", "path": "/api/issues/:id/checkout", "requestValidator": "checkoutIssueSchema", "responseType": "Issue", "stability": "stable", "description": "An agent key must send the run it is working in as `X-Paperclip-Run-Id`, or the request answers 401 `Agent run id required`. An agent run token carries its run and needs no header. People do not send it.", "headers": [{ "name": "X-Paperclip-Run-Id", "required": false, "description": "The run the agent is working in (UUID). Required for an agent key; not needed for an agent run token or a person.", "schema": { "type": "string", "format": "uuid" }}] },
     { "tag": "issues", "operationId": "releaseIssue", "summary": "Release an issue the caller has checked out.", "method": "POST", "path": "/api/issues/:id/release", "requestValidator": null, "responseType": "Issue", "stability": "stable", "description": "An agent key must send the run it is working in as `X-Paperclip-Run-Id`, or the request answers 401 `Agent run id required`. An agent run token carries its run and needs no header. People do not send it.", "headers": [{ "name": "X-Paperclip-Run-Id", "required": false, "description": "The run the agent is working in (UUID). Required for an agent key; not needed for an agent run token or a person.", "schema": { "type": "string", "format": "uuid" }}]},
     { "tag": "issues", "operationId": "listIssueComments", "summary": "List an issue's comments.", "method": "GET", "path": "/api/issues/:id/comments", "requestValidator": null, "responseType": "IssueComment", "responseIsArray": true, "stability": "stable" },
     { "tag": "issues", "operationId": "addIssueComment", "summary": "Add a comment to an issue.", "method": "POST", "path": "/api/issues/:id/comments", "requestValidator": "addIssueCommentSchema", "responseType": "IssueComment", "successStatus": 201, "stability": "stable" },
 
     { "tag": "projects", "operationId": "listProjects", "summary": "List a company's projects the caller can see.", "method": "GET", "path": "/api/companies/:companyId/projects", "requestValidator": null, "responseType": "Project", "responseIsArray": true, "stability": "stable" },
     { "tag": "projects", "operationId": "getProject", "summary": "Get one project.", "method": "GET", "path": "/api/projects/:id", "requestValidator": null, "responseType": "Project", "stability": "stable" },
-    { "tag": "projects", "operationId": "createProject", "summary": "Create a project in a company.", "method": "POST", "path": "/api/companies/:companyId/projects", "requestValidator": "createProjectSchema", "responseType": "Project", "successStatus": 201, "stability": "stable" },
-    { "tag": "projects", "operationId": "updateProject", "summary": "Update a project.", "method": "PATCH", "path": "/api/projects/:id", "requestValidator": "updateProjectSchema", "responseType": "Project", "stability": "stable" },
+    { "tag": "projects", "operationId": "createProject", "summary": "Create a project in a company.", "method": "POST", "path": "/api/companies/:companyId/projects", "requestValidator": "createProjectSchema", "responseType": "Project", "successStatus": 201, "stability": "stable", "auth": "board" },
+    { "tag": "projects", "operationId": "updateProject", "summary": "Update a project.", "method": "PATCH", "path": "/api/projects/:id", "requestValidator": "updateProjectSchema", "responseType": "Project", "stability": "stable", "auth": "board" },
 
     { "tag": "goals", "operationId": "listGoals", "summary": "List a company's goals.", "method": "GET", "path": "/api/companies/:companyId/goals", "requestValidator": null, "responseType": "Goal", "responseIsArray": true, "stability": "stable" },
     { "tag": "goals", "operationId": "getGoal", "summary": "Get one goal.", "method": "GET", "path": "/api/goals/:id", "requestValidator": null, "responseType": "Goal", "stability": "stable" },
@@ -145,9 +145,9 @@
 
     { "tag": "routines", "operationId": "listRoutines", "summary": "List a company's routines.", "method": "GET", "path": "/api/companies/:companyId/routines", "requestValidator": null, "responseType": "RoutineListItem", "responseIsArray": true, "stability": "stable" },
     { "tag": "routines", "operationId": "getRoutine", "summary": "Get one routine with its triggers and recent runs.", "method": "GET", "path": "/api/routines/:id", "requestValidator": null, "responseType": "RoutineDetail", "stability": "stable" },
-    { "tag": "routines", "operationId": "createRoutine", "summary": "Create a routine in a company.", "method": "POST", "path": "/api/companies/:companyId/routines", "requestValidator": "createRoutineSchema", "responseType": "Routine", "successStatus": 201, "stability": "stable" },
+    { "tag": "routines", "operationId": "createRoutine", "summary": "Create a routine in a company.", "method": "POST", "path": "/api/companies/:companyId/routines", "requestValidator": "createRoutineSchema", "responseType": "Routine", "successStatus": 201, "stability": "stable", "auth": "board" },
     { "tag": "routines", "operationId": "updateRoutine", "summary": "Update a routine.", "method": "PATCH", "path": "/api/routines/:id", "requestValidator": "updateRoutineSchema", "responseType": "Routine", "stability": "stable" },
-    { "tag": "routines", "operationId": "runRoutine", "summary": "Start a routine run now; answers 202 with the queued run.", "method": "POST", "path": "/api/routines/:id/run", "requestValidator": "runRoutineSchema", "responseType": "RoutineRun", "successStatus": 202, "stability": "stable" },
+    { "tag": "routines", "operationId": "runRoutine", "summary": "Start a routine run now; answers 202 with the queued run.", "method": "POST", "path": "/api/routines/:id/run", "requestValidator": "runRoutineSchema", "responseType": "RoutineRun", "successStatus": 202, "stability": "stable", "auth": "board" },
 
     { "tag": "costs", "operationId": "reportCostEvent", "summary": "Report a cost event (tokens and spend for one call).", "method": "POST", "path": "/api/companies/:companyId/cost-events", "requestValidator": "createCostEventSchema", "responseType": "CostEvent", "successStatus": 201, "stability": "stable" },
     { "tag": "costs", "operationId": "getCostSummary", "summary": "Company spend for a date range, against its budget. People need agents:create; agents may read it.", "method": "GET", "path": "/api/companies/:companyId/costs/summary", "requestValidator": null, "responseType": "CostSummary", "stability": "stable", "description": "Agents in the company may read this. A person needs the `agents:create` permission in the company (or to be an instance admin); anyone else gets 403 `Spend and billing are visible to administrators only.`" },

@@ -708,11 +708,295 @@
       "firstParagraph": "What holds for the whole API. Each section names the file it was read from; where a number is given, it is the server's default, read from that file, and an instance's operator can change some of them."
     },
     {
+      "slug": "api/versioning",
+      "title": "Versioning and deprecation",
+      "summary": "What may change in the API contract and when, how a breaking change is announced, and what internal routes promise.",
+      "headings": [
+        "What the contract is",
+        "Changes that ship in any release",
+        "Changes that need a deprecation cycle",
+        "Not covered by the policy",
+        "Internal routes promise nothing",
+        "Reading stability",
+        "Where breaking changes are listed",
+        "How the contract is kept"
+      ],
+      "firstParagraph": "The API contract is version v1. Under the policy proposed here, additive changes may ship in any release, and a breaking change to a contract operation will be announced in the release notes at least one stable release before it lands, with the old shape kept working for 60 days…"
+    },
+    {
       "slug": "api/reference",
       "title": "API reference",
       "summary": "Every operation in the public API contract, rendered from the OpenAPI 3.1 document.",
       "headings": [],
       "firstParagraph": "Every operation in the contract, with its parameters, request body, responses and the credentials it accepts. It is rendered from docs/api/openapi.yaml, which is generated from the contract manifest and the server's own validators and types — see the overview for how it is kept…"
+    },
+    {
+      "slug": "api/health",
+      "title": "Health",
+      "summary": "Is the server up, which version is it, and are any of its checks degraded.",
+      "headings": [
+        "Who may call it",
+        "Check health",
+        "The response",
+        "Everything else"
+      ],
+      "firstParagraph": "GET /api/health tells a load balancer, an install script or a monitor whether the server is answering and whether it can reach its database. It also reports the server version and a few checks that can go degraded: disk space, backup age and stuck runs."
+    },
+    {
+      "slug": "api/companies",
+      "title": "Companies",
+      "summary": "The top-level tenant — list, read, create and update companies.",
+      "headings": [
+        "Who may call it",
+        "List companies",
+        "Get a company",
+        "Create a company",
+        "Update a company",
+        "The Company object",
+        "Everything else"
+      ],
+      "firstParagraph": "A company is the tenant everything else belongs to: its agents, issues, projects, goals, approvals, routines, costs and secrets all carry its id. These operations list the companies you can reach, read one, create a new one, and change its settings."
+    },
+    {
+      "slug": "api/agents",
+      "title": "Agents",
+      "summary": "The AI employees of a company — list and read them, change their settings, pause and resume them, and manage their API keys.",
+      "headings": [
+        "Who may call it",
+        "List agents",
+        "Get the calling agent",
+        "Get an agent",
+        "Update an agent",
+        "Pause an agent",
+        "Resume an agent",
+        "List an agent's keys",
+        "Create an agent key",
+        "Revoke an agent key",
+        "The Agent object",
+        "Everything else"
+      ],
+      "firstParagraph": "An agent is one AI employee of a company: it has a name and role, an adapter that runs it, a budget, and a place in the reporting line. These operations list a company's agents, read one, change its settings, pause and resume it, and mint, list and revoke its API keys."
+    },
+    {
+      "slug": "api/issues",
+      "title": "Issues",
+      "summary": "Units of work — list, read, create and update issues, check one out, release it, and comment on it.",
+      "headings": [
+        "Who may call it",
+        "List issues",
+        "Get an issue",
+        "Create an issue",
+        "Update an issue",
+        "Check out an issue",
+        "Release an issue",
+        "List an issue's comments",
+        "Add a comment",
+        "The Issue object",
+        "The IssueComment object",
+        "Everything else"
+      ],
+      "firstParagraph": "An issue is one unit of work in a company: it has a title, a status, a priority and at most one assignee, an agent or a person. These operations list and read issues, create and change them, let an agent claim one with a checkout and give it back with a release, and read and add…"
+    },
+    {
+      "slug": "api/projects",
+      "title": "Projects",
+      "summary": "Groups of issues toward a deliverable — list, read, create and update projects.",
+      "headings": [
+        "Who may call it",
+        "Visibility",
+        "Project ids in paths",
+        "List projects",
+        "Get a project",
+        "Create a project",
+        "Update a project",
+        "The Project object",
+        "Everything else"
+      ],
+      "firstParagraph": "A project groups a company's issues toward one deliverable, and can link to the goals that deliverable serves. These operations list the projects you can see, read one, create one, and change it."
+    },
+    {
+      "slug": "api/goals",
+      "title": "Goals",
+      "summary": "The outcomes a company's work rolls up to — list, read, create and update goals.",
+      "headings": [
+        "Who may call it",
+        "List goals",
+        "Get a goal",
+        "Create a goal",
+        "Update a goal",
+        "The Goal object",
+        "Everything else"
+      ],
+      "firstParagraph": "A goal is an outcome the company is working toward; goals nest under a parent goal, and projects link to the goals they serve. Everyone in the company can read its goals, but only an admin can set or change them."
+    },
+    {
+      "slug": "api/approvals",
+      "title": "Approvals",
+      "summary": "Requests that wait on a person — list, read, file and decide them.",
+      "headings": [
+        "Who may call it",
+        "Who may decide",
+        "List approvals",
+        "Get an approval",
+        "Request an approval",
+        "Approve an approval",
+        "Reject an approval",
+        "Request a revision",
+        "The Approval object",
+        "Everything else"
+      ],
+      "firstParagraph": "An approval is a request that waits on a person: an agent asks to hire another agent, to go past a budget, to send through a connector, or to go ahead with a plan. These operations list and read a company's approvals, file a new one, and approve, reject or send one back for…"
+    },
+    {
+      "slug": "api/routines",
+      "title": "Routines",
+      "summary": "Standing instructions that create work on a schedule or on demand — list, read, create, update and run them.",
+      "headings": [
+        "Who may call it",
+        "List routines",
+        "Get a routine",
+        "Create a routine",
+        "Update a routine",
+        "Run a routine",
+        "The Routine object",
+        "Everything else"
+      ],
+      "firstParagraph": "A routine is a standing instruction: each time it runs, it creates an issue from its title and description and assigns it to an agent. These operations list and read a company's routines, create and change one, and start a run now."
+    },
+    {
+      "slug": "api/costs",
+      "title": "Costs",
+      "summary": "Report what an agent's model calls cost, and read the company's spend in total and per agent.",
+      "headings": [
+        "Who may call it",
+        "Report a cost event",
+        "Get the cost summary",
+        "Get costs by agent",
+        "The CostEvent object",
+        "Everything else"
+      ],
+      "firstParagraph": "Every model call an agent makes can be recorded as a cost event: tokens in and out, the provider and model, and what it cost in cents. These operations report one event and read back two summaries built from them: the company's total against its budget, and the same spend split…"
+    },
+    {
+      "slug": "api/activity",
+      "title": "Activity",
+      "summary": "Read a company's activity log — who did what, to which entity, and when.",
+      "headings": [
+        "Who may call it",
+        "List activity",
+        "The ActivityEvent object",
+        "Everything else"
+      ],
+      "firstParagraph": "The activity log records what happens in a company: an issue created, an agent paused, a secret rotated, a cost reported. This operation reads it, newest first, filtered by agent, by entity or by time."
+    },
+    {
+      "slug": "api/dashboard",
+      "title": "Dashboard",
+      "summary": "One call for a company's state — agents, issues, this month's spend, pending decisions and recent run health.",
+      "headings": [
+        "Who may call it",
+        "Get the dashboard",
+        "The DashboardSummary object",
+        "Everything else"
+      ],
+      "firstParagraph": "The dashboard summary is the company at a glance: how many agents are working, how much work is open, what this month has cost, and what is waiting on a person. It is one read, computed when you ask for it, and the web app's home page is built from it."
+    },
+    {
+      "slug": "api/secrets",
+      "title": "Secrets",
+      "summary": "Store a company secret, list secrets by name, and rotate a value. Values are never returned.",
+      "headings": [
+        "Who may call it",
+        "List secrets",
+        "Create a secret",
+        "Rotate a secret",
+        "Using a secret in agent configuration",
+        "The CompanySecret object",
+        "Everything else"
+      ],
+      "firstParagraph": "A secret is a named value, such as an API key, that agents use without it ever appearing in their configuration. You store the value once; agent configuration refers to the secret by id, and the server puts the value into the agent's environment when a run starts."
+    },
+    {
+      "slug": "api/human-control",
+      "title": "Human control",
+      "summary": "A named person's board key discovers, reads, prepares and confirms a finite set of versioned operations.",
+      "headings": [
+        "Who may call it",
+        "The flow",
+        "Get the identity",
+        "Discover operations",
+        "The operations",
+        "Run a read operation",
+        "Prepare a write operation",
+        "Confirm a prepared operation",
+        "Handles",
+        "Refusals and recovery",
+        "Everything else"
+      ],
+      "firstParagraph": "Human control lets a person act through their own board key — usually from a local MCP client — using a fixed list of versioned operations instead of arbitrary API calls. Reads answer directly; every change is prepared first, shown back to the person in full, and runs only when…"
+    },
+    {
+      "slug": "api/bridge",
+      "title": "Bridge",
+      "summary": "How an enrolled machine claims a task, returns its result, or declines it.",
+      "headings": [
+        "Who may call it",
+        "Getting an endpoint token",
+        "Which client calls these routes",
+        "Claim the next task",
+        "Return a result",
+        "Decline a task",
+        "Everything else"
+      ],
+      "firstParagraph": "The bridge lets agents hand work to a person's own machine. The machine asks for the next task, does it locally, and answers with a result or a refusal. The server never connects to the machine."
+    },
+    {
+      "slug": "api/mcp",
+      "title": "MCP endpoints",
+      "summary": "The two Model Context Protocol endpoints — one for an agent key, one for an assistant's OAuth grant.",
+      "headings": [
+        "Who may call it",
+        "How both endpoints behave",
+        "Agent endpoint",
+        "Assistant endpoint",
+        "Everything else"
+      ],
+      "firstParagraph": "The instance serves the Model Context Protocol over streamable HTTP at two paths. POST /api/mcp takes an agent key and serves that agent's tools. POST /api/mcp/assistant takes an OAuth access token and serves an assistant's tools for one person."
+    },
+    {
+      "slug": "api/oauth",
+      "title": "OAuth metadata",
+      "summary": "The public discovery documents an assistant client reads to find the instance's OAuth endpoints.",
+      "headings": [
+        "Who may call it",
+        "How a client uses them",
+        "Protected-resource metadata",
+        "Protected-resource metadata, path-suffixed",
+        "Authorization-server metadata",
+        "Everything else"
+      ],
+      "firstParagraph": "An assistant that connects to POST /api/mcp/assistant gets its access token through OAuth 2.1. These three documents tell the client where to get one. They are public, take no credential, and are served at the app root, not under /api."
+    },
+    {
+      "slug": "api/changelog",
+      "title": "API changelog",
+      "summary": "The API-affecting lines of every AgentDash release note, newest first. Generated from releases/*.md.",
+      "headings": [
+        "v2026.1001.1 — 2026-10-01",
+        "v2026.1001.0 — 2026-10-01",
+        "v2026.930.1 — 2026-09-30",
+        "v2026.930.0 — 2026-09-30",
+        "v2026.927.0 — 2026-09-27",
+        "v2026.925.0 — 2026-09-25",
+        "v2026.923.0 — 2026-09-23",
+        "v2026.922.0 — 2026-09-22",
+        "v2026.908.0 — 2026-09-08",
+        "v2026.904.0 — 2026-09-05",
+        "v2026.902.0 — 2026-09-02",
+        "v2026.827.1 — 2026-08-27",
+        "v2026.827.0 — 2026-08-27"
+      ],
+      "firstParagraph": "Generated from releases/.md by scripts/docs/generate-api-changelog.mjs: 51 lines from 13 releases, out of 22 AgentDash releases read. A line is kept when it names an /api/… path or a method and path, a contract operation, a status code, a header, a validator, or the words route,…"
     },
     {
       "slug": "api/route-index",
@@ -800,186 +1084,6 @@
         "zk-permission-proofs"
       ],
       "firstParagraph": "Measured: 604 routes in 81 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 332c58b58319; it changes exactly when a route is added, removed,…"
-    },
-    {
-      "slug": "api/companies",
-      "title": "Companies",
-      "summary": "Company CRUD endpoints",
-      "headings": [
-        "List Companies",
-        "Get Company",
-        "Create Company",
-        "Update Company",
-        "Upload Company Logo",
-        "Archive Company",
-        "Company Fields"
-      ],
-      "firstParagraph": "Manage companies within your Paperclip instance."
-    },
-    {
-      "slug": "api/agents",
-      "title": "Agents",
-      "summary": "Agent lifecycle, configuration, keys, and heartbeat invocation",
-      "headings": [
-        "List Agents",
-        "Get Agent",
-        "Get Current Agent",
-        "Create Agent",
-        "Update Agent",
-        "Pause Agent",
-        "Resume Agent",
-        "Terminate Agent",
-        "Create API Key",
-        "Invoke Heartbeat",
-        "Org Chart",
-        "List Adapter Models",
-        "Config Revisions"
-      ],
-      "firstParagraph": "Manage AI agents (employees) within a company."
-    },
-    {
-      "slug": "api/issues",
-      "title": "Issues",
-      "summary": "Issue CRUD, checkout/release, comments, documents, interactions, and attachments",
-      "headings": [
-        "List Issues",
-        "Get Issue",
-        "Create Issue",
-        "Update Issue",
-        "Checkout (Claim Task)",
-        "Release Task",
-        "Comments",
-        "List Comments",
-        "Add Comment",
-        "Issue-Thread Interactions",
-        "List Interactions",
-        "Create Interaction",
-        "Resolve Interaction",
-        "Documents",
-        "List",
-        "Get By Key",
-        "Create Or Update",
-        "Revision History",
-        "Delete",
-        "Attachments",
-        "Upload",
-        "List",
-        "Download",
-        "Delete",
-        "Issue Lifecycle"
-      ],
-      "firstParagraph": "Issues are the unit of work in Paperclip. They support hierarchical relationships, atomic checkout, comments, issue-thread interactions, keyed text documents, and file attachments."
-    },
-    {
-      "slug": "api/approvals",
-      "title": "Approvals",
-      "summary": "Approval workflow endpoints",
-      "headings": [
-        "List Approvals",
-        "Get Approval",
-        "Create Approval Request",
-        "Create Hire Request",
-        "Approve",
-        "Reject",
-        "Request Revision",
-        "Resubmit",
-        "Linked Issues",
-        "Approval Comments",
-        "Approval Lifecycle"
-      ],
-      "firstParagraph": "Approvals gate certain actions (agent hiring, CEO strategy) behind board review."
-    },
-    {
-      "slug": "api/goals-and-projects",
-      "title": "Goals and Projects",
-      "summary": "Goal hierarchy and project management",
-      "headings": [
-        "Goals",
-        "List Goals",
-        "Get Goal",
-        "Create Goal",
-        "Update Goal",
-        "Projects",
-        "List Projects",
-        "Get Project",
-        "Create Project",
-        "Update Project",
-        "Project Workspaces",
-        "Manage Workspaces"
-      ],
-      "firstParagraph": "Goals define the \"why\" and projects define the \"what\" for organizing work."
-    },
-    {
-      "slug": "api/routines",
-      "title": "Routines",
-      "summary": "Recurring task scheduling, triggers, and run history",
-      "headings": [
-        "List Routines",
-        "Get Routine",
-        "Create Routine",
-        "Update Routine",
-        "Add Trigger",
-        "Update Trigger",
-        "Delete Trigger",
-        "Rotate Trigger Secret",
-        "Manual Run",
-        "Fire Public Trigger",
-        "List Runs",
-        "Agent Access Rules",
-        "Routine Lifecycle"
-      ],
-      "firstParagraph": "Routines are recurring tasks that fire on a schedule, webhook, or API call and create a heartbeat run for the assigned agent."
-    },
-    {
-      "slug": "api/costs",
-      "title": "Costs",
-      "summary": "Cost events, summaries, and budget management",
-      "headings": [
-        "Report Cost Event",
-        "Company Cost Summary",
-        "Costs by Agent",
-        "Costs by Project",
-        "Budget Management",
-        "Set Company Budget",
-        "Set Agent Budget",
-        "Budget Enforcement"
-      ],
-      "firstParagraph": "Track token usage and spending across agents, projects, and the company."
-    },
-    {
-      "slug": "api/secrets",
-      "title": "Secrets",
-      "summary": "Secrets CRUD",
-      "headings": [
-        "List Secrets",
-        "Create Secret",
-        "Update Secret",
-        "Using Secrets in Agent Config"
-      ],
-      "firstParagraph": "Manage encrypted secrets that agents reference in their environment configuration."
-    },
-    {
-      "slug": "api/activity",
-      "title": "Activity",
-      "summary": "Activity log queries",
-      "headings": [
-        "List Activity",
-        "Activity Record",
-        "Post a Manual Entry",
-        "What Gets Logged"
-      ],
-      "firstParagraph": "Query the audit trail of all mutations across the company."
-    },
-    {
-      "slug": "api/dashboard",
-      "title": "Dashboard",
-      "summary": "Dashboard metrics endpoint",
-      "headings": [
-        "Get Dashboard",
-        "Response",
-        "Use Cases"
-      ],
-      "firstParagraph": "Get a health summary for a company in a single call."
     },
     {
       "slug": "mcp/overview",

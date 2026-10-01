@@ -125,29 +125,42 @@
               "api/index",
               "api/authentication",
               "api/api-keys",
-              "api/conventions"
+              "api/conventions",
+              "api/versioning"
             ]
           },
           {
             "group": "Reference",
             "pages": [
-              "api/reference",
-              "api/route-index"
+              "api/reference"
             ]
           },
           {
             "group": "Resources",
             "pages": [
+              "api/health",
               "api/companies",
               "api/agents",
               "api/issues",
+              "api/projects",
+              "api/goals",
               "api/approvals",
-              "api/goals-and-projects",
               "api/routines",
               "api/costs",
-              "api/secrets",
               "api/activity",
-              "api/dashboard"
+              "api/dashboard",
+              "api/secrets",
+              "api/human-control",
+              "api/bridge",
+              "api/mcp",
+              "api/oauth"
+            ]
+          },
+          {
+            "group": "Changes and coverage",
+            "pages": [
+              "api/changelog",
+              "api/route-index"
             ]
           }
         ]

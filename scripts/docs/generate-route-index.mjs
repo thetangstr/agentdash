@@ -308,6 +308,16 @@ export function readContract(repoRoot) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
+/**
+ * Where an operation is on the rendered reference: `/api/reference#tag/<tag>/<operationId>`
+ * (docs-relative; the docs renderer prefixes `/docs`). The operation part is the
+ * operationId because ui/src/components/docs/ApiReference.tsx sets Scalar's
+ * `generateOperationSlug` to it (ui/src/lib/api-reference-server.ts).
+ */
+export function referenceAnchor(tag, operationId) {
+  return `/api/reference#tag/${tag}/${operationId}`;
+}
+
 export function routeKey(method, routePath) {
   return `${method.toUpperCase()} ${routePath}`;
 }
@@ -382,7 +392,7 @@ export function renderRouteIndex(index, contract) {
       let status = "internal";
       if (entry) {
         const page = tagPages.get(entry.tag);
-        status = `contract: [\`${entry.operationId}\`](/api/reference)${page ? ` · [guide](/${page})` : ""}`;
+        status = `contract: [\`${entry.operationId}\`](${referenceAnchor(entry.tag, entry.operationId)})${page ? ` · [guide](/${page})` : ""}`;
       }
       lines.push(`| ${route.method} | \`${escapeCell(route.path)}\` | ${status} |`);
     }

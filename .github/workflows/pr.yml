@@ -45,12 +45,14 @@ jobs:
         # scripts/ci/profile-ux-allowlist.json, which may only shrink.
         run: node scripts/ci/check-no-profile-ux.mjs && node --test scripts/ci/check-no-profile-ux.test.mjs
 
-      - name: API reference matches the server (route index + contract)
+      - name: API reference matches the server (route index + contract + pages + changelog)
         # doc/plans/2026-10-01-public-docs-section.md: every route in
         # docs/api/contract.json must still be registered (a renamed contract
-        # route fails), and docs/api/route-index.md must be what the route files
-        # generate. Dependency-free; the OpenAPI half needs an install and runs
-        # in verify-build.
+        # route fails), docs/api/route-index.md must be what the route files
+        # generate, every contract operation must be linked from its resource
+        # page, and docs/api/changelog.md must be what releases/*.md generate.
+        # Dependency-free; the OpenAPI half needs an install and runs in
+        # verify-build.
         run: node scripts/ci/check-api-reference-drift.mjs --routes-only && node --test scripts/ci/check-api-reference-drift.test.mjs
 
       - name: Release log is complete and indexed

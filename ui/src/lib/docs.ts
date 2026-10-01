@@ -48,7 +48,7 @@ const docModules = import.meta.glob(
     "../../../docs/guides/agent-developer/{how-agents-work,heartbeat-protocol,writing-a-skill,task-workflow,comments-and-communication,handling-approvals,cost-reporting}.{md,mdx}",
     "../../../docs/deploy/{overview,local-development,tailscale-private-access,docker,deployment-modes,database,secrets,storage,environment-variables}.{md,mdx}",
     "../../../docs/adapters/{overview,claude-local,codex-local,process,http,external-adapters,adapter-ui-parser,creating-an-adapter}.{md,mdx}",
-    "../../../docs/api/{index,authentication,api-keys,conventions,reference,route-index,companies,agents,issues,approvals,goals-and-projects,routines,costs,secrets,activity,dashboard}.{md,mdx}",
+    "../../../docs/api/{index,authentication,api-keys,conventions,versioning,reference,health,companies,agents,issues,projects,goals,approvals,routines,costs,activity,dashboard,secrets,human-control,bridge,mcp,oauth,changelog,route-index}.{md,mdx}",
     "../../../docs/mcp/{overview,connecting,toolsets,resources,playbooks}.{md,mdx}",
     "../../../docs/mcp/tools/{agent,setup,assistant,human,bridge}.{md,mdx}",
     "../../../docs/cli/{agentdash-connect,agentdash-mcp,overview,setup-commands,control-plane-commands}.{md,mdx}",
