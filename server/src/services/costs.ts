@@ -230,7 +230,10 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       };
     },
 
-    issueTreeSummary: async (companyId: string, issueId: string) => {
+    // AgentDash (GH #902): `visibleWhere` is the caller's restricted-project
+    // condition over issues.project_id — a descendant in a restricted project
+    // must not add its spend to a visible parent's tree total.
+    issueTreeSummary: async (companyId: string, issueId: string, opts: { visibleWhere?: SQL } = {}) => {
       // Callers must resolve and authorize a visible root issue before invoking this.
       // The route does that so zero counts are not mistaken for a missing root.
       const childIssues = alias(issues, "child");
@@ -274,6 +277,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
             eq(issues.companyId, companyId),
             isNull(issues.hiddenAt),
             issueTreeCondition,
+            opts.visibleWhere,
           ),
         );
 

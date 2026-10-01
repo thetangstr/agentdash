@@ -11,9 +11,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { and, sql } from "drizzle-orm";
 import { HEARTBEAT_RUN_STATUSES } from "@paperclipai/shared";
-import { createDb, companies, agents, costEvents, financeEvents, heartbeatRuns, issues, projectAccess, projects } from "@paperclipai/db";
+import { createDb, companies, agents, budgetIncidents, budgetPolicies, costEvents, financeEvents, heartbeatRuns, issues, projectAccess, projects } from "@paperclipai/db";
 import { costService } from "../services/costs.ts";
 import { financeService } from "../services/finance.ts";
+import { budgetService } from "../services/budgets.ts";
 import { projectScopedVisibilityCondition } from "../routes/visibility.ts";
 import {
   getEmbeddedPostgresTestSupport,
@@ -255,7 +256,8 @@ describe("cost routes", () => {
 
     expect(res.status).toBe(200);
     expect(mockIssueService.getByIdentifier).toHaveBeenCalledWith("PAP-1");
-    expect(mockCostService.issueTreeSummary).toHaveBeenCalledWith("company-1", "issue-1");
+    // AgentDash (GH #902): a local-implicit board actor sees everything, so no filter.
+    expect(mockCostService.issueTreeSummary).toHaveBeenCalledWith("company-1", "issue-1", { visibleWhere: undefined });
     expect(res.body).toEqual({
       issueId: "issue-1",
       issueCount: 1,
@@ -353,6 +355,28 @@ describe("cost routes", () => {
     expect(financeBody, "finance events carry raw issueId/projectId — both paths need the filter")
       .toContain("financeEventsTable.projectId");
     expect(financeBody).toContain("financeEventsTable.issueId");
+  });
+
+  it("wires restricted-project visibility into /budgets/overview and /issues/:id/cost-summary", async () => {
+    // AgentDash (GH #902): same source-level guard as the by-project one —
+    // budgets/overview is only company-gated, so the restricted-project
+    // filter is the only thing keeping project policies out.
+    const source = await readFile(
+      new URL("../routes/costs.ts", import.meta.url),
+      "utf8",
+    );
+
+    const overview = source.slice(source.indexOf('router.get("/companies/:companyId/budgets/overview"'));
+    const overviewBody = overview.slice(0, overview.indexOf("});"));
+    expect(overviewBody, "budget overview must not surface restricted project names or spend")
+      .toContain("projectScopedVisibilityCondition(");
+    expect(overviewBody).toContain("budgetPoliciesTable.scopeId");
+
+    const treeSummary = source.slice(source.indexOf('router.get("/issues/:id/cost-summary"'));
+    // The handler has an early 404 `});`, so bound it by the next route.
+    const treeBody = treeSummary.slice(0, treeSummary.indexOf("router.", 10));
+    expect(treeBody, "restricted descendants must not count toward a visible parent's total")
+      .toContain("projectScopedVisibilityCondition(req, issue.companyId, issuesTable.projectId)");
   });
 
   it("rejects company budget updates for board users outside the company", async () => {
@@ -483,6 +507,7 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   let db!: ReturnType<typeof createDb>;
   let costs!: ReturnType<typeof costService>;
   let finance!: ReturnType<typeof financeService>;
+  let budgets!: ReturnType<typeof budgetService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
   beforeAll(async () => {
@@ -490,9 +515,12 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     db = createDb(tempDb.connectionString);
     costs = costService(db);
     finance = financeService(db);
+    budgets = budgetService(db);
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(budgetIncidents);
+    await db.delete(budgetPolicies);
     await db.delete(financeEvents);
     await db.delete(costEvents);
     await db.delete(heartbeatRuns);
@@ -1120,6 +1148,151 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
       ),
     });
     expect(adminRows).toHaveLength(5);
+  });
+
+  it("budgets.overview hides restricted project policies and their incidents from actors off the access list", async () => {
+    // AgentDash (GH #902)
+    const companyId = randomUUID();
+    const openProjectId = randomUUID();
+    const restrictedProjectId = randomUUID();
+    const outsiderAgentId = randomUUID();
+    const listedAgentId = randomUUID();
+    const restrictedPolicyId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: prefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      { id: outsiderAgentId, companyId, name: "Outsider", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+      { id: listedAgentId, companyId, name: "Listed", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+    ]);
+    await db.insert(projects).values([
+      { id: openProjectId, companyId, name: "Open", visibility: "company", createdByUserId: "owner-1" },
+      { id: restrictedProjectId, companyId, name: "Secret", visibility: "restricted", createdByUserId: "sam-1" },
+    ]);
+    await db.insert(projectAccess).values({
+      projectId: restrictedProjectId,
+      principalType: "agent",
+      principalId: listedAgentId,
+      grantedByUserId: "sam-1",
+    });
+    await db.insert(budgetPolicies).values([
+      { companyId, scopeType: "company", scopeId: companyId, windowKind: "calendar_month_utc", amount: 10_000 },
+      { companyId, scopeType: "agent", scopeId: outsiderAgentId, windowKind: "calendar_month_utc", amount: 5_000 },
+      { companyId, scopeType: "project", scopeId: openProjectId, windowKind: "lifetime", amount: 3_000 },
+      { id: restrictedPolicyId, companyId, scopeType: "project", scopeId: restrictedProjectId, windowKind: "lifetime", amount: 2_000 },
+    ]);
+    await db.insert(budgetIncidents).values({
+      companyId,
+      policyId: restrictedPolicyId,
+      scopeType: "project",
+      scopeId: restrictedProjectId,
+      metric: "billed_cents",
+      windowKind: "lifetime",
+      windowStart: new Date("2026-01-01T00:00:00.000Z"),
+      windowEnd: new Date("2027-01-01T00:00:00.000Z"),
+      thresholdType: "soft",
+      amountLimit: 2_000,
+      amountObserved: 1_900,
+      status: "open",
+    });
+    await db.insert(costEvents).values([
+      { companyId, agentId: listedAgentId, projectId: restrictedProjectId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 10, cachedInputTokens: 0, outputTokens: 5, costCents: 1_900, occurredAt: new Date() },
+    ]);
+
+    // Same wiring the route applies.
+    const overviewFor = (actor: unknown) => {
+      const req = { actor } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0];
+      return budgets.overview(companyId, {
+        visibleWhere: projectScopedVisibilityCondition(
+          req,
+          companyId,
+          sql`(case when ${budgetPolicies.scopeType} = 'project' then ${budgetPolicies.scopeId} end)`,
+        ),
+      });
+    };
+
+    const outsider = await overviewFor({ type: "agent", agentId: outsiderAgentId });
+    expect(outsider.policies.map((p) => p.scopeId).sort()).toEqual([companyId, outsiderAgentId, openProjectId].sort());
+    expect(outsider.policies.map((p) => p.scopeName)).not.toContain("Secret");
+    expect(outsider.activeIncidents).toHaveLength(0);
+
+    const listed = await overviewFor({ type: "agent", agentId: listedAgentId });
+    expect(listed.policies.map((p) => p.scopeId)).toContain(restrictedProjectId);
+    expect(listed.policies.find((p) => p.scopeId === restrictedProjectId)?.observedAmount).toBe(1_900);
+    expect(listed.activeIncidents.map((i) => i.scopeName)).toEqual(["Secret"]);
+
+    const admin = await overviewFor({ type: "board", userId: "admin-1", isInstanceAdmin: true });
+    expect(admin.policies).toHaveLength(4);
+    expect(admin.activeIncidents).toHaveLength(1);
+  });
+
+  it("issueTreeSummary leaves a restricted descendant's spend out of a visible parent's total", async () => {
+    // AgentDash (GH #902)
+    const companyId = randomUUID();
+    const openProjectId = randomUUID();
+    const restrictedProjectId = randomUUID();
+    const outsiderAgentId = randomUUID();
+    const listedAgentId = randomUUID();
+    const rootIssueId = randomUUID();
+    const openChildId = randomUUID();
+    const secretChildId = randomUUID();
+
+    const prefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: prefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      { id: outsiderAgentId, companyId, name: "Outsider", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+      { id: listedAgentId, companyId, name: "Listed", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+    ]);
+    await db.insert(projects).values([
+      { id: openProjectId, companyId, name: "Open", visibility: "company", createdByUserId: "owner-1" },
+      { id: restrictedProjectId, companyId, name: "Secret", visibility: "restricted", createdByUserId: "sam-1" },
+    ]);
+    await db.insert(projectAccess).values({
+      projectId: restrictedProjectId,
+      principalType: "agent",
+      principalId: listedAgentId,
+      grantedByUserId: "sam-1",
+    });
+    await db.insert(issues).values([
+      { id: rootIssueId, companyId, projectId: openProjectId, title: "Root", status: "in_progress", priority: "medium", issueNumber: 1, identifier: `${prefix}-1` },
+      { id: openChildId, companyId, projectId: openProjectId, parentId: rootIssueId, title: "Open child", status: "done", priority: "medium", issueNumber: 2, identifier: `${prefix}-2` },
+      { id: secretChildId, companyId, projectId: restrictedProjectId, parentId: rootIssueId, title: "Secret child", status: "done", priority: "medium", issueNumber: 3, identifier: `${prefix}-3` },
+    ]);
+    await db.insert(costEvents).values([
+      { companyId, agentId: outsiderAgentId, issueId: rootIssueId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 10, cachedInputTokens: 0, outputTokens: 1, costCents: 100, occurredAt: new Date("2026-04-10T00:00:00.000Z") },
+      { companyId, agentId: outsiderAgentId, issueId: openChildId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 20, cachedInputTokens: 0, outputTokens: 2, costCents: 200, occurredAt: new Date("2026-04-10T00:01:00.000Z") },
+      { companyId, agentId: listedAgentId, issueId: secretChildId, provider: "openai", biller: "openai", billingType: "metered_api", model: "gpt-5", inputTokens: 40, cachedInputTokens: 0, outputTokens: 4, costCents: 400, occurredAt: new Date("2026-04-10T00:02:00.000Z") },
+    ]);
+
+    const summaryFor = (actor: unknown) => {
+      const req = { actor } as unknown as Parameters<typeof projectScopedVisibilityCondition>[0];
+      return costs.issueTreeSummary(companyId, rootIssueId, {
+        visibleWhere: projectScopedVisibilityCondition(req, companyId, issues.projectId),
+      });
+    };
+
+    const outsider = await summaryFor({ type: "agent", agentId: outsiderAgentId });
+    expect(outsider.issueCount).toBe(2);
+    expect(outsider.costCents).toBe(300);
+    expect(outsider.inputTokens).toBe(30);
+
+    const listed = await summaryFor({ type: "agent", agentId: listedAgentId });
+    expect(listed.issueCount).toBe(3);
+    expect(listed.costCents).toBe(700);
+
+    const admin = await summaryFor({ type: "board", userId: "admin-1", isInstanceAdmin: true });
+    expect(admin.issueCount).toBe(3);
+    expect(admin.costCents).toBe(700);
   });
 });
 
