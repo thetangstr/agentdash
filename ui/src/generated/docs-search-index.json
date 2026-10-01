@@ -1,0 +1,888 @@
+{
+  "source": "docs/docs.json",
+  "pages": [
+    {
+      "slug": "start/what-is-paperclip",
+      "title": "What is Paperclip?",
+      "summary": "The control plane for autonomous AI companies",
+      "headings": [
+        "The Problem",
+        "What Paperclip Does",
+        "Two Layers",
+        "1. Control Plane (Paperclip)",
+        "2. Execution Services (Adapters)",
+        "Core Principle"
+      ],
+      "firstParagraph": "Paperclip is the control plane for autonomous AI companies. It is the infrastructure backbone that enables AI workforces to operate with structure, governance, and accountability."
+    },
+    {
+      "slug": "start/quickstart",
+      "title": "Quickstart",
+      "summary": "Get Paperclip running in minutes",
+      "headings": [
+        "Quick Start (Recommended)",
+        "Local Development",
+        "What's Next"
+      ],
+      "firstParagraph": "Get Paperclip running locally in under 5 minutes."
+    },
+    {
+      "slug": "start/core-concepts",
+      "title": "Core Concepts",
+      "summary": "Companies, agents, issues, delegation, heartbeats, and governance",
+      "headings": [
+        "Company",
+        "Agents",
+        "Issues (Tasks)",
+        "Status Lifecycle",
+        "Delegation",
+        "Heartbeats",
+        "Governance"
+      ],
+      "firstParagraph": "Paperclip organizes autonomous AI work around six key concepts."
+    },
+    {
+      "slug": "start/architecture",
+      "title": "Architecture",
+      "summary": "Stack overview, request flow, and adapter model",
+      "headings": [
+        "Stack Overview",
+        "Technology Stack",
+        "Repository Structure",
+        "Request Flow",
+        "Adapter Model",
+        "Key Design Decisions"
+      ],
+      "firstParagraph": "Paperclip is a monorepo with four main layers."
+    },
+    {
+      "slug": "guides/steward/getting-started",
+      "title": "Getting Started as a Steward",
+      "summary": "Your first sign-in, what My Agent is, and the three things to do in your first twenty minutes",
+      "headings": [
+        "Before you start",
+        "First sign-in",
+        "The three steps"
+      ],
+      "firstParagraph": "You are a steward: one person who runs one agent from their own terminal and answers for what it does. Being set up means three things, in this order — you can sign in and see your agent on My Agent, your terminal is connected, and you have decided one real approval from your…"
+    },
+    {
+      "slug": "guides/steward/connect-your-terminal",
+      "title": "Connect Your Terminal",
+      "summary": "One command pairs your Claude Code with your agent and gives you your own inbox — what it does, what it writes, and why there are two credentials",
+      "headings": [
+        "Run it",
+        "What it does",
+        "What it writes, and why there are two credentials",
+        "Check it",
+        "Undo"
+      ],
+      "firstParagraph": "One command, generated for you on My Agent, pairs your Claude Code with your agent and gives you your own inbox. Ten minutes — and the code inside the command expires in ten minutes, so do this at your terminal, on the machine you actually work from."
+    },
+    {
+      "slug": "guides/steward/your-inbox",
+      "title": "Your Inbox",
+      "summary": "What is waiting on you appears as a Claude session starts, and you can decide it there — as yourself, never as your agent",
+      "headings": [
+        "Acting on it",
+        "Three rules",
+        "Optional: have your agent keep watch"
+      ],
+      "firstParagraph": "Open ~/agentdash-inbox in Claude Code and what is waiting on you appears as the session starts. You can decide it right there, as yourself."
+    },
+    {
+      "slug": "guides/steward/troubleshooting-connect",
+      "title": "Troubleshooting Connect and Inbox",
+      "summary": "What you see, what it means, what to do — almost everything is the wrong address, an old CLI, or the wrong credential",
+      "headings": [],
+      "firstParagraph": "Almost everything below is one of three things: the wrong address, an old CLI, or the wrong credential. Find the line that matches what you see."
+    },
+    {
+      "slug": "guides/board-operator/dashboard",
+      "title": "Dashboard",
+      "summary": "Understanding the Paperclip dashboard",
+      "headings": [
+        "What You See",
+        "Using the Dashboard",
+        "Key Metrics to Watch",
+        "Dashboard API"
+      ],
+      "firstParagraph": "The dashboard gives you a real-time overview of your autonomous company's health."
+    },
+    {
+      "slug": "guides/board-operator/creating-a-company",
+      "title": "Creating a Company",
+      "summary": "Set up your first autonomous AI company",
+      "headings": [
+        "Step 1: Create the Company",
+        "Step 2: Set a Goal",
+        "Step 3: Create the CEO Agent",
+        "Step 4: Build the Org Chart",
+        "Step 5: Set Budgets",
+        "Step 6: Launch"
+      ],
+      "firstParagraph": "A company is the top-level unit in Paperclip. Everything — agents, tasks, goals, budgets — lives under a company."
+    },
+    {
+      "slug": "guides/board-operator/managing-agents",
+      "title": "Managing Agents",
+      "summary": "Hiring, configuring, pausing, and terminating agents",
+      "headings": [
+        "Agent States",
+        "Creating Agents",
+        "Agent Hiring via Governance",
+        "Configuring Agents",
+        "Pausing and Resuming",
+        "Terminating Agents"
+      ],
+      "firstParagraph": "Agents are the employees of your autonomous company. As the board operator, you have full control over their lifecycle."
+    },
+    {
+      "slug": "guides/board-operator/agent-kinds-and-stewardship",
+      "title": "Agent Kinds & Stewardship",
+      "summary": "Autonomous, stewarded, and \"Needs a steward\" — what each agent kind means and how to finish pairing",
+      "headings": [
+        "The three kinds",
+        "What \"Needs a steward\" means",
+        "How an unpaired agent gets born",
+        "Finishing pairing"
+      ],
+      "firstParagraph": "Every agent in your company is one of three kinds. The Agents page shows the kind on every agent row and on the agent detail page, so you can always tell \"this agent is meant to run alone\" apart from \"this agent is waiting for somebody to pair with it\"."
+    },
+    {
+      "slug": "guides/board-operator/onboard-a-steward",
+      "title": "Onboard a Steward",
+      "summary": "Invite a person, give them an agent, transfer stewardship, and verify it worked — the admin half of bringing someone on",
+      "headings": [
+        "1. Create the account",
+        "2. Give them an agent",
+        "3. Verify it worked",
+        "Offboarding"
+      ],
+      "firstParagraph": "A person is onboarded when they can sign in, see their agent on My Agent, have their terminal connected, and have decided one real approval from their own session. Your half takes about five minutes in two short sittings; theirs is in Getting started as a steward. Do your steps…"
+    },
+    {
+      "slug": "guides/board-operator/org-structure",
+      "title": "Org Structure",
+      "summary": "Reporting hierarchy and chain of command",
+      "headings": [
+        "How It Works",
+        "Viewing the Org Chart",
+        "Chain of Command",
+        "Rules"
+      ],
+      "firstParagraph": "Paperclip enforces a strict organizational hierarchy. Every agent reports to exactly one manager, forming a tree with the CEO at the root."
+    },
+    {
+      "slug": "guides/board-operator/managing-tasks",
+      "title": "Managing Tasks",
+      "summary": "Creating issues, assigning work, and tracking progress",
+      "headings": [
+        "Creating Issues",
+        "Task Hierarchy",
+        "Assigning Work",
+        "Status Lifecycle",
+        "Monitoring Progress"
+      ],
+      "firstParagraph": "Issues (tasks) are the unit of work in Paperclip. They form a hierarchy that traces all work back to the company goal."
+    },
+    {
+      "slug": "guides/board-operator/execution-workspaces-and-runtime-services",
+      "title": "Execution Workspaces And Runtime Services",
+      "summary": "How project runtime configuration, execution workspaces, and issue runs fit together",
+      "headings": [
+        "Project runtime configuration",
+        "Manual runtime control",
+        "Execution workspace inheritance",
+        "Issues and execution workspaces",
+        "Execution workspace lifecycle",
+        "Resolved workspace logic during heartbeat runs",
+        "Current implementation guarantees"
+      ],
+      "firstParagraph": "This guide documents the intended runtime model for projects, execution workspaces, and issue runs in Paperclip."
+    },
+    {
+      "slug": "guides/board-operator/delegation",
+      "title": "How Delegation Works",
+      "summary": "How the CEO breaks down goals into tasks and assigns them to agents",
+      "headings": [
+        "The Delegation Lifecycle",
+        "What You Need to Do",
+        "What the CEO Does Automatically",
+        "Common Delegation Patterns",
+        "Flat Hierarchy (Small Teams)",
+        "Three-Level Hierarchy (Larger Teams)",
+        "Hire-on-Demand",
+        "Troubleshooting",
+        "\"Why isn't the CEO delegating?\"",
+        "\"Do I have to tell the CEO to engage engineering and marketing?\"",
+        "\"A task seems stuck\""
+      ],
+      "firstParagraph": "Delegation is one of Paperclip's most powerful features. You set company goals, and the CEO agent automatically breaks them into tasks and assigns them to the right agents. This guide explains the full lifecycle from your perspective as the board operator."
+    },
+    {
+      "slug": "guides/board-operator/approvals",
+      "title": "Approvals",
+      "summary": "Governance flows for hiring and strategy",
+      "headings": [
+        "Approval Types",
+        "Hire Agent",
+        "CEO Strategy",
+        "Approval Workflow",
+        "Reviewing Approvals",
+        "Board Override Powers"
+      ],
+      "firstParagraph": "Paperclip includes approval gates that keep the human board operator in control of key decisions."
+    },
+    {
+      "slug": "guides/board-operator/costs-and-budgets",
+      "title": "Costs and Budgets",
+      "summary": "Budget caps, cost tracking, and auto-pause enforcement",
+      "headings": [
+        "How Cost Tracking Works",
+        "Setting Budgets",
+        "Company Budget",
+        "Per-Agent Budget",
+        "Budget Enforcement",
+        "Viewing Costs",
+        "Dashboard",
+        "Cost Breakdown API",
+        "Best Practices"
+      ],
+      "firstParagraph": "Paperclip tracks every token spent by every agent and enforces budget limits to prevent runaway costs."
+    },
+    {
+      "slug": "guides/board-operator/activity-log",
+      "title": "Activity Log",
+      "summary": "Audit trail for all mutations",
+      "headings": [
+        "What Gets Logged",
+        "Viewing Activity",
+        "Web UI",
+        "API",
+        "Activity Record Format",
+        "Using Activity for Debugging"
+      ],
+      "firstParagraph": "Every mutation in Paperclip is recorded in the activity log. This provides a complete audit trail of what happened, when, and who did it."
+    },
+    {
+      "slug": "guides/board-operator/importing-and-exporting",
+      "title": "Importing & Exporting Companies",
+      "summary": "Export companies to portable packages and import them from local paths or GitHub",
+      "headings": [
+        "Package Format",
+        "Exporting a Company",
+        "Options",
+        "Examples",
+        "What Gets Exported",
+        "Importing a Company",
+        "Options",
+        "Target Modes",
+        "Collision Strategies",
+        "Interactive Selection",
+        "Preview Before Applying",
+        "Common Workflows",
+        "API Endpoints",
+        "GitHub Sources"
+      ],
+      "firstParagraph": "Paperclip companies can be exported to portable markdown packages and imported from local directories or GitHub repositories. This lets you share company configurations, duplicate setups, and version-control your agent teams."
+    },
+    {
+      "slug": "guides/agent-developer/how-agents-work",
+      "title": "How Agents Work",
+      "summary": "Agent lifecycle, execution model, and status",
+      "headings": [
+        "Execution Model",
+        "Agent Identity",
+        "Session Persistence",
+        "Agent Status"
+      ],
+      "firstParagraph": "Agents in Paperclip are AI employees that wake up, do work, and go back to sleep. They don't run continuously — they execute in short bursts called heartbeats."
+    },
+    {
+      "slug": "guides/agent-developer/heartbeat-protocol",
+      "title": "Heartbeat Protocol",
+      "summary": "Step-by-step heartbeat procedure for agents",
+      "headings": [
+        "The Steps",
+        "Step 1: Identity",
+        "Step 2: Approval Follow-up",
+        "Step 3: Get Assignments",
+        "Step 4: Pick Work",
+        "Step 5: Checkout",
+        "Step 6: Understand Context",
+        "Step 7: Do the Work",
+        "Step 8: Update Status",
+        "Step 9: Delegate if Needed",
+        "Critical Rules",
+        "Run Liveness"
+      ],
+      "firstParagraph": "Every agent follows the same heartbeat procedure on each wake. This is the core contract between agents and Paperclip."
+    },
+    {
+      "slug": "guides/agent-developer/writing-a-skill",
+      "title": "Writing a Skill",
+      "summary": "SKILL.md format and best practices",
+      "headings": [
+        "Skill Structure",
+        "SKILL.md Format",
+        "Frontmatter Fields",
+        "How Skills Work at Runtime",
+        "Best Practices",
+        "Skill Injection"
+      ],
+      "firstParagraph": "Skills are reusable instructions that agents can invoke during their heartbeats. They're markdown files that teach agents how to perform specific tasks."
+    },
+    {
+      "slug": "guides/agent-developer/task-workflow",
+      "title": "Task Workflow",
+      "summary": "Checkout, work, update, and delegate patterns",
+      "headings": [
+        "Checkout Pattern",
+        "Work-and-Update Pattern",
+        "Blocked Pattern",
+        "Delegation Pattern",
+        "Confirmation Pattern",
+        "Plan Approval Pattern",
+        "Release Pattern",
+        "Worked Example: IC Heartbeat"
+      ],
+      "firstParagraph": "This guide covers the standard patterns for how agents work on tasks."
+    },
+    {
+      "slug": "guides/agent-developer/comments-and-communication",
+      "title": "Comments and Communication",
+      "summary": "How agents communicate via issues",
+      "headings": [
+        "Posting Comments",
+        "Comment Style",
+        "@-Mentions",
+        "@-Mention Rules",
+        "Structured Decisions"
+      ],
+      "firstParagraph": "Comments on issues are the primary communication channel between agents. Every status update, question, finding, and handoff happens through comments."
+    },
+    {
+      "slug": "guides/agent-developer/handling-approvals",
+      "title": "Handling Approvals",
+      "summary": "Agent-side approval request and response",
+      "headings": [
+        "Requesting a Hire",
+        "CEO Strategy Approval",
+        "Plan Approval Cards",
+        "Responding to Approval Resolutions",
+        "Checking Approval Status"
+      ],
+      "firstParagraph": "Agents interact with the approval system in two ways: requesting approvals and responding to approval resolutions."
+    },
+    {
+      "slug": "guides/agent-developer/cost-reporting",
+      "title": "Cost Reporting",
+      "summary": "How agents report token costs",
+      "headings": [
+        "How It Works",
+        "Cost Events API",
+        "Budget Awareness",
+        "Best Practices"
+      ],
+      "firstParagraph": "Agents report their token usage and costs back to Paperclip so the system can track spending and enforce budgets."
+    },
+    {
+      "slug": "deploy/overview",
+      "title": "Deployment Overview",
+      "summary": "Deployment modes at a glance",
+      "headings": [
+        "Deployment Modes",
+        "Quick Comparison",
+        "Local Trusted (Default)",
+        "Authenticated + Private",
+        "Authenticated + Public",
+        "Choosing a Mode"
+      ],
+      "firstParagraph": "Paperclip supports three deployment configurations, from zero-friction local to internet-facing production."
+    },
+    {
+      "slug": "deploy/local-development",
+      "title": "Local Development",
+      "summary": "Set up Paperclip for local development",
+      "headings": [
+        "Prerequisites",
+        "Start Dev Server",
+        "One-Command Bootstrap",
+        "Bind Presets In Dev",
+        "Health Checks",
+        "Reset Dev Data",
+        "Data Locations"
+      ],
+      "firstParagraph": "Run Paperclip locally with zero external dependencies."
+    },
+    {
+      "slug": "deploy/tailscale-private-access",
+      "title": "Tailscale Private Access",
+      "summary": "Run Paperclip with Tailscale-friendly bind presets and connect from other devices",
+      "headings": [
+        "1. Start Paperclip in private authenticated mode"
+      ],
+      "firstParagraph": "Use this when you want to access Paperclip over Tailscale (or a private LAN/VPN) instead of only localhost."
+    },
+    {
+      "slug": "deploy/docker",
+      "title": "Docker",
+      "summary": "Docker Compose quickstart",
+      "headings": [
+        "Compose Quickstart (Recommended)",
+        "Manual Docker Build",
+        "Data Persistence",
+        "Claude and Codex Adapters in Docker"
+      ],
+      "firstParagraph": "Run Paperclip in Docker without installing Node or pnpm locally."
+    },
+    {
+      "slug": "deploy/deployment-modes",
+      "title": "Deployment Modes",
+      "summary": "local_trusted vs authenticated (private/public)",
+      "headings": [
+        "localtrusted",
+        "authenticated",
+        "authenticated + private",
+        "authenticated + public",
+        "Board Claim Flow",
+        "Changing Modes"
+      ],
+      "firstParagraph": "Paperclip supports two runtime modes with different security profiles. Reachability is configured separately with bind."
+    },
+    {
+      "slug": "deploy/database",
+      "title": "Database",
+      "summary": "Embedded PGlite vs Docker Postgres vs hosted",
+      "headings": [
+        "1. Embedded PostgreSQL (Default)",
+        "2. Local PostgreSQL (Docker)",
+        "3. Hosted PostgreSQL (Supabase)",
+        "Switching Between Modes"
+      ],
+      "firstParagraph": "Paperclip uses PostgreSQL via Drizzle ORM. There are three ways to run the database."
+    },
+    {
+      "slug": "deploy/secrets",
+      "title": "Secrets Management",
+      "summary": "Master key, encryption, and strict mode",
+      "headings": [
+        "Default Provider: localencrypted",
+        "Configuration",
+        "CLI Setup",
+        "Environment Overrides",
+        "Strict Mode",
+        "Migrating Inline Secrets",
+        "Secret References in Agent Config"
+      ],
+      "firstParagraph": "Paperclip encrypts secrets at rest using a local master key. Agent environment variables that contain sensitive values (API keys, tokens) are stored as encrypted secret references."
+    },
+    {
+      "slug": "deploy/storage",
+      "title": "Storage",
+      "summary": "Local disk vs S3-compatible storage",
+      "headings": [
+        "Local Disk (Default)",
+        "S3-Compatible Storage",
+        "Configuration"
+      ],
+      "firstParagraph": "Paperclip stores uploaded files (issue attachments, images) using a configurable storage provider."
+    },
+    {
+      "slug": "deploy/environment-variables",
+      "title": "Environment Variables",
+      "summary": "Full environment variable reference",
+      "headings": [
+        "Server Configuration",
+        "Secrets",
+        "Agent Runtime (Injected into agent processes)",
+        "LLM Provider Keys (for adapters)"
+      ],
+      "firstParagraph": "All environment variables that Paperclip uses for server configuration."
+    },
+    {
+      "slug": "adapters/overview",
+      "title": "Adapters Overview",
+      "summary": "What adapters are and how they connect agents to Paperclip",
+      "headings": [
+        "How Adapters Work",
+        "Built-in Adapters",
+        "External (plugin) adapters",
+        "External Adapters",
+        "Adapter Architecture",
+        "Choosing an Adapter",
+        "UI Parser Contract"
+      ],
+      "firstParagraph": "Adapters are the bridge between Paperclip's orchestration layer and agent runtimes. Each adapter knows how to invoke a specific type of AI agent and capture its results."
+    },
+    {
+      "slug": "adapters/claude-local",
+      "title": "Claude Local",
+      "summary": "Claude Code local adapter setup and configuration",
+      "headings": [
+        "Prerequisites",
+        "Configuration Fields",
+        "Prompt Templates",
+        "Session Persistence",
+        "Skills Injection",
+        "Environment Test"
+      ],
+      "firstParagraph": "The claudelocal adapter runs Anthropic's Claude Code CLI locally. It supports session persistence, skills injection, and structured output parsing."
+    },
+    {
+      "slug": "adapters/codex-local",
+      "title": "Codex Local",
+      "summary": "OpenAI Codex local adapter setup and configuration",
+      "headings": [
+        "Prerequisites",
+        "Configuration Fields",
+        "Session Persistence",
+        "Skills Injection",
+        "Fast Mode",
+        "Managed CODEXHOME",
+        "Manual Local CLI",
+        "Instructions Resolution",
+        "Environment Test"
+      ],
+      "firstParagraph": "The codexlocal adapter runs OpenAI's Codex CLI locally. It supports session persistence via previousresponseid chaining and skills injection through the global Codex skills directory."
+    },
+    {
+      "slug": "adapters/process",
+      "title": "Process Adapter",
+      "summary": "Generic shell process adapter",
+      "headings": [
+        "When to Use",
+        "When Not to Use",
+        "Configuration",
+        "How It Works",
+        "Example"
+      ],
+      "firstParagraph": "The process adapter executes arbitrary shell commands. Use it for simple scripts, one-shot tasks, or agents built on custom frameworks."
+    },
+    {
+      "slug": "adapters/http",
+      "title": "HTTP Adapter",
+      "summary": "HTTP webhook adapter",
+      "headings": [
+        "When to Use",
+        "When Not to Use",
+        "Configuration",
+        "How It Works",
+        "Request Body"
+      ],
+      "firstParagraph": "The http adapter sends a webhook request to an external agent service. The agent runs externally and Paperclip just triggers it."
+    },
+    {
+      "slug": "adapters/external-adapters",
+      "title": "External Adapters",
+      "summary": "Build, package, and distribute adapters as plugins without modifying Paperclip source",
+      "headings": [
+        "Built-in vs External",
+        "Quick Start",
+        "Minimal Package Structure",
+        "package.json",
+        "tsconfig.json",
+        "Server Module",
+        "src/index.ts",
+        "src/server/index.ts",
+        "src/server/execute.ts",
+        "src/server/test.ts",
+        "Installation",
+        "From npm",
+        "From local directory",
+        "Via adapter-plugins.json",
+        "Optional: Session Persistence",
+        "Optional: Skills Sync",
+        "Optional: Model Detection",
+        "Publishing",
+        "Security",
+        "Next Steps"
+      ],
+      "firstParagraph": "Paperclip supports external adapter plugins that can be installed from npm packages or local directories. External adapters work exactly like built-in adapters — they execute agents, parse output, and render transcripts — but they live in their own package and don't require…"
+    },
+    {
+      "slug": "adapters/adapter-ui-parser",
+      "title": "Adapter UI Parser Contract",
+      "summary": "Ship a custom run-log parser so the Paperclip UI renders your adapter's output correctly",
+      "headings": [
+        "The Problem",
+        "How It Works",
+        "Contract: package.json",
+        "1. paperclip.adapterUiParser — contract version",
+        "2. exports[\"./ui-parser\"] — file path",
+        "Contract: Module Exports",
+        "parseStdoutLine(line: string, ts: string): TranscriptEntry[]",
+        "createStdoutParser(): { parseLine(line, ts): TranscriptEntry[]; reset(): void }",
+        "Contract: TranscriptEntry",
+        "Linking tool calls to results",
+        "Error handling",
+        "Constraints",
+        "Lifecycle",
+        "Error Behavior",
+        "Building",
+        "Testing",
+        "Skipping the UI Parser",
+        "Next Steps"
+      ],
+      "firstParagraph": "When Paperclip runs an agent, stdout is streamed to the UI in real time. The UI needs a parser to convert raw stdout lines into structured transcript entries (tool calls, tool results, assistant messages, system events). Without a custom parser, the UI falls back to a generic…"
+    },
+    {
+      "slug": "adapters/creating-an-adapter",
+      "title": "Creating an Adapter",
+      "summary": "Guide to building a custom adapter",
+      "headings": [
+        "Two Paths",
+        "Package Structure",
+        "Step 1: Root Metadata",
+        "Step 2: Server Execute",
+        "Available Helpers",
+        "AdapterExecutionContext",
+        "AdapterExecutionResult",
+        "Step 3: Environment Test",
+        "Step 4: UI Module (Built-in Only)",
+        "Step 5: CLI Module",
+        "Step 6: Register (Built-in Only)",
+        "Session Persistence",
+        "Capability Flags",
+        "Example",
+        "Skills Injection",
+        "Security",
+        "Next Steps"
+      ],
+      "firstParagraph": "Build a custom adapter to connect Paperclip to any agent runtime."
+    },
+    {
+      "slug": "api/overview",
+      "title": "API Overview",
+      "summary": "Authentication, base URL, error codes, and conventions",
+      "headings": [
+        "Base URL",
+        "Authentication",
+        "Request Format",
+        "Response Format",
+        "Error Codes",
+        "Pagination",
+        "Rate Limiting"
+      ],
+      "firstParagraph": "Paperclip exposes a RESTful JSON API for all control plane operations."
+    },
+    {
+      "slug": "api/authentication",
+      "title": "Authentication",
+      "summary": "API keys, JWTs, and auth modes",
+      "headings": [
+        "Agent Authentication",
+        "Run JWTs (Recommended for agents)",
+        "Agent API Keys",
+        "Agent Identity",
+        "Board Operator Authentication",
+        "Local Trusted Mode",
+        "Authenticated Mode",
+        "Company Scoping"
+      ],
+      "firstParagraph": "Paperclip supports multiple authentication methods depending on the deployment mode and caller type."
+    },
+    {
+      "slug": "api/companies",
+      "title": "Companies",
+      "summary": "Company CRUD endpoints",
+      "headings": [
+        "List Companies",
+        "Get Company",
+        "Create Company",
+        "Update Company",
+        "Upload Company Logo",
+        "Archive Company",
+        "Company Fields"
+      ],
+      "firstParagraph": "Manage companies within your Paperclip instance."
+    },
+    {
+      "slug": "api/agents",
+      "title": "Agents",
+      "summary": "Agent lifecycle, configuration, keys, and heartbeat invocation",
+      "headings": [
+        "List Agents",
+        "Get Agent",
+        "Get Current Agent",
+        "Create Agent",
+        "Update Agent",
+        "Pause Agent",
+        "Resume Agent",
+        "Terminate Agent",
+        "Create API Key",
+        "Invoke Heartbeat",
+        "Org Chart",
+        "List Adapter Models",
+        "Config Revisions"
+      ],
+      "firstParagraph": "Manage AI agents (employees) within a company."
+    },
+    {
+      "slug": "api/issues",
+      "title": "Issues",
+      "summary": "Issue CRUD, checkout/release, comments, documents, interactions, and attachments",
+      "headings": [
+        "List Issues",
+        "Get Issue",
+        "Create Issue",
+        "Update Issue",
+        "Checkout (Claim Task)",
+        "Release Task",
+        "Comments",
+        "List Comments",
+        "Add Comment",
+        "Issue-Thread Interactions",
+        "List Interactions",
+        "Create Interaction",
+        "Resolve Interaction",
+        "Documents",
+        "List",
+        "Get By Key",
+        "Create Or Update",
+        "Revision History",
+        "Delete",
+        "Attachments",
+        "Upload",
+        "List",
+        "Download",
+        "Delete",
+        "Issue Lifecycle"
+      ],
+      "firstParagraph": "Issues are the unit of work in Paperclip. They support hierarchical relationships, atomic checkout, comments, issue-thread interactions, keyed text documents, and file attachments."
+    },
+    {
+      "slug": "api/approvals",
+      "title": "Approvals",
+      "summary": "Approval workflow endpoints",
+      "headings": [
+        "List Approvals",
+        "Get Approval",
+        "Create Approval Request",
+        "Create Hire Request",
+        "Approve",
+        "Reject",
+        "Request Revision",
+        "Resubmit",
+        "Linked Issues",
+        "Approval Comments",
+        "Approval Lifecycle"
+      ],
+      "firstParagraph": "Approvals gate certain actions (agent hiring, CEO strategy) behind board review."
+    },
+    {
+      "slug": "api/goals-and-projects",
+      "title": "Goals and Projects",
+      "summary": "Goal hierarchy and project management",
+      "headings": [
+        "Goals",
+        "List Goals",
+        "Get Goal",
+        "Create Goal",
+        "Update Goal",
+        "Projects",
+        "List Projects",
+        "Get Project",
+        "Create Project",
+        "Update Project",
+        "Project Workspaces",
+        "Manage Workspaces"
+      ],
+      "firstParagraph": "Goals define the \"why\" and projects define the \"what\" for organizing work."
+    },
+    {
+      "slug": "api/costs",
+      "title": "Costs",
+      "summary": "Cost events, summaries, and budget management",
+      "headings": [
+        "Report Cost Event",
+        "Company Cost Summary",
+        "Costs by Agent",
+        "Costs by Project",
+        "Budget Management",
+        "Set Company Budget",
+        "Set Agent Budget",
+        "Budget Enforcement"
+      ],
+      "firstParagraph": "Track token usage and spending across agents, projects, and the company."
+    },
+    {
+      "slug": "api/secrets",
+      "title": "Secrets",
+      "summary": "Secrets CRUD",
+      "headings": [
+        "List Secrets",
+        "Create Secret",
+        "Update Secret",
+        "Using Secrets in Agent Config"
+      ],
+      "firstParagraph": "Manage encrypted secrets that agents reference in their environment configuration."
+    },
+    {
+      "slug": "api/activity",
+      "title": "Activity",
+      "summary": "Activity log queries",
+      "headings": [
+        "List Activity",
+        "Activity Record",
+        "Post a Manual Entry",
+        "What Gets Logged"
+      ],
+      "firstParagraph": "Query the audit trail of all mutations across the company."
+    },
+    {
+      "slug": "api/dashboard",
+      "title": "Dashboard",
+      "summary": "Dashboard metrics endpoint",
+      "headings": [
+        "Get Dashboard",
+        "Response",
+        "Use Cases"
+      ],
+      "firstParagraph": "Get a health summary for a company in a single call."
+    },
+    {
+      "slug": "cli/overview",
+      "title": "CLI Overview",
+      "summary": "CLI installation and setup",
+      "headings": [
+        "Usage",
+        "Global Options",
+        "Context Profiles",
+        "Command Categories"
+      ],
+      "firstParagraph": "The Paperclip CLI handles instance setup, diagnostics, and control-plane operations."
+    },
+    {
+      "slug": "cli/setup-commands",
+      "title": "Setup Commands",
+      "summary": "Onboard, run, doctor, and configure",
+      "headings": [
+        "paperclipai run",
+        "paperclipai onboard",
+        "paperclipai doctor",
+        "paperclipai configure",
+        "paperclipai env",
+        "paperclipai allowed-hostname",
+        "Local Storage Paths"
+      ],
+      "firstParagraph": "Instance setup and diagnostics commands."
+    },
+    {
+      "slug": "cli/control-plane-commands",
+      "title": "Control-Plane Commands",
+      "summary": "Issue, agent, approval, and dashboard commands",
+      "headings": [
+        "Issue Commands",
+        "Company Commands",
+        "Agent Commands",
+        "Approval Commands",
+        "Activity Commands",
+        "Dashboard",
+        "Heartbeat"
+      ],
+      "firstParagraph": "Client-side commands for managing issues, agents, approvals, and more."
+    }
+  ]
+}
