@@ -20,6 +20,7 @@ import { ProjectGitHubSection } from "../components/ProjectGitHubSection";
 import { InlineEditor } from "../components/InlineEditor";
 import { useCapability } from "../hooks/useCapability";
 import { DirectionRestricted } from "../components/DirectionRestricted";
+import { ProjectAccessEditor } from "../components/access/ProjectAccessEditor";
 // AgentDash: goals-eval-hitl
 import { DefinitionOfDoneEditor } from "../components/DefinitionOfDoneEditor";
 import { goalsEvalHitlApi } from "../api/goals-eval-hitl";
@@ -706,6 +707,12 @@ export function ProjectDetail() {
 
       {activeTab === "configuration" && canEditProject && (
         <div className="max-w-4xl space-y-6">
+          <ProjectAccessEditor
+            projectId={project.id}
+            companyId={resolvedCompanyId ?? lookupCompanyId ?? project.companyId}
+            visibility={project.visibility === "restricted" ? "restricted" : "company"}
+            canManage={direction.membershipRole === "admin" || direction.isInstanceAdmin}
+          />
           <ProjectProperties
             project={project}
             onUpdate={(data) => updateProject.mutate(data)}

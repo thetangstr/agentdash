@@ -29,6 +29,8 @@ Until pairing is finished:
 
 Nothing is broken — the agent is simply waiting for you to finish setting it up.
 
+When the company's agent visibility is set to *People see the agents they answer for*, an unpaired agent is visible to administrators only until someone is paired with it.
+
 ## How an unpaired agent gets born
 
 A stewarded-but-unpaired agent appears when **an agent hires another agent** without an accountable user attached. For example, your CEO agent requests to hire an engineer; if no person is designated as that new agent's steward at hire time, the agent is created stewarded-but-unpaired. This is expected — not a malfunction.

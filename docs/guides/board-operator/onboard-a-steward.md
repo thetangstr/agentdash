@@ -36,6 +36,8 @@ Every stewarded agent has exactly one steward, and every person has at most one 
 3. **Company Settings → Access → Agent stewardship**: select the agent, select the person, **Assign**. Because the agent already has a steward (you), this is a transfer and asks for a reason. Write `onboarding <name>` — it is the audit trail.
 4. Check: the **Agents** page shows the agent with a **Stewarded** badge, and its detail page shows **Steward: <name>**.
 
+**What they will see.** By default every member sees every agent. If this company has set **Settings → Access → Agent visibility** to *People see the agents they answer for*, the new person sees only the agent you just paired, its reporting line, and any agent marked *Everyone* on its own page — plus their own issues and every issue in a project they are listed on. To share more work with them, list them on the project (**Who can see this project**, on the project page). Administrators see everything regardless.
+
 An agent already showing the amber **Needs a steward** badge — one another agent hired — can be assigned directly; skip step 1. See [Agent kinds and stewardship](./agent-kinds-and-stewardship) for what the badges mean.
 
 By API, for scripting: `POST /api/companies/{companyId}/agent-stewardships` with `{ "agentId", "userId" }`, as an admin.
