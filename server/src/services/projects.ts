@@ -1,6 +1,7 @@
+import { HttpError, conflict } from "../errors.js";
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { issues, projects, projectGoals, goals, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
+import { companies, issues, projects, projectGoals, goals, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import {
   PROJECT_COLORS,
   deriveProjectUrlKey,
@@ -18,7 +19,7 @@ import { listCurrentRuntimeServicesForProjectWorkspaces } from "./workspace-runt
 import { parseProjectExecutionWorkspacePolicy } from "./execution-workspace-policy.js";
 import { mergeProjectWorkspaceRuntimeConfig, readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
 import { resolveManagedProjectWorkspaceDir } from "../home-paths.js";
-import { clearIssueDependents } from "./issue-dependents.js";
+import { clearIssueDependents, prepareIssueDeletion } from "./issue-dependents.js";
 
 type ProjectRow = typeof projects.$inferSelect;
 type ProjectWorkspaceRow = typeof projectWorkspaces.$inferSelect;
@@ -586,20 +587,32 @@ export function projectService(db: Db) {
      * One transaction, so a failure part-way cannot leave issues deleted and
      * the project still standing.
      */
-    remove: (id: string, opts: { withIssues?: boolean } = {}) =>
-      db.transaction(async (tx) => {
-        if (opts.withIssues) {
-          // The issues cannot simply be deleted: ten tables reference them
-          // with NO ACTION. Same clearing rules as the single-issue delete,
-          // from one place, so a fix to one never misses the other.
-          await clearIssueDependents(tx, sql`in (select id from issues where project_id = ${id})`);
-          await tx.delete(issues).where(eq(issues.projectId, id));
-        }
-        const rows = await tx.delete(projects).where(eq(projects.id, id)).returning();
-        const row = rows[0] ?? null;
-        if (!row) return null;
-        return { ...row, urlKey: deriveProjectUrlKey(row.name, row.id) };
-      }),
+    remove: async (id: string, opts: { withIssues?: boolean } = {}) => {
+      let callbackCompleted = false;
+      try {
+        return await db.transaction(async (tx) => {
+          const [binding] = await tx.select({ companyId: projects.companyId }).from(projects).where(eq(projects.id, id));
+          if (!binding) return null;
+          await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("no key update");
+          const [project] = await tx.select({ companyId: projects.companyId }).from(projects).where(eq(projects.id, id)).for("update");
+          if (!project || project.companyId !== binding.companyId) throw conflict("Project is unavailable for deletion");
+          if (opts.withIssues) {
+            const targets = await tx.select({ id: issues.id }).from(issues).where(eq(issues.projectId, id));
+            const deletion = await prepareIssueDeletion(tx, binding.companyId, targets.map(row => row.id));
+            await clearIssueDependents(tx, deletion);
+            if (deletion.issueIds.length) await tx.delete(issues).where(inArray(issues.id, deletion.issueIds));
+          }
+          const rows = await tx.delete(projects).where(eq(projects.id, id)).returning();
+          const row = rows[0] ?? null;
+          if (!row) return null;
+          callbackCompleted = true;
+          return { ...row, urlKey: deriveProjectUrlKey(row.name, row.id) };
+        });
+      } catch (error) {
+        if (callbackCompleted) throw new HttpError(409, "Project persistence is uncertain. Read current state before retrying.", { persistenceOutcome: "unknown" });
+        throw error;
+      }
+    },
 
     listWorkspaces: async (projectId: string): Promise<ProjectWorkspace[]> => {
       const rows = await db

@@ -1,3 +1,6 @@
+// Current credential/row witnesses are covered by issue-current-authority.test.ts with real HTTP and PostgreSQL.
+vi.mock("../services/issue-current-authority.js", () => ({ issueCurrentAuthority: () => undefined }));
+import { commentTransactionReads, installPatchServiceMocks, patchTransactionFixture } from "./helpers/issue-comment-transaction.js";
 import { Readable } from "node:stream";
 import express from "express";
 import request from "supertest";
@@ -24,8 +27,13 @@ const peerAgentId = "44444444-4444-4444-8444-444444444444";
 const ownerRunId = "55555555-5555-4555-8555-555555555555";
 
 const mockIssueService = vi.hoisted(() => ({
+  lockBlockerIssues: vi.fn().mockResolvedValue(undefined),
+  // Domain behavior is covered with PostgreSQL; this route fixture models its explicit result.
+  prepareUpdate: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({ patch })),
   addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
+  evaluateCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),
+  applyCheckoutOwner: vi.fn(async () => ({ adoptedFromRunId: null })),
   getAttachmentById: vi.fn(),
   getByIdentifier: vi.fn(),
   getById: vi.fn(),
@@ -196,7 +204,18 @@ function makeAgent(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+vi.mock("../services/issues.js", async () => ({
+  issueService: (await import("../services/index.js")).issueService,
+}));
+vi.mock("../services/issue-references.js", async () => ({
+  issueReferenceService: (await import("../services/index.js")).issueReferenceService,
+}));
+vi.mock("../services/issue-thread-interactions.js", async () => ({
+  issueThreadInteractionService: (await import("../services/index.js")).issueThreadInteractionService,
+}));
+
 async function createApp(actor: Record<string, unknown>) {
+  await installPatchServiceMocks();
   const [{ errorHandler }, { issueRoutes }] = await Promise.all([
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
     vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
@@ -207,7 +226,7 @@ async function createApp(actor: Record<string, unknown>) {
     (req as any).actor = actor;
     next();
   });
-  app.use("/api", issueRoutes({} as any, mockStorageService as any));
+  app.use("/api", issueRoutes(patchTransactionFixture(() => mockIssueService.getById()) as any, mockStorageService as any));
   app.use(errorHandler);
   return app;
 }

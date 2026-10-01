@@ -1,7 +1,9 @@
 // AgentDash: goals-eval-hitl
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { featureFlags } from "@paperclipai/db";
+import { companies, featureFlags } from "@paperclipai/db";
+
+import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
 
 export type FeatureFlagRow = typeof featureFlags.$inferSelect;
 
@@ -40,25 +42,33 @@ export function featureFlagsService(db: Db) {
       companyId: string,
       flagKey: string,
       enabled: boolean,
+      acceptance?: ActivityAcceptance,
     ): Promise<FeatureFlagRow> => {
-      const now = new Date();
-      const inserted = await db
-        .insert(featureFlags)
-        .values({
-          companyId,
-          flagKey,
-          enabled,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [featureFlags.companyId, featureFlags.flagKey],
-          set: {
+      const write = async (executor: Db) => {
+        if (flagKey === "dod_guard_enabled") {
+          await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
+        }
+        const now = new Date();
+        const inserted = await executor
+          .insert(featureFlags)
+          .values({
+            companyId,
+            flagKey,
             enabled,
             updatedAt: now,
-          },
-        })
-        .returning();
-      return inserted[0]!;
+          })
+          .onConflictDoUpdate({
+            target: [featureFlags.companyId, featureFlags.flagKey],
+            set: {
+              enabled,
+              updatedAt: now,
+            },
+          })
+          .returning();
+        return inserted[0]!;
+      };
+      if (acceptance !== undefined) { assertActivityAcceptance(acceptance); return write(acceptance.executor); }
+      return flagKey === "dod_guard_enabled" ? db.transaction(tx => write(tx as unknown as Db)) : write(db);
     },
 
     listForCompany: async (companyId: string): Promise<FeatureFlagRow[]> => {

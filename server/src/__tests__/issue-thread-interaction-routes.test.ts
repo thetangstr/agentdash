@@ -16,15 +16,28 @@ vi.mock("../routes/visibility.js", async (importOriginal) => ({
   runVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
+// Question resolutions commit their audit on the same transaction; the stub
+// db runs the callback directly and the audit goes through mockLogActivity.
+vi.mock("../services/activity-log.js", () => ({
+  logActivity: (...args: unknown[]) => mockLogActivity(...args),
+  insertActivity: async (tx: unknown, input: unknown) => { await mockLogActivity(tx, input); return {}; },
+  publishActivity: () => undefined,
+}));
+
 const ASSIGNEE_AGENT_ID = "11111111-1111-4111-8111-111111111111";
 const CREATED_AGENT_ID = "22222222-2222-4222-8222-222222222222";
 
 const mockIssueService = vi.hoisted(() => ({
+  // Acceptance locks blocker/parent rows on the caller transaction; real lock
+  // order is covered by issue-mutation-acceptance.test.ts with PostgreSQL.
+  lockBlockerIssues: vi.fn(async () => undefined),
   getById: vi.fn(),
 }));
 
 const mockInteractionService = vi.hoisted(() => ({
   listForIssue: vi.fn(),
+  // Routes read the accepted question back through the current authority.
+  getById: vi.fn(),
   create: vi.fn(),
   acceptInteraction: vi.fn(),
   acceptSuggestedTasks: vi.fn(),
@@ -38,7 +51,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(async () => undefined),
 }));
 
-const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
+const mockLogActivity = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 
 vi.mock("@paperclipai/shared/telemetry", () => ({
   trackAgentTaskCompleted: vi.fn(),
@@ -152,7 +165,9 @@ async function createApp(actor: Record<string, unknown> = {
     (req as any).actor = actor;
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  const stubDb: Record<string, unknown> = {};
+  stubDb.transaction = async (callback: (tx: unknown) => unknown) => callback(stubDb);
+  app.use("/api", issueRoutes(stubDb as any, {} as any));
   app.use(errorHandler);
   return app;
 }
@@ -168,6 +183,10 @@ describe.sequential("issue thread interaction routes", () => {
     vi.clearAllMocks();
     mockIssueService.getById.mockResolvedValue(createIssue());
     mockInteractionService.listForIssue.mockResolvedValue([]);
+    mockInteractionService.getById.mockImplementation(async () => {
+      const results = [...mockInteractionService.answerQuestions.mock.results, ...mockInteractionService.cancelQuestions.mock.results];
+      return results.length ? await results.at(-1)!.value : null;
+    });
     mockInteractionService.create.mockResolvedValue({
       id: "interaction-1",
       companyId: "company-1",
@@ -425,6 +444,8 @@ describe.sequential("issue thread interaction routes", () => {
       "interaction-2",
       {},
       expect.objectContaining({ userId: "local-board" }),
+      // Acceptance: the caller transaction and its publication collector.
+      expect.objectContaining({ publications: expect.any(Array) }),
     );
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
       ASSIGNEE_AGENT_ID,

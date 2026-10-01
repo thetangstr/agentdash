@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { executionWorkspaces, issues, projects, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
+import { companies, executionWorkspaces, issues, projects, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import type {
   ExecutionWorkspace,
   ExecutionWorkspaceSummary,
@@ -15,6 +15,8 @@ import type {
   WorkspaceRuntimeDesiredState,
   WorkspaceRuntimeService,
 } from "@paperclipai/shared";
+import { badRequest, conflict, HttpError } from "../errors.js";
+import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
 import { parseProjectExecutionWorkspacePolicy } from "./execution-workspace-policy.js";
 // AgentDash (security): keep the close preview consistent with deletion confinement.
 import {
@@ -393,7 +395,47 @@ async function loadEffectiveRuntimeServicesByExecutionWorkspace(
   );
 }
 
+// AgentDash: callback completion is not proof that the outer commit was acknowledged.
+export class ExecutionWorkspacePersistenceUncertain extends HttpError {
+  constructor() {
+    super(409, "Workspace persistence is uncertain. Read current state before retrying.", { persistenceOutcome: "unknown" });
+  }
+}
+
 export function executionWorkspaceService(db: Db) {
+  // AgentDash: supplied callers own commit/publication and must enter company-first.
+  // These generic writes create no activity; do not flush the caller's collector.
+  async function acceptWrite<T>(supplied: ActivityAcceptance | undefined, work: (executor: Db) => Promise<T>): Promise<T> {
+    if (supplied !== undefined) {
+      assertActivityAcceptance(supplied);
+      return work(supplied.executor);
+    }
+    let callbackCompleted = false;
+    try {
+      return await db.transaction(async tx => {
+        const result = await work(tx as unknown as Db);
+        callbackCompleted = true;
+        return result;
+      });
+    } catch (error) {
+      if (callbackCompleted) throw new ExecutionWorkspacePersistenceUncertain();
+      throw error;
+    }
+  }
+
+  async function lockCompany(executor: Db, companyId: string) {
+    const [company] = await executor.select({ id: companies.id }).from(companies)
+      .where(eq(companies.id, companyId)).for("no key update");
+    if (!company) throw conflict("Workspace company is unavailable");
+  }
+
+  async function validateSource(executor: Db, companyId: string, sourceIssueId: string | null | undefined) {
+    if (sourceIssueId == null) return;
+    const [source] = await executor.select({ id: issues.id }).from(issues)
+      .where(and(eq(issues.id, sourceIssueId), eq(issues.companyId, companyId))).for("share");
+    if (!source) throw badRequest("Workspace source issue is unavailable");
+  }
+
   function buildListConditions(
     companyId: string,
     filters?: {
@@ -746,23 +788,38 @@ export function executionWorkspaceService(db: Db) {
       };
     },
 
-    create: async (data: typeof executionWorkspaces.$inferInsert) => {
-      const row = await db
-        .insert(executionWorkspaces)
-        .values(data)
-        .returning()
-        .then((rows) => rows[0] ?? null);
-      return row ? toExecutionWorkspace(row) : null;
+    create: async (data: typeof executionWorkspaces.$inferInsert, acceptance?: ActivityAcceptance) => {
+      return acceptWrite(acceptance, async executor => {
+        await lockCompany(executor, data.companyId);
+        await validateSource(executor, data.companyId, data.sourceIssueId);
+        const [row] = await executor.insert(executionWorkspaces).values(data).returning();
+        return row ? toExecutionWorkspace(row) : null;
+      });
     },
 
-    update: async (id: string, patch: Partial<typeof executionWorkspaces.$inferInsert>) => {
-      const row = await db
-        .update(executionWorkspaces)
-        .set({ ...patch, updatedAt: new Date() })
-        .where(eq(executionWorkspaces.id, id))
-        .returning()
-        .then((rows) => rows[0] ?? null);
-      return row ? toExecutionWorkspace(row) : null;
+    update: async (id: string, patch: Partial<typeof executionWorkspaces.$inferInsert>, acceptance?: ActivityAcceptance) => {
+      return acceptWrite(acceptance, async executor => {
+        // Discover the mutex only; locked facts below decide the accepted write.
+        const [binding] = await executor.select({ companyId: executionWorkspaces.companyId })
+          .from(executionWorkspaces).where(eq(executionWorkspaces.id, id));
+        if (!binding) return null;
+        await lockCompany(executor, binding.companyId);
+        const [existing] = await executor.select().from(executionWorkspaces)
+          .where(eq(executionWorkspaces.id, id)).for("update");
+        if (!existing || existing.companyId !== binding.companyId) throw conflict("Workspace changed before acceptance");
+        if (patch.companyId !== undefined && patch.companyId !== existing.companyId) {
+          throw badRequest("Workspace company cannot be changed");
+        }
+        // Repeating a legacy source is not a reassignment or authorization to repair it.
+        if (patch.sourceIssueId !== undefined && patch.sourceIssueId !== existing.sourceIssueId) {
+          await validateSource(executor, existing.companyId, patch.sourceIssueId);
+        }
+        const { companyId: _companyId, ...changes } = patch;
+        const [row] = await executor.update(executionWorkspaces)
+          .set({ ...changes, updatedAt: new Date() })
+          .where(and(eq(executionWorkspaces.id, id), eq(executionWorkspaces.companyId, existing.companyId))).returning();
+        return row ? toExecutionWorkspace(row) : null;
+      });
     },
 
     clearEnvironmentSelection: async (companyId: string, environmentId: string) => {

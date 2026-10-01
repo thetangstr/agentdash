@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agents, executionWorkspaces,
+  companies,
   agentWakeupRequests,
   heartbeatRuns,
   issueComments,
@@ -9,6 +12,8 @@ import {
   issues,
 } from "@paperclipai/db";
 import {
+  createIssueTreeHoldSchema, releaseIssueTreeHoldSchema,
+  type CreateIssueTreeHold, type ReleaseIssueTreeHold,
   ISSUE_STATUSES,
   type IssueStatus,
   type IssueTreeControlMode,
@@ -21,6 +26,10 @@ import {
   type IssueTreePreviewRun,
   type IssueTreePreviewWarning,
 } from "@paperclipai/shared";
+import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
+import { insertActivity, publishActivity, logActivity, type ActivityPublication } from "./activity-log.js";
+import type { issueTreeCurrentAuthority, TreeAuthorityTarget } from "./issue-current-authority.js";
+import type { heartbeatService } from "./heartbeat.js";
 import { conflict, notFound, unprocessable } from "../errors.js";
 
 type IssueRow = typeof issues.$inferSelect;
@@ -408,7 +417,160 @@ function restoreStatusFromCancelSnapshot(status: IssueStatus): IssueStatus | nul
   return status;
 }
 
+type TreeReader = Pick<Db, "select">;
+const uniqueIds = (ids: Array<string | null | undefined>) => [...new Set(ids.filter((id): id is string => !!id))].sort();
+const treeUnavailable = () => notFound("Issue tree source not found");
+
+// ID-only legacy references are never company or project visibility grants.
+async function validateSources(reader: TreeReader, companyId: string, current: IssueRow[],
+  holds: HoldRow[] = [], members: HoldMemberRow[] = [], actor?: ActorInput) {
+  const holdById = new Map(holds.map(hold => [hold.id, hold]));
+  if (holds.some(hold => hold.companyId !== companyId) || members.some(member =>
+    member.companyId !== companyId || holdById.get(member.holdId)?.companyId !== companyId)) throw treeUnavailable();
+  const ids = uniqueIds([...current.map(row => row.id), ...current.map(row => row.parentId), ...holds.map(row => row.rootIssueId),
+    ...members.flatMap(row => [row.issueId, row.parentIssueId])]);
+  const sources = ids.length ? await reader.select().from(issues).where(inArray(issues.id, ids)) : [];
+  if (sources.length !== ids.length || sources.some(row => row.companyId !== companyId)) throw treeUnavailable();
+  const runIds = uniqueIds([...sources.flatMap(row => [row.executionRunId, row.checkoutRunId]), ...members.map(row => row.activeRunId),
+    ...holds.flatMap(row => [row.createdByRunId, row.releasedByRunId]), actor?.runId]);
+  const runs = runIds.length ? await reader.select().from(heartbeatRuns).where(inArray(heartbeatRuns.id, runIds)) : [];
+  if (runs.length !== runIds.length || runs.some(row => row.companyId !== companyId)) throw treeUnavailable();
+  const contextIds = uniqueIds(runs.map(row => readNonEmptyStringFromRecord(row.contextSnapshot, "issueId")));
+  const contextSources = contextIds.length ? await reader.select().from(issues).where(inArray(issues.id, contextIds)) : [];
+  if (contextSources.length !== contextIds.length || contextSources.some(row => row.companyId !== companyId)) throw treeUnavailable();
+  const agentIds = uniqueIds([...sources.map(row => row.assigneeAgentId), ...members.map(row => row.assigneeAgentId),
+    ...holds.flatMap(row => [row.createdByAgentId, row.releasedByAgentId]), ...runs.map(row => row.agentId), actor?.agentId]);
+  const agentRows = agentIds.length ? await reader.select().from(agents).where(inArray(agents.id, agentIds)) : [];
+  if (agentRows.length !== agentIds.length || agentRows.some(row => row.companyId !== companyId)) throw treeUnavailable();
+  return [...new Map([...sources, ...contextSources].map(row => [row.id, row])).values()].sort((a,b) => a.id.localeCompare(b.id));
+}
+
+type HoldCreateInput = {
+  mode: IssueTreeControlMode;
+  reason?: string | null;
+  releasePolicy?: IssueTreeHoldReleasePolicy | null;
+  actor: ActorInput;
+};
+type HoldReleaseInput = {
+  reason?: string | null;
+  releasePolicy?: IssueTreeHoldReleasePolicy | null;
+  metadata?: Record<string, unknown> | null;
+  actor: ActorInput;
+};
+
+// Shared synchronous payloads preserve the final authority → first write boundary.
+function holdInsertValues(companyId: string, rootIssueId: string, input: HoldCreateInput): typeof issueTreeHolds.$inferInsert {
+  return {
+    companyId,
+    rootIssueId,
+    mode: input.mode,
+    status: "active",
+    reason: input.reason ?? null,
+    releasePolicy: normalizeReleasePolicy(input.releasePolicy) as unknown as Record<string, unknown>,
+    createdByActorType: input.actor.actorType,
+    createdByAgentId: input.actor.agentId ?? null,
+    createdByUserId: input.actor.userId ?? (input.actor.actorType === "user" ? input.actor.actorId : null),
+    createdByRunId: input.actor.runId ?? null,
+  };
+}
+
+function memberInsertValues(companyId: string, holdId: string, projected: IssueTreePreviewIssue[]): Array<typeof issueTreeHoldMembers.$inferInsert> {
+  return projected.map(issue => ({
+    companyId,
+    holdId,
+    issueId: issue.id,
+    parentIssueId: issue.parentId,
+    depth: issue.depth,
+    issueIdentifier: issue.identifier,
+    issueTitle: issue.title,
+    issueStatus: issue.status,
+    assigneeAgentId: issue.assigneeAgentId,
+    assigneeUserId: issue.assigneeUserId,
+    activeRunId: issue.activeRun?.id ?? null,
+    activeRunStatus: issue.activeRun?.status ?? null,
+    skipped: issue.skipped,
+    skipReason: issue.skipReason,
+  }));
+}
+
+function holdReleaseValues(existingPolicy: HoldRow["releasePolicy"], input: HoldReleaseInput) {
+  const now = new Date();
+  return {
+    status: "released",
+    releasedAt: now,
+    releasedByActorType: input.actor.actorType,
+    releasedByAgentId: input.actor.agentId ?? null,
+    releasedByUserId: input.actor.userId ?? (input.actor.actorType === "user" ? input.actor.actorId : null),
+    releasedByRunId: input.actor.runId ?? null,
+    releaseReason: input.reason ?? null,
+    releasePolicy: input.releasePolicy
+      ? normalizeReleasePolicy(input.releasePolicy) as unknown as Record<string, unknown>
+      : existingPolicy,
+    releaseMetadata: input.metadata ?? null,
+    updatedAt: now,
+  };
+}
+
+function unclaimedWakeupPredicate(companyId: string, issueIds: string[], requestIds?: string[]) {
+  return and(
+    eq(agentWakeupRequests.companyId, companyId),
+    inArray(agentWakeupRequests.status, ["queued", "deferred_issue_execution"]),
+    isNull(agentWakeupRequests.runId),
+    inArray(sql<string | null>`${agentWakeupRequests.payload} ->> 'issueId'`, issueIds),
+    requestIds ? inArray(agentWakeupRequests.id, requestIds) : undefined,
+  );
+}
+
+async function cancelExactUnclaimedWakeups(executor: Db, companyId: string, issueIds: string[], reason: string, requestIds?: string[]) {
+  if (!issueIds.length || requestIds?.length === 0) return [];
+  const now = new Date();
+  return executor.update(agentWakeupRequests)
+    .set({ status: "cancelled", finishedAt: now, updatedAt: now, error: reason })
+    .where(unclaimedWakeupPredicate(companyId, issueIds, requestIds))
+    .returning({
+      id: agentWakeupRequests.id,
+      agentId: agentWakeupRequests.agentId,
+      reason: agentWakeupRequests.reason,
+      payload: agentWakeupRequests.payload,
+    });
+}
+
+export type TreeActionContext = { companyId: string; rootIssueId: string; actor: ActorInput; authority: ReturnType<typeof issueTreeCurrentAuthority> };
+export type TreeIntent = { kind: "create"; input: CreateIssueTreeHold } | { kind: "release"; holdId: string; input: ReleaseIssueTreeHold };
+export type TreeActionPin = { version: 1; companyId: string; rootIssueId: string; intentDigest: string; stateDigest: string };
+type CreateResult = { hold: IssueTreeHold; preview: IssueTreeControlPreview; resumedPauseHoldIds?: string[] };
+export type TreeEffect = { kind: "cancelRun"; runId: string; issueId: string; holdId: string }
+  | { kind: "wake"; agentId: string; issueId: string; holdId: string; options: Parameters<ReturnType<typeof heartbeatService>["wakeup"]>[1] };
+export type AcceptedTreeAction = { kind: TreeIntent["kind"]; result: CreateResult | IssueTreeHold | { preview: IssueTreeControlPreview }; companyId: string; rootIssueId: string; actor: ActorInput;
+  acceptedIssueIds: string[]; authorizedIssueIds: string[]; updatedIssueIds: string[]; releasedHoldIds: string[]; cancelledWakeupIds: string[]; effects: TreeEffect[] };
+function stable(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)]));
+  return value;
+}
+const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+const canonicalIntent = (intent: TreeIntent): TreeIntent => intent.kind === "create"
+  ? { kind: "create", input: createIssueTreeHoldSchema.parse(intent.input) }
+  : { kind: "release", holdId: intent.holdId, input: releaseIssueTreeHoldSchema.parse(intent.input) };
+
 export function issueTreeControlService(db: Db) {
+  async function accept<T>(companyId: string, supplied: ActivityAcceptance | undefined, work: (tx: Db, accepted: ActivityAcceptance) => Promise<T>) {
+    const run = async (accepted: ActivityAcceptance) => {
+      const tx = accepted.executor;
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
+      return work(tx, accepted);
+    };
+    if (supplied !== undefined) { assertActivityAcceptance(supplied); return run(supplied); }
+    const publications: ActivityPublication[] = [];
+    let completed = false;
+    let result: T;
+    try { result = await db.transaction(async tx => { const value = await run({ executor: tx as unknown as Db, publications }); completed = true; return value; }); }
+    catch (error) { if (completed) throw conflict("Issue tree acceptance acknowledgment is unknown; read current state", { persistenceOutcome: "unknown" }); throw error; }
+    for (const publication of publications) publishActivity(publication);
+    return result;
+  }
+
   async function listTreeIssues(companyId: string, rootIssueId: string): Promise<TreeIssue[]> {
     const root = await db
       .select()
@@ -548,9 +710,9 @@ export function issueTreeControlService(db: Db) {
     return byIssueId;
   }
 
-  async function activePauseHoldsForIssueIds(companyId: string, issueIds: string[]) {
+  async function activePauseHoldsForIssueIds(companyId: string, issueIds: string[], connection: Db = db) {
     if (issueIds.length === 0) return [];
-    return db
+    return connection
       .select()
       .from(issueTreeHolds)
       .where(
@@ -567,8 +729,9 @@ export function issueTreeControlService(db: Db) {
   async function getActivePauseHoldGate(
     companyId: string,
     issueId: string,
+    reader: Pick<Db, "select"> = db,
   ): Promise<ActiveIssueTreePauseHoldGate | null> {
-    const activePauseHolds = await db
+    const activePauseHolds = await reader
       .select({
         id: issueTreeHolds.id,
         rootIssueId: issueTreeHolds.rootIssueId,
@@ -596,8 +759,14 @@ export function issueTreeControlService(db: Db) {
       && visited.size < MAX_PAUSE_HOLD_ANCESTOR_DEPTH
     ) {
       visited.add(currentIssueId);
+      const parent: { parentId: string | null } | null = await reader
+        .select({ parentId: issues.parentId })
+        .from(issues)
+        .where(and(eq(issues.id, currentIssueId), eq(issues.companyId, companyId)))
+        .then((rows) => rows[0] ?? null);
       const hold = holdByRootIssueId.get(currentIssueId);
       if (hold) {
+        if (!parent) throw treeUnavailable();
         return {
           holdId: hold.id,
           rootIssueId: hold.rootIssueId,
@@ -609,11 +778,6 @@ export function issueTreeControlService(db: Db) {
         };
       }
 
-      const parent: { parentId: string | null } | null = await db
-        .select({ parentId: issues.parentId })
-        .from(issues)
-        .where(and(eq(issues.id, currentIssueId), eq(issues.companyId, companyId)))
-        .then((rows) => rows[0] ?? null);
       currentIssueId = parent?.parentId ?? null;
     }
 
@@ -637,6 +801,8 @@ export function issueTreeControlService(db: Db) {
         ? activeCancelSnapshotsByIssueId(companyId, rootIssueId)
         : Promise.resolve(new Map<string, ActiveCancelSnapshot>()),
     ]);
+    await historySources(db, companyId, treeIssues, uniqueIds([...holdsByIssueId.values()].flatMap(value => value.all)));
+    for (const run of activeRunRows) await validateSources(db, companyId, [], [], [], { actorType: 'system', actorId: 'system', runId: run.id, agentId: run.agentId });
     const runsByIssueId = new Map<string, ActiveRunRow>();
     for (const run of activeRunRows) {
       if (!runsByIssueId.has(run.issueId)) runsByIssueId.set(run.issueId, run);
@@ -702,90 +868,45 @@ export function issueTreeControlService(db: Db) {
   async function createHold(
     companyId: string,
     rootIssueId: string,
-    input: {
-      mode: IssueTreeControlMode;
-      reason?: string | null;
-      releasePolicy?: IssueTreeHoldReleasePolicy | null;
-      actor: ActorInput;
-    },
-  ): Promise<{
-    hold: IssueTreeHold;
-    preview: IssueTreeControlPreview;
-    resumedPauseHoldIds?: string[];
-  }> {
-    const holdReleasePolicy = normalizeReleasePolicy(input.releasePolicy);
-    const holdPreview = await preview(companyId, rootIssueId, {
-      mode: input.mode,
-      releasePolicy: holdReleasePolicy,
-    });
-
-    if (input.mode === "resume") {
-      const issueIds = [...new Set(holdPreview.issues.map((issue) => issue.id))];
-      const activePauseHolds = await activePauseHoldsForIssueIds(companyId, issueIds);
-      const releaseReason = input.reason ?? "Subtree resume applied.";
-
-      const { hold: resumeHold } = await db.transaction(async (tx) => {
-        const [createdHold] = await tx
-          .insert(issueTreeHolds)
-          .values({
-            companyId,
-            rootIssueId,
-            mode: input.mode,
-            status: "active",
-            reason: input.reason ?? null,
-            releasePolicy: holdReleasePolicy as unknown as Record<string, unknown>,
-            createdByActorType: input.actor.actorType,
-            createdByAgentId: input.actor.agentId ?? null,
-            createdByUserId: input.actor.userId ?? (input.actor.actorType === "user" ? input.actor.actorId : null),
-            createdByRunId: input.actor.runId ?? null,
-          })
-          .returning();
-
-        const memberRows = holdPreview.issues.map((issue) => ({
-          companyId,
-          holdId: createdHold.id,
-          issueId: issue.id,
-          parentIssueId: issue.parentId,
-          depth: issue.depth,
-          issueIdentifier: issue.identifier,
-          issueTitle: issue.title,
-          issueStatus: issue.status,
-          assigneeAgentId: issue.assigneeAgentId,
-          assigneeUserId: issue.assigneeUserId,
-          activeRunId: issue.activeRun?.id ?? null,
-          activeRunStatus: issue.activeRun?.status ?? null,
-          skipped: issue.skipped,
-          skipReason: issue.skipReason,
-        }));
-
-        const createdMembers = memberRows.length > 0
-          ? await tx
-            .insert(issueTreeHoldMembers)
-            .values(memberRows)
-            .returning()
-          : [];
-
-        return { hold: toHold(createdHold, createdMembers) };
+    input: HoldCreateInput,
+    acceptance?: ActivityAcceptance,
+  ): Promise<CreateResult> {
+    return accept(companyId, acceptance, async (tx, accepted) => {
+      const reader = issueTreeControlService(tx);
+      const holdReleasePolicy = normalizeReleasePolicy(input.releasePolicy);
+      const holdPreview = await reader.preview(companyId, rootIssueId, {
+        mode: input.mode,
+        releasePolicy: holdReleasePolicy,
       });
+      await validateSources(tx, companyId, await reader.listTreeIssues(companyId, rootIssueId), [], [], input.actor);
+      const activePauseHolds = input.mode === "resume"
+        ? await activePauseHoldsForIssueIds(companyId, uniqueIds(holdPreview.issues.map(issue => issue.id)), tx)
+        : [];
+      for (const hold of activePauseHolds) await getHold(companyId, hold.id, tx);
 
-      const resumedPauseHoldIds = activePauseHolds.map((hold) => hold.id);
-      if (resumedPauseHoldIds.length > 0) {
-        await Promise.all(
-          activePauseHolds.map((pauseHold) =>
-            releaseHold(companyId, pauseHold.rootIssueId, pauseHold.id, {
-              reason: releaseReason,
-              metadata: {
-                resumedByResumeHoldId: resumeHold.id,
-                resumeHoldMode: "tree_resume",
-                resumedPauseHoldId: pauseHold.id,
-              },
-              actor: input.actor,
-            }),
-          ),
-        );
-      }
+      const [createdHold] = await tx.insert(issueTreeHolds)
+        .values(holdInsertValues(companyId, rootIssueId, input)).returning();
+      const memberRows = memberInsertValues(companyId, createdHold.id, holdPreview.issues);
+      const createdMembers = memberRows.length
+        ? await tx.insert(issueTreeHoldMembers).values(memberRows).returning()
+        : [];
+      const hold = toHold(createdHold, createdMembers);
+      if (input.mode !== "resume") return { hold, preview: holdPreview };
 
-      const releasedResumeHold = await releaseHold(companyId, rootIssueId, resumeHold.id, {
+      const releaseReason = input.reason ?? "Subtree resume applied.";
+      const resumedPauseHoldIds = activePauseHolds.map(selected => selected.id);
+      await Promise.all(activePauseHolds.map(selected =>
+        releaseHold(companyId, selected.rootIssueId, selected.id, {
+          reason: releaseReason,
+          metadata: {
+            resumedByResumeHoldId: hold.id,
+            resumeHoldMode: "tree_resume",
+            resumedPauseHoldId: selected.id,
+          },
+          actor: input.actor,
+        }, accepted),
+      ));
+      const releasedResumeHold = await releaseHold(companyId, rootIssueId, hold.id, {
         reason: releaseReason,
         metadata: {
           resumedPauseHoldIds,
@@ -793,115 +914,67 @@ export function issueTreeControlService(db: Db) {
           ...(input.releasePolicy ? { releasePolicy: holdReleasePolicy } : {}),
         },
         actor: input.actor,
-      });
-
-      return {
-        hold: releasedResumeHold,
-        preview: holdPreview,
-        resumedPauseHoldIds,
-      };
-    }
-
-    const { hold, members } = await db.transaction(async (tx) => {
-      const [createdHold] = await tx
-        .insert(issueTreeHolds)
-        .values({
-          companyId,
-          rootIssueId,
-          mode: input.mode,
-          status: "active",
-          reason: input.reason ?? null,
-          releasePolicy: holdReleasePolicy as unknown as Record<string, unknown>,
-          createdByActorType: input.actor.actorType,
-          createdByAgentId: input.actor.agentId ?? null,
-          createdByUserId: input.actor.userId ?? (input.actor.actorType === "user" ? input.actor.actorId : null),
-          createdByRunId: input.actor.runId ?? null,
-        })
-        .returning();
-
-      const memberRows = holdPreview.issues.map((issue) => ({
-        companyId,
-        holdId: createdHold.id,
-        issueId: issue.id,
-        parentIssueId: issue.parentId,
-        depth: issue.depth,
-        issueIdentifier: issue.identifier,
-        issueTitle: issue.title,
-        issueStatus: issue.status,
-        assigneeAgentId: issue.assigneeAgentId,
-        assigneeUserId: issue.assigneeUserId,
-        activeRunId: issue.activeRun?.id ?? null,
-        activeRunStatus: issue.activeRun?.status ?? null,
-        skipped: issue.skipped,
-        skipReason: issue.skipReason,
-      }));
-
-      const createdMembers = memberRows.length > 0
-        ? await tx.insert(issueTreeHoldMembers).values(memberRows).returning()
-        : [];
-
-      return { hold: createdHold, members: createdMembers };
+      }, accepted);
+      return { hold: releasedResumeHold, preview: holdPreview, resumedPauseHoldIds };
     });
-
-    return {
-      hold: toHold(hold, members),
-      preview: holdPreview,
-    };
   }
 
   async function cancelIssueStatusesForHold(
     companyId: string,
     rootIssueId: string,
     holdId: string,
+    acceptance?: ActivityAcceptance,
   ): Promise<TreeStatusUpdateResult> {
-    const hold = await getHold(companyId, holdId);
-    if (!hold) throw notFound("Issue tree hold not found");
-    if (hold.rootIssueId !== rootIssueId) {
-      throw unprocessable("Issue tree hold does not belong to the requested root issue");
-    }
-    if (hold.mode !== "cancel") {
-      throw unprocessable("Issue tree hold is not a cancel operation");
-    }
+    return accept(companyId, acceptance, async tx => {
+      const hold = await getHold(companyId, holdId, tx);
+      if (!hold) throw notFound("Issue tree hold not found");
+      if (hold.rootIssueId !== rootIssueId) {
+        throw unprocessable("Issue tree hold does not belong to the requested root issue");
+      }
+      if (hold.mode !== "cancel") {
+        throw unprocessable("Issue tree hold is not a cancel operation");
+      }
 
-    const issueIds = [...new Set((hold.members ?? [])
-      .filter((member) => !member.skipped)
-      .map((member) => member.issueId))];
-    if (issueIds.length === 0) return { updatedIssueIds: [], updatedIssues: [] };
+      const issueIds = [...new Set((hold.members ?? [])
+        .filter((member) => !member.skipped)
+        .map((member) => member.issueId))];
+      if (issueIds.length === 0) return { updatedIssueIds: [], updatedIssues: [] };
 
-    const now = new Date();
-    const updated = await db
-      .update(issues)
-      .set({
-        status: "cancelled",
-        cancelledAt: now,
-        completedAt: null,
-        checkoutRunId: null,
-        executionRunId: null,
-        executionAgentNameKey: null,
-        executionLockedAt: null,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(issues.companyId, companyId),
-          inArray(issues.id, issueIds),
-          notInArray(issues.status, ["done", "cancelled"]),
-        ),
-      )
-      .returning({
-        id: issues.id,
-        status: issues.status,
-        assigneeAgentId: issues.assigneeAgentId,
-      });
+      const now = new Date();
+      const updated = await tx
+        .update(issues)
+        .set({
+          status: "cancelled",
+          cancelledAt: now,
+          completedAt: null,
+          checkoutRunId: null,
+          executionRunId: null,
+          executionAgentNameKey: null,
+          executionLockedAt: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(issues.companyId, companyId),
+            inArray(issues.id, issueIds),
+            notInArray(issues.status, ["done", "cancelled"]),
+          ),
+        )
+        .returning({
+          id: issues.id,
+          status: issues.status,
+          assigneeAgentId: issues.assigneeAgentId,
+        });
 
-    return {
-      updatedIssueIds: updated.map((issue) => issue.id),
-      updatedIssues: updated.map((issue) => ({
-        id: issue.id,
-        status: coerceIssueStatus(issue.status),
-        assigneeAgentId: issue.assigneeAgentId,
-      })),
-    };
+      return {
+        updatedIssueIds: updated.map((issue) => issue.id),
+        updatedIssues: updated.map((issue) => ({
+          id: issue.id,
+          status: coerceIssueStatus(issue.status),
+          assigneeAgentId: issue.assigneeAgentId,
+        })),
+      };
+    });
   }
 
   async function restoreIssueStatusesForHold(
@@ -912,51 +985,56 @@ export function issueTreeControlService(db: Db) {
       reason?: string | null;
       actor: ActorInput;
     },
+    acceptance?: ActivityAcceptance,
   ): Promise<RestoreTreeStatusResult> {
-    const restoreHold = await getHold(companyId, restoreHoldId);
-    if (!restoreHold) throw notFound("Issue tree hold not found");
-    if (restoreHold.rootIssueId !== rootIssueId) {
-      throw unprocessable("Issue tree hold does not belong to the requested root issue");
-    }
-    if (restoreHold.mode !== "restore") {
-      throw unprocessable("Issue tree hold is not a restore operation");
-    }
+    return accept(companyId, acceptance, async tx => {
+      const reader = issueTreeControlService(tx as unknown as Db);
+      const restoreHold = await getHold(companyId, restoreHoldId, tx as unknown as Db);
+      if (!restoreHold) throw notFound("Issue tree hold not found");
+      await validateSources(tx, companyId, [], [], [], input.actor);
+      if (restoreHold.rootIssueId !== rootIssueId) {
+        throw unprocessable("Issue tree hold does not belong to the requested root issue");
+      }
+      if (restoreHold.mode !== "restore") {
+        throw unprocessable("Issue tree hold is not a restore operation");
+      }
 
-    const activeCancelHolds = await listHolds(companyId, rootIssueId, {
-      status: "active",
-      mode: "cancel",
-      includeMembers: true,
-    });
-    const cancelSnapshotByIssueId = new Map<string, IssueTreeHoldMember>();
-    for (const hold of [...activeCancelHolds].reverse()) {
-      for (const member of hold.members ?? []) {
-        if (!member.skipped && !cancelSnapshotByIssueId.has(member.issueId)) {
-          cancelSnapshotByIssueId.set(member.issueId, member);
+      const activeCancelHolds = await reader.listHolds(companyId, rootIssueId, {
+        status: "active",
+        mode: "cancel",
+        includeMembers: true,
+      });
+      const cancelSnapshotByIssueId = new Map<string, IssueTreeHoldMember>();
+      for (const hold of [...activeCancelHolds].reverse()) {
+        for (const member of hold.members ?? []) {
+          if (!member.skipped && !cancelSnapshotByIssueId.has(member.issueId)) {
+            cancelSnapshotByIssueId.set(member.issueId, member);
+          }
         }
       }
-    }
 
-    const restoreIssueIds = [...new Set((restoreHold.members ?? [])
-      .filter((member) => !member.skipped)
-      .map((member) => member.issueId))];
-    const restoreStatusByIssueId = new Map<string, IssueStatus>();
-    for (const issueId of restoreIssueIds) {
-      const snapshot = cancelSnapshotByIssueId.get(issueId);
-      if (!snapshot) continue;
-      const restoredStatus = restoreStatusFromCancelSnapshot(coerceIssueStatus(snapshot.issueStatus));
-      if (restoredStatus) restoreStatusByIssueId.set(issueId, restoredStatus);
-    }
+      const restoreIssueIds = [...new Set((restoreHold.members ?? [])
+        .filter((member) => !member.skipped)
+        .map((member) => member.issueId))];
+      if (restoreIssueIds.length) await tx.select({ id: issues.id }).from(issues)
+        .where(and(eq(issues.companyId, companyId), inArray(issues.id, restoreIssueIds))).orderBy(asc(issues.id)).for("update");
+      const restoreStatusByIssueId = new Map<string, IssueStatus>();
+      for (const issueId of restoreIssueIds) {
+        const snapshot = cancelSnapshotByIssueId.get(issueId);
+        if (!snapshot) continue;
+        const restoredStatus = restoreStatusFromCancelSnapshot(coerceIssueStatus(snapshot.issueStatus));
+        if (restoredStatus) restoreStatusByIssueId.set(issueId, restoredStatus);
+      }
 
-    const issueIdsByStatus = new Map<IssueStatus, string[]>();
-    for (const [issueId, status] of restoreStatusByIssueId) {
-      const current = issueIdsByStatus.get(status) ?? [];
-      current.push(issueId);
-      issueIdsByStatus.set(status, current);
-    }
+      const issueIdsByStatus = new Map<IssueStatus, string[]>();
+      for (const [issueId, status] of restoreStatusByIssueId) {
+        const current = issueIdsByStatus.get(status) ?? [];
+        current.push(issueId);
+        issueIdsByStatus.set(status, current);
+      }
 
-    const now = new Date();
-    const releasedCancelHoldIds = activeCancelHolds.map((hold) => hold.id);
-    const updatedIssues = await db.transaction(async (tx) => {
+      const now = new Date();
+      const releasedCancelHoldIds = activeCancelHolds.map((hold) => hold.id);
       const restored: TreeStatusUpdateResult["updatedIssues"] = [];
       for (const [status, issueIdsForStatus] of issueIdsByStatus) {
         if (issueIdsForStatus.length === 0) continue;
@@ -1029,29 +1107,29 @@ export function issueTreeControlService(db: Db) {
         })
         .where(and(eq(issueTreeHolds.companyId, companyId), eq(issueTreeHolds.id, restoreHoldId)));
 
-      return restored;
-    });
 
-    return {
-      updatedIssueIds: updatedIssues.map((issue) => issue.id),
-      updatedIssues,
-      releasedCancelHoldIds,
-      restoreHold: await getHold(companyId, restoreHoldId),
-    };
+      return {
+        updatedIssueIds: restored.map((issue) => issue.id),
+        updatedIssues: restored,
+        releasedCancelHoldIds,
+        restoreHold: await getHold(companyId, restoreHoldId, tx as unknown as Db),
+      };
+    });
   }
 
-  async function getHold(companyId: string, holdId: string) {
-    const hold = await db
+  async function getHold(companyId: string, holdId: string, connection: Pick<Db, "select"> = db) {
+    const hold = await connection
       .select()
       .from(issueTreeHolds)
       .where(and(eq(issueTreeHolds.id, holdId), eq(issueTreeHolds.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
     if (!hold) return null;
-    const members = await db
+    const members = await connection
       .select()
       .from(issueTreeHoldMembers)
-      .where(and(eq(issueTreeHoldMembers.companyId, companyId), eq(issueTreeHoldMembers.holdId, holdId)))
+      .where(eq(issueTreeHoldMembers.holdId, holdId))
       .orderBy(asc(issueTreeHoldMembers.depth), asc(issueTreeHoldMembers.createdAt), asc(issueTreeHoldMembers.issueId));
+    await validateSources(connection, companyId, [], [hold], members);
     return toHold(hold, members);
   }
 
@@ -1076,22 +1154,16 @@ export function issueTreeControlService(db: Db) {
       .from(issueTreeHolds)
       .where(and(...whereClauses))
       .orderBy(asc(issueTreeHolds.createdAt), asc(issueTreeHolds.id));
-    if (!input?.includeMembers || holds.length === 0) {
-      return holds.map((hold) => toHold(hold));
-    }
+    if (holds.length === 0) return [];
 
     const holdIds = holds.map((hold) => hold.id);
     const members = await db
       .select()
       .from(issueTreeHoldMembers)
-      .where(
-        and(
-          eq(issueTreeHoldMembers.companyId, companyId),
-          inArray(issueTreeHoldMembers.holdId, holdIds),
-        ),
-      )
+      .where(inArray(issueTreeHoldMembers.holdId, holdIds))
       .orderBy(asc(issueTreeHoldMembers.depth), asc(issueTreeHoldMembers.createdAt), asc(issueTreeHoldMembers.issueId));
 
+    await validateSources(db, companyId, [], holds, members);
     const membersByHoldId = new Map<string, HoldMemberRow[]>();
     for (const member of members) {
       const existing = membersByHoldId.get(member.holdId) ?? [];
@@ -1099,91 +1171,307 @@ export function issueTreeControlService(db: Db) {
       membersByHoldId.set(member.holdId, existing);
     }
 
-    return holds.map((hold) => toHold(hold, membersByHoldId.get(hold.id) ?? []));
+    return holds.map((hold) => toHold(hold, input?.includeMembers ? membersByHoldId.get(hold.id) ?? [] : undefined));
   }
 
   async function releaseHold(
     companyId: string,
     rootIssueId: string,
     holdId: string,
-    input: {
-      reason?: string | null;
-      releasePolicy?: IssueTreeHoldReleasePolicy | null;
-      metadata?: Record<string, unknown> | null;
-      actor: ActorInput;
-    },
+    input: HoldReleaseInput,
+    acceptance?: ActivityAcceptance,
   ) {
-    const existing = await db
-      .select()
-      .from(issueTreeHolds)
-      .where(and(eq(issueTreeHolds.id, holdId), eq(issueTreeHolds.companyId, companyId)))
-      .then((rows) => rows[0] ?? null);
-    if (!existing) throw notFound("Issue tree hold not found");
-    if (existing.rootIssueId !== rootIssueId) {
-      throw unprocessable("Issue tree hold does not belong to the requested root issue");
-    }
-    if (existing.status === "released") {
-      throw conflict("Issue tree hold is already released");
-    }
+    return accept(companyId, acceptance, async tx => {
+      const existing = await tx
+        .select()
+        .from(issueTreeHolds)
+        .where(and(eq(issueTreeHolds.id, holdId), eq(issueTreeHolds.companyId, companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!existing) throw notFound("Issue tree hold not found");
+      if (existing.rootIssueId !== rootIssueId) {
+        throw unprocessable("Issue tree hold does not belong to the requested root issue");
+      }
+      await getHold(companyId, holdId, tx);
+      await validateSources(tx, companyId, [], [], [], input.actor);
+      if (existing.status === "released") {
+        throw conflict("Issue tree hold is already released");
+      }
 
-    const [updated] = await db
-      .update(issueTreeHolds)
-      .set({
-        status: "released",
-        releasedAt: new Date(),
-        releasedByActorType: input.actor.actorType,
-        releasedByAgentId: input.actor.agentId ?? null,
-        releasedByUserId: input.actor.userId ?? (input.actor.actorType === "user" ? input.actor.actorId : null),
-        releasedByRunId: input.actor.runId ?? null,
-        releaseReason: input.reason ?? null,
-        releasePolicy: input.releasePolicy
-          ? (normalizeReleasePolicy(input.releasePolicy) as unknown as Record<string, unknown>)
-          : existing.releasePolicy,
-        releaseMetadata: input.metadata ?? null,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(issueTreeHolds.id, holdId), eq(issueTreeHolds.companyId, companyId)))
-      .returning();
+      const [updated] = await tx
+        .update(issueTreeHolds)
+        .set(holdReleaseValues(existing.releasePolicy, input))
+        .where(and(eq(issueTreeHolds.id, holdId), eq(issueTreeHolds.companyId, companyId)))
+        .returning();
 
-    const members = await db
-      .select()
-      .from(issueTreeHoldMembers)
-      .where(and(eq(issueTreeHoldMembers.companyId, companyId), eq(issueTreeHoldMembers.holdId, holdId)))
-      .orderBy(asc(issueTreeHoldMembers.depth), asc(issueTreeHoldMembers.createdAt), asc(issueTreeHoldMembers.issueId));
+      const members = await tx
+        .select()
+        .from(issueTreeHoldMembers)
+        .where(eq(issueTreeHoldMembers.holdId, holdId))
+        .orderBy(asc(issueTreeHoldMembers.depth), asc(issueTreeHoldMembers.createdAt), asc(issueTreeHoldMembers.issueId));
 
-    return toHold(updated, members);
+      return toHold(updated, members);
+    });
   }
 
-  async function cancelUnclaimedWakeupsForTree(companyId: string, rootIssueId: string, reason: string) {
-    const treeIssues = await listTreeIssues(companyId, rootIssueId);
-    const issueIds = treeIssues.map((issue) => issue.id);
-    if (issueIds.length === 0) return [];
-    const now = new Date();
-    return db
-      .update(agentWakeupRequests)
-      .set({
-        status: "cancelled",
-        finishedAt: now,
-        error: reason,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(agentWakeupRequests.companyId, companyId),
-          inArray(agentWakeupRequests.status, ["queued", "deferred_issue_execution"]),
-          isNull(agentWakeupRequests.runId),
-          inArray(sql<string | null>`${agentWakeupRequests.payload} ->> 'issueId'`, issueIds),
-        ),
-      )
-      .returning({
-        id: agentWakeupRequests.id,
-        agentId: agentWakeupRequests.agentId,
-        reason: agentWakeupRequests.reason,
-        payload: agentWakeupRequests.payload,
-      });
+  async function cancelUnclaimedWakeupsForTree(companyId: string, rootIssueId: string, reason: string, acceptance?: ActivityAcceptance, exactIssueIds?: string[]) {
+    return accept(companyId, acceptance, async tx => {
+      const issueIds = exactIssueIds ?? (await issueTreeControlService(tx).listTreeIssues(companyId, rootIssueId)).map(issue => issue.id);
+      return cancelExactUnclaimedWakeups(tx, companyId, issueIds, reason);
+    });
+  }
+
+  async function historySources(reader: TreeReader, companyId: string, current: IssueRow[], holdIds: string[]) {
+    const holds = holdIds.length ? await reader.select().from(issueTreeHolds).where(inArray(issueTreeHolds.id, uniqueIds(holdIds))).orderBy(asc(issueTreeHolds.id)) : [];
+    if (holds.length !== uniqueIds(holdIds).length) throw treeUnavailable();
+    const members = holds.length ? await reader.select().from(issueTreeHoldMembers).where(inArray(issueTreeHoldMembers.holdId, holds.map(row => row.id))).orderBy(asc(issueTreeHoldMembers.id)) : [];
+    const sources = await validateSources(reader, companyId, current, holds, members);
+    return { holds, members, sources };
+  }
+
+  async function actionSnapshot(context: TreeActionContext, intent: TreeIntent, reader: TreeReader) {
+    // The bound reader is SELECT-only; no helper here can initialize, expire or audit.
+    const view = issueTreeControlService(reader as Db);
+    const tree = await view.listTreeIssues(context.companyId, context.rootIssueId);
+    const preview = await view.preview(context.companyId, context.rootIssueId, intent.kind === 'create' ? intent.input : { mode: 'resume' });
+    let selected: HoldRow[] = [];
+    if (intent.kind === 'release') {
+      selected = await reader.select().from(issueTreeHolds).where(and(eq(issueTreeHolds.id, intent.holdId), eq(issueTreeHolds.companyId, context.companyId), eq(issueTreeHolds.rootIssueId, context.rootIssueId)));
+      if (!selected.length) throw notFound('Issue tree hold not found');
+      if (selected[0].status !== 'active') throw conflict('Issue tree hold is already released');
+    } else if (intent.input.mode === 'resume') {
+      selected = await activePauseHoldsForIssueIds(context.companyId, tree.map(row => row.id), reader as Db);
+    } else if (intent.input.mode === 'restore') {
+      selected = await reader.select().from(issueTreeHolds).where(and(eq(issueTreeHolds.companyId, context.companyId), eq(issueTreeHolds.rootIssueId, context.rootIssueId), eq(issueTreeHolds.mode, 'cancel'), eq(issueTreeHolds.status, 'active'))).orderBy(asc(issueTreeHolds.createdAt), asc(issueTreeHolds.id));
+    }
+    const history = await historySources(reader, context.companyId, tree, uniqueIds([...selected.map(row => row.id), ...preview.issues.flatMap(row => row.activeHoldIds)]));
+    const runIds = uniqueIds([...preview.activeRuns.map(row => row.id), ...history.sources.flatMap(row => [row.executionRunId, row.checkoutRunId]),
+      ...history.members.map(row => row.activeRunId), ...history.holds.flatMap(row => [row.createdByRunId, row.releasedByRunId]), context.actor.runId]);
+    const runs = runIds.length ? await reader.select().from(heartbeatRuns).where(inArray(heartbeatRuns.id, runIds)).orderBy(asc(heartbeatRuns.id)) : [];
+    const queue = await reader.select().from(agentWakeupRequests)
+      .where(unclaimedWakeupPredicate(context.companyId, tree.map(row => row.id)))
+      .orderBy(asc(agentWakeupRequests.id));
+    const runSources = await validateSources(reader, context.companyId, history.sources, [], [], context.actor);
+    const runContextIds = uniqueIds(runs.map(row => readNonEmptyStringFromRecord(row.contextSnapshot, 'issueId')));
+    const runContextSources = runContextIds.length ? await reader.select().from(issues).where(inArray(issues.id, runContextIds)) : [];
+    if (runContextSources.length !== runContextIds.length || runContextSources.some(row => row.companyId !== context.companyId) || runs.some(row => row.companyId !== context.companyId)) throw treeUnavailable();
+    const agentIds = uniqueIds([...runs.map(row => row.agentId), ...queue.map(row => row.agentId)]);
+    const agentRows = agentIds.length ? await reader.select().from(agents).where(inArray(agents.id, agentIds)) : [];
+    if (agentRows.length !== agentIds.length || agentRows.some(row => row.companyId !== context.companyId)) throw treeUnavailable();
+    const sources = [...new Map([...history.sources, ...runSources, ...runContextSources].map(row => [row.id,row])).values()].sort((a,b) => a.id.localeCompare(b.id));
+    const workspaceIds = uniqueIds(sources.map(row => row.executionWorkspaceId));
+    const workspaces = workspaceIds.length ? await reader.select().from(executionWorkspaces).where(inArray(executionWorkspaces.id, workspaceIds)).orderBy(asc(executionWorkspaces.id)) : [];
+    if (workspaces.length !== workspaceIds.length || workspaces.some(row => row.companyId !== context.companyId)) throw treeUnavailable();
+    const decisions = new Map(preview.issues.map(row => [row.id, row]));
+    const restoreSnapshots = new Map<string, HoldMemberRow>();
+    for (const hold of [...selected].reverse()) for (const member of history.members) {
+      if (member.holdId === hold.id && !member.skipped && !restoreSnapshots.has(member.issueId)) restoreSnapshots.set(member.issueId, member);
+    }
+    const targets: TreeAuthorityTarget[] = sources.map(issue => {
+      const decision = decisions.get(issue.id);
+      let status: IssueStatus | null = null;
+      if (intent.kind === 'create' && decision && !decision.skipped) {
+        if (intent.input.mode === 'cancel') status = 'cancelled';
+        if (intent.input.mode === 'restore' && issue.status === 'cancelled') {
+          const snapshot = restoreSnapshots.get(issue.id);
+          if (snapshot) status = restoreStatusFromCancelSnapshot(coerceIssueStatus(snapshot.issueStatus));
+        }
+      }
+      return { issue, effectivePatch: status ? { status, checkoutRunId: null, executionRunId: null, executionAgentNameKey: null, executionLockedAt: null } : {} };
+    });
+    // References require positive witnesses, never a synthetic reassignment.
+    const allAgentIds = uniqueIds([...agentIds, ...history.members.map(row => row.assigneeAgentId), ...history.holds.flatMap(row => [row.createdByAgentId, row.releasedByAgentId]), context.actor.agentId]);
+    targets.find(target => target.issue.id === context.rootIssueId)!.referencedAgentIds = allAgentIds;
+    const state = {
+      tree: tree.map(row => [row.id,row.parentId,row.depth]).sort(),
+      sources: sources.map(row => ({ id: row.id, companyId: row.companyId, parentId: row.parentId, projectId: row.projectId, goalId: row.goalId,
+        projectWorkspaceId: row.projectWorkspaceId, executionWorkspaceId: row.executionWorkspaceId, executionWorkspaceSettings: row.executionWorkspaceSettings,
+        title: row.title, identifier: row.identifier, status: row.status, assigneeAgentId: row.assigneeAgentId, assigneeUserId: row.assigneeUserId,
+        checkoutRunId: row.checkoutRunId, executionRunId: row.executionRunId, executionAgentNameKey: row.executionAgentNameKey, executionLockedAt: row.executionLockedAt })),
+      workspaces: workspaces.map(row => ({ id: row.id, companyId: row.companyId, projectId: row.projectId, sourceIssueId: row.sourceIssueId, status: row.status, metadata: row.metadata })),
+      selected: selected.map(row => row.id),
+      holds: history.holds.map(({ updatedAt: _updated, ...row }) => row),
+      members: history.members,
+      decisions: preview.issues.map(row => ({ id: row.id, skipped: row.skipped, skipReason: row.skipReason, activeHoldIds: row.activeHoldIds })),
+      runs: runs.map(row => ({ id: row.id, companyId: row.companyId, agentId: row.agentId, status: row.status, startedAt: row.startedAt, createdAt: row.createdAt, contextSnapshot: row.contextSnapshot, wakeupRequestId: row.wakeupRequestId })),
+      queue: queue.map(row => ({ id: row.id, companyId: row.companyId, agentId: row.agentId, status: row.status, runId: row.runId, reason: row.reason, payload: row.payload })),
+    };
+    return { tree, preview, selected, ...history, sources, targets, runs, queue, state };
+  }
+
+  async function planAction(context: TreeActionContext, rawIntent: TreeIntent, reader: TreeReader = db) {
+    const intent = canonicalIntent(rawIntent), snapshot = await actionSnapshot(context, intent, reader);
+    await context.authority.read(reader, snapshot.targets);
+    const pin: TreeActionPin = { version: 1, companyId: context.companyId, rootIssueId: context.rootIssueId, intentDigest: digest(intent), stateDigest: digest(snapshot.state) };
+    return { pin, safeReadback: snapshot.preview };
+  }
+
+  // SELECT-only authority for the sources read now. Serialization of a separate
+  // earlier projection must use readAction or retain its own company coordination.
+  async function authorizeRead(context: TreeActionContext, holdIds: string[] = [], reader: TreeReader = db) {
+    const view = issueTreeControlService(reader as Db);
+    const tree = await view.listTreeIssues(context.companyId, context.rootIssueId);
+    const history = await historySources(reader, context.companyId, tree, holdIds);
+    await context.authority.read(reader, history.sources.map(issue => ({ issue, effectivePatch: {} })));
+  }
+
+  // Canonical readback projects and authorizes from one consistent snapshot
+  // (REPEATABLE READ, read only). Reads take no row locks (#881 review P2):
+  // the checked source union and the returned projection come from the same
+  // snapshot, so a concurrent writer cannot make them disagree.
+  async function readAction(context: TreeActionContext, selection:
+    | { kind: "state" }
+    | { kind: "detail"; holdId: string }
+    | { kind: "list"; status?: IssueTreeHold["status"]; mode?: IssueTreeControlMode; includeMembers?: boolean }) {
+    return db.transaction(async tx => {
+      const reader = issueTreeControlService(tx as unknown as Db);
+      if (selection.kind === "state") {
+        const activePauseHold = await reader.getActivePauseHoldGate(context.companyId, context.rootIssueId);
+        await authorizeRead(context, activePauseHold ? [activePauseHold.holdId] : [], tx);
+        return { activePauseHold };
+      }
+      if (selection.kind === "detail") {
+        const hold = await reader.getHold(context.companyId, selection.holdId);
+        if (!hold || hold.rootIssueId !== context.rootIssueId) throw notFound("Issue tree hold not found");
+        await authorizeRead(context, [hold.id], tx);
+        return hold;
+      }
+      const holds = await reader.listHolds(context.companyId, context.rootIssueId, selection);
+      await authorizeRead(context, holds.map(hold => hold.id), tx);
+      return holds;
+    }, { isolationLevel: "repeatable read", accessMode: "read only" });
+  }
+
+  async function acceptAction(context: TreeActionContext, rawIntent: TreeIntent,
+    options: { expected?: TreeActionPin; acceptance?: ActivityAcceptance; previewOnly?: boolean } = {}): Promise<AcceptedTreeAction> {
+    const intent = canonicalIntent(rawIntent);
+    let acceptedResult: AcceptedTreeAction | undefined;
+    const work = async (accepted: ActivityAcceptance) => {
+      assertActivityAcceptance(accepted);
+      const tx = accepted.executor;
+      if (typeof tx.execute !== 'function') throw new TypeError('Tree acceptance requires an actual SQL executor');
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, context.companyId)).for("no key update");
+      const initial = await actionSnapshot(context, intent, tx);
+      const authority = await context.authority.stage(tx, initial.targets);
+      // Fixed order: complete positive witness union, sorted issue union, exact
+      // active runs, selected/projected holds, their members, eligible queue rows.
+      await tx.select({ id: issues.id }).from(issues).where(inArray(issues.id, initial.sources.map(row => row.id))).orderBy(asc(issues.id)).for('update');
+      if (initial.runs.length) await tx.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(inArray(heartbeatRuns.id, initial.runs.map(row => row.id))).orderBy(asc(heartbeatRuns.id)).for('update');
+      if (initial.holds.length) await tx.select({ id: issueTreeHolds.id }).from(issueTreeHolds).where(inArray(issueTreeHolds.id, initial.holds.map(row => row.id))).orderBy(asc(issueTreeHolds.id)).for('update');
+      if (initial.members.length) await tx.select({ id: issueTreeHoldMembers.id }).from(issueTreeHoldMembers).where(inArray(issueTreeHoldMembers.id, initial.members.map(row => row.id))).orderBy(asc(issueTreeHoldMembers.id)).for('update');
+      if (initial.queue.length) await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests).where(inArray(agentWakeupRequests.id, initial.queue.map(row => row.id))).orderBy(asc(agentWakeupRequests.id)).for('update');
+      const current = await actionSnapshot(context, intent, tx);
+      if (digest(initial.state) !== digest(current.state)) throw conflict('Issue tree changed during acceptance');
+      const pin: TreeActionPin = { version: 1, companyId: context.companyId, rootIssueId: context.rootIssueId, intentDigest: digest(intent), stateDigest: digest(current.state) };
+      if (options.expected && digest(options.expected) !== digest(pin)) throw conflict('Issue tree changed since preparation');
+      const audit = async (action: string, details: Record<string, unknown>, entityType = 'issue', entityId = context.rootIssueId) => {
+        accepted.publications.push(await insertActivity(tx, { companyId: context.companyId, ...context.actor, action, entityType, entityId, details }, options.previewOnly ? authority.checkTime : undefined));
+      };
+      const result: AcceptedTreeAction = { kind: intent.kind, result: {} as IssueTreeHold, companyId: context.companyId, rootIssueId: context.rootIssueId, actor: context.actor,
+        acceptedIssueIds: current.tree.map(row => row.id), authorizedIssueIds: current.sources.map(row => row.id), updatedIssueIds: [], releasedHoldIds: [], cancelledWakeupIds: [], effects: [] };
+      await authority.beforeWrite(current.targets);
+      authority.checkTime();
+      // Nothing asynchronous may intervene between the final time/lease check
+      // above and the first write below (including another helper's reads).
+      if (options.previewOnly) {
+        await audit('issue.tree_control_previewed', { mode: current.preview.mode, totals: current.preview.totals, warningCodes: current.preview.warnings.map(row => row.code) });
+        result.result = { preview: current.preview };
+      } else if (intent.kind === 'release') {
+        const [released] = await tx.update(issueTreeHolds)
+          .set(holdReleaseValues(current.selected[0].releasePolicy, { ...intent.input, actor: context.actor }))
+          .where(eq(issueTreeHolds.id, intent.holdId)).returning();
+        result.result = toHold(released, current.members.filter(row => row.holdId === released.id)); result.releasedHoldIds = [released.id];
+        await audit('issue.tree_hold_released', { holdId: released.id, mode: released.mode, reason: released.releaseReason, memberCount: (result.result as IssueTreeHold).members?.length ?? 0 });
+      } else {
+        const [hold] = await tx.insert(issueTreeHolds)
+          .values(holdInsertValues(context.companyId, context.rootIssueId, { ...intent.input, actor: context.actor })).returning();
+        const members = await tx.insert(issueTreeHoldMembers)
+          .values(memberInsertValues(context.companyId, hold.id, current.preview.issues)).returning();
+        let projectedHold = toHold(hold, members);
+        await audit('issue.tree_hold_created', { holdId: hold.id, mode: hold.mode, reason: hold.reason, totals: current.preview.totals, warningCodes: current.preview.warnings.map(row => row.code) });
+        if (hold.mode === 'pause' || hold.mode === 'cancel') {
+          result.effects = current.preview.activeRuns.map(run => ({ kind: 'cancelRun', runId: run.id, issueId: run.issueId, holdId: hold.id }));
+          if (current.queue.length) {
+            const reason = hold.mode === "pause"
+              ? "Cancelled because an active subtree pause hold was created"
+              : "Cancelled because a subtree cancel operation was applied";
+            const matched = await cancelExactUnclaimedWakeups(
+              tx, context.companyId, result.acceptedIssueIds, reason, current.queue.map(row => row.id),
+            );
+            result.cancelledWakeupIds = matched.map(row => row.id);
+            for (const row of matched) await audit('issue.tree_hold_wakeup_deferred', { holdId: hold.id, rootIssueId: context.rootIssueId, agentId: row.agentId, previousReason: row.reason }, 'agent_wakeup_request', row.id);
+          }
+        }
+        if (hold.mode === 'cancel') {
+          const changed = await cancelIssueStatusesForHold(context.companyId, context.rootIssueId, hold.id, accepted);
+          result.updatedIssueIds = changed.updatedIssueIds;
+          await audit('issue.tree_cancel_status_updated', { holdId: hold.id, cancelledIssueIds: changed.updatedIssueIds, cancelledIssueCount: changed.updatedIssueIds.length });
+        } else if (hold.mode === 'resume') {
+          const reason = intent.input.reason ?? 'Subtree resume applied.';
+          for (const selected of current.selected) await releaseHold(context.companyId, selected.rootIssueId, selected.id, { reason, metadata: { resumedByResumeHoldId: hold.id, resumeHoldMode: 'tree_resume', resumedPauseHoldId: selected.id }, actor: context.actor }, accepted);
+          result.releasedHoldIds = current.selected.map(row => row.id);
+          projectedHold = await releaseHold(context.companyId, context.rootIssueId, hold.id, { reason, metadata: { resumedPauseHoldIds: result.releasedHoldIds, resumeMode: 'subtree', ...(intent.input.releasePolicy ? { releasePolicy: normalizeReleasePolicy(intent.input.releasePolicy) } : {}) }, actor: context.actor }, accepted);
+          result.releasedHoldIds.push(hold.id);
+        } else if (hold.mode === 'restore') {
+          const changed = await restoreIssueStatusesForHold(context.companyId, context.rootIssueId, hold.id, { reason: hold.reason, actor: context.actor }, accepted);
+          result.updatedIssueIds = changed.updatedIssueIds; result.releasedHoldIds = [...changed.releasedCancelHoldIds, hold.id]; projectedHold = changed.restoreHold!;
+          await audit('issue.tree_restore_status_updated', { holdId: hold.id, restoredIssueIds: changed.updatedIssueIds, restoredIssueCount: changed.updatedIssueIds.length, releasedCancelHoldIds: changed.releasedCancelHoldIds });
+          if (intent.input.metadata?.wakeAgents === true) for (const issue of changed.updatedIssues) if (issue.assigneeAgentId) result.effects.push({ kind: 'wake', agentId: issue.assigneeAgentId, issueId: issue.id, holdId: hold.id,
+            options: { source: 'assignment', triggerDetail: 'system', reason: 'issue_tree_restored', payload: { issueId: issue.id, rootIssueId: context.rootIssueId, restoreHoldId: hold.id }, requestedByActorType: context.actor.actorType, requestedByActorId: context.actor.actorId,
+              contextSnapshot: { issueId: issue.id, taskId: issue.id, wakeReason: 'issue_tree_restored', source: 'issue.tree_restore', rootIssueId: context.rootIssueId, restoreHoldId: hold.id } } });
+        }
+        result.result = { hold: projectedHold, preview: current.preview, ...(hold.mode === 'resume' ? { resumedPauseHoldIds: current.selected.map(row => row.id) } : {}) };
+      }
+      acceptedResult = result;
+      return result;
+    };
+    if (options.acceptance) return work(options.acceptance);
+    const publications: ActivityPublication[] = [];
+    let result: AcceptedTreeAction;
+    try { result = await db.transaction(tx => work({ executor: tx as unknown as Db, publications })); }
+    catch (error) {
+      if (acceptedResult) throw conflict('Issue tree acceptance acknowledgment is unknown; read current state', { persistenceOutcome: 'unknown', rootIssueId: context.rootIssueId,
+        holdId: intent.kind === 'release' ? intent.holdId : (acceptedResult.result as CreateResult).hold?.id });
+      throw error;
+    }
+    try { for (const publication of publications) publishActivity(publication); }
+    catch { throw conflict('Issue tree was accepted but publication is unresolved; read current state', { persistenceOutcome: 'accepted', rootIssueId: context.rootIssueId,
+      holdId: intent.kind === 'release' ? intent.holdId : (result.result as CreateResult).hold?.id }); }
+    return result;
+  }
+
+  async function dispatchTreeEffects(accepted: AcceptedTreeAction, runtime: Pick<ReturnType<typeof heartbeatService>, 'cancelRun' | 'wakeup'>) {
+    const pending = new Set(accepted.effects);
+    const record = async (effect: TreeEffect, outcome: string, runtimeId: string | null) => {
+      await logActivity(db, { companyId: accepted.companyId, ...accepted.actor,
+        action: effect.kind === 'cancelRun' && outcome === 'cancelled' ? 'issue.tree_hold_run_interrupted' : effect.kind === 'wake' && runtimeId ? 'issue.tree_restore_wakeup_requested' : 'issue.tree_hold_effect_unresolved',
+        entityType: runtimeId ? 'heartbeat_run' : 'issue', entityId: runtimeId ?? effect.issueId,
+        details: { holdId: effect.holdId, rootIssueId: accepted.rootIssueId, issueId: effect.issueId, outcome } }).catch(() => undefined);
+    };
+    const tasks = accepted.effects.map(async effect => {
+      let outcome: string, runtimeId: string | null = null;
+      try {
+        if (effect.kind === 'cancelRun') {
+          const run = await runtime.cancelRun(effect.runId);
+          outcome = run && run.id !== effect.runId ? 'unconfirmed' : run?.status ?? 'null'; runtimeId = effect.runId;
+        } else {
+          const run = await runtime.wakeup(effect.agentId, effect.options);
+          const persisted = run ? await db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.companyId, accepted.companyId), eq(heartbeatRuns.agentId, effect.agentId),
+            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${effect.issueId}`)).then(rows => rows[0] ?? null) : null;
+          outcome = persisted ? `wake_${persisted.status}` : run ? 'unconfirmed' : 'null'; runtimeId = persisted?.id ?? null;
+        }
+      } catch { outcome = 'thrown'; }
+      pending.delete(effect);
+      await record(effect, outcome, runtimeId);
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.all(tasks), new Promise(resolve => { timer = setTimeout(resolve, 1000); })]);
+      for (const effect of pending) await record(effect, 'pending', effect.kind === 'cancelRun' ? effect.runId : null);
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   return {
+    planAction, acceptAction, authorizeRead, readAction, dispatchTreeEffects,
     listTreeIssues,
     preview,
     createHold,

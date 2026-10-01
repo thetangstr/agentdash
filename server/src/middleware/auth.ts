@@ -28,6 +28,23 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// AgentDash: only this middleware can populate original board-key provenance.
+// The bearer remains private to this actual Request and is never an actor flag.
+type VerifiedBoardCredential = Readonly<{
+  userId: string;
+  keyId: string;
+  bearer: string;
+  expiresAt: number | null;
+}>;
+const verifiedBoardCredentials = new WeakMap<Request, VerifiedBoardCredential>();
+
+export function verifiedBoardCredential(req: Request): VerifiedBoardCredential | null {
+  const credential = verifiedBoardCredentials.get(req);
+  return credential && req.actor.type === "board" && req.actor.source === "board_key"
+    && req.actor.userId === credential.userId && req.actor.keyId === credential.keyId
+    ? credential : null;
+}
+
 function normalizeRunId(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return isUuidLike(trimmed) ? trimmed : undefined;
@@ -84,6 +101,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
   const bridge = bridgeService(db);
   const assistantOAuth = assistantOAuthService(db);
   return async (req, res, next) => {
+    verifiedBoardCredentials.delete(req);
+    req.verifiedCredential = undefined;
     req.actor =
       opts.deploymentMode === "local_trusted"
         ? {
@@ -104,9 +123,15 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     // header on every request", but the server historically only read Authorization:
     // Bearer — so agents that followed their own instructions 401'd. When no Bearer
     // credential is present, map x-agent-key onto the same token validation path.
-    const agentKeyHeader = req.header("x-agent-key")?.trim();
-    if (agentKeyHeader && !authHeader?.toLowerCase().startsWith("bearer ")) {
-      authHeader = `Bearer ${agentKeyHeader}`;
+    const rawAgentKeyHeader = req.header("x-agent-key");
+    const hasBearer = /^bearer(?:\s|$)/i.test(authHeader ?? "");
+    // AgentDash: explicit credentials never inherit the no-credential local
+    // operator. Empty, revoked and invalid keys must remain unauthenticated.
+    if (hasBearer || rawAgentKeyHeader !== undefined) {
+      req.actor = { type: "none", source: "none" };
+      authHeader = hasBearer
+        ? `Bearer ${(authHeader ?? "").slice("bearer".length).trim()}`
+        : `Bearer ${rawAgentKeyHeader?.trim() ?? ""}`;
     }
     if (!authHeader?.toLowerCase().startsWith("bearer ")) {
       if (opts.deploymentMode === "authenticated" && opts.resolveSession) {
@@ -119,7 +144,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             "Failed to resolve auth session from request headers",
           );
         }
-        if (session?.user?.id) {
+        if (session?.user?.id && session.session?.id && session.session.userId === session.user.id) {
           const userId = session.user.id;
           const [roleRow, memberships] = await Promise.all([
             db
@@ -153,6 +178,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             runId: runIdHeader ?? undefined,
             source: "session",
           };
+          req.verifiedCredential = { kind: "session", sessionId: session.session.id, userId };
           next();
           return;
         }
@@ -226,6 +252,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         runId: runIdHeader || undefined,
         source: "assistant_grant",
       };
+      req.verifiedCredential = { kind: "assistant", origin: resolved.origin };
       next();
       return;
     }
@@ -314,6 +341,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         assistantLoopback: true,
         source: "assistant_grant",
       };
+      req.verifiedCredential = { kind: "assistant", origin: resolved.origin,
+        loopback: { expiresAt: resolved.expiresAt, lease: resolved.lease } };
       next();
       return;
     }
@@ -335,6 +364,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           runId: runIdHeader || undefined,
           source: "board_key",
         };
+        verifiedBoardCredentials.set(req, Object.freeze({
+          userId: boardKey.userId,
+          keyId: boardKey.id,
+          bearer: token,
+          expiresAt: boardKey.expiresAt?.getTime() ?? null,
+        }));
         next();
         return;
       }
@@ -434,6 +469,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         principalKind: jwtPrincipalKind,
         readOnly: jwtPrincipalKind === "evaluator",
       };
+      req.verifiedCredential = { kind: "agent_jwt", expiresAt: claims.exp, agentId: claims.sub,
+        companyId: claims.company_id, signedRunId: claims.run_id };
       if (refuseIfReadOnly(claims.company_id, claims.sub)) return;
       next();
       return;
@@ -450,7 +487,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       .where(eq(agents.id, key.agentId))
       .then((rows) => rows[0] ?? null);
 
-    if (!agentRecord || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
+    if (!agentRecord || agentRecord.companyId !== key.companyId || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
       next();
       return;
     }

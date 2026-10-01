@@ -1197,6 +1197,7 @@ export function assistantOAuthService(db: Db) {
     ]).catch(() => {});
 
     return {
+      origin: { kind: "oauth" as const, accessTokenId: row.id, expiresAt: row.expiresAt.getTime(), resource: row.resource, scopes: [...row.scopes] },
       userId: grant.userId,
       companyId: grant.companyId,
       grantId: grant.id,

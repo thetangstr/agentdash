@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
-import { clearIssueDependents } from "./issue-dependents.js";
+import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
+import { publishActivity } from "./activity-log.js";
+import { clearIssueDependents, prepareIssueDeletion } from "./issue-dependents.js";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -42,7 +44,7 @@ import type {
   IssueRelationIssueSummary,
 } from "@paperclipai/shared";
 import { clampIssueRequestDepth, extractAgentMentionIds, extractProjectMentionIds, isUuidLike } from "@paperclipai/shared";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { HttpError, conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
   gateProjectExecutionWorkspacePolicy,
@@ -51,7 +53,7 @@ import {
   parseProjectExecutionWorkspacePolicy,
 } from "./execution-workspace-policy.js";
 import { mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
-import { instanceSettingsService } from "./instance-settings.js";
+import { instanceSettingsService, readInstanceExperimentalSettings, readInstanceGeneralSettings } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
@@ -236,6 +238,23 @@ type IssueUserContextInput = {
 };
 type ProjectGoalReader = Pick<Db, "select">;
 type DbReader = Pick<Db, "select">;
+type IssueUpdateData = Partial<typeof issues.$inferInsert> & {
+  labelIds?: string[];
+  blockedByIssueIds?: string[];
+  actorAgentId?: string | null;
+  actorUserId?: string | null;
+};
+type IssueMutationExecutor = Pick<Db, "select" | "insert" | "update" | "delete" | "execute">;
+
+// AgentDash: private acceptance facts, never a caller-authored authority capability.
+export interface CheckoutOwnerEvaluation {
+  current: Pick<typeof issues.$inferSelect, "id" | "status" | "assigneeAgentId" | "checkoutRunId" | "executionRunId">;
+  actorAgentId: string;
+  actorRunId: string | null;
+  clearExecutionRunId: string | null;
+  adopt: boolean;
+  adoptedFromRunId: string | null;
+}
 type IssueCreateInput = Omit<typeof issues.$inferInsert, "companyId"> & {
   labelIds?: string[];
   blockedByIssueIds?: string[];
@@ -1900,6 +1919,34 @@ async function blockedByMapForIssues(
 }
 
 export function issueService(db: Db) {
+  // AgentDash: explicit actual acceptance; a tx-bound factory is not ownership.
+  async function acceptTopology<T>(supplied: ActivityAcceptance | undefined, work: (tx: Db, accepted: ActivityAcceptance) => Promise<T>): Promise<T> {
+    if (supplied !== undefined) {
+      assertActivityAcceptance(supplied);
+      if (typeof supplied.executor.execute !== "function" || typeof supplied.executor.delete !== "function") throw new Error("Invalid topology acceptance executor");
+      return work(supplied.executor, supplied);
+    }
+    const publications: ActivityAcceptance["publications"] = [];
+    let callbackCompleted = false;
+    let result: T;
+    try {
+      result = await db.transaction(async tx => {
+        const result = await work(tx as unknown as Db, { executor: tx as unknown as Db, publications });
+        callbackCompleted = true;
+        return result;
+      });
+    } catch (error) {
+      if (callbackCompleted) throw new HttpError(409, "Issue persistence is uncertain. Read current state before retrying.", { persistenceOutcome: "unknown" });
+      throw error;
+    }
+    for (const publication of publications) publishActivity(publication);
+    return result;
+  }
+  async function lockTopologyCompany(tx: IssueMutationExecutor, companyId: string) {
+    const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
+    if (!company) throw conflict("Issue company is unavailable");
+  }
+
   const instanceSettings = instanceSettingsService(db);
   const treeControlSvc = issueTreeControlService(db);
 
@@ -1932,8 +1979,8 @@ export function issueService(db: Db) {
     };
   }
 
-  async function assertAssignableAgent(companyId: string, agentId: string) {
-    const assignee = await db
+  async function assertAssignableAgent(companyId: string, agentId: string, executor: DbReader = db) {
+    const assignee = await executor
       .select({
         id: agents.id,
         companyId: agents.companyId,
@@ -1983,8 +2030,8 @@ export function issueService(db: Db) {
     });
   }
 
-  async function assertAssignableUser(companyId: string, userId: string) {
-    const membership = await db
+  async function assertAssignableUser(companyId: string, userId: string, executor: DbReader = db) {
+    const membership = await executor
       .select({ id: companyMemberships.id })
       .from(companyMemberships)
       .where(
@@ -2195,6 +2242,27 @@ export function issueService(db: Db) {
     }
   }
 
+  async function assertValidBlockedByIssueIds(
+    issueId: string, companyId: string, blockerIds: string[], executor: DbReader,
+  ) {
+    const deduped = [...new Set(blockerIds)];
+    if (deduped.includes(issueId)) throw unprocessable("Issue cannot be blocked by itself");
+    if (!deduped.length) return;
+    const related = await executor.select({ id: issues.id }).from(issues)
+      .where(and(eq(issues.companyId, companyId), inArray(issues.id, deduped)));
+    if (related.length !== deduped.length) throw unprocessable("Blocked-by issues must belong to the same company");
+    await assertNoBlockingCycles(companyId, issueId, deduped, executor);
+  }
+
+  // AgentDash: caller holds the company mutex before reading this changing set.
+  async function lockBlockerIssues(issueId: string, companyId: string, submitted: string[], executor: IssueMutationExecutor) {
+    const previous = await executor.select({ id: issueRelations.issueId }).from(issueRelations)
+      .where(and(eq(issueRelations.companyId, companyId), eq(issueRelations.relatedIssueId, issueId), eq(issueRelations.type, "blocks")));
+    const ids = [...new Set([issueId, ...submitted, ...previous.map(row => row.id)])].sort();
+    await executor.select({ id: issues.id }).from(issues)
+      .where(and(eq(issues.companyId, companyId), inArray(issues.id, ids))).orderBy(asc(issues.id)).for("update");
+  }
+
   async function syncBlockedByIssueIds(
     issueId: string,
     companyId: string,
@@ -2203,27 +2271,8 @@ export function issueService(db: Db) {
     dbOrTx: any = db,
   ) {
     const deduped = [...new Set(blockedByIssueIds)];
-    if (deduped.some((candidate) => candidate === issueId)) {
-      throw unprocessable("Issue cannot be blocked by itself");
-    }
-
-    if (deduped.length > 0) {
-      const lockedIssueIds = [issueId, ...deduped].sort();
-      await dbOrTx.execute(
-        sql`SELECT ${issues.id} FROM ${issues}
-            WHERE ${and(eq(issues.companyId, companyId), inArray(issues.id, lockedIssueIds))}
-            ORDER BY ${issues.id}
-            FOR UPDATE`,
-      );
-      const relatedIssues = await dbOrTx
-        .select({ id: issues.id })
-        .from(issues)
-        .where(and(eq(issues.companyId, companyId), inArray(issues.id, deduped)));
-      if (relatedIssues.length !== deduped.length) {
-        throw unprocessable("Blocked-by issues must belong to the same company");
-      }
-      await assertNoBlockingCycles(companyId, issueId, deduped, dbOrTx);
-    }
+    await lockBlockerIssues(issueId, companyId, deduped, dbOrTx);
+    await assertValidBlockedByIssueIds(issueId, companyId, deduped, dbOrTx);
 
     await dbOrTx
       .delete(issueRelations)
@@ -2249,8 +2298,8 @@ export function issueService(db: Db) {
     );
   }
 
-  async function isTerminalOrMissingHeartbeatRun(runId: string) {
-    const run = await db
+  async function isTerminalOrMissingHeartbeatRun(runId: string, executor: DbReader = db) {
+    const run = await executor
       .select({ status: heartbeatRuns.status })
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
@@ -2283,41 +2332,6 @@ export function issueService(db: Db) {
           eq(issues.status, "in_progress"),
           eq(issues.assigneeAgentId, input.actorAgentId),
           eq(issues.checkoutRunId, input.expectedCheckoutRunId),
-        ),
-      )
-      .returning({
-        id: issues.id,
-        status: issues.status,
-        assigneeAgentId: issues.assigneeAgentId,
-        checkoutRunId: issues.checkoutRunId,
-        executionRunId: issues.executionRunId,
-      })
-      .then((rows) => rows[0] ?? null);
-
-    return adopted;
-  }
-
-  async function adoptUnownedCheckoutRun(input: {
-    issueId: string;
-    actorAgentId: string;
-    actorRunId: string;
-  }) {
-    const now = new Date();
-    const adopted = await db
-      .update(issues)
-      .set({
-        checkoutRunId: input.actorRunId,
-        executionRunId: input.actorRunId,
-        executionLockedAt: now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(issues.id, input.issueId),
-          eq(issues.status, "in_progress"),
-          eq(issues.assigneeAgentId, input.actorAgentId),
-          isNull(issues.checkoutRunId),
-          or(isNull(issues.executionRunId), eq(issues.executionRunId, input.actorRunId)),
         ),
       )
       .returning({
@@ -2375,8 +2389,196 @@ export function issueService(db: Db) {
     });
   }
 
+  /** Read/check only: no cleanup, adoption, audit or publication. */
+  async function evaluateCheckoutOwner(
+    id: string,
+    actorAgentId: string,
+    actorRunId: string | null,
+    executor: DbReader = db,
+  ): Promise<CheckoutOwnerEvaluation> {
+    const current = await executor.select({
+      id: issues.id,
+      status: issues.status,
+      assigneeAgentId: issues.assigneeAgentId,
+      checkoutRunId: issues.checkoutRunId,
+      executionRunId: issues.executionRunId,
+    }).from(issues).where(eq(issues.id, id)).then((rows) => rows[0] ?? null);
+    if (!current) throw notFound("Issue not found");
+    const clearExecutionRunId = current.executionRunId &&
+      await isTerminalOrMissingHeartbeatRun(current.executionRunId, executor)
+      ? current.executionRunId : null;
+    const effectiveExecutionRunId = clearExecutionRunId ? null : current.executionRunId;
+    const owned = current.status === "in_progress" && current.assigneeAgentId === actorAgentId;
+    const sameRun = owned && sameRunLock(current.checkoutRunId, actorRunId);
+    const adoptUnowned = owned && Boolean(actorRunId) && current.checkoutRunId === null &&
+      (effectiveExecutionRunId === null || effectiveExecutionRunId === actorRunId);
+    const adoptStale = owned && Boolean(actorRunId) && current.checkoutRunId !== null &&
+      current.checkoutRunId !== actorRunId &&
+      await isTerminalOrMissingHeartbeatRun(current.checkoutRunId, executor);
+    if (!sameRun && !adoptUnowned && !adoptStale) {
+      throw conflict("Issue run ownership conflict", {
+        issueId: current.id,
+        status: current.status,
+        assigneeAgentId: current.assigneeAgentId,
+        checkoutRunId: current.checkoutRunId,
+        executionRunId: effectiveExecutionRunId,
+        actorAgentId,
+        actorRunId,
+      });
+    }
+    return {
+      current, actorAgentId, actorRunId, clearExecutionRunId,
+      adopt: !sameRun && (adoptUnowned || adoptStale),
+      adoptedFromRunId: !sameRun && adoptStale ? current.checkoutRunId : null,
+    };
+  }
+
+  /** DB-only accepted application; the caller owns the transaction and adoption audit. */
+  async function applyCheckoutOwner(evaluation: CheckoutOwnerEvaluation, executor: IssueMutationExecutor) {
+    await executor.execute(sql`select ${issues.id} from ${issues} where ${issues.id} = ${evaluation.current.id} for update`);
+    const fresh = await evaluateCheckoutOwner(evaluation.current.id, evaluation.actorAgentId, evaluation.actorRunId, executor);
+    // A plan cannot silently adopt a different run than the one checked by its composer.
+    if (fresh.current.checkoutRunId !== evaluation.current.checkoutRunId ||
+        fresh.current.executionRunId !== evaluation.current.executionRunId ||
+        fresh.clearExecutionRunId !== evaluation.clearExecutionRunId ||
+        fresh.adopt !== evaluation.adopt) {
+      throw conflict("Issue run ownership conflict", {
+        issueId: fresh.current.id, status: fresh.current.status,
+        assigneeAgentId: fresh.current.assigneeAgentId,
+        checkoutRunId: fresh.current.checkoutRunId, executionRunId: fresh.current.executionRunId,
+        actorAgentId: fresh.actorAgentId, actorRunId: fresh.actorRunId,
+      });
+    }
+    let current = fresh.current;
+    if (fresh.clearExecutionRunId || fresh.adopt) {
+      const now = new Date();
+      const [updated] = await executor.update(issues).set({
+        ...(fresh.clearExecutionRunId ? { executionRunId: null, executionAgentNameKey: null, executionLockedAt: null } : {}),
+        ...(fresh.adopt ? { checkoutRunId: fresh.actorRunId, executionRunId: fresh.actorRunId, executionLockedAt: now } : {}),
+        updatedAt: now,
+      }).where(eq(issues.id, current.id)).returning({
+        id: issues.id, status: issues.status, assigneeAgentId: issues.assigneeAgentId,
+        checkoutRunId: issues.checkoutRunId, executionRunId: issues.executionRunId,
+      });
+      current = updated;
+    }
+    return { ...current, adoptedFromRunId: fresh.adoptedFromRunId };
+  }
+
+  // AgentDash: one SELECT-only domain resolver for preparation and canonical writes.
+  // Generated timestamps and lock application are deliberately outside this result.
+  async function resolveUpdate(
+    existing: typeof issues.$inferSelect,
+    data: IssueUpdateData,
+    tx: DbReader,
+    experimentalSettings?: Awaited<ReturnType<typeof readInstanceExperimentalSettings>> | null,
+  ) {
+    const {
+      labelIds: nextLabelIds,
+      blockedByIssueIds,
+      actorAgentId,
+      actorUserId,
+      ...issueData
+    } = data;
+    const isolatedWorkspacesEnabled = (experimentalSettings ?? await readInstanceExperimentalSettings(tx)).enableIsolatedWorkspaces;
+    if (!isolatedWorkspacesEnabled) {
+      delete issueData.executionWorkspaceId;
+      delete issueData.executionWorkspacePreference;
+      delete issueData.executionWorkspaceSettings;
+    }
+
+    if (issueData.status) {
+      assertTransition(existing.status, issueData.status);
+    }
+
+    const patch: Partial<typeof issues.$inferInsert> = {
+      ...issueData,
+    };
+    if (issueData.requestDepth !== undefined) {
+      patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
+    }
+
+    const nextAssigneeAgentId =
+      issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
+    const nextAssigneeUserId =
+      issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
+
+    if (nextAssigneeAgentId && nextAssigneeUserId) {
+      throw unprocessable("Issue can only have one assignee");
+    }
+    if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
+      throw unprocessable("in_progress issues require an assignee");
+    }
+    if (patch.status === "in_progress") {
+      const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
+        ? await listUnresolvedBlockerIssueIds(tx, existing.companyId, blockedByIssueIds)
+        : (
+            await listIssueDependencyReadinessMap(tx, existing.companyId, [existing.id])
+          ).get(existing.id)?.unresolvedBlockerIssueIds ?? [];
+      if (unresolvedBlockerIssueIds.length > 0) {
+        throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+      }
+    }
+    if (issueData.assigneeAgentId) {
+      await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId, tx);
+    }
+    if (issueData.assigneeUserId) {
+      await assertAssignableUser(existing.companyId, issueData.assigneeUserId, tx);
+    }
+    const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
+    const nextProjectWorkspaceId =
+      issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
+    const nextExecutionWorkspaceId =
+      issueData.executionWorkspaceId !== undefined ? issueData.executionWorkspaceId : existing.executionWorkspaceId;
+    const nextExecutionWorkspacePreference =
+      issueData.executionWorkspacePreference !== undefined
+        ? issueData.executionWorkspacePreference
+        : existing.executionWorkspacePreference;
+    const nextExecutionWorkspaceSettings =
+      issueData.executionWorkspaceSettings !== undefined
+        ? parseIssueExecutionWorkspaceSettings(issueData.executionWorkspaceSettings)
+        : parseIssueExecutionWorkspaceSettings(existing.executionWorkspaceSettings);
+    if (nextProjectWorkspaceId) {
+      await assertValidProjectWorkspace(existing.companyId, nextProjectId, nextProjectWorkspaceId, tx);
+    }
+    if (nextExecutionWorkspaceId) {
+      await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId, tx);
+    }
+
+    const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
+    const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
+      getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),
+      getProjectDefaultGoalId(
+        tx,
+        existing.companyId,
+        issueData.projectId !== undefined ? issueData.projectId : existing.projectId,
+      ),
+    ]);
+    patch.goalId = resolveNextIssueGoalId({
+      currentProjectId: existing.projectId,
+      currentGoalId: existing.goalId,
+      currentProjectGoalId,
+      projectId: issueData.projectId,
+      goalId: issueData.goalId,
+      projectGoalId: nextProjectGoalId,
+      defaultGoalId: defaultCompanyGoal?.id ?? null,
+    });
+    if (nextLabelIds !== undefined) await assertValidLabelIds(existing.companyId, [...new Set(nextLabelIds)], tx);
+    if (blockedByIssueIds !== undefined) await assertValidBlockedByIssueIds(existing.id, existing.companyId, blockedByIssueIds, tx);
+    return { patch, issueData, nextLabelIds, blockedByIssueIds, actorAgentId, actorUserId,
+      nextExecutionWorkspaceId, nextExecutionWorkspacePreference, nextExecutionWorkspaceSettings };
+  }
+
   return {
     clearExecutionRunIfTerminal,
+    lockBlockerIssues,
+
+    // No initialization, FOR UPDATE, cleanup, adoption, or writes on this path.
+    prepareUpdate: async (id: string, data: IssueUpdateData, executor: DbReader = db) => {
+      const [existing] = await executor.select().from(issues).where(eq(issues.id, id));
+      if (!existing) throw notFound("Issue not found");
+      return resolveUpdate(existing, data, executor);
+    },
 
     list: async (companyId: string, filters?: IssueFilters) => {
       const conditions = [eq(issues.companyId, companyId)];
@@ -3053,66 +3255,48 @@ export function issueService(db: Db) {
     createChild: async (
       parentIssueId: string,
       data: IssueChildCreateInput,
+      acceptance?: ActivityAcceptance,
     ) => {
-      const parent = await db
-        .select()
-        .from(issues)
-        .where(eq(issues.id, parentIssueId))
-        .then((rows) => rows[0] ?? null);
-      if (!parent) throw notFound("Parent issue not found");
-
-      const [{ childCount }] = await db
-        .select({ childCount: sql<number>`count(*)::int` })
-        .from(issues)
-        .where(and(eq(issues.companyId, parent.companyId), eq(issues.parentId, parent.id)));
-      if (childCount >= MAX_CHILD_ISSUES_CREATED_BY_HELPER) {
-        throw unprocessable(`Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} child issues for this helper`);
-      }
-
-      const {
-        acceptanceCriteria,
-        blockParentUntilDone,
-        actorAgentId,
-        actorUserId,
-        ...issueData
-      } = data;
-      const child = await issueService(db).create(parent.companyId, {
-        ...issueData,
-        parentId: parent.id,
-        projectId: issueData.projectId ?? parent.projectId,
-        goalId: issueData.goalId ?? parent.goalId,
-        requestDepth: clampIssueRequestDepth(
-          Math.max(clampIssueRequestDepth(parent.requestDepth) + 1, issueData.requestDepth ?? 0),
-        ),
-        description: appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria),
-        definitionOfDone:
-          issueData.definitionOfDone
-          ?? definitionOfDoneFromAcceptanceCriteria(issueData.title, acceptanceCriteria),
-        inheritExecutionWorkspaceFromIssueId: parent.id,
+      const connection = acceptance?.executor ?? db;
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      const [binding] = await connection.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, parentIssueId));
+      if (!binding) throw notFound("Parent issue not found");
+      if (acceptance === undefined) await instanceSettings.getExperimental();
+      return acceptTopology(acceptance, async (tx, accepted) => {
+        await lockTopologyCompany(tx, binding.companyId);
+        await lockBlockerIssues(parentIssueId, binding.companyId, data.blockedByIssueIds ?? [], tx);
+        const [parent] = await tx.select().from(issues).where(and(eq(issues.id, parentIssueId), eq(issues.companyId, binding.companyId)));
+        if (!parent) throw conflict("Parent issue is unavailable");
+        const [{ childCount }] = await tx.select({ childCount: sql<number>`count(*)::int` }).from(issues)
+          .where(and(eq(issues.companyId, parent.companyId), eq(issues.parentId, parent.id)));
+        if (childCount >= MAX_CHILD_ISSUES_CREATED_BY_HELPER) throw unprocessable(`Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} child issues for this helper`);
+        const { acceptanceCriteria, blockParentUntilDone, actorAgentId, actorUserId, ...issueData } = data;
+        const child = await issueService(db).create(parent.companyId, {
+          ...issueData,
+          parentId: parent.id,
+          projectId: issueData.projectId ?? parent.projectId,
+          goalId: issueData.goalId ?? parent.goalId,
+          requestDepth: clampIssueRequestDepth(Math.max(clampIssueRequestDepth(parent.requestDepth) + 1, issueData.requestDepth ?? 0)),
+          description: appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria),
+          definitionOfDone: issueData.definitionOfDone ?? definitionOfDoneFromAcceptanceCriteria(issueData.title, acceptanceCriteria),
+          inheritExecutionWorkspaceFromIssueId: parent.id,
+        }, accepted);
+        if (blockParentUntilDone) {
+          const existingBlockers = await tx.select({ blockerIssueId: issueRelations.issueId }).from(issueRelations)
+            .where(and(eq(issueRelations.companyId, parent.companyId), eq(issueRelations.relatedIssueId, parent.id), eq(issueRelations.type, "blocks")));
+          await syncBlockedByIssueIds(parent.id, parent.companyId,
+            [...new Set([...existingBlockers.map(row => row.blockerIssueId), child.id])],
+            { agentId: actorAgentId ?? null, userId: actorUserId ?? null }, tx);
+        }
+        return { issue: child, parentBlockerAdded: Boolean(blockParentUntilDone) };
       });
-
-      if (blockParentUntilDone) {
-        const existingBlockers = await db
-          .select({ blockerIssueId: issueRelations.issueId })
-          .from(issueRelations)
-          .where(and(eq(issueRelations.companyId, parent.companyId), eq(issueRelations.relatedIssueId, parent.id), eq(issueRelations.type, "blocks")));
-        await syncBlockedByIssueIds(
-          parent.id,
-          parent.companyId,
-          [...new Set([...existingBlockers.map((row) => row.blockerIssueId), child.id])],
-          { agentId: actorAgentId ?? null, userId: actorUserId ?? null },
-        );
-      }
-
-      return {
-        issue: child,
-        parentBlockerAdded: Boolean(blockParentUntilDone),
-      };
     },
 
     create: async (
       companyId: string,
       data: IssueCreateInput,
+      acceptance?: ActivityAcceptance,
+      beforeWrite?: () => void,
     ) => {
       const {
         labelIds: inputLabelIds,
@@ -3121,34 +3305,31 @@ export function issueService(db: Db) {
         routeUnownedTodoToChiefOfStaff,
         ...issueData
       } = data;
-      // AgentDash: the issue start policy (see issue-start-policy.ts). An
-      // omitted status takes the company default; an unowned `todo` goes to
-      // the Chief of Staff when the caller may assign — but never back to a
-      // CoS that created it, which would wake itself for its own issue.
-      if (issueData.status == null) issueData.status = await defaultStatusForNewIssue(db, companyId);
-      if (routeUnownedTodoToChiefOfStaff) {
-        const triageOwnerId = await triageOwnerForNewIssue(db, companyId, issueData);
-        if (triageOwnerId && triageOwnerId !== issueData.createdByAgentId) issueData.assigneeAgentId = triageOwnerId;
-      }
-      const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
-      if (!isolatedWorkspacesEnabled) {
-        delete issueData.executionWorkspaceId;
-        delete issueData.executionWorkspacePreference;
-        delete issueData.executionWorkspaceSettings;
-      }
-      if (issueData.assigneeAgentId && issueData.assigneeUserId) {
-        throw unprocessable("Issue can only have one assignee");
-      }
-      if (issueData.assigneeAgentId) {
-        await assertAssignableAgent(companyId, issueData.assigneeAgentId);
-      }
-      if (issueData.assigneeUserId) {
-        await assertAssignableUser(companyId, issueData.assigneeUserId);
-      }
-      if (issueData.status === "in_progress" && !issueData.assigneeAgentId && !issueData.assigneeUserId) {
-        throw unprocessable("in_progress issues require an assignee");
-      }
-      return db.transaction(async (tx) => {
+      if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      const experimental = acceptance === undefined ? await instanceSettings.getExperimental() : null;
+      return acceptTopology(acceptance, async (tx) => {
+        await lockTopologyCompany(tx, companyId);
+        const isolatedWorkspacesEnabled = (experimental ?? await readInstanceExperimentalSettings(tx)).enableIsolatedWorkspaces;
+        if (!isolatedWorkspacesEnabled) {
+          delete issueData.executionWorkspaceId;
+          delete issueData.executionWorkspacePreference;
+          delete issueData.executionWorkspaceSettings;
+        }
+        if (issueData.status == null) issueData.status = await defaultStatusForNewIssue(tx, companyId);
+        if (routeUnownedTodoToChiefOfStaff) {
+          const triageOwnerId = await triageOwnerForNewIssue(tx, companyId, issueData);
+          if (triageOwnerId && triageOwnerId !== issueData.createdByAgentId) issueData.assigneeAgentId = triageOwnerId;
+        }
+        if (issueData.assigneeAgentId && issueData.assigneeUserId) throw unprocessable("Issue can only have one assignee");
+        if (issueData.assigneeAgentId) await assertAssignableAgent(companyId, issueData.assigneeAgentId, tx);
+        if (issueData.assigneeUserId) await assertAssignableUser(companyId, issueData.assigneeUserId, tx);
+        if (issueData.status === "in_progress" && !issueData.assigneeAgentId && !issueData.assigneeUserId) throw unprocessable("in_progress issues require an assignee");
+        const relatedIds = [...new Set([issueData.parentId, inheritExecutionWorkspaceFromIssueId, ...(blockedByIssueIds ?? [])].filter((id): id is string => Boolean(id)))].sort();
+        if (relatedIds.length) await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, companyId), inArray(issues.id, relatedIds))).orderBy(asc(issues.id)).for("update");
+        if (issueData.parentId) {
+          const [parent] = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, issueData.parentId)));
+          if (!parent) throw unprocessable("Parent issue is unavailable");
+        }
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;
@@ -3240,6 +3421,7 @@ export function issueService(db: Db) {
           .where(eq(issues.companyId, companyId));
         const currentMax = maxRow?.maxNum ?? 0;
 
+        beforeWrite?.();
         const [company] = await tx
           .update(companies)
           .set({
@@ -3302,138 +3484,70 @@ export function issueService(db: Db) {
 
     update: async (
       id: string,
-      data: Partial<typeof issues.$inferInsert> & {
-        labelIds?: string[];
-        blockedByIssueIds?: string[];
-        actorAgentId?: string | null;
-        actorUserId?: string | null;
-      },
-      dbOrTx: any = db,
+      data: IssueUpdateData,
+      dbOrTx: IssueMutationExecutor = db,
     ) => {
-      const existing = await dbOrTx
-        .select()
-        .from(issues)
-        .where(eq(issues.id, id))
-        .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
-      if (!existing) return null;
-
-      const {
-        labelIds: nextLabelIds,
-        blockedByIssueIds,
-        actorAgentId,
-        actorUserId,
-        ...issueData
-      } = data;
-      const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
-      if (!isolatedWorkspacesEnabled) {
-        delete issueData.executionWorkspaceId;
-        delete issueData.executionWorkspacePreference;
-        delete issueData.executionWorkspaceSettings;
+      // Existence-only preflight preserves missing-target no-initialization behavior.
+      // The locked transaction read below remains authoritative for all domain work.
+      if (dbOrTx === db) {
+        const [exists] = await db.select({ id: issues.id }).from(issues).where(eq(issues.id, id));
+        if (!exists) return null;
       }
-
-      if (issueData.status) {
-        assertTransition(existing.status, issueData.status);
-      }
-
-      const patch: Partial<typeof issues.$inferInsert> = {
-        ...issueData,
-        updatedAt: new Date(),
-      };
-      if (issueData.requestDepth !== undefined) {
-        patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
-      }
-
-      const nextAssigneeAgentId =
-        issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
-      const nextAssigneeUserId =
-        issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
-
-      if (nextAssigneeAgentId && nextAssigneeUserId) {
-        throw unprocessable("Issue can only have one assignee");
-      }
-      if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
-        throw unprocessable("in_progress issues require an assignee");
-      }
-      if (patch.status === "in_progress") {
-        const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
-          ? await listUnresolvedBlockerIssueIds(dbOrTx, existing.companyId, blockedByIssueIds)
-          : (
-              await listIssueDependencyReadinessMap(dbOrTx, existing.companyId, [id])
-            ).get(id)?.unresolvedBlockerIssueIds ?? [];
-        if (unresolvedBlockerIssueIds.length > 0) {
-          throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+      // Root compatibility initializes/captures settings before domain locks.
+      // A supplied transaction may already hold those locks: use read-only lookup.
+      const experimentalSettings = dbOrTx === db ? await instanceSettings.getExperimental() : null;
+      const runUpdate = async (tx: IssueMutationExecutor) => {
+        const [binding] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, id));
+        if (!binding) return null;
+        // Serialize predicate writers while allowing incidental company FK KEY SHARE
+        // held by caller-owned comment/activity transactions.
+        await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("no key update");
+        await lockBlockerIssues(id, binding.companyId, [...(data.blockedByIssueIds ?? []), ...(data.parentId ? [data.parentId] : [])], tx);
+        const existing = await tx
+          .select()
+          .from(issues)
+          .where(eq(issues.id, id))
+          .for("update")
+          .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
+        if (!existing) return null;
+        if (existing.companyId !== binding.companyId) throw conflict("Issue company changed before acceptance");
+        const companyPatch = (data as Record<string, unknown>).companyId;
+        if (companyPatch !== undefined && companyPatch !== existing.companyId) throw unprocessable("Issue company cannot be changed");
+        if (data.parentId !== undefined && data.parentId !== null && data.parentId !== existing.parentId) {
+          const [parent] = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, existing.companyId), eq(issues.id, data.parentId)));
+          if (!parent) throw unprocessable("Parent issue is unavailable");
         }
-      }
-      if (issueData.assigneeAgentId) {
-        await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId);
-      }
-      if (issueData.assigneeUserId) {
-        await assertAssignableUser(existing.companyId, issueData.assigneeUserId);
-      }
-      const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
-      const nextProjectWorkspaceId =
-        issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
-      const nextExecutionWorkspaceId =
-        issueData.executionWorkspaceId !== undefined ? issueData.executionWorkspaceId : existing.executionWorkspaceId;
-      const nextExecutionWorkspacePreference =
-        issueData.executionWorkspacePreference !== undefined
-          ? issueData.executionWorkspacePreference
-          : existing.executionWorkspacePreference;
-      const nextExecutionWorkspaceSettings =
-        issueData.executionWorkspaceSettings !== undefined
-          ? parseIssueExecutionWorkspaceSettings(issueData.executionWorkspaceSettings)
-          : parseIssueExecutionWorkspaceSettings(existing.executionWorkspaceSettings);
-      if (nextProjectWorkspaceId) {
-        await assertValidProjectWorkspace(existing.companyId, nextProjectId, nextProjectWorkspaceId);
-      }
-      if (nextExecutionWorkspaceId) {
-        await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
-      }
+        const { companyId: _companyId, ...acceptedData } = data as IssueUpdateData & { companyId?: unknown };
 
-      applyStatusSideEffects(issueData.status, patch, existing);
-      if (issueData.status && issueData.status !== "done") {
-        patch.completedAt = null;
-      }
-      if (issueData.status && issueData.status !== "cancelled") {
-        patch.cancelledAt = null;
-      }
-      if (issueData.status && issueData.status !== "in_progress") {
-        patch.checkoutRunId = null;
-        // Fix B: also clear the execution lock when leaving in_progress
-        patch.executionRunId = null;
-        patch.executionAgentNameKey = null;
-        patch.executionLockedAt = null;
-      }
-      if (
-        (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
-        (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId)
-      ) {
-        patch.checkoutRunId = null;
-        // Fix B: clear execution lock on reassignment, matching checkoutRunId clear
-        patch.executionRunId = null;
-        patch.executionAgentNameKey = null;
-        patch.executionLockedAt = null;
-      }
+        const { patch, issueData, nextLabelIds, blockedByIssueIds, actorAgentId, actorUserId,
+          nextExecutionWorkspaceId, nextExecutionWorkspacePreference, nextExecutionWorkspaceSettings } =
+          await resolveUpdate(existing, acceptedData, tx, experimentalSettings);
+        patch.updatedAt = new Date();
+        applyStatusSideEffects(issueData.status, patch, existing);
+        if (issueData.status && issueData.status !== "done") {
+          patch.completedAt = null;
+        }
+        if (issueData.status && issueData.status !== "cancelled") {
+          patch.cancelledAt = null;
+        }
+        if (issueData.status && issueData.status !== "in_progress") {
+          patch.checkoutRunId = null;
+          // Fix B: also clear the execution lock when leaving in_progress
+          patch.executionRunId = null;
+          patch.executionAgentNameKey = null;
+          patch.executionLockedAt = null;
+        }
+        if (
+          (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
+          (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId)
+        ) {
+          patch.checkoutRunId = null;
+          // Fix B: clear execution lock on reassignment, matching checkoutRunId clear
+          patch.executionRunId = null;
+          patch.executionAgentNameKey = null;
+          patch.executionLockedAt = null;
+        }
 
-      const runUpdate = async (tx: any) => {
-        const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
-        const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
-          getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),
-          getProjectDefaultGoalId(
-            tx,
-            existing.companyId,
-            issueData.projectId !== undefined ? issueData.projectId : existing.projectId,
-          ),
-        ]);
-        patch.goalId = resolveNextIssueGoalId({
-          currentProjectId: existing.projectId,
-          currentGoalId: existing.goalId,
-          currentProjectGoalId,
-          projectId: issueData.projectId,
-          goalId: issueData.goalId,
-          projectGoalId: nextProjectGoalId,
-          defaultGoalId: defaultCompanyGoal?.id ?? null,
-        });
         const updated = await tx
           .update(issues)
           .set(patch)
@@ -3524,8 +3638,12 @@ export function issueService(db: Db) {
       return cleared;
     },
 
-    remove: (id: string) =>
-      db.transaction(async (tx) => {
+    remove: (id: string, acceptance?: ActivityAcceptance) =>
+      acceptTopology(acceptance, async (tx) => {
+        const [binding] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, id));
+        if (!binding) return null;
+        await lockTopologyCompany(tx, binding.companyId);
+        const deletion = await prepareIssueDeletion(tx, binding.companyId, [id]);
         const attachmentAssetIds = await tx
           .select({ assetId: issueAttachments.assetId })
           .from(issueAttachments)
@@ -3537,7 +3655,7 @@ export function issueService(db: Db) {
 
         // Every dependent that would block the delete below. Shared with the
         // project-delete path so the two cannot drift apart.
-        await clearIssueDependents(tx, sql`= ${id}`);
+        await clearIssueDependents(tx, deletion);
 
         const removedIssue = await tx
           .delete(issues)
@@ -3714,81 +3832,16 @@ export function issueService(db: Db) {
       });
     },
 
+    evaluateCheckoutOwner,
+    applyCheckoutOwner,
+
     assertCheckoutOwner: async (id: string, actorAgentId: string, actorRunId: string | null) => {
+      // Compatibility: legacy callers clear terminal execution locks even on refusal.
+      // Acceptance composers must use evaluate/apply instead of this wrapper.
       await clearExecutionRunIfTerminal(id);
-      const current = await db
-        .select({
-          id: issues.id,
-          status: issues.status,
-          assigneeAgentId: issues.assigneeAgentId,
-          checkoutRunId: issues.checkoutRunId,
-          executionRunId: issues.executionRunId,
-        })
-        .from(issues)
-        .where(eq(issues.id, id))
-        .then((rows) => rows[0] ?? null);
-
-      if (!current) throw notFound("Issue not found");
-
-      if (
-        current.status === "in_progress" &&
-        current.assigneeAgentId === actorAgentId &&
-        sameRunLock(current.checkoutRunId, actorRunId)
-      ) {
-        return { ...current, adoptedFromRunId: null as string | null };
-      }
-
-      if (
-        actorRunId &&
-        current.status === "in_progress" &&
-        current.assigneeAgentId === actorAgentId &&
-        current.checkoutRunId == null &&
-        (current.executionRunId == null || current.executionRunId === actorRunId)
-      ) {
-        const adopted = await adoptUnownedCheckoutRun({
-          issueId: id,
-          actorAgentId,
-          actorRunId,
-        });
-
-        if (adopted) {
-          return {
-            ...adopted,
-            adoptedFromRunId: null as string | null,
-          };
-        }
-      }
-
-      if (
-        actorRunId &&
-        current.status === "in_progress" &&
-        current.assigneeAgentId === actorAgentId &&
-        current.checkoutRunId &&
-        current.checkoutRunId !== actorRunId
-      ) {
-        const adopted = await adoptStaleCheckoutRun({
-          issueId: id,
-          actorAgentId,
-          actorRunId,
-          expectedCheckoutRunId: current.checkoutRunId,
-        });
-
-        if (adopted) {
-          return {
-            ...adopted,
-            adoptedFromRunId: current.checkoutRunId,
-          };
-        }
-      }
-
-      throw conflict("Issue run ownership conflict", {
-        issueId: current.id,
-        status: current.status,
-        assigneeAgentId: current.assigneeAgentId,
-        checkoutRunId: current.checkoutRunId,
-        executionRunId: current.executionRunId,
-        actorAgentId,
-        actorRunId,
+      return db.transaction(async (tx) => {
+        const evaluation = await evaluateCheckoutOwner(id, actorAgentId, actorRunId, tx);
+        return applyCheckoutOwner(evaluation, tx);
       });
     },
 
@@ -4062,38 +4115,48 @@ export function issueService(db: Db) {
       issueId: string,
       body: string,
       actor: { agentId?: string; userId?: string; runId?: string | null },
+      dbOrTx: IssueMutationExecutor = db,
     ) => {
-      const issue = await db
-        .select({ companyId: issues.companyId })
-        .from(issues)
-        .where(eq(issues.id, issueId))
-        .then((rows) => rows[0] ?? null);
+      if (dbOrTx === db) {
+        // Existence only: the transaction still rereads before accepting the comment.
+        const [exists] = await db.select({ id: issues.id }).from(issues).where(eq(issues.id, issueId));
+        if (!exists) throw notFound("Issue not found");
+      }
+      const generalSettings = dbOrTx === db ? await instanceSettings.getGeneral() : null;
+      const insertComment = async (executor: IssueMutationExecutor) => {
+        const issue = await executor
+          .select({ companyId: issues.companyId })
+          .from(issues)
+          .where(eq(issues.id, issueId))
+          .then((rows) => rows[0] ?? null);
+        if (!issue) throw notFound("Issue not found");
 
-      if (!issue) throw notFound("Issue not found");
+        // Supplied executors only read settings, even with the issue already locked.
+        const currentUserRedactionOptions = {
+          enabled: (generalSettings ?? await readInstanceGeneralSettings(executor)).censorUsernameInLogs,
+        };
+        const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+        const [comment] = await executor
+          .insert(issueComments)
+          .values({
+            companyId: issue.companyId,
+            issueId,
+            authorAgentId: actor.agentId ?? null,
+            authorUserId: actor.userId ?? null,
+            createdByRunId: actor.runId ?? null,
+            body: redactedBody,
+          })
+          .returning();
 
-      const currentUserRedactionOptions = {
-        enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
+        // Comment and recency are one accepted DB operation.
+        await executor
+          .update(issues)
+          .set({ updatedAt: new Date() })
+          .where(eq(issues.id, issueId));
+
+        return redactIssueComment(comment, currentUserRedactionOptions.enabled);
       };
-      const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
-      const [comment] = await db
-        .insert(issueComments)
-        .values({
-          companyId: issue.companyId,
-          issueId,
-          authorAgentId: actor.agentId ?? null,
-          authorUserId: actor.userId ?? null,
-          createdByRunId: actor.runId ?? null,
-          body: redactedBody,
-        })
-        .returning();
-
-      // Update issue's updatedAt so comment activity is reflected in recency sorting
-      await db
-        .update(issues)
-        .set({ updatedAt: new Date() })
-        .where(eq(issues.id, issueId));
-
-      return redactIssueComment(comment, currentUserRedactionOptions.enabled);
+      return dbOrTx === db ? db.transaction(insertComment) : insertComment(dbOrTx);
     },
 
     createAttachment: async (input: {

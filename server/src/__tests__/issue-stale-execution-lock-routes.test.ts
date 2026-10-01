@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+// These fixtures inject req.actor without running the auth middleware, so no
+// verified credential exists. Current-authority witnesses are covered with the
+// real middleware in issue-current-authority.test.ts.
+vi.mock("../services/issue-current-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/issue-current-authority.js")>()),
+  issueCurrentAuthority: () => undefined,
+}));
+
 import {
   activityLog,
   agents,

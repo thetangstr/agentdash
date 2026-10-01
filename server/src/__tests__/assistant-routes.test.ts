@@ -1,4 +1,5 @@
 import express from "express";
+import { getTableName } from "drizzle-orm";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -69,7 +70,22 @@ async function createApp(
     (req as any).actor = { ...actor };
     next();
   });
-  app.use(assistantRoutes({} as never));
+  // These approval/task fixtures contain no pending questions. Keep the real
+  // waiting-on-you composition and its authority/visibility predicates; adapt
+  // only its added SELECT-only question reader to that explicit empty dataset.
+  const emptyQuestions = {
+    from(table: Parameters<typeof getTableName>[0]) {
+      if (getTableName(table) !== "issue_thread_interactions") throw new Error("Unexpected fixture query");
+      return emptyQuestions;
+    },
+    innerJoin: () => emptyQuestions,
+    leftJoin: () => emptyQuestions,
+    where: () => emptyQuestions,
+    orderBy: () => emptyQuestions,
+    limit: () => emptyQuestions,
+    offset: async () => [],
+  };
+  app.use(assistantRoutes({ select: () => emptyQuestions } as never));
   app.use(errorHandler);
   return app;
 }
