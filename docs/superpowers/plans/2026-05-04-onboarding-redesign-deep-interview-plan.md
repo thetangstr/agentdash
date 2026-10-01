@@ -437,7 +437,7 @@ export interface LLMResponseTrailer {
 
 ### Phase G — E2E happy path (Playwright)
 
-**Goal:** one `tests/e2e/onboarding-deep-interview.spec.ts` that drives the full flow against a stub LLM (deterministic) and an assertion that the same flow works against real Hermes on the Mac mini (`maxiaoer@192.168.86.45`) when `E2E_HERMES=1`.
+**Goal:** one `tests/e2e/onboarding-deep-interview.spec.ts` that drives the full flow against a stub LLM (deterministic) and an assertion that the same flow works against real Hermes on the Mac mini (`maxiaoer@<hq-lan-ip>`) when `E2E_HERMES=1`.
 
 **Files:**
 - *new* `tests/e2e/onboarding-deep-interview.spec.ts`:

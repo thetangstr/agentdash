@@ -3,8 +3,8 @@
 **Purpose:** Copy/paste request for the launch owner to collect the remaining external confirmations before moving PR #376 out of draft and asking the first MSP design partner to use the Mac mini instance.
 
 **Current PR:** <https://github.com/thetangstr/agentdash/pull/376>
-**Target URL under test:** `http://192.168.86.48:3100`
-**Target Mac mini:** `maxiaoer@192.168.86.48`
+**Target URL under test:** `http://<hq-lan-ip>:3100`
+**Target Mac mini:** `maxiaoer@<hq-lan-ip>`
 
 Do not send passwords, session cookies, invite tokens, API keys, OAuth tokens, SSH keys, customer secrets, or raw customer data in the response. Send proof command output only after redacting any credentials or secrets.
 
@@ -28,7 +28,7 @@ AGENTDASH_PROOF_EMAIL="<proof-account-email>" \
 AGENTDASH_PROOF_PASSWORD="<proof-account-password>" \
 AGENTDASH_EXPECTED_COMPANY="<expected-company-name-or-id>" \
 scripts/msp-partner-access-proof.sh \
-  --base-url http://192.168.86.48:3100 \
+  --base-url http://<hq-lan-ip>:3100 \
   --output "agentdash-partner-proof-$(date -u +%Y%m%dT%H%M%SZ).txt"
 ```
 

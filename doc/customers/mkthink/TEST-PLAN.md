@@ -16,10 +16,10 @@ Raj/Platform, Maya/People. `buzzhive` is also on this instance; leave it alone.
 > decommissioned; the Mini now runs one instance, `mkboard`. Its database,
 > backups and instance files were deliberately kept, so this plan remains
 > readable as a record — but nothing answers on `:3103` any more. To run these
-> cases against the live workspace, use https://mkthinks-mac-mini.tail112187.ts.net:3112 and read the warning below,
+> cases against the live workspace, use https://<tailnet-host>.ts.net:3112 and read the warning below,
 > which still applies.
 
-Reach the live instance at https://mkthinks-mac-mini.tail112187.ts.net:3112, the only address with a publicly-trusted
+Reach the live instance at https://<tailnet-host>.ts.net:3112, the only address with a publicly-trusted
 certificate. **Not `127.0.0.1`, and not the app's own port** — sign-in checks the
 browser's origin against the configured public URL, and an address that is not
 that URL returns `403 INVALID_ORIGIN`. That check misfired for a day in August

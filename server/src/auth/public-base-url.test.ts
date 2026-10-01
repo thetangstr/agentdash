@@ -14,20 +14,20 @@ describe("rewritePublicBaseUrlPort", () => {
     // INVALID_ORIGIN, because the trusted origins stopped matching the port
     // people actually arrive on.
     expect(
-      rewritePublicBaseUrlPort("https://mkthinks-mac-mini.tail112187.ts.net:3112", {
+      rewritePublicBaseUrlPort("https://agentdash-host.example-tailnet.ts.net:3112", {
         requestedPort: 3102,
         listenPort: 3102,
       }),
-    ).toBe("https://mkthinks-mac-mini.tail112187.ts.net:3112");
+    ).toBe("https://agentdash-host.example-tailnet.ts.net:3112");
   });
 
   it("leaves the proxied URL alone even when the app's own port moved", () => {
     expect(
-      rewritePublicBaseUrlPort("https://mkthinks-mac-mini.tail112187.ts.net:3112", {
+      rewritePublicBaseUrlPort("https://agentdash-host.example-tailnet.ts.net:3112", {
         requestedPort: 3102,
         listenPort: 3103,
       }),
-    ).toBe("https://mkthinks-mac-mini.tail112187.ts.net:3112");
+    ).toBe("https://agentdash-host.example-tailnet.ts.net:3112");
   });
 
   it("leaves a portless URL alone", () => {

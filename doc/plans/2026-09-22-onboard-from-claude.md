@@ -18,7 +18,7 @@ A steward types one sentence in their own Claude Code and the account, the agent
 >
 > **Titus:** yes
 >
-> **Claude:** Done. The invite email is on its way; here is the link to paste into Teams as well: `http://10.50.10.129:3102/invite/…`. I will tell you when Sam accepts and when their machine connects.
+> **Claude:** Done. The invite email is on its way; here is the link to paste into Teams as well: `http://<office-lan-ip>:3102/invite/…`. I will tell you when Sam accepts and when their machine connects.
 
 Later, in Titus's inbox: *Sam accepted and is paired with Sam's Chief of Staff — not yet connected.* Then: *Sam's laptop connected, inbox-capable.*
 

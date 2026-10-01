@@ -25,7 +25,7 @@ drifted and needs a refresh (see "The lockfile" below).
 | Checkout | `/Users/yang/agentdash`, running the repo directly through `tsx` |
 | Supervision | launchd **system** daemons only (`/Library/LaunchDaemons/com.agentdash.*`) |
 | App port | `127.0.0.1:3102` |
-| Public URL | `https://mkthinks-mac-mini.tail112187.ts.net:3112` — Caddy terminates TLS on 3112 and proxies to 3102 |
+| Public URL | `https://<tailnet-host>.ts.net:3112` — Caddy terminates TLS on 3112 and proxies to 3102 |
 | LAN alternative | `https://mkmini.local:3112` (self-signed cert) |
 | Instance | `mkboard`; env at `~/.config/agentdash/mkboard.env` (43 keys) |
 | Database | embedded Postgres, `127.0.0.1:54329`, database `mkboard` |
@@ -38,7 +38,7 @@ public URL. Both should be `200` with `status: ok`.
 
 Three addresses reach the same instance and they are not interchangeable:
 
-- **`https://mkthinks-mac-mini.tail112187.ts.net:3112`** — anything sent to a
+- **`https://<tailnet-host>.ts.net:3112`** — anything sent to a
   person: invite links, the board, harness connection. The only host with a
   publicly-trusted certificate, which is what MDM-managed Macs require.
 - **`https://mkmini.local:3112`** — LAN convenience, self-signed.

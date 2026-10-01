@@ -4,8 +4,8 @@
 
 **Current PR:** <https://github.com/thetangstr/agentdash/pull/376>
 **Current launch head:** use the latest PR #376 head and CI status line.
-**Target Mac mini:** `maxiaoer@192.168.86.48`
-**Private URL under test:** `http://192.168.86.48:3100`
+**Target Mac mini:** `maxiaoer@<hq-lan-ip>`
+**Private URL under test:** `http://<hq-lan-ip>:3100`
 **External confirmation request:** `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`
 
 Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, SSH keys, or raw customer secrets into this document.
@@ -18,8 +18,8 @@ Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, 
 | PR checks | `check`, `audit`, `drift`, `policy`, `verify`, `e2e`, Vercel, Vercel Preview Comments pass on the latest PR #376 head | Complete |
 | Target checkout | `/Users/maxiaoer/workspace/agentdash_msp_launch` clean at the latest PR #376 head | Complete |
 | Local health | `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready JSON | Complete |
-| Host readiness | `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` returned `30 pass, 12 warn, 0 fail` | Complete |
-| Network precheck | `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` returned `9 pass, 1 warn, 0 fail` | Precheck only |
+| Host readiness | `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://<hq-lan-ip>:3100` returned `30 pass, 12 warn, 0 fail` | Complete |
+| Network precheck | `scripts/msp-partner-access-proof.sh --network-only --base-url http://<hq-lan-ip>:3100` returned `9 pass, 1 warn, 0 fail` | Precheck only |
 | Unauthenticated access | Network precheck confirmed `/api/auth/get-session` rejects with HTTP `401` and `/api/companies` rejects with HTTP `403` | Complete |
 | Hermes CoS | CoS reply routed through `hermes_local` and `/Users/maxiaoer/.local/bin/hermes` | Complete |
 | Hermes agent run | Assigned issue-write run completed and wrote `Hermes issue-write smoke completed` | Complete |
@@ -66,7 +66,7 @@ AGENTDASH_PROOF_EMAIL="<proof-account-email>" \
 AGENTDASH_PROOF_PASSWORD="<proof-account-password>" \
 AGENTDASH_EXPECTED_COMPANY="<expected-company-name-or-id>" \
 scripts/msp-partner-access-proof.sh \
-  --base-url http://192.168.86.48:3100 \
+  --base-url http://<hq-lan-ip>:3100 \
   --output "agentdash-partner-proof-$(date -u +%Y%m%dT%H%M%SZ).txt"
 ```
 

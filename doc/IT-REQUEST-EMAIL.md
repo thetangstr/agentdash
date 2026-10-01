@@ -13,7 +13,7 @@ what was probed and why it shapes the ask.
 Hi <name>,
 
 We have an on-premise server on your network — a Mac Mini in the server room,
-currently at **10.50.10.129** — running an internal web app for a small group at
+currently at **<office-lan-ip>** — running an internal web app for a small group at
 MKThink. It's finished and working; what's left is three pieces of network
 housekeeping that only you can do. They're listed in dependency order, and none
 of them require anything to change on anybody's laptop.
@@ -91,7 +91,7 @@ on the server, is mode 600, and never leaves it.
 
 ```
 Subject : CN=agentdash.mkthink.com, O=MKThink, OU=AgentDash
-SANs    : DNS:agentdash.mkthink.com, IP:10.50.10.129
+SANs    : DNS:agentdash.mkthink.com, IP:<office-lan-ip>
 Key     : RSA 2048 (deliberately, not EC — some CAs still reject EC CSRs)
 Usage   : Digital Signature, Key Encipherment / serverAuth
 ```
@@ -100,7 +100,7 @@ If you're issuing from AD Certificate Services, the **Web Server** template is
 what we need. Please send back the signed certificate plus your issuing chain.
 Standard validity is fine; we have a renewal reminder either way.
 
-Note the CSR pins **10.50.10.129** in the SAN. If the reservation in (1) lands
+Note the CSR pins **<office-lan-ip>** in the SAN. If the reservation in (1) lands
 on a different address, send us the address and we'll reissue — again, one
 command.
 
@@ -146,7 +146,7 @@ already exist or propose things that can't work:
 - **A USB 2.5G LAN adapter is also present** (`en8`, `84:5c:31:47:29:8d`) if the
   built-in port is inconvenient. Re-checked 2026-08-31: `en8` is not attached
   today, and `en0` still has no cable.
-- **Re-verified 2026-08-31, all still true:** address 10.50.10.129, lease 80000 s
+- **Re-verified 2026-08-31, all still true:** address <office-lan-ip>, lease 80000 s
   (22.2 h), Wi-Fi still presenting the randomised `02:e3:44:1e:93:58`,
   `agentdash.mkthink.com` still absent from the DC, and the DC still
   authoritative for `mkthink.com`. The CSR on disk matches the subject and SANs

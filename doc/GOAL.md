@@ -41,7 +41,7 @@ Source repo: https://github.com/thetangstr/agentdash
 ### Operating Loop
 
 1. Hermes runs on the target machine against the test environment, not production data.
-   - Target host: `192.168.86.48`
+   - Target host: `<hq-lan-ip>`
    - Hermes profile: `agentdash`
    - Target checkout: `/Users/maxiaoer/workspace/agentdash_dev`
    - Pull the latest `origin/main` before each test pass.

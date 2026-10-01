@@ -4,7 +4,7 @@ One visit, three things, all routine. They are listed in dependency order —
 each makes the next one possible.
 
 Everything below is about a Mac Mini already sitting in your server room,
-currently at **10.50.10.129**, serving an internal web app on port 3112.
+currently at **<office-lan-ip>**, serving an internal web app on port 3112.
 It is not exposed to the internet and does not need to be.
 
 ---
@@ -31,7 +31,7 @@ returns `403` and looks broken.
 |---|---|
 | MAC to reserve — wired `en0` | `1c:f6:4c:69:c6:9d` ← ask for this |
 | MAC to reserve — Wi-Fi `en1` | `1c:f6:4c:68:d0:2d` (hardware address) |
-| Current address | 10.50.10.129, on `en1` |
+| Current address | <office-lan-ip>, on `en1` |
 | Ask | reserve it, or assign a static |
 
 **Do not give them `02:e3:44:1e:93:58`.** That is what `ifconfig en1` reports
@@ -102,7 +102,7 @@ Already generated, sitting on the machine:
 
 ```
 Subject : CN=agentdash.mkthink.com, O=MKThink, OU=AgentDash
-SANs    : DNS:agentdash.mkthink.com, IP:10.50.10.129
+SANs    : DNS:agentdash.mkthink.com, IP:<office-lan-ip>
 Key     : RSA 2048
 EKU     : serverAuth
 ```
@@ -119,7 +119,7 @@ admin. Ask for the issuing chain alongside the certificate.
 If they want a different name, regenerate in one command:
 
 ```bash
-./deploy/make-csr.sh <their-name> 10.50.10.129
+./deploy/make-csr.sh <their-name> <office-lan-ip>
 ```
 
 ### When the signed certificate comes back

@@ -1,8 +1,8 @@
 # TLS front door, and reaching this box from off the LAN
 
-> **Machine name.** The Tailscale node was renamed `yangs-mac-mini` →
-> **`mkthinks-mac-mini`** on 2026-08-17, so the MagicDNS name is now
-> `mkthinks-mac-mini.tail112187.ts.net`. The old name is still in the
+> **Machine name.** The Tailscale node was renamed `<old-tailnet-host>` →
+> **`<tailnet-host>`** on 2026-08-17, so the MagicDNS name is now
+> `<tailnet-host>.ts.net`. The old name is still in the
 > certificate and in the site blocks below during the cutover; it can be
 > dropped once nobody has it bookmarked.
 >
@@ -15,7 +15,7 @@
 > round, the new name 403s at the hostname guard until someone restarts.
 >
 > The guard is real, not vacuous: before the restart,
-> `Host: mkthinks-mac-mini.tail112187.ts.net` returned **403**, exactly as a
+> `Host: <tailnet-host>.ts.net` returned **403**, exactly as a
 > junk hostname did.
 >
 > Restarting the servers needs no password. `KeepAlive` is
@@ -35,10 +35,17 @@
 > into the Caddyfile, both env files, the runbook and the cert, and renaming it
 > would mean redoing all of that for a cosmetic gain.
 
-`Caddyfile` here is the copy of what runs at
-`~/.config/agentdash/Caddyfile`. Keep them in step — the LaunchDaemon reads the
-one in `~/.config`, so this copy exists so the config survives a rebuild, not
-so it can be edited in place.
+`Caddyfile` here is a reference copy of what runs at
+`~/.config/agentdash/Caddyfile`. The LaunchDaemon reads the one in `~/.config`
+(written by `deploy/relocate.sh` with the real names), so this copy exists so
+the config survives a rebuild, not so it can be edited in place. It carries no
+real host names or addresses: the site blocks read `AGENTDASH_TAILNET_HOST`,
+`AGENTDASH_LAN_IP`, `AGENTDASH_TAILNET_IP`, `AGENTDASH_MDNS_HOST` and
+`AGENTDASH_TLS_DIR` from the environment (Caddy's `{$VAR}` placeholders).
+
+**Placeholders in this document.** `<tailnet-host>.ts.net`, `<lan-ip>` and
+`<tailnet-ip>` stand for the real MagicDNS name and addresses, which live in
+the operator's private env file and runbook, not in this public repository.
 
 ## The thing that was nearly missed
 
@@ -52,9 +59,9 @@ address. Measured before the fix:
 
 | URL | result |
 |---|---|
-| `http://100.64.89.16:3102/api/health` | **200** |
-| `https://100.64.89.16:3112/api/health` | **000** — connection dropped |
-| `https://yangs-mac-mini.tail112187.ts.net:3112/api/health` | **000** |
+| `http://<tailnet-ip>:3102/api/health` | **200** |
+| `https://<tailnet-ip>:3112/api/health` | **000** — connection dropped |
+| `https://<old-tailnet-host>.ts.net:3112/api/health` | **000** |
 
 So anyone connecting over Tailscale would have landed on the **plaintext** port,
 found it working, and had no reason to think that was not the intended path. The
@@ -67,8 +74,8 @@ Two causes, both fixed here:
    the IPs specifically, not just the names.
 2. **The certificate did not cover those names.** The original mkcert cert
    carried `mkmini.local, *.mkmini.local, localhost, 127.0.0.1`. It was reissued
-   as `mkmini-multi.pem` adding `yangs-mac-mini.tail112187.ts.net`,
-   `100.64.89.16` and `192.168.86.57`.
+   as `mkmini-multi.pem` adding `<old-tailnet-host>.ts.net`,
+   `<tailnet-ip>` and `<lan-ip>`.
 
 After the fix, all four addresses return 200 on both instances, verified with
 `--cacert` against the real mkcert root rather than `-k`.
@@ -86,8 +93,8 @@ produces.
 Retested **through** Caddy, with the CA trusted:
 
 ```
-https://yangs-mac-mini.tail112187.ts.net:3112  GET=200 POST=201
-https://100.64.89.16:3112                      GET=200 POST=201
+https://<old-tailnet-host>.ts.net:3112  GET=200 POST=201
+https://<tailnet-ip>:3112                      GET=200 POST=201
 https://mkmini.local:3112                      GET=200 POST=201
 ```
 
@@ -97,7 +104,7 @@ produced it is one a real client would have made.
 
 ## Better, when someone can reach the Tailscale admin console
 
-`tailscale cert yangs-mac-mini.tail112187.ts.net` would issue a **publicly
+`tailscale cert <old-tailnet-host>.ts.net` would issue a **publicly
 trusted** certificate for the `.ts.net` name, and nobody would need the mkcert
 root installed at all. It fails today:
 

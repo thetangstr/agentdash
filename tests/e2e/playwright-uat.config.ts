@@ -17,7 +17,12 @@ import { defineConfig } from "@playwright/test";
  * Headed by default, and slowed down, because the point of this suite is that
  * a person can watch it happen.
  */
-const BASE_URL = process.env.UAT_BASE_URL?.trim() || "http://192.168.86.57:3103";
+// No default: the real LAN or Tailscale address is operator-private and does
+// not belong in this repository (GH #880).
+const BASE_URL = process.env.UAT_BASE_URL?.trim() ?? "";
+if (!BASE_URL) {
+  throw new Error("Set UAT_BASE_URL to the UAT instance's LAN or Tailscale address, e.g. http://<lan-ip>:3103");
+}
 const HEADLESS = process.env.UAT_HEADLESS === "true";
 const SLOW_MO = Number(process.env.UAT_SLOW_MO ?? (HEADLESS ? 0 : 250));
 

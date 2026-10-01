@@ -47,7 +47,7 @@ agent contributions rather than canned strings.
 ## Constraints
 
 - **LAN-first.** All four machines are on the same office network as
-  `192.168.86.57` for the initial rollout. Remote access exists but its protocol
+  `<lan-ip>` for the initial rollout. Remote access exists but its protocol
   is unknown, so nothing may *depend* on Tailscale or any specific remote path.
 - **No new model spend assumed.** `AGENTDASH_DEFAULT_ADAPTER=claude_local` is
   already configured on both LAN instances and `dispatchLLM` supports it by
@@ -133,7 +133,7 @@ interview, rather than by a fresh exploration pass:
 - `ui/src/pages/MyAgent.tsx` — gated entirely on `productProfile === "agentdash_mk"`.
 - `ui/src/components/OnboardingWizard.tsx` — 5 steps; step 3 harvests the mandate and writes `AGENTS.md` before the task is created.
 - MCP: `@agentdash/mcp-server`, 71 tools, served at `/downloads/agentdash-mcp-server.tgz`; `selectPlaybook` picks the steward contract when `PAPERCLIP_AGENT_ID` is set. Verified over LAN — `whoami` returned `CoS / chief_of_staff`.
-- Instances: `lantest` 192.168.86.57:3100 (owner's, real licence — do not destroy), `mkdemo` :3101 (clean, claimed as titus@mkthink.com), `fresh1` :3500 and `fresh2` :3600 (scratch).
+- Instances: `lantest` <lan-ip>:3100 (owner's, real licence — do not destroy), `mkdemo` :3101 (clean, claimed as titus@mkthink.com), `fresh1` :3500 and `fresh2` :3600 (scratch).
 
 ## Ontology (Key Entities)
 
@@ -193,7 +193,7 @@ Dependency-ordered, because `workspace-profile` gates three others and
 **Ambiguity:** 47% → 25% (Goal 0.85, Constraints 0.45, Criteria 0.80, Context 0.92)
 
 ### Round 2 — Constraints (weakest at 0.45)
-**Q:** Where are the three colleagues' machines relative to 192.168.86.57?
+**Q:** Where are the three colleagues' machines relative to <lan-ip>?
 **A:** "Same office LAN to start, their remote access is available but I don't know the protocol."
 **Ambiguity:** 25% → 16% (Goal 0.88, Constraints 0.75, Criteria 0.82, Context 0.92) — threshold met.
 

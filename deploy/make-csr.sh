@@ -20,7 +20,7 @@
 #   deploy/make-csr.sh agentdash.mkthink.com [extra-san ...]
 #
 # Example with the LAN IP as an additional SAN:
-#   deploy/make-csr.sh agentdash.mkthink.com 10.50.10.129
+#   deploy/make-csr.sh agentdash.mkthink.com <office-lan-ip>
 
 set -eu
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
@@ -28,7 +28,7 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 FQDN="${1:-}"
 if [ -z "$FQDN" ]; then
   print -u2 "usage: deploy/make-csr.sh <fqdn> [extra-san ...]"
-  print -u2 "  e.g. deploy/make-csr.sh agentdash.mkthink.com 10.50.10.129"
+  print -u2 "  e.g. deploy/make-csr.sh agentdash.mkthink.com <office-lan-ip>"
   exit 2
 fi
 shift
