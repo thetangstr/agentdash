@@ -112,7 +112,8 @@ export const ACCOUNT_TRANSITIONS: Record<AccountStatus, readonly AccountStatus[]
 };
 
 // AgentDash (SC-9, GH #770): invite_codes_changed records imports, adds and revokes (counts and ids, never a code).
-export const OPERATOR_AUDIT_KINDS = ["setting_changed", "admin_refused", "invite_codes_changed"] as const;
+// AgentDash (SC-8, GH #769): fleet_secret_changed records a shared-secret change (name, version, fingerprint; never the value).
+export const OPERATOR_AUDIT_KINDS = ["setting_changed", "admin_refused", "invite_codes_changed", "fleet_secret_changed"] as const;
 export type OperatorAuditKind = (typeof OPERATOR_AUDIT_KINDS)[number];
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
@@ -229,6 +230,28 @@ export const boxes = pgTable(
     cohort: text("cohort"),
     /** AgentDash (GH #861): customer | demo | canary | internal. */
     purpose: text("purpose").$type<BoxPurpose>().notNull().default("customer"),
+    // AgentDash (SC-8, GH #769): Stripe and Resend per box (spec §3.7).
+    /** The box's own STRIPE_WEBHOOK_SECRET, encrypted: forwarded events are re-signed with it. */
+    stripeWebhookSecretEnc: text("stripe_webhook_secret_enc"),
+    /** Which fleet billing config (shared key version, price, trial days) the box last received. */
+    stripeConfigRev: text("stripe_config_rev"),
+    /**
+     * A billing config sent to Railway but not yet running: it becomes
+     * stripe_config_rev only once a deployment that started after
+     * stripe_config_pending_since has succeeded (SC-8 review).
+     */
+    stripeConfigPendingRev: text("stripe_config_pending_rev"),
+    stripeConfigPendingSince: timestamp("stripe_config_pending_since", { withTimezone: true }),
+    /**
+     * The box's Stripe customer, bound once from the first slug-routed event
+     * and never rebound silently (unique): an event whose box_slug disagrees
+     * with an existing binding is held for an operator (SC-8 review).
+     */
+    stripeCustomerId: text("stripe_customer_id"),
+    /** Stripe `created` of the subscription event plan_tier was last taken from (out-of-order guard). */
+    planTierEventAt: timestamp("plan_tier_event_at", { withTimezone: true }),
+    /** The box's sending-only Resend API key id (never the key), for revocation at delete. */
+    resendKeyId: text("resend_key_id"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -236,6 +259,8 @@ export const boxes = pgTable(
     uniqueIndex("boxes_slug_uq").on(t.slug),
     index("boxes_account_idx").on(t.accountId),
     index("boxes_state_idx").on(t.state),
+    // AgentDash (SC-8 review): a Stripe customer belongs to at most one box.
+    uniqueIndex("boxes_stripe_customer_uq").on(t.stripeCustomerId),
     check("boxes_kind_ck", inList("kind", BOX_KINDS)),
     check("boxes_state_ck", inList("state", BOX_STATES)),
     check("boxes_purpose_ck", inList("purpose", BOX_PURPOSES)),
@@ -728,5 +753,63 @@ export const boxBackups = pgTable(
       .where(sql`"trigger" = 'scheduled'`),
     check("box_backups_trigger_ck", inList("trigger", BACKUP_TRIGGERS)),
     check("box_backups_state_ck", inList("state", BACKUP_STATES)),
+  ],
+);
+
+// ---- Stripe forwarding and fleet secrets (SC-8, GH #769) ---------------
+
+/**
+ * Secrets shared by the whole fleet, encrypted under CLOUD_DATA_KEY: the
+ * boxes' shared restricted Stripe key, and the account webhook endpoint's
+ * signing secret when the control plane created the endpoint. `version`
+ * goes up on every change; `fingerprint` (sha256) tells a re-run of the same
+ * value from a new one without decrypting.
+ */
+export const fleetSecrets = pgTable("fleet_secrets", {
+  name: text("name").primaryKey(),
+  valueEnc: text("value_enc").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  version: integer("version").notNull().default(1),
+  updatedAt: updatedAt(),
+  updatedBy: text("updated_by"),
+});
+
+export const STRIPE_EVENT_STATES = ["pending", "delivered", "dropped", "dead"] as const;
+export type StripeEventState = (typeof STRIPE_EVENT_STATES)[number];
+
+/**
+ * Every Stripe event the account endpoint accepted (spec §3.7), one row per
+ * event id: the idempotency key, the forwarding queue and the dead-letter
+ * view in one. The raw body is kept encrypted only while it may still be
+ * delivered; a dropped event keeps no body.
+ */
+export const stripeEvents = pgTable(
+  "stripe_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    eventId: text("event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    livemode: boolean("livemode").notNull().default(false),
+    /** Stripe's `created` for the event. */
+    stripeCreatedAt: timestamp("stripe_created_at", { withTimezone: true }),
+    boxSlug: text("box_slug"),
+    boxId: uuid("box_id").references(() => boxes.id),
+    state: text("state").$type<StripeEventState>().notNull().default("pending"),
+    /** Why it was dropped or parked, or the last delivery outcome. Never a secret or a body. */
+    reason: text("reason"),
+    bodyEnc: text("body_enc"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    lastStatus: integer("last_status"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("stripe_events_event_id_uq").on(t.eventId),
+    index("stripe_events_due_idx").on(t.state, t.nextAttemptAt),
+    index("stripe_events_box_idx").on(t.boxId, t.createdAt),
+    check("stripe_events_state_ck", inList("state", STRIPE_EVENT_STATES)),
   ],
 );

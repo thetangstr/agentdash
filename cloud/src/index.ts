@@ -19,6 +19,11 @@ import { resumeHandler, suspendHandler } from "./monitor/suspend.js";
 import { tickRollout } from "./jobs/rollout.js";
 import { upgradeHandler } from "./jobs/upgrade.js";
 import { setupBackups, startBackupScheduler } from "./backups/setup.js";
+import { billingAndMailExtras } from "./railway/box-extras.js";
+import { resendKeysClient } from "./email/resend-keys.js";
+import { loadBillingConfig } from "./stripe/config.js";
+import { fleetSecretStore } from "./stripe/fleet-secrets.js";
+import { stripeForwarder } from "./stripe/forwarder.js";
 
 const log = createLogger({ base: { service: "cloud-control" } });
 const SWEEP_MS = 10 * 60_000;
@@ -26,6 +31,7 @@ const READY_MAIL_MS = 20_000;
 const RELEASE_MS = 60_000;
 const PRUNE_MS = 60 * 60_000;
 const ROLLOUT_TICK_MS = 60_000;
+const STRIPE_DELIVERY_MS = 15_000;
 
 async function main() {
   const config = loadConfig();
@@ -56,6 +62,15 @@ async function main() {
   }
   const alerter = combineAlerters(log, transports.map((t) => t.alerter));
 
+  // AgentDash (SC-8, GH #769): Stripe fan-out, the shared box key and per-box Resend keys.
+  const billing = config.billing ?? loadBillingConfig({});
+  const fleetStore = fleetSecretStore(db, config.dataKeys);
+  const forwarder = stripeForwarder({ db, log, keys: config.dataKeys, billing, store: fleetStore, alerter });
+  const resendKeys = billing.resendAdminKey ? resendKeysClient({ apiKey: billing.resendAdminKey }) : null;
+  if (!billing.stripeWebhookSecrets.length) log.warn("CLOUD_STRIPE_WEBHOOK_SECRET is not set: the Stripe webhook answers 503 unless the endpoint secret is stored (admin stripe endpoint ensure)");
+  if (!billing.stripeProPriceId) log.warn("CLOUD_STRIPE_PRO_PRICE_ID is not set: new boxes get no Stripe variables");
+  if (!resendKeys) log.warn("CLOUD_RESEND_ADMIN_API_KEY is not set: new boxes get no Resend key, and box keys cannot be revoked");
+
   let runner: JobRunner | null = null;
   let sweep: NodeJS.Timeout | null = null;
   let rolloutTimer: NodeJS.Timeout | null = null;
@@ -70,12 +85,13 @@ async function main() {
       imageRepo: config.boxImageRepo,
       sourceRepo: config.boxSourceRepo,
       edgeLive: config.edgeLive,
+      boxExtras: billingAndMailExtras({ keys: config.dataKeys, billing, store: fleetStore, resend: resendKeys }),
     });
     if (!config.escrowPublicKey) log.warn("CLOUD_ESCROW_PUBLIC_KEY is not set: every provision job will refuse to start");
     if (!capabilities.claimTrackingReady) log.warn("claim tracking is not ready (SC-5, SC-6): provisioning stays off whatever the setting says");
     runner = new JobRunner({ db, log, alerter, handlers: [
         provision,
-        deleteHandler({ client, workspaceId: config.railwayWorkspaceId }),
+        deleteHandler({ client, workspaceId: config.railwayWorkspaceId, resend: resendKeys }),
         closeSignupHandler({ client, workspaceId: config.railwayWorkspaceId }),
         // AgentDash (SC-10, GH #771): suspend (web deployment removed) and wake.
         suspendHandler({ client, workspaceId: config.railwayWorkspaceId }),
@@ -138,6 +154,8 @@ async function main() {
     setInterval(() => void frontDoor.releaseApproved().catch((err: unknown) => log.error("waitlist release pass failed", { err })), RELEASE_MS),
     // GH #836 review: rate_events is pruned hourly.
     setInterval(() => void pruneRateEvents(db).catch((err: unknown) => log.error("rate_events prune failed", { err })), PRUNE_MS),
+    // AgentDash (SC-8, GH #769): retries and parked Stripe events.
+    setInterval(() => void forwarder.deliverDue().catch((err: unknown) => log.error("Stripe delivery pass failed", { err })), STRIPE_DELIVERY_MS),
   ];
   for (const t of passes) t.unref();
 
@@ -152,7 +170,7 @@ async function main() {
     config: loadMonitorConfig(process.env, config),
   });
 
-  const server = createApp({ db, config, log, frontDoor, alertTransports: transports, ...(backups ? { backups: backups.routeDeps } : {}) }).listen(config.port, () => {
+  const server = createApp({ db, config, log, frontDoor, alertTransports: transports, alerter, stripe: { forwarder }, ...(backups ? { backups: backups.routeDeps } : {}) }).listen(config.port, () => {
     log.info("listening", { port: config.port, release: config.release, railwayApi: config.railwayToken ? "configured" : "not configured" });
   });
   const shutdown = () => {

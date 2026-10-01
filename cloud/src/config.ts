@@ -5,6 +5,7 @@ import { BlockList, isIP } from "node:net";
 import { type DataKeyring, parseKeyring } from "./crypto.js";
 import { parseEscrowPublicKey } from "./railway/secrets.js";
 import { Secret } from "./secret.js";
+import { type BillingConfig, BillingConfigError, loadBillingConfig } from "./stripe/config.js";
 
 export type ClientIpSource = "socket" | "x-real-ip";
 /**
@@ -55,6 +56,8 @@ export interface CloudConfig {
   edgeLive: boolean;
   /** SC-7 (GH #768): the public front door. See ./front-door/. */
   frontDoor: FrontDoorConfig;
+  /** SC-8 (GH #769): Stripe forwarding and per-box Stripe/Resend. Optional so hand-built test configs stay valid. */
+  billing?: BillingConfig;
 }
 
 export interface FrontDoorConfig {
@@ -242,6 +245,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     boxSourceRepo: sourceRepo,
     edgeLive: (env.CLOUD_EDGE_LIVE ?? "").trim().toLowerCase() === "true",
     frontDoor: loadFrontDoorConfig(env),
+    billing: (() => {
+      try {
+        return loadBillingConfig(env);
+      } catch (err) {
+        if (err instanceof BillingConfigError) throw new ConfigError(err.message);
+        throw err;
+      }
+    })(),
   };
 }
 

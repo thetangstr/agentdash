@@ -17,6 +17,11 @@ import { publicRoutes } from "./routes/public.js";
 import { inviteService, inviteValidateRoutes } from "./invites.js";
 import { type Alerter, logAlerter } from "./jobs/alerts.js";
 import { monitorRoutes } from "./routes/monitor.js";
+import { stripeInternalRoutes, stripeWebhookHandlers } from "./routes/stripe.js";
+import { loadBillingConfig } from "./stripe/config.js";
+import { stripeEndpointsClient, type StripeEndpointsClient } from "./stripe/endpoint.js";
+import { fleetSecretStore } from "./stripe/fleet-secrets.js";
+import { STRIPE_WEBHOOK_PATH, stripeForwarder, type StripeForwarder } from "./stripe/forwarder.js";
 
 /** The front door's mail transport from config (SC-7, GH #768). */
 export function mailerFromConfig(config: CloudConfig, log: Logger): Mailer {
@@ -37,11 +42,24 @@ export function createApp(opts: {
   alertTransports?: Array<{ name: string; alerter: Alerter }>;
   /** GH #733: off-box backups (status works without them; run/download answer 409). */
   backups?: BackupRouteDeps;
+  /** SC-8 (GH #769): ops alerts for the Stripe forwarder (log only when omitted). */
+  alerter?: Alerter;
+  /** SC-8 (GH #769): test hooks; built from config when omitted. */
+  stripe?: { forwarder?: StripeForwarder; railway?: RailwayClient | null; endpoints?: StripeEndpointsClient | null };
 }): Express {
   const { db, config, log } = opts;
   const frontDoor = opts.frontDoor ?? makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
   const app = express();
   app.disable("x-powered-by");
+
+  // AgentDash (SC-8, GH #769): the account's one Stripe webhook endpoint. Its
+  // signature covers the exact raw bytes, so it is mounted before the JSON parser.
+  const billing = config.billing ?? loadBillingConfig({});
+  const fleetStore = fleetSecretStore(db, config.dataKeys);
+  const forwarder =
+    opts.stripe?.forwarder ?? stripeForwarder({ db, log, keys: config.dataKeys, billing, store: fleetStore, ...(opts.alerter ? { alerter: opts.alerter } : {}) });
+  app.post(STRIPE_WEBHOOK_PATH, ...stripeWebhookHandlers(forwarder, log));
+
   app.use(express.json({ limit: "32kb" }));
 
   app.get("/health", async (_req, res) => {
@@ -74,7 +92,21 @@ export function createApp(opts: {
     });
   };
   const adminGuard = requireAdmin(config, log, { onRefused, ...opts.admin });
-  app.use("/internal", adminGuard, internalRoutes(db, log, {
+  // AgentDash (SC-8, GH #769): /internal/stripe/* (status, dead letters, redeliver, box key rotation, endpoint).
+  const stripeRailway =
+    opts.stripe?.railway !== undefined ? opts.stripe.railway : config.railwayToken ? new RailwayClient({ token: config.railwayToken, log }) : null;
+  const stripeInternal = stripeInternalRoutes({
+    db,
+    log,
+    forwarder,
+    billing,
+    store: fleetStore,
+    syncDeps: () => ({ db, keys: config.dataKeys, billing, store: fleetStore, client: stripeRailway, workspaceId: config.railwayWorkspaceId, log }),
+    endpoints:
+      opts.stripe?.endpoints !== undefined ? opts.stripe.endpoints : billing.stripeControlKey ? stripeEndpointsClient({ apiKey: billing.stripeControlKey }) : null,
+    webhookUrl: `${config.frontDoor.siteUrl}${STRIPE_WEBHOOK_PATH}`,
+  });
+  app.use("/internal", adminGuard, stripeInternal, internalRoutes(db, log, {
     frontDoor,
     invites: inviteService(db, config.dataKeys),
     // AgentDash (SC-12, GH #773): rollouts resolve the release's GHCR digest.

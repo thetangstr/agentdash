@@ -40,6 +40,7 @@ describe("migrations", () => {
       "edge_stats",
       "email_tokens",
       "fleet_alerts",
+      "fleet_secrets",
       "invite_codes",
       "jobs",
       "monitor_readings",
@@ -49,6 +50,7 @@ describe("migrations", () => {
       "rollouts",
       "settings",
       "signup_requests",
+      "stripe_events",
       "waitlist",
     ]);
   });

@@ -10,6 +10,7 @@ import type { CloudDb } from "../db/client.js";
 import { boxEvents, boxes } from "../db/schema.js";
 import type { Logger } from "../logger.js";
 import type { RailwayClient } from "../railway/client.js";
+import { revokeBoxResendKey, type ResendKeysClient } from "../email/resend-keys.js";
 import { DeleteRefused, guardedDeleteBoxProject } from "../railway/delete.js";
 import { ProjectNameRefused } from "../railway/names.js";
 import type { Alerter } from "./alerts.js";
@@ -99,7 +100,13 @@ export async function sweepCleanup(db: CloudDb, log: Logger, opts: SweepOptions 
   return { claimed, expired, flagged, enqueued };
 }
 
-export function deleteHandler(deps: { client: RailwayClient; workspaceId: string; fetch?: typeof fetch }): JobHandler {
+export function deleteHandler(deps: {
+  client: RailwayClient;
+  workspaceId: string;
+  fetch?: typeof fetch;
+  /** AgentDash (SC-8, GH #769): revokes the box's Resend key; null when CLOUD_RESEND_ADMIN_API_KEY is not set. */
+  resend?: ResendKeysClient | null;
+}): JobHandler {
   return {
     kind: "delete",
     maxDurationMs: 30 * 60_000,
@@ -131,6 +138,21 @@ export function deleteHandler(deps: { client: RailwayClient; workspaceId: string
             if (err instanceof DeleteRefused || err instanceof ProjectNameRefused) throw new FatalJobError(err.message);
             throw err;
           }
+        },
+      },
+      // AgentDash (SC-8, GH #769, spec §6.5): the box's sending-only Resend key is revoked,
+      // after the project delete, so every guard above has already passed.
+      {
+        name: "revoke_resend_key",
+        timeoutMs: 60_000,
+        async run(ctx) {
+          const box = await ctx.box();
+          if (!box.resendKeyId) return;
+          if (!deps.resend) {
+            ctx.log.warn("box deleted with a Resend key the control plane cannot revoke (CLOUD_RESEND_ADMIN_API_KEY is not set)", { slug: box.slug });
+            return;
+          }
+          await revokeBoxResendKey(ctx.db, deps.resend, box, "delete-job", ctx.signal);
         },
       },
       {

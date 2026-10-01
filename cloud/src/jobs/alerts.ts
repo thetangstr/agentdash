@@ -17,7 +17,11 @@ export interface Alert {
     | "cert_expiry"
     | "spend_alarm"
     | "idle_policy"
-    | "alert_test";
+    | "alert_test"
+    // AgentDash (SC-8, GH #769): stripe_* for the account webhook's forwarding.
+    | "stripe_unknown_box"
+    | "stripe_delivery_dead"
+    | "stripe_routing_conflict";
   subject: string;
   /** SC-10: a short human-readable explanation (no secret; redacted anyway). */
   detail?: string | null;

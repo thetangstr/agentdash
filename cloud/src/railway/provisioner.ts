@@ -47,6 +47,7 @@ import {
 import type { RailwayClient } from "./client.js";
 import { ImageNotFound, RELEASE_TAG_RE, resolveImageDigest, resolveTagCommit } from "./image.js";
 import { findProjectsByName } from "./delete.js";
+import type { BoxExtras } from "./box-extras.js";
 import { assertBoxProjectName, boxProjectDescription, boxProjectName, projectTag } from "./names.js";
 import { newAuthSecret, newClaimCode, newEdgeSecret, newMasterKey, newPostgresPassword, sealToEscrow } from "./secrets.js";
 import { validateNewSlug, validateSlug } from "./slug.js";
@@ -89,6 +90,8 @@ export interface ProvisionerDeps {
   sourceDeployWaitMs?: number;
   healthWaitMs?: number;
   edgeHealthWaitMs?: number;
+  /** AgentDash (SC-8, GH #769): the box's Stripe and Resend variables (./box-extras.ts). */
+  boxExtras?: BoxExtras;
 }
 
 const sleep = (ms: number, signal: AbortSignal) =>
@@ -454,7 +457,11 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
           generatedMasterKey = newMasterKey();
           vars.PAPERCLIP_SECRETS_MASTER_KEY = generatedMasterKey;
         }
+        // AgentDash (SC-8, GH #769): Stripe and Resend ride the same single upsert.
+        const extras = deps.boxExtras ? await deps.boxExtras.prepare({ db: ctx.db, box, names, log: ctx.log, signal: ctx.signal }) : null;
+        if (extras) Object.assign(vars, extras.vars);
         await upsertVariables(client, P, E, W, vars, { signal: ctx.signal });
+        await extras?.commit();
         const toEscrow = generatedMasterKey ?? liveMasterKey;
         if (toEscrow && (!box.masterKeyEscrow || generatedMasterKey)) {
           boxPatch.masterKeyEscrow = await sealToEscrow(deps.escrowPublicKey!, toEscrow);
