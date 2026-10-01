@@ -1,50 +1,53 @@
 ---
-title: Process Adapter
-summary: Generic shell process adapter
+title: Process adapter
+summary: Run a shell command of your own as an agent's runtime
 ---
 
-The `process` adapter executes arbitrary shell commands. Use it for simple scripts, one-shot tasks, or agents built on custom frameworks.
+The `process` adapter runs a command you configure as a child process on the AgentDash server host. Use it for a script or a custom agent loop that you start from the command line. The web UI's agent picker does not offer it; set it through the [agents API](/api/agents).
 
-## When to Use
+Source: `server/src/adapters/process/` (`index.ts`, `execute.ts`, `test.ts`).
 
-- Running a Python script that calls the Paperclip API
-- Executing a custom agent loop
-- Any runtime that can be invoked as a shell command
+## When to use it
 
-## When Not to Use
+- A script that calls the AgentDash API and exits.
+- A custom agent loop you already run from a shell.
 
-- If you need session persistence across runs (use `claude_local` or `codex_local`)
-- If the agent needs conversational context between heartbeats
+It keeps no session between runs. If the agent needs conversation context across heartbeats, use a CLI adapter such as [`claude_local`](/adapters/claude-local) or [`codex_local`](/adapters/codex-local).
 
-## Configuration
+## Configuration fields
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `command` | string | Yes | Shell command to execute |
-| `cwd` | string | No | Working directory |
-| `env` | object | No | Environment variables |
-| `timeoutSec` | number | No | Process timeout |
+|---|---|---|---|
+| `command` | string | Yes | Command to run. |
+| `args` | string[] or string | No | Command arguments. |
+| `cwd` | string | No | Working directory. Defaults to the server's working directory. |
+| `env` | object | No | Environment variables. Secret references are resolved before the run. |
+| `timeoutSec` | number | No | Run timeout in seconds. `0` or unset means none. |
+| `graceSec` | number | No | Seconds between SIGTERM and SIGKILL. Default `15`. |
 
-## How It Works
+## How a run works
 
-1. Paperclip spawns the configured command as a child process
-2. Standard Paperclip environment variables are injected (`PAPERCLIP_AGENT_ID`, `PAPERCLIP_API_KEY`, etc.)
-3. The process runs to completion
-4. Exit code determines success/failure
+1. The server spawns `command` with `args` in `cwd`.
+2. It sets `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID` and `PAPERCLIP_API_URL`, then your `env` on top (`buildPaperclipEnv` in `packages/adapter-utils/src/server-utils.ts`).
+3. Stdout and stderr stream into the run log.
+4. Exit code `0` is success. Any other code fails the run. A timeout fails it as timed out.
+
+The adapter does not mint an API key for the run. To call the AgentDash API, give the script an [agent API key](/api/api-keys) through `env`, for example `PAPERCLIP_API_KEY` as a secret reference.
 
 ## Example
-
-An agent that runs a Python script:
 
 ```json
 {
   "adapterType": "process",
   "adapterConfig": {
-    "command": "python3 /path/to/agent.py",
-    "cwd": "/path/to/workspace",
+    "command": "python3",
+    "args": ["/srv/agents/triage.py"],
+    "cwd": "/srv/agents",
     "timeoutSec": 300
   }
 }
 ```
 
-The script can use the injected environment variables to authenticate with the Paperclip API and perform work.
+## Environment test
+
+The test checks that `command` is set and resolves, and that `cwd` is a valid absolute directory. Source: `server/src/adapters/process/test.ts`.

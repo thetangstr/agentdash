@@ -1,67 +1,73 @@
 ---
-title: CLI Overview
-summary: CLI installation and setup
+title: Operator CLI overview
+summary: The operator CLI for a self-hosted AgentDash instance, run from a checkout of the repository
 ---
 
-The Paperclip CLI handles instance setup, diagnostics, and control-plane operations.
+Most people do not need this CLI.
 
-## Usage
+- To connect Claude Code or Codex on your machine to your AgentDash agent, use [agentdash-connect](/cli/agentdash-connect).
+- To give an MCP client the AgentDash tools over stdio, use the [MCP server](/cli/agentdash-mcp).
+
+`paperclipai` is the self-host and operator CLI. It sets up and diagnoses an instance, and has client commands for issues, agents, approvals and more. It runs from a clone of the repository:
 
 ```sh
+git clone https://github.com/thetangstr/agentdash.git
+cd agentdash
+pnpm install
 pnpm paperclipai --help
 ```
 
-## Global Options
+`pnpm paperclipai` is a root `package.json` script that runs `cli/src/index.ts` with `tsx`. Do not use `npx paperclipai`: that npm package is not AgentDash. Source: `cli/src/index.ts`.
 
-All commands support:
+See [Local development](/deploy/local-development) for prerequisites.
+
+## Common options
+
+Setup commands (`setup`, `onboard`, `run`, `doctor`, `configure`, `env`, `db:backup`, `allowed-hostname`) take:
 
 | Flag | Description |
-|------|-------------|
-| `--data-dir <path>` | Local Paperclip data root (isolates from `~/.paperclip`) |
+|---|---|
+| `-c, --config <path>` | Config file path |
+| `-d, --data-dir <path>` | Data root, instead of `~/.paperclip` |
+
+Client commands (`issue`, `agent`, `approval`, `company`, `activity`, `dashboard`) also take (`cli/src/commands/client/common.ts`):
+
+| Flag | Description |
+|---|---|
+| `--context <path>` | CLI context file |
+| `--profile <name>` | Context profile |
 | `--api-base <url>` | API base URL |
-| `--api-key <token>` | API authentication token |
-| `--context <path>` | Context file path |
-| `--profile <name>` | Context profile name |
-| `--json` | Output as JSON |
+| `--api-key <token>` | Bearer token |
+| `--json` | Raw JSON output |
+| `-C, --company-id <id>` | Company id, on company-scoped commands |
 
-Company-scoped commands also accept `--company-id <id>`.
-
-For clean local instances, pass `--data-dir` on the command you run:
+For a throwaway local instance, pass `--data-dir`:
 
 ```sh
-pnpm paperclipai run --data-dir ./tmp/paperclip-dev
+pnpm paperclipai run --data-dir ./tmp/agentdash-dev
 ```
 
-## Context Profiles
+## Context profiles
 
-Store defaults to avoid repeating flags:
+Store defaults so you do not repeat flags:
 
 ```sh
-# Set defaults
 pnpm paperclipai context set --api-base http://localhost:3100 --company-id <id>
-
-# View current context
 pnpm paperclipai context show
-
-# List profiles
 pnpm paperclipai context list
-
-# Switch profile
 pnpm paperclipai context use default
 ```
 
-To avoid storing secrets in context, use an env var:
+To keep the API key out of the context file, store the name of an env var instead:
 
 ```sh
 pnpm paperclipai context set --api-key-env-var-name PAPERCLIP_API_KEY
 export PAPERCLIP_API_KEY=...
 ```
 
-Context is stored at `~/.paperclip/context.json`.
+Context lives in `~/.paperclip/context.json` (under `PAPERCLIP_HOME` when set).
 
-## Command Categories
+## Command groups
 
-The CLI has two categories:
-
-1. **[Setup commands](/cli/setup-commands)** — instance bootstrap, diagnostics, configuration
-2. **[Control-plane commands](/cli/control-plane-commands)** — issues, agents, approvals, activity
+1. [Setup commands](/cli/setup-commands): first-run setup, start, diagnostics, configuration.
+2. [Control-plane commands](/cli/control-plane-commands): issues, agents, approvals, companies, activity, dashboard, heartbeats.

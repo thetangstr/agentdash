@@ -1,123 +1,146 @@
 ---
-title: Setup Commands
-summary: Onboard, run, doctor, and configure
+title: Setup commands
+summary: Set up, start, diagnose and configure a self-hosted instance with the operator CLI
 ---
 
-Instance setup and diagnostics commands.
+Commands for setting up and running a self-hosted instance. Run them from a checkout as `pnpm paperclipai <command>` (see the [CLI overview](/cli/overview)). Each one takes `-c, --config <path>` and `-d, --data-dir <path>`. Source: `cli/src/index.ts`, `cli/src/commands/`.
 
-## `paperclipai run`
+## `setup`
 
-One-command bootstrap and start:
+The first-run wizard:
+
+```sh
+pnpm paperclipai setup
+```
+
+If there is no config yet, it writes one with safe defaults: embedded PostgreSQL, local-disk storage, local encrypted secrets, port 3100. The bind mode is `tailnet` when Tailscale is running, otherwise `loopback`. On a machine with a LAN address and no Tailscale, it asks whether to stay local or listen on the network. It then asks for an adapter, checks that its CLI is installed, and saves the choice as `AGENTDASH_DEFAULT_ADAPTER` in the instance's env file. It also creates the agent JWT secret if missing. Source: `cli/src/commands/setup.ts`.
+
+| Flag | Description |
+|---|---|
+| `--adapter <type>` | Adapter for the first agent; skips the prompt |
+| `-y, --yes` | Non-interactive. The adapter defaults to `claude_local`. |
+
+Subcommands re-run one step:
+
+```sh
+pnpm paperclipai setup adapter [--type <adapter>] [--yes]
+pnpm paperclipai setup server [--bind loopback|lan|tailnet] [--port <n>] [--yes]
+pnpm paperclipai setup bootstrap [--force] [--expires-hours <n>] [--base-url <url>] [--no-open]
+```
+
+`setup bootstrap` creates the first-admin invite for an authenticated instance and opens it in the browser.
+
+## `run`
+
+Start the instance:
 
 ```sh
 pnpm paperclipai run
 ```
 
-Does:
+1. If there is no config, it runs `setup` (interactive terminals only).
+2. It runs `doctor` with repair on.
+3. It starts the server when the checks pass.
 
-1. Auto-onboards if config is missing
-2. Runs `paperclipai doctor` with repair enabled
-3. Starts the server when checks pass
+| Flag | Description |
+|---|---|
+| `-i, --instance <id>` | Local instance id. Default `default`. |
+| `--bind <mode>` | On first run, the reachability preset (`loopback`, `lan`, `tailnet`) |
+| `--no-repair` | Run doctor without repairs |
 
-Choose a specific instance:
+## `onboard`
 
-```sh
-pnpm paperclipai run --instance dev
-```
-
-## `paperclipai onboard`
-
-Interactive first-time setup:
+The advanced setup wizard, with prompts for database, LLM, storage and server:
 
 ```sh
 pnpm paperclipai onboard
 ```
 
-If Paperclip is already configured, rerunning `onboard` keeps the existing config in place. Use `paperclipai configure` to change settings on an existing install.
+The first prompt is **Quickstart** (local defaults) or **Advanced setup**. If a config already exists, `onboard` keeps it unchanged; use `configure` to change it.
 
-First prompt:
+| Flag | Description |
+|---|---|
+| `--run` | Start the server after saving the config |
+| `-y, --yes` | Accept Quickstart defaults and start |
+| `--bind <mode>` | Quickstart reachability preset (`loopback`, `lan`, `tailnet`) |
 
-1. `Quickstart` (recommended): local defaults (embedded database, no LLM provider, local disk storage, default secrets)
-2. `Advanced setup`: full interactive configuration
+## `doctor`
 
-Start immediately after onboarding:
-
-```sh
-pnpm paperclipai onboard --run
-```
-
-Non-interactive defaults + immediate start (opens browser on server listen):
-
-```sh
-pnpm paperclipai onboard --yes
-```
-
-On an existing install, `--yes` now preserves the current config and just starts Paperclip with that setup.
-
-## `paperclipai doctor`
-
-Health checks with optional auto-repair:
+Health checks, with optional repair:
 
 ```sh
 pnpm paperclipai doctor
-pnpm paperclipai doctor --repair
+pnpm paperclipai doctor --repair [--yes]
 ```
 
-Validates:
+It checks the config file, deployment and auth mode, the agent JWT secret, secrets, storage, the database, the LLM provider, the log directory and the server port. Source: `cli/src/commands/doctor.ts`, `cli/src/checks/`.
 
-- Server configuration
-- Database connectivity
-- Secrets adapter configuration
-- Storage configuration
-- Missing key files
+## `configure`
 
-## `paperclipai configure`
-
-Update configuration sections:
+Change one section of the config:
 
 ```sh
 pnpm paperclipai configure --section server
-pnpm paperclipai configure --section secrets
-pnpm paperclipai configure --section storage
 ```
 
-## `paperclipai env`
+Sections: `llm`, `database`, `logging`, `server`, `storage`, `secrets`.
 
-Show resolved environment configuration:
+## `env`
+
+Print the environment variables a deployment needs, resolved from the current config (database URL, port, origins, agent JWT, secrets and storage settings):
 
 ```sh
 pnpm paperclipai env
 ```
 
-This now includes bind-oriented deployment settings such as `PAPERCLIP_BIND` and `PAPERCLIP_BIND_HOST` when configured.
+## `db:backup`
 
-## `paperclipai allowed-hostname`
-
-Allow a private hostname for authenticated/private mode:
+Make a one-off database backup:
 
 ```sh
-pnpm paperclipai allowed-hostname my-tailscale-host
+pnpm paperclipai db:backup [--dir <path>] [--retention-days <n>] [--filename-prefix <prefix>] [--json]
 ```
 
-## Local Storage Paths
+## `allowed-hostname`
 
-| Data | Default Path |
-|------|-------------|
+Allow a hostname for authenticated or private access:
+
+```sh
+pnpm paperclipai allowed-hostname <host>
+```
+
+## `auth bootstrap-ceo`
+
+Create a one-time invite URL for the first instance admin:
+
+```sh
+pnpm paperclipai auth bootstrap-ceo [--force] [--expires-hours <n>] [--base-url <url>]
+```
+
+`setup bootstrap` does the same and opens the link.
+
+## Local paths
+
+| Data | Default path |
+|---|---|
 | Config | `~/.paperclip/instances/default/config.json` |
 | Database | `~/.paperclip/instances/default/db` |
 | Logs | `~/.paperclip/instances/default/logs` |
 | Storage | `~/.paperclip/instances/default/data/storage` |
+| Backups | `~/.paperclip/instances/default/data/backups` |
 | Secrets key | `~/.paperclip/instances/default/secrets/master.key` |
 
-Override with:
+Source: `cli/src/config/home.ts`. Override the root and instance with environment variables:
 
 ```sh
 PAPERCLIP_HOME=/custom/home PAPERCLIP_INSTANCE_ID=dev pnpm paperclipai run
 ```
 
-Or pass `--data-dir` directly on any command:
+or pass `--data-dir` on any command:
 
 ```sh
-pnpm paperclipai run --data-dir ./tmp/paperclip-dev
-pnpm paperclipai doctor --data-dir ./tmp/paperclip-dev
+pnpm paperclipai run --data-dir ./tmp/agentdash-dev
+pnpm paperclipai doctor --data-dir ./tmp/agentdash-dev
 ```
+
+For running from source day to day, see [Local development](/deploy/local-development). For a container, see [Docker](/deploy/docker).

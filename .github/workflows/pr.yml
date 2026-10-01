@@ -55,6 +55,16 @@ jobs:
         # verify-build.
         run: node scripts/ci/check-api-reference-drift.mjs --routes-only && node --test scripts/ci/check-api-reference-drift.test.mjs
 
+      - name: Public docs carry no forbidden token and no upstream name outside code
+        # doc/plans/2026-10-01-public-docs-section.md, "Content rules": every
+        # page docs/docs.json lists (bundled or not), docs/docs.json itself and
+        # the generated files the site ships. Hashed customer/instance tokens
+        # from scripts/docs/forbidden-tokens.mjs (the list the UI docs
+        # test uses too), reported as file:line without the token; and the
+        # upstream project's name in prose anywhere but the fork page.
+        # Dependency-free.
+        run: node scripts/ci/check-docs-forbidden-tokens.mjs && node --test scripts/ci/check-docs-forbidden-tokens.test.mjs
+
       - name: Release log is complete and indexed
         # releases/*.md is the release log (GitHub Release bodies, in-app
         # Changelog). Fails when a stable tag has no notes, a note has no

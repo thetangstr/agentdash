@@ -1,71 +1,98 @@
 ---
 title: Codex Local
-summary: OpenAI Codex local adapter setup and configuration
+summary: Run the OpenAI Codex CLI on the AgentDash server host as an agent's runtime
 ---
 
-The `codex_local` adapter runs OpenAI's Codex CLI locally. It supports session persistence via `previous_response_id` chaining and skills injection through the global Codex skills directory.
+The `codex_local` adapter runs `codex exec --json` on the machine that runs the AgentDash server. The prompt goes in on stdin. The adapter resumes Codex sessions across heartbeats, runs each company with its own managed `CODEX_HOME`, and links the agent's skills into that home.
+
+Source: `packages/adapters/codex-local/src/` (`index.ts` for fields, `server/execute.ts`, `server/codex-args.ts`, `server/codex-home.ts`, `server/command.ts`).
 
 ## Prerequisites
 
-- Codex CLI installed (`codex` command available)
-- `OPENAI_API_KEY` set in the environment or agent config
+- The Codex CLI installed on the server host.
+- Credentials Codex can use: `OPENAI_API_KEY` in the server environment or the agent's `env`, or a `codex` login whose `auth.json` is in the shared Codex home (`CODEX_HOME`, or `~/.codex`).
 
-## Configuration Fields
+## Configuration fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `cwd` | string | Yes | Working directory for the agent process (absolute path; created automatically if missing when permissions allow) |
-| `model` | string | No | Model to use |
-| `promptTemplate` | string | No | Prompt used for all runs |
-| `env` | object | No | Environment variables (supports secret refs) |
-| `timeoutSec` | number | No | Process timeout (0 = no timeout) |
-| `graceSec` | number | No | Grace period before force-kill |
-| `fastMode` | boolean | No | Enables Codex Fast mode. Currently supported on `gpt-5.4` only and burns credits faster |
-| `dangerouslyBypassApprovalsAndSandbox` | boolean | No | Skip safety checks (dev only) |
+| Field | Type | Description |
+|---|---|---|
+| `cwd` | string | Absolute working directory. Created if missing when permissions allow. |
+| `model` | string | Codex model id, passed as `--model`. |
+| `modelReasoningEffort` | string | `minimal`, `low`, `medium`, `high` or `xhigh`, passed as `-c model_reasoning_effort=...`. |
+| `promptTemplate` | string | Prompt for each run. |
+| `instructionsFilePath` | string | Absolute path to a markdown instructions file prepended to the stdin prompt. |
+| `search` | boolean | Run with `--search`. |
+| `fastMode` | boolean | Codex Fast mode. See below. |
+| `dangerouslyBypassApprovalsAndSandbox` | boolean | Pass `--dangerously-bypass-approvals-and-sandbox`. |
+| `command` | string | Binary to run. Default `codex`. |
+| `extraArgs` | string[] | Extra CLI arguments. |
+| `env` | object | Environment variables. Values can be secret references. Setting `CODEX_HOME` here turns off the managed home. |
+| `timeoutSec` | number | Run timeout in seconds. |
+| `graceSec` | number | Seconds between SIGTERM and SIGKILL. |
+| `workspaceStrategy` | object | Execution workspace strategy. Supports `{ type: "git_worktree", baseRef?, branchTemplate?, worktreeParentDir? }`. |
 
-## Session Persistence
+Every run also passes `--skip-git-repo-check`, because agent workspaces start as empty directories that Codex would otherwise refuse to run in.
 
-Codex uses `previous_response_id` for session continuity. The adapter serializes and restores this across heartbeats, allowing the agent to maintain conversation context.
+## Command resolution
 
-## Skills Injection
+The binary is resolved the same way for the environment test and for the run (`resolveCodexCommand` in `server/command.ts`):
 
-The adapter symlinks Paperclip skills into the global Codex skills directory (`~/.codex/skills`). Existing user skills are not overwritten.
+1. `adapterConfig.command`
+2. `AGENTDASH_CODEX_COMMAND` in the server environment
+3. `codex`
 
-## Fast Mode
+## Sessions
 
-When `fastMode` is enabled, Paperclip adds Codex config overrides equivalent to:
+The adapter stores the Codex session id and resumes with `codex exec ... resume <session-id> -` on the next wake. Resume is cwd-aware: if the working directory changed, a fresh session starts. If Codex reports the session as unavailable, the adapter retries once with a fresh session.
+
+## Managed `CODEX_HOME`
+
+Unless the agent's `env` sets `CODEX_HOME`, each run uses a per-company Codex home:
+
+```
+$PAPERCLIP_HOME/instances/<instance-id>/companies/<company-id>/codex-home
+```
+
+`PAPERCLIP_HOME` defaults to `~/.paperclip` and the instance id to `default`. The managed home is seeded from the shared Codex home: `auth.json` is symlinked; `config.json`, `config.toml` and `instructions.md` are copied. Source: `server/codex-home.ts`.
+
+## Skills
+
+The agent's selected skills are linked into `<effective CODEX_HOME>/skills/` before each run. Broken links that point into an AgentDash skills directory are removed. Other entries, including skills you installed yourself, are left alone.
+
+## Fast mode
+
+With `fastMode` on, the adapter adds:
 
 ```sh
 -c 'service_tier="fast"' -c 'features.fast_mode=true'
 ```
 
-Paperclip currently applies that only when the selected model is `gpt-5.4`. On other models, the toggle is preserved in config but ignored at execution time to avoid unsupported runs.
+It applies them only for the models in `CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS` (`index.ts`) and for model ids the adapter does not know. For any other model the setting is kept but ignored, and the environment test warns.
 
-## Managed `CODEX_HOME`
+## Instructions
 
-When Paperclip is running inside a managed worktree instance (`PAPERCLIP_IN_WORKTREE=true`), the adapter instead uses a worktree-isolated `CODEX_HOME` under the Paperclip instance so Codex skills, sessions, logs, and other runtime state do not leak across checkouts. It seeds that isolated home from the user's main Codex home for shared auth/config continuity.
+If `instructionsFilePath` is set, its contents are prepended to the stdin prompt. On a resumed session that only carries a wake update, they are not sent again.
 
-## Manual Local CLI
+Codex also loads any repo-level `AGENTS.md` in the working directory on its own. The adapter cannot turn that off, so a repository's `AGENTS.md` may apply in addition to the agent's [mandate](/concepts/mandates-directives-and-the-agent-bundle).
 
-For manual local CLI usage outside heartbeat runs (for example running as `codexcoder` directly), use:
+## Manual local CLI
+
+To run Codex by hand as an agent, outside a heartbeat, use the CLI from a checkout:
 
 ```sh
-pnpm paperclipai agent local-cli codexcoder --company-id <company-id>
+pnpm paperclipai agent local-cli <agent-id-or-shortname> --company-id <company-id>
 ```
 
-This installs any missing skills, creates an agent API key, and prints shell exports to run as that agent.
+It installs the repository's skills into `~/.codex/skills` and `~/.claude/skills`, creates an agent API key, and prints the `PAPERCLIP_*` shell exports for that agent.
 
-## Instructions Resolution
+## Environment test
 
-If `instructionsFilePath` is configured, Paperclip reads that file and prepends it to the stdin prompt sent to `codex exec` on every run.
+The **Test** button in the Adapter section of the agent's configuration form checks:
 
-This is separate from any workspace-level instruction discovery that Codex itself performs in the run `cwd`. Paperclip does not disable Codex-native repo instruction files, so a repo-local `AGENTS.md` may still be loaded by Codex in addition to the Paperclip-managed agent instructions.
+- the configured command resolves
+- the working directory is absolute and usable
+- an auth signal: `OPENAI_API_KEY`, or a native Codex login in `auth.json`
+- Fast mode against the selected model
+- a live hello probe: the same `codex exec --json` arguments a run uses (with Fast mode off) and `Respond with hello.` on stdin. Skipped when `command` is not `codex`.
 
-## Environment Test
-
-The environment test checks:
-
-- Codex CLI is installed and accessible
-- Working directory is absolute and available (auto-created if missing and permitted)
-- Authentication signal (`OPENAI_API_KEY` presence)
-- A live hello probe (`codex exec --json -` with prompt `Respond with hello.`) to verify the CLI can actually run
+Source: `packages/adapters/codex-local/src/server/test.ts`.

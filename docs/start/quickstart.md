@@ -1,62 +1,55 @@
 ---
-title: Quickstart
-summary: Get Paperclip running in minutes
+title: Start on AgentDash Cloud
+summary: Sign up for a hosted workspace, claim it, and get through the three setup steps
 ---
 
-Get Paperclip running locally in under 5 minutes.
+AgentDash Cloud gives you your own workspace at `your-name.agentdash.cloud`, with a Chief of Staff agent already in it. Setup takes a few minutes, plus however long the waitlist is.
 
-## Quick Start (Recommended)
+Want to run it yourself instead? See [Deploy](/deploy/overview).
 
-```sh
-npx paperclipai onboard --yes
-```
+## 1. Sign up
 
-This walks you through setup, configures your environment, and gets Paperclip running.
+Go to [www.agentdash.cloud/start](https://www.agentdash.cloud/start) and fill in:
 
-If you already have a Paperclip install, rerunning `onboard` keeps your current config and data paths intact. Use `paperclipai configure` if you want to edit settings.
+| Field | Notes |
+| --- | --- |
+| Work email | Where the links go |
+| Workspace name | Fills in the web address; you can edit the address before you submit |
+| Web address | 3–16 lowercase letters, numbers or dashes, starting with a letter. Availability is checked as you type |
 
-To start Paperclip again later:
+Accept the terms and submit. You get an email with a link: open it on the same device within 30 minutes. It works once. **Send it again** on the same page if it does not arrive.
 
-```sh
-npx paperclipai run
-```
+## 2. Wait for your workspace
 
-> **Note:** If you used `npx` for setup, always use `npx paperclipai` to run commands. The `pnpm paperclipai` form only works inside a cloned copy of the Paperclip repository (see Local Development below).
+The link opens a progress page.
 
-## Local Development
+- **You're on the list** — new workspaces open a few at a time. Your address is held for you, and you get an email when your workspace is being created.
+- **Creating your workspace** — five steps, from reserving the address to a health check. The page estimates about three minutes. You can close it; you get an email when it is ready.
+- **Your workspace is ready** — press **Open my workspace**. That link is only for you: it works once, for the email you signed up with, and it is also in your inbox.
 
-For contributors working on Paperclip itself. Prerequisites: Node.js 20+ and pnpm 9+.
+Source: `ui/src/marketing/pages/Start.tsx`, `StartProgress.tsx`.
 
-Clone the repository, then:
+## 3. Claim it
 
-```sh
-pnpm install
-pnpm dev
-```
+The link opens **Claim your workspace** on your new address. Enter your name and a password. This creates the first account, and you are its admin. You land on the Chief of Staff page.
 
-This starts the API server and UI at [http://localhost:3100](http://localhost:3100).
+## 4. Set it up
 
-No external database required — Paperclip uses an embedded PostgreSQL instance by default.
+1. **Your model.** Before the Chief of Staff can reply, the workspace asks for a model provider — Z.AI (GLM), OpenRouter, Anthropic or OpenAI — and an API key. The key is checked with one small request, then stored encrypted. Your agents and your Chief of Staff run on this provider.
+2. **Your repo and first issue.** Home shows a **Continue setup** prompt that opens the setup page (`/setup`). It asks for:
+   - a GitHub repository URL and a fine-grained token limited to that repository, with **Contents** and **Pull requests** set to *Read and write*. Classic tokens are refused. Agents clone the repo, push a branch per issue and open a pull request. They never merge. Protect your default branch on GitHub.
+   - what to build first, or one of the suggestions. The issue goes to an engineer agent — one is hired for you if the workspace has none and your plan allows it.
 
-When working from the cloned repo, you can also use:
+   If you leave the setup page, it picks up at the first step not yet done.
 
-```sh
-pnpm paperclipai run
-```
+Marketing and sales roles do not need a repository: the setup page links to **Set up a marketing or sales role** instead. See [Workforce roles](/concepts/workforce-roles).
 
-This auto-onboards if config is missing, runs health checks with auto-repair, and starts the server.
+Source: `ui/src/pages/Claim.tsx`, `ui/src/pages/CoSConversation.tsx`, `ui/src/pages/FirstRun.tsx`, `server/src/services/first-run.ts`, `ui/src/components/onboarding/`.
 
-## What's Next
+## Next
 
-Once Paperclip is running:
+- [Your first company and agent](/start/first-agent) — what is in your workspace now, and what to do next.
 
-1. Create your first company in the web UI
-2. Define a company goal
-3. Create a CEO agent and configure its adapter
-4. Build out the org chart with more agents
-5. Set budgets and assign initial tasks
-6. Hit go — agents start their heartbeats and the company runs
+## Signing in later
 
-<Card title="Core Concepts" href="/start/core-concepts">
-  Learn the key concepts behind Paperclip
-</Card>
+Go to `your-name.agentdash.cloud` and sign in. If you forget the address, [www.agentdash.cloud/find](https://www.agentdash.cloud/find) emails you a link to it. A workspace that has been idle may be paused; visiting it wakes it; the page estimates about a minute.

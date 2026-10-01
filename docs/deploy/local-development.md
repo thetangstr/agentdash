@@ -1,105 +1,106 @@
 ---
-title: Local Development
-summary: Set up Paperclip for local development
+title: Local development
+summary: Run AgentDash from a clone of the repository to work on it
 ---
 
-Run Paperclip locally with zero external dependencies.
+This page is for contributors running AgentDash from source. To use AgentDash, start with [AgentDash Cloud](/start/quickstart); to self-host it, see the [Deploy overview](/deploy/overview).
 
 ## Prerequisites
 
-- Node.js 20+
-- pnpm 9+
+- Node.js 20 or later (`engines.node` in the root `package.json`)
+- pnpm 9 (the repository pins `pnpm@9.15.4` in `packageManager`; `corepack enable` picks it up)
+- Git
 
-## Start Dev Server
+No Docker or external database is needed. With no `DATABASE_URL`, the server starts an embedded PostgreSQL.
+
+## Clone and start
 
 ```sh
+git clone https://github.com/thetangstr/agentdash.git
+cd agentdash
 pnpm install
 pnpm dev
 ```
 
-This starts:
+`pnpm dev` starts the API server on `http://localhost:3100` and serves the UI from the same origin through dev middleware. It watches for changes and restarts. Unless your instance config says otherwise, it runs in `local_trusted` mode, bound to loopback, with no sign-in.
 
-- **API server** at `http://localhost:3100`
-- **UI** served by the API server in dev middleware mode (same origin)
+Other dev scripts from the root `package.json`:
 
-No Docker or external database required. Paperclip uses embedded PostgreSQL automatically.
+| Command | What it does |
+|---|---|
+| `pnpm dev:once` | Start once, without watching |
+| `pnpm dev:list` | List running dev servers |
+| `pnpm dev:stop` | Stop a running dev server |
+| `pnpm dev:server` / `pnpm dev:ui` | Run only the server or only the UI package |
+| `pnpm db:migrate` | Apply pending database migrations |
+| `pnpm typecheck` | Type-check every package |
+| `pnpm test` | Build the packages and run the Vitest suite |
 
-## One-Command Bootstrap
+The dev runner applies pending migrations automatically (it sets `PAPERCLIP_MIGRATION_AUTO_APPLY=true`). Source: `scripts/dev-runner.ts`.
 
-For a first-time install:
+## The repository CLI
+
+The repository's CLI runs from the clone as `pnpm paperclipai <command>` (the `paperclipai` script in the root `package.json`). Do not use `npx paperclipai`: that npm package is not AgentDash.
 
 ```sh
 pnpm paperclipai run
 ```
 
-This does:
+`run` writes a config with the setup wizard if none exists, runs `doctor` with repairs on, and starts the server if the checks pass. Source: `cli/src/commands/run.ts`. More commands: [Setup commands](/cli/setup-commands).
 
-1. Auto-onboards if config is missing
-2. Runs `paperclipai doctor` with repair enabled
-3. Starts the server when checks pass
+## Open the dev server to other devices
 
-## Bind Presets In Dev
-
-Default `pnpm dev` stays in `local_trusted` with loopback-only binding.
-
-To open Paperclip to a private network with login enabled:
+By default the dev server listens on loopback only. To listen on other interfaces, pass a bind preset. Any preset other than `loopback` switches the server to `authenticated` + `private`, so sign-in is required, and the server will not start without `BETTER_AUTH_SECRET` in the environment (source: `server/src/auth/better-auth.ts`).
 
 ```sh
-pnpm dev --bind lan
+pnpm dev --bind lan       # all interfaces
+pnpm dev --bind tailnet   # the machine's Tailscale address only
+pnpm dev --bind custom --bind-host 10.0.0.5
 ```
 
-For Tailscale-only binding on a detected tailnet address:
+`--tailscale-auth` and `--authenticated-private` still work as aliases for `--bind lan`. To allow an extra private hostname:
 
 ```sh
-pnpm dev --bind tailnet
+pnpm paperclipai allowed-hostname my-laptop
 ```
 
-Legacy aliases still work and map to the older broad private-network behavior:
+See [Tailscale private access](/deploy/tailscale-private-access) for the full setup.
 
-```sh
-pnpm dev --tailscale-auth
-pnpm dev --authenticated-private
-```
-
-Allow additional private hostnames:
-
-```sh
-pnpm paperclipai allowed-hostname dotta-macbook-pro
-```
-
-For full setup and troubleshooting, see [Tailscale Private Access](/deploy/tailscale-private-access).
-
-## Health Checks
+## Check it is running
 
 ```sh
 curl http://localhost:3100/api/health
-# -> {"status":"ok"}
-
-curl http://localhost:3100/api/companies
-# -> []
 ```
 
-## Reset Dev Data
+The response is JSON with `"status": "ok"`. Source: `server/src/routes/health.ts`.
 
-To wipe local data and start fresh:
+## Where data lives
+
+All instance data sits under `PAPERCLIP_HOME` (default `~/.paperclip`), in `instances/<PAPERCLIP_INSTANCE_ID>` (default `default`). Source: `server/src/home-paths.ts`.
+
+| Data | Default path |
+|---|---|
+| Config | `~/.paperclip/instances/default/config.json` |
+| Embedded database | `~/.paperclip/instances/default/db` |
+| Database backups | `~/.paperclip/instances/default/data/backups` |
+| Uploaded files | `~/.paperclip/instances/default/data/storage` |
+| Secrets master key | `~/.paperclip/instances/default/secrets/master.key` |
+| Logs | `~/.paperclip/instances/default/logs` |
+| Agent workspaces | `~/.paperclip/instances/default/workspaces` |
+
+Run a second, separate instance by changing either variable:
+
+```sh
+PAPERCLIP_HOME=/tmp/agentdash-scratch PAPERCLIP_INSTANCE_ID=dev pnpm paperclipai run
+```
+
+## Reset local data
+
+Stop the server, then remove the embedded database:
 
 ```sh
 rm -rf ~/.paperclip/instances/default/db
 pnpm dev
 ```
 
-## Data Locations
-
-| Data | Path |
-|------|------|
-| Config | `~/.paperclip/instances/default/config.json` |
-| Database | `~/.paperclip/instances/default/db` |
-| Storage | `~/.paperclip/instances/default/data/storage` |
-| Secrets key | `~/.paperclip/instances/default/secrets/master.key` |
-| Logs | `~/.paperclip/instances/default/logs` |
-
-Override with environment variables:
-
-```sh
-PAPERCLIP_HOME=/custom/path PAPERCLIP_INSTANCE_ID=dev pnpm paperclipai run
-```
+This deletes every company, agent and issue in that instance. Uploaded files and the secrets key are separate and stay.

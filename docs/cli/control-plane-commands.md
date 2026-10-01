@@ -1,110 +1,123 @@
 ---
-title: Control-Plane Commands
-summary: Issue, agent, approval, and dashboard commands
+title: Control-plane commands
+summary: Operator CLI client commands for issues, agents, approvals, companies, activity, the dashboard and heartbeats
 ---
 
-Client-side commands for managing issues, agents, approvals, and more.
+Client commands call the HTTP API of a running instance. Run them from a checkout as `pnpm paperclipai <command>`. Each takes the client options from the [CLI overview](/cli/overview) (`--api-base`, `--api-key`, `--context`, `--profile`, `--json`). Source: `cli/src/commands/client/`, `cli/src/commands/heartbeat-run.ts`.
 
-## Issue Commands
+`-C, --company-id <id>` is required where shown. Where it is optional, the company comes from the context profile.
+
+## Issues
 
 ```sh
-# List issues
-pnpm paperclipai issue list [--status todo,in_progress] [--assignee-agent-id <id>] [--match text]
+# List (company from -C or the context profile)
+pnpm paperclipai issue list [-C <company-id>] [--status todo,in_progress] [--assignee-agent-id <id>] [--project-id <id>] [--match <text>]
 
-# Get issue details
+# Get by id or identifier
 pnpm paperclipai issue get <issue-id-or-identifier>
 
-# Create issue
-pnpm paperclipai issue create --title "..." [--description "..."] [--status todo] [--priority high]
+# Create
+pnpm paperclipai issue create -C <company-id> --title "..." [--description "..."] [--status todo] [--priority high] \
+  [--assignee-agent-id <id>] [--project-id <id>] [--goal-id <id>] [--parent-id <id>]
 
-# Update issue
-pnpm paperclipai issue update <issue-id> [--status in_progress] [--comment "..."]
+# Update
+pnpm paperclipai issue update <issue-id> [--title "..."] [--status in_progress] [--priority <p>] \
+  [--assignee-agent-id <id>] [--comment "..."]
 
-# Add comment
-pnpm paperclipai issue comment <issue-id> --body "..." [--reopen]
+# Comment
+pnpm paperclipai issue comment <issue-id> --body "..." [--reopen] [--resume]
 
-# Checkout task
-pnpm paperclipai issue checkout <issue-id> --agent-id <agent-id>
-
-# Release task
+# Check out for an agent, and release
+pnpm paperclipai issue checkout <issue-id> --agent-id <agent-id> [--expected-statuses todo,backlog,blocked]
 pnpm paperclipai issue release <issue-id>
 ```
 
-## Company Commands
+`--match` filters locally on identifier, title and description. `release` puts the issue back to `todo` and clears the assignee.
+
+## Agents
+
+```sh
+pnpm paperclipai agent list -C <company-id>
+pnpm paperclipai agent get <agent-id>
+
+# Run as an agent by hand: creates an agent API key, installs the repo's skills
+# into ~/.codex/skills and ~/.claude/skills, and prints shell exports
+pnpm paperclipai agent local-cli <agent-id-or-shortname> -C <company-id> [--key-name <label>] [--no-install-skills]
+```
+
+## Approvals
+
+```sh
+pnpm paperclipai approval list -C <company-id> [--status pending]
+pnpm paperclipai approval get <approval-id>
+
+pnpm paperclipai approval create -C <company-id> --type hire_agent --payload '{"name":"..."}' \
+  [--requested-by-agent-id <id>] [--issue-ids <id1,id2>]
+
+pnpm paperclipai approval approve <approval-id> [--decision-note "..."]
+pnpm paperclipai approval reject <approval-id> [--decision-note "..."]
+pnpm paperclipai approval request-revision <approval-id> [--decision-note "..."]
+pnpm paperclipai approval resubmit <approval-id> [--payload '{"...": "..."}']
+pnpm paperclipai approval comment <approval-id> --body "..."
+```
+
+`--type` takes `hire_agent` or `approve_ceo_strategy`.
+
+## Companies
 
 ```sh
 pnpm paperclipai company list
 pnpm paperclipai company get <company-id>
 
-# Export to portable folder package (writes manifest + markdown files)
-pnpm paperclipai company export <company-id> --out ./exports/acme --include company,agents
+# Export to a folder package
+pnpm paperclipai company export <company-id> --out ./exports/my-company --include company,agents
 
-# Preview import (no writes)
-pnpm paperclipai company import \
-  <owner>/<repo>/<path> \
-  --target existing \
-  --company-id <company-id> \
-  --ref main \
-  --collision rename \
-  --dry-run
+# Preview an import without writing
+pnpm paperclipai company import <path-or-url> --target existing -C <company-id> --collision rename --dry-run
 
-# Apply import
-pnpm paperclipai company import \
-  ./exports/acme \
-  --target new \
-  --new-company-name "Acme Imported" \
-  --include company,agents
+# Import into a new company
+pnpm paperclipai company import ./exports/my-company --target new --new-company-name "Imported" --include company,agents
+
+# Delete (destructive; both safety flags are required)
+pnpm paperclipai company delete <company-id-or-prefix> --yes --confirm <company-id-or-prefix>
 ```
 
-## Agent Commands
+`--include` takes any of `company`, `agents`, `projects`, `issues`, `tasks`, `skills`. `--collision` is `rename` (default), `skip` or `replace`. A GitHub source takes `--ref <branch|tag|commit>`.
+
+## Activity
 
 ```sh
-pnpm paperclipai agent list
-pnpm paperclipai agent get <agent-id>
-```
-
-## Approval Commands
-
-```sh
-# List approvals
-pnpm paperclipai approval list [--status pending]
-
-# Get approval
-pnpm paperclipai approval get <approval-id>
-
-# Create approval
-pnpm paperclipai approval create --type hire_agent --payload '{"name":"..."}' [--issue-ids <id1,id2>]
-
-# Approve
-pnpm paperclipai approval approve <approval-id> [--decision-note "..."]
-
-# Reject
-pnpm paperclipai approval reject <approval-id> [--decision-note "..."]
-
-# Request revision
-pnpm paperclipai approval request-revision <approval-id> [--decision-note "..."]
-
-# Resubmit
-pnpm paperclipai approval resubmit <approval-id> [--payload '{"..."}']
-
-# Comment
-pnpm paperclipai approval comment <approval-id> --body "..."
-```
-
-## Activity Commands
-
-```sh
-pnpm paperclipai activity list [--agent-id <id>] [--entity-type issue] [--entity-id <id>]
+pnpm paperclipai activity list -C <company-id> [--agent-id <id>] [--entity-type issue] [--entity-id <id>]
 ```
 
 ## Dashboard
 
 ```sh
-pnpm paperclipai dashboard get
+pnpm paperclipai dashboard get -C <company-id>
 ```
 
 ## Heartbeat
 
+Run one heartbeat for an agent and stream its log:
+
 ```sh
-pnpm paperclipai heartbeat run --agent-id <agent-id> [--api-base http://localhost:3100]
+pnpm paperclipai heartbeat run --agent-id <agent-id> [--api-base http://localhost:3100] \
+  [--source on_demand] [--trigger manual] [--timeout-ms <ms>] [--debug]
 ```
+
+`--source` is `timer`, `assignment`, `on_demand` (default) or `automation`. See [Heartbeats and runs](/concepts/heartbeats-and-runs).
+
+## Other command groups
+
+| Group | What it does |
+|---|---|
+| `context` | Manage CLI context profiles. See the [CLI overview](/cli/overview#context-profiles). |
+| `auth login`, `auth logout`, `auth whoami` | Board-user sign-in for the CLI |
+| `plugin` | List, install, enable, disable, inspect and uninstall instance plugins |
+| `routines disable-all` | Local routine maintenance |
+| `feedback report`, `feedback export` | Inspect and export feedback traces |
+| `worktree` | Helpers for an instance per git worktree |
+| `env-lab` | Local test environment fixtures |
+| `bridge run`, `bridge inbox`, `bridge inbox-init` | The local bridge worker (macOS only) and the steward inbox reader. Most people use [agentdash-connect](/cli/agentdash-connect) instead. |
+
+Run `pnpm paperclipai <group> --help` for the flags.

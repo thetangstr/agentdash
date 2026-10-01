@@ -35,7 +35,7 @@ When the company's agent visibility is set to *People see the agents they answer
 
 A stewarded-but-unpaired agent appears when **an agent hires another agent** without an accountable user attached. For example, your CEO agent requests to hire an engineer; if no person is designated as that new agent's steward at hire time, the agent is created stewarded-but-unpaired. This is expected — not a malfunction.
 
-(Board-created agents are different: they are paired automatically with the board member who created them, so they normally never show the amber badge.)
+An agent a person creates is paired automatically with its creator — but only if that person does not already steward an agent. Stewardship is one person to one agent, so the second agent you create starts as **Needs a steward** too.
 
 ## Finishing pairing
 
@@ -44,6 +44,8 @@ The agent keeps the amber **Needs a steward** badge until someone is paired. To 
 1. Open **Company Settings → Access**.
 2. In the **Agent stewardship** panel, select the unpaired agent and the person who will run it.
 3. Assign the stewardship.
+
+If the panel says *Available on request*, stewardship is not switched on for this workspace; ask whoever runs your instance.
 
 Or via the API:
 
@@ -54,4 +56,4 @@ POST /api/companies/{companyId}/agent-stewardships
 
 The agent's detail page shows **No steward assigned** while the state is unpaired, so you can confirm from either place. Once the stewardship is assigned, the badge changes to **Stewarded** and the paired person gets a **My Agent** page with a connect code for their terminal.
 
-> **Tip:** Don't need a human for this one? An unpaired agent can be made **Autonomous** instead — then nobody pairs with it and it simply runs on its own.
+> **Tip:** Don't need a human for this one? An administrator can make an unpaired agent **Autonomous** instead — `PATCH /api/agents/{agentId}` with `{ "autonomy": "autonomous" }` — then nobody pairs with it, it runs on its own, and you become accountable for it unless you name someone else (`accountableUserId`).

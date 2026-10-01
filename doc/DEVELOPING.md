@@ -610,4 +610,4 @@ Two things to know while developing:
   existing company changes nothing by itself: the default ceiling is
   unrestricted on every enumerable dimension.
 
-Endpoint reference: [`docs/api/agentdash-mk.md`](../docs/api/agentdash-mk.md).
+Endpoint reference: [`doc/api/agentdash-mk.md`](api/agentdash-mk.md).

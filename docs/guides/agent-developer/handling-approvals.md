@@ -1,23 +1,32 @@
 ---
 title: Handling Approvals
-summary: Agent-side approval request and response
+summary: How an agent requests an approval, asks to hire, and acts when an approval is decided
 ---
 
-Agents interact with the approval system in two ways: requesting approvals and responding to approval resolutions.
+An agent meets approvals two ways: it requests them, and it is woken when one is decided. An agent never decides an approval — that is a person's job, and an agent key that tries gets `403`. See [Approvals and decisions](/concepts/approvals-and-decisions); the endpoints are in [Approvals](/api/approvals).
 
-The approval system is for governed actions that need formal board records, such as hires, strategy gates, spend approvals, or security-sensitive actions. For ordinary issue-thread yes/no decisions, use a `request_confirmation` interaction instead.
+Approvals are for governed actions that need a formal record: hires, spend, anything your mandate says to ask about first. For an ordinary yes/no inside an issue ("Accept this plan?", "Proceed with this breakdown?"), use a `request_confirmation` interaction instead — see [Task workflow](/guides/agent-developer/task-workflow#confirmation-pattern).
 
-Examples that should use `request_confirmation` instead of approvals:
+Source: `server/src/routes/approvals.ts`, `server/src/routes/agents.ts`, `packages/shared/src/validators/approval.ts`.
 
-- "Accept this plan?"
-- "Proceed with this issue breakdown?"
-- "Use option A or reject and request changes?"
+## Request an approval
 
-Create those cards with `POST /api/issues/{issueId}/interactions` and `kind: "request_confirmation"`.
+```
+POST /api/companies/{companyId}/approvals       # MCP: create_approval
+{
+  "type": "request_board_approval",
+  "payload": { "summary": "Publish the Q3 market report" },
+  "issueIds": ["{issueId}"]
+}
+```
 
-## Requesting a Hire
+- You file on your own behalf. `requestedByAgentId` defaults to you; naming another agent answers `403`.
+- `issueIds` links the approval to issues, so the decision wakes you with them.
+- Core types: `hire_agent`, `approve_ceo_strategy`, `budget_override_required`, `request_board_approval`, `mandate_violation`. A workspace may have more if its operator switched on extra capabilities; [Approvals](/api/approvals) lists every type.
 
-Managers and CEOs can request to hire new agents:
+## Request a hire
+
+Managers and CEOs can ask to hire:
 
 ```
 POST /api/companies/{companyId}/agent-hires
@@ -30,56 +39,33 @@ POST /api/companies/{companyId}/agent-hires
 }
 ```
 
-If company policy requires approval, the new agent is created as `pending_approval` and a `hire_agent` approval is created automatically.
+If the company has **require board approval for new agents** on (`requireBoardApprovalForNewAgents`), the new agent is created as `pending_approval` and a `hire_agent` approval is filed automatically. An agent hired this way with no person attached starts as **Needs a steward** — see [Agent kinds and stewardship](/guides/board-operator/agent-kinds-and-stewardship).
 
-Only managers and CEOs should request hires. IC agents should ask their manager.
+Individual contributors should ask their manager rather than hire.
 
-## CEO Strategy Approval
+## When an approval is decided
 
-If you are the CEO, your first strategic plan requires board approval:
+You may be woken with:
 
-```
-POST /api/companies/{companyId}/approvals
-{
-  "type": "approve_ceo_strategy",
-  "requestedByAgentId": "{yourAgentId}",
-  "payload": { "plan": "Strategic breakdown..." }
-}
-```
+- `PAPERCLIP_APPROVAL_ID` — the approval
+- `PAPERCLIP_APPROVAL_STATUS` — the decision, e.g. `approved` or `rejected`
+- `PAPERCLIP_LINKED_ISSUE_IDS` — comma-separated linked issues
 
-## Plan Approval Cards
-
-For normal issue implementation plans, use the issue-thread confirmation surface:
-
-1. Update the `plan` issue document.
-2. Create `request_confirmation` bound to the latest `plan` revision.
-3. Use an idempotency key such as `confirmation:${issueId}:plan:${latestRevisionId}`.
-4. Set `supersedeOnUserComment: true` so later board/user comments expire the stale request.
-5. Wait for the accepted confirmation before creating implementation subtasks.
-
-## Responding to Approval Resolutions
-
-When an approval you requested is resolved, you may be woken with:
-
-- `PAPERCLIP_APPROVAL_ID` — the resolved approval
-- `PAPERCLIP_APPROVAL_STATUS` — `approved` or `rejected`
-- `PAPERCLIP_LINKED_ISSUE_IDS` — comma-separated list of linked issue IDs
-
-Handle it at the start of your heartbeat:
+Handle it first:
 
 ```
-GET /api/approvals/{approvalId}
-GET /api/approvals/{approvalId}/issues
+GET /api/approvals/{approvalId}           # MCP: get_approval
+GET /api/approvals/{approvalId}/issues    # MCP: get_approval_issues
 ```
 
-For each linked issue:
-- Close it if the approval fully resolves the requested work
-- Comment on it explaining what happens next if it remains open
+For each linked issue, close it if the approval settles the work, or comment on what happens next.
 
-## Checking Approval Status
+A person can also send it back with **request revision** (status `revision_requested`). Read the approval's comments (`GET /api/approvals/{approvalId}/comments`; MCP `list_approval_comments`), change what was asked, and resubmit (`POST /api/approvals/{approvalId}/resubmit`).
 
-Poll pending approvals for your company:
+## Check status
 
 ```
-GET /api/companies/{companyId}/approvals?status=pending
+GET /api/companies/{companyId}/approvals?status=pending     # MCP: list_approvals
 ```
+
+Statuses: `pending`, `revision_requested`, `approved`, `rejected`, `cancelled`.

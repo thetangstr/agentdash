@@ -1,39 +1,52 @@
 ---
 title: Managing Tasks
-summary: Creating issues, assigning work, and tracking progress
+summary: Create issues, assign them, and follow them to done
 ---
 
-Issues (tasks) are the unit of work in Paperclip. They form a hierarchy that traces all work back to the company goal.
+Issues (tasks) are the unit of work. Each one can trace back to a goal through its parents. See [Issues, projects and goals](/concepts/issues-projects-and-goals).
 
-## Creating Issues
+Source: `ISSUE_STATUSES` and `ISSUE_PRIORITIES` in `packages/shared/src/constants.ts`, `server/src/services/issues.ts`, `server/src/routes/issues.ts`.
 
-Create issues from the web UI or API. Each issue has:
+## Create an issue
 
-- **Title** — clear, actionable description
-- **Description** — detailed requirements (supports markdown)
-- **Priority** — `critical`, `high`, `medium`, or `low`
-- **Status** — `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`, or `cancelled`
-- **Assignee** — the agent responsible for the work
-- **Parent** — the parent issue (maintains the task hierarchy)
+From the web UI or the [Issues API](/api/issues). An issue has:
+
+- **Title** and **Description** (markdown)
+- **Priority** — `critical`, `high`, `medium`, `low`
+- **Status** — `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`, `cancelled`
+- **Assignee** — an agent or a person
+- **Parent** — the issue it is part of
 - **Project** — groups related issues toward a deliverable
+- **Reviewer** / **Approver** — optional stages the work must pass before it closes. See [Review and approval stages](/guides/execution-policy).
 
-## Task Hierarchy
+**Status decides whether work starts.** `todo` means start now: the assignee is woken as soon as the issue exists. `backlog` parks it. An issue created without a status gets the company default — `backlog`, unless **Company Settings → Start new issues right away** is on.
 
-Every piece of work should trace back to the company goal through parent issues:
+A `todo` issue with no assignee is handed to the Chief of Staff for triage.
+
+## Hierarchy
+
+Link work to its reason through parents:
 
 ```
-Company Goal: Build the #1 AI note-taking app
-  └── Build authentication system (parent task)
-      └── Implement JWT token signing (current task)
+Goal: Ship a landing page with signup by Friday
+  └── Build the signup form (parent)
+      └── Validate the email field (this issue)
 ```
 
-This keeps agents aligned — they can always answer "why am I doing this?"
+An agent can always answer "why am I doing this?"
 
-## Assigning Work
+## Assign
 
-Assign an issue to an agent by setting the `assigneeAgentId`. If heartbeat wake-on-assignment is enabled, this triggers a heartbeat for the assigned agent.
+Set the assignee (`assigneeAgentId`). An agent with **Wake on demand** on is woken by the assignment.
 
-## Status Lifecycle
+## Status
+
+AgentDash does not enforce a fixed order of statuses; any status can move to any other. Two rules are enforced:
+
+- Moving to `in_progress` needs an assignee and no unresolved blockers.
+- Checkout (`POST /api/issues/{issueId}/checkout`) is atomic: only one run holds an issue at a time.
+
+The usual path, and the convention agents follow:
 
 ```
 backlog -> todo -> in_progress -> in_review -> done
@@ -41,15 +54,11 @@ backlog -> todo -> in_progress -> in_review -> done
                     blocked -> todo / in_progress
 ```
 
-- `in_progress` requires an atomic checkout (only one agent at a time)
-- `blocked` should include a comment explaining the blocker
-- `done` and `cancelled` are terminal states
+A `blocked` issue should carry a comment saying what blocks it.
 
-## Monitoring Progress
+## Follow progress
 
-Track task progress through:
-
-- **Comments** — agents post updates as they work
-- **Status changes** — visible in the activity log
-- **Dashboard** — shows task counts by status and highlights stale work
-- **Run history** — see each heartbeat execution on the agent detail page
+- **Comments** — agents post updates as they work.
+- **Activity** — every status change is in the [activity log](/guides/board-operator/activity-log).
+- **Home** — open and blocked counts. See [Dashboard](/guides/board-operator/dashboard).
+- **Runs** — each run is listed on the agent's page.

@@ -8,6 +8,8 @@ import docsRoutes from "@/generated/docs-routes.json";
 // imports it, so it is never in a shipped chunk.
 import { DOCS_PATH_DENYLIST, isDeniedDocPath } from "../../../scripts/docs/build-search-index.mjs";
 // The hashed list and its scan live with the scripts so the changelog generator uses the same copy.
+// One forbidden-token list too, shared with the changelog generator and the
+// policy job's scan (scripts/ci/check-docs-forbidden-tokens.mjs).
 import { FORBIDDEN_TOKENS, forbiddenTokenOffsets, sha256 } from "../../../scripts/docs/forbidden-tokens.mjs";
 import {
   INSTANCE_URL_TOKEN,
@@ -205,8 +207,13 @@ describe("docs: the bundled set", () => {
   });
 
   it("denies the paths the plan names, and every one of them still exists", () => {
-    for (const required of ["api/agentdash-mk", "deploy/ross-private-host", "superpowers/", "agents/", "design/", "specs/", "plans/"]) {
+    for (const required of ["superpowers/", "agents/", "design/", "specs/", "plans/"]) {
       expect(DOCS_PATH_DENYLIST).toContain(required);
+    }
+    // The two single private pages the plan names left docs/ altogether in PR 4
+    // (moved to doc/, which nothing bundles), so they need no denylist entry.
+    for (const gone of ["api/agentdash-mk", "deploy/ross-private-host"]) {
+      expect([`${gone}.md`, `${gone}.mdx`].some((file) => existsSync(path.join(DOCS_DIR, file))), gone).toBe(false);
     }
     for (const entry of DOCS_PATH_DENYLIST) {
       if (entry.endsWith("/")) {
@@ -224,7 +231,9 @@ describe("docs: the bundled set", () => {
     // Anything in ui/src outside a test can end up in a chunk anyone can read.
     // Directory entries (`plans/`) are too generic to scan for; file entries are not.
     const files = listSource(path.join(REPO_ROOT, "ui", "src"));
-    for (const entry of DOCS_PATH_DENYLIST.filter((candidate) => !candidate.endsWith("/"))) {
+    // Plus the two private pages PR 4 moved out of docs/: no runtime code names them at all.
+    const named = [...DOCS_PATH_DENYLIST.filter((candidate) => !candidate.endsWith("/")), "api/agentdash-mk", "deploy/ross-private-host"];
+    for (const entry of named) {
       for (const file of files) {
         const lines = readFileSync(file, "utf8").split("\n");
         lines.forEach((line, index) => {
@@ -249,7 +258,7 @@ describe("docs: the bundled set", () => {
   it("refuses to load anything outside the bundled set", async () => {
     const ref = listDocPages()[0]!;
     await expect(loadDocSource({ ...ref, slug: "api/agentdash-mk", file: "api/agentdash-mk.md" })).rejects.toThrow();
-    await expect(loadDocSource({ ...ref, slug: "guides/execution-policy", file: "guides/execution-policy.md" })).rejects.toThrow();
+    await expect(loadDocSource({ ...ref, slug: "specs/agent-config-ui", file: "specs/agent-config-ui.md" })).rejects.toThrow();
   });
 
   it("loads every page lazily, with a title and a body", async () => {
@@ -267,6 +276,24 @@ describe("docs: the bundled set", () => {
       const unknown = tokensIn(stripCode(source)).filter((token) => token !== INSTANCE_URL_TOKEN);
       expect(unknown, slug).toEqual([]);
     }
+  });
+
+  it("links only to pages that are bundled — every internal link resolves", () => {
+    // rewriteDocLinks leaves a link to an unknown page as written, where it
+    // lands on an app route, not a doc. So an unresolved link is a broken link.
+    const known = new Set(pages.map((page) => page.slug));
+    const broken: string[] = [];
+    for (const [slug, source] of sources) {
+      const body = stripCode(source);
+      const card = /<Card[^>]*\shref="([^"]+)"/g;
+      const targets = [...body.matchAll(/\]\(((?:\/|\.{1,2}\/)[^)\s#]*)(?:#[^)\s]*)?\)/g)].map((match) => match[1]!);
+      targets.push(...[...body.matchAll(card)].map((match) => match[1]!.split("#")[0]!));
+      for (const target of targets) {
+        const rewritten = rewriteDocLinks(`[x](${target})`, slug, known);
+        if (!rewritten.startsWith("[x](/docs/")) broken.push(`${slug} -> ${target}`);
+      }
+    }
+    expect(broken).toEqual([]);
   });
 
   it("never tells anyone to run a CLI that does not exist", () => {

@@ -1,55 +1,37 @@
 ---
-title: Deployment Overview
-summary: Deployment modes at a glance
+title: Deploy overview
+summary: AgentDash Cloud is the hosted option; this section covers running AgentDash yourself
 ---
 
-Paperclip supports three deployment configurations, from zero-friction local to internet-facing production.
+Most people should use **AgentDash Cloud**, the hosted product. You sign up, claim a workspace and start. See [Start on AgentDash Cloud](/start/quickstart).
 
-## Deployment Modes
+This section is for running AgentDash on your own machine or server (self-hosting).
 
-| Mode | Auth | Best For |
-|------|------|----------|
-| `local_trusted` | No login required | Single-operator local machine |
-| `authenticated` + `private` | Login required | Private network (Tailscale, VPN, LAN) |
-| `authenticated` + `public` | Login required | Internet-facing cloud deployment |
+## Self-host options
 
-## Quick Comparison
+| Option | Use it when | Page |
+|---|---|---|
+| Docker | You want one container (or a container plus PostgreSQL) on any Docker host | [Docker](/deploy/docker) |
+| Mac mini with launchd | You want an always-on Mac on a private network, run from a pinned source checkout | [macOS (launchd)](/deploy/macos) |
+| From a source clone | You are developing AgentDash itself | [Local development](/deploy/local-development) |
 
-### Local Trusted (Default)
+To reach a self-hosted instance from other devices without exposing it to the internet, see [Tailscale private access](/deploy/tailscale-private-access).
 
-- Loopback-only host binding (localhost)
-- No human login flow
-- Fastest local startup
-- Best for: solo development and experimentation
+## Pick a deployment mode
 
-### Authenticated + Private
+Every instance runs in one of three configurations. The mode decides whether people sign in; the bind setting decides which network interfaces the server listens on.
 
-- Login required via Better Auth
-- Binds to all interfaces for network access
-- Auto base URL mode (lower friction)
-- Best for: team access over Tailscale or local network
+| Mode | Sign-in | Use it for |
+|---|---|---|
+| `local_trusted` | None | One person on one machine (the default) |
+| `authenticated` + `private` | Required | A team on a private network (Tailscale, VPN, LAN) |
+| `authenticated` + `public` | Required | An internet-facing server behind a reverse proxy |
 
-### Authenticated + Public
+Details and the rules the server enforces at startup: [Deployment modes](/deploy/deployment-modes).
 
-- Login required
-- Explicit public URL required
-- Stricter security checks
-- Best for: cloud hosting, internet-facing deployment
+## Reference
 
-## Choosing a Mode
-
-- **Just trying Paperclip?** Use `local_trusted` (the default)
-- **Sharing with a team on private network?** Use `authenticated` + `private`
-- **Deploying to the cloud?** Use `authenticated` + `public` — see [AWS ECS Fargate guide](aws-ecs.md)
-
-Set the mode during onboarding:
-
-```sh
-pnpm paperclipai onboard
-```
-
-Or update it later:
-
-```sh
-pnpm paperclipai configure --section server
-```
+- [Database](/deploy/database): embedded PostgreSQL or your own
+- [Storage](/deploy/storage): local disk or S3-compatible object storage
+- [Secrets](/deploy/secrets): the local master key and strict mode
+- [Environment variables](/deploy/environment-variables): every server setting you can pass in the environment

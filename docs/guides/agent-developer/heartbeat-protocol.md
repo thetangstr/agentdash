@@ -1,128 +1,129 @@
 ---
 title: Heartbeat Protocol
-summary: Step-by-step heartbeat procedure for agents
+summary: What an agent does on each wake, step by step, with the API call and MCP tool for each step
 ---
 
-Every agent follows the same heartbeat procedure on each wake. This is the core contract between agents and Paperclip.
+Every agent follows the same procedure each time it wakes. Your mandate (`AGENTS.md` in your instruction bundle) outranks this page: where they disagree, follow the mandate. See [Mandates, directives and the agent bundle](/concepts/mandates-directives-and-the-agent-bundle) and [Heartbeats and runs](/concepts/heartbeats-and-runs).
 
-## The Steps
+Each step lists the HTTP call and, where one exists, the MCP tool from the [agent toolset](/mcp/tools/agent). The procedure follows the default agent skill, `skills/paperclip/SKILL.md`.
 
-### Step 1: Identity
+## The steps
 
-Get your agent record:
-
-```
-GET /api/agents/me
-```
-
-This returns your ID, company, role, chain of command, and budget.
-
-### Step 2: Approval Follow-up
-
-If `PAPERCLIP_APPROVAL_ID` is set, handle the approval first:
+### 1. Who am I
 
 ```
-GET /api/approvals/{approvalId}
-GET /api/approvals/{approvalId}/issues
+GET /api/agents/me          # MCP: whoami
 ```
 
-Close linked issues if the approval resolves them, or comment on why they remain open.
+Returns your agent record — ID, company, role, `chainOfCommand`, `budgetMonthlyCents`, `spentMonthlyCents` — plus your `steward` (if you have one) and `accountable`, the person your work reaches when it needs a human. See [Agents](/api/agents).
 
-### Step 3: Get Assignments
+### 2. Approval follow-up
+
+If `PAPERCLIP_APPROVAL_ID` is set, handle it first:
+
+```
+GET /api/approvals/{approvalId}           # MCP: get_approval
+GET /api/approvals/{approvalId}/issues    # MCP: get_approval_issues
+```
+
+Close linked issues the approval resolves, or comment on why they stay open. See [Handling approvals](/guides/agent-developer/handling-approvals).
+
+### 3. Get assignments
+
+```
+GET /api/agents/me/inbox-lite             # MCP: inbox_lite
+```
+
+The compact list you need to prioritize. When you need full issue objects:
 
 ```
 GET /api/companies/{companyId}/issues?assigneeAgentId={yourId}&status=todo,in_progress,in_review,blocked
 ```
 
-Results are sorted by priority. This is your inbox.
+`status` takes a comma-separated list. Results sort by priority (`critical`, `high`, `medium`, `low`) unless you search with `q`.
 
-### Step 4: Pick Work
+### 4. Pick work
 
-- Work on `in_progress` tasks first, then `in_review` when you were woken by a comment on it, then `todo`
-- Skip `blocked` unless you can unblock it
-- If `PAPERCLIP_TASK_ID` is set and assigned to you, prioritize it
-- If woken by a comment mention, read that comment thread first
+- `in_progress` first, then `in_review` if you were woken by a comment on it, then `todo`.
+- Skip `blocked` unless you can unblock it.
+- If `PAPERCLIP_TASK_ID` is set and assigned to you, start there.
+- If woken by a mention, read that comment thread first.
 
-### Step 5: Checkout
-
-Before doing any work, you must checkout the task:
+### 5. Check out
 
 ```
-POST /api/issues/{issueId}/checkout
-Headers: X-Paperclip-Run-Id: {runId}
+POST /api/issues/{issueId}/checkout       # MCP: checkout_issue
+X-Paperclip-Run-Id: {runId}
 { "agentId": "{yourId}", "expectedStatuses": ["todo", "backlog", "blocked", "in_review"] }
 ```
 
-If already checked out by you, this succeeds. If another agent owns it: `409 Conflict` — stop and pick a different task. **Never retry a 409.**
+If you already hold it, this succeeds. If another run holds it you get `409` — pick something else. **Never retry a 409.** See [Issues → Check out an issue](/api/issues).
 
-### Step 6: Understand Context
-
-```
-GET /api/issues/{issueId}
-GET /api/issues/{issueId}/comments
-```
-
-Read ancestors to understand why this task exists. If woken by a specific comment, find it and treat it as the immediate trigger.
-
-### Step 7: Do the Work
-
-Use your tools and capabilities to complete the task. If the issue is actionable, take a concrete action in the same heartbeat. Do not stop at a plan unless the issue asked for planning.
-
-Leave durable progress in comments, documents, or work products, and include the next action before exiting. For parallel or long delegated work, create child issues and let Paperclip wake the parent when they complete instead of polling agents, sessions, or processes.
-
-When the board/user must choose tasks, answer structured questions, or confirm a proposal before work can continue, create an issue-thread interaction with `POST /api/issues/{issueId}/interactions`. Use `request_confirmation` for explicit yes/no decisions instead of asking for them in markdown. For plan approval, update the `plan` document first, create a confirmation bound to the latest revision, and wait for acceptance before creating implementation subtasks.
-
-### Step 8: Update Status
-
-Always include the run ID header on state changes:
+### 6. Read the context
 
 ```
-PATCH /api/issues/{issueId}
-Headers: X-Paperclip-Run-Id: {runId}
+GET /api/issues/{issueId}                       # MCP: get_issue
+GET /api/issues/{issueId}/comments              # MCP: list_comments
+GET /api/issues/{issueId}/heartbeat-context     # MCP: get_heartbeat_context
+```
+
+Read the parent issues to understand why the task exists. If a specific comment woke you, treat it as the trigger.
+
+### 7. Do the work
+
+If the issue is actionable, act in this run. Do not stop at a plan unless the issue asked for one.
+
+Leave durable progress — comments, documents, work products — and state the next action before you exit. For long or parallel work, create child issues; AgentDash wakes the parent with `issue_children_completed` when they finish, so you do not poll.
+
+When a person must pick tasks, answer questions or confirm a proposal, create an issue-thread interaction (`POST /api/issues/{issueId}/interactions`). See [Task workflow](/guides/agent-developer/task-workflow#confirmation-pattern).
+
+### 8. Update status
+
+Send the run ID on every change:
+
+```
+PATCH /api/issues/{issueId}               # MCP: update_issue
+X-Paperclip-Run-Id: {runId}
 { "status": "done", "comment": "What was done and why." }
 ```
 
-If blocked:
-
 ```
 PATCH /api/issues/{issueId}
-Headers: X-Paperclip-Run-Id: {runId}
-{ "status": "blocked", "comment": "What is blocked, why, and who needs to unblock it." }
+X-Paperclip-Run-Id: {runId}
+{ "status": "blocked", "comment": "What is blocked, why, and who can unblock it." }
 ```
 
-### Step 9: Delegate if Needed
+If the issue has a reviewer or approver, `done` moves it to `in_review` instead. See [Review and approval stages](/guides/execution-policy).
 
-Create subtasks for your reports:
+### 9. Delegate
 
 ```
-POST /api/companies/{companyId}/issues
+POST /api/companies/{companyId}/issues    # MCP: create_issue
 { "title": "...", "assigneeAgentId": "...", "parentId": "...", "goalId": "..." }
 ```
 
-Always set `parentId` and `goalId` on subtasks.
+Set `parentId` on subtasks, and `goalId` when there is one.
 
-## Critical Rules
+## Rules
 
-- **Always checkout** before working — never PATCH to `in_progress` manually
-- **Never retry a 409** — the task belongs to someone else
-- **Always comment** on in-progress work before exiting a heartbeat
-- **Start actionable work** in the same heartbeat; planning-only exits are for planning tasks
-- **Leave a clear next action** in durable issue context
-- **Use child issues instead of polling** for long or parallel delegated work
-- **Use `request_confirmation`** for issue-scoped yes/no decisions and plan approval cards
-- **Always set parentId** on subtasks
-- **Never cancel cross-team tasks** — reassign to your manager
-- **Escalate when stuck** — use your chain of command
+- **Check out before working.** Do not PATCH to `in_progress` yourself.
+- **Never retry a 409.** The task belongs to another run.
+- **Comment before you exit.** A run tied to an issue that leaves no comment is woken once more with reason `missing_issue_comment`.
+- **Act in the same run** when the work is actionable; plan-only exits are for planning tasks.
+- **Leave a clear next action** on the issue.
+- **Use child issues, not polling**, for long or parallel work.
+- **Use `request_confirmation`** for yes/no decisions and plan sign-off.
+- **Do not cancel tasks from outside your reporting line** — hand them back to your manager. This is a convention from the default skill, not a server check.
+- **Escalate when stuck**, up your chain of command or to the person accountable for you.
 
-## Run Liveness
+## Run liveness
 
-Paperclip records run liveness as metadata on heartbeat runs. It is not an issue status and does not replace the issue status state machine.
+Each run gets a liveness state, separate from issue status. Issue status stays authoritative for the workflow.
 
-- Issue status remains authoritative for workflow: `todo`, `in_progress`, `blocked`, `in_review`, `done`, and related states.
-- Run liveness describes the latest run outcome: for example `completed`, `advanced`, `plan_only`, `empty_response`, `blocked`, `failed`, or `needs_followup`.
-- Only `plan_only` and `empty_response` can enqueue bounded liveness continuation wakes.
-- Continuations re-wake the same assigned agent on the same issue when the issue is still active and budget/execution policy allow it.
-- `continuationAttempt` counts semantic liveness continuations for a source run chain. It is separate from process recovery, queued wake delivery, adapter session resume, and other operational retries.
-- Liveness continuation wake prompts include the attempt, source run, liveness state, liveness reason, and the instruction for the next heartbeat.
-- Continuations do not mark the issue `blocked` or `done`. If automatic continuations are exhausted, Paperclip leaves an audit comment so a human or manager can clarify, block, or assign follow-up work.
-- Workspace provisioning alone is not treated as concrete task progress. Durable progress should appear as tool/action events, issue comments, document or work-product revisions, activity log entries, commits, or tests.
+- States: `completed`, `advanced`, `plan_only`, `empty_response`, `blocked`, `failed`, `needs_followup`.
+- Only `plan_only` and `empty_response` queue a continuation wake: the same agent, the same issue, while the issue is still active and budget allows. Default limit: 2 attempts.
+- `continuationAttempt` on the run counts these. It is separate from process recovery and other retries.
+- Continuations never mark an issue `blocked` or `done`. When they run out, AgentDash leaves an audit comment so a person or manager can step in.
+- Setting up a workspace is not counted as progress. Progress is tool actions, comments, document or work-product revisions, activity, commits, or tests.
+
+Source: `packages/shared/src/constants.ts`, `server/src/services/run-liveness.ts`, `server/src/services/recovery/run-liveness-continuations.ts`.

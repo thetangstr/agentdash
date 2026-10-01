@@ -31,8 +31,6 @@ import { fileURLToPath } from "node:url";
  * (ui/src/lib/docs.test.ts checks that). Do not import this from UI code.
  */
 export const DOCS_PATH_DENYLIST = [
-  "api/agentdash-mk",
-  "deploy/ross-private-host",
   "superpowers/",
   "agents/",
   "design/",

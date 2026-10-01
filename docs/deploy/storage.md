@@ -1,39 +1,42 @@
 ---
 title: Storage
-summary: Local disk vs S3-compatible storage
+summary: Where uploaded files go, local disk or S3-compatible object storage
 ---
 
-Paperclip stores uploaded files (issue attachments, images) using a configurable storage provider.
+AgentDash stores uploaded files (issue attachments, images, documents) through a storage provider. There are two: `local_disk` and `s3`. Source: `server/src/storage/`, `STORAGE_PROVIDERS` in `packages/shared/src/constants.ts`.
 
-## Local Disk (Default)
+## Local disk (default)
 
-Files are stored at:
+Files go to `~/.paperclip/instances/default/data/storage`, or `PAPERCLIP_STORAGE_LOCAL_DIR` if set. No other setup.
 
-```
-~/.paperclip/instances/default/data/storage
-```
+Use it for a single machine. Back the directory up with the database: a database backup does not contain the files.
 
-No configuration required. Suitable for local development and single-machine deployments.
+## S3-compatible
 
-## S3-Compatible Storage
+Use `s3` for AWS S3 or a compatible service (MinIO, Cloudflare R2 and others), or when more than one machine needs the same files.
 
-For production or multi-node deployments, use S3-compatible object storage (AWS S3, MinIO, Cloudflare R2, etc.).
+| Variable | Default | Meaning |
+|---|---|---|
+| `PAPERCLIP_STORAGE_PROVIDER` | `local_disk` | Set to `s3` |
+| `PAPERCLIP_STORAGE_S3_BUCKET` | `paperclip` | Bucket name |
+| `PAPERCLIP_STORAGE_S3_REGION` | `us-east-1` | Region |
+| `PAPERCLIP_STORAGE_S3_ENDPOINT` | (unset) | Endpoint URL, for non-AWS services |
+| `PAPERCLIP_STORAGE_S3_PREFIX` | (empty) | Key prefix inside the bucket |
+| `PAPERCLIP_STORAGE_S3_FORCE_PATH_STYLE` | `false` | Path-style URLs, which MinIO and some others need |
 
-Configure via CLI:
+The S3 client is created without explicit credentials (`server/src/storage/s3-provider.ts`), so it uses the AWS SDK's default credential chain: for example `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment, or an attached IAM role.
+
+The same settings can live in the instance config's `storage` section. Environment variables win. From a clone you can edit it with:
 
 ```sh
 pnpm paperclipai configure --section storage
 ```
 
-## Configuration
+## Upload limits
 
-| Provider | Best For |
-|----------|----------|
-| `local_disk` | Local development, single-machine deployments |
-| `s3` | Production, multi-node, cloud deployments |
+| Variable | Default | Meaning |
+|---|---|---|
+| `PAPERCLIP_ATTACHMENT_MAX_BYTES` | 10 MiB | Ceiling for any upload. A company's own attachment limit is capped at this value |
+| `PAPERCLIP_ALLOWED_ATTACHMENT_TYPES` | a built-in list of image, PDF, Markdown, text, JSON, CSV and HTML types | Replaces the list. Comma-separated MIME types or wildcards, such as `image/*,application/pdf` |
 
-Storage configuration is stored in the instance config file:
-
-```
-~/.paperclip/instances/default/config.json
-```
+Source: `server/src/attachment-types.ts`.

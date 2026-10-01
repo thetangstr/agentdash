@@ -1,7 +1,8 @@
 // The hashed forbidden-token list for the public docs, and the scan that uses it.
-// One copy: ui/src/lib/docs.test.ts scans every bundled page with it, and
-// scripts/docs/generate-api-changelog.mjs withholds any release-note line it
-// hits. Node builtins only (the changelog generator runs in the PR workflow's
+// One copy: ui/src/lib/docs.test.ts scans every bundled page with it,
+// scripts/ci/check-docs-forbidden-tokens.mjs scans every page the nav lists
+// with it in the policy job, and scripts/docs/generate-api-changelog.mjs
+// withholds any release-note line it hits. Node builtins only (the changelog generator runs in the PR workflow's
 // policy job, which has no install).
 
 import { createHash } from "node:crypto";

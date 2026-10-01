@@ -1,205 +1,131 @@
 ---
-title: macOS Native Deployment
-summary: Run AgentDash as a native macOS launchd service on a Mac mini
+title: macOS (launchd)
+summary: Run AgentDash on an always-on Mac as a launchd service, from a source checkout pinned to a git SHA
 ---
 
-This guide covers the MSP/local-server path: one Mac mini, private access over Tailscale or LAN, a real signed-in operator, and a launchd service that restarts AgentDash after crashes or reboots.
+This runs AgentDash on one Mac (a Mac mini, for example) as a per-user launchd service. launchd starts it at login and restarts it if it exits. It runs from a clone of https://github.com/thetangstr/agentdash that is pinned to one reviewed git commit, in `authenticated` + `private` mode for access over Tailscale or a LAN.
 
-For this deployment, use `authenticated/private`, not `local_trusted`, unless the app is only ever opened on the Mac mini itself.
+The installer is `scripts/deploy/agentdash-mac-mini-source-launchd.mjs`. It writes the files below and starts nothing itself. Everything on this page comes from that script.
 
-## Prerequisites
+## Before you start
 
-- macOS with Node.js 20+ and pnpm 9+
-- Git
-- Either Docker for the managed PostgreSQL option, or an already-running PostgreSQL 14+ server
-- Optional but recommended: Tailscale
-- Hermes CLI installed and configured with `hermes setup`. For this MSP pilot path, Hermes is the local agent execution harness under AgentDash.
+- macOS, with the Mac set to log in to the account that will run AgentDash. The service is a LaunchAgent, so it runs only while that user is logged in.
+- Node.js 20 or later, pnpm 9, `git`, `curl` and `lsof`. The generated scripts use the PATH `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`; pass `--tool-path` if your tools are elsewhere.
+- The agent CLIs your agents will use (for example `hermes`, `claude` or `codex`), installed and signed in as the same user.
+- Optional: Tailscale. See [Tailscale private access](/deploy/tailscale-private-access).
 
-## Managed Install
-
-From the checkout you want to run in production:
+## 1. Check out the commit you will run
 
 ```sh
 git clone https://github.com/thetangstr/agentdash.git ~/agentdash
 cd ~/agentdash
-
-# Recommended: start and use a local PostgreSQL 17 Docker container.
-./docker/launchd/install.sh --with-postgres
-
-# Or, if PostgreSQL is already running at DATABASE_URL in the env file:
-./docker/launchd/install.sh
+git checkout --detach <commit-sha>
+pnpm install --frozen-lockfile
+pnpm build
 ```
 
-The installer:
+The service refuses to start if the checkout's `HEAD` is not the pinned commit.
 
-- runs `pnpm install --frozen-lockfile`
-- runs `pnpm build`
-- creates `~/.config/agentdash/agentdash.env` on first install
-- installs `~/Library/LaunchAgents/ai.agentdash.agent.plist`
-- runs the service from the checkout with `pnpm --filter @paperclipai/server exec tsx src/index.ts`
+## 2. Preview the install
 
-If Hermes is on PATH during install, the env file records its absolute path in `AGENTDASH_HERMES_COMMAND`. If not, install Hermes later, run `hermes setup`, and set that variable manually before the design partner uses the instance.
-
-## Required Env Review
-
-Open the env file after install:
+Without `--write`, the installer prints the plan and changes nothing:
 
 ```sh
-nano ~/.config/agentdash/agentdash.env
+node scripts/deploy/agentdash-mac-mini-source-launchd.mjs \
+  --repo-dir ~/agentdash \
+  --target-sha "$(git rev-parse HEAD)" \
+  --public-url http://<tailscale-or-lan-host>:3100
 ```
 
-Minimum production-pilot settings:
+`--public-url` is the address people will open in a browser. Other options: `--paperclip-port` (default `3100`), `--label` (default `ai.agentdash.agent`), `--runtime-env-file`, `--agentdash-home`, `--paperclip-home`, `--launch-agent-dir`, `--tool-path`, `--better-auth-secret`, `--agent-jwt-secret`. Run with `--help` for the full list.
+
+## 3. Write the files
+
+Run the same command with `--write`. It creates:
+
+| Path | What it is |
+|---|---|
+| `~/.config/agentdash/agentdash.env` | Runtime environment, mode `600` |
+| `~/Library/LaunchAgents/ai.agentdash.agent.plist` | The launchd job (`RunAtLoad`, `KeepAlive`) |
+| `~/.agentdash/bin/agentdash-source-supervisor.sh` | What launchd runs: loads the env file, checks the SHA, starts the server |
+| `~/.agentdash/bin/agentdash-backup-db.sh` | Database backup, with a read-only `--check` |
+| `~/.agentdash/bin/agentdash-readiness.sh` | Post-start checks |
+| `~/.agentdash/bin/agentdash-source-update.sh` | Update to a new commit |
+| `~/.agentdash/bin/agentdash-source-rollback.sh` | Go back to the previous commit |
+| `~/.agentdash/RUNBOOK.md` | The same commands, with this machine's paths |
+| `~/.agentdash/logs/`, `backups/`, `deployments/` | Logs, backups, deploy state and receipts |
+
+The env file gets these values:
 
 ```sh
-PAPERCLIP_DEPLOYMENT_MODE=authenticated
 NODE_ENV=production
+PORT=3100
+SERVE_UI=true
+PAPERCLIP_DEPLOYMENT_MODE=authenticated
 PAPERCLIP_DEPLOYMENT_EXPOSURE=private
-PAPERCLIP_BIND=lan                  # private LAN/tailnet only; do not port-forward publicly
-PAPERCLIP_ALLOWED_HOSTNAMES=<tailscale-ip>,<lan-ip>
-PAPERCLIP_PUBLIC_URL=http://<tailscale-ip>:3100
+PAPERCLIP_PUBLIC_URL=<your --public-url>
 PAPERCLIP_API_URL=http://127.0.0.1:3100
-PAPERCLIP_AUTH_BASE_URL_MODE=explicit
-PAPERCLIP_AUTH_PUBLIC_BASE_URL=http://<tailscale-ip>:3100
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
-BETTER_AUTH_SECRET=<generated-secret>
-PAPERCLIP_AGENT_JWT_SECRET=<generated-secret>
-AGENTDASH_DEFAULT_ADAPTER=hermes_local
-AGENTDASH_HERMES_COMMAND=/absolute/path/to/hermes
+AGENTDASH_REQUIRE_AGENT_HARNESS_PREFLIGHT=true
+AGENTDASH_SOURCE_SHA=<commit-sha>
+PAPERCLIP_HOME=~/.paperclip   # expanded to an absolute path
+BETTER_AUTH_SECRET=<generated>
+PAPERCLIP_AGENT_JWT_SECRET=<generated>
 ```
 
-`hermes_local` is the default local harness for this pilot: AgentDash remains the product/control plane, while Hermes executes local agent work and can power CoS chat when selected.
+`PAPERCLIP_API_URL` stays on loopback, so agents on this Mac call the API directly rather than through the public address.
 
-Optional launch integrations:
+Re-running with `--write` sets every key above again from the command line, except the two secrets, which are kept if already present. Other lines you added are left alone. So put your own settings (for example `PAPERCLIP_ALLOWED_HOSTNAMES`, `AGENTDASH_DEFAULT_ADAPTER`, `RESEND_API_KEY`) on their own lines, and pass the same options each time. See [Environment variables](/deploy/environment-variables).
 
-```sh
-ANTHROPIC_API_KEY=sk-ant-...
-RESEND_API_KEY=re_...
-AGENTDASH_EMAIL_FROM='AgentDash <noreply@example.com>'
-```
-
-`PAPERCLIP_PUBLIC_URL` is the partner-visible private URL. `PAPERCLIP_API_URL` is the local write-back URL used by Hermes and other local harnesses; keep it loopback so agent API calls do not depend on partner-device routing. If you use Tailscale Serve instead, bind AgentDash to loopback and point Tailscale Serve at `http://127.0.0.1:3100`.
-
-For the embedded Postgres install path, leave `DATABASE_URL` unset and set `PAPERCLIP_EMBEDDED_POSTGRES_PORT=54329` only if you need an explicit port. Do not keep a stale Homebrew `DATABASE_URL` in the launch env while also running embedded Postgres; that creates split-brain instances and can make launchd move to `3101` while a stale process masks `3100`.
-
-For the private MSP Mac mini paid trial, do not rely on Stripe webhooks reaching this host. Collect payment through AgentDash-owned Stripe/customer-portal/payment-link flow, then record the launch company locally as `pro_trial` or `pro_active`. The readiness collector verifies that local entitlement for the expected company.
-
-Restart after changing the env file:
+## 4. Start it
 
 ```sh
-launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
-```
-
-## Service Commands
-
-```sh
-# Logs
-tail -f ~/.agentdash/logs/agentdash.log
-tail -f ~/.agentdash/logs/agentdash.err
-
-# Health
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.agentdash.agent.plist
 curl -fsS http://127.0.0.1:3100/api/health
-
-# Stop
-launchctl unload ~/Library/LaunchAgents/ai.agentdash.agent.plist
-
-# Start
-launchctl load ~/Library/LaunchAgents/ai.agentdash.agent.plist
-
-# Restart
-launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
-
-# Uninstall service only; data is preserved.
-./docker/launchd/install.sh --uninstall
+~/.agentdash/bin/agentdash-readiness.sh
 ```
 
-## Readiness Evidence
+The readiness script checks that health responds at the public URL, launchd has the service loaded with a live process, the checkout is at the pinned SHA, the env file is mode `600` and in `authenticated` + `private` mode with both secrets set, and the process listening on the port belongs to the service.
 
-After install, collect one readiness artifact before inviting the design partner:
+Then make the first admin: see [First admin](/deploy/deployment-modes).
+
+## Service commands
 
 ```sh
-cd ~/agentdash
-scripts/msp-mac-mini-readiness.sh \
-  --run-backup \
-  --run-instance-backup \
-  --base-url http://<tailscale-or-lan-host>:3100 \
-  --expected-company "AgentDash MSP Demo" \
-  | tee ~/agentdash-readiness-$(date +%Y%m%d-%H%M%S).txt
+launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent              # restart
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/ai.agentdash.agent.plist   # stop and unload
+tail -f ~/.agentdash/logs/launchd.err.log                           # logs (also launchd.out.log)
 ```
 
-The collector is read-only by default. It checks the launchd service, local health, core authenticated/private env values, Hermes command wiring, local agent API write-back, Tailscale/private URL posture, recent logs, backup posture, and billing/email posture. It exits nonzero when a P0 host/configuration gate fails.
+Restart after any change to the env file.
 
-For the P1 backup rehearsal, run it with the explicit backup flag:
+## Update and roll back
 
 ```sh
-scripts/msp-mac-mini-readiness.sh --run-backup | tee ~/agentdash-readiness-backup-$(date +%Y%m%d-%H%M%S).txt
+~/.agentdash/bin/agentdash-source-update.sh <new-commit-sha>
+~/.agentdash/bin/agentdash-source-rollback.sh
 ```
 
-If the partner-visible URL differs from `PAPERCLIP_PUBLIC_URL`, test that URL explicitly:
+The update script backs up the database first and stops if the backup fails, before it changes anything. Then it fetches, checks out the new commit, runs `pnpm install --frozen-lockfile` and `pnpm run build`, restarts the service, runs the readiness checks and writes a receipt to `~/.agentdash/deployments/receipts`. Rollback returns to the previous commit recorded there. It does not restore the database; do that only on purpose.
 
-```sh
-scripts/msp-mac-mini-readiness.sh --base-url http://<tailscale-or-lan-host>:3100
-```
-
-This script does not replace the two product proofs: a real Hermes-backed CoS reply and one completed `hermes_local` agent run with a visible transcript.
-
-## Launch Smoke
-
-Run this before putting MSP users on the instance:
-
-1. `curl -fsS http://127.0.0.1:3100/api/health` returns healthy JSON.
-2. Open `PAPERCLIP_PUBLIC_URL` from another machine on the tailnet or LAN.
-3. Sign up with the founding operator account.
-4. Complete `/company-create -> /assess?onboarding=1 -> /cos`.
-5. Send one CoS message and confirm the reply is real, not the Anthropic stub string.
-6. Create one test company/agent/task using `hermes_local`.
-7. Confirm one agent wakeup/run exits successfully and appears in the dashboard transcript.
-8. Confirm the paid trial is captured in AgentDash-owned Stripe evidence and the local launch company shows `pro_trial` or `pro_active` in `/billing`.
-
-For the first MSP design partner, use the operating plan in [doc/plans/2026-05-27-msp-design-partner-operating-plan.md](../../doc/plans/2026-05-27-msp-design-partner-operating-plan.md) to keep week-one usage focused on human-reviewed Ticket Concierge, Daily MSP Ops Briefing, and Client Value Report workflows.
-
-## Update
-
-```sh
-cd ~/agentdash
-scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://<tailscale-or-lan-host>:3100 --expected-company "AgentDash MSP Demo"
-git fetch origin
-git checkout <approved-release-branch-or-sha>
-git pull --ff-only
-pnpm install --frozen-lockfile
-pnpm build
-launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
-curl -fsS http://127.0.0.1:3100/api/health
-scripts/msp-mac-mini-readiness.sh --base-url http://<tailscale-or-lan-host>:3100 --expected-company "AgentDash MSP Demo"
-```
-
-Record the deployed SHA:
-
-```sh
-git rev-parse HEAD
-```
-
-## Rollback
-
-```sh
-cd ~/agentdash
-git checkout <previous-good-sha>
-pnpm install --frozen-lockfile
-pnpm build
-launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
-curl -fsS http://127.0.0.1:3100/api/health
-```
-
-Do not roll back across migrations after customer data has changed unless you have a tested database restore point.
+The update runs `git fetch --all --tags --prune`, so it fails if another remote in the clone has a tag that conflicts with `origin`. Keep the clone's remotes to `origin`.
 
 ## Backups
 
-Back up all of these for full local-instance disaster recovery:
+```sh
+~/.agentdash/bin/agentdash-backup-db.sh --check   # read-only: can a backup be taken?
+~/.agentdash/bin/agentdash-backup-db.sh           # take and verify one
+```
+
+It uses `pg_dump` when a compatible one is on the PATH, and otherwise the repository's own backup code (`packages/db/src/backup-lib.ts`), which verifies the archive by restoring it into a scratch database and comparing row counts. The embedded PostgreSQL has no `pg_dump`, so this fallback is the normal path there. The server's own scheduled backups also run (see [Database](/deploy/database)).
+
+For a full restore you need more than the database. Keep copies of:
 
 - `~/.config/agentdash/agentdash.env`
-- `~/.agentdash/instances/default/data/backups`
-- `~/.agentdash/instances/default/data/storage`
-- `~/.agentdash/instances/default/secrets/master.key`
-- `~/.agentdash/data/postgres` when using the Docker PostgreSQL option
-- the deployed checkout SHA from `~/agentdash`
+- `PAPERCLIP_HOME` (`~/.paperclip`): the embedded database, uploaded files, and `secrets/master.key`
+- `~/.agentdash/backups`
+- the commit SHA you were running
 
-Database logical backups alone are not enough: uploads, workspaces, and the local encrypted secrets key live outside the database.
+## Alternative: the Docker image under launchd
+
+If the Mac has Docker, `scripts/deploy/agentdash-mac-mini-launchd.mjs` sets up the same kind of launchd service around `docker/docker-compose.production.yml` and a pinned `sha-<commit>` image instead of a source checkout. It takes `--target-image` and `--public-url`, defaults to `/opt/agentdash`, and adds `--load` to start the service after `--write`. Run it with `--help`. See [Docker](/deploy/docker) for the image.
