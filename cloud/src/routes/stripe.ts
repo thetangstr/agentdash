@@ -6,11 +6,11 @@
 //   stripeInternalRoutes   /internal/stripe/* for the admin CLI (behind the
 //                          operator guard like every /internal route).
 import express, { Router, type Request, type RequestHandler, type Response, type Router as ExpressRouter } from "express";
-import { and, count, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { and, count, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type { CloudDb } from "../db/client.js";
 import { boxes, STRIPE_EVENT_STATES, stripeEvents, type StripeEventState } from "../db/schema.js";
 import type { Logger } from "../logger.js";
-import { BILLING_SYNC_STATES, BoxKeyRotationError, currentFleetBilling, syncFleetBilling, type SyncDeps } from "../stripe/box-billing.js";
+import { BILLING_SYNC_STATES, BoxKeyRotationError, currentFleetBilling, promoteDeployedBillingRevs, syncFleetBilling, type SyncDeps } from "../stripe/box-billing.js";
 import type { BillingConfig } from "../stripe/config.js";
 import { ensureStripeEndpoint, type StripeEndpointsClient } from "../stripe/endpoint.js";
 import { BOX_STRIPE_KEY, STRIPE_ENDPOINT_SECRET, type FleetSecretStore } from "../stripe/fleet-secrets.js";
@@ -56,6 +56,16 @@ export function stripeInternalRoutes(deps: StripeInternalDeps): ExpressRouter {
 
   router.get("/stripe/status", async (_req, res) => {
     const { billing: fleet, missing } = await currentFleetBilling(deps.store, billing);
+    // A box counts as on a config only once a deployment after it was sent has succeeded.
+    await promoteDeployedBillingRevs(deps.syncDeps());
+    const pendingDeploy = fleet
+      ? (
+          await db
+            .select({ n: count() })
+            .from(boxes)
+            .where(and(inArray(boxes.state, [...BILLING_SYNC_STATES]), eq(boxes.stripeConfigPendingRev, fleet.rev)))
+        )[0]!.n
+      : null;
     const live = await db
       .select({ rev: boxes.stripeConfigRev, n: count() })
       .from(boxes)
@@ -86,7 +96,9 @@ export function stripeInternalRoutes(deps: StripeInternalDeps): ExpressRouter {
       targetRev: fleet?.rev ?? null,
       incomplete: missing,
       boxesByRev: Object.fromEntries(live.map((r) => [r.rev ?? "none", r.n])),
+      // Behind = not yet RUNNING the target config (includes boxesPendingDeploy). The old key must outlive this reaching 0.
       boxesBehind: behind,
+      boxesPendingDeploy: pendingDeploy,
       resend: { boxKeys: billing.resendAdminKey !== null, domainId: billing.resendBoxDomainId, from: billing.boxEmailFrom },
       events: Object.fromEntries(events.map((r) => [r.state, r.n])),
     });

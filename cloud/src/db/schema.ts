@@ -235,7 +235,18 @@ export const boxes = pgTable(
     stripeWebhookSecretEnc: text("stripe_webhook_secret_enc"),
     /** Which fleet billing config (shared key version, price, trial days) the box last received. */
     stripeConfigRev: text("stripe_config_rev"),
-    /** Learned from forwarded events that carry box_slug; routes later events that do not. */
+    /**
+     * A billing config sent to Railway but not yet running: it becomes
+     * stripe_config_rev only once a deployment that started after
+     * stripe_config_pending_since has succeeded (SC-8 review).
+     */
+    stripeConfigPendingRev: text("stripe_config_pending_rev"),
+    stripeConfigPendingSince: timestamp("stripe_config_pending_since", { withTimezone: true }),
+    /**
+     * The box's Stripe customer, bound once from the first slug-routed event
+     * and never rebound silently (unique): an event whose box_slug disagrees
+     * with an existing binding is held for an operator (SC-8 review).
+     */
     stripeCustomerId: text("stripe_customer_id"),
     /** Stripe `created` of the subscription event plan_tier was last taken from (out-of-order guard). */
     planTierEventAt: timestamp("plan_tier_event_at", { withTimezone: true }),
@@ -248,7 +259,8 @@ export const boxes = pgTable(
     uniqueIndex("boxes_slug_uq").on(t.slug),
     index("boxes_account_idx").on(t.accountId),
     index("boxes_state_idx").on(t.state),
-    index("boxes_stripe_customer_idx").on(t.stripeCustomerId),
+    // AgentDash (SC-8 review): a Stripe customer belongs to at most one box.
+    uniqueIndex("boxes_stripe_customer_uq").on(t.stripeCustomerId),
     check("boxes_kind_ck", inList("kind", BOX_KINDS)),
     check("boxes_state_ck", inList("state", BOX_STATES)),
     check("boxes_purpose_ck", inList("purpose", BOX_PURPOSES)),

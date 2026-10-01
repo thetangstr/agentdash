@@ -31,6 +31,8 @@ CREATE TABLE "stripe_events" (
 ALTER TABLE "operator_audit" DROP CONSTRAINT "operator_audit_kind_ck";--> statement-breakpoint
 ALTER TABLE "boxes" ADD COLUMN "stripe_webhook_secret_enc" text;--> statement-breakpoint
 ALTER TABLE "boxes" ADD COLUMN "stripe_config_rev" text;--> statement-breakpoint
+ALTER TABLE "boxes" ADD COLUMN "stripe_config_pending_rev" text;--> statement-breakpoint
+ALTER TABLE "boxes" ADD COLUMN "stripe_config_pending_since" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "boxes" ADD COLUMN "stripe_customer_id" text;--> statement-breakpoint
 ALTER TABLE "boxes" ADD COLUMN "plan_tier_event_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "boxes" ADD COLUMN "resend_key_id" text;--> statement-breakpoint
@@ -38,5 +40,5 @@ ALTER TABLE "stripe_events" ADD CONSTRAINT "stripe_events_box_id_boxes_id_fk" FO
 CREATE UNIQUE INDEX "stripe_events_event_id_uq" ON "stripe_events" USING btree ("event_id");--> statement-breakpoint
 CREATE INDEX "stripe_events_due_idx" ON "stripe_events" USING btree ("state","next_attempt_at");--> statement-breakpoint
 CREATE INDEX "stripe_events_box_idx" ON "stripe_events" USING btree ("box_id","created_at");--> statement-breakpoint
-CREATE INDEX "boxes_stripe_customer_idx" ON "boxes" USING btree ("stripe_customer_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "boxes_stripe_customer_uq" ON "boxes" USING btree ("stripe_customer_id");--> statement-breakpoint
 ALTER TABLE "operator_audit" ADD CONSTRAINT "operator_audit_kind_ck" CHECK (kind in ('setting_changed', 'admin_refused', 'invite_codes_changed', 'fleet_secret_changed'));

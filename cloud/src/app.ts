@@ -101,7 +101,7 @@ export function createApp(opts: {
     forwarder,
     billing,
     store: fleetStore,
-    syncDeps: () => ({ db, keys: config.dataKeys, billing, store: fleetStore, client: stripeRailway, log }),
+    syncDeps: () => ({ db, keys: config.dataKeys, billing, store: fleetStore, client: stripeRailway, workspaceId: config.railwayWorkspaceId, log }),
     endpoints:
       opts.stripe?.endpoints !== undefined ? opts.stripe.endpoints : billing.stripeControlKey ? stripeEndpointsClient({ apiKey: billing.stripeControlKey }) : null,
     webhookUrl: `${config.frontDoor.siteUrl}${STRIPE_WEBHOOK_PATH}`,

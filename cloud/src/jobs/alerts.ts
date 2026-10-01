@@ -7,6 +7,7 @@ import { redact, redactString } from "../logger.js";
 import type { Secret } from "../secret.js";
 
 export interface Alert {
+<<<<<<< HEAD
   kind:
     | "job_failed"
     | "job_dead"
@@ -20,7 +21,8 @@ export interface Alert {
     | "alert_test"
     // AgentDash (SC-8, GH #769): stripe_* for the account webhook's forwarding.
     | "stripe_unknown_box"
-    | "stripe_delivery_dead";
+    | "stripe_delivery_dead"
+    | "stripe_routing_conflict";
   subject: string;
   /** SC-10: a short human-readable explanation (no secret; redacted anyway). */
   detail?: string | null;

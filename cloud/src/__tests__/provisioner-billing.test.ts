@@ -115,7 +115,8 @@ describe("provisioning with Stripe and Resend (SC-8)", () => {
     expect(v.STRIPE_WEBHOOK_SECRET).toMatch(/^whsec_/);
     expect(v.RESEND_API_KEY).toMatch(/^re_box_/);
     expect(decryptField(KEYS, box.stripeWebhookSecretEnc!, WEBHOOK_SECRET_AAD)).toBe(v.STRIPE_WEBHOOK_SECRET);
-    expect(box.stripeConfigRev).toBe("k1.price_TestPro29.14");
+    expect(box.stripeConfigPendingRev).toBe("k1.price_TestPro29.14");
+    expect(box.stripeConfigRev).toBeNull();
     expect(resendKeys).toEqual([expect.objectContaining({ id: box.resendKeyId, name: `agentdash-box-${slug}`, domainId: "dom-mail-agentdash-cloud" })]);
 
     // A re-run of the step (a resumed job) keeps the box's webhook secret and its Resend key.

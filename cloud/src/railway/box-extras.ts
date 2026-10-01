@@ -40,6 +40,7 @@ export function billingAndMailExtras(deps: {
   return {
     async prepare({ db, box, names, log, signal }) {
       const vars: Record<string, string> = {};
+      const sentAt = new Date();
       const skipped: string[] = [];
       const { billing: fleet, missing } = await currentFleetBilling(deps.store, deps.billing);
       if (fleet) {
@@ -61,7 +62,10 @@ export function billingAndMailExtras(deps: {
       return {
         vars,
         async commit() {
-          if (fleet) await db.update(boxes).set({ stripeConfigRev: fleet.rev, updatedAt: new Date() }).where(eq(boxes.id, box.id));
+          // Pending until the box's next successful deploy (the provision's own deploy step), see promoteDeployedBillingRevs.
+          if (fleet) {
+            await db.update(boxes).set({ stripeConfigPendingRev: fleet.rev, stripeConfigPendingSince: sentAt, updatedAt: new Date() }).where(eq(boxes.id, box.id));
+          }
           if (skipped.length) {
             await db.insert(boxEvents).values({ boxId: box.id, kind: "billing_mail_skipped", actor: "provisioner", detail: { skipped, missing } });
           }

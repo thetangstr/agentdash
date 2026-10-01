@@ -21,10 +21,10 @@
 //             (no attempt used) for up to PARK_MAX_MS.
 //
 // Nothing secret or personal is logged: no body, no secret, no signature.
-import { and, eq, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { decryptField, encryptField, type DataKeyring } from "../crypto.js";
 import type { CloudDb } from "../db/client.js";
-import { boxes, stripeEvents, type StripeEventState } from "../db/schema.js";
+import { boxEvents, boxes, stripeEvents, type StripeEventState } from "../db/schema.js";
 import type { Alerter } from "../jobs/alerts.js";
 import type { Logger } from "../logger.js";
 import { redactString } from "../logger.js";
@@ -49,7 +49,28 @@ const GONE_STATES = new Set(["pending_delete", "cleanup", "deleted"]);
 /** A Railway service domain or similar bare host name: never a path, port, user or scheme. */
 const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
+/** Railway service domains: the only hosts a forward may go to (SC-8 review). */
+export const UPSTREAM_HOST_SUFFIX = ".up.railway.app";
+/** Dead letters keep their (encrypted) body this long, then only the metadata. */
+export const DEAD_BODY_TTL_MS = 30 * 86_400_000;
+
 const bodyAad = (eventId: string) => `stripe_events.body:${eventId}`;
+
+type BoxRow = typeof boxes.$inferSelect;
+type Route =
+  | { kind: "box"; box: BoxRow; slug: string; via: "slug" | "customer"; bind: string | null }
+  | { kind: "none"; slug: string | null }
+  | { kind: "conflict"; slug: string; owner: BoxRow | null; reason: "customer_bound_to_another_box" | "box_bound_to_another_customer" };
+
+/** Same-second tie-break for plan_tier: the more final status wins. */
+const TIER_RANK: Record<string, number> = { free: 0, pro_trial: 1, pro_active: 2, pro_past_due: 3, pro_canceled: 4 };
+const TIER_RANK_SQL = sql.raw(
+  `(case "boxes"."plan_tier" ${Object.entries(TIER_RANK).map(([t, r]) => `when '${t}' then ${r}`).join(" ")} else 0 end)`,
+);
+
+export function forwardableHost(host: string | null): host is string {
+  return !!host && HOST_RE.test(host) && host.endsWith(UPSTREAM_HOST_SUFFIX) && host.length > UPSTREAM_HOST_SUFFIX.length;
+}
 
 export interface ForwarderDeps {
   db: CloudDb;
@@ -103,19 +124,52 @@ export function stripeForwarder(deps: ForwarderDeps) {
     return storedSecret.value ? [...fromEnv, storedSecret.value] : fromEnv;
   }
 
-  async function findBox(event: StripeEventLike): Promise<{ slug: string | null; box: typeof boxes.$inferSelect | null; via: "slug" | "customer" | null }> {
+  /**
+   * Where an event goes (SC-8 security review). Every box holds the shared
+   * restricted key, so a compromised box can write any box_slug into any
+   * object's metadata. The customer binding is therefore the authority:
+   * a customer is bound to one box (unique) the first time a slug-routed
+   * event names it, a box is bound to one customer, and neither is ever
+   * rebound silently. An event whose box_slug disagrees with a binding is a
+   * conflict: held in the dead letters for an operator, with an alert.
+   */
+  async function route(event: StripeEventLike): Promise<Route> {
     const slug = boxSlugOf(event);
-    if (slug) {
-      if (!isValidSlug(slug)) return { slug, box: null, via: "slug" };
-      const [box] = await db.select().from(boxes).where(eq(boxes.slug, slug));
-      return { slug, box: box ?? null, via: "slug" };
-    }
     const customer = customerOf(event);
-    if (customer) {
-      const [box] = await db.select().from(boxes).where(eq(boxes.stripeCustomerId, customer));
-      if (box) return { slug: box.slug, box, via: "customer" };
+    const [bound] = customer ? await db.select().from(boxes).where(eq(boxes.stripeCustomerId, customer)) : [];
+    if (!slug) return bound ? { kind: "box", box: bound, slug: bound.slug, via: "customer", bind: null } : { kind: "none", slug: null };
+    if (!isValidSlug(slug)) return { kind: "none", slug };
+    const [named] = await db.select().from(boxes).where(eq(boxes.slug, slug));
+    if (bound && bound.id !== named?.id) {
+      // Shape: box_slug=<another box> written on a customer already bound here.
+      return { kind: "conflict", slug, owner: bound, reason: "customer_bound_to_another_box" };
     }
-    return { slug: null, box: null, via: null };
+    if (!named) return { kind: "none", slug };
+    if (customer && named.stripeCustomerId && named.stripeCustomerId !== customer) {
+      // Shape: box_slug=<victim> written on some other customer's object.
+      return { kind: "conflict", slug, owner: null, reason: "box_bound_to_another_customer" };
+    }
+    return { kind: "box", box: named, slug, via: "slug", bind: customer && !named.stripeCustomerId ? customer : null };
+  }
+
+  /** Bind a customer to a box once. False when the box or the customer was bound elsewhere meanwhile. */
+  async function bind(box: BoxRow, customer: string): Promise<boolean> {
+    try {
+      const rows = await db
+        .update(boxes)
+        .set({ stripeCustomerId: customer, updatedAt: new Date() })
+        .where(and(eq(boxes.id, box.id), isNull(boxes.stripeCustomerId)))
+        .returning({ id: boxes.id });
+      if (rows.length) {
+        await db.insert(boxEvents).values({ boxId: box.id, kind: "stripe_customer_bound", actor: "stripe-forwarder", detail: { customer } });
+        return true;
+      }
+      const [now2] = await db.select({ c: boxes.stripeCustomerId }).from(boxes).where(eq(boxes.id, box.id));
+      return now2?.c === customer;
+    } catch (err) {
+      if ((err as { code?: string; cause?: { code?: string } }).code === "23505" || (err as { cause?: { code?: string } }).cause?.code === "23505") return false;
+      throw err;
+    }
   }
 
   async function insertEvent(values: typeof stripeEvents.$inferInsert): Promise<string | null> {
@@ -124,20 +178,28 @@ export function stripeForwarder(deps: ForwarderDeps) {
   }
 
   /** What the control plane itself learns from an event for a known box. */
-  async function learn(event: StripeEventLike, box: typeof boxes.$inferSelect, via: "slug" | "customer"): Promise<void> {
-    const customer = customerOf(event);
-    if (via === "slug" && customer && box.stripeCustomerId !== customer) {
-      await db.update(boxes).set({ stripeCustomerId: customer, updatedAt: new Date() }).where(eq(boxes.id, box.id));
-    }
+  // A box holds one company, so plan_tier mirrors that company's one
+  // subscription: the latest customer.subscription.* event wins.
+  async function learn(event: StripeEventLike, box: BoxRow): Promise<void> {
     const tier = planTierOf(event);
-    if (tier && event.created !== null) {
-      const at = new Date(event.created * 1000);
-      // Stripe does not order events: an older event never overwrites a newer one's tier.
-      await db
-        .update(boxes)
-        .set({ planTier: tier, planTierEventAt: at, updatedAt: new Date() })
-        .where(and(eq(boxes.id, box.id), or(isNull(boxes.planTierEventAt), lte(boxes.planTierEventAt, at))));
-    }
+    if (!tier || event.created === null) return;
+    const at = new Date(event.created * 1000);
+    // Stripe does not order events: an older event never overwrites a newer
+    // one; on the same second the more final status wins (canceled over
+    // past_due over active over trialing over free).
+    await db
+      .update(boxes)
+      .set({ planTier: tier, planTierEventAt: at, updatedAt: new Date() })
+      .where(
+        and(
+          eq(boxes.id, box.id),
+          or(
+            isNull(boxes.planTierEventAt),
+            lt(boxes.planTierEventAt, at),
+            and(eq(boxes.planTierEventAt, at), sql`${TIER_RANK_SQL} <= ${TIER_RANK[tier] ?? 0}`),
+          ),
+        ),
+      );
   }
 
   async function receive(raw: Buffer, signature: string | undefined): Promise<ReceiveResult> {
@@ -168,7 +230,37 @@ export function stripeForwarder(deps: ForwarderDeps) {
       return { status: 200, body: { received: true, dropped: "livemode_mismatch", duplicate: id === null } };
     }
 
-    const { slug, box, via } = await findBox(event);
+    let r = await route(event);
+    if (r.kind === "box" && r.bind && !(await bind(r.box, r.bind))) {
+      r = { kind: "conflict", slug: r.slug, owner: null, reason: "box_bound_to_another_customer" };
+    }
+    if (r.kind === "conflict") {
+      // Held, not dropped: the body stays (encrypted) so an operator can redeliver to the bound box.
+      const id = await insertEvent({
+        ...base,
+        boxSlug: r.slug,
+        boxId: r.owner?.id ?? null,
+        state: "dead",
+        reason: r.reason,
+        bodyEnc: encryptField(deps.keys, raw.toString("base64"), bodyAad(event.id)),
+      });
+      if (id) {
+        log.warn("Stripe event's box_slug disagrees with the customer binding; held for an operator", { eventId: event.id, type: event.type, slug: r.slug, owner: r.owner?.slug ?? null, reason: r.reason });
+        await deps.alerter
+          ?.send({
+            kind: "stripe_routing_conflict",
+            subject: `Stripe event ${event.id} (${event.type}) names box ${r.slug} but ${r.reason === "customer_bound_to_another_box" ? `its customer belongs to ${r.owner?.slug}` : "that box is bound to another customer"}; held, not delivered`,
+            slug: r.slug,
+            boxId: r.owner?.id ?? null,
+            error: r.reason,
+          })
+          .catch((err: unknown) => log.error("alert failed", { err }));
+      }
+      return { status: 200, body: { received: true, held: r.reason, duplicate: id === null } };
+    }
+    const slug = r.slug;
+    const box = r.kind === "box" ? r.box : null;
+    const via = r.kind === "box" ? r.via : null;
     if (!box && slug && deps.billing.stripeIgnoredSlugs.includes(slug)) {
       const id = await insertEvent({ ...base, boxSlug: isValidSlug(slug) ? slug : null, state: "dropped", reason: "ignored_box" });
       log.info("Stripe event for a box outside the control plane; dropped", { eventId: event.id, type: event.type, slug });
@@ -206,7 +298,7 @@ export function stripeForwarder(deps: ForwarderDeps) {
       log.info("Stripe event already received; acknowledged", { eventId: event.id, type: event.type });
       return { status: 200, body: { received: true, duplicate: true } };
     }
-    await learn(event, box, via!);
+    await learn(event, box);
     log.info("Stripe event queued for its box", { eventId: event.id, type: event.type, slug: box.slug, via });
     if (deps.deliverOnReceive !== false) {
       void deliver(id).catch((err: unknown) => log.error("Stripe delivery failed", { err, eventId: event.id }));
@@ -256,7 +348,7 @@ export function stripeForwarder(deps: ForwarderDeps) {
       return "pending";
     };
     if (!DELIVERABLE_STATES.has(box.state)) return park(`box_${box.state}`);
-    if (!box.upstreamHost || !HOST_RE.test(box.upstreamHost)) return park("box_has_no_upstream_host");
+    if (!forwardableHost(box.upstreamHost)) return park("box_has_no_railway_upstream_host");
     if (!box.stripeWebhookSecretEnc) return park("box_has_no_webhook_secret");
     if (!row.bodyEnc) {
       await settle(row.id, { state: "dead", reason: "no stored body" });
@@ -317,7 +409,18 @@ export function stripeForwarder(deps: ForwarderDeps) {
   }
 
   /** The background pass: every due event, oldest first. */
+  /** Dead letters keep their body DEAD_BODY_TTL_MS; after that only the metadata stays (no DELETE grant needed). */
+  async function pruneDeadBodies(): Promise<number> {
+    const rows = await db
+      .update(stripeEvents)
+      .set({ bodyEnc: null, reason: sql`coalesce(${stripeEvents.reason}, '') || ' (body expired)'`, updatedAt: new Date() })
+      .where(and(eq(stripeEvents.state, "dead"), isNotNull(stripeEvents.bodyEnc), lt(stripeEvents.updatedAt, new Date(now() - DEAD_BODY_TTL_MS))))
+      .returning({ id: stripeEvents.id });
+    return rows.length;
+  }
+
   async function deliverDue(limit = 25): Promise<Record<string, number>> {
+    await pruneDeadBodies().catch((err: unknown) => log.error("Stripe dead-letter prune failed", { err }));
     const due = await db
       .select({ id: stripeEvents.id })
       .from(stripeEvents)
@@ -373,7 +476,7 @@ export function stripeForwarder(deps: ForwarderDeps) {
     return { ok: true };
   }
 
-  return { receive, deliver, deliverDue, list, redeliver, endpointSecrets };
+  return { receive, deliver, deliverDue, list, redeliver, endpointSecrets, pruneDeadBodies };
 }
 
 export type StripeForwarder = ReturnType<typeof stripeForwarder>;

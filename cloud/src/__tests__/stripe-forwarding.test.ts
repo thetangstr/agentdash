@@ -24,11 +24,12 @@ import { deleteHandler } from "../jobs/cleanup.js";
 import type { JobContext, JobRow } from "../jobs/runner.js";
 import { createLogger } from "../logger.js";
 import { billingAndMailExtras } from "../railway/box-extras.js";
-import { BoxKeyRotationError, syncFleetBilling, WEBHOOK_SECRET_AAD } from "../stripe/box-billing.js";
+import { BoxKeyRotationError, promoteDeployedBillingRevs, syncFleetBilling, WEBHOOK_SECRET_AAD } from "../stripe/box-billing.js";
+import { boxProjectDescription, boxProjectName } from "../railway/names.js";
 import { checkBoxStripeKey, loadBillingConfig } from "../stripe/config.js";
 import { ensureStripeEndpoint, FORWARDED_EVENTS, type StripeEndpointsClient } from "../stripe/endpoint.js";
 import { BOX_STRIPE_KEY, fleetSecretStore, STRIPE_ENDPOINT_SECRET } from "../stripe/fleet-secrets.js";
-import { MAX_ATTEMPTS, PARK_RETRY_MS, RETRY_SCHEDULE_MS, stripeForwarder } from "../stripe/forwarder.js";
+import { DEAD_BODY_TTL_MS, MAX_ATTEMPTS, PARK_RETRY_MS, RETRY_SCHEDULE_MS, stripeForwarder } from "../stripe/forwarder.js";
 import { boxSlugOf, parseStripeEvent } from "../stripe/routing.js";
 import { signStripePayload, StripeSignatureError, verifyStripeSignature } from "../stripe/signature.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
@@ -147,8 +148,13 @@ async function makeBox(state: "active" | "awaiting_claim" | "suspended" | "provi
   };
   for (const s of path[state]!) await db.update(boxes).set({ state: s as typeof box.state }).where(eq(boxes.id, box!.id));
   fakeBoxes.set(host, { secret: boxSecret });
+  projectInfo.set(`proj-${slug}`, { name: boxProjectName(slug), description: boxProjectDescription(box!.id), workspaceId: FAKE_WORKSPACE });
   return { id: box!.id, slug, host, boxSecret };
 }
+
+/** What the fake Railway answers for each box's project and latest web deployment. */
+const projectInfo = new Map<string, { name: string; description: string; workspaceId: string }>();
+const deployments = new Map<string, { id: string; status: string; createdAt: string }>();
 
 async function boxRow(id: string) {
   return (await db.select().from(boxes).where(eq(boxes.id, id)))[0]!;
@@ -185,7 +191,7 @@ function subscriptionEvent(opts: { slug?: string | null; status?: string; create
     created: opts.created ?? Math.floor(clock / 1000),
     livemode: opts.livemode ?? false,
     // Non-ASCII and spacing on purpose: the box must get the exact bytes Stripe signed.
-    data: { object: { id: `sub_${evtSeq}`, object: "subscription", customer: opts.customer ?? `cus_T${evtSeq}`, status: opts.status ?? "trialing", metadata, description: "Café Zürich ✓" } },
+    data: { object: { id: `sub_${evtSeq}`, object: "subscription", customer: opts.customer ?? (opts.slug ? `cus_${opts.slug}` : `cus_T${evtSeq}`), status: opts.status ?? "trialing", metadata, description: "Café Zürich ✓" } },
   };
 }
 
@@ -370,6 +376,89 @@ describe("the account webhook endpoint", () => {
     expect(received.filter((r) => r.eventId === ev.id)).toHaveLength(1);
   });
 
+  it("security review: a box cannot claim another box's customer, or point its own subscription at a victim box", async () => {
+    const victim = await makeBox("active");
+    const attacker = await makeBox("active");
+    const fwd = forwarder();
+    // Both boxes bind their customers through ordinary checkouts.
+    for (const [b, status] of [[victim, "active"], [attacker, "trialing"]] as const) {
+      const s = stripeSigned(subscriptionEvent({ slug: b.slug, customer: `cus_${b.slug}`, status, created: Math.floor(clock / 1000) - 100 }));
+      await fwd.receive(s.raw, s.header);
+    }
+    expect((await boxRow(victim.id)).stripeCustomerId).toBe(`cus_${victim.slug}`);
+    await fwd.deliverDue();
+    received.length = 0;
+
+    // Shape 1: the attacker writes box_slug=<attacker> on the VICTIM's customer, to divert its events.
+    const divert = subscriptionEvent({ slug: attacker.slug, customer: `cus_${victim.slug}`, status: "canceled", type: "customer.subscription.updated" });
+    const d = stripeSigned(divert);
+    expect((await fwd.receive(d.raw, d.header)).body).toMatchObject({ held: "customer_bound_to_another_box" });
+    expect(await eventRow(divert.id)).toMatchObject({ state: "dead", reason: "customer_bound_to_another_box", boxId: victim.id });
+    expect(alerts.at(-1)).toMatchObject({ kind: "stripe_routing_conflict", slug: attacker.slug });
+
+    // Shape 2: the attacker writes box_slug=<victim> on its OWN subscription, to corrupt the victim's tier.
+    const corrupt = subscriptionEvent({ slug: victim.slug, customer: `cus_${attacker.slug}`, status: "canceled", type: "customer.subscription.deleted" });
+    const c = stripeSigned(corrupt);
+    expect((await fwd.receive(c.raw, c.header)).body).toMatchObject({ held: "customer_bound_to_another_box" });
+    expect(await eventRow(corrupt.id)).toMatchObject({ state: "dead", boxId: attacker.id });
+
+    // A fresh customer naming the victim (bound already to another customer) is held too.
+    const fresh = stripeSigned(subscriptionEvent({ slug: victim.slug, customer: "cus_BrandNew99", status: "canceled" }));
+    expect((await fwd.receive(fresh.raw, fresh.header)).body).toMatchObject({ held: "box_bound_to_another_customer" });
+
+    // Nothing moved: bindings, tiers, and no forward to either box.
+    await fwd.deliverDue();
+    expect(received).toEqual([]);
+    expect(await boxRow(victim.id)).toMatchObject({ stripeCustomerId: `cus_${victim.slug}`, planTier: "pro_active" });
+    expect(await boxRow(attacker.id)).toMatchObject({ stripeCustomerId: `cus_${attacker.slug}`, planTier: "pro_trial" });
+    expect((await fwd.list("dead")).filter((e) => [divert.id, corrupt.id].includes(e.eventId))).toHaveLength(2);
+    // The database refuses one customer on two boxes outright.
+    await expect(db.update(boxes).set({ stripeCustomerId: `cus_${victim.slug}` }).where(eq(boxes.id, attacker.id))).rejects.toThrow();
+    // An operator may redeliver a held event: it goes to the box the customer is bound to.
+    expect(await fwd.redeliver(divert.id)).toEqual({ ok: true });
+    await fwd.deliverDue();
+    expect(received.map((r) => [r.host, r.eventId])).toEqual([[victim.host, divert.id]]);
+  });
+
+  it("breaks a same-second plan_tier tie by the more final status", async () => {
+    const box = await makeBox("active");
+    const fwd = forwarder();
+    const t = Math.floor(clock / 1000);
+    const canceled = stripeSigned(subscriptionEvent({ slug: box.slug, status: "canceled", created: t, type: "customer.subscription.deleted" }));
+    const active = stripeSigned(subscriptionEvent({ slug: box.slug, status: "active", created: t, type: "customer.subscription.updated" }));
+    await fwd.receive(canceled.raw, canceled.header);
+    await fwd.receive(active.raw, active.header);
+    expect((await boxRow(box.id)).planTier).toBe("pro_canceled");
+  });
+
+  it("forwards only to Railway service domains", async () => {
+    const box = await makeBox("active");
+    await db.update(boxes).set({ upstreamHost: "attacker.example.com" }).where(eq(boxes.id, box.id));
+    const fwd = forwarder();
+    const ev = subscriptionEvent({ slug: box.slug });
+    const s = stripeSigned(ev);
+    await fwd.receive(s.raw, s.header);
+    expect(await fwd.deliver((await eventRow(ev.id))!.id)).toBe("pending");
+    expect((await eventRow(ev.id))!.reason).toBe("parked:box_has_no_railway_upstream_host");
+    expect(received).toEqual([]);
+  });
+
+  it("expires dead-letter bodies after 30 days, keeping the row", async () => {
+    const box = await makeBox("active");
+    fakeBoxes.get(box.host)!.status = 503;
+    const fwd = forwarder();
+    const ev = subscriptionEvent({ slug: box.slug });
+    const s = stripeSigned(ev);
+    await fwd.receive(s.raw, s.header);
+    await db.update(stripeEvents).set({ attempts: MAX_ATTEMPTS - 1 }).where(eq(stripeEvents.eventId, ev.id));
+    expect(await fwd.deliver((await eventRow(ev.id))!.id)).toBe("dead");
+    expect(await fwd.pruneDeadBodies()).toBe(0);
+    await db.update(stripeEvents).set({ updatedAt: new Date(clock - DEAD_BODY_TTL_MS - 1000) }).where(eq(stripeEvents.eventId, ev.id));
+    expect(await fwd.pruneDeadBodies()).toBe(1);
+    expect(await eventRow(ev.id)).toMatchObject({ state: "dead", bodyEnc: null });
+    expect(await fwd.redeliver(ev.id)).toMatchObject({ ok: false, status: 409 });
+  });
+
   it("drops events for a deleted box", async () => {
     const box = await makeBox("deleted");
     const s = stripeSigned(subscriptionEvent({ slug: box.slug }));
@@ -486,12 +575,60 @@ function fakeRailwayForVars() {
       return { variableCollectionUpsert: true };
     },
   });
+  fake.resolvers.push({
+    match: /project\(id:\$id\)\{ id name description workspaceId\s+environments/,
+    op: "projectDetail",
+    resolve: (v) => {
+      const p = projectInfo.get(String(v.id));
+      if (!p) throw new Error("Project not found");
+      return { project: { id: v.id, ...p, environments: { edges: [] }, services: { edges: [] }, volumes: { edges: [] } } };
+    },
+  });
+  fake.resolvers.push({
+    match: /deployments\(first:1/,
+    op: "deployments",
+    resolve: (v) => {
+      const d = deployments.get((v.i as { serviceId: string }).serviceId);
+      return { deployments: { edges: d ? [{ node: d }] : [] } };
+    },
+  });
   return { fake, upserts, failFor };
+}
+
+/** The box's web service finished a deployment now (after anything sent before this call). */
+function deployed(slug: string, status = "SUCCESS") {
+  deployments.set(`svc-${slug}`, { id: `dep-${randomBytes(3).toString("hex")}`, status, createdAt: new Date(Date.now() + 1000).toISOString() });
 }
 
 describe("rotate-box-key", () => {
   beforeEach(async () => {
-    await db.execute(sql`update boxes set stripe_config_rev = 'k0.old.14' where state <> 'deleted'`);
+    await db.execute(sql`update boxes set stripe_config_rev = 'k0.old.14', stripe_config_pending_rev = null, stripe_config_pending_since = null where state <> 'deleted'`);
+    deployments.clear();
+  });
+
+  it("refuses to write to a project that is protected, renamed, untagged or outside the boxes workspace", async () => {
+    await db.execute(sql`delete from fleet_secrets`);
+    const good = await makeBox("active");
+    const renamed = await makeBox("active");
+    const untagged = await makeBox("active");
+    const foreign = await makeBox("active");
+    projectInfo.set(`proj-${renamed.slug}`, { ...projectInfo.get(`proj-${renamed.slug}`)!, name: "agentdash" });
+    projectInfo.set(`proj-${untagged.slug}`, { ...projectInfo.get(`proj-${untagged.slug}`)!, description: "someone else's project" });
+    projectInfo.set(`proj-${foreign.slug}`, { ...projectInfo.get(`proj-${foreign.slug}`)!, workspaceId: "ws-personal" });
+    const { fake, upserts } = fakeRailwayForVars();
+    const r = await syncFleetBilling(
+      { db, keys: KEYS, billing, store: fleetSecretStore(db, KEYS), client: fake.client({ log }), workspaceId: FAKE_WORKSPACE, log },
+      { newKey: SHARED_KEY, apply: true, actor: "test" },
+    );
+    for (const bad of [renamed, untagged, foreign]) {
+      expect(r.boxes.find((b) => b.slug === bad.slug)).toMatchObject({ outcome: "failed", error: expect.stringMatching(/refusing/) });
+      expect(upserts.some((u) => u.serviceId === `svc-${bad.slug}`)).toBe(false);
+    }
+    expect(upserts.some((u) => u.serviceId === `svc-${good.slug}`)).toBe(true);
+    // Without a workspace configured nothing is written at all.
+    const none = await syncFleetBilling({ db, keys: KEYS, billing, store: fleetSecretStore(db, KEYS), client: fake.client({ log }), workspaceId: null, log }, { apply: true, actor: "test" });
+    expect(none.updated).toBe(0);
+    for (const bad of [renamed, untagged, foreign]) projectInfo.set(`proj-${bad.slug}`, { name: boxProjectName(bad.slug), description: boxProjectDescription(bad.id), workspaceId: FAKE_WORKSPACE });
   });
 
   it("refuses keys that are not restricted keys of the fleet's mode", () => {
@@ -505,7 +642,7 @@ describe("rotate-box-key", () => {
     const box = await makeBox("active");
     const { fake, upserts } = fakeRailwayForVars();
     const store = fleetSecretStore(db, KEYS);
-    const r = await syncFleetBilling({ db, keys: KEYS, billing, store, client: fake.client({ log }), log }, { newKey: SHARED_KEY, apply: false, actor: "test" });
+    const r = await syncFleetBilling({ db, keys: KEYS, billing, store, client: fake.client({ log }), workspaceId: FAKE_WORKSPACE, log }, { newKey: SHARED_KEY, apply: false, actor: "test" });
     expect(r).toMatchObject({ dryRun: true, key: "new", keyVersion: 1, targetRev: "k1.price_TestPro29.14" });
     expect(r.boxes.find((b) => b.slug === box.slug)).toMatchObject({ outcome: "would_update" });
     expect(upserts).toHaveLength(0);
@@ -523,7 +660,7 @@ describe("rotate-box-key", () => {
     const { fake, upserts, failFor } = fakeRailwayForVars();
     failFor.add(`svc-${b.slug}`);
     const store = fleetSecretStore(db, KEYS);
-    const deps = { db, keys: KEYS, billing, store, client: fake.client({ log }), log };
+    const deps = { db, keys: KEYS, billing, store, client: fake.client({ log }), workspaceId: FAKE_WORKSPACE, log };
 
     const first = await syncFleetBilling(deps, { newKey: SHARED_KEY, apply: true, actor: "test" });
     expect(first.key).toBe("new");
@@ -537,8 +674,19 @@ describe("rotate-box-key", () => {
     const generated = upserts.find((u) => u.serviceId === `svc-${needsSecret.slug}`)!.variables.STRIPE_WEBHOOK_SECRET!;
     expect(generated).toMatch(/^whsec_/);
     expect(decryptField(KEYS, (await boxRow(needsSecret.id)).stripeWebhookSecretEnc!, WEBHOOK_SECRET_AAD)).toBe(generated);
-    expect((await boxRow(a.id)).stripeConfigRev).toBe("k1.price_TestPro29.14");
-    expect((await boxRow(b.id)).stripeConfigRev).toBeNull();
+    // Sent under skipDeploys: pending, NOT counted as running until a later deploy succeeds.
+    expect(await boxRow(a.id)).toMatchObject({ stripeConfigRev: null, stripeConfigPendingRev: "k1.price_TestPro29.14" });
+    expect((await boxRow(b.id)).stripeConfigPendingRev).toBeNull();
+    expect(first.pendingDeploy).toBeGreaterThanOrEqual(2);
+    // A failed deploy, or one from before the upsert, promotes nothing; a later successful one does.
+    deployed(a.slug, "FAILED");
+    deployments.set(`svc-${needsSecret.slug}`, { id: "dep-old", status: "SUCCESS", createdAt: new Date(Date.now() - 3_600_000).toISOString() });
+    await promoteDeployedBillingRevs(deps);
+    expect((await boxRow(a.id)).stripeConfigRev).toBeNull();
+    expect((await boxRow(needsSecret.id)).stripeConfigRev).toBeNull();
+    deployed(a.slug);
+    expect(await promoteDeployedBillingRevs(deps)).toBe(1);
+    expect(await boxRow(a.id)).toMatchObject({ stripeConfigRev: "k1.price_TestPro29.14", stripeConfigPendingRev: null });
     const [stored] = await db.select().from(fleetSecrets).where(eq(fleetSecrets.name, BOX_STRIPE_KEY));
     expect(stored!.valueEnc).not.toContain(SHARED_KEY);
     const [audit] = await db.select().from(operatorAudit).where(eq(operatorAudit.kind, "fleet_secret_changed")).orderBy(sql`id desc`).limit(1);
@@ -563,7 +711,7 @@ describe("rotate-box-key", () => {
 
   it("refuses a wrong-mode key and a run with no key stored", async () => {
     await db.execute(sql`delete from fleet_secrets`);
-    const deps = { db, keys: KEYS, billing, store: fleetSecretStore(db, KEYS), client: null, log };
+    const deps = { db, keys: KEYS, billing, store: fleetSecretStore(db, KEYS), client: null, workspaceId: FAKE_WORKSPACE, log };
     await expect(syncFleetBilling(deps, { newKey: "rk_live_abcdefghijklmnop", apply: true, actor: "t" })).rejects.toThrow(BoxKeyRotationError);
     await expect(syncFleetBilling(deps, { apply: false, actor: "t" })).rejects.toThrow(/no shared box key/);
   });
@@ -572,13 +720,14 @@ describe("rotate-box-key", () => {
     await db.execute(sql`delete from fleet_secrets`);
     const box = await makeBox("active");
     const { fake, upserts } = fakeRailwayForVars();
-    const app = createApp({ db, config: appConfig(), log, stripe: { forwarder: forwarder(), railway: fake.client({ log }), endpoints: null } });
+    const app = createApp({ db, config: appConfig({ CLOUD_RAILWAY_WORKSPACE_ID: FAKE_WORKSPACE }), log, stripe: { forwarder: forwarder(), railway: fake.client({ log }), endpoints: null } });
     const server = await listening(app);
     try {
       const port = (server.address() as AddressInfo).port;
       const out: string[] = [];
       const err: string[] = [];
       const io = { out: (l: string) => out.push(l), err: (l: string) => err.push(l), fetch, readStdin: async () => `${SHARED_KEY}\n` };
+      // stripe status counts a box as behind until a deploy after the upsert succeeded.
       const env = { CLOUD_ADMIN_TOKEN: ADMIN, CLOUD_CONTROL_URL: `http://127.0.0.1:${port}` };
       expect(await runAdmin(["stripe", "rotate-box-key"], env, io)).toBe(0);
       expect(JSON.parse(out.join("\n"))).toMatchObject({ dryRun: true, key: "new" });
@@ -589,6 +738,17 @@ describe("rotate-box-key", () => {
       expect(JSON.parse(out.join("\n"))).toMatchObject({ dryRun: false, key: "new", failed: 0 });
       expect(upserts.some((u) => u.serviceId === `svc-${box.slug}`)).toBe(true);
       expect(out.join("\n")).not.toContain(SHARED_KEY);
+      out.length = 0;
+      await runAdmin(["stripe", "status"], env, io);
+      const before = JSON.parse(out.join("\n")) as { boxesBehind: number; boxesPendingDeploy: number };
+      expect(before.boxesPendingDeploy).toBeGreaterThanOrEqual(1);
+      expect(before.boxesBehind).toBeGreaterThanOrEqual(before.boxesPendingDeploy);
+      deployed(box.slug);
+      out.length = 0;
+      await runAdmin(["stripe", "status"], env, io);
+      const after = JSON.parse(out.join("\n")) as { boxesBehind: number; boxesPendingDeploy: number };
+      expect(after.boxesBehind).toBe(before.boxesBehind - 1);
+      expect(after.boxesPendingDeploy).toBe(before.boxesPendingDeploy - 1);
       expect(await runAdmin(["stripe", "rotate-box-key", "--bogus"], env, io)).toBe(64);
       expect(await runAdmin(["stripe", "rotate-box-key"], env, { ...io, readStdin: async () => "  " })).toBe(2);
     } finally {
@@ -678,7 +838,7 @@ describe("per-box Resend keys", () => {
     expect((await boxRow(box.id)).resendKeyId).toBeNull();
   });
 
-  it("the provisioner extras add Stripe and Resend variables, keep an existing Resend key, and record the rev after commit", async () => {
+  it("the provisioner extras add Stripe and Resend variables, keep an existing Resend key, and record the rev as pending after commit", async () => {
     await db.execute(sql`delete from fleet_secrets`);
     const store = fleetSecretStore(db, KEYS);
     await store.set(BOX_STRIPE_KEY, SHARED_KEY, "test");
@@ -693,7 +853,7 @@ describe("per-box Resend keys", () => {
     expect(fresh.vars.STRIPE_SECRET_KEY).toBe(SHARED_KEY);
     expect((await boxRow(box.id)).stripeConfigRev).toBeNull();
     await fresh.commit();
-    expect((await boxRow(box.id)).stripeConfigRev).toBe("k1.price_TestPro29.14");
+    expect((await boxRow(box.id)).stripeConfigPendingRev).toBe("k1.price_TestPro29.14");
 
     const again = await extras.prepare({ ...ctx, box: await boxRow(box.id), names: new Set(["RESEND_API_KEY"]) });
     expect(again.vars.RESEND_API_KEY).toBeUndefined();

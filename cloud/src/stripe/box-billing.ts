@@ -20,6 +20,8 @@ import { boxEvents, boxes } from "../db/schema.js";
 import type { Logger } from "../logger.js";
 import { redactString } from "../logger.js";
 import type { RailwayClient } from "../railway/client.js";
+import { getProject, latestDeployment } from "../railway/api.js";
+import { assertBoxProjectName, boxProjectName, ProjectNameRefused, projectTag } from "../railway/names.js";
 import type { BoxRow } from "../jobs/runner.js";
 import { type BillingConfig, checkBoxStripeKey } from "./config.js";
 import { BOX_STRIPE_KEY, type FleetSecretStore } from "./fleet-secrets.js";
@@ -136,8 +138,57 @@ export interface SyncDeps {
   store: FleetSecretStore;
   /** Absent without a Railway token: only a dry run is possible. */
   client: RailwayClient | null;
+  /** The dedicated boxes workspace: a project outside it is never written to. */
+  workspaceId: string | null;
   log: Logger;
   signal?: AbortSignal;
+}
+
+/**
+ * The provisioner's project guard, before any write (SC-8 review): the
+ * recorded project must be in the boxes workspace, carry this box's name
+ * (never a protected project) and this box's control-plane tag.
+ */
+export async function assertBoxProject(client: RailwayClient, workspaceId: string | null, box: Pick<BoxRow, "id" | "slug" | "projectId">, signal?: AbortSignal): Promise<void> {
+  if (!workspaceId) throw new Error("CLOUD_RAILWAY_WORKSPACE_ID is not set; refusing to write to any project");
+  const expected = boxProjectName(box.slug);
+  assertBoxProjectName(expected);
+  const p = await getProject(client, box.projectId!, { signal });
+  assertBoxProjectName(p.name);
+  if (p.name !== expected) throw new ProjectNameRefused(`recorded project is named ${p.name}, not ${expected}; refusing to write to it`);
+  if (p.workspaceId !== workspaceId) throw new ProjectNameRefused(`recorded project ${p.id} is not in the boxes workspace; refusing to write to it`);
+  if (!(p.description ?? "").includes(projectTag(box.id))) throw new ProjectNameRefused(`project ${p.name} does not carry this box's control-plane tag; refusing to write to it`);
+}
+
+/**
+ * A billing config the box was sent becomes the one it RUNS only once a
+ * deployment that started after it was sent has succeeded (SC-8 review):
+ * Railway applies variables at the next deploy, so "upserted" is not
+ * "in use". Returns how many boxes were promoted.
+ */
+export async function promoteDeployedBillingRevs(deps: Pick<SyncDeps, "db" | "client" | "log" | "signal">): Promise<number> {
+  if (!deps.client) return 0;
+  const waiting = await deps.db.select().from(boxes).where(and(isNotNull(boxes.stripeConfigPendingRev), isNotNull(boxes.webServiceId)));
+  let promoted = 0;
+  for (const box of waiting) {
+    try {
+      const d = await latestDeployment(deps.client, box.projectId!, box.environmentId!, box.webServiceId!, { signal: deps.signal });
+      const since = box.stripeConfigPendingSince?.getTime() ?? Infinity;
+      if (!d || d.status !== "SUCCESS" || Date.parse(d.createdAt) < since) continue;
+      const rows = await deps.db
+        .update(boxes)
+        .set({ stripeConfigRev: box.stripeConfigPendingRev, stripeConfigPendingRev: null, stripeConfigPendingSince: null, updatedAt: new Date() })
+        .where(and(eq(boxes.id, box.id), eq(boxes.stripeConfigPendingRev, box.stripeConfigPendingRev!)))
+        .returning({ id: boxes.id });
+      if (rows.length) {
+        await deps.db.insert(boxEvents).values({ boxId: box.id, kind: "billing_variables_live", actor: "billing-sync", detail: { rev: box.stripeConfigPendingRev, deploymentId: d.id } });
+        promoted += 1;
+      }
+    } catch (err) {
+      deps.log.warn("could not check a box's deployment for its billing config", { slug: box.slug, error: redactString(err instanceof Error ? err.message : String(err)).slice(0, 200) });
+    }
+  }
+  return promoted;
 }
 
 export interface SyncResult {
@@ -150,8 +201,10 @@ export interface SyncResult {
   boxes: Array<{ slug: string; state: string; from: string | null; outcome: "would_update" | "updated" | "failed"; error?: string }>;
   updated: number;
   failed: number;
-  /** Boxes still behind after this run; re-run with --apply to resume. */
+  /** Boxes not yet sent the target config; re-run with --apply to resume. */
   remaining: number;
+  /** Boxes sent the target config whose next successful deploy has not happened yet: the old key is still in use there. */
+  pendingDeploy: number;
 }
 
 /** Plan (dry run) or apply the shared key and billing variables across the fleet. */
@@ -172,6 +225,7 @@ export async function syncFleetBilling(deps: SyncDeps, input: SyncInput): Promis
   if (targetVersion === null) throw new BoxKeyRotationError("no shared box key is stored yet; pipe one in: `admin stripe rotate-box-key --apply < key`", 409);
   const targetRev = billingRev(targetVersion, cfg.stripeProPriceId, cfg.stripeTrialDays);
   const redeploy = input.redeploy === true;
+  await promoteDeployedBillingRevs(deps);
 
   const targets = await db
     .select()
@@ -183,13 +237,29 @@ export async function syncFleetBilling(deps: SyncDeps, input: SyncInput): Promis
         isNotNull(boxes.environmentId),
         isNotNull(boxes.webServiceId),
         or(isNull(boxes.stripeConfigRev), ne(boxes.stripeConfigRev, targetRev)),
+        or(isNull(boxes.stripeConfigPendingRev), ne(boxes.stripeConfigPendingRev, targetRev)),
       ),
     )
     .orderBy(boxes.createdAt);
+  const pendingDeploy = async () =>
+    (await db.select({ id: boxes.id }).from(boxes).where(and(inArray(boxes.state, [...BILLING_SYNC_STATES]), eq(boxes.stripeConfigPendingRev, targetRev)))).length;
 
-  const result: SyncResult = { dryRun: !input.apply, mode: cfg.stripeMode, key: keyState, keyVersion: targetVersion, targetRev, redeploy, boxes: [], updated: 0, failed: 0, remaining: targets.length };
+  const result: SyncResult = {
+    dryRun: !input.apply,
+    mode: cfg.stripeMode,
+    key: keyState,
+    keyVersion: targetVersion,
+    targetRev,
+    redeploy,
+    boxes: [],
+    updated: 0,
+    failed: 0,
+    remaining: targets.length,
+    pendingDeploy: 0,
+  };
   if (!input.apply) {
     result.boxes = targets.map((b) => ({ slug: b.slug, state: b.state, from: b.stripeConfigRev, outcome: "would_update" as const }));
+    result.pendingDeploy = await pendingDeploy();
     return result;
   }
   if (!deps.client) throw new BoxKeyRotationError("no Railway token is configured on the control plane; only a dry run is possible", 409);
@@ -198,15 +268,18 @@ export async function syncFleetBilling(deps: SyncDeps, input: SyncInput): Promis
 
   for (const box of targets) {
     try {
+      await assertBoxProject(deps.client, deps.workspaceId, box, deps.signal);
       const webhookSecret = await ensureBoxWebhookSecret(db, deps.keys, box);
       const vars = stripeVariables(fleet, webhookSecret);
+      const sentAt = new Date();
       await upsertBoxVariables(
         deps.client,
         { projectId: box.projectId!, environmentId: box.environmentId!, serviceId: box.webServiceId! },
         vars,
         { skipDeploys: !redeploy, signal: deps.signal },
       );
-      await db.update(boxes).set({ stripeConfigRev: fleet.rev, updatedAt: new Date() }).where(eq(boxes.id, box.id));
+      // Sent, not yet running: promoted to stripe_config_rev after the next successful deploy.
+      await db.update(boxes).set({ stripeConfigPendingRev: fleet.rev, stripeConfigPendingSince: sentAt, updatedAt: new Date() }).where(eq(boxes.id, box.id));
       await db.insert(boxEvents).values({
         boxId: box.id,
         kind: "billing_variables_synced",
@@ -223,6 +296,7 @@ export async function syncFleetBilling(deps: SyncDeps, input: SyncInput): Promis
     }
   }
   result.remaining = result.failed;
+  result.pendingDeploy = await pendingDeploy();
   deps.log.info("fleet billing sync", { rev: fleet.rev, updated: result.updated, failed: result.failed, redeploy });
   return result;
 }
