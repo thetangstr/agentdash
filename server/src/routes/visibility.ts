@@ -226,20 +226,39 @@ export async function assertIssueIdVisible(
   // routes query the raw param (the verdict routes did), so skipping here
   // let them find an issue this guard never looked at (GH #830 review).
   else throw notFound(`${what} not found`);
-  const row = await db
+  const issue = await db
     .select({
-      id: projects.id,
-      companyId: projects.companyId,
-      visibility: projects.visibility,
-      createdByUserId: projects.createdByUserId,
+      id: issues.id,
+      companyId: issues.companyId,
+      projectId: projects.id,
+      projectCompanyId: projects.companyId,
+      projectVisibility: projects.visibility,
+      projectCreatedByUserId: projects.createdByUserId,
     })
     .from(issues)
-    .innerJoin(projects, eq(projects.id, issues.projectId))
+    .leftJoin(projects, eq(projects.id, issues.projectId))
     .where(match)
     .then((rows) => rows[0] ?? null);
-  if (!row) return; // no issue, or no project: company-visible
-  if (await isProjectVisible(db, req, row)) return;
-  throw notFound(`${what} not found`);
+  if (!issue) return; // no issue: the route's own lookup answers
+  if (issue.projectId) {
+    const visible = await isProjectVisible(db, req, {
+      id: issue.projectId,
+      companyId: issue.projectCompanyId ?? issue.companyId,
+      visibility: issue.projectVisibility,
+      createdByUserId: issue.projectCreatedByUserId,
+    });
+    if (!visible) throw notFound(`${what} not found`);
+  }
+  // Agent visibility (2026-09-30): the same predicate the list uses, asked
+  // of this one row, so detail and list can never disagree.
+  const scope = await resolveAgentVisibility(db, req, issue.companyId);
+  if (scope.mode === "all") return;
+  const allowed = await db
+    .select({ id: issues.id })
+    .from(issues)
+    .where(and(eq(issues.id, issue.id), issueVisibilityCondition(req, issue.companyId)))
+    .then((rows) => rows.length > 0);
+  if (!allowed) throw notFound(`${what} not found`);
 }
 
 /**
@@ -585,6 +604,20 @@ function rememberScope(req: Request, companyId: string, scope: AgentVisibilitySc
   return scope;
 }
 
+/**
+ * True when the actor sees every agent in every company it can reach, which
+ * is decidable from the request alone: agent actors, the local board,
+ * instance admins, and humans who are admins in each of their memberships.
+ * Lets the id guard skip the database for the common case — and lets the
+ * stub-database route suites that run as admins keep running unchanged.
+ */
+function plainlySeesAllAgents(req: Request): boolean {
+  if (req.actor.type !== "board" || !req.actor.userId) return true;
+  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return true;
+  const memberships = Array.isArray(req.actor.memberships) ? req.actor.memberships : [];
+  return memberships.length > 0 && memberships.every((m) => actorHumanRole(req, m.companyId) === "admin");
+}
+
 /** The human board actors the rule applies to; everyone else sees all agents. */
 function restrictedHumanUserId(req: Request, companyId: string): string | null {
   if (req.actor.type !== "board" || !req.actor.userId) return null;
@@ -606,7 +639,7 @@ export async function resolveAgentVisibility(
   if (cached) return cached;
 
   const userId = restrictedHumanUserId(req, companyId);
-  if (!userId) return rememberScope(req, companyId, { mode: "all" });
+  if (!userId || plainlySeesAllAgents(req)) return rememberScope(req, companyId, { mode: "all" });
 
   const company = await db
     .select({ agentVisibilityDefault: companies.agentVisibilityDefault })
@@ -737,6 +770,7 @@ export async function visibleAgentIdsFor(
  * stewardship are too. Unknown ids pass through (the route answers 404);
  * non-canonical ids are 404 here, as for issues.
  */
+
 export async function assertAgentIdVisible(
   db: Db,
   req: Request,
@@ -745,6 +779,7 @@ export async function assertAgentIdVisible(
 ): Promise<void> {
   const id = typeof agentId === "string" ? agentId.trim() : "";
   if (!isCanonicalUuid(id)) throw notFound(`${what} not found`);
+  if (plainlySeesAllAgents(req)) return;
   const agent = await db
     .select({ id: agents.id, companyId: agents.companyId })
     .from(agents)
@@ -766,4 +801,24 @@ export function agentVisibilityParam(db: Db) {
       next(err);
     }
   };
+}
+
+/**
+ * An org tree for a member who cannot see every agent: invisible nodes are
+ * removed and their visible reports take their place in the parent's list,
+ * so the shape a person sees is "the agents I can see, in their lines", not
+ * a tree with holes that confirm what was cut out.
+ */
+export function pruneOrgTreeToVisible(
+  nodes: readonly Record<string, unknown>[],
+  visible: ReadonlySet<string>,
+): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const node of nodes) {
+    const children = Array.isArray(node.reports) ? (node.reports as Record<string, unknown>[]) : [];
+    const reports = pruneOrgTreeToVisible(children, visible);
+    if (typeof node.id === "string" && visible.has(node.id)) out.push({ ...node, reports });
+    else out.push(...reports);
+  }
+  return out;
 }

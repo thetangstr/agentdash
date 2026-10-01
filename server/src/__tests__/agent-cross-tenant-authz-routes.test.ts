@@ -2,6 +2,19 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../routes/visibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routes/visibility.js")>()),
+  // Agent visibility (2026-09-30): the rule is owned by the real-Postgres suites
+  // (agent-visibility*.test.ts); here it is a pass-through, as A5's guards are.
+  resolveAgentVisibility: vi.fn(async () => ({ mode: "all" })),
+  visibleAgentIdsFor: vi.fn(async () => null),
+  assertAgentIdVisible: vi.fn(async () => undefined),
+  agentVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  agentVisibilityCondition: () => undefined,
+  issueVisibilityCondition: () => undefined,
+}));
+
+
 vi.unmock("http");
 vi.unmock("node:http");
 

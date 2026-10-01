@@ -1,7 +1,8 @@
+import { and } from "drizzle-orm";
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { issues } from "@paperclipai/db";
+import { activityLog, issues } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import {
   activityService,
@@ -17,8 +18,10 @@ import {
 } from "./authz.js";
 import {
   activityVisibilityCondition,
+  agentVisibilityCondition,
   issueVisibilityParam,
   projectScopedVisibilityCondition,
+  resolveAgentVisibility,
   runVisibilityParam,
 } from "./visibility.js";
 import { heartbeatService, issueService } from "../services/index.js";
@@ -61,6 +64,7 @@ export function activityRoutes(db: Db) {
   router.get("/companies/:companyId/activity", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    await resolveAgentVisibility(db, req, companyId);
 
     // AgentDash assistant MCP (#676): `since` bounds the feed to an ISO
     // timestamp so `whats_new` can ask "what changed since T" instead of
@@ -86,7 +90,11 @@ export function activityRoutes(db: Db) {
       // A5 (GH #830): rows about an issue or project the actor cannot see
       // are absent, so `?entityType=issue&entityId=` cannot read around the
       // guarded /issues/:id/activity.
-      visibleWhere: activityVisibilityCondition(req, companyId),
+      visibleWhere: and(
+        activityVisibilityCondition(req, companyId),
+        // Agent visibility (2026-09-30): rows about an invisible agent are absent.
+        agentVisibilityCondition(req, companyId, activityLog.agentId),
+      ),
     };
     const result = await svc.list(filters);
     res.json(result);

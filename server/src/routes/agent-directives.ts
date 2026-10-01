@@ -8,6 +8,9 @@ import { validate } from "../middleware/validate.js";
 import { agentDirectivesService } from "../services/agent-directives.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertCompanyAccess } from "./authz.js";
+import {
+  agentVisibilityParam,
+} from "./visibility.js";
 import { requireActiveStewardHarness } from "./agentdash-mk-harness-auth.js";
 import { describeRuntimeDirectiveDelivery } from "../adapters/runtime-directives-support.js";
 
@@ -27,6 +30,8 @@ import { describeRuntimeDirectiveDelivery } from "../adapters/runtime-directives
  */
 export function agentDirectivesRoutes(db: Db) {
   const router = Router();
+  // Agent visibility (2026-09-30): an agent the actor cannot see is 404 here too.
+  router.param("agentId", agentVisibilityParam(db));
   const directives = agentDirectivesService(db);
 
   async function requireProfileCompany(req: Request, companyId: string) {

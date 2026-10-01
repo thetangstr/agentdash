@@ -5,6 +5,7 @@ import {
   AGENT_ICON_NAMES,
   AGENT_ROLES,
   AGENT_STATUSES,
+  AGENT_VISIBILITIES,
   INBOX_MINE_ISSUE_STATUS_FILTER,
 } from "../constants.js";
 import { agentAdapterTypeSchema } from "../adapter-type.js";
@@ -239,6 +240,8 @@ export const updateAgentSchema = z.preprocess(normalizeAgentAdapterAliases, crea
     replaceAdapterConfig: z.boolean().optional(),
     status: z.enum(AGENT_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),
+    /** Agent visibility (2026-09-30): null inherits the company default. Administrators only; the route enforces it. */
+    visibility: z.enum(AGENT_VISIBILITIES).nullable().optional(),
   }));
 
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;

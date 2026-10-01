@@ -3,7 +3,12 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companyMemberships, heartbeatRuns, instanceUserRoles, issues, projects } from "@paperclipai/db";
 import type { LiveEvent } from "@paperclipai/shared";
-import { isCanonicalUuid, isProjectVisible, seesEverything } from "../routes/visibility.js";
+import {
+  isCanonicalUuid,
+  isProjectVisible,
+  resolveAgentVisibility,
+  seesEverything,
+} from "../routes/visibility.js";
 
 /**
  * AgentDash (GH #830 part A follow-up): the live-events websocket applies the
@@ -60,6 +65,8 @@ export type LiveEventRefs = {
   issueIds: string[];
   runIds: string[];
   projectIds: string[];
+  /** Agent visibility (2026-09-30): agents the event is about; delivery needs each to be visible. */
+  agentIds: string[];
   /** A reference that is not a canonical UUID: cannot be resolved, fail closed. */
   malformed: boolean;
 };
@@ -99,7 +106,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 /** Which issues, runs and projects does this event carry content about? */
 export function liveEventRefs(event: LiveEvent): LiveEventRefs {
-  const refs: LiveEventRefs = { issueIds: [], runIds: [], projectIds: [], malformed: false };
+  const refs: LiveEventRefs = { issueIds: [], runIds: [], projectIds: [], agentIds: [], malformed: false };
   const payload = asRecord(event.payload) ?? {};
   const add = (list: string[], value: unknown, strict: boolean) => {
     if (typeof value !== "string" || value.length === 0) return;
@@ -110,8 +117,12 @@ export function liveEventRefs(event: LiveEvent): LiveEventRefs {
     }
   };
 
+  // Agent references are collected loosely: an odd id is simply not an agent
+  // reference, not a reason to fail closed (that is the project rule's job).
+  add(refs.agentIds, payload.agentId, false);
   if (event.type === "activity.logged") {
     const entityType = payload.entityType;
+    if (entityType === "agent") add(refs.agentIds, payload.entityId, false);
     if (entityType === "issue") add(refs.issueIds, payload.entityId, true);
     else if (entityType === "project") add(refs.projectIds, payload.entityId, true);
     else if (entityType === "heartbeat_run" || entityType === "run") add(refs.runIds, payload.entityId, true);
@@ -294,6 +305,17 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     }
 
     return async function shouldDeliver(event: LiveEvent): Promise<boolean> {
+      // Agent visibility (2026-09-30): an event about an agent the subscriber
+      // cannot see is not delivered, whatever project it is in. The scope is
+      // cached on the actor request, which currentReq() keeps for ACTOR_TTL_MS.
+      const agentIds = liveEventRefs(event).agentIds;
+      if (agentIds.length > 0) {
+        const req = await currentReq();
+        if (!seesEverything(req, companyId)) {
+          const scope = await resolveAgentVisibility(db, req, companyId);
+          if (scope.mode !== "all" && agentIds.some((id) => !scope.visibleAgentIds.has(id))) return false;
+        }
+      }
       const ref = await resolveEvent(event);
       if (ref.kind === "none") return true;
       const req = await currentReq();

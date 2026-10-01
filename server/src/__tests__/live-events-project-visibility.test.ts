@@ -47,17 +47,23 @@ describe("liveEventRefs", () => {
       type: "activity.logged",
       payload: { entityType: "issue", entityId: issueId, runId, details: { projectId } },
     });
-    expect(refs).toEqual({ issueIds: [issueId], runIds: [runId], projectIds: [projectId], malformed: false });
+    expect(refs).toEqual({ issueIds: [issueId], runIds: [runId], projectIds: [projectId], agentIds: [], malformed: false });
   });
 
-  it("reads the run from heartbeat events and ignores company-wide events", () => {
+  it("reads the run from heartbeat events, and the agent from agent events (agent visibility, 2026-09-30)", () => {
     expect(liveEventRefs({ ...base, type: "heartbeat.run.log", payload: { runId } }).runIds).toEqual([runId]);
-    expect(liveEventRefs({ ...base, type: "agent.status", payload: { agentId: randomUUID() } })).toEqual({
+    // An agent event names no issue, run or project — but it is about an
+    // agent, and delivery now depends on the subscriber being able to see it.
+    const agentId = randomUUID();
+    expect(liveEventRefs({ ...base, type: "agent.status", payload: { agentId } })).toEqual({
       issueIds: [],
       runIds: [],
       projectIds: [],
+      agentIds: [agentId],
       malformed: false,
     });
+    // A malformed agent id is simply not a reference; it never fails closed.
+    expect(liveEventRefs({ ...base, type: "agent.status", payload: { agentId: "not-an-id" } }).malformed).toBe(false);
   });
 
   it("flags a non-canonical entity id as unresolvable (fail closed)", () => {

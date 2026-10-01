@@ -18,8 +18,8 @@ import { agents, issueExecutionDecisions, issues } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import {
   assertFeedbackTraceVisible,
-  assertIssueIdsVisibleInCompany,
   assertIssueIdVisible,
+  assertIssueIdsVisibleInCompany,
   assertProjectIdVisible,
   assertWorkspaceIdsVisible,
   feedbackTraceVisibilityCondition,
@@ -28,9 +28,12 @@ import {
   filterVisibleReferenceSummary,
   isCanonicalUuid,
   isProjectIdVisible,
+  issueVisibilityCondition,
   listVisibleIssueIds,
   projectScopedVisibilityCondition,
+  resolveAgentVisibility,
   truncateAncestorsAtInvisible,
+  visibleAgentIdsFor,
 } from "./visibility.js";
 import { decodeShippedCursor } from "../services/work-products.js";
 import {
@@ -802,6 +805,7 @@ export function issueRoutes(
       projectWorkspaceId?: unknown;
       executionWorkspaceId?: unknown;
       blockedByIssueIds?: unknown;
+      assigneeAgentId?: unknown;
     },
   ) {
     if (typeof body.projectId === "string") {
@@ -818,6 +822,12 @@ export function issueRoutes(
     // issue; linking a restricted one would echo its title back in the
     // response. Missing, foreign and restricted ids share one 404.
     await assertIssueIdsVisibleInCompany(db, req, companyId, body.blockedByIssueIds);
+    // Agent visibility (2026-09-30): work may only be given to an agent the
+    // actor can see; an invisible one is nonexistent, so 404, not 403.
+    if (typeof body.assigneeAgentId === "string" && body.assigneeAgentId) {
+      const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+      if (visibleIds !== null && !visibleIds.has(body.assigneeAgentId)) throw notFound("Agent not found");
+    }
   }
 
   // Common malformed path when companyId is empty in "/api/companies/{companyId}/issues".
@@ -914,9 +924,11 @@ export function issueRoutes(
     }
     const offset = parsedOffset ?? 0;
 
+    // Agent visibility (2026-09-30) composes with A5 here; the one predicate
+    // is the same one the /issues/:id guard asks of a single row.
+    await resolveAgentVisibility(db, req, companyId);
     const result = await svc.list(companyId, {
-      // A5: issues inside a restricted project vanish for actors off its list.
-      visibleWhere: projectScopedVisibilityCondition(req, companyId, issues.projectId),
+      visibleWhere: issueVisibilityCondition(req, companyId),
       status: req.query.status as string | undefined,
       assigneeAgentId: req.query.assigneeAgentId as string | undefined,
       participantAgentId: req.query.participantAgentId as string | undefined,

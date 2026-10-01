@@ -14,10 +14,15 @@ import { agentAccountabilityService } from "../services/agent-accountability.js"
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+import {
+  agentVisibilityParam,
+} from "./visibility.js";
 import { requireActiveStewardHarness } from "./agentdash-mk-harness-auth.js";
 
 export function agentGovernanceRoutes(db: Db) {
   const router = Router();
+  // Agent visibility (2026-09-30): an agent the actor cannot see is 404 here too.
+  router.param("agentId", agentVisibilityParam(db));
   const governance = agentGovernanceService(db);
   const access = accessService(db);
 

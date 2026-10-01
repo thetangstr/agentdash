@@ -1,12 +1,17 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { and, eq } from "drizzle-orm";
-import { inboxDismissals, joinRequests } from "@paperclipai/db";
+import { inboxDismissals, joinRequests, agents } from "@paperclipai/db";
 import { sidebarBadgeService } from "../services/sidebar-badges.js";
 import { accessService } from "../services/access.js";
 import { dashboardService } from "../services/dashboard.js";
 import { collapseDuplicatePendingHumanJoinRequests } from "../lib/join-request-dedupe.js";
 import { assertCompanyAccess } from "./authz.js";
+import {
+  agentVisibilityCondition,
+  issueVisibilityCondition,
+  resolveAgentVisibility,
+} from "./visibility.js";
 
 function buildDismissedAtByKey(
   dismissals: Array<{ itemKey: string; dismissedAt: Date | string }>,
@@ -69,7 +74,11 @@ export function sidebarBadgeRoutes(db: Db) {
       dismissals: dismissedAtByKey,
       joinRequests: visibleJoinRequests,
     });
-    const summary = await dashboard.summary(companyId);
+    await resolveAgentVisibility(db, req, companyId);
+    const summary = await dashboard.summary(companyId, {
+      agentVisibleWhere: agentVisibilityCondition(req, companyId, agents.id),
+      issueVisibleWhere: issueVisibilityCondition(req, companyId),
+    });
     const hasFailedRuns = badges.failedRuns > 0;
     const alertsCount =
       (summary.agents.error > 0 && !hasFailedRuns ? 1 : 0) +

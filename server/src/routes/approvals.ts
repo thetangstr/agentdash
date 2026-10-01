@@ -36,7 +36,12 @@ import {
   secretService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { assertIssueIdVisible, filterVisibleByProject } from "./visibility.js";
+import {
+  assertAgentIdVisible,
+  assertIssueIdVisible,
+  filterVisibleByProject,
+  visibleAgentIdsFor,
+} from "./visibility.js";
 import { badRequest, forbidden, unprocessable } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { approvalUrl } from "../lib/public-base-url.js";
@@ -299,7 +304,14 @@ export function approvalRoutes(
     assertCompanyAccess(req, companyId);
     const status = req.query.status as string | undefined;
     const result = await svc.list(companyId, status);
-    res.json(result.map((approval) => approvalResponse(approval)));
+    // Agent visibility (2026-09-30): a request raised by an agent the actor
+    // cannot see is not theirs to know about.
+    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+    const visible =
+      visibleIds === null
+        ? result
+        : result.filter((approval) => !approval.requestedByAgentId || visibleIds.has(approval.requestedByAgentId));
+    res.json(visible.map((approval) => approvalResponse(approval)));
   });
 
   router.get("/approvals/:id", async (req, res) => {
@@ -310,6 +322,9 @@ export function approvalRoutes(
       return;
     }
     assertCompanyAccess(req, approval.companyId);
+    if (approval.requestedByAgentId) {
+      await assertAgentIdVisible(db, req, approval.requestedByAgentId, "Approval");
+    }
     res.json(approvalResponse(approval));
   });
 
