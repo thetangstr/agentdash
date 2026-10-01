@@ -16,6 +16,9 @@ import { agentService } from "../services/agents.js";
 import { requireProductProfile } from "../services/companies.js";
 import { logger } from "../middleware/logger.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+import {
+  agentVisibilityParam,
+} from "./visibility.js";
 
 /**
  * Memberships created before this instant predate automatic provisioning.
@@ -29,6 +32,8 @@ const PERSONAL_AGENT_PROVISIONING_FROM = new Date("2026-09-01T00:00:00.000Z");
 
 export function agentStewardshipRoutes(db: Db) {
   const router = Router();
+  // Agent visibility (2026-09-30): an agent the actor cannot see is 404 here too.
+  router.param("agentId", agentVisibilityParam(db));
   const stewardships = agentStewardshipService(db);
   const access = accessService(db);
 

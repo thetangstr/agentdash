@@ -1,9 +1,14 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { dashboardService } from "../services/dashboard.js";
-import { issues } from "@paperclipai/db";
+import { issues, agents } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
-import { projectScopedVisibilityCondition } from "./visibility.js";
+import {
+  agentVisibilityCondition,
+  issueVisibilityCondition,
+  projectScopedVisibilityCondition,
+  resolveAgentVisibility,
+} from "./visibility.js";
 
 export function dashboardRoutes(db: Db) {
   const router = Router();
@@ -12,7 +17,11 @@ export function dashboardRoutes(db: Db) {
   router.get("/companies/:companyId/dashboard", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const summary = await svc.summary(companyId);
+    await resolveAgentVisibility(db, req, companyId);
+    const summary = await svc.summary(companyId, {
+      agentVisibleWhere: agentVisibilityCondition(req, companyId, agents.id),
+      issueVisibleWhere: issueVisibilityCondition(req, companyId),
+    });
     res.json(summary);
   });
 
@@ -21,9 +30,10 @@ export function dashboardRoutes(db: Db) {
   router.get("/companies/:companyId/dashboard/working-now", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    await resolveAgentVisibility(db, req, companyId);
     res.json(
       await svc.workingNow(companyId, {
-        visibleWhere: projectScopedVisibilityCondition(req, companyId, issues.projectId),
+        visibleWhere: issueVisibilityCondition(req, companyId),
       }),
     );
   });

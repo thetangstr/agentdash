@@ -668,6 +668,11 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     } else {
       assertBoard(req);
       body = updateCompanySchema.parse(req.body);
+      // Agent visibility (2026-09-30): who sees which agents is a company
+      // administrator's decision, whoever else may edit company settings.
+      if (body.agentVisibilityDefault !== undefined) {
+        await assertCompanyAdministrator(access, req, companyId);
+      }
 
       // The code is an authorization input, never company data — stripped here
       // for the same reason `POST /companies` strips it, so it cannot land in a

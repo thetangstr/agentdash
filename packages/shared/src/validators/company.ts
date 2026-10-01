@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AGENT_VISIBILITIES,
   COMPANY_PRODUCT_PROFILES,
   COMPANY_STATUSES,
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
@@ -38,6 +39,8 @@ export const updateCompanySchema = createCompanySchema
     spentMonthlyCents: z.number().int().nonnegative().optional(),
     requireBoardApprovalForNewAgents: z.boolean().optional(),
     newIssuesStartAsTodo: z.boolean().optional(),
+    /** Agent visibility (2026-09-30): administrators only; the route enforces it. */
+    agentVisibilityDefault: z.enum(AGENT_VISIBILITIES).optional(),
     feedbackDataSharingEnabled: z.boolean().optional(),
     feedbackDataSharingConsentAt: z.coerce.date().nullable().optional(),
     feedbackDataSharingConsentByUserId: z.string().min(1).nullable().optional(),

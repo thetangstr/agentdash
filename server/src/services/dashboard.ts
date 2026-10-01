@@ -192,7 +192,7 @@ export function dashboardService(db: Db) {
       };
     },
 
-    summary: async (companyId: string) => {
+    summary: async (companyId: string, opts: { agentVisibleWhere?: SQL; issueVisibleWhere?: SQL } = {}) => {
       const company = await db
         .select()
         .from(companies)
@@ -201,16 +201,17 @@ export function dashboardService(db: Db) {
 
       if (!company) throw notFound("Company not found");
 
+      // Agent visibility (2026-09-30): a member's counts cover what they can see.
       const agentRows = await db
         .select({ status: agents.status, count: sql<number>`count(*)` })
         .from(agents)
-        .where(eq(agents.companyId, companyId))
+        .where(and(eq(agents.companyId, companyId), opts.agentVisibleWhere))
         .groupBy(agents.status);
 
       const taskRows = await db
         .select({ status: issues.status, count: sql<number>`count(*)` })
         .from(issues)
-        .where(eq(issues.companyId, companyId))
+        .where(and(eq(issues.companyId, companyId), opts.issueVisibleWhere))
         .groupBy(issues.status);
 
       const pendingApprovals = await db

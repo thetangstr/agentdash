@@ -8,6 +8,9 @@ import { accessService } from "../services/access.js";
 import { agentMemoryService } from "../services/agent-memory.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { assertCompanyAccess, isCompanyAdministrator } from "./authz.js";
+import {
+  agentVisibilityParam,
+} from "./visibility.js";
 
 /**
  * AgentDash: an agent's durable memory.
@@ -32,6 +35,8 @@ import { assertCompanyAccess, isCompanyAdministrator } from "./authz.js";
  */
 export function agentMemoryRoutes(db: Db) {
   const router = Router();
+  // Agent visibility (2026-09-30): an agent the actor cannot see is 404 here too.
+  router.param("agentId", agentVisibilityParam(db));
   const memory = agentMemoryService(db);
   const stewardships = agentStewardshipService(db);
   const access = accessService(db);

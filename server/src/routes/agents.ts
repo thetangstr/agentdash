@@ -78,8 +78,20 @@ import {
   checkCompanyInstructionsPath,
   findProtectedHostDirectoryOverlap,
 } from "../services/instructions-root-confinement.js";
-import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
-import { assertIssueIdVisible, issueVisibilityParam, runVisibilityCondition, runVisibilityParam } from "./visibility.js";
+import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo,
+  assertCompanyAdministrator,
+} from "./authz.js";
+import {
+  agentVisibilityCondition,
+  assertAgentIdVisible,
+  assertIssueIdVisible,
+  issueVisibilityParam,
+  pruneOrgTreeToVisible,
+  resolveAgentVisibility,
+  runVisibilityCondition,
+  runVisibilityParam,
+  visibleAgentIdsFor,
+} from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { approvalDecisionEffectsService } from "../services/approval-decision-effects.js";
@@ -1857,6 +1869,9 @@ export function agentRoutes(
   router.param("id", async (req, _res, next, rawId) => {
     try {
       req.params.id = await normalizeAgentReference(req, String(rawId));
+      // Agent visibility (2026-09-30): an agent the actor cannot see is 404 on
+      // every /agents/:id/* route, before the handler runs.
+      await assertAgentIdVisible(db, req, req.params.id);
       next();
     } catch (err) {
       next(err);
@@ -2143,7 +2158,10 @@ export function agentRoutes(
       });
       return;
     }
-    const result = (await svc.list(companyId)).map((agent) => withHarnessReadiness(agent));
+    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+    const result = (await svc.list(companyId))
+      .filter((agent) => visibleIds === null || visibleIds.has(agent.id))
+      .map((agent) => withHarnessReadiness(agent));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
       res.json(await attachHumanContext(companyId, result));
@@ -2229,7 +2247,9 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const tree = await svc.orgForCompany(companyId);
-    const leanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
+    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+    const fullLeanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
+    const leanTree = visibleIds === null ? fullLeanTree : pruneOrgTreeToVisible(fullLeanTree, visibleIds);
     res.json(leanTree);
   });
 
@@ -2238,7 +2258,9 @@ export function agentRoutes(
     assertCompanyAccess(req, companyId);
     const style = (ORG_CHART_STYLES.includes(req.query.style as OrgChartStyle) ? req.query.style : "warmth") as OrgChartStyle;
     const tree = await svc.orgForCompany(companyId);
-    const leanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
+    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+    const fullLeanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
+    const leanTree = visibleIds === null ? fullLeanTree : pruneOrgTreeToVisible(fullLeanTree, visibleIds);
     const svg = renderOrgChartSvg(leanTree as unknown as OrgNode[], style);
     res.setHeader("Content-Type", "image/svg+xml");
     res.setHeader("Cache-Control", "no-cache");
@@ -2250,7 +2272,9 @@ export function agentRoutes(
     assertCompanyAccess(req, companyId);
     const style = (ORG_CHART_STYLES.includes(req.query.style as OrgChartStyle) ? req.query.style : "warmth") as OrgChartStyle;
     const tree = await svc.orgForCompany(companyId);
-    const leanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
+    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+    const fullLeanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
+    const leanTree = visibleIds === null ? fullLeanTree : pruneOrgTreeToVisible(fullLeanTree, visibleIds);
     const png = await renderOrgChartPng(leanTree as unknown as OrgNode[], style);
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "no-cache");
@@ -3557,6 +3581,11 @@ export function agentRoutes(
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
       return;
     }
+    // Agent visibility (2026-09-30): who may see an agent is a company
+    // administrator's decision, whoever else may edit the agent.
+    if (hasOwn(req.body as object, "visibility")) {
+      await assertCompanyAdministrator(access, req, existing.companyId);
+    }
 
     /*
      * Refuse `steward` rather than silently dropping it.
@@ -4407,8 +4436,12 @@ export function agentRoutes(
       res.status(400).json({ error: "offset must be a non-negative integer" });
       return;
     }
+    await resolveAgentVisibility(db, req, companyId);
     const runs = await heartbeat.list(companyId, agentId, limit, parsedOffset ?? 0, {
-      visibleWhere: runVisibilityCondition(req, companyId),
+      visibleWhere: and(
+        runVisibilityCondition(req, companyId),
+        agentVisibilityCondition(req, companyId, heartbeatRuns.agentId),
+      ),
     });
     res.json(runs);
   });
@@ -4424,7 +4457,11 @@ export function agentRoutes(
     // padded in and renders bogus "live" counts.
     const minCount = readLiveRunsQueryInt(req.query.minCount, 50, 0);
     // A5 (GH #830): runs on an issue in a restricted project are absent.
-    const runsVisibleWhere = runVisibilityCondition(req, companyId);
+    await resolveAgentVisibility(db, req, companyId);
+    const runsVisibleWhere = and(
+      runVisibilityCondition(req, companyId),
+      agentVisibilityCondition(req, companyId, heartbeatRuns.agentId),
+    );
     const limit = readLiveRunsQueryInt(req.query.limit, 50, 50);
 
     const columns = {
