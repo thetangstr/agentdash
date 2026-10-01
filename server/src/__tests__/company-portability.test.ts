@@ -447,6 +447,19 @@ describe("company portability", () => {
     });
   });
 
+  // AgentDash: GH #709 — non-GitHub hosts are refused with a 400 before any fetch.
+  it("rejects a GitHub import URL on a non-allowlisted host with a 400", () => {
+    expect(() => parseGitHubSourceUrl("https://attacker.example/acme/pkg")).toThrow(
+      expect.objectContaining({ status: 400, code: "GITHUB_SOURCE_HOST_NOT_ALLOWED" }),
+    );
+    expect(() => parseGitHubSourceUrl("https://169.254.169.254/latest/meta-data")).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+    expect(() => parseGitHubSourceUrl("http://github.com/acme/pkg")).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+  });
+
   it("exports referenced skills as stubs by default with sanitized Paperclip extension data", async () => {
     const portability = companyPortabilityService({} as any);
 

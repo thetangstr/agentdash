@@ -58,7 +58,7 @@ import {
 import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
 import { findServerAdapter } from "../adapters/index.js";
 import { HttpError, forbidden, notFound, unprocessable } from "../errors.js";
-import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
+import { assertAllowedGitHubSourceUrl, ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import type { StorageService } from "../storage/types.js";
 import { accessService } from "./access.js";
 import { agentService } from "./agents.js";
@@ -2734,10 +2734,9 @@ function normalizeGitHubSourcePath(value: string | null | undefined) {
 }
 
 export function parseGitHubSourceUrl(rawUrl: string) {
-  const url = new URL(rawUrl);
-  if (url.protocol !== "https:") {
-    throw unprocessable("GitHub source URL must use HTTPS");
-  }
+  // AgentDash: GH #709 — only allowlisted GitHub hosts (plus operator-configured
+  // GitHub Enterprise hosts); rejects with a clear 400 before any fetch.
+  const url = assertAllowedGitHubSourceUrl(rawUrl);
   const hostname = url.hostname;
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length < 2) {

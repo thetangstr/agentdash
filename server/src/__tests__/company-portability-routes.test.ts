@@ -363,6 +363,30 @@ describe.sequential("company portability routes", () => {
     expect(mockCompanyPortabilityService.importBundle).not.toHaveBeenCalled();
   });
 
+  // AgentDash: GH #709 — a non-GitHub source host is a clear 400 before the service runs.
+  it.sequential("rejects a non-allowlisted GitHub source host with a 400 before previewing", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId: ceoAgentId,
+      companyId: "11111111-1111-4111-8111-111111111111",
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post("/api/companies/11111111-1111-4111-8111-111111111111/imports/preview")
+      .send({
+        source: { type: "github", url: "https://attacker.example/acme/pkg" },
+        include: { company: true, agents: true, projects: false, issues: false },
+        target: { mode: "existing_company", companyId: "11111111-1111-4111-8111-111111111111" },
+        collisionStrategy: "rename",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("not an allowed GitHub host");
+    expect(mockCompanyPortabilityService.previewImport).not.toHaveBeenCalled();
+  });
+
   it.sequential("rejects non-CEO agents from CEO-safe import preview routes", async () => {
     const app = await createApp({
       type: "agent",

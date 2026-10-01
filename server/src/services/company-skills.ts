@@ -29,7 +29,7 @@ import type {
 import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { conflict, notFound, unprocessable } from "../errors.js";
-import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
+import { assertAllowedGitHubSourceUrl, ghFetch, gitHubApiBase, publicUrlFetch, resolveRawGitHubUrl } from "./github-fetch.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
 
@@ -548,6 +548,15 @@ async function fetchText(url: string) {
   return response.text();
 }
 
+// AgentDash: GH #709 — plain-URL skill import goes through the SSRF-guarded public fetch.
+async function fetchPublicText(url: string) {
+  const response = await publicUrlFetch(url);
+  if (!response.ok) {
+    throw unprocessable(`Failed to fetch ${url}: ${response.status}`);
+  }
+  return response.text();
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await ghFetch(url, {
     headers: {
@@ -580,10 +589,8 @@ async function resolveGitHubCommitSha(owner: string, repo: string, ref: string, 
 }
 
 function parseGitHubSourceUrl(rawUrl: string) {
-  const url = new URL(rawUrl);
-  if (url.protocol !== "https:") {
-    throw unprocessable("GitHub source URL must use HTTPS");
-  }
+  // AgentDash: GH #709 — only allowlisted GitHub hosts; a clear 400 before any fetch.
+  const url = assertAllowedGitHubSourceUrl(rawUrl);
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length < 2) {
     throw unprocessable("Invalid GitHub URL");
@@ -1156,7 +1163,9 @@ async function readUrlSkillImports(
   }
 
   if (url.startsWith("http://") || url.startsWith("https://")) {
-    const markdown = await fetchText(url);
+    // AgentDash: GH #709 — arbitrary hosts stay allowed here, but private/reserved addresses,
+    // unvalidated redirects and unbounded responses are refused.
+    const markdown = await fetchPublicText(url);
     const parsedMarkdown = parseFrontmatterMarkdown(markdown);
     const urlObj = new URL(url);
     const fileName = path.posix.basename(urlObj.pathname);
