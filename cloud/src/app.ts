@@ -14,6 +14,8 @@ import { frontDoor as makeFrontDoor, type FrontDoor } from "./front-door/service
 import { logMailer, type Mailer, resendMailer, unconfiguredMailer } from "./front-door/mailer.js";
 import { publicRoutes } from "./routes/public.js";
 import { inviteService, inviteValidateRoutes } from "./invites.js";
+import { type Alerter, logAlerter } from "./jobs/alerts.js";
+import { monitorRoutes } from "./routes/monitor.js";
 
 /** The front door's mail transport from config (SC-7, GH #768). */
 export function mailerFromConfig(config: CloudConfig, log: Logger): Mailer {
@@ -30,6 +32,8 @@ export function createApp(opts: {
   admin?: Omit<RequireAdminOptions, "onRefused">;
   /** SC-7 (GH #768): the front door; built from config when omitted. Tests pass one with fakes. */
   frontDoor?: FrontDoor;
+  /** SC-10 (GH #771): the ops alert transports by name, for `alerts test`. Defaults to the log. */
+  alertTransports?: Array<{ name: string; alerter: Alerter }>;
 }): Express {
   const { db, config, log } = opts;
   const frontDoor = opts.frontDoor ?? makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
@@ -82,7 +86,8 @@ export function createApp(opts: {
             }),
         }
       : {}),
-  }));
+  }), // AgentDash (SC-10, GH #771): fleet status, box health, suspend and wake, alerts test.
+  monitorRoutes(db, log, { edgeLive: config.edgeLive, transports: opts.alertTransports ?? [{ name: "log", alerter: logAlerter(log) }] }));
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not found" });

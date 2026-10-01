@@ -15,7 +15,17 @@ export interface MailMessage {
   kind: MailKind;
 }
 
-export type MailKind = "verify" | "already_have_box" | "ready" | "find" | "find_none" | "waitlisted" | "approved";
+export type MailKind =
+  | "verify"
+  | "already_have_box"
+  | "ready"
+  | "find"
+  | "find_none"
+  | "waitlisted"
+  | "approved"
+  // AgentDash (SC-10, GH #771): the Free idle policy (spec §5.2).
+  | "idle_suspend_warning"
+  | "idle_delete_warning";
 
 export interface Mailer {
   send(message: MailMessage): Promise<void>;
@@ -128,4 +138,21 @@ export const emails = {
         : `You're approved. Your workspace ${input.slug} will be created shortly; we will email the link to open it when it is ready.`,
     ], { label: "Watch progress", url: input.signInLink });
   },
+  // AgentDash (SC-10, GH #771): Free idle policy, spec §5.2 (day 14 and day 45).
+  idleSuspendWarning(to: string, input: { slug: string; url: string; pauseOn: Date }): MailMessage {
+    return render("idle_suspend_warning", to, "Your AgentDash workspace will pause soon", [
+      `Nobody has used your free workspace ${input.slug} for two weeks. To save resources we pause idle free workspaces; yours will pause on or after ${longDate(input.pauseOn)}.`,
+      "Sign in before then to keep it running. If it does pause, nothing is lost: your data stays, and opening the workspace wakes it in about a minute.",
+    ], { label: "Open my workspace", url: input.url });
+  },
+  idleDeleteWarning(to: string, input: { slug: string; url: string; deleteOn: Date }): MailMessage {
+    return render("idle_delete_warning", to, "Your paused AgentDash workspace will be deleted in 15 days", [
+      `Your free workspace ${input.slug} has been paused for a while and nobody has opened it. It will be deleted on or after ${longDate(input.deleteOn)}.`,
+      "To keep it, open it before then: it wakes in about a minute and the countdown stops. To keep a copy instead, open it and export your company from its settings.",
+    ], { label: "Open my workspace", url: input.url });
+  },
 };
+
+function longDate(d: Date): string {
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+}

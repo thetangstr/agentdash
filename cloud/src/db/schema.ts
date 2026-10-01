@@ -12,6 +12,7 @@ import {
   boolean,
   check,
   customType,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -417,4 +418,156 @@ export const rateEvents = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("rate_events_lookup_idx").on(t.bucket, t.key, t.createdAt)],
+);
+
+// ---- Fleet health, alerts, idle policy, spend (SC-10, GH #771) -----------
+
+export const HEALTH_PATHS = ["direct", "router"] as const;
+export type HealthPath = (typeof HEALTH_PATHS)[number];
+
+export const HEALTH_STATUSES = ["ok", "failing", "unknown"] as const;
+export type HealthStatus = (typeof HEALTH_STATUSES)[number];
+
+/**
+ * The latest health of each box on each path (spec §6.3): `direct` is the
+ * box's Railway host (health is exempt from the edge secret), `router` is
+ * https://<slug>.<edge domain> through the edge router. One row per box and
+ * path; `consecutive_failures` drives the 3-failure alert.
+ */
+export const boxHealth = pgTable(
+  "box_health",
+  {
+    boxId: uuid("box_id")
+      .notNull()
+      .references(() => boxes.id),
+    path: text("path").$type<HealthPath>().notNull(),
+    status: text("status").$type<HealthStatus>().notNull().default("unknown"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    lastOkAt: timestamp("last_ok_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    release: text("release"),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("box_health_box_path_uq").on(t.boxId, t.path),
+    check("box_health_path_ck", inList("path", HEALTH_PATHS)),
+    check("box_health_status_ck", inList("status", HEALTH_STATUSES)),
+  ],
+);
+
+/** Every health poll, for `box health <slug>`. Pruned by prune_fleet_history() (the runtime role has no DELETE). */
+export const boxHealthChecks = pgTable(
+  "box_health_checks",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    boxId: uuid("box_id")
+      .notNull()
+      .references(() => boxes.id),
+    path: text("path").$type<HealthPath>().notNull(),
+    ok: boolean("ok").notNull(),
+    httpStatus: integer("http_status"),
+    latencyMs: integer("latency_ms"),
+    error: text("error"),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("box_health_checks_box_idx").on(t.boxId, t.checkedAt),
+    index("box_health_checks_time_idx").on(t.checkedAt),
+    check("box_health_checks_path_ck", inList("path", HEALTH_PATHS)),
+  ],
+);
+
+export const FLEET_ALERT_STATES = ["firing", "resolved"] as const;
+export type FleetAlertState = (typeof FLEET_ALERT_STATES)[number];
+
+/**
+ * One row per alert condition (`key`, e.g. `health:direct:<box id>`,
+ * `router_5xx`, `cert:<host>`, `spend`): dedupe, reminders, flap
+ * suppression and recovery notices (../monitor/alert-center.ts).
+ */
+export const fleetAlerts = pgTable(
+  "fleet_alerts",
+  {
+    key: text("key").primaryKey(),
+    kind: text("kind").notNull(),
+    state: text("state").$type<FleetAlertState>().notNull(),
+    subject: text("subject").notNull(),
+    boxId: uuid("box_id").references(() => boxes.id),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    firstFiredAt: timestamp("first_fired_at", { withTimezone: true }).notNull(),
+    lastFiredAt: timestamp("last_fired_at", { withTimezone: true }).notNull(),
+    lastNotifiedAt: timestamp("last_notified_at", { withTimezone: true }),
+    notifyCount: integer("notify_count").notNull().default(0),
+    suppressedCount: integer("suppressed_count").notNull().default(0),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("fleet_alerts_state_idx").on(t.state), check("fleet_alerts_state_ck", inList("state", FLEET_ALERT_STATES))],
+);
+
+/**
+ * Per-replica request counts from the edge router, one row per flush
+ * (written only through edge_record_stats(), migration 0009). The control
+ * plane sums a window to get the router's 5xx rate.
+ */
+export const edgeStats = pgTable(
+  "edge_stats",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    replica: text("replica").notNull(),
+    requests: integer("requests").notNull(),
+    serverErrors: integer("server_errors").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("edge_stats_time_idx").on(t.createdAt)],
+);
+
+export const MONITOR_READING_KINDS = ["spend", "cert", "router_5xx"] as const;
+export type MonitorReadingKind = (typeof MONITOR_READING_KINDS)[number];
+
+/**
+ * Point readings for the fleet summary: the spend reading (`value` in USD,
+ * null when not available), certificate days left per host, the router's
+ * 5xx rate. Pruned by prune_fleet_history().
+ */
+export const monitorReadings = pgTable(
+  "monitor_readings",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    kind: text("kind").$type<MonitorReadingKind>().notNull(),
+    subject: text("subject").notNull(),
+    value: doublePrecision("value"),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("monitor_readings_kind_idx").on(t.kind, t.subject, t.createdAt),
+    check("monitor_readings_kind_ck", inList("kind", MONITOR_READING_KINDS)),
+  ],
+);
+
+export const IDLE_NOTICE_KINDS = ["suspend_warning", "delete_warning"] as const;
+export type IdleNoticeKind = (typeof IDLE_NOTICE_KINDS)[number];
+
+/**
+ * The idle policy's customer emails (spec §5.2), one per idle period: a
+ * period is identified by when it started (`idle_since`), so a box that is
+ * used again and goes idle again is warned again.
+ */
+export const boxIdleNotices = pgTable(
+  "box_idle_notices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    boxId: uuid("box_id")
+      .notNull()
+      .references(() => boxes.id),
+    kind: text("kind").$type<IdleNoticeKind>().notNull(),
+    idleSince: timestamp("idle_since", { withTimezone: true }).notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("box_idle_notices_period_uq").on(t.boxId, t.kind, t.idleSince),
+    check("box_idle_notices_kind_ck", inList("kind", IDLE_NOTICE_KINDS)),
+  ],
 );

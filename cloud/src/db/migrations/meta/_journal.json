@@ -64,6 +64,13 @@
       "when": 1790619960402,
       "tag": "0008_invite_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790872862127,
+      "tag": "0009_fleet_health",
+      "breakpoints": true
     }
   ]
 }

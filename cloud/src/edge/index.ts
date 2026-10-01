@@ -16,16 +16,19 @@
 // CLOUD_DATA_KEY. A dedicated edge-secret key (the provisioner encrypting
 // edge_secret_enc under it, existing rows re-encrypted) would keep the router
 // from holding a key that also opens claim codes; tracked on #765.
+import { hostname } from "node:os";
 import postgres from "postgres";
 import { parseKeyring } from "../crypto.js";
 import { edgeRoleProblems } from "../db/roles.js";
 import { createLogger } from "../logger.js";
 import { ActivityBuffer, type ClientIpSource, createEdgeServer } from "./proxy.js";
 import { pgRouteSource, RouteTable } from "./routes.js";
+import { EdgeStats } from "./stats.js";
 
 const log = createLogger({ base: { service: "edge" } });
 const REFRESH_MS = 5_000;
 const ACTIVITY_FLUSH_MS = 30_000;
+const STATS_FLUSH_MS = 60_000;
 
 async function main() {
   const url = process.env.DATABASE_URL?.trim();
@@ -53,7 +56,18 @@ async function main() {
   const flush = setInterval(() => void activity.flush().catch((err: unknown) => log.warn("activity flush failed", { err })), ACTIVITY_FLUSH_MS);
   flush.unref();
 
+  // AgentDash (SC-10, GH #771): request and 5xx counts for the control plane's router-5xx alert.
+  const stats = new EdgeStats();
+  const replica = (process.env.RAILWAY_REPLICA_ID ?? hostname()).slice(0, 64);
+  const writeStats = () =>
+    stats.flush(async (requests, serverErrors) => {
+      await sql`select edge_record_stats(${replica}, ${requests}::int, ${serverErrors}::int)`;
+    });
+  const statsFlush = setInterval(() => void writeStats().catch((err: unknown) => log.warn("stats flush failed", { err })), STATS_FLUSH_MS);
+  statsFlush.unref();
+
   const server = createEdgeServer({
+    recordResponse: (serverError) => stats.record(serverError),
     routes: table,
     edgeDomain,
     log,
@@ -73,7 +87,8 @@ async function main() {
   const shutdown = () => {
     clearInterval(refresh);
     clearInterval(flush);
-    server.close(() => void activity.flush().catch(() => {}).finally(() => void sql.end({ timeout: 5 }).finally(() => process.exit(0))));
+    clearInterval(statsFlush);
+    server.close(() => void Promise.allSettled([activity.flush(), writeStats()]).finally(() => void sql.end({ timeout: 5 }).finally(() => process.exit(0))));
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

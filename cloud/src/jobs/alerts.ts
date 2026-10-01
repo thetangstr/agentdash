@@ -7,8 +7,22 @@ import { redact, redactString } from "../logger.js";
 import type { Secret } from "../secret.js";
 
 export interface Alert {
-  kind: "job_failed" | "job_dead" | "cleanup_refused";
+  kind:
+    | "job_failed"
+    | "job_dead"
+    | "cleanup_refused"
+    // AgentDash (SC-10, GH #771): fleet monitoring (../monitor/).
+    | "box_unhealthy"
+    | "router_5xx"
+    | "cert_expiry"
+    | "spend_alarm"
+    | "idle_policy"
+    | "alert_test";
   subject: string;
+  /** SC-10: a short human-readable explanation (no secret; redacted anyway). */
+  detail?: string | null;
+  /** SC-10: true on a recovery notice (the condition cleared). */
+  resolved?: boolean;
   boxId?: string | null;
   slug?: string | null;
   jobId?: string | null;
