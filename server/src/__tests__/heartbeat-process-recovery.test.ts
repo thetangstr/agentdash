@@ -1191,7 +1191,61 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(comments[0]?.body).toContain("costUsd=");
   });
 
-  it("lets a human-triggered remediation clear an exhausted recovery budget", async () => {
+  // AgentDash: this test previously claimed a manual wake "cleared" an
+  // exhausted budget, but it never seeded the durable marker — it only proved
+  // the unlinked-dispatch ancestry bypass. Once a persisted exhausted marker
+  // exists, EVERY wake for the issue is refused, including an unlinked
+  // human-source one; only the named-human task_recovery.remediate permit
+  // path authorizes a single bound run.
+  it("holds a persisted exhausted marker against an unlinked human-source wake", async () => {
+    const { agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("cost");
+    await db
+      .update(issues)
+      .set({
+        status: "blocked",
+        executionState: {
+          recoveryBudget: {
+            status: "exhausted",
+            exhaustedBy: ["cost"],
+            usage: {
+              automaticRetries: 0,
+              providerTurns: 1,
+              providerTokens: 1,
+              providerCostUsd: 0.25,
+              runtimeMs: 1_000,
+            },
+            exhaustedAt: new Date().toISOString(),
+            sourceRunId: parentRunId,
+            refusedRunId: parentRunId,
+          },
+        },
+      })
+      .where(eq(issues.id, issueId));
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const wake = await heartbeat.wakeup(agentId, {
+      source: "on_demand",
+      triggerDetail: "manual",
+      reason: "Human remediation after recovery exhaustion",
+      contextSnapshot: { issueId, taskId: issueId },
+      requestedByActorType: "user",
+      requestedByActorId: "staging-operator",
+    });
+
+    const remediationRun = wake
+      ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, wake.id)).then((rows) => rows[0] ?? null)
+      : null;
+    expect(remediationRun?.status).toBe("cancelled");
+    expect(remediationRun?.errorCode).toBe("task_recovery_budget_exhausted");
+    expect(mockAdapterExecute).not.toHaveBeenCalled();
+
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.executionState).toMatchObject({
+      recoveryBudget: { status: "exhausted" },
+    });
+  });
+
+  it("keeps the unlinked-dispatch bypass only when no persisted marker exists", async () => {
     const { agentId, issueId } = await seedExhaustedRecoveryBudgetFixture("cost");
     const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
 
@@ -1471,10 +1525,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(continuationRun?.errorCode).toBe("task_recovery_budget_exhausted");
   }
 
-  it("keeps the exhausted marker when a board user moves the issue out of blocked; the run it starts still goes ahead", async () => {
+  it("keeps the exhausted marker when a board user moves the issue out of blocked; the unlinked wake it starts is refused", async () => {
     const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
     await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
     const knownRunIds = await knownRunIdsForAgent(agentId);
+    const adapterCallsBefore = mockAdapterExecute.mock.calls.length;
 
     const res = await request(createRecoveryBudgetIssueApp(recoveryBudgetBoardActor(companyId)))
       .patch(`/api/issues/${issueId}`)
@@ -1485,21 +1540,33 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expectRecoveryBudgetNotice(res.body, issueId);
     await expectRecoveryBudgetKept(issueId);
 
-    // Interim (until the one-run permit): the person-started run is not refused.
-    const humanRun = await waitForAdapterRunOnIssue(agentId, issueId, knownRunIds);
-    expect(humanRun?.status).toBe("succeeded");
+    // Founder decision (permit + explicit clear): the interim
+    // isRunStartedByPerson exemption is retired — an ordinary wake a board
+    // user's action starts is refused like any other unlinked wake. Only the
+    // exact run a confirmed task_recovery.remediate permit names can pass.
+    const humanRun = await waitForValue(async () => {
+      const rows = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+      return rows.find((row) =>
+        !knownRunIds.has(row.id) &&
+        (row.contextSnapshot as Record<string, unknown> | null)?.issueId === issueId &&
+        row.status !== "queued" && row.status !== "running" && row.status !== "scheduled_retry"
+      ) ?? null;
+    }, 5_000);
+    expect(humanRun?.status).toBe("cancelled");
+    expect(humanRun?.errorCode).toBe("task_recovery_budget_exhausted");
     await waitForHeartbeatIdle(db, 5_000);
-    expect(mockAdapterExecute).toHaveBeenCalled();
+    expect(mockAdapterExecute.mock.calls.length).toBe(adapterCallsBefore);
 
     // No fresh window was opened: automatic recovery is still refused.
     await expectRecoveryBudgetKept(issueId);
     await expectLinkedRetryRefused(agentId, issueId, humanRun!.id);
   });
 
-  it("keeps the exhausted marker when a board user reopens the issue by comment; the run it starts still goes ahead", async () => {
+  it("keeps the exhausted marker when a board user reopens the issue by comment; the unlinked wake it starts is refused", async () => {
     const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
     await exhaustRecoveryBudgetThroughLinkedRetry({ agentId, issueId, parentRunId });
     const knownRunIds = await knownRunIdsForAgent(agentId);
+    const adapterCallsBefore = mockAdapterExecute.mock.calls.length;
 
     const res = await request(createRecoveryBudgetIssueApp(recoveryBudgetBoardActor(companyId)))
       .post(`/api/issues/${issueId}/comments`)
@@ -1507,14 +1574,26 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expectRecoveryBudgetNotice(res.body, issueId);
 
+    // The comment reopens the issue to `todo`; the wake it starts is refused
+    // at claim, and the refusal moves the issue straight back to `blocked`
+    // (reblockExhaustedIssue), so either status may be visible here.
     const issue = await expectRecoveryBudgetKept(issueId);
-    expect(issue.status).toBe("todo");
+    expect(["todo", "blocked"]).toContain(issue.status);
 
-    const humanRun = await waitForAdapterRunOnIssue(agentId, issueId, knownRunIds);
-    expect(humanRun?.status).toBe("succeeded");
+    const humanRun = await waitForValue(async () => {
+      const rows = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+      return rows.find((row) =>
+        !knownRunIds.has(row.id) &&
+        (row.contextSnapshot as Record<string, unknown> | null)?.issueId === issueId &&
+        row.status !== "queued" && row.status !== "running" && row.status !== "scheduled_retry"
+      ) ?? null;
+    }, 5_000);
+    expect(humanRun?.status).toBe("cancelled");
+    expect(humanRun?.errorCode).toBe("task_recovery_budget_exhausted");
     await waitForHeartbeatIdle(db, 5_000);
-    expect(mockAdapterExecute).toHaveBeenCalled();
-    await expectRecoveryBudgetKept(issueId);
+    expect(mockAdapterExecute.mock.calls.length).toBe(adapterCallsBefore);
+    const reblocked = await expectRecoveryBudgetKept(issueId);
+    expect(reblocked.status).toBe("blocked");
     await expectLinkedRetryRefused(agentId, issueId, humanRun!.id);
   });
 
@@ -1731,8 +1810,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(linkedRun?.error).toContain("Clear recovery block & retry");
     expect(mockAdapterExecute).not.toHaveBeenCalled();
 
-    // An unlinked, human-originated wake is not automatic recovery: it is not
-    // cancelled by the exhausted marker (it used to be).
+    // Founder decision (permit + explicit clear): an unlinked, human-originated
+    // wake is refused by the exhausted marker too — the only run that passes
+    // is the exact one a confirmed task_recovery.remediate permit names.
     const human = await heartbeat.wakeup(agentId, {
       source: "automation",
       triggerDetail: "system",
@@ -1745,8 +1825,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const humanRun = human
       ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, human.id)).then((rows) => rows[0] ?? null)
       : null;
-    expect(humanRun?.status).not.toBe("cancelled");
-    expect(humanRun?.errorCode).toBeNull();
+    expect(humanRun?.status).toBe("cancelled");
+    expect(humanRun?.errorCode).toBe("task_recovery_budget_exhausted");
 
     // A wake is not a clear: the marker stays until a board user clears it.
     const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
@@ -1859,7 +1939,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     ].sort());
   });
 
-  it("keeps a queued person-started wake when the budget first trips", async () => {
+  // Founder decision (permit + explicit clear): a queued wake a person started
+  // no longer survives the trip. It would be refused at claim anyway (only a
+  // task_recovery.remediate permit's bound run passes), so it is cancelled
+  // with the automatic siblings and the comment stays on the issue.
+  it("cancels a queued person-started wake when the budget first trips", async () => {
     const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
     const humanWakeId = randomUUID();
     const humanRunId = randomUUID();
@@ -1925,8 +2009,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, humanRunId)).then((rows) => rows[0] ?? null),
       db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, automaticSiblingId)).then((rows) => rows[0] ?? null),
     ]);
-    expect(humanRun?.status).toBe("scheduled_retry");
-    expect(humanRun?.errorCode).toBeNull();
+    expect(humanRun?.status).toBe("cancelled");
+    expect(humanRun?.errorCode).toBe("task_recovery_budget_exhausted");
     expect(automaticSibling?.status).toBe("cancelled");
     expect(automaticSibling?.errorCode).toBe("task_recovery_budget_exhausted");
     expect(mockAdapterExecute).not.toHaveBeenCalled();

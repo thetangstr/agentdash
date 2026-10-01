@@ -5,10 +5,13 @@ import { Button } from "@/components/ui/button";
 // see that automatic recovery for this task stopped, and why, and clear it.
 // Before this, the only trace was one comment, and nothing could clear it.
 //
-// AgentDash (recovery budget, explicit clear — 2026-09-30): the button below is
-// the only clear. Changing the status, commenting or reassigning no longer
-// clears the block, so the banner says so. Interim, until the one-run permit
-// ships: a run a board user's own action starts still goes ahead.
+// AgentDash (recovery budget, permit + explicit clear — 2026-09-30 founder
+// decision): there are two ways past the block, and the banner names both.
+// The button below clears it. A board user can instead authorize exactly one
+// run through the human-control plane (task_recovery.remediate); that run
+// cannot continue on its own. Changing the status, commenting or reassigning
+// does not clear the block, and the run such an action would start is
+// refused too.
 
 const DIMENSION_LABELS: Record<string, string> = {
   attempts: "automatic retries",
@@ -17,6 +20,15 @@ const DIMENSION_LABELS: Record<string, string> = {
   cost: "cost",
   time: "runtime",
 };
+
+/** A still-unused one-run authorization on the marker, if there is one. */
+export function authorizedRecoveryRun(executionState: unknown): { expiresAt: string | null } | null {
+  const record = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const remediation = record(record(record(executionState)?.recoveryBudget)?.remediation);
+  if (!remediation || remediation.status !== "authorized") return null;
+  return { expiresAt: typeof remediation.expiresAt === "string" ? remediation.expiresAt : null };
+}
 
 function formatMinutes(ms: number) {
   const minutes = ms / 60_000;
@@ -66,6 +78,7 @@ export function IssueRecoveryBudgetBanner({
   const budget = readIssueRecoveryBudget(executionState);
   if (!budget) return null;
 
+  const authorized = authorizedRecoveryRun(executionState);
   const dimensions = budget.exhaustedBy.map((dimension) => DIMENSION_LABELS[dimension] ?? dimension);
   return (
     <div
@@ -79,13 +92,21 @@ export function IssueRecoveryBudgetBanner({
           {dimensions.length > 0
             ? `The automatic-retry budget ran out (${dimensions.join(", ")}). `
             : "The automatic-retry budget ran out. "}
-          No automatic retry starts until a board user clears the block with the button below.
+          No run starts on this issue until a board user clears the block, or authorizes exactly one run.
         </span>
       </div>
       <div className="text-xs text-amber-900/80 dark:text-amber-100/80" data-testid="issue-recovery-budget-explicit-clear">
-        Changing the status, commenting or reassigning does not clear it. A run you start that way can still go
-        ahead, and comments still reach the assignee, but the budget stays exhausted until it is cleared here.
+        Changing the status, commenting or reassigning does not clear it. The run that would start is refused too.
+        Comments stay on the issue for the next permitted run. To go on, clear the block with the button below
+        (automatic retries resume), or authorize one run through the human-control plane
+        (task_recovery.remediate): that run cannot continue on its own, and the block stays.
       </div>
+      {authorized ? (
+        <div className="text-xs font-medium" data-testid="issue-recovery-budget-authorized-run">
+          One run is authorized and waiting to start
+          {authorized.expiresAt ? ` (the authorization expires ${new Date(authorized.expiresAt).toLocaleString()})` : ""}.
+        </div>
+      ) : null}
       {budget.usage ? (
         <div className="text-xs text-amber-900/80 dark:text-amber-100/80">
           Used: {usageFragments(budget.usage, budget.limits).join(" · ")}

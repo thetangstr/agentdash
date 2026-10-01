@@ -7,7 +7,7 @@ import { agents, agentStewardships, authUsers, companies, companyContext, compan
   issueWorkProducts, principalPermissionGrants, projects, projectAccess, verdicts,
   workforceEnrollments, type Db } from '@paperclipai/db';
 import { type AskUserQuestionsInteraction, type CreateIssueThreadInteraction, resolveWorkforceTemplate } from '@paperclipai/shared';
-import { conflict, forbidden, notFound } from '../../errors.js';
+import { badRequest, conflict, forbidden, notFound } from '../../errors.js';
 import { actorHumanRole, assertCompanyAccess, assertCanSetCompanyDirection } from '../../routes/authz.js';
 import { assertProjectVisible } from '../../routes/visibility.js';
 import { currentBoardIdentity, type BoardIdentityWitness } from '../current-board-identity.js';
@@ -229,6 +229,17 @@ export function foundationAuthority(req: Request) {
           }
         }
       }
+    } else if (op === 'task_recovery.exhausted.read' || op === 'task_recovery.remediate') {
+      // AgentDash: task recovery requires a live named member with current
+      // issue visibility, plus the pinned assignee's current owner chain.
+      const [membership] = await executor.select().from(companyMemberships).where(and(
+        eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'),
+        eq(companyMemberships.principalId, req.actor.userId ?? ''), eq(companyMemberships.status, 'active')));
+      if (!membership) throw forbidden('Active named company membership required');
+      row(state, '09:membership', companyMemberships, membership.id);
+      if (typeof input.issueId !== 'string') throw badRequest('Task recovery operations require issueId');
+      const selected = await source.issue(input.issueId);
+      if (selected.assigneeAgentId) await source.ownerFacts(selected.assigneeAgentId);
     } else if (op === 'human_questions.pending.list') {
       const pending = await waitingOnYouService(executor).pendingQuestions(companyId, req.actor, { limit: 2147483647 }, req);
       for (const value of pending.items) await source.question(value.interactionId, value.issueId);

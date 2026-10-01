@@ -14,6 +14,7 @@ export const HUMAN_OPERATION_IDS = [
   'human_questions.pending.list', 'human_questions.read', 'human_questions.respond',
   'human_questions.cancel', 'human_questions.replace',
   'human_questions.owner.assign', 'human_questions.stewardship.assign', 'human_questions.stewardship.transfer',
+  'task_recovery.exhausted.read', 'task_recovery.remediate',
 ] as const;
 export type HumanOperationId = typeof HUMAN_OPERATION_IDS[number];
 export interface HumanOperationDescriptor {
