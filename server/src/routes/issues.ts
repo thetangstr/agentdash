@@ -1,3 +1,6 @@
+import { questionRecoveryCancelInputSchema, questionRecoveryListInputSchema, questionRecoveryReferenceSchema } from '@paperclipai/shared';
+import { cancelQuestionRecovery, listQuestionRecovery } from '../services/human-control/question-recovery.js';
+import { questionReplacement } from '../services/human-control/authority.js';
 import { issueCurrentAuthority } from "../services/issue-current-authority.js";
 import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
 import {
@@ -2603,6 +2606,47 @@ export function issueRoutes(
     for (const publication of publications) publishActivity(publication);
     return value;
   }
+  // AgentDash: dedicated safe metadata/receipt routes preserve the full interaction API.
+  router.get('/issues/:id/question-recovery', async (req, res) => {
+    const authority = foundationAuthority(req);
+    const input = questionRecoveryListInputSchema.parse({ ...req.query, issueId: req.params.id,
+      ...(req.query.limit === undefined ? {} : { limit: Number(req.query.limit) }) });
+    const issue = await svc.getById(input.issueId);
+    if (!issue) throw notFound('Issue not found');
+    const result = await protectedQuestions(req, authority, issue.companyId, 'human_questions.recovery.list', input,
+      executor => listQuestionRecovery(executor, req, issue.companyId, input));
+    res.json(result);
+  });
+  router.post('/issues/:id/question-recovery/:interactionId/cancel', async (req, res) => {
+    const authority = foundationAuthority(req);
+    const input = questionRecoveryCancelInputSchema.parse({ ...req.body, issueId: req.params.id, interactionId: req.params.interactionId });
+    const issue = await svc.getById(input.issueId);
+    if (!issue) throw notFound('Issue not found');
+    await protectedQuestions(req, authority, issue.companyId, 'human_questions.recovery.cancel', input,
+      (executor, acceptance, guards) => cancelQuestionRecovery(executor, req, issue.companyId, input, acceptance, guards), true);
+    const result = await protectedQuestions(req, authority, issue.companyId, 'human_questions.recovery.list', { issueId: input.issueId, interactionId: input.interactionId },
+      executor => listQuestionRecovery(executor, req, issue.companyId, { issueId: input.issueId, interactionId: input.interactionId }));
+    res.json(result.items[0]);
+  });
+  router.post('/issues/:id/question-recovery/:interactionId/replace', async (req, res) => {
+    const authority = foundationAuthority(req);
+    const input = questionRecoveryReferenceSchema.parse({ ...req.body, issueId: req.params.id, interactionId: req.params.interactionId });
+    const issue = await svc.getById(input.issueId);
+    if (!issue) throw notFound('Issue not found');
+    const value = await protectedQuestions(req, authority, issue.companyId, 'human_questions.replace', input, async (executor, acceptance, guards) => {
+      const prior = await issueThreadInteractionService(executor).getById(input.interactionId);
+      if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled' || prior.companyId !== issue.companyId || prior.issueId !== issue.id) throw notFound('Cancelled question not found');
+      if (!req.actor.userId?.trim() || !prior.payload.workforceAgentId) throw forbidden('A named workforce question owner is required');
+      const body = questionReplacement(prior);
+      const actor = { userId: req.actor.userId! };
+      const resolved = await issueThreadInteractionService(executor).previewCreate(issue, body, actor);
+      if (resolved.kind !== 'ask_user_questions' || resolved.payload.answerOwnerUserId !== actor.userId) throw forbidden('Only the current named answer owner may replace this question');
+      const created = await issueThreadInteractionService(executor).create(issue, body, actor, acceptance, guards);
+      acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: 'user', actorId: actor.userId, action: 'issue.thread_interaction_created', entityType: 'issue', entityId: issue.id, details: { interactionId: created.id, interactionKind: created.kind, interactionStatus: created.status } }, guards.beforeWrite));
+      return created;
+    }, true);
+    res.status(201).json(await currentQuestion(req, authority, issue, value.id));
+  });
   router.get("/issues/:id/interactions", async (req, res) => {
     const authority = req.actor.type === 'board' && !isAssistantActor(req) ? foundationAuthority(req) : null;
     const id = req.params.id as string;

@@ -1,3 +1,4 @@
+import { QuestionOwnerRecovery } from '@/components/QuestionOwnerRecovery';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type Ref } from "react";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Link, useLocation, useNavigate, useNavigationType, useParams } from "@/lib/router";
@@ -3679,6 +3680,7 @@ export function IssueDetail() {
           ))}
         </TabsList>
 
+        <QuestionOwnerRecovery companyId={issue.companyId} issueId={issue.id} />
         <TabsContent value="chat">
           {detailTab === "chat" ? (
             <IssueDetailChatTab

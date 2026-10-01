@@ -40,6 +40,7 @@ beforeEach(() => {
     const method = init?.method ?? 'GET';
     const body = init?.body ? JSON.parse(init.body as string) : null; requests.push({ url, method, body });
     let data: any = [];
+    if (url.includes('/question-recovery')) return Response.json({ items: [], nextCursor: null });
     if (url.includes('/two/')) data = url.endsWith('/brief') ? { ...brief, revision: 0, sources: [], facts: [] } : [];
     else if (url.endsWith('/proposals')) data = proposals;
     else if (url.endsWith('/review')) { if (conflict) return new Response(JSON.stringify({ error: 'Company sources changed; request a new proposal' }), { status: 409 }); proposals = proposals.map(p => url.includes(p.id) ? { ...p, status: body.decision === 'approve' ? 'approved' : 'rejected' } : p); data = proposals[0]; }

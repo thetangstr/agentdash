@@ -11,7 +11,7 @@ import { IssueThreadInteractionCard } from './IssueThreadInteractionCard';
 import { Button } from './ui/button';
 import type { AskUserQuestionsInteraction } from '@/lib/issue-thread-interactions';
 
-function useQuestionActions(companyId: string, issueId: string) {
+export function useQuestionActions(companyId: string, issueId: string) {
   const client = useQueryClient();
   return async () => {
     await Promise.all([
@@ -22,14 +22,14 @@ function useQuestionActions(companyId: string, issueId: string) {
     ]);
   };
 }
-function QuestionCard({ companyId, question }: { companyId: string; question: AskUserQuestionsInteraction }) {
+export function QuestionCard({ companyId, question, onUpdated }: { companyId: string; question: AskUserQuestionsInteraction; onUpdated?: (question: AskUserQuestionsInteraction) => void }) {
   const refresh = useQuestionActions(companyId, question.issueId);
   const [error, setError] = useState<string | null>(null);
   async function perform(action: () => Promise<unknown>) { setError(null); try { await action(); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : "Question update failed"); } }
   const session = useQuery({ queryKey: queryKeys.auth.session, queryFn: () => authApi.getSession() });
   return <div>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<IssueThreadInteractionCard interaction={question} currentUserId={session.data?.user?.id ?? session.data?.session?.userId ?? null}
-    onSubmitInteractionAnswers={(q, answers, shareWithCompany) => perform(() => issuesApi.respondToInteraction(q.issueId, q.id, { answers, shareWithCompany }))}
-    onCancelInteraction={q => perform(() => issuesApi.cancelInteraction(q.issueId, q.id, 'Explicit human cancellation; required input remains unresolved'))} />
+    onSubmitInteractionAnswers={(q, answers, shareWithCompany) => perform(async () => { const updated = await issuesApi.respondToInteraction(q.issueId, q.id, { answers, shareWithCompany }); if (updated.kind === 'ask_user_questions') onUpdated?.(updated); })}
+    onCancelInteraction={q => perform(async () => { const updated = await issuesApi.cancelInteraction(q.issueId, q.id, 'Explicit human cancellation; required input remains unresolved'); if (updated.kind === 'ask_user_questions') onUpdated?.(updated); })} />
   </div>;
 }
 export function PendingQuestionRow({ companyId, question }: { companyId: string; question: WaitingOnYouQuestion }) {

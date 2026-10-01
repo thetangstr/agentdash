@@ -86,6 +86,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: accepted-hire-recovery is inherited verbatim from the canonical default
 // bundle: repair accepted IDs without replaying interview/plan confirmations.
 // AgentDash: this remains the proposal creator's agent-facing prompt surface.
+// AgentDash: inactive-question-owner-recovery is inherited from the unified default bundle:
+// safe metadata, human-only confirmed cancellation, separate replacement/genuine answer,
+// continued dependent hold and uncertain-outcome inspection without replay or impersonation.
 // AgentDash: human fact-review and target-update guidance remains in the canonical bundle.
 // AgentDash: current-source authority, separate guarded skill stages and unknown-outcome
 // recovery are inherited with human-control-transport; generated hires get no private-owner override.

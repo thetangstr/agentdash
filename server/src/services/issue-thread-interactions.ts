@@ -430,6 +430,20 @@ async function expireStaleRequestConfirmationTarget(db: Db | any, args: {
 }
 
 
+// AgentDash: one factual Branch A/current assignee then Branch B/prior binding selection.
+// Callers retain their own create/cancelled/required-definition authorization checks.
+export async function selectWorkforceQuestionOwner(connection: Pick<Db, "select">,
+  issue: { id: string; companyId: string }, previous?: AskUserQuestionsInteraction["payload"]) {
+  const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+  if (!persistedIssue) throw notFound('Issue not found');
+  const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
+  const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
+  const agentId = template ? persistedIssue.assigneeAgentId : previous?.workforceAgentId;
+  const owner = agentId ? await agentAccountabilityService(connection).escalationUserId(issue.companyId, agentId) : null;
+  return { persistedIssue, enrollment, template, owner, agentId,
+    branch: template ? 'current' as const : previous?.workforceAgentId ? 'prior' as const : null };
+}
+
 // AgentDash: native SELECT-only question pins; factual resolution is not authorization.
 export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
     issue: { id: string; companyId: string },
@@ -438,10 +452,10 @@ export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
   ) {
     const data = createIssueThreadInteractionSchema.parse(input);
     if (data.kind === 'ask_user_questions') {
-      const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
-      if (!persistedIssue) throw notFound('Issue not found');
-      const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
-      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
+      const [prior] = data.payload.replacesInteractionId ? await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id))) : [];
+      const previous = prior?.kind === 'ask_user_questions' ? askUserQuestionsPayloadSchema.parse(prior.payload) : undefined;
+      const selection = await selectWorkforceQuestionOwner(connection, issue, previous);
+      const { persistedIssue, enrollment, template } = selection;
       const accountability = agentAccountabilityService(connection);
       // The server pins the target, never a body-supplied agent identifier.
       delete data.payload.workforceAgentId;
@@ -454,7 +468,7 @@ export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
         if (actor.agentId && actor.agentId !== persistedIssue.assigneeAgentId) throw forbidden('Only the enrolled assignee may request workforce input');
         if (!actor.agentId && !actor.userId) throw forbidden('An authenticated human or assigned worker is required');
         if (data.payload.questions.some(q => q.companyFactKey && !template.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Question must reference a known fact key of the assigned workforce template');
-        const owner = await accountability.escalationUserId(issue.companyId, persistedIssue.assigneeAgentId);
+        const owner = selection.owner;
         if (!owner) throw conflict('Assign an active accountable company member before asking workforce questions');
         if (data.payload.answerOwnerUserId && data.payload.answerOwnerUserId !== owner) throw conflict('Question owner must be the assignee’s current accountable member');
         data.payload.answerOwnerUserId = owner;
@@ -470,13 +484,12 @@ export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
       if (actor.agentId && !data.payload.workforceAgentId) delete data.payload.answerOwnerUserId;
       if (data.payload.answerOwnerUserId) await accountability.assertAccountableMember(issue.companyId, data.payload.answerOwnerUserId);
       if (data.payload.replacesInteractionId) {
-        const [prior] = await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id)));
         if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled') throw unprocessable('Replace an explicitly cancelled question on this issue');
         const previous = askUserQuestionsPayloadSchema.parse(prior.payload);
         if (previous.workforceAgentId && !data.payload.workforceAgentId) {
           if (actor.agentId || !actor.userId) throw forbidden('A human must replace a workforce question after reassignment to an unenrolled worker');
           if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
-          const owner = await accountability.escalationUserId(issue.companyId, previous.workforceAgentId);
+          const owner = selection.owner;
           if (!owner) throw conflict('Assign an active accountable member before replacing this question');
           await accountability.assertAccountableMember(issue.companyId, owner);
           data.payload.answerOwnerUserId = owner;

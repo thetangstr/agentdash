@@ -1,3 +1,4 @@
+import { recoveryHumanOperations } from '../services/human-control/question-recovery.js';
 import { ownershipHumanOperations } from "../services/human-control/ownership.js";
 import { questionHumanOperations } from "../services/human-control/questions.js";
 // AgentDash: trusted local human bridge; canonical REST authority is unchanged.
@@ -10,7 +11,7 @@ import { heartbeatService } from '../services/heartbeat.js';
 export function humanControlRoutes(db: Db, options: { heartbeat?: Pick<ReturnType<typeof heartbeatService>, 'wakeup'> } = {}) {
   const router = Router();
   const heartbeat = options.heartbeat ?? heartbeatService(db);
-  const svc = humanControlService(db, [...workforceHumanOperations(heartbeat), ...questionHumanOperations(heartbeat), ...ownershipHumanOperations()]);
+  const svc = humanControlService(db, [...workforceHumanOperations(heartbeat), ...questionHumanOperations(heartbeat), ...ownershipHumanOperations(), ...recoveryHumanOperations()]);
   router.get('/identity', async (req, res) => res.json(await svc.identity(req)));
   router.post('/discover', async (req, res) => {
     const input = humanDiscoverRequestSchema.parse(req.body);

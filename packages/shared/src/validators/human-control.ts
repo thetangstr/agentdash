@@ -68,3 +68,21 @@ export function humanJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
   if (schema instanceof z.ZodUnion) return { anyOf: def.options.map(humanJsonSchema) };
   throw new Error('Unsupported human operation schema');
 }
+
+// AgentDash: recovery metadata is deliberately independent of private question detail.
+export const questionRecoveryReferenceSchema = z.object({ issueId: z.string().uuid(), interactionId: z.string().uuid() }).strict();
+export const questionRecoveryListInputSchema = z.object({
+  issueId: z.string().uuid(), interactionId: z.string().uuid().optional(),
+  cursor: z.string().uuid().optional(), limit: z.number().int().min(1).max(50).default(20),
+}).strict().refine(value => !(value.interactionId && value.cursor), 'Targeted inspection and cursor are mutually exclusive');
+export const questionRecoveryCancelInputSchema = questionRecoveryReferenceSchema.extend({ expectedUpdatedAt: z.string().datetime({ offset: true }) }).strict();
+export const questionRecoveryMetadataSchema = questionRecoveryReferenceSchema.extend({
+  status: z.literal('pending'), updatedAt: z.string().datetime({ offset: true }), reason: z.literal('original_owner_unavailable'),
+}).strict();
+export const questionRecoveryReceiptSchema = questionRecoveryReferenceSchema.extend({ status: z.literal('cancelled'), replacementRequired: z.literal(true) }).strict();
+export const questionRecoveryListSchema = z.object({ items: z.array(z.union([questionRecoveryMetadataSchema, questionRecoveryReceiptSchema])), nextCursor: z.string().uuid().nullable() }).strict();
+export type QuestionRecoveryListInput = z.input<typeof questionRecoveryListInputSchema>;
+export type QuestionRecoveryCancelInput = z.infer<typeof questionRecoveryCancelInputSchema>;
+export type QuestionRecoveryMetadata = z.infer<typeof questionRecoveryMetadataSchema>;
+export type QuestionRecoveryReceipt = z.infer<typeof questionRecoveryReceiptSchema>;
+export type QuestionRecoveryList = z.infer<typeof questionRecoveryListSchema>;

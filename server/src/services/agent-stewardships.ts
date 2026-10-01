@@ -7,6 +7,7 @@ import {
   agentStewardships,
   authUsers,
   companyMemberships,
+  companies,
   bridgeEndpoints,
   humanChannelBindings,
 } from "@paperclipai/db";
@@ -515,6 +516,15 @@ export function agentStewardshipService(db: Db) {
         if (lockRows[0]?.locked !== true) {
           throw conflict("Agent stewardship transfer already in progress");
         }
+
+        // AgentDash: take the successor INSERT's existing company FK lock before
+        // membership/agent locks, matching company-first source authorization.
+        const parent = await tx.execute(sql`
+          select ${companies.id} from ${companies}
+          where ${companies.id} = ${companyId}
+          for key share
+        `);
+        if (resultRows(parent).length === 0) throw notFound("Company not found");
 
         await lockActiveUserMember(tx, companyId, input.userId);
         await lockTransferCompanyAgent(tx, companyId, agentId);

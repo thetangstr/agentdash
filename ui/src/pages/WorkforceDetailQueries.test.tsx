@@ -35,6 +35,7 @@ beforeEach(() => {
     const method = init?.method ?? 'GET'; const body = init?.body ? JSON.parse(init.body as string) : null;
     requests.push({ url, method, body });
     let data: any = [];
+    if (url.includes('/question-recovery')) return Response.json({ items: [], nextCursor: null });
     if (method === 'PATCH' || (method === 'POST' && (url.endsWith('/agent-stewardships') || url.endsWith('/stewardship/transfer')))) {
       agent = { ...agent, accountable: { userId: 'active-human', name: 'Nora', email: 'nora@example.test', via: agent.autonomy === 'autonomous' ? 'assignment' : 'steward' } }; data = agent;
     } else if (url.startsWith('/api/agents/')) data = agent;

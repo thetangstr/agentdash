@@ -254,7 +254,7 @@ describe('human control HTTP contract with current named authority', () => {
       expect((await client.listTools()).tools).toHaveLength(6);
       expect((await invoke('human_select_target', { target: h.target })).error).not.toBe(true);
       const found = await invoke('human_discover', { target: h.target });
-      expect(found.body.operations).toHaveLength(20);
+      expect(found.body.operations).toHaveLength(22);
       const p = await invoke('human_prepare', { target: h.target, operationId: 'workforce.first_job.start', version: 1, input: { agentId: worker.id } });
       expect(await db.select().from(issues).where(eq(issues.companyId, h.company.id))).toHaveLength(0);
       failAfterWake = true;

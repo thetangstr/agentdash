@@ -13,6 +13,7 @@ export const HUMAN_OPERATION_IDS = [
   'workforce.skills.retry', 'workforce.first_job.start',
   'human_questions.pending.list', 'human_questions.read', 'human_questions.respond',
   'human_questions.cancel', 'human_questions.replace',
+  'human_questions.recovery.list', 'human_questions.recovery.cancel',
   'human_questions.owner.assign', 'human_questions.stewardship.assign', 'human_questions.stewardship.transfer',
 ] as const;
 export type HumanOperationId = typeof HUMAN_OPERATION_IDS[number];
@@ -23,7 +24,7 @@ export interface HumanOperationDescriptor {
   actionId: string;
   targetKind: HumanTarget['kind'];
   behavior: 'read' | 'prepare_confirm';
-  authority: 'company_access' | 'company_direction' | 'exact_question_owner' | 'agent_management';
+  authority: 'company_access' | 'company_direction' | 'exact_question_owner' | 'agent_management' | 'current_question_recovery_owner';
   confirmation: 'none' | 'human_readback';
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;

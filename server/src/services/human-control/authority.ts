@@ -16,6 +16,7 @@ import { agentAccountabilityService } from '../agent-accountability.js';
 import { getDefaultCompanyGoal } from '../goals.js';
 import { workforceService, type WorkforceSkillStages } from '../workforce.js';
 import { boardAuthService } from '../board-auth.js';
+import { listQuestionRecovery, recoveryQuestion } from './question-recovery.js';
 import { waitingOnYouService } from '../waiting-on-you.js';
 import type { WorkforceQuestionDependency } from '../workforce-inputs.js';
 
@@ -229,6 +230,19 @@ export function foundationAuthority(req: Request) {
           }
         }
       }
+    } else if (op === 'human_questions.recovery.list' || op === 'human_questions.recovery.cancel') {
+      await source.member(req.actor.userId);
+      await source.issue(input.issueId as string);
+      const observe = async (value: Awaited<ReturnType<typeof recoveryQuestion>>) => {
+        row(state, '24:interaction', issueThreadInteractions, value.q.id);
+        // All actually consumed current enrollment rows, without unrelated goal/job traversal.
+        if (value.selection.persistedIssue.assigneeAgentId) await source.enrollmentRow(value.selection.persistedIssue.assigneeAgentId);
+        await source.enrollmentRow(value.enrollment.agentId);
+        await source.ownerFacts(value.enrollment.agentId);
+        if (value.oldMembership) row(state, '09:membership', companyMemberships, value.oldMembership.id);
+      };
+      if (op === 'human_questions.recovery.list') await listQuestionRecovery(executor, req, companyId, input, observe);
+      else await observe(await recoveryQuestion(executor, req, companyId, input.issueId as string, input.interactionId as string, selection.recovery));
     } else if (op === 'human_questions.pending.list') {
       const pending = await waitingOnYouService(executor).pendingQuestions(companyId, req.actor, { limit: 2147483647 }, req);
       for (const value of pending.items) await source.question(value.interactionId, value.issueId);
@@ -367,6 +381,8 @@ export function foundationAuthority(req: Request) {
         async assertSource(supplied: Db, issue: { id: string; companyId: string }) {
           if (supplied !== executor || issue.companyId !== selection.companyId) throw conflict('Current authority executor changed');
           await sources(executor, selection, state).issue(issue.id);
+          // Same sealed collection after native target-lock/validation awaits; never stage again.
+          if (selection.operationId === 'human_questions.recovery.cancel') await collect(executor, selection, state);
         },
         async seal() { await collect(executor, selection, state); identity.checkTime(); },
         async visibleQuestion(id: string, issueId: string) {
