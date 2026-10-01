@@ -197,20 +197,20 @@ This section is AgentDash-specific and lives in a named block so upstream cherry
 
 When AgentDash adds a feature that requires agent behavior changes — a new endpoint workers must call, a new state transition, a new approval gate, a new failure mode they must recover from — every agent must learn about it regardless of which adapter (Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, Hermes, etc.) is dispatching that worker. Agent prompts are the harness, not the adapter; if a prompt surface is missed, that adapter's worker silently runs the old behavior and the regression is invisible until production. PR #191 made this concrete: workers without prompt updates were silently broken on the new DoD/verdict workflow.
 
-### The four prompt surfaces that MUST be updated
+### The two prompt surfaces that MUST be updated
 
-When a change touches agent-facing behavior, update **every** surface below in the same PR:
+When a change touches agent-facing behavior, update **both** surfaces below in the same PR:
 
-1. `server/src/onboarding-assets/default/AGENTS.md` — default worker prompt baseline.
-2. `server/src/onboarding-assets/ceo/AGENTS.md` — CEO agent prompt.
-3. `server/src/onboarding-assets/chief_of_staff/AGENTS.md` — Chief of Staff agent prompt.
-4. `server/src/services/agent-creator-from-proposal.ts` — `renderAgents` (agent-creator template that synthesizes per-hire prompts from proposals).
+1. `server/src/onboarding-assets/default/AGENTS.md` — the one worker prompt. Every role (CEO and Chief of Staff included) loads this unified bundle; there are no separate `ceo/` or `chief_of_staff/` prompt files (the old copies were never loaded and were removed in the #859 split).
+2. `server/src/services/agent-creator-from-proposal.ts` — `renderAgents` (per-hire header from the proposal, prepended to the canonical default bundle).
+
+`server/src/onboarding-assets/evaluator/` and `reviewer/` are specialist mandates, not worker prompts; update them only when the change applies to those principals.
 
 If the new behavior genuinely doesn't apply to a surface, still touch the file with a short comment explaining why — that gives reviewers and CI an explicit signal rather than silent omission.
 
 ### Adapter-agnostic content rules
 
-The four surfaces are read by every adapter, so write them in adapter-neutral terms:
+The prompt surfaces are read by every adapter, so write them in adapter-neutral terms:
 
 - **HTTP endpoints over adapter-specific tool calls.** Refer to `POST /api/companies/:companyId/...` rather than to a specific adapter's tool name. Workers reach the control plane the same way regardless of harness.
 - **JSON payload field names, not visual representations.** Say `{ "verdict": "pass" }` rather than "click the green Pass button" — adapters with no UI must still understand the contract.
@@ -230,7 +230,7 @@ This makes the conflict surface explicit if an upstream cherry-pick later touche
 
 ### CI enforcement
 
-`.github/workflows/agents-md-drift-check.yml` runs on every pull request against `main` and fails when a PR adds new files under `server/src/routes/`, `server/src/services/`, or `packages/db/src/schema/` without also touching at least one of the four prompt surfaces. Bypass when the change genuinely doesn't apply to agent prompts by including `[no-prompt-update]` (case-insensitive) in the PR title or body. Use the bypass sparingly — the default assumption is that agent-facing infrastructure changes need prompt updates.
+`.github/workflows/agents-md-drift-check.yml` runs on every pull request against `main` and fails when a PR adds new files under `server/src/routes/`, `server/src/services/`, or `packages/db/src/schema/` without also touching at least one of the prompt surfaces. Bypass when the change genuinely doesn't apply to agent prompts by including `[no-prompt-update]` (case-insensitive) in the PR title or body. Use the bypass sparingly — the default assumption is that agent-facing infrastructure changes need prompt updates.
 <!-- /AgentDash: agent-facing-feature-convention -->
 
 <!-- AgentDash: quota-enforcement — DO NOT REMOVE OR REORDER THIS BLOCK -->
@@ -254,7 +254,7 @@ The system enforces per-workspace run quotas before each agent task starts. The 
 
 ### Agent-facing impact
 
-All four prompt surfaces (`default/AGENTS.md`, `ceo/AGENTS.md`, `chief_of_staff/AGENTS.md`, `agent-creator-from-proposal.ts`) have been updated in the `agent-run-quota` named block to describe the enforcement behavior. Agents should not retry quota-blocked runs and should escalate to the board for an upgrade.
+The prompt surfaces (`default/AGENTS.md` and `agent-creator-from-proposal.ts`; the unused `ceo/` and `chief_of_staff/` copies were removed later) have been updated in the `agent-run-quota` named block to describe the enforcement behavior. Agents should not retry quota-blocked runs and should escalate to the board for an upgrade.
 <!-- /AgentDash: quota-enforcement -->
 
 <!-- AgentDash: harness-directives — DO NOT REMOVE OR REORDER THIS BLOCK -->
@@ -286,7 +286,7 @@ The separation is structural rather than conventional: capability lives in `agen
 
 ### Agent-facing impact
 
-All four prompt surfaces carry the `agentdash-mk-harness-directives` named block. Agents must treat directives as authoritative about HOW they work, must not read them as authorization, and must report rather than retry when a harness push narrows something away.
+The prompt surfaces carry the `agentdash-mk-harness-directives` named block. Agents must treat directives as authoritative about HOW they work, must not read them as authorization, and must report rather than retry when a harness push narrows something away.
 <!-- /AgentDash: harness-directives -->
 
 <!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->

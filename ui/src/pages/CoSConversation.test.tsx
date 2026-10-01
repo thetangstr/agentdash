@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 // @vitest-environment jsdom
 // AgentDash: smoke test for CoSConversation onboarding page
 
@@ -120,7 +121,7 @@ describe("CoSConversation", () => {
 
     await act(async () => {
       const { CoSConversation } = await import("./CoSConversation");
-      root.render(<CoSConversation />);
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
     });
 
     expect(container.textContent).toContain("Setting up your workspace");
@@ -135,7 +136,7 @@ describe("CoSConversation", () => {
 
     await act(async () => {
       const { CoSConversation } = await import("./CoSConversation");
-      root.render(<CoSConversation />);
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
     });
 
     // Flush the bootstrap promise
@@ -167,7 +168,7 @@ describe("CoSConversation", () => {
 
     await act(async () => {
       const { CoSConversation } = await import("./CoSConversation");
-      root.render(<CoSConversation />);
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
     });
     await act(async () => {});
 
@@ -193,7 +194,7 @@ describe("CoSConversation", () => {
 
     await act(async () => {
       const { CoSConversation } = await import("./CoSConversation");
-      root.render(<CoSConversation />);
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
     });
     await act(async () => {});
 
@@ -205,7 +206,7 @@ describe("CoSConversation", () => {
 
     await act(async () => {
       const { CoSConversation } = await import("./CoSConversation");
-      root.render(<CoSConversation />);
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
     });
 
     await act(async () => {});
@@ -237,7 +238,7 @@ describe("CoSConversation", () => {
 
     await act(async () => {
       const { CoSConversation } = await import("./CoSConversation");
-      root.render(<CoSConversation />);
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
     });
     await act(async () => {});
 

@@ -42,6 +42,7 @@ interface IssueThreadInteractionCardProps {
   onSubmitInteractionAnswers?: (
     interaction: AskUserQuestionsInteraction,
     answers: AskUserQuestionsAnswer[],
+    shareWithCompany?: boolean,
   ) => Promise<void> | void;
   onCancelInteraction?: (
     interaction: AskUserQuestionsInteraction,
@@ -649,6 +650,7 @@ function AskUserQuestionsCard({
   onSubmitInteractionAnswers?: (
     interaction: AskUserQuestionsInteraction,
     answers: AskUserQuestionsAnswer[],
+    shareWithCompany?: boolean,
   ) => Promise<void> | void;
   onCancelInteraction?: (
     interaction: AskUserQuestionsInteraction,
@@ -662,6 +664,8 @@ function AskUserQuestionsCard({
       ]),
     ),
   );
+  const [draftText, setDraftText] = useState<Record<string, string>>(() => Object.fromEntries((interaction.result?.answers ?? []).map(a => [a.questionId, a.text ?? ''])));
+  const [shareWithCompany, setShareWithCompany] = useState(false);
   const [working, setWorking] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
@@ -679,7 +683,7 @@ function AskUserQuestionsCard({
   const questions = interaction.payload.questions;
   const requiredQuestions = questions.filter((question) => question.required);
   const canSubmit = requiredQuestions.every(
-    (question) => (draftAnswers[question.id] ?? []).length > 0,
+    (question) => question.selectionMode === "text" ? Boolean(draftText[question.id]?.trim()) : (draftAnswers[question.id] ?? []).length > 0,
   );
 
   function toggleOption(questionId: string, optionId: string, selectionMode: "single" | "multi") {
@@ -703,8 +707,10 @@ function AskUserQuestionsCard({
         interaction,
         questions.map((question) => ({
           questionId: question.id,
-          optionIds: draftAnswers[question.id] ?? [],
+          optionIds: question.selectionMode === "text" ? [] : draftAnswers[question.id] ?? [],
+          ...(question.selectionMode === "text" ? { text: draftText[question.id]?.trim() ?? "" } : {}),
         })),
+        shareWithCompany,
       );
     } finally {
       setWorking(false);
@@ -760,7 +766,7 @@ function AskUserQuestionsCard({
                   ) : null}
                 </div>
                 <TaskField
-                  label={question.selectionMode === "single" ? "Pick" : "Pick many"}
+                  label={question.selectionMode === "text" ? "Text" : question.selectionMode === "single" ? "Pick" : "Pick many"}
                   value={question.required ? "Required" : "Optional"}
                   tone="subtle"
                 />
@@ -771,22 +777,26 @@ function AskUserQuestionsCard({
                 role={question.selectionMode === "single" ? "radiogroup" : "group"}
                 aria-labelledby={`${interaction.id}-${question.id}-prompt`}
               >
-                {question.options.map((option) => (
+                {question.selectionMode === "text" ? (
+                  <textarea aria-labelledby={`${interaction.id}-${question.id}-prompt`} maxLength={4000} value={draftText[question.id] ?? ""} onChange={event => setDraftText(current => ({ ...current, [question.id]: event.target.value }))} className="min-h-24 w-full rounded-md border border-border bg-background p-3 text-sm" />
+                ) : question.options.map((option) => (
                   <QuestionOptionButton
                     key={option.id}
                     id={`${interaction.id}-${question.id}-${option.id}`}
                     label={option.label}
                     description={option.description}
                     selected={(draftAnswers[question.id] ?? []).includes(option.id)}
-                    selectionMode={question.selectionMode}
+                    selectionMode={question.selectionMode as "single" | "multi"}
                     onClick={() =>
-                      toggleOption(question.id, option.id, question.selectionMode)}
+                      toggleOption(question.id, option.id, question.selectionMode as "single" | "multi")}
                   />
                 ))}
               </div>
             </div>
           ))}
 
+          {interaction.payload.answerOwnerUserId ? <p className="text-sm text-muted-foreground">Answer owner: {interaction.payload.answerOwnerUserId}</p> : null}
+          {questions.some(q => q.companyFactKey) ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shareWithCompany} onChange={event => setShareWithCompany(event.target.checked)} />Share these facts with the company (company-level jobs only)</label> : null}
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/75 p-4">
             <div className="text-sm text-muted-foreground">
               Submit once after you finish the full form.
@@ -838,6 +848,7 @@ function AskUserQuestionsCard({
       ) : (
         <div className="space-y-3">
           {questions.map((question) => {
+            const answer = interaction.result?.answers.find(answer => answer.questionId === question.id);
             const labels = getQuestionAnswerLabels({
               question,
               answers: interaction.result?.answers ?? [],
@@ -851,7 +862,7 @@ function AskUserQuestionsCard({
                   {question.prompt}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {labels.length > 0 ? (
+                  {answer?.text ? <p className="whitespace-pre-wrap text-sm">{answer.text}</p> : labels.length > 0 ? (
                     labels.map((label) => (
                       <TaskField key={label} label="Answer" value={label} />
                     ))
@@ -1235,7 +1246,7 @@ export function IssueThreadInteractionCard({
       : null;
 
   return (
-    <div className={cn("rounded-sm border p-5 shadow-none", styles.shell)}>
+    <div id={`interaction-${interaction.id}`} className={cn("rounded-sm border p-5 shadow-none", styles.shell)}>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1 basis-64">
           <div className="flex flex-wrap items-center gap-2">

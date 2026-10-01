@@ -1,3 +1,4 @@
+import { WorkforceTemplatePreview } from "../WorkforceTemplatePreview";
 // AgentDash: chat substrate card — CoS plan proposal (Phase C + #210 revision).
 // See docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
 import { useState } from "react";
@@ -49,6 +50,8 @@ export function AgentPlanProposal({
               <div className="text-sm font-semibold text-text-primary">
                 {agent.name} <span className="text-text-secondary font-normal">— {agent.role}</span>
               </div>
+              <WorkforceTemplatePreview templateId={agent.workforceTemplateId}/>
+              {agent.kpis?.length > 0 && <p className="mt-2 text-sm">Declared targets: {agent.kpis.join("; ")} · Outcome measurements: Unknown</p>}
               {agent.responsibilities?.[0] && (
                 <div className="mt-1 text-sm text-text-secondary">{agent.responsibilities[0]}</div>
               )}

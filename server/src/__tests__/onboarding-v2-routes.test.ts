@@ -2,6 +2,8 @@ import express from "express";
 import request from "supertest";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+vi.mock("../services/workforce.js", () => ({ workforceService: () => ({ ensureSkillsInstalled: vi.fn() }) }));
+
 const mockOrchestrator = { bootstrap: vi.fn() };
 const mockConversations = {
   paginate: vi.fn().mockResolvedValue([]),
@@ -11,6 +13,8 @@ const mockConversations = {
   addParticipant: vi.fn().mockResolvedValue(undefined),
 };
 const mockAgents = {
+  completeMaterialization: vi.fn().mockResolvedValue({}),
+  update: vi.fn().mockResolvedValue({}),
   create: vi.fn(),
   getById: vi.fn(),
   createApiKey: vi.fn(),
@@ -25,7 +29,11 @@ const mockCompanies = {
 };
 const mockInterview = { nextTurn: vi.fn() };
 const mockProposer = { propose: vi.fn() };
-const mockCreator = { create: vi.fn() };
+const mockCreator = {
+  create: vi.fn(),
+  accept: async (input: unknown) => { const result = await mockCreator.create(input); return { created: { id: result.agentId }, input, result }; },
+  complete: async (accepted: { result: unknown }) => accepted.result,
+};
 const mockInstructions = { materializeManagedBundle: vi.fn().mockResolvedValue({}) };
 const mockCosState = {
   getOrCreate: vi.fn(),
@@ -160,6 +168,7 @@ vi.mock("drizzle-orm", () => ({
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
 }));
 
+import { assistantConversations, companies } from "@paperclipai/db";
 import { onboardingV2Routes } from "../routes/onboarding-v2.js";
 import { errorHandler } from "../middleware/error-handler.js";
 
@@ -182,23 +191,40 @@ afterEach(() => {
 
 function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
   const app = express();
+  let hireFlow = false;
   app.use(express.json());
   app.use((req: any, _res: any, next: any) => {
     req.actor = actor;
+    hireFlow = ["/api/onboarding/agent/confirm", "/api/onboarding/confirm-plan"].includes(req.path);
     next();
   });
   // Stub db: each `select().from().where()...orderBy?...limit?` chain pops the
   // next preset result. The chain's terminal state is awaitable as a Promise of an array.
   const queue = [...dbResults];
+  let selectedTable: unknown;
+  let receiptConversation: any;
+  let updating = false;
   const makeChain = (): any => {
     const chain: any = {
-      select: () => chain,
-      from: () => chain,
+      select: () => { updating = false; return chain; },
+      from: (table: unknown) => { selectedTable = table; return chain; },
+      for: () => chain,
+      update: () => { updating = true; return chain; },
+      set: (patch: unknown) => { receiptConversation = { ...receiptConversation, ...(patch as object) }; return chain; },
       where: () => chain,
       orderBy: () => chain,
       limit: () => chain,
-      then: (onF: any, onR: any) =>
-        Promise.resolve(queue.length > 0 ? queue.shift() : []).then(onF, onR),
+      then: (onF: any, onR: any) => {
+        let result: unknown[];
+        if (hireFlow && updating) result = [];
+        else if (hireFlow && selectedTable === companies) result = [];
+        else if (hireFlow && selectedTable === assistantConversations && receiptConversation) result = [receiptConversation];
+        else {
+          result = queue.length > 0 ? queue.shift()! : [];
+          if (hireFlow && selectedTable === assistantConversations) receiptConversation = result[0];
+        }
+        return Promise.resolve(result).then(onF, onR);
+      },
     };
     return chain;
   };
@@ -441,8 +467,8 @@ describe("POST /api/onboarding/agent/confirm", () => {
       request(app).post("/api/onboarding/agent/confirm").send(requestBody),
     ]);
 
-    expect([first.status, second.status].sort()).toEqual([201, 402]);
-    expect([first.body.code, second.body.code]).toContain("agent_cap_exceeded");
+    expect([first.status, second.status].sort()).toEqual([201, 409]);
+    expect([first.body.details?.accepted, second.body.details?.accepted]).toContain(true);
     expect(mockCreator.create).toHaveBeenCalledTimes(1);
     expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
   });
@@ -550,6 +576,7 @@ describe("POST /api/onboarding/confirm-plan", () => {
       id: `agent-${++createdCount}`,
       companyId,
       name: data.name,
+      pausedAt: data.pausedAt,
       adapterConfig: {},
     }));
 
@@ -599,11 +626,13 @@ describe("POST /api/onboarding/confirm-plan", () => {
       1,
       "c1",
       expect.objectContaining({ name: "Ellie", adapterType: "hermes_local", reportsTo: "cos1" }),
+      expect.objectContaining({ executor: expect.any(Object), publications: expect.any(Array) }),
     );
     expect(mockAgents.create).toHaveBeenNthCalledWith(
       2,
       "c1",
       expect.objectContaining({ name: "Quinn", adapterType: "hermes_local" }),
+      expect.objectContaining({ executor: expect.any(Object), publications: expect.any(Array) }),
     );
     expect(mockInstructions.materializeManagedBundle).toHaveBeenCalledTimes(2);
     expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "materializing");
@@ -1347,7 +1376,7 @@ describe("POST /api/onboarding/interview/turn — real-LLM plan parse path", () 
             plan: {
               rationale: "A lean two-agent team covering operations and engineering to unblock onboarding.",
               agents: [
-                { role: "operations_lead", name: "Maya", adapterType: "hermes_local", responsibilities: ["Triage incoming requests", "Draft standard replies"], kpis: ["Time-to-first-response"] },
+                { role: "operations_lead", name: "Maya", adapterType: "hermes_local", workforceTemplateId: "marketing-content", responsibilities: ["Triage incoming requests", "Draft standard replies"], kpis: ["Time-to-first-response"] },
                 { role: "engineering_lead", name: "Dev", adapterType: "hermes_local", responsibilities: ["Ship product fixes"], kpis: ["Issues closed per sprint"] },
               ],
               alignmentToShortTerm: "Unblocks manual onboarding within the first two weeks.",
@@ -1383,6 +1412,8 @@ describe("POST /api/onboarding/interview/turn — real-LLM plan parse path", () 
     expect(payload.agents).toHaveLength(2);
     expect(payload.agents[0].name).toBe("Maya");
     expect(payload.agents[0].adapterType).toBe("hermes_local");
+    expect(payload.agents[0].workforceTemplateId).toBe("marketing-content");
+    expect(payload.agents[1].workforceTemplateId).toBeUndefined();
     expect(payload.rationale).toMatch(/two-agent/);
   });
 

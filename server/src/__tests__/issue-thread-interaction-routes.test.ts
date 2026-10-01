@@ -16,8 +16,21 @@ vi.mock("../routes/visibility.js", async (importOriginal) => ({
   runVisibilityParam: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-// Question resolutions commit their audit on the same transaction; the stub
-// db runs the callback directly and the audit goes through mockLogActivity.
+// Native board question routes now accept through the current-source authority
+// on a real transaction. That authority (row witnesses, lock order, named-owner
+// visibility) is covered with PostgreSQL in human-workforce-source-authority,
+// workforce-questions and issue-current-authority tests; this suite keeps the
+// route/wake composition and models the authority as an always-current guard.
+vi.mock("../services/human-control/authority.js", () => ({
+  foundationAuthority: () => ({
+    stage: async () => ({
+      seal: async () => undefined,
+      checkTime: () => undefined,
+      assertSource: async () => undefined,
+      visibleQuestion: async () => undefined,
+    }),
+  }),
+}));
 vi.mock("../services/activity-log.js", () => ({
   logActivity: (...args: unknown[]) => mockLogActivity(...args),
   insertActivity: async (tx: unknown, input: unknown) => { await mockLogActivity(tx, input); return {}; },
@@ -444,8 +457,9 @@ describe.sequential("issue thread interaction routes", () => {
       "interaction-2",
       {},
       expect.objectContaining({ userId: "local-board" }),
-      // Acceptance: the caller transaction and its publication collector.
+      // Acceptance (caller transaction + publications) and current-source guards.
       expect.objectContaining({ publications: expect.any(Array) }),
+      expect.anything(),
     );
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
       ASSIGNEE_AGENT_ID,

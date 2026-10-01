@@ -74,6 +74,8 @@ const EMPTY_TEXT =
 
 function waitingWith(overrides: Partial<WaitingOnYou> = {}): WaitingOnYou {
   return {
+    pendingQuestions: [],
+    pendingQuestionsTotal: 0,
     decisions: [
       {
         approvalId: "appr-1",

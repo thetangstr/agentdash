@@ -6,6 +6,7 @@ import {
   Download,
   FlaskConical,
   Gauge,
+  GraduationCap,
   HeartPulse,
   Info,
   KeyRound,
@@ -65,6 +66,10 @@ export function settingsNavGroups({ isInstanceAdmin }: { isInstanceAdmin: boolea
       id: "agents",
       label: "Agents",
       items: [
+        // AgentDash (#859 workforce): role templates, approved company
+        // knowledge and first-job readiness. Lives under Settings › Agents
+        // (with Team › Agents linking here), not as a top-level item.
+        { to: "/workforce", label: "Workforce roles", icon: GraduationCap },
         { to: "/skills", label: "Skills", icon: Boxes },
         { to: "/company/settings/environments", label: "Environments", icon: MonitorCog, end: true },
         // Read-only for members; installing/removing adapters is instance-admin

@@ -15,7 +15,7 @@ import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.j
 vi.mock('../services/live-events.js', () => ({ publishLiveEvent: vi.fn() }));
 
 function gate() { let open!: () => void; const promise = new Promise<void>(r => { open = r; }); return { promise, open }; }
-const question = { kind: 'ask_user_questions' as const, continuationPolicy: 'none' as const, payload: { version: 1 as const, questions: [{ id: 'answer', prompt: 'What next?', selectionMode: 'single' as const, required: true, options: [{ id: 'proceed', label: 'Proceed' }] }] } };
+const question = { kind: 'ask_user_questions' as const, continuationPolicy: 'none' as const, payload: { version: 1 as const, questions: [{ id: 'answer', prompt: 'What next?', selectionMode: 'text' as const, required: true, options: [] }] } };
 const confirmation = { kind: 'request_confirmation' as const, continuationPolicy: 'none' as const, payload: { version: 1 as const, prompt: 'Proceed?', supersedeOnUserComment: true } };
 const actor = { actorType: 'user' as const, actorId: 'human', userId: 'human' };
 
@@ -56,7 +56,7 @@ describe('participating predicate writers on real PostgreSQL', () => {
     } finally { release.open(); await owner; await writer; }
   }
 
-  it.each(['goal-create', 'goal-update', 'goal-remove', 'dod-insert', 'blocks-add', 'blocks-clear', 'question-create', 'question-cancel', 'question-answer', 'confirmation-create', 'confirmation-accept', 'confirmation-reject', 'confirmation-comment-expiry', 'hold-create', 'hold-release', 'materialize'] as const)('%s waits before accepted predicate changes', async kind => {
+  it.each(['goal-create', 'goal-update', 'goal-remove', 'dod-insert', 'blocks-add', 'blocks-clear', 'question-create', 'question-cancel', 'question-answer', 'question-replace', 'confirmation-create', 'confirmation-accept', 'confirmation-reject', 'confirmation-comment-expiry', 'hold-create', 'hold-release', 'materialize'] as const)('%s waits before accepted predicate changes', async kind => {
     const f = await fixture(); const svc = issueThreadInteractionService(db);
     let run: () => Promise<unknown>;
     if (kind.startsWith('goal')) {
@@ -68,7 +68,8 @@ describe('participating predicate writers on real PostgreSQL', () => {
       run = () => issueService(db).update(f.issue.id, { blockedByIssueIds: kind === 'blocks-clear' ? [] : [f.blocker.id] });
     } else if (kind.startsWith('question')) {
       const q = kind === 'question-create' ? null : await svc.create(f.issue, question, actor);
-      run = () => kind === 'question-create' ? svc.create(f.issue, question, actor) : kind === 'question-cancel' ? svc.cancelQuestions(f.issue, q!.id, {}, actor) : kind === 'question-answer' ? svc.answerQuestions(f.issue, q!.id, { answers: [{ questionId: 'answer', optionIds: ['proceed'] }] }, actor) : svc.create(f.issue, question, actor);
+      if (kind === 'question-replace') await svc.cancelQuestions(f.issue, q!.id, {}, actor);
+      run = () => kind === 'question-create' ? svc.create(f.issue, question, actor) : kind === 'question-cancel' ? svc.cancelQuestions(f.issue, q!.id, {}, actor) : kind === 'question-answer' ? svc.answerQuestions(f.issue, q!.id, { answers: [{ questionId: 'answer', optionIds: [], text: 'Proceed' }] }, actor) : svc.create(f.issue, { ...question, payload: { ...question.payload, replacesInteractionId: q!.id } }, actor);
     } else if (kind.startsWith('confirmation')) {
       const c = kind === 'confirmation-create' ? null : await svc.create(f.issue, confirmation, actor);
       run = () => kind === 'confirmation-create' ? svc.create(f.issue, confirmation, actor) : kind === 'confirmation-accept' ? svc.acceptInteraction(f.issue, c!.id, {}, actor) : kind === 'confirmation-reject' ? svc.rejectInteraction(f.issue, c!.id, {}, actor) : svc.expireRequestConfirmationsSupersededByComment(f.issue, { id: randomUUID(), authorUserId: 'human' }, actor);

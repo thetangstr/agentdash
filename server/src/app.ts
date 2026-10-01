@@ -1,3 +1,4 @@
+import { workforceRoutes } from "./routes/workforce.js";
 import express, { Router, type Request as ExpressRequest } from "express";
 import { setAuthzRefusalDb } from "./routes/authz.js";
 import path from "node:path";
@@ -548,6 +549,7 @@ export async function createApp(
   api.use(gmailRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
+  api.use(workforceRoutes(db));
   // AgentDash: Company Evaluator (Stage 1 shadow)
   api.use(evaluationRoutes(db));
   api.use(featureFlagRoutes(db));

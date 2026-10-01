@@ -1,3 +1,4 @@
+import { Link } from "@/lib/router";
 // AgentDash: CoSConversation — onboarding v2 entry point
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -217,6 +218,7 @@ function CoSConversationView({
 
   return (
     <div className="fixed inset-0 flex flex-col">
+      <div className="border-b px-4 py-2 text-sm"><Link to="/workforce" className="underline">Review hired roles, company knowledge and first jobs</Link></div>
       <ChatPanel
         conversationId={bootstrapped.conversationId}
         companyId={bootstrapped.companyId}

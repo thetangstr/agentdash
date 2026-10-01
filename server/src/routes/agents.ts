@@ -1,3 +1,8 @@
+import { publishActivity, type ActivityPublication } from "../services/activity-log.js";
+import { isBillingDisabled } from "../services/tier-policy.js";
+import { agentConfigurationAuthority, resolveAccountabilityPatch, recordAccountabilityChange } from "../services/human-control/ownership.js";
+import { workforceService } from "../services/workforce.js";
+import { type ActivityAcceptance } from "../services/activity-log.js";
 import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -73,7 +78,7 @@ import {
   checkCompanyInstructionsPath,
   findProtectedHostDirectoryOverlap,
 } from "../services/instructions-root-confinement.js";
-import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
+import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo } from "./authz.js";
 import { assertIssueIdVisible, issueVisibilityParam, runVisibilityCondition, runVisibilityParam } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
@@ -83,7 +88,6 @@ import {
   type ApprovalDecisionRole,
 } from "../services/approval-authority.js";
 import {
-  accountabilityLabel,
   type AgentAccountability,
   agentAccountabilityService,
   assertAgentMayHoldKey,
@@ -161,6 +165,17 @@ function readLiveRunsQueryInt(value: unknown, max: number, fallback = 0) {
   if (!Number.isFinite(parsed)) return fallback;
   if (parsed <= 0) return fallback;
   return Math.min(max, Math.trunc(parsed));
+}
+
+// AgentDash: pass the caller's acceptance only when there is one, so the
+// non-transactional path keeps the original two-argument create call.
+function createAgentRow(
+  svc: ReturnType<typeof agentService>,
+  companyId: string,
+  input: Parameters<ReturnType<typeof agentService>["create"]>[1],
+  acceptance: Parameters<ReturnType<typeof agentService>["create"]>[2],
+) {
+  return acceptance ? svc.create(companyId, input, acceptance) : svc.create(companyId, input);
 }
 
 export function agentRoutes(
@@ -246,16 +261,20 @@ export function agentRoutes(
   async function createAgentWithinTierCapacity<T>(
     companyId: string,
     res: Response,
-    create: (dbOrTx: Db) => Promise<T>,
+    create: (dbOrTx: Db, acceptance?: ActivityAcceptance) => Promise<T>,
   ): Promise<T | null> {
-    return withCompanyTierCapacityGuard(
+    const publications: ActivityPublication[] = [];
+    const disabled = isBillingDisabled();
+    const result = await withCompanyTierCapacityGuard(
       db,
       companyId,
       { agents: 1 },
       buildRequireTierDeps,
       (action) => res.status(402).json(freeTierCapExceededPayload(action)),
-      create,
+      executor => create(executor, disabled ? undefined : { executor, publications }),
     );
+    for (const publication of publications) publishActivity(publication);
+    return result;
   }
 
   /**
@@ -872,16 +891,7 @@ export function agentRoutes(
     req: Request,
     targetAgent: { id: string; companyId: string },
   ): Promise<"admin" | "steward"> {
-    assertCompanyAccess(req, targetAgent.companyId);
-    const authority = await governance.resolveConfigurationAuthority(
-      targetAgent.companyId,
-      targetAgent.id,
-      req.actor,
-    );
-    if (authority) return authority;
-    // Preserve the existing error semantics for non-stewards.
-    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
-    return "admin";
+    return agentConfigurationAuthority(db, req, targetAgent);
   }
 
   /** 403 when a steward-authority caller touches a field only an admin may set. */
@@ -2579,6 +2589,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     const sourceIssueIds = parseSourceIssueIds(req.body);
     // A5 (GH #830): the hire approval links these issues; they must be visible.
     for (const issueId of sourceIssueIds) {
@@ -2669,8 +2680,8 @@ export function agentRoutes(
 
     const requiresApproval = company.requireBoardApprovalForNewAgents;
     const status = requiresApproval ? "pending_approval" : "idle";
-    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
-      agentService(dbOrTx).create(companyId, {
+    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx, acceptance) =>
+      createAgentRow(agentService(dbOrTx), companyId, {
         ...normalizedHireInput,
         metadata: withHarnessPreflightMetadata(normalizedHireInput.metadata, {
           adapterType: normalizedHireInput.adapterType,
@@ -2685,10 +2696,14 @@ export function agentRoutes(
         // agent (chief-of-staff hires) records no human creator; the hire
         // approval trail is its provenance.
         createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
-      }),
+      }, acceptance),
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
+    // AgentDash: enrollment is atomic with creation; filesystem work follows commit.
+    if (req.body.workforceTemplateId !== undefined) {
+      await workforceService(db).ensureSkillsInstalled(companyId, agent.id, { userId: req.actor.userId ?? "board" });
+    }
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
     const actor = getActorInfo(req);
@@ -2800,6 +2815,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
 
     const company = await db
       .select()
@@ -2913,8 +2929,8 @@ export function agentRoutes(
         })
       : null;
 
-    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
-      agentService(dbOrTx).create(companyId, {
+    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx, acceptance) =>
+      createAgentRow(agentService(dbOrTx), companyId, {
         ...createInput,
         adapterConfig: normalizedAdapterConfig,
         runtimeConfig: normalizedRuntimeConfig,
@@ -2935,10 +2951,14 @@ export function agentRoutes(
         // agent (chief-of-staff hires) records no human creator; the hire
         // approval trail is its provenance.
         createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
-      }),
+      }, acceptance),
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
+    // AgentDash: enrollment is atomic with creation; filesystem work follows commit.
+    if (req.body.workforceTemplateId !== undefined) {
+      await workforceService(db).ensureSkillsInstalled(companyId, agent.id, { userId: req.actor.userId ?? "board" });
+    }
 
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -3603,46 +3623,7 @@ export function agentRoutes(
     // does not list either field, so a steward patching their own agent is
     // refused by `assertStewardPatchScope` above.
     if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
-      const currentAutonomy = normalizeAgentAutonomy(existing.autonomy);
-      const nextAutonomy = hasOwn(patchData, "autonomy")
-        ? normalizeAgentAutonomy(patchData.autonomy)
-        : currentAutonomy;
-      const requestedAccountable =
-        typeof patchData.accountableUserId === "string" ? patchData.accountableUserId.trim() : null;
-
-      if (nextAutonomy === "autonomous") {
-        const activeSteward = await stewardships.activeByAgent(existing.companyId, existing.id);
-        if (activeSteward) {
-          const steward = await accountability.resolveForAgent(existing.companyId, existing.id);
-          throw conflict(
-            `${existing.name} is stewarded by ${accountabilityLabel(steward) ?? activeSteward.userId}. `
-              + "End that stewardship first if this agent should run without a person; "
-              + "making it autonomous would revoke their connect code and channel binding.",
-          );
-        }
-        const resolved = requestedAccountable
-          ?? existing.accountableUserId
-          ?? (req.actor.type === "board" ? req.actor.userId ?? null : null);
-        if (!resolved) {
-          throw conflict(
-            "An autonomous agent needs a human who is accountable for it. Pass accountableUserId.",
-          );
-        }
-        await accountability.assertAccountableMember(existing.companyId, resolved);
-        patchData.accountableUserId = resolved;
-      } else {
-        if (requestedAccountable) {
-          throw conflict(
-            "A stewarded agent takes its accountable human from its steward, so accountableUserId "
-              + "cannot be set on one. Assign the stewardship instead, or make the agent autonomous.",
-          );
-        }
-        // Clearing it is deliberate: leaving a stale value behind would give the
-        // agent two answers to "who answers for this?" the moment a steward is
-        // assigned, and the stewardship is the one that means anything.
-        patchData.accountableUserId = null;
-      }
-      patchData.autonomy = nextAutonomy;
+      Object.assign(patchData, await resolveAccountabilityPatch(db, req, existing, patchData));
     }
     if (hasOwn(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
@@ -3830,22 +3811,7 @@ export function agentRoutes(
     // actually asks. Recorded separately so it can be found without reading
     // every update to the agent.
     if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
-      await logActivity(db, {
-        companyId: agent.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "agent.accountability_changed",
-        entityType: "agent",
-        entityId: agent.id,
-        details: {
-          fromAutonomy: normalizeAgentAutonomy(existing.autonomy),
-          toAutonomy: normalizeAgentAutonomy(agent.autonomy),
-          fromAccountableUserId: existing.accountableUserId ?? null,
-          toAccountableUserId: agent.accountableUserId ?? null,
-        },
-      });
+      await recordAccountabilityChange(db, req, existing, agent);
     }
 
     res.json(agent);

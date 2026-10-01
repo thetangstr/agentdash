@@ -62,12 +62,15 @@ export async function clearWorkspacePersistenceHold(db: Db, input: {
   agentId: string | null;
   actorUserId: string;
   note?: string | null;
+  /** Re-checks target and access on the clear transaction, after the company lock. */
+  authorize?: (tx: Db) => Promise<void>;
 }) {
   if (!input.issueId && !input.agentId) throw new Error('issueId or agentId is required');
   const publications: ActivityPublication[] = [];
   const clearedRunIds = await db.transaction(async tx => {
     // Same company mutex as the attempt writer and claim admission.
     await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, input.companyId)).for('no key update');
+    await input.authorize?.(tx as unknown as Db);
     const rows = await tx.select({ id: heartbeatRuns.id, agentId: heartbeatRuns.agentId, resultJson: heartbeatRuns.resultJson })
       .from(heartbeatRuns).where(and(
         eq(heartbeatRuns.companyId, input.companyId),

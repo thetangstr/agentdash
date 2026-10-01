@@ -36,6 +36,7 @@ import {
   ensurePathInEnv,
   renderTemplate,
   renderAgentDirectivesPrompt,
+  renderWorkforcePrompt,
   renderAgentMemoryPrompt,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
@@ -562,6 +563,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // prompt is suppressed — because a constraint the agent stops being told
   // about stops being a constraint.
   const agentDirectivesNote = renderAgentDirectivesPrompt(context.paperclipAgentDirectives);
+  const workforceNote = renderWorkforcePrompt(context.paperclipWorkforce);
   // AgentDash: the agent's own durable memory. After directives because it is
   // the agent's own writing and ranks below its steward's, and rendered on
   // every turn for the same reason directives are — plus one of its own: a
@@ -571,6 +573,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     agentDirectivesNote,
+    workforceNote,
     agentMemoryNote,
     wakePrompt,
     sessionHandoffNote,

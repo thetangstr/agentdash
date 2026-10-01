@@ -11,7 +11,7 @@
 // transition; the next user turn re-runs the prompt.
 
 import { logger } from "../middleware/logger.js";
-import { isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import { WORKFORCE_TEMPLATES, isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
 import type { DispatchMeter } from "./dispatch-llm.js";
 
@@ -44,6 +44,9 @@ export function defaultAgentPlanAdapterType(): string {
   }
   return "hermes_local";
 }
+
+// AgentDash: shared catalog guidance for single, generated and revised proposals.
+export const WORKFORCE_PROPOSAL_GUIDANCE = `Available workforce templates (version 1): ${WORKFORCE_TEMPLATES.map(template => `${template.id}: ${template.description}`).join("; ")}. Add optional workforceTemplateId to an agent only when the human explicitly selects that catalog role. Preserve existing selections when revising unrelated details. Ambiguous requests remain custom with the field omitted. A template describes work and grants no permissions; display role, authority and runtime remain independent. Creation starts learning; first-job acceptance requires artifact evidence and neutral review.`;
 
 interface CosStateRow {
   conversationId: string;
@@ -144,6 +147,8 @@ Goal: ${spec.goal}
 Constraints: ${constraintsJson}
 Success criteria: ${criteriaJson}
 
+${WORKFORCE_PROPOSAL_GUIDANCE}
+
 Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter.
 
 In the visible body (before the JSON), give the user a short paragraph of rationale that references at least one constraint and one success criterion verbatim from the captured context, then a one-line tour of each agent. End with the question "Want me to set them up, or revise?"
@@ -172,6 +177,8 @@ No greetings. No markdown headings outside the JSON block.`;
 function planPrompt(state: CosStateRow): string {
   return `You are the Chief of Staff for AgentDash. Goals captured:
 ${JSON.stringify(state.goals, null, 2)}
+
+${WORKFORCE_PROPOSAL_GUIDANCE}
 
 Propose a concrete agent team that hits the short-term goal AND seeds the long-term one. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter.
 

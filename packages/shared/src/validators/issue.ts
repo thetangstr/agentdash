@@ -372,13 +372,27 @@ export const askUserQuestionsQuestionSchema = z.object({
   id: z.string().trim().min(1).max(120),
   prompt: z.string().trim().min(1).max(500),
   helpText: z.string().trim().max(1000).nullable().optional(),
-  selectionMode: z.enum(["single", "multi"]),
+  selectionMode: z.enum(["single", "multi", "text"]),
+  companyFactKey: z.string().trim().min(1).max(120).optional(),
   required: z.boolean().optional(),
-  options: z.array(askUserQuestionsQuestionOptionSchema).min(1).max(10),
+  options: z.array(askUserQuestionsQuestionOptionSchema).max(10),
+}).superRefine((question, ctx) => {
+  if (question.selectionMode === "text" ? question.options.length !== 0 : question.options.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["options"], message: "Text questions require empty options; selection questions require options" });
+  }
+  if (question.companyFactKey && question.selectionMode !== "text") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["companyFactKey"], message: "Company facts require a text question" });
+  }
 });
 
 export const askUserQuestionsPayloadSchema = z.object({
   version: z.literal(1),
+  answerOwnerUserId: z.string().trim().min(1).max(255).optional(),
+  workforceAgentId: z.string().uuid().optional(),
+  workforceEnrollmentId: z.string().uuid().optional(),
+  workforceTemplateId: z.string().max(120).optional(),
+  workforceTemplateVersion: z.literal(1).optional(),
+  replacesInteractionId: z.string().uuid().optional(),
   title: z.string().trim().max(240).nullable().optional(),
   submitLabel: z.string().trim().max(120).nullable().optional(),
   questions: z.array(askUserQuestionsQuestionSchema).min(1).max(10),
@@ -411,10 +425,12 @@ export const askUserQuestionsPayloadSchema = z.object({
 export const askUserQuestionsAnswerSchema = z.object({
   questionId: z.string().trim().min(1).max(120),
   optionIds: z.array(z.string().trim().min(1).max(120)).max(20),
+  text: z.string().trim().max(4000).optional(),
 });
 
 export const askUserQuestionsResultSchema = z.object({
   version: z.literal(1),
+  shareWithCompany: z.boolean().optional(),
   answers: z.array(askUserQuestionsAnswerSchema).max(20),
   cancelled: z.literal(true).optional(),
   cancellationReason: z.string().trim().max(4000).nullable().optional(),
@@ -540,6 +556,7 @@ export const cancelIssueThreadInteractionSchema = z.object({
 export type CancelIssueThreadInteraction = z.infer<typeof cancelIssueThreadInteractionSchema>;
 
 export const respondIssueThreadInteractionSchema = z.object({
+  shareWithCompany: z.boolean().optional(),
   answers: z.array(askUserQuestionsAnswerSchema).max(20),
   summaryMarkdown: multilineTextSchema.pipe(z.string().max(20000)).nullable().optional(),
 });

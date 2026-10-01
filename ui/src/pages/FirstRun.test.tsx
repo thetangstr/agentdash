@@ -159,6 +159,7 @@ describe("FirstRunPage", () => {
   it("uses the workspace named in ?companyId, not the previously selected one", async () => {
     mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: true, done: true } }));
     await render("/setup?companyId=company-2");
+    expect(container.querySelector('a[href$="/workforce"]')?.getAttribute("href")).toBe("/NEW/workforce");
     expect(mockStatus).toHaveBeenCalledWith("company-2");
     expect(mockCompany.setSelectedCompanyId).toHaveBeenCalledWith("company-2");
   });

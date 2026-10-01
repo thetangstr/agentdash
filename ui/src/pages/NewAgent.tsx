@@ -1,3 +1,4 @@
+import { WorkforceRoleSelect, WorkforceTemplatePreview } from "@/components/WorkforceTemplatePreview";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
@@ -64,6 +65,8 @@ export function NewAgent() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const [workforceTemplateId, setWorkforceTemplateId] = useState(searchParams.get("workforceTemplateId") ?? "");
+  useEffect(() => { setWorkforceTemplateId(searchParams.get("workforceTemplateId") ?? ""); }, [selectedCompanyId]);
   const presetAdapterType = searchParams.get("adapterType");
 
   const [name, setName] = useState("");
@@ -214,6 +217,7 @@ export function NewAgent() {
     createAgent.mutate(
       buildNewAgentHirePayload({
         name,
+        workforceTemplateId: workforceTemplateId || undefined,
         effectiveRole,
         title,
         reportsTo,
@@ -271,6 +275,8 @@ export function NewAgent() {
         only change the advanced options if you know what you need.
       </div>
 
+      <WorkforceRoleSelect value={workforceTemplateId} onChange={setWorkforceTemplateId}/>
+      <WorkforceTemplatePreview templateId={workforceTemplateId}/>
       <div className="border border-border">
         {/* Name */}
         <div className="px-4 pt-4 pb-2">

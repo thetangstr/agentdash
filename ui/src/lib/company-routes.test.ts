@@ -95,3 +95,7 @@ describe("board route roots stay in step with the router", () => {
     expect(misread, "these roots would be mistaken for company codes").toEqual([]);
   });
 });
+
+ it('treats workforce as a company route and preserves its query and brief anchor', () => {
+ expect(applyCompanyPrefix('/workforce?agent=a#company-brief', 'ACME')).toBe('/ACME/workforce?agent=a#company-brief');
+ });

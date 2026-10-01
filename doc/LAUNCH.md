@@ -10,6 +10,27 @@ For the first MSP Mac mini design partner, also capture `scripts/msp-mac-mini-re
 
 **Private Mac mini billing stance.** The first MSP launch is a paid trial, but the customer Mac mini should stay private-network only for week one. Collect payment through AgentDash-owned Stripe/customer-portal/payment-link flow, then record the customer company locally as `pro_trial` or `pro_active`. Do not depend on Stripe webhooks reaching the private Mac mini. Before the second customer, add a pull-based entitlement sync from AgentDash-owned billing into private installs.
 
+<!-- AgentDash: workforce-launch-gate — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Required launch gate: workforce templates and company onboarding
+
+Added by the founder on September29,2026. This must pass before the hosted waitlist launch. The launch outcome is **onboard an agent through its first accepted useful job, then demonstrate reuse on the next job**. Initial implementation covers marketing-content and sales-support. Each role has distinct output standards; company onboarding establishes the actual OKRs/KPIs.
+
+- [ ] **WF-1 — Templates and skills:** reviewed, versioned role bundles installed through all supported hiring paths; custom instructions preserved; template selection grants no authority.
+- [ ] **WF-2 — Company learning:** agents receive current permitted company sources/facts, with provenance and revision; unconfirmed proposals are reviewed; changed sources invalidate affected learning.
+- [ ] **WF-3 — Clarification and resumption:** named human questions accept business facts, persist answers, hold dependent dispatch and resume once; duplicate/cancelled/incomplete responses do not fabricate readiness; private/project answers stay scoped unless separately published with authority.
+  - [ ] Inactive question-owner recovery: the current accountable human can discover eligible stale questions through safe metadata, explicitly cancel and replace them, then answer the new question and resume the same task through UI/API/MCP/bridge. No private-answer disclosure, fabricated answer or replay after an uncertain effect.
+- [ ] **WF-4 — First useful job:** a real deliverable is accessible and meets the role/company criteria; acceptance has artifact evidence and a neutral passed verdict. Setup completion alone is not this gate.
+- [ ] **WF-5 — Durable reuse and isolation:** the next job/new hire reuses confirmed knowledge; two distinct company fixtures produce appropriate results; no cross-company/restricted leakage or duplicated actions.
+- [ ] **WF-6 — Outcome quality and cost:** repeated trials on the intended hosted model/tool configuration pass human output review; owner correction time and full model/tool cost are recorded against a fair ordinary-assistant/current-workflow baseline. Deterministic/fake-adapter tests do not establish this.
+- [ ] **WF-7 — Integrated experience and transport parity:** every shipped human-facing page action is usable through API, MCP and the human bridge with equivalent permissions and required confirmation, including company setup, hiring, readiness, inbox and reviews; files and security ceremonies have usable continuation; failures and unavailable measurements are explicit.
+  - [ ] Workspace uncertainty recovery: inspect/remediate the exact unresolved run and attempted/accepted workspace, then record an explicitly authorized durable resolution through API/MCP/bridge. Ordinary retry must not clear uncertainty or replay potentially committed setup.
+- [ ] **WF-8 — Release candidate:** targeted regressions, full typecheck/test/build and independent review pass on the integrated candidate; live provider, claim, paid-lifecycle and existing security gates also remain necessary.
+
+Build: [implementation plan](plans/2026-09-29-workforce-onboarding-implementation.md). Requirements: [workforce scope and experience](plans/2026-09-29-workforce-templates-requirements.md). Evidence will be recorded alongside this build; [whole-app transport coverage](plans/2026-09-29-human-control-plane-transport-coverage.md) tracks actions and gaps. Boxes stay unchecked until proven.
+
+The current laptop execution bridge is MK-only; Gmail draft/send rejects agent actors, Calendar/Outlook execution is absent and HubSpot is MK-only. Template import does not change those capabilities. Standard-hosted bridge/connector expansion needs scoped implementation and end-to-end proof. Migration remains an optional onboarding entry path, with source/destination still to be defined.
+<!-- /AgentDash: workforce-launch-gate -->
+
 ---
 
 ## 1. Pick a cloud host and provision Postgres

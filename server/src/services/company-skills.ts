@@ -28,7 +28,7 @@ import type {
 } from "@paperclipai/shared";
 import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
-import { notFound, unprocessable } from "../errors.js";
+import { conflict, notFound, unprocessable } from "../errors.js";
 import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
@@ -1545,6 +1545,12 @@ function toCompanySkillListItem(skill: CompanySkillListRow, attachedAgentCount: 
   };
 }
 
+// AgentDash: curated workforce installation only; root imports keep their native path.
+export interface CuratedSkillStages {
+  beforeMaterialize(): Promise<() => void>;
+  stageCatalog(executor: Db): Promise<() => void>;
+}
+
 export function companySkillService(db: Db) {
   const agents = agentService(db);
   const projects = projectService(db);
@@ -1832,12 +1838,13 @@ export function companySkillService(db: Db) {
     };
   }
 
-  async function createLocalSkill(companyId: string, input: CompanySkillCreateRequest): Promise<CompanySkill> {
+  async function createLocalSkill(companyId: string, input: CompanySkillCreateRequest, stages?: CuratedSkillStages): Promise<CompanySkill> {
     const slug = normalizeSkillSlug(input.slug ?? input.name) ?? "skill";
     const managedRoot = resolveManagedSkillsRoot(companyId);
     const skillDir = path.resolve(managedRoot, slug);
     const skillFilePath = path.resolve(skillDir, "SKILL.md");
 
+    (await stages?.beforeMaterialize())?.();
     await fs.mkdir(skillDir, { recursive: true });
 
     const markdown = (input.markdown?.trim().length
@@ -1854,10 +1861,11 @@ export function companySkillService(db: Db) {
         "",
       ].join("\n"));
 
+    (await stages?.beforeMaterialize())?.();
     await fs.writeFile(skillFilePath, markdown, "utf8");
 
     const parsed = parseFrontmatterMarkdown(markdown);
-    const imported = await upsertImportedSkills(companyId, [{
+    const importedSkills: ImportedSkill[] = [{
       key: `company/${companyId}/${slug}`,
       slug,
       name: asString(parsed.frontmatter.name) ?? input.name,
@@ -1870,8 +1878,21 @@ export function companySkillService(db: Db) {
       compatibility: "compatible",
       fileInventory: [{ path: "SKILL.md", kind: "skill" }],
       metadata: { sourceKind: "managed_local" },
-    }]);
-
+    }];
+    let callbackCompleted = false;
+    let imported: CompanySkill[];
+    try {
+      imported = stages ? await db.transaction(async tx => {
+        const executor = tx as unknown as Db;
+        const beforeWrite = await stages.stageCatalog(executor);
+        const value = await upsertImportedSkills(companyId, importedSkills, executor, beforeWrite);
+        callbackCompleted = true;
+        return value;
+      }) : await upsertImportedSkills(companyId, importedSkills);
+    } catch (error) {
+      if (callbackCompleted) throw conflict('Curated skill catalog outcome is unknown; inspect existing state before retrying', { persistenceOutcome: 'unknown' });
+      throw error;
+    }
     return imported[0]!;
   }
 
@@ -2317,10 +2338,11 @@ export function companySkillService(db: Db) {
     return out;
   }
 
-  async function upsertImportedSkills(companyId: string, imported: ImportedSkill[]): Promise<CompanySkill[]> {
+  async function upsertImportedSkills(companyId: string, imported: ImportedSkill[], executor: Db = db, beforeWrite?: () => void): Promise<CompanySkill[]> {
     const out: CompanySkill[] = [];
     for (const skill of imported) {
-      const existing = await getByKey(companyId, skill.key);
+      const stored = await executor.select(selectCompanySkillColumns()).from(companySkills).where(and(eq(companySkills.companyId, companyId), eq(companySkills.key, skill.key))).then(rows => rows[0] ?? null);
+      const existing = stored ? toCompanySkill(stored) : null;
       const existingMeta = existing ? getSkillMeta(existing) : {};
       const incomingMeta = skill.metadata && isPlainRecord(skill.metadata) ? skill.metadata : {};
       const incomingOwner = asString(incomingMeta.owner);
@@ -2357,14 +2379,15 @@ export function companySkillService(db: Db) {
         metadata,
         updatedAt: new Date(),
       };
+      beforeWrite?.();
       const row = existing
-        ? await db
+        ? await executor
           .update(companySkills)
           .set(values)
           .where(eq(companySkills.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? null)
-        : await db
+        : await executor
           .insert(companySkills)
           .values(values)
           .returning()

@@ -133,7 +133,21 @@ export interface WaitingOnYouTask {
   originKind?: string;
 }
 
+export interface WaitingOnYouQuestion {
+  interactionId: string;
+  issueId: string;
+  identifier: string | null;
+  issueTitle: string;
+  title: string;
+  questionSummary: string;
+  waitingSince: string;
+  answerOwnerUserId: string;
+  answerOwnerName: string;
+}
+
 export interface WaitingOnYou {
+  pendingQuestions: WaitingOnYouQuestion[];
+  pendingQuestionsTotal: number;
   decisions: WaitingOnYouDecision[];
   /** Every waiting approval, not only those in `decisions`. */
   total: number;

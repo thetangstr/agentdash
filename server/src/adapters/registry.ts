@@ -93,7 +93,8 @@ import {
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
 import { resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
 import { HERMES_HUMAN_QUESTION_PROMPT, createHermesHumanQuestionGuard } from "./hermes-human-question.js";
-import { renderHermesDirectivesSection } from "./hermes-directives.js";
+import { renderWorkforcePrompt } from "@paperclipai/adapter-utils/server-utils";
+import { escapeHermesTemplate, renderHermesDirectivesSection } from "./hermes-directives.js";
 import { listCursorModels } from "./cursor-models.js";
 import {
   execute as piExecute,
@@ -845,7 +846,14 @@ const hermesLocalAdapter: ServerAdapterModule = {
         "[hermes] Ignoring invalid persisted session id parsed from resume help text.\n",
       );
     }
+    const workforceNote = escapeHermesTemplate(renderWorkforcePrompt(readRecord(taskPatchedCtx.context)?.paperclipWorkforce));
     if (!taskPatchedCtx.authToken) {
+      if (workforceNote) {
+        const config = { ...(readRecord(taskPatchedCtx.agent.adapterConfig) ?? {}), ...(readRecord(taskPatchedCtx.config) ?? {}) };
+        config.promptTemplate = [workforceNote, readNonEmptyString(config.promptTemplate) ?? '{{context.paperclipTaskMarkdown}}'].join('\n\n');
+        const workforceCtx = { ...taskPatchedCtx, config, agent: { ...taskPatchedCtx.agent, adapterConfig: config } };
+        return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(workforceCtx)), workforceCtx);
+      }
       // The unauthenticated pass-through hands Hermes the original context
       // untouched (adapter-registry.test.ts pins that); heartbeat always mints
       // an authToken, so every AgentDash run takes the guarded path below.
@@ -963,7 +971,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
     );
     // AgentDash (AGE-13): the human-question rule sits between the mandate and
     // the task so it reads as part of how this agent works, not as task text.
-    patchedConfig.promptTemplate = [roleContract, directivesNote, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
+    patchedConfig.promptTemplate = [roleContract, directivesNote, workforceNote, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
       .filter((section): section is string => typeof section === "string" && section.trim().length > 0)
       .join("\n\n");
 

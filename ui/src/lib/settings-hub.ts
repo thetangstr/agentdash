@@ -9,6 +9,8 @@ const COMPANY_SETTINGS_HUB_ROOTS = [
   "company/import",
   "company/export",
   "skills",
+  // AgentDash (#859): workforce roles and company knowledge (Settings › Agents).
+  "workforce",
   "billing",
   "evaluation",
   // Adapters is also mounted under the company prefix (App.tsx boardRoutes).

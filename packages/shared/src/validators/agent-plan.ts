@@ -4,6 +4,8 @@
 // isAgentPlanPayload) — same defect shape as #168. Both copies must grow
 // in lock-step (e.g. adapterType allowlisting per #231), so the only safe
 // place to land it is here, in @paperclipai/shared.
+import { workforceTemplateIdSchema } from "./workforce.js";
+import { supportsWorkforcePrompt } from "../types/workforce.js";
 import type { AgentPlanProposalV1Payload } from "../cards.js";
 
 // Closes #231: adapterType allowlist enforced at the trust boundary so a
@@ -24,12 +26,13 @@ function isValidAgent(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const a = value as Record<string, unknown>;
   return (
+    (a.workforceTemplateId === undefined || workforceTemplateIdSchema.safeParse(a.workforceTemplateId).success) &&
     typeof a.role === "string" &&
     a.role.length > 0 &&
     typeof a.name === "string" &&
     a.name.length > 0 &&
     typeof a.adapterType === "string" &&
-    ALLOWED_ADAPTER_TYPES.has(a.adapterType) &&
+    (a.workforceTemplateId === undefined ? ALLOWED_ADAPTER_TYPES.has(a.adapterType) : supportsWorkforcePrompt(a.adapterType)) &&
     Array.isArray(a.responsibilities) &&
     Array.isArray(a.kpis)
   );

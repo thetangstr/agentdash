@@ -12,6 +12,7 @@ import { useToastActions } from "./ToastContext";
 import { upsertIssueCommentInPages } from "../lib/optimistic-issue-comments";
 import { clearIssueExecutionRun, removeLiveRunById } from "../lib/optimistic-issue-runs";
 import { queryKeys } from "../lib/queryKeys";
+import { workforceKeys } from "../api/workforce";
 import { toCompanyRelativePath } from "../lib/company-routes";
 import { useLocation } from "../lib/router";
 import { publishConversationMessage } from "../realtime/conversationEventBus";
@@ -627,6 +628,14 @@ function invalidateHeartbeatQueries(
   }
 }
 
+// AgentDash: readiness is derived from approved context, current artifacts,
+// current neutral verdict and first-job ownership/status. These are the actual
+// activity actions emitted by workforce, verdicts and issue routes.
+const WORKFORCE_ISSUE_ACTIONS = new Set([
+  "verdict_recorded", "dod_set", "issue.created", "issue.updated", "issue.deleted",
+  "issue.checked_out", "issue.released", "issue.admin_force_release",
+]);
+
 function invalidateActivityQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   companyId: string,
@@ -643,6 +652,15 @@ function invalidateActivityQueries(
   const action = readString(payload.action);
   const actorType = readString(payload.actorType);
   const actorId = readString(payload.actorId);
+
+  if (entityType === "workforce" || (entityType === "issue" && action && (
+    WORKFORCE_ISSUE_ACTIONS.has(action)
+    || action.startsWith("issue.document_")
+    || action.startsWith("issue.work_product_")
+    || action.startsWith("issue.thread_interaction_")
+  ))) {
+    queryClient.invalidateQueries({ queryKey: workforceKeys.all(companyId) });
+  }
 
   if (entityType === "issue") {
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(companyId) });
@@ -684,6 +702,7 @@ function invalidateActivityQueries(
           queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(ref), ...invalidationOptions });
         }
         if (action?.startsWith("issue.thread_interaction_")) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(companyId) });
           queryClient.invalidateQueries({ queryKey: queryKeys.issues.interactions(ref), ...invalidationOptions });
         }
       }

@@ -275,3 +275,28 @@ describe("IssueThreadInteractionCard", () => {
     );
   });
 });
+
+it('requires trimmed free text and makes company sharing an explicit opt-in', async () => {
+  const submit = vi.fn();
+  const host = renderCard({ interaction: { ...pendingAskUserQuestionsInteraction, payload: { version: 1, answerOwnerUserId: 'owner', questions: [{ id: 'offer', prompt: 'What is the offer?', selectionMode: 'text', companyFactKey: 'offer', required: true, options: [] }] } }, onSubmitInteractionAnswers: submit });
+  const textarea = host.querySelector('textarea')!;
+  expect(textarea).not.toBeNull();
+  const button = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Submit answers'))!;
+  expect(button.disabled).toBe(true);
+  const share = host.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  expect(share.checked).toBe(false);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '  A specific offer  ');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  expect(button.disabled).toBe(false);
+  await act(async () => { share.click(); });
+  await act(async () => { button.click(); });
+  expect(submit.mock.calls[0][1]).toEqual([{ questionId: 'offer', optionIds: [], text: 'A specific offer' }]);
+  expect(submit.mock.calls[0][2]).toBe(true);
+});
+
+it('renders the persisted free-text answer after submission', () => {
+  const host = renderCard({ interaction: { ...pendingAskUserQuestionsInteraction, status: 'answered', payload: { version: 1, questions: [{ id: 'offer', prompt: 'What is the offer?', selectionMode: 'text', options: [] }] }, result: { version: 1, answers: [{ questionId: 'offer', optionIds: [], text: 'A saved private offer' }] } } });
+  expect(host.textContent).toContain('A saved private offer');
+});

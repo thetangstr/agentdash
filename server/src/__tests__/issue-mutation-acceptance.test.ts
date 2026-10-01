@@ -12,6 +12,7 @@ import { issueCommentActions } from '../services/issue-mutation-actions.js';
 import { issueService } from '../services/issues.js';
 import { issuePatchActions, type IssuePatchContext } from '../services/issue-patch-actions.js';
 import { normalizeIssueExecutionPolicy } from '../services/issue-execution-policy.js';
+import { workforceService } from '../services/workforce.js';
 import { heartbeatService } from '../services/heartbeat.js';
 import { publishLiveEvent } from '../services/live-events.js';
 import { actorMiddleware } from '../middleware/auth.js';
@@ -363,6 +364,16 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
     expect(await snapshot(f)).toEqual(before);
   });
 
+  it('required workforce inputs refuse completion and interrupt atomically', async () => {
+    const f = await fixture();
+    await db.update(agents).set({ adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: f.userId }).where(eq(agents.id, f.agent.id));
+    await workforceService(db).enroll(f.company.id, f.agent.id, { templateId: 'marketing-content' }, { userId: f.userId });
+    const before = await snapshot(f);
+    expect((await patch(f, { status: 'done', comment: 'Cannot finish without inputs', interrupt: true })).status).toBe(409);
+    expect(await snapshot(f)).toEqual(before);
+    expect(effects.cancel).not.toHaveBeenCalled();
+  });
+
   it.each(['blocker', 'hold', 'cancelled'] as const)('PATCH explicit resume preserves %s refusal', async guard => {
     const f = await fixture();
     await db.update(issues).set({ status: guard === 'cancelled' ? 'cancelled' : 'blocked' }).where(eq(issues.id, f.issue.id));
@@ -470,6 +481,34 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
     await db.update(projects).set({ goalId: f.second.id }).where(eq(projects.id, f.project.id));
     await db.update(goals).set({ status: 'cancelled' }).where(eq(goals.id, f.first.id));
     expect((await actions.accept({ ...plan.context, expectedSnapshot: plan.snapshot })).issue.goalId).toBe(f.first.id);
+  });
+
+  it('read-only preparation rejects workforce completion before any checkout attempt', async () => {
+    const f = await fixture(), actions = issuePatchActions(db, heartbeatService(db));
+    await db.update(agents).set({ adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: f.userId }).where(eq(agents.id, f.agent.id));
+    await workforceService(db).enroll(f.company.id, f.agent.id, { templateId: 'marketing-content' }, { userId: f.userId });
+    const [old] = await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: f.agent.id, status: 'succeeded' }).returning();
+    await db.update(issues).set({ status: 'in_progress', checkoutRunId: old.id, executionRunId: old.id }).where(eq(issues.id, f.issue.id));
+    const input = { ...context(f, { status: 'done' }), actorKind: 'agent', actor: { actorType: 'agent' as const, actorId: f.agent.id, agentId: f.agent.id, runId: f.run.id } };
+    const before = await snapshot(f);
+    vi.mocked(publishLiveEvent).mockClear();
+    await expect(actions.prepare(input)).rejects.toThrow('Required workforce input');
+    await db.execute(sql`CREATE SEQUENCE checkout_attempt_probe`);
+    await db.execute(sql`CREATE FUNCTION probe_checkout_attempt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.checkout_run_id IS DISTINCT FROM OLD.checkout_run_id THEN PERFORM nextval('checkout_attempt_probe'); END IF; RETURN NEW; END $$`);
+    await db.execute(sql`CREATE TRIGGER probe_checkout_attempt BEFORE UPDATE ON issues FOR EACH ROW EXECUTE FUNCTION probe_checkout_attempt()`);
+    try {
+      await expect(actions.accept(input)).rejects.toThrow('Required workforce input');
+      const probe = await db.execute(sql`SELECT is_called FROM checkout_attempt_probe`);
+      expect(probe[0].is_called).toBe(false);
+      expect(await snapshot(f)).toEqual(before);
+      expect(publishLiveEvent).not.toHaveBeenCalled();
+      expect(effects.cancel).not.toHaveBeenCalled();
+    } finally {
+      await db.execute(sql`DROP TRIGGER probe_checkout_attempt ON issues`);
+      await db.execute(sql`DROP FUNCTION probe_checkout_attempt()`);
+      await db.execute(sql`DROP SEQUENCE checkout_attempt_probe`);
+    }
   });
 
   it.each([false, true])('reopening comments pin their derived goal (changed=%s)', async changed => {

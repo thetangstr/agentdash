@@ -1,10 +1,14 @@
 import { publishActivity, type ActivityPublication } from './activity-log.js';
+import type { Request } from 'express';
+import { assertProjectIdVisible } from '../routes/visibility.js';
 import { isDeepStrictEqual } from "node:util";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   documents,
   companies,
+  companyMemberships,
+  workforceEnrollments,
   heartbeatRuns,
   issueComments,
   issueDocuments,
@@ -34,14 +38,17 @@ import {
   createIssueThreadInteractionSchema,
   rejectIssueThreadInteractionSchema,
   respondIssueThreadInteractionSchema,
+  resolveWorkforceTemplate,
   requestConfirmationPayloadSchema,
   requestConfirmationResultSchema,
   suggestTasksPayloadSchema,
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
-import { HttpError, conflict, notFound, unprocessable } from "../errors.js";
+import { HttpError, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { issueService, MAX_CHILD_ISSUES_CREATED_BY_HELPER } from "./issues.js";
+import { agentAccountabilityService } from "./agent-accountability.js";
+import { workforceService } from "./workforce.js";
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
 
 type InteractionActor = {
@@ -252,6 +259,10 @@ function normalizeQuestionAnswers(args: {
       throw unprocessable(`Duplicate answer for questionId: ${answer.questionId}`);
     }
 
+    const text = answer.text?.trim();
+    if (question.selectionMode === "text" ? answer.optionIds.length > 0 : answer.text !== undefined) {
+      throw unprocessable(`Question ${answer.questionId} requires ${question.selectionMode === "text" ? "text without selected options" : "selected options without text"}`);
+    }
     const uniqueOptionIds = [...new Set(answer.optionIds)];
     const validOptionIds = new Set(question.options.map((option) => option.id));
     for (const optionId of uniqueOptionIds) {
@@ -267,12 +278,13 @@ function normalizeQuestionAnswers(args: {
     answerByQuestionId.set(answer.questionId, {
       questionId: answer.questionId,
       optionIds: uniqueOptionIds,
+      ...(question.selectionMode === "text" ? { text: text ?? "" } : {}),
     });
   }
 
   for (const question of args.questions) {
     const answer = answerByQuestionId.get(question.id);
-    if (question.required && (!answer || answer.optionIds.length === 0)) {
+    if (question.required && (!answer || (question.selectionMode === "text" ? !answer.text : answer.optionIds.length === 0))) {
       throw unprocessable(`Question ${question.id} requires an answer`);
     }
   }
@@ -418,13 +430,68 @@ async function expireStaleRequestConfirmationTarget(db: Db | any, args: {
 }
 
 
-// AgentDash: native SELECT-only create-input resolution; it grants no authority.
-export async function resolveQuestionCreateInput(_connection: Pick<Db, "select">,
-    _issue: { id: string; companyId: string },
+// AgentDash: native SELECT-only question pins; factual resolution is not authorization.
+export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
+    issue: { id: string; companyId: string },
     input: CreateIssueThreadInteraction,
-    _actor: InteractionActor,
+    actor: InteractionActor,
   ) {
-    return createIssueThreadInteractionSchema.parse(input);
+    const data = createIssueThreadInteractionSchema.parse(input);
+    if (data.kind === 'ask_user_questions') {
+      const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+      if (!persistedIssue) throw notFound('Issue not found');
+      const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
+      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
+      const accountability = agentAccountabilityService(connection);
+      // The server pins the target, never a body-supplied agent identifier.
+      delete data.payload.workforceAgentId;
+      delete data.payload.workforceEnrollmentId;
+      delete data.payload.workforceTemplateId;
+      delete data.payload.workforceTemplateVersion;
+      if (data.payload.questions.some(q => q.companyFactKey) && !template && !data.payload.replacesInteractionId) throw unprocessable('Assign an enrolled worker before requesting workforce facts');
+      if (template && persistedIssue.assigneeAgentId) {
+        if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
+        if (actor.agentId && actor.agentId !== persistedIssue.assigneeAgentId) throw forbidden('Only the enrolled assignee may request workforce input');
+        if (!actor.agentId && !actor.userId) throw forbidden('An authenticated human or assigned worker is required');
+        if (data.payload.questions.some(q => q.companyFactKey && !template.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Question must reference a known fact key of the assigned workforce template');
+        const owner = await accountability.escalationUserId(issue.companyId, persistedIssue.assigneeAgentId);
+        if (!owner) throw conflict('Assign an active accountable company member before asking workforce questions');
+        if (data.payload.answerOwnerUserId && data.payload.answerOwnerUserId !== owner) throw conflict('Question owner must be the assignee’s current accountable member');
+        data.payload.answerOwnerUserId = owner;
+        data.payload.workforceAgentId = persistedIssue.assigneeAgentId;
+        data.payload.workforceEnrollmentId = enrollment!.id;
+        data.payload.workforceTemplateId = template.id;
+        data.payload.workforceTemplateVersion = template.version;
+      }
+      // Review P2 (#859): on a non-workforce issue an agent may not pin any
+      // member as a question's private owner. Only the server pins an owner
+      // for an agent (from the enrolled assignee's accountability above);
+      // a person may still name one, subject to the accountable-member check.
+      if (actor.agentId && !data.payload.workforceAgentId) delete data.payload.answerOwnerUserId;
+      if (data.payload.answerOwnerUserId) await accountability.assertAccountableMember(issue.companyId, data.payload.answerOwnerUserId);
+      if (data.payload.replacesInteractionId) {
+        const [prior] = await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id)));
+        if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled') throw unprocessable('Replace an explicitly cancelled question on this issue');
+        const previous = askUserQuestionsPayloadSchema.parse(prior.payload);
+        if (previous.workforceAgentId && !data.payload.workforceAgentId) {
+          if (actor.agentId || !actor.userId) throw forbidden('A human must replace a workforce question after reassignment to an unenrolled worker');
+          if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
+          const owner = await accountability.escalationUserId(issue.companyId, previous.workforceAgentId);
+          if (!owner) throw conflict('Assign an active accountable member before replacing this question');
+          await accountability.assertAccountableMember(issue.companyId, owner);
+          data.payload.answerOwnerUserId = owner;
+          data.payload.workforceAgentId = previous.workforceAgentId;
+          data.payload.workforceEnrollmentId = previous.workforceEnrollmentId;
+          data.payload.workforceTemplateId = previous.workforceTemplateId;
+          data.payload.workforceTemplateVersion = previous.workforceTemplateVersion;
+        }
+        const originTemplate = resolveWorkforceTemplate(data.payload.workforceTemplateId ?? '', data.payload.workforceTemplateVersion);
+        if (originTemplate && data.payload.questions.some(q => q.companyFactKey && !originTemplate.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Replacement must use known fact keys of its workforce template');
+        if (previous.questions.some(q => q.required && !data.payload.questions.some(replacement => replacement.id === q.id && replacement.required && replacement.companyFactKey === q.companyFactKey))) throw unprocessable('Replacement must retain every required question and fact key');
+      }
+    }
+
+    return data;
   }
 
 // AgentDash: actual-request source check and synchronous leaf guard are private and optional.
@@ -777,12 +844,34 @@ export function issueThreadInteractionService(db: Db) {
 
     const interaction = hydrateInteraction(current) as AskUserQuestionsInteraction;
     await guards?.assertSource?.(connection, issue);
+    if (interaction.payload.answerOwnerUserId) {
+      if (actor.agentId || actor.userId !== interaction.payload.answerOwnerUserId) throw forbidden('Only the named human answer owner may respond');
+      const accountability = agentAccountabilityService(connection);
+      await accountability.assertAccountableMember(issue.companyId, actor.userId!);
+      const [member] = await connection.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, issue.companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, actor.userId!), eq(companyMemberships.status, 'active')));
+      const [job] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+      if (!guards?.assertSource) await assertProjectIdVisible(connection, { actor: { type: 'board', userId: actor.userId, memberships: member ? [member] : [] } } as unknown as Request, issue.companyId, job?.projectId);
+    }
     const normalizedAnswers = normalizeQuestionAnswers({
       questions: interaction.payload.questions,
       answers: input.answers,
     });
 
+    let publish: (() => Promise<unknown>) | null = null;
+    if (input.shareWithCompany) {
+      if (!actor.userId || actor.agentId || !interaction.payload.answerOwnerUserId) throw forbidden('Named human confirmation is required to publish company facts');
+      const [job] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+      if (!job || job.projectId || !interaction.payload.workforceAgentId) throw unprocessable('Only company-level workforce jobs may share answers with the company');
+      const svc = workforceService(connection);
+      const enrollment = await svc.getEnrollment(issue.companyId, interaction.payload.workforceAgentId!);
+      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
+      const facts = interaction.payload.questions.filter(q => q.companyFactKey).map(q => ({ key: q.companyFactKey!, value: normalizedAnswers.find(a => a.questionId === q.id)?.text ?? '', sourceReference: `interaction:${interaction.id}/question:${q.id}` }));
+      if (!template || !facts.length || facts.some(f => !template.requiredFactKeys.includes(f.key) || !f.value.trim())) throw unprocessable('Only answered template fact keys may be shared');
+      const prior = await svc.getBrief(issue.companyId);
+      publish = () => svc.updateBrief(issue.companyId, { expectedRevision: prior.revision, sources: prior.sources, facts: [...prior.facts.filter(f => !facts.some(next => next.key === f.key)), ...facts] }, { userId: actor.userId! }, acceptance, guards?.beforeWrite);
+    }
     if (validationOnly) return interaction;
+    if (publish) await publish();
     guards?.beforeWrite?.();
     const [updated] = await connection
       .update(issueThreadInteractions)
@@ -791,6 +880,7 @@ export function issueThreadInteractionService(db: Db) {
         result: {
           version: 1,
           answers: normalizedAnswers,
+          ...(input.shareWithCompany !== undefined || interaction.payload.workforceAgentId ? { shareWithCompany: input.shareWithCompany ?? false } : {}),
           summaryMarkdown: input.summaryMarkdown ?? null,
         },
         resolvedByAgentId: actor.agentId ?? null,

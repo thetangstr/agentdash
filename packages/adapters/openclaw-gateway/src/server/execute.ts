@@ -9,6 +9,7 @@ import {
   buildPaperclipEnv,
   parseObject,
   renderAgentDirectivesPrompt,
+  renderWorkforcePrompt,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -1113,15 +1114,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // joinPromptSections seam, and a channel the directives cannot reach is an
   // adapter where the steward's constraints silently do not apply.
   const agentDirectivesNote = renderAgentDirectivesPrompt(ctx.context.paperclipAgentDirectives);
+  const workforceNote = renderWorkforcePrompt(ctx.context.paperclipWorkforce);
   const structuredSections = structuredWakeJson
     ? joinWakePayloadSections(structuredWakePrompt, structuredWakeJson)
     : structuredWakePrompt;
   const wakeText = buildWakeText(
     wakePayload,
     paperclipEnv,
-    agentDirectivesNote
-      ? [agentDirectivesNote, structuredSections].filter(Boolean).join("\n\n")
-      : structuredSections,
+    [agentDirectivesNote, workforceNote, structuredSections].filter(Boolean).join("\n\n"),
   );
 
   const sessionKeyStrategy = normalizeSessionKeyStrategy(ctx.config.sessionKeyStrategy);
