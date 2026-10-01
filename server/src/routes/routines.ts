@@ -13,7 +13,7 @@ import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
 import { accessService, logActivity, routineService } from "../services/index.js";
 import { assertCanSetCompanyDirection, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { forbidden, unauthorized } from "../errors.js";
+import { forbidden } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -59,24 +59,15 @@ export function routineRoutes(
     }
   }
 
-  function assertCanManageCompanyRoutine(req: Request, companyId: string, assigneeAgentId?: string | null) {
-    assertCompanyAccess(req, companyId);
-    if (req.actor.type === "board") return;
-    if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
-    if (assigneeAgentId !== req.actor.agentId) {
-      throw forbidden("Agents can only manage routines assigned to themselves");
-    }
-  }
-
-  async function assertCanManageExistingRoutine(req: Request, routineId: string) {
+  // AgentDash: (#710) every routine write goes through `assertBoardCanAssignTasks`.
+  // The old assigned-agent helpers let an agent manage a routine assigned to
+  // itself; that branch became dead once the guard above rejects every agent,
+  // so they are gone. What remains is load, 404, then the standing-instruction
+  // guard (which also checks company access).
+  async function loadRoutineForWrite(req: Request, routineId: string) {
     const routine = await svc.get(routineId);
     if (!routine) return null;
-    assertCompanyAccess(req, routine.companyId);
-    if (req.actor.type === "board") return routine;
-    if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
-    if (routine.assigneeAgentId !== req.actor.agentId) {
-      throw forbidden("Agents can only manage routines assigned to themselves");
-    }
+    await assertBoardCanAssignTasks(req, routine.companyId);
     return routine;
   }
 
@@ -91,7 +82,6 @@ export function routineRoutes(
   router.post("/companies/:companyId/routines", validate(createRoutineSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertBoardCanAssignTasks(req, companyId);
-    assertCanManageCompanyRoutine(req, companyId, req.body.assigneeAgentId);
     const created = await svc.create(companyId, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
@@ -126,30 +116,18 @@ export function routineRoutes(
   });
 
   router.patch("/routines/:id", validate(updateRoutineSchema), async (req, res) => {
-    const routine = await assertCanManageExistingRoutine(req, req.params.id as string);
+    // AgentDash: (#710) the guard used to run only when the assignee changed or
+    // the status became active, so an assigned agent or a member without
+    // `tasks:assign` could rewrite the description, variables, project/goal/
+    // parent issue, priority or policies of an active routine and so change
+    // future autonomous work. Every field in `updateRoutineSchema` shapes the
+    // issues a routine creates (the title too: it becomes the title of each
+    // issue the agent picks up), so there is no cosmetic subset. Every PATCH
+    // is guarded.
+    const routine = await loadRoutineForWrite(req, req.params.id as string);
     if (!routine) {
       res.status(404).json({ error: "Routine not found" });
       return;
-    }
-    const assigneeWillChange =
-      req.body.assigneeAgentId !== undefined &&
-      req.body.assigneeAgentId !== routine.assigneeAgentId;
-    if (assigneeWillChange) {
-      await assertBoardCanAssignTasks(req, routine.companyId);
-    }
-    const statusWillActivate =
-      req.body.status !== undefined &&
-      req.body.status === "active" &&
-      routine.status !== "active";
-    if (statusWillActivate) {
-      await assertBoardCanAssignTasks(req, routine.companyId);
-    }
-    if (
-      req.actor.type === "agent" &&
-      req.body.assigneeAgentId !== undefined &&
-      req.body.assigneeAgentId !== req.actor.agentId
-    ) {
-      throw forbidden("Agents can only assign routines to themselves");
     }
     const updated = await svc.update(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
@@ -183,12 +161,11 @@ export function routineRoutes(
   });
 
   router.post("/routines/:id/triggers", validate(createRoutineTriggerSchema), async (req, res) => {
-    const routine = await assertCanManageExistingRoutine(req, req.params.id as string);
+    const routine = await loadRoutineForWrite(req, req.params.id as string);
     if (!routine) {
       res.status(404).json({ error: "Routine not found" });
       return;
     }
-    await assertBoardCanAssignTasks(req, routine.companyId);
     const created = await svc.createTrigger(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
@@ -214,12 +191,11 @@ export function routineRoutes(
       res.status(404).json({ error: "Routine trigger not found" });
       return;
     }
-    const routine = await assertCanManageExistingRoutine(req, trigger.routineId);
+    const routine = await loadRoutineForWrite(req, trigger.routineId);
     if (!routine) {
       res.status(404).json({ error: "Routine not found" });
       return;
     }
-    await assertBoardCanAssignTasks(req, routine.companyId);
     const updated = await svc.updateTrigger(trigger.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
@@ -245,7 +221,9 @@ export function routineRoutes(
       res.status(404).json({ error: "Routine trigger not found" });
       return;
     }
-    const routine = await assertCanManageExistingRoutine(req, trigger.routineId);
+    // AgentDash: (#710) deleting a trigger changes when the routine runs; this
+    // route skipped the guard before.
+    const routine = await loadRoutineForWrite(req, trigger.routineId);
     if (!routine) {
       res.status(404).json({ error: "Routine not found" });
       return;
@@ -275,7 +253,9 @@ export function routineRoutes(
         res.status(404).json({ error: "Routine trigger not found" });
         return;
       }
-      const routine = await assertCanManageExistingRoutine(req, trigger.routineId);
+      // AgentDash: (#710) rotating a webhook secret changes who can fire the
+      // routine; this route skipped the guard before.
+      const routine = await loadRoutineForWrite(req, trigger.routineId);
       if (!routine) {
         res.status(404).json({ error: "Routine not found" });
         return;
@@ -301,12 +281,11 @@ export function routineRoutes(
   );
 
   router.post("/routines/:id/run", validate(runRoutineSchema), async (req, res) => {
-    const routine = await assertCanManageExistingRoutine(req, req.params.id as string);
+    const routine = await loadRoutineForWrite(req, req.params.id as string);
     if (!routine) {
       res.status(404).json({ error: "Routine not found" });
       return;
     }
-    await assertBoardCanAssignTasks(req, routine.companyId);
     const run = await svc.runRoutine(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? null : null,

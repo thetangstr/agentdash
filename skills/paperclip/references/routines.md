@@ -8,7 +8,7 @@ A routine has:
 - A concurrency policy (what to do when a previous run is still active)
 - A catch-up policy (what to do with missed scheduled runs)
 
-**Authorization:** Agents can read all routines in their company but can only create or manage routines assigned to themselves. Board operators have full access, including reassignment.
+**Authorization:** Agents can read all routines in their company but cannot create, edit, run or manage the triggers of any routine, including one assigned to themselves; every write returns 403. Board users need `tasks:assign` (instance admins and the local board are exempt) for every routine write, including edits to the description, variables and triggers.
 
 ---
 
@@ -167,7 +167,7 @@ POST /api/routines/{routineId}/run
 
 ## Updating a Routine
 
-All create fields are updatable. Agents cannot reassign a routine to another agent.
+All create fields are updatable. Every update requires `tasks:assign`; agents cannot update routines.
 
 ```
 PATCH /api/routines/{routineId}
