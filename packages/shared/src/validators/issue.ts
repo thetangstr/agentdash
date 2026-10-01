@@ -125,6 +125,10 @@ export const issueExecutionStateSchema = z.object({
   completedStageIds: z.array(z.string().uuid()).default([]),
   lastDecisionId: z.string().uuid().nullable(),
   lastDecisionOutcome: z.enum(ISSUE_EXECUTION_DECISION_OUTCOMES).nullable(),
+  // AgentDash: the task-recovery namespace is owned by the recovery ledger,
+  // not the execution-stage workflow. It must survive policy/status
+  // transitions instead of being stripped by this schema.
+  recoveryBudget: z.record(z.unknown()).nullable().optional(),
 });
 
 const issueRequestDepthInputSchema = z

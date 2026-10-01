@@ -41,7 +41,7 @@ Both HTTP and MCP use the same registered contracts. Caller-controlled URLs, met
 
 ## Currently reviewed operations
 
-All 20 foundation operations are version 1, company-targeted. Other target kinds currently have no domain operations in this foundation.
+All 22 foundation operations are version 1, company-targeted. Other target kinds currently have no domain operations in this foundation.
 
 | Area | Operation IDs |
 | --- | --- |
@@ -50,8 +50,21 @@ All 20 foundation operations are version 1, company-targeted. Other target kinds
 | Readiness/first job | `workforce.readiness.read`, `workforce.learning.acknowledge`, `workforce.skills.retry`, `workforce.first_job.start` |
 | Human questions | `human_questions.pending.list`, `human_questions.read`, `human_questions.respond`, `human_questions.cancel`, `human_questions.replace` |
 | Owner recovery | `human_questions.owner.assign`, `human_questions.stewardship.assign`, `human_questions.stewardship.transfer` |
+| Task recovery | `task_recovery.exhausted.read`, `task_recovery.remediate` |
 
 Questions retain their actual named owner and source visibility. Answers are private to the original job by default; eligible company-wide sharing is an explicit choice. Cancellation supplies no answer and required work stays held. A company selection or template instruction cannot impersonate the answer owner or grant sharing authority.
+
+### Task recovery permits
+
+When an issue's automatic recovery budget is exhausted, the persisted `executionState.recoveryBudget` marker refuses every wake for that issue — automatic, timer, manual, or any caller-supplied permit context. `task_recovery.exhausted.read` projects the marker, its dimensions and any pending permit. `task_recovery.remediate` is the only authorized path past the gate: a named human with active membership and current issue visibility prepares a readback pinned to the exact issue, its exhaustion marker, revision (`updatedAt`), assignee and refused/source run IDs, then confirms once.
+
+Confirmation atomically writes a server-owned permit under `recoveryBudget.remediation` and enqueues exactly one `queued` heartbeat run bound to that permit (no retry/continuation linkage), then dispatches it through the ordinary queue after commit. The marker itself is never cleared. Consumption happens inside the claim transaction, immediately before the queued→running compare-and-set — so a run refused by any earlier gate (agent pause, workspace/workforce/tree hold, budget, quota) leaves the permit `authorized` and reusable. Activity evidence is published only after the claim outcome is committed: a won CAS produces the `issue.task_recovery_permit_consumed` row; a lost CAS (e.g. a board cancel racing the claim) finalizes the permit `denied` in the same transaction and publishes `issue.task_recovery_permit_denied` instead — a consumed receipt can never stand beside a denied marker. These rows are written after commit, so a server stop in between can leave the marker without its row; the marker's `remediation.status` is the source of truth. Only that exact run can consume it — a wrong run, sibling, expired permit or stale authorization is refused and recorded (`denied`/`expired`). If a bound run dies before claim (agent pause, hold cancellation, board cancel), the permit stays truthfully `authorized` until a fresh prepare/confirm finalizes it (`issue.task_recovery_permit_superseded` activity) and mints a replacement bound to a new run. A failed permitted run creates no automatic continuation; another remediation requires another human confirmation. Permit lifetime is `expiresInMinutes` (1–120, default 15). If confirmation's outcome is uncertain, the durable handle reports `recovery_required`: inspect the issue's `recoveryBudget.remediation` state rather than confirming again — replay cannot mint a second permit or run.
+
+Both operations carry `authority: 'company_access'`: any principal the board key resolves to a currently active company membership can authorize — there is no additional per-operation grant.
+
+Attribution always comes from the authenticated board user of the confirming request — never from the handle or its payload. A confirmed handle proves only that prepare and confirm were made with the same board key; a consumed handle is not consent evidence and must not be presented as one.
+
+The two remediation paths compose: the explicit `POST /api/issues/:id/recovery-budget/clear` remains the only clear, and `task_recovery.remediate` is the only way a run goes ahead while the marker persists. If a board user clears while a permit is still `authorized`, the clear finalizes the permit as `denied` (`issue.task_recovery_permit_denied`), cancels the still-claimable bound run, then removes the marker — a bound run can never slip through as an ordinary wake after the marker is gone, and the activity log keeps the permit evidence.
 
 Hiring dialogs and the remaining app pages are separate pending coverage. The [coverage ledger](plans/2026-09-29-human-control-plane-transport-coverage.md) records that work and its acceptance criteria.
 

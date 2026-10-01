@@ -1,5 +1,6 @@
 import { ownershipHumanOperations } from "../services/human-control/ownership.js";
 import { questionHumanOperations } from "../services/human-control/questions.js";
+import { taskRecoveryHumanOperations } from "../services/human-control/task-recovery.js";
 // AgentDash: trusted local human bridge; canonical REST authority is unchanged.
 import { Router } from 'express';
 import type { Db } from '@paperclipai/db';
@@ -7,10 +8,10 @@ import { humanConfirmRequestSchema, humanDiscoverRequestSchema, humanOperationRe
 import { humanControlService } from '../services/human-control.js';
 import { workforceHumanOperations } from '../services/human-control/workforce.js';
 import { heartbeatService } from '../services/heartbeat.js';
-export function humanControlRoutes(db: Db, options: { heartbeat?: Pick<ReturnType<typeof heartbeatService>, 'wakeup'> } = {}) {
+export function humanControlRoutes(db: Db, options: { heartbeat?: Pick<ReturnType<typeof heartbeatService>, 'wakeup' | 'enqueueTaskRecoveryPermitRun' | 'dispatchQueuedRunsForAgent'> } = {}) {
   const router = Router();
   const heartbeat = options.heartbeat ?? heartbeatService(db);
-  const svc = humanControlService(db, [...workforceHumanOperations(heartbeat), ...questionHumanOperations(heartbeat), ...ownershipHumanOperations()]);
+  const svc = humanControlService(db, [...workforceHumanOperations(heartbeat), ...questionHumanOperations(heartbeat), ...ownershipHumanOperations(), ...taskRecoveryHumanOperations(heartbeat)]);
   router.get('/identity', async (req, res) => res.json(await svc.identity(req)));
   router.post('/discover', async (req, res) => {
     const input = humanDiscoverRequestSchema.parse(req.body);

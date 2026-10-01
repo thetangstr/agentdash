@@ -4,6 +4,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, t
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
 import { publishActivity } from "./activity-log.js";
 import { clearIssueDependents, prepareIssueDeletion } from "./issue-dependents.js";
+import { preserveIssueRecoveryBudget } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -1919,6 +1920,21 @@ async function blockedByMapForIssues(
   return map;
 }
 
+/**
+ * AgentDash (recovery permit): the executionState an issue update writes,
+ * with the `recoveryBudget` namespace taken from the locked row (`locked`)
+ * rather than from the caller's replacement (`next`). Exported for direct
+ * tests.
+ */
+export function withLockedRecoveryBudget(locked: unknown, next: unknown): Record<string, unknown> | null {
+  let base: Record<string, unknown> | null = null;
+  if (next && typeof next === "object" && !Array.isArray(next)) {
+    const { recoveryBudget: _ignored, ...rest } = next as Record<string, unknown>;
+    base = Object.keys(rest).length > 0 || !(next as Record<string, unknown>).recoveryBudget ? rest : null;
+  }
+  return preserveIssueRecoveryBudget(locked, base);
+}
+
 export function issueService(db: Db) {
   // AgentDash: explicit actual acceptance; a tx-bound factory is not ownership.
   async function acceptTopology<T>(supplied: ActivityAcceptance | undefined, work: (tx: Db, accepted: ActivityAcceptance) => Promise<T>): Promise<T> {
@@ -2495,6 +2511,19 @@ export function issueService(db: Db) {
     const patch: Partial<typeof issues.$inferInsert> = {
       ...issueData,
     };
+    // AgentDash (recovery permit, review F5): a whole-object executionState
+    // write carries the recoveryBudget namespace exactly as it stands on the
+    // row locked for this write — never the value a stale plan-phase read
+    // saw. A status/policy write therefore can neither erase a concurrently
+    // minted or consumed remediation permit nor re-add a marker the explicit
+    // clear removed in between. Only the heartbeat, the permit operation and
+    // the explicit clear write this namespace, and none of them come here.
+    if (issueData.executionState !== undefined) {
+      patch.executionState = withLockedRecoveryBudget(
+        existing.executionState,
+        issueData.executionState,
+      ) as typeof patch.executionState;
+    }
     if (issueData.requestDepth !== undefined) {
       patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
     }

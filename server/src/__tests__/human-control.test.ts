@@ -38,7 +38,7 @@ describe('human control HTTP contract with current named authority', () => {
     const app = express(); app.use(express.json());
     app.use(actorMiddleware(db, { deploymentMode: 'local_trusted' }));
     const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
-    if (bridge) app.use('/api/human-control', bridge.humanControlRoutes(db, { heartbeat: { wakeup: async (...args) => { const result = await heartbeat.wakeup(...args); if (failAfterWake) throw new Error('SYNTHETIC_PRIVATE_TRANSPORT_FAILURE'); return result; } } }));
+    if (bridge) app.use('/api/human-control', bridge.humanControlRoutes(db, { heartbeat: { ...heartbeat, wakeup: async (...args) => { const result = await heartbeat.wakeup(...args); if (failAfterWake) throw new Error('SYNTHETIC_PRIVATE_TRANSPORT_FAILURE'); return result; } } }));
     app.use(errorHandler);
     server = app.listen(0, '127.0.0.1'); await new Promise<void>(r => server!.once('listening', r));
     base = `http://127.0.0.1:${(server.address() as {port: number}).port}/api/human-control`;
@@ -276,7 +276,7 @@ describe('human control HTTP contract with current named authority', () => {
       expect((await client.listTools()).tools).toHaveLength(6);
       expect((await invoke('human_select_target', { target: h.target })).error).not.toBe(true);
       const found = await invoke('human_discover', { target: h.target });
-      expect(found.body.operations).toHaveLength(20);
+      expect(found.body.operations).toHaveLength(22);
       const p = await invoke('human_prepare', { target: h.target, operationId: 'workforce.first_job.start', version: 1, input: { agentId: worker.id } });
       expect(await db.select().from(issues).where(eq(issues.companyId, h.company.id))).toHaveLength(0);
       failAfterWake = true;

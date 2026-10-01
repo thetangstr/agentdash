@@ -137,3 +137,9 @@ ${userVoice || "No interview context was captured."}
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry
 // or destructive compensation; separate setup/persistence/link phases stay truthful.
+
+// AgentDash: task-recovery-permit is inherited from the canonical default
+// bundle: a persisted exhausted marker refuses every wake source, including a
+// board user's ordinary wake; only the explicit clear or one board-user-confirmed
+// task_recovery.remediate permit (exactly one bound run, no automatic
+// continuation) gets past it. A confirmed handle is not consent evidence.

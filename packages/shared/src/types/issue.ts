@@ -222,6 +222,9 @@ export interface IssueExecutionState {
   completedStageIds: string[];
   lastDecisionId: string | null;
   lastDecisionOutcome: IssueExecutionDecisionOutcome | null;
+  // AgentDash: task-recovery ledger namespace (exhaustion marker + named-human
+  // remediation permit). Server-owned; preserved across policy transitions.
+  recoveryBudget?: Record<string, unknown> | null;
 }
 
 /**

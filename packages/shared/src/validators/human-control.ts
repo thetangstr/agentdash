@@ -68,3 +68,66 @@ export function humanJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
   if (schema instanceof z.ZodUnion) return { anyOf: def.options.map(humanJsonSchema) };
   throw new Error('Unsupported human operation schema');
 }
+// AgentDash: named-human task-recovery permit. One confirm authorizes exactly
+// one queued run on the SAME exhausted issue; it never clears the exhaustion
+// marker, resets counters, or enables automatic continuation.
+export const taskRecoveryPermitStatusSchema = z.enum(['authorized', 'consumed', 'denied', 'expired']);
+export const taskRecoveryPermitSchema = z.object({
+  kind: z.literal('task_recovery_permit'),
+  version: z.literal(1),
+  status: taskRecoveryPermitStatusSchema,
+  issueId: z.string().uuid(),
+  companyId: z.string().uuid(),
+  runId: z.string().uuid(),
+  wakeupRequestId: z.string().uuid(),
+  assigneeAgentId: z.string().uuid(),
+  issueUpdatedAt: z.string(),
+  exhaustedAt: z.string().nullable(),
+  sourceRunId: z.string().nullable(),
+  refusedRunId: z.string().nullable(),
+  exhaustedBy: z.array(z.string()),
+  authorizedByUserId: z.string(),
+  actionHandleId: z.string(),
+  authorizedAt: z.string(),
+  expiresAt: z.string(),
+  consumedAt: z.string().nullable().optional(),
+  deniedAt: z.string().nullable().optional(),
+  expiredAt: z.string().nullable().optional(),
+  denialReason: z.string().nullable().optional(),
+  outcomeCriteria: z.string().nullable(),
+}).strict();
+export const taskRecoveryExhaustedIssueSchema = z.object({
+  issueId: z.string().uuid(),
+  companyId: z.string().uuid(),
+  identifier: z.string().nullable(),
+  title: z.string(),
+  status: z.string(),
+  assigneeAgentId: z.string().uuid().nullable(),
+  assigneeAgentName: z.string().nullable(),
+  exhausted: z.boolean(),
+  exhaustedAt: z.string().nullable(),
+  exhaustedBy: z.array(z.string()),
+  sourceRunId: z.string().nullable(),
+  refusedRunId: z.string().nullable(),
+  usage: z.record(z.unknown()).nullable(),
+  pendingPermit: taskRecoveryPermitSchema.nullable(),
+}).strict();
+export const taskRecoveryIssueInputSchema = z.object({
+  issueId: z.string().uuid(),
+}).strict();
+export const taskRecoveryRemediateInputSchema = taskRecoveryIssueInputSchema.extend({
+  outcomeCriteria: z.string().trim().min(1).max(4000).nullable().optional(),
+  expiresInMinutes: z.number().int().min(1).max(120).optional(),
+}).strict();
+export const taskRecoveryRemediateReceiptSchema = z.object({
+  authorized: z.literal(true),
+  permit: taskRecoveryPermitSchema,
+  runId: z.string().uuid(),
+  wakeupRequestId: z.string().uuid(),
+  runStatus: z.string(),
+  expiresAt: z.string(),
+}).strict();
+export type TaskRecoveryPermit = z.infer<typeof taskRecoveryPermitSchema>;
+export type TaskRecoveryExhaustedIssue = z.infer<typeof taskRecoveryExhaustedIssueSchema>;
+export type TaskRecoveryRemediateInput = z.input<typeof taskRecoveryRemediateInputSchema>;
+export type TaskRecoveryRemediateReceipt = z.infer<typeof taskRecoveryRemediateReceiptSchema>;

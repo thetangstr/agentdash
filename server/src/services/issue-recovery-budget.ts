@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns, issueComments, issues } from "@paperclipai/db";
+import { activityLog, agentWakeupRequests, heartbeatRuns, issueComments, issues } from "@paperclipai/db";
 import {
   ISSUE_RECOVERY_BUDGET_CLEARED_ACTION,
   readIssueRecoveryBudget,
@@ -16,8 +16,9 @@ import { logActivity } from "./activity-log.js";
  *
  * The heartbeat writes `execution_state.recoveryBudget = { status: "exhausted" }`
  * when automatic retries for a task run out, and while it is set refuses every
- * run a person did not start. Before this module nothing removed it, although
- * the exhaustion message promised human remediation.
+ * run except the one a confirmed task_recovery.remediate permit names. Before
+ * this module nothing removed it, although the exhaustion message promised
+ * human remediation.
  *
  * Clearing removes the marker and logs `issue.recovery_budget_cleared` in the
  * same transaction. That activity row is also the ledger reset point: the
@@ -57,13 +58,13 @@ export type IssueRecoveryBudgetNotice = {
 };
 
 /**
- * AgentDash (recovery budget, explicit clear — INTERIM, 2026-09-30): what the
- * issue PATCH and comment responses say while an exhausted marker is still on
- * the issue. Status changes, reopen-by-comment and reassignment used to clear
- * the marker; now they do not, so the caller is told plainly that the budget
- * is still exhausted and where the clear is. Until the one-run permit ships,
- * a run a board user's own action starts still goes ahead (see
- * isRunStartedByPerson in heartbeat.ts); automatic retries do not.
+ * AgentDash (recovery budget, permit + explicit clear — 2026-09-30 founder
+ * decision): what the issue PATCH and comment responses say while an
+ * exhausted marker is still on the issue. Status changes, reopen-by-comment
+ * and reassignment do not clear the marker, and no ordinary wake goes ahead —
+ * including one a board user's own action starts. The only run that passes
+ * is the exact one a confirmed task_recovery.remediate permit names; the only
+ * removal is the explicit clear below.
  */
 export function recoveryBudgetNotice(issueId: string, executionState: unknown): IssueRecoveryBudgetNotice | null {
   const budget = readIssueRecoveryBudget(executionState);
@@ -73,8 +74,9 @@ export function recoveryBudgetNotice(issueId: string, executionState: unknown): 
     exhaustedBy: budget.exhaustedBy,
     message:
       "This issue's automatic-retry budget is still exhausted. Changing its status, commenting or reassigning it " +
-      "does not clear the block: a run a board user's own action starts may still go ahead, but no automatic retry " +
-      "will. Use \"Clear recovery block & retry\" to clear it.",
+      "does not clear the block and no ordinary run will start — only the exact bound run a confirmed " +
+      "task_recovery.remediate permit names can proceed. Use \"Clear recovery block & retry\" to clear it, " +
+      "or authorize one bound run via task_recovery.remediate.",
     clearPath: `/api/issues/${issueId}/recovery-budget/clear`,
   };
 }
@@ -127,6 +129,77 @@ export async function clearIssueRecoveryBudget(
     if (!current) return null;
     const cleared = readIssueRecoveryBudget(current.executionState);
     if (!cleared) return null;
+
+    // AgentDash (founder decision, permit + explicit clear): a live
+    // task_recovery.remediate permit is finalized BEFORE the marker comes
+    // off — never erased silently. If the marker vanished while a bound run
+    // sat queued behind an authorized permit, that run would later claim as
+    // an ordinary wake with no consumed evidence, which is exactly the
+    // silent re-arm the decision prohibits. Deny the permit, cancel the
+    // still-claimable bound run, and record both so the activity log keeps
+    // the evidence after the marker is gone.
+    const remediation =
+      current.executionState && typeof current.executionState === "object" && !Array.isArray(current.executionState)
+        ? ((current.executionState as Record<string, unknown>).recoveryBudget as Record<string, unknown> | undefined)
+              ?.remediation as Record<string, unknown> | undefined
+        : undefined;
+    const livePermit =
+      remediation && remediation.status === "authorized" && typeof remediation.runId === "string"
+        ? remediation
+        : null;
+    if (livePermit) {
+      const now = new Date();
+      await tx
+        .update(issues)
+        .set({
+          executionState: sql`jsonb_set(${issues.executionState}, '{recoveryBudget,remediation}', (${issues.executionState} -> 'recoveryBudget' -> 'remediation') || ${JSON.stringify({ status: "denied", deniedAt: now.toISOString(), denialReason: "superseded by explicit recovery-budget clear" })}::jsonb)`,
+        })
+        .where(
+          and(
+            eq(issues.id, input.issueId),
+            sql`${issues.executionState} -> 'recoveryBudget' -> 'remediation' ->> 'status' = 'authorized'`,
+            sql`${issues.executionState} -> 'recoveryBudget' -> 'remediation' ->> 'runId' = ${livePermit.runId as string}`,
+          ),
+        );
+      const [boundRun] = await tx
+        .update(heartbeatRuns)
+        .set({
+          status: "cancelled",
+          finishedAt: now,
+          error: "task_recovery.remediate permit superseded by explicit recovery-budget clear",
+          errorCode: "task_recovery_permit_superseded",
+        })
+        .where(
+          and(
+            eq(heartbeatRuns.id, livePermit.runId as string),
+            eq(heartbeatRuns.companyId, input.companyId),
+            inArray(heartbeatRuns.status, ["queued", "scheduled_retry"]),
+          ),
+        )
+        .returning({ id: heartbeatRuns.id, wakeupRequestId: heartbeatRuns.wakeupRequestId });
+      if (boundRun?.wakeupRequestId) {
+        await tx
+          .update(agentWakeupRequests)
+          .set({ status: "skipped", finishedAt: now, error: "task_recovery.remediate permit superseded by explicit recovery-budget clear" })
+          .where(eq(agentWakeupRequests.id, boundRun.wakeupRequestId));
+      }
+      await logActivity(tx as unknown as Db, {
+        companyId: input.companyId,
+        actorType: "user",
+        actorId: input.actorUserId,
+        agentId: typeof livePermit.assigneeAgentId === "string" ? livePermit.assigneeAgentId : null,
+        runId: livePermit.runId as string,
+        action: "issue.task_recovery_permit_denied",
+        entityType: "issue",
+        entityId: input.issueId,
+        details: {
+          denialReason: "superseded by explicit recovery-budget clear",
+          boundRunCancelled: Boolean(boundRun),
+          actionHandleId: typeof livePermit.actionHandleId === "string" ? livePermit.actionHandleId : null,
+          wakeupRequestId: typeof livePermit.wakeupRequestId === "string" ? livePermit.wakeupRequestId : null,
+        },
+      });
+    }
 
     const [updated] = await tx
       .update(issues)
@@ -190,14 +263,14 @@ function formatUsage(usage: IssueRecoveryBudgetUsage | null, limits: IssueRecove
  * than the explicit clear moved it out of `blocked`: a board user's status
  * change, reopen-by-comment or reassignment (none of which clear the marker
  * any more), the assignee agent checking it out or PATCHing it, an
- * assistant-grant reopen, or a run a person started that then left the issue
- * in `todo`. Every automatic retry is then refused
- * and nothing else ever surfaces it.
+ * assistant-grant reopen, or a permit-bound remediation run that then left
+ * the issue in `todo`. Every wake is then refused except a live permit's
+ * bound run, and nothing else ever surfaces it.
  *
  * This moves such an issue back to `blocked` and posts one explanatory comment
  * per clear window (deduped on the comment prefix since the latest clear). It
  * does nothing while another run on the issue is queued or running, so it
- * never pulls the issue out from under a run a person started.
+ * never pulls the issue out from under a permitted run.
  * `excludeRunId` is the run being refused, which is not live work.
  */
 export async function reblockExhaustedIssue(
@@ -279,7 +352,8 @@ export async function reblockExhaustedIssue(
           `${RECOVERY_BUDGET_REBLOCK_COMMENT_PREFIX}: this issue's automatic-retry budget is exhausted` +
           `${usage ? ` (${usage})` : ""}, but it was in \`${current.status}\`, where it looked like live work. ` +
           "Moved it back to `blocked`. No automatic retry will start until a board user clears the recovery block with " +
-          "\"Clear recovery block & retry\" on this issue; moving it out of `blocked`, commenting or reassigning does not clear it.",
+          "\"Clear recovery block & retry\" on this issue or authorizes one bound run via task_recovery.remediate; " +
+          "moving it out of `blocked`, commenting or reassigning does not clear it.",
       });
     }
 
