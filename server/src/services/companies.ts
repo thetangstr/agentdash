@@ -154,6 +154,7 @@ export function companyService(db: Db) {
     feedbackDataSharingConsentAt: companies.feedbackDataSharingConsentAt,
     feedbackDataSharingConsentByUserId: companies.feedbackDataSharingConsentByUserId,
     feedbackDataSharingTermsVersion: companies.feedbackDataSharingTermsVersion,
+    agentVisibilityDefault: companies.agentVisibilityDefault,
     brandColor: companies.brandColor,
     // AgentDash (AGE-55): FRE Plan B — domain claim on the company.
     emailDomain: companies.emailDomain,

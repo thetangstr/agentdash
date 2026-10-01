@@ -331,8 +331,12 @@ describeEmbeddedPostgres("agent visibility routes", () => {
 
     it("only a company administrator may change the company default; flipping it to 'company' restores full visibility", async () => {
       expect((await request(titus()).patch(`/api/companies/${COMPANY}`).send({ agentVisibilityDefault: "company" })).status).toBe(403);
+      // The read must carry the value back, or the Settings radio can never show what was saved.
+      expect((await request(admin()).get(`/api/companies/${COMPANY}`)).body.agentVisibilityDefault).toBe("owner");
       const flipped = await request(admin()).patch(`/api/companies/${COMPANY}`).send({ agentVisibilityDefault: "company" });
       expect(flipped.status).toBe(200);
+      expect(flipped.body.agentVisibilityDefault).toBe("company");
+      expect((await request(admin()).get(`/api/companies/${COMPANY}`)).body.agentVisibilityDefault).toBe("company");
       // Everything inheriting is now company-visible; EXTRA stays 'owner' from the previous case.
       expect(names((await request(sam()).get(`/api/companies/${COMPANY}/agents`)).body)).toEqual(["Casper", "Delivery", "Other", "Shared"]);
       await db.update(companies).set({ agentVisibilityDefault: "owner" }).where(eq(companies.id, COMPANY));
