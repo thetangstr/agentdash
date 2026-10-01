@@ -104,6 +104,8 @@ import {
 import { inviteSignupBoundEmail } from "../services/invites.js";
 import { isHostedBox } from "../services/license.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
+// AgentDash (GH #708): membership changes re-check open live-event sockets.
+import { publishLiveEventAccessChange, publishMembershipAccessChange } from "../realtime/live-events-access.js";
 import {
   claimBoardOwnership,
   inspectBoardClaimChallenge
@@ -4541,6 +4543,7 @@ export function accessRoutes(
           .then((rows) => rows[0] ?? existing);
       });
       if (!updated) throw notFound("Member not found");
+      publishMembershipAccessChange(updated, "membership updated"); // AgentDash (GH #708): after commit
 
       await logActivity(db, {
         companyId,
@@ -4667,6 +4670,7 @@ export function accessRoutes(
         return updatedMember;
       });
       if (!updated) throw notFound("Member not found");
+      publishMembershipAccessChange(updated, "membership updated"); // AgentDash (GH #708): after commit
 
       await logActivity(db, {
         companyId,
@@ -4891,6 +4895,9 @@ export function accessRoutes(
           );
         });
         if (res.headersSent) return;
+        // AgentDash (GH #708): the service published inside this outer
+        // transaction; publish again now that it has committed.
+        publishLiveEventAccessChange({ kind: "user", userId, reason: "company access updated" });
       }
       res.json(await loadUserCompanyAccessResponse(db, access, userId));
     }

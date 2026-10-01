@@ -30,6 +30,8 @@ import {
 import { logger } from "../middleware/logger.js";
 import { configuredPublicBaseUrl, requestOrigin } from "../lib/public-base-url.js";
 import { normalizeOrigin } from "../lib/declared-origins.js";
+// AgentDash (GH #708): session/user deletion re-checks open live-event sockets.
+import { publishLiveEventAccessChange } from "../realtime/live-events-access.js";
 
 export type BetterAuthSessionUser = {
   id: string;
@@ -472,6 +474,22 @@ export function createBetterAuthInstance(
                 "[email] welcome email hook failed",
               );
             }
+          },
+        },
+        // AgentDash (GH #708): a deleted user loses every live-event socket.
+        delete: {
+          after: async (user: { id: string }) => {
+            publishLiveEventAccessChange({ kind: "user", userId: user.id, reason: "user deleted" });
+          },
+        },
+      },
+      // AgentDash (GH #708): sign-out / single-session revocation closes the
+      // sockets opened with that session. Bulk revocations that bypass this
+      // hook are caught by the live-events heartbeat re-authorization.
+      session: {
+        delete: {
+          after: async (session: { userId: string }) => {
+            publishLiveEventAccessChange({ kind: "user", userId: session.userId, reason: "session revoked" });
           },
         },
       },

@@ -71,6 +71,8 @@ import { HttpError, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { environmentService } from "./environments.js";
 import { isHostedBox } from "./license.js";
+// AgentDash (GH #708): company deletion closes its live-event sockets.
+import { publishLiveEventAccessChange } from "../realtime/live-events-access.js";
 
 // AgentDash (AGE-55): typed conflict surfaced when a creator tries to claim
 // a domain another company already owns. Routes catch this and turn it into
@@ -470,7 +472,7 @@ export function companyService(db: Db) {
     remove: async (id: string) => {
       let callbackCompleted = false;
       try {
-        return await db.transaction(async (tx) => {
+        const removed = await db.transaction(async (tx) => {
           // AgentDash: refuse foreign incoming topology before the first purge write.
           const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, id)).for("update");
           if (!company) return null;
@@ -588,6 +590,9 @@ export function companyService(db: Db) {
           callbackCompleted = true;
           return rows[0] ?? null;
         });
+        // AgentDash (GH #708): memberships and keys are gone; close the company's live-event sockets.
+        if (removed) publishLiveEventAccessChange({ kind: "company", companyId: id, reason: "company deleted" });
+        return removed;
       } catch (error) {
         if (callbackCompleted) throw new HttpError(409, "Company persistence is uncertain. Read current state before retrying.", { persistenceOutcome: "unknown" });
         throw error;

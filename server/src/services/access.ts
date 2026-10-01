@@ -13,6 +13,8 @@ import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict } from "../errors.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { logActivity } from "./activity-log.js";
+// AgentDash (GH #708): tell live-event sockets when a membership changes.
+import { publishLiveEventAccessChange, publishMembershipAccessChange } from "../realtime/live-events-access.js";
 
 // AgentDash: self-serve-bootstrap. The synthetic local_trusted actor never
 // becomes an instance admin through this path; it has no auth_users row.
@@ -193,7 +195,8 @@ export function accessService(db: Db) {
     },
     grantedByUserId: string | null,
   ) {
-    return db.transaction(async (tx) => {
+    // AgentDash (GH #708): publish after commit so live sockets re-read the new state.
+    const result = await db.transaction(async (tx) => {
       await tx.execute(sql`
         select ${companyMemberships.id}
         from ${companyMemberships}
@@ -276,6 +279,8 @@ export function accessService(db: Db) {
 
       return updated;
     });
+    publishMembershipAccessChange(result, "membership updated");
+    return result;
   }
 
   async function assertCanRemoveActiveOwner(
@@ -356,7 +361,8 @@ export function accessService(db: Db) {
   }
 
   async function archiveMember(companyId: string, memberId: string, input: MemberArchiveInput = {}) {
-    return db.transaction(async (tx) => {
+    // AgentDash (GH #708): publish after commit so live sockets re-read the new state.
+    const result = await db.transaction(async (tx) => {
       await tx.execute(sql`
         select ${companyMemberships.id}
         from ${companyMemberships}
@@ -470,6 +476,8 @@ export function accessService(db: Db) {
         reassignedIssueCount: resetInProgress.length + reassigned.length,
       };
     });
+    publishMembershipAccessChange(result?.member, "membership archived");
+    return result;
   }
 
   async function promoteInstanceAdmin(userId: string) {
@@ -560,11 +568,14 @@ export function accessService(db: Db) {
   }
 
   async function demoteInstanceAdmin(userId: string) {
-    return db
+    const removed = await db
       .delete(instanceUserRoles)
       .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
       .returning()
       .then((rows) => rows[0] ?? null);
+    // AgentDash (GH #708): an instance admin read every company; re-check all of this user's sockets.
+    if (removed) publishLiveEventAccessChange({ kind: "user", userId, reason: "instance admin demoted" });
+    return removed;
   }
 
   async function listUserCompanyAccess(userId: string) {
@@ -678,6 +689,13 @@ export function accessService(db: Db) {
       }
     });
 
+    // AgentDash (GH #708): the archived companies' live sockets re-check access.
+    for (const row of existing) {
+      if (!target.has(row.companyId) && row.status !== "archived") {
+        publishMembershipAccessChange(row, "company access removed");
+      }
+    }
+
     return listUserCompanyAccess(userId);
   }
 
@@ -697,6 +715,7 @@ export function accessService(db: Db) {
           .where(eq(companyMemberships.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? null);
+        publishMembershipAccessChange(updated ?? existing, "membership updated"); // AgentDash (GH #708)
         return updated ?? existing;
       }
       return existing;
@@ -850,7 +869,8 @@ export function accessService(db: Db) {
       status?: "pending" | "active" | "suspended";
     },
   ) {
-    return db.transaction(async (tx) => {
+    // AgentDash (GH #708): publish after commit so live sockets re-read the new state.
+    const result = await db.transaction(async (tx) => {
       await tx.execute(sql`
         select ${companyMemberships.id}
         from ${companyMemberships}
@@ -906,6 +926,8 @@ export function accessService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? existing);
     });
+    publishMembershipAccessChange(result, "membership updated");
+    return result;
   }
 
   return {

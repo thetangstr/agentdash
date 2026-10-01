@@ -363,7 +363,17 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       return { ...event, payload: { ...payload, details: pruned } };
     }
 
-    return Object.assign(shouldDeliver, { redactForSubscriber });
+    /**
+     * AgentDash (GH #708): forget the cached actor and project decisions, so a
+     * role change (e.g. admin demoted to member) applies to the next event
+     * instead of after ACTOR_TTL_MS.
+     */
+    function invalidateActor() {
+      actorReq = null;
+      decisions.clear();
+    }
+
+    return Object.assign(shouldDeliver, { redactForSubscriber, invalidateActor });
 
     async function shouldDeliver(event: LiveEvent): Promise<boolean> {
       // Agent visibility (2026-09-30): an event about an agent the subscriber

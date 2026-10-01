@@ -33,6 +33,8 @@ import { deprovisionAgentProfile, hermesManagedProfilesEnabled } from "./hermes-
 import { assignUnassignedReviewItems } from "./review-queue-assignments.js";
 import { endStewardshipForTerminatedAgent } from "./agent-stewardships.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
+// AgentDash (GH #708): key revocation and termination close live-event sockets.
+import { publishLiveEventAccessChange } from "../realtime/live-events-access.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -611,6 +613,8 @@ export function agentService(db: Db) {
       });
       if (!terminated) return getById(id);
       for (const publication of terminationPublications) publishActivity(publication);
+      // AgentDash (GH #708): its keys are revoked; close its live-event sockets.
+      publishLiveEventAccessChange({ kind: "agent", agentId: id, companyId: existing.companyId, reason: "agent terminated" });
 
       // AgentDash: a terminated reviewer cannot review. Retire its queue
       // assignment here — inside terminate, not at the call sites — so every
@@ -674,7 +678,7 @@ export function agentService(db: Db) {
         );
       }
 
-      return db.transaction(async (tx) => {
+      const removed = await db.transaction(async (tx) => {
         // AgentDash: canonical issue acceptance locks this company before
         // principal witnesses. Join that order before detaching issues or
         // deleting credential children, which otherwise invert those locks.
@@ -756,6 +760,11 @@ export function agentService(db: Db) {
           .then((rows) => rows[0] ?? null);
         return deleted ? normalizeAgentRow(deleted) : null;
       });
+      // AgentDash (GH #708): its keys are gone; close its live-event sockets.
+      if (removed) {
+        publishLiveEventAccessChange({ kind: "agent", agentId: id, companyId: existing.companyId, reason: "agent deleted" });
+      }
+      return removed;
     },
 
     activatePendingApproval: async (id: string) => {
@@ -846,6 +855,8 @@ export function agentService(db: Db) {
         .set({ revokedAt: new Date() })
         .where(and(eq(agentApiKeys.agentId, id), eq(agentApiKeys.principalKind, principalKind), isNull(agentApiKeys.revokedAt)))
         .returning({ id: agentApiKeys.id });
+      // AgentDash (GH #708): close sockets opened with a now-revoked key.
+      if (rows.length > 0) publishLiveEventAccessChange({ kind: "agent", agentId: id, reason: "agent keys revoked" });
       return rows.length;
     },
 
@@ -934,6 +945,10 @@ export function agentService(db: Db) {
         .set({ revokedAt: new Date() })
         .where(and(eq(agentApiKeys.id, keyId), eq(agentApiKeys.agentId, agentId)))
         .returning();
+      // AgentDash (GH #708): close sockets opened with this key.
+      if (rows[0]) {
+        publishLiveEventAccessChange({ kind: "agent", agentId, companyId: rows[0].companyId, reason: "agent key revoked" });
+      }
       return rows[0] ?? null;
     },
 

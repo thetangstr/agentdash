@@ -4,12 +4,14 @@ import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { agentApiKeys, agents, authSessions, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
 import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 import { edgeUpgradeAllowed } from "../middleware/edge-gate.js";
+// AgentDash (GH #708): access changes close sockets that no longer authorize.
+import { subscribeLiveEventAccessChanges, type LiveEventAccessChange } from "./live-events-access.js";
 import {
   createLiveEventVisibility,
   loadBoardUserActor,
@@ -53,7 +55,17 @@ interface UpgradeContext {
   // AgentDash (GH #830 part A follow-up): how the subscriber is authenticated,
   // so live events can be filtered by the same project rule as REST.
   source: "local_implicit" | "session" | "agent_key";
+  // AgentDash (GH #708): the exact credential the socket was opened with, so
+  // re-authorization checks that credential and not just the principal.
+  keyId?: string;
+  sessionId?: string | null;
 }
+
+// AgentDash (GH #708): policy-violation close code for a revoked subscriber.
+export const LIVE_EVENTS_REVOKED_CLOSE_CODE = 1008;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+// Agents that REST auth refuses (middleware/auth.ts) cannot subscribe either.
+const INACTIVE_AGENT_STATUSES = new Set(["terminated", "pending_approval"]);
 
 interface IncomingMessageWithContext extends IncomingMessage {
   paperclipUpgradeContext?: UpgradeContext;
@@ -155,32 +167,14 @@ async function authorizeUpgrade(
     const userId = session?.user?.id;
     if (!userId) return null;
 
-    const [roleRow, memberships] = await Promise.all([
-      db
-        .select({ id: instanceUserRoles.id })
-        .from(instanceUserRoles)
-        .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
-        .then((rows) => rows[0] ?? null),
-      db
-        .select({ companyId: companyMemberships.companyId })
-        .from(companyMemberships)
-        .where(
-          and(
-            eq(companyMemberships.principalType, "user"),
-            eq(companyMemberships.principalId, userId),
-            eq(companyMemberships.status, "active"),
-          ),
-        ),
-    ]);
-
-    const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
-    if (!roleRow && !hasCompanyMembership) return null;
+    if (!(await userCanReadCompany(db, userId, companyId))) return null;
 
     return {
       companyId,
       actorType: "board",
       actorId: userId,
       source: "session",
+      sessionId: session?.session?.id ?? null,
     };
   }
 
@@ -194,6 +188,10 @@ async function authorizeUpgrade(
   if (!key || key.companyId !== companyId) {
     return null;
   }
+  // AgentDash (GH #708): parity with REST auth — a terminated or unapproved agent's key does not subscribe.
+  if (!(await agentIsActiveInCompany(db, key.agentId, companyId))) {
+    return null;
+  }
 
   await db
     .update(agentApiKeys)
@@ -205,7 +203,83 @@ async function authorizeUpgrade(
     actorType: "agent",
     actorId: key.agentId,
     source: "agent_key",
+    keyId: key.id,
   };
+}
+
+// AgentDash (GH #708): the checks the upgrade made, repeatable for an open socket.
+async function userCanReadCompany(db: Db, userId: string, companyId: string): Promise<boolean> {
+  const [roleRow, membership] = await Promise.all([
+    db
+      .select({ id: instanceUserRoles.id })
+      .from(instanceUserRoles)
+      .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+      .then((rows) => rows[0] ?? null),
+    db
+      .select({ id: companyMemberships.id })
+      .from(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.companyId, companyId),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, userId),
+          eq(companyMemberships.status, "active"),
+        ),
+      )
+      .then((rows) => rows[0] ?? null),
+  ]);
+  return Boolean(roleRow || membership);
+}
+
+async function agentIsActiveInCompany(db: Db, agentId: string, companyId: string): Promise<boolean> {
+  const agent = await db
+    .select({ companyId: agents.companyId, status: agents.status })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .then((rows) => rows[0] ?? null);
+  return Boolean(agent && agent.companyId === companyId && !INACTIVE_AGENT_STATUSES.has(agent.status));
+}
+
+/**
+ * AgentDash (GH #708): does the credential this socket was opened with still
+ * grant read access to its company? Run on the heartbeat and on access-change
+ * signals, never per event.
+ */
+async function reauthorize(db: Db, context: UpgradeContext): Promise<boolean> {
+  if (context.source === "local_implicit") return true;
+
+  if (context.source === "session") {
+    if (context.sessionId) {
+      const session = await db
+        .select({ expiresAt: authSessions.expiresAt })
+        .from(authSessions)
+        .where(eq(authSessions.id, context.sessionId))
+        .then((rows) => rows[0] ?? null);
+      if (!session || session.expiresAt.getTime() <= Date.now()) return false;
+    }
+    return userCanReadCompany(db, context.actorId, context.companyId);
+  }
+
+  if (!context.keyId) return false;
+  const key = await db
+    .select({ companyId: agentApiKeys.companyId, agentId: agentApiKeys.agentId })
+    .from(agentApiKeys)
+    .where(and(eq(agentApiKeys.id, context.keyId), isNull(agentApiKeys.revokedAt)))
+    .then((rows) => rows[0] ?? null);
+  if (!key || key.companyId !== context.companyId || key.agentId !== context.actorId) return false;
+  return agentIsActiveInCompany(db, context.actorId, context.companyId);
+}
+
+/** One re-authorization per credential per heartbeat, however many sockets share it. */
+function credentialCacheKey(context: UpgradeContext) {
+  return [context.source, context.actorId, context.keyId ?? "", context.sessionId ?? "", context.companyId].join("|");
+}
+
+function accessChangeMatches(change: LiveEventAccessChange, context: UpgradeContext) {
+  if (change.companyId && change.companyId !== context.companyId) return false;
+  if (change.kind === "company") return true;
+  if (change.kind === "user") return context.source === "session" && context.actorId === change.userId;
+  return context.source === "agent_key" && context.actorId === change.agentId;
 }
 
 /** The subscriber as the REST auth middleware would describe it on `req.actor`. */
@@ -225,6 +299,8 @@ export function setupLiveEventsWebSocketServer(
   opts: {
     deploymentMode: DeploymentMode;
     resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
+    /** AgentDash (GH #708): heartbeat (ping + re-authorization) interval; tests only. */
+    heartbeatIntervalMs?: number;
   },
 ) {
   const wss = new WebSocketServer({ noServer: true });
@@ -233,16 +309,89 @@ export function setupLiveEventsWebSocketServer(
   // AgentDash (GH #830 part A follow-up): per-subscriber project visibility.
   const visibility = createLiveEventVisibility(db);
 
+  // AgentDash (GH #708): what each open socket was authorized as, so it can be
+  // re-authorized on the heartbeat and on access-change signals.
+  type ClientAccess = {
+    context: UpgradeContext;
+    revoked: boolean;
+    invalidateActor: () => void;
+    // An access-change re-check in flight. Events published after the change
+    // wait for it, so none slips out between the commit and the close.
+    pendingCheck: Promise<void> | null;
+  };
+  const accessByClient = new Map<WsSocket, ClientAccess>();
+
+  function revokeClient(socket: WsSocket, access: ClientAccess, reason: string) {
+    if (access.revoked) return;
+    access.revoked = true;
+    // Stop queueing events at once; the close handler cleans up the rest.
+    const cleanup = cleanupByClient.get(socket);
+    if (cleanup) cleanup();
+    cleanupByClient.delete(socket);
+    logger.info?.(
+      { companyId: access.context.companyId, actorType: access.context.actorType, actorId: access.context.actorId, reason },
+      "live websocket access revoked; closing",
+    );
+    try {
+      socket.close(LIVE_EVENTS_REVOKED_CLOSE_CODE, "access revoked");
+    } catch {
+      socket.terminate();
+    }
+  }
+
+  async function recheckClient(
+    socket: WsSocket,
+    access: ClientAccess,
+    reason: string,
+    memo?: Map<string, Promise<boolean>>,
+  ): Promise<boolean> {
+    if (access.revoked) return false;
+    let pending: Promise<boolean>;
+    if (memo) {
+      const key = credentialCacheKey(access.context);
+      pending = memo.get(key) ?? reauthorize(db, access.context);
+      memo.set(key, pending);
+    } else {
+      pending = reauthorize(db, access.context);
+    }
+    let allowed: boolean;
+    try {
+      allowed = await pending;
+    } catch (err) {
+      // A transient database error keeps the socket; the next heartbeat retries.
+      logger.warn({ err, companyId: access.context.companyId }, "live websocket re-authorization failed");
+      return true;
+    }
+    if (!allowed) revokeClient(socket, access, reason);
+    return allowed;
+  }
+
+  const unsubscribeAccessChanges = subscribeLiveEventAccessChanges((change) => {
+    for (const [socket, access] of accessByClient) {
+      if (access.revoked || !accessChangeMatches(change, access.context)) continue;
+      const check: Promise<void> = recheckClient(socket, access, change.reason).then((allowed) => {
+        // Still allowed (e.g. admin demoted to member): apply the new role to the next event.
+        if (allowed) access.invalidateActor();
+        if (access.pendingCheck === check) access.pendingCheck = null;
+      });
+      access.pendingCheck = check;
+    }
+  });
+
   const pingInterval = setInterval(() => {
+    // AgentDash (GH #708): one re-authorization per credential per heartbeat.
+    const memo = new Map<string, Promise<boolean>>();
     for (const socket of wss.clients) {
       if (!aliveByClient.get(socket)) {
         socket.terminate();
         continue;
       }
+      const access = accessByClient.get(socket);
+      if (access) void recheckClient(socket, access, "heartbeat re-authorization", memo);
       aliveByClient.set(socket, false);
       socket.ping();
     }
-  }, 30000);
+  }, opts.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
 
   wss.on("connection", (socket: WsSocket, req: IncomingMessage) => {
     const context = (req as IncomingMessageWithContext).paperclipUpgradeContext;
@@ -258,10 +407,21 @@ export function setupLiveEventsWebSocketServer(
       companyId: context.companyId,
       loadActor: () => liveEventActorFor(db, context),
     });
+    const access: ClientAccess = {
+      context,
+      revoked: false,
+      invalidateActor: shouldDeliver.invalidateActor,
+      pendingCheck: null,
+    };
+    accessByClient.set(socket, access);
     let delivery: Promise<void> = Promise.resolve();
     const unsubscribe = subscribeCompanyLiveEvents(context.companyId, (event) => {
       void visibility.resolveEvent(event); // resolve (and invalidate caches) at emit time
       delivery = delivery.then(async () => {
+        // AgentDash (GH #708): wait out an access-change re-check, then
+        // deliver nothing more after a revocation, even if queued before it.
+        if (access.pendingCheck) await access.pendingCheck;
+        if (access.revoked) return;
         let deliver = false;
         try {
           deliver = await shouldDeliver(event);
@@ -278,7 +438,7 @@ export function setupLiveEventsWebSocketServer(
           logger.warn({ err, companyId: context.companyId, type: event.type }, "live event redaction failed");
           return;
         }
-        if (socket.readyState !== WebSocket.OPEN) return;
+        if (access.revoked || socket.readyState !== WebSocket.OPEN) return;
         socket.send(JSON.stringify(outgoing));
       });
     });
@@ -295,6 +455,7 @@ export function setupLiveEventsWebSocketServer(
       if (cleanup) cleanup();
       cleanupByClient.delete(socket);
       aliveByClient.delete(socket);
+      accessByClient.delete(socket); // AgentDash (GH #708)
     });
 
     socket.on("error", (err: Error) => {
@@ -304,6 +465,7 @@ export function setupLiveEventsWebSocketServer(
 
   wss.on("close", () => {
     clearInterval(pingInterval);
+    unsubscribeAccessChanges(); // AgentDash (GH #708)
   });
 
   server.on("upgrade", (req, socket, head) => {
