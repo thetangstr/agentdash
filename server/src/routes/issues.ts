@@ -96,7 +96,8 @@ import {
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
-import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, reportAuthzRefusal } from "./authz.js";
+import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, reportAuthzRefusal } from "./authz.js";
+import { clearWorkspacePersistenceHold } from "../services/workspace-persistence-recovery.js";
 import {
   WorkspaceFileError,
   contentTypeForWorkspaceFile,
@@ -2363,6 +2364,48 @@ export function issueRoutes(
   // issue back to `todo` when nothing else blocks it, and wakes the assignee.
   // The clear resets the retry ledger (see services/issue-recovery-budget.ts),
   // so the agent gets a fresh automatic-retry window, not an unlimited one.
+  // AgentDash (#881 review P3): audited exit from a workspace-persistence
+  // quarantine. A person checks the workspace and issue first; this only
+  // marks the unresolved attempts resolved (no file cleanup, no replay).
+  // `{ agentId }` clears an agent-level hold (an attempt with no issue) and
+  // needs company admin; `{ issueId }` needs a human board user who can see
+  // the issue.
+  router.post("/companies/:companyId/workspace-recovery/clear", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    if (!isHumanBoardActor(req) || !req.actor.userId && req.actor.source !== "local_implicit") {
+      res.status(403).json({ error: "Only a board user can clear a workspace recovery hold" });
+      return;
+    }
+    assertCompanyAccess(req, companyId);
+    const body = (req.body ?? {}) as { issueId?: unknown; agentId?: unknown; note?: unknown };
+    const issueId = typeof body.issueId === "string" ? body.issueId : null;
+    const agentId = typeof body.agentId === "string" ? body.agentId : null;
+    if ((issueId === null) === (agentId === null)) {
+      res.status(400).json({ error: "Pass exactly one of issueId or agentId" });
+      return;
+    }
+    if (issueId) {
+      await assertIssueIdVisible(db, req, issueId);
+      const issue = await svc.getById(issueId);
+      if (!issue || issue.companyId !== companyId) throw notFound("Issue not found");
+    } else {
+      const isAdmin = req.actor.source === "local_implicit" || req.actor.isInstanceAdmin || actorHumanRole(req, companyId) === "admin";
+      if (!isAdmin) throw forbidden("Clearing an agent-level workspace hold requires company admin");
+      const agent = await agentsSvc.getById(agentId!);
+      if (!agent || agent.companyId !== companyId) throw notFound("Agent not found");
+    }
+    const actor = getActorInfo(req);
+    const result = await clearWorkspacePersistenceHold(db, {
+      companyId, issueId, agentId, actorUserId: actor.actorId,
+      note: typeof body.note === "string" ? body.note.slice(0, 2000) : null,
+    });
+    if (result.clearedRunIds.length === 0) {
+      res.status(409).json({ error: "No unresolved workspace attempt matches" });
+      return;
+    }
+    res.json({ cleared: true, runIds: result.clearedRunIds });
+  });
+
   router.post("/issues/:id/recovery-budget/clear", async (req, res) => {
     if (!isHumanBoardActor(req)) {
       res.status(403).json({ error: "Only a board user can clear an issue's recovery block" });

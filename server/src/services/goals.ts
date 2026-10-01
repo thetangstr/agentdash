@@ -52,7 +52,7 @@ export function goalService(db: Db) {
   }
   async function lockCompanies(tx: Db, ids: string[]) {
     await tx.select({ id: companies.id }).from(companies)
-      .where(inArray(companies.id, [...new Set(ids)].sort())).orderBy(asc(companies.id)).for("update");
+      .where(inArray(companies.id, [...new Set(ids)].sort())).orderBy(asc(companies.id)).for("no key update");
   }
   async function lockGoalCompanies(tx: Db, id: string, nextCompanyId?: string) {
     const [before] = await tx.select().from(goals).where(eq(goals.id, id));

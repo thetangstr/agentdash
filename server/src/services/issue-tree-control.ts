@@ -558,7 +558,7 @@ export function issueTreeControlService(db: Db) {
   async function accept<T>(companyId: string, supplied: ActivityAcceptance | undefined, work: (tx: Db, accepted: ActivityAcceptance) => Promise<T>) {
     const run = async (accepted: ActivityAcceptance) => {
       const tx = accepted.executor;
-      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("update");
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
       return work(tx, accepted);
     };
     if (supplied !== undefined) { assertActivityAcceptance(supplied); return run(supplied); }
@@ -1314,16 +1314,15 @@ export function issueTreeControlService(db: Db) {
     await context.authority.read(reader, history.sources.map(issue => ({ issue, effectivePatch: {} })));
   }
 
-  // Canonical readback owns the company mutex through projection and current
-  // authorization. Participating deletion/topology/history writers cannot shrink
-  // the checked source union while an older projection is retained for return.
+  // Canonical readback projects and authorizes from one consistent snapshot
+  // (REPEATABLE READ, read only). Reads take no row locks (#881 review P2):
+  // the checked source union and the returned projection come from the same
+  // snapshot, so a concurrent writer cannot make them disagree.
   async function readAction(context: TreeActionContext, selection:
     | { kind: "state" }
     | { kind: "detail"; holdId: string }
     | { kind: "list"; status?: IssueTreeHold["status"]; mode?: IssueTreeControlMode; includeMembers?: boolean }) {
     return db.transaction(async tx => {
-      await tx.select({ id: companies.id }).from(companies)
-        .where(eq(companies.id, context.companyId)).for("share");
       const reader = issueTreeControlService(tx as unknown as Db);
       if (selection.kind === "state") {
         const activePauseHold = await reader.getActivePauseHoldGate(context.companyId, context.rootIssueId);
@@ -1339,7 +1338,7 @@ export function issueTreeControlService(db: Db) {
       const holds = await reader.listHolds(context.companyId, context.rootIssueId, selection);
       await authorizeRead(context, holds.map(hold => hold.id), tx);
       return holds;
-    });
+    }, { isolationLevel: "repeatable read", accessMode: "read only" });
   }
 
   async function acceptAction(context: TreeActionContext, rawIntent: TreeIntent,
@@ -1350,7 +1349,7 @@ export function issueTreeControlService(db: Db) {
       assertActivityAcceptance(accepted);
       const tx = accepted.executor;
       if (typeof tx.execute !== 'function') throw new TypeError('Tree acceptance requires an actual SQL executor');
-      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, context.companyId)).for('update');
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, context.companyId)).for("no key update");
       const initial = await actionSnapshot(context, intent, tx);
       const authority = await context.authority.stage(tx, initial.targets);
       // Fixed order: complete positive witness union, sorted issue union, exact

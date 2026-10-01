@@ -10,7 +10,7 @@ export function commentTransactionReads(getIssue: () => Promise<any>, getRun: (i
       const query = {
         from(table: any) { tableName = getTableName(table); return query; },
         where() { return query; },
-        for(mode: string) { if (mode !== "update") throw new Error("Unexpected lock mode"); return query; },
+        for(mode: string) { if (mode !== "update" && mode !== "no key update") throw new Error("Unexpected lock mode"); return query; },
         orderBy() { return query; },
         limit() { return query; },
         async then(resolve: (rows: any[]) => unknown, reject?: (error: unknown) => unknown) {

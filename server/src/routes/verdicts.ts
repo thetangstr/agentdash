@@ -51,8 +51,9 @@ export function verdictRoutes(db: Db) {
       }
       const claimedAgentId = req.body?.reviewerAgentId;
       const claimedUserId = req.body?.reviewerUserId;
-      const impersonatesAgent = claimedAgentId !== undefined && claimedAgentId !== reviewerAgentId;
-      const impersonatesUser = claimedUserId !== undefined && claimedUserId !== reviewerUserId;
+      // null and undefined both mean "not provided" (#881 review P3).
+      const impersonatesAgent = claimedAgentId != null && claimedAgentId !== reviewerAgentId;
+      const impersonatesUser = claimedUserId != null && claimedUserId !== reviewerUserId;
       if (impersonatesAgent || impersonatesUser) {
         throw forbidden("Reviewer identity must match the authenticated actor");
       }

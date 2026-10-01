@@ -62,7 +62,7 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
         return query;
       };
       if (key !== 'transaction') return Reflect.get(target, key, receiver);
-      return (callback: (tx: unknown) => Promise<unknown>) => target.transaction(async tx => {
+      return (callback: (tx: unknown) => Promise<unknown>, config?: unknown) => target.transaction(async tx => {
         acceptancePid = Number((await tx.execute(sql`select pg_backend_pid() as pid`))[0].pid);
         let issueSelectCount = 0;
         return callback(new Proxy(tx, { get(t, k, r) {
@@ -91,7 +91,7 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
           };
           return query;
         };
-      } })); });
+      } })); }, config as never);
     } });
     routeExecutor = routeDb;
     const app = express(); app.use(express.json());
@@ -169,36 +169,19 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
     await projected.promise;
     const deletion = issueService(deletionDb).remove(child.id);
     await deletionStarted.promise;
-    // Before the fix the actual deletion completes in this projection window.
-    // A coordinated reader instead holds the company row; release the read
-    // only after observing that distinct backend's company-lock wait.
-    let deleted = false;
-    void deletion.then(() => { deleted = true; });
-    let first: 'deleted' | 'blocked' = 'deleted';
-    try {
-      const deadline = Date.now() + 4000;
-      while (!deleted) {
-        const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where pid = ${deletionPid} and cardinality(pg_blocking_pids(pid)) > 0`);
-        if (row) {
-          expect(Number(row.pid)).not.toBe(acceptancePid);
-          expect(row.blockers).toContain(acceptancePid);
-          expect(String(row.query)).toMatch(/companies.*for no key update/i);
-          console.log(JSON.stringify({ label: `read-${kind}-deletion`, readerPid: acceptancePid, waiter: row }));
-          first = 'blocked';
-          break;
-        }
-        if (Date.now() >= deadline) throw new Error('Deletion neither completed nor waited on company');
-        await new Promise(resolve => setImmediate(resolve));
-      }
-    } finally { continueRead.open(); }
-    const response = await pendingRead, body = await response.text();
+    // #881 review P2: readback takes no row locks. It projects and authorizes
+    // from one REPEATABLE READ snapshot, so the deletion commits without
+    // waiting, and the reader still refuses (its snapshot holds the restricted
+    // source) instead of returning a projection authorized against a later state.
     await deletion;
+    continueRead.open();
+    const response = await pendingRead, body = await response.text();
+    expect(deletionPid).toBeGreaterThan(0);
     expect(response.status).toBe(404);
     expect(body).not.toContain('Secret retained snapshot');
     expect(body).not.toContain('SECRET-HISTORY');
     expect(body).not.toContain(child.id);
     expect((await request(f, endpoint)).status).toBe(200);
-    expect(first).toBe('blocked');
   });
   it('refuses audited preview when credential expires during audit settings read', async () => {
     const f = await fixture();

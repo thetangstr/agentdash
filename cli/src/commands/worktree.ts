@@ -2679,7 +2679,7 @@ async function applyStagedMergePlan(input: { targetDb: ClosableDb; company: Reso
   let completed = false;
   try {
     return await input.targetDb.transaction(async (tx) => {
-      const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).for("update");
+      const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).for("no key update");
       if (!company) throw new Error("Merge company is unavailable");
       async function requireBinding(table: typeof projects | typeof projectWorkspaces | typeof goals | typeof agents | typeof issues, id: string | null) {
         if (id && !(await tx.select({ id: table.id }).from(table).where(and(eq(table.id, id), eq(table.companyId, companyId))))[0]) throw new Error("Merge dependency is unavailable");

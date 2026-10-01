@@ -73,7 +73,7 @@ export function materializeOnboardingGoals(deps: MaterializeOnboardingGoalsDeps)
   ): Promise<MaterializeOnboardingGoalsResult> => {
     const publications: ActivityPublication[] = acceptance?.publications ?? [];
     const work = async (tx: Db): Promise<MaterializeOnboardingGoalsResult> => {
-      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, input.companyId)).for("update");
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, input.companyId)).for("no key update");
       // 1. Load the onboarding state row.
       const stateRows = await tx
         .select()

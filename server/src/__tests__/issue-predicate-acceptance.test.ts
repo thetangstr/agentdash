@@ -46,7 +46,7 @@ describe('composed predicate acceptance over canonical HTTP and real PostgreSQL'
               const builder = from(table), originalFor = builder.for.bind(builder);
               builder.for = (mode: string) => {
                 const result = originalFor(mode);
-                if (table !== lockTable || mode !== 'update' || !onCompanyLock) return result;
+                if (table !== lockTable || (mode !== 'update' && mode !== 'no key update') || !onCompanyLock) return result;
                 const hook = onCompanyLock; onCompanyLock = undefined;
                 return { then: (resolve: Function, reject: Function) => Promise.resolve(result).then(async rows => { await hook(); return rows; }).then(resolve, reject) };
               };

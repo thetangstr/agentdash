@@ -837,7 +837,7 @@ export function routineService(
     try {
       accepted = await db.transaction(async tx => {
         const txDb = tx as unknown as Db;
-        await tx.execute(sql`select id from ${companies} where id = ${input.routine.companyId} for update`);
+        await tx.execute(sql`select id from ${companies} where id = ${input.routine.companyId} for no key update`);
         const [routine] = await txDb.select().from(routines).where(and(eq(routines.id, input.routine.id), eq(routines.companyId, input.routine.companyId))).for("update");
         if (!routine) throw notFound("Routine not found");
         if (routine.status === "archived") throw conflict("Routine is archived");
@@ -978,7 +978,7 @@ export function routineService(
       try {
         run = await db.transaction(async tx => {
           const txDb = tx as unknown as Db;
-          await tx.execute(sql`select id from ${companies} where id = ${run.companyId} for update`);
+          await tx.execute(sql`select id from ${companies} where id = ${run.companyId} for no key update`);
           // Lifecycle writers already hold the issue before synchronizing its original run.
           const [issue] = await txDb.select().from(issues).where(and(
             eq(issues.id, accepted.issue!.id), eq(issues.companyId, run.companyId),

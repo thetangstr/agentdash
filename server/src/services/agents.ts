@@ -616,7 +616,7 @@ export function agentService(db: Db) {
         // principal witnesses. Join that order before detaching issues or
         // deleting credential children, which otherwise invert those locks.
         const [company] = await tx.select({ id: companies.id }).from(companies)
-          .where(eq(companies.id, existing.companyId)).for("update");
+          .where(eq(companies.id, existing.companyId)).for("no key update");
         if (!company) return null;
         const [current] = await tx.select({ id: agents.id, companyId: agents.companyId }).from(agents)
           .where(eq(agents.id, id));

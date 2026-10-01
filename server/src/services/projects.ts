@@ -593,7 +593,7 @@ export function projectService(db: Db) {
         return await db.transaction(async (tx) => {
           const [binding] = await tx.select({ companyId: projects.companyId }).from(projects).where(eq(projects.id, id));
           if (!binding) return null;
-          await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("update");
+          await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("no key update");
           const [project] = await tx.select({ companyId: projects.companyId }).from(projects).where(eq(projects.id, id)).for("update");
           if (!project || project.companyId !== binding.companyId) throw conflict("Project is unavailable for deletion");
           if (opts.withIssues) {

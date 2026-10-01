@@ -154,6 +154,22 @@ describe('exact current issue authority over real middleware, HTTP and PostgreSQ
     await db.update(issues).set({ assigneeAgentId: agent.id }).where(eq(issues.id, f.issue.id));
     expect((await mutate(f, kind, { token })).status).toBe(404); await noWrites(f);
   });
+  // #881 review: the router.param guard runs first; this proves the
+  // acceptance path itself (issueCurrentAuthority.projectGuards) refuses an
+  // agent that loses access after the route guard and before acceptance.
+  it.each(['patch', 'comment'] as const)('refuses %s with 404 when an agent leaves the access list during acceptance', async kind => {
+    const f = await fixture(), token = randomUUID();
+    const [agent] = await db.insert(agents).values({ companyId: f.company.id, name: 'Removed during acceptance' }).returning();
+    await db.insert(agentApiKeys).values({ agentId: agent.id, companyId: f.company.id, keyHash: hashBearerToken(token), name: 'Disposable' });
+    await db.update(projects).set({ visibility: 'restricted' }).where(eq(projects.id, f.project.id));
+    await db.insert(projectAccess).values({ projectId: f.project.id, principalType: 'agent', principalId: agent.id, grantedByUserId: f.userId });
+    await db.update(issues).set({ assigneeAgentId: agent.id }).where(eq(issues.id, f.issue.id));
+    beforeFirstPrepare = async () => {
+      await db.delete(projectAccess).where(and(eq(projectAccess.projectId, f.project.id), eq(projectAccess.principalId, agent.id)));
+    };
+    expect((await mutate(f, kind, { token })).status).toBe(404); await noWrites(f);
+    expect(beforeFirstPrepare).toBeUndefined();
+  });
   it.each([null, '', 'member', 'legacy-role'])('preserves assignment grant semantics for role %s', async role => {
     const f = await fixture(); await db.update(companyMemberships).set({ membershipRole: role }).where(eq(companyMemberships.id, f.membership.id));
     const [agent] = await db.insert(agents).values({ companyId: f.company.id, name: 'Requested' }).returning();

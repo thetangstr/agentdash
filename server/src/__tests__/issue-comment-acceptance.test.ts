@@ -416,4 +416,44 @@ describe('standalone comment acceptance over HTTP and PostgreSQL', () => {
     },
   );
 
+
+  // #881 review P1: heartbeat's recovery-budget and retry writers lock the
+  // issue first, then insert a row whose company FK takes FOR KEY SHARE on
+  // the company. Acceptance holds the company row as its mutex; with plain
+  // FOR UPDATE the two orders deadlocked (40P01). FOR NO KEY UPDATE does not
+  // conflict with KEY SHARE, so the heartbeat side finishes and acceptance
+  // proceeds after it.
+  it('a human comment and a heartbeat-style budget comment on the same issue do not deadlock', async () => {
+    const f = await fixture();
+    let markLocked!: () => void, release!: () => void;
+    const issueLocked = new Promise<void>(resolve => { markLocked = resolve; });
+    const proceed = new Promise<void>(resolve => { release = resolve; });
+    const heartbeatSide = db.transaction(async tx => {
+      await tx.select({ id: issues.id }).from(issues).where(eq(issues.id, f.issue.id)).for('update');
+      markLocked();
+      await proceed;
+      await tx.insert(issueComments).values({ companyId: f.company.id, issueId: f.issue.id, authorAgentId: f.agent.id,
+        body: 'Automatic recovery budget exhausted. Regression fixture.' });
+      await tx.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, f.issue.id));
+    });
+    await issueLocked;
+    const human = post(f, { body: 'Human comment while the reconciler writes' });
+    // Wait until acceptance holds the company row and queues behind the issue lock.
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const rows = await db.execute(sql`select count(*)::int as waiting from pg_stat_activity
+        where datname = current_database() and wait_event_type = 'Lock'`) as unknown as Array<{ waiting: number }>;
+      if (rows[0].waiting > 0) break;
+      if (Date.now() > deadline) throw new Error('acceptance never queued behind the issue lock');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    release();
+    const [heartbeatResult, humanResult] = await Promise.allSettled([heartbeatSide, human]);
+    expect(heartbeatResult.status, heartbeatResult.status === 'rejected' ? String(heartbeatResult.reason) : '').toBe('fulfilled');
+    expect(humanResult.status).toBe('fulfilled');
+    expect((humanResult as PromiseFulfilledResult<Response>).value.status).toBe(201);
+    const bodies = (await db.select().from(issueComments).where(eq(issueComments.issueId, f.issue.id))).map(row => row.body);
+    expect(bodies).toEqual(expect.arrayContaining(['Automatic recovery budget exhausted. Regression fixture.', 'Human comment while the reconciler writes']));
+  });
+
 });

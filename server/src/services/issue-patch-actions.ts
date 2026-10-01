@@ -550,7 +550,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     let acceptedDecisionId: string | null = null;
     try {
       return await db.transaction(async tx => {
-        const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, context.companyId)).for("update");
+        const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, context.companyId)).for("no key update");
         if (!company) throw notFound("Issue not found");
         const [preflight] = await tx.select().from(issues).where(and(eq(issues.id, context.issueId), eq(issues.companyId, company.id)));
         if (!preflight) throw notFound("Issue not found");

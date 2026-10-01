@@ -46,7 +46,7 @@ export function featureFlagsService(db: Db) {
     ): Promise<FeatureFlagRow> => {
       const write = async (executor: Db) => {
         if (flagKey === "dod_guard_enabled") {
-          await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("update");
+          await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
         }
         const now = new Date();
         const inserted = await executor

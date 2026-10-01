@@ -86,7 +86,7 @@ export function documentService(db: Db) {
     const [binding] = await tx.select({ companyId: issues.companyId }).from(issues).where(eq(issues.id, issueId));
     if (!binding) return null;
     if (expectedCompanyId && binding.companyId !== expectedCompanyId) throw conflict("Issue company changed before document acceptance");
-    await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("update");
+    await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, binding.companyId)).for("no key update");
     const [current] = await tx.select({ id: issues.id, companyId: issues.companyId }).from(issues).where(eq(issues.id, issueId)).for("update");
     if (!current) return null;
     if (current.companyId !== binding.companyId) throw conflict("Issue company changed before document acceptance");

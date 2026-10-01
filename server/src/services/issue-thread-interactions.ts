@@ -447,7 +447,7 @@ export function issueThreadInteractionService(db: Db) {
 
   // AgentDash: acquire the predicate mutex before any mutable interaction/target read.
   async function lockInteractionIssue(connection: Pick<Db, "select">, issue: { id: string; companyId: string }) {
-    await connection.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for("update");
+    await connection.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for("no key update");
     const [current] = await connection.select({ id: issues.id }).from(issues)
       .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for("update");
     if (!current) throw notFound("Issue not found");
@@ -887,7 +887,7 @@ export function issueThreadInteractionService(db: Db) {
       let callbackCompleted = false;
       try {
         return await acceptInteractionWrite(acceptance, async (tx, accepted) => {
-          const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for("update");
+          const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for("no key update");
           if (!company) throw notFound("Issue not found");
           const [freshIssue] = await tx.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
           if (!freshIssue) throw notFound("Issue not found");
@@ -1211,7 +1211,7 @@ export function issueThreadInteractionService(db: Db) {
     answerQuestions: async (issue: { id: string; companyId: string }, interactionId: string, input: RespondIssueThreadInteraction, actor: InteractionActor, acceptance?: ActivityAcceptance, guards?: QuestionWriteGuards) => acceptInteractionWrite(acceptance, async (tx, accepted) => {
       const connection = tx;
       // Lock company before issue, matching brief publication and job creation.
-      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for('update');
+      await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, issue.companyId)).for("no key update");
       await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for('update');
       return answerQuestions(connection, issue, interactionId, input, actor, false, accepted, guards);
     }),
