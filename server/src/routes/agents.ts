@@ -167,6 +167,17 @@ function readLiveRunsQueryInt(value: unknown, max: number, fallback = 0) {
   return Math.min(max, Math.trunc(parsed));
 }
 
+// AgentDash: pass the caller's acceptance only when there is one, so the
+// non-transactional path keeps the original two-argument create call.
+function createAgentRow(
+  svc: ReturnType<typeof agentService>,
+  companyId: string,
+  input: Parameters<ReturnType<typeof agentService>["create"]>[1],
+  acceptance: Parameters<ReturnType<typeof agentService>["create"]>[2],
+) {
+  return acceptance ? svc.create(companyId, input, acceptance) : svc.create(companyId, input);
+}
+
 export function agentRoutes(
   db: Db,
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
@@ -2670,7 +2681,7 @@ export function agentRoutes(
     const requiresApproval = company.requireBoardApprovalForNewAgents;
     const status = requiresApproval ? "pending_approval" : "idle";
     const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx, acceptance) =>
-      agentService(dbOrTx).create(companyId, {
+      createAgentRow(agentService(dbOrTx), companyId, {
         ...normalizedHireInput,
         metadata: withHarnessPreflightMetadata(normalizedHireInput.metadata, {
           adapterType: normalizedHireInput.adapterType,
@@ -2919,7 +2930,7 @@ export function agentRoutes(
       : null;
 
     const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx, acceptance) =>
-      agentService(dbOrTx).create(companyId, {
+      createAgentRow(agentService(dbOrTx), companyId, {
         ...createInput,
         adapterConfig: normalizedAdapterConfig,
         runtimeConfig: normalizedRuntimeConfig,
