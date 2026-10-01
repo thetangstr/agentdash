@@ -383,7 +383,7 @@ function stopReasonLabel(run: RunForIssue) {
   }
   if (stopReason === "budget_paused") return "budget paused";
   if (stopReason === "cancelled") return "cancelled";
-  if (stopReason === "paused") return "paused by board";
+  if (stopReason === "paused") return "paused by a person";
   if (stopReason === "process_lost") return "process lost";
   if (stopReason === "adapter_failed") return "adapter failed";
   if (stopReason === "completed") return timeoutText ? `completed (${timeoutText})` : "completed";

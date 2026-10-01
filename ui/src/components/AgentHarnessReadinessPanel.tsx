@@ -193,6 +193,19 @@ function toneForState(state: AgentHarnessPreflightStatus["state"]) {
   return "border-red-500/30 bg-red-500/10 text-red-900 dark:text-red-200";
 }
 
+/**
+ * AgentDash: UX-10 (GH #791) — "harness preflight" is operator vocabulary.
+ * The panel says "setup check" instead, for every company (one UX,
+ * doc/plans/2026-09-30-one-ux.md). Applied at render so the underlying
+ * evidence strings — some of them server-issued — keep their technical meaning
+ * in logs and the API.
+ */
+export function personFacingPreflightText(text: string): string {
+  return text
+    .replace(/harness\s+preflight/gi, (match) => (match[0] === "H" ? "Setup check" : "setup check"))
+    .replace(/\bpreflight\b/gi, (match) => (match[0] === "P" ? "Setup check" : "setup check"));
+}
+
 export function AgentHarnessReadinessPanel({
   status,
   onRunPreflight,
@@ -217,9 +230,9 @@ export function AgentHarnessReadinessPanel({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Icon className="h-4 w-4 shrink-0" />
-            <h3 className="font-medium">{status.title}</h3>
+            <h3 className="font-medium">{personFacingPreflightText(status.title)}</h3>
           </div>
-          <p className="mt-1 text-xs opacity-85">{status.message}</p>
+          <p className="mt-1 text-xs opacity-85">{personFacingPreflightText(status.message)}</p>
           <p className="mt-2 text-[11px] opacity-80">
             {formatAdapterType(status.adapterType)}
             {status.testedAt ? ` · Saved evidence ${new Date(status.testedAt).toLocaleString()}` : ""}
@@ -234,14 +247,14 @@ export function AgentHarnessReadinessPanel({
             onClick={onRunPreflight}
             disabled={pending}
           >
-            {pending ? "Running..." : "Run preflight"}
+            {pending ? "Checking…" : "Check setup"}
           </Button>
         ) : null}
       </div>
 
       {error ? (
         <p className="mt-2 rounded-md border border-current/20 bg-background/50 px-2 py-1.5 text-xs">
-          {error}
+          {personFacingPreflightText(error)}
         </p>
       ) : null}
 
@@ -251,8 +264,8 @@ export function AgentHarnessReadinessPanel({
             <div key={`${check.code}-${check.message}`} className="rounded-md border border-current/15 bg-background/50 px-2 py-1.5 text-xs">
               <span className="font-mono uppercase opacity-75">{check.level}</span>
               <span className="mx-1 opacity-60">·</span>
-              <span>{check.message}</span>
-              {check.hint ? <span className="block opacity-85">{check.hint}</span> : null}
+              <span>{personFacingPreflightText(check.message)}</span>
+              {check.hint ? <span className="block opacity-85">{personFacingPreflightText(check.hint)}</span> : null}
             </div>
           ))}
         </div>

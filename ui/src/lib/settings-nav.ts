@@ -78,7 +78,7 @@ export function settingsNavGroups({ isInstanceAdmin }: { isInstanceAdmin: boolea
         // The scheduler view spans every company on the instance and the API
         // is instance-admin only, so members are not offered a page that 403s.
         ...(isInstanceAdmin
-          ? [{ to: "/instance/settings/heartbeats", label: "Heartbeats", icon: Clock3, end: true }]
+          ? [{ to: "/instance/settings/heartbeats", label: "Schedules", icon: Clock3, end: true }]
           : []),
       ],
     },

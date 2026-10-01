@@ -1116,14 +1116,14 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           }
           <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
             <ToggleWithNumber
-              label="Heartbeat on interval"
+              label="Run on a schedule"
               hint={help.heartbeatInterval}
               checked={val!.heartbeatEnabled}
               onCheckedChange={(v) => set!({ heartbeatEnabled: v })}
               number={val!.intervalSec}
               onNumberChange={(v) => set!({ intervalSec: v })}
               numberLabel="sec"
-              numberPrefix="Run heartbeat every"
+              numberPrefix="Run every"
               numberHint={help.intervalSec}
               showNumber={val!.heartbeatEnabled}
             />
@@ -1138,14 +1138,14 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           <div className={cn(cards ? "border border-border rounded-lg overflow-hidden" : "")}>
             <div className={cn(cards ? "p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
               <ToggleWithNumber
-                label="Heartbeat on interval"
+                label="Run on a schedule"
                 hint={help.heartbeatInterval}
                 checked={eff("heartbeat", "enabled", heartbeat.enabled === true)}
                 onCheckedChange={(v) => mark("heartbeat", "enabled", v)}
                 number={eff("heartbeat", "intervalSec", Number(heartbeat.intervalSec ?? 300))}
                 onNumberChange={(v) => mark("heartbeat", "intervalSec", v)}
                 numberLabel="sec"
-                numberPrefix="Run heartbeat every"
+                numberPrefix="Run every"
                 numberHint={help.intervalSec}
                 showNumber={eff("heartbeat", "enabled", heartbeat.enabled === true)}
               />

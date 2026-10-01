@@ -61,7 +61,7 @@ export function MemberOnboardingPage() {
         </h1>
         <p className="mt-4 text-muted-foreground">
           {isWelcome
-            ? "AgentDash keeps your team’s work, agent activity, and approvals in one place. Your existing company role and permissions stay unchanged."
+            ? "AgentDash keeps your team’s work, agent activity, and approvals in one place. Your existing role and permissions stay unchanged."
             : "Open tasks show work that is not done or cancelled. You can leave at any time and this step will resume when you return."}
         </p>
         {isWelcome ? (
