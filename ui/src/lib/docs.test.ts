@@ -299,6 +299,7 @@ const FORBIDDEN_TOKENS: ReadonlyArray<{ length: number; sha256: string }> = [
   { length: 5, sha256: "2d07d002c88b7c7546f7c81175b0fd8ef3843654895574b81ba28573d4373a96" },
   { length: 12, sha256: "68b7730d0f4346654432e894c673760d287e3ee7a7509c4c6f802f216301c4b7" },
   { length: 12, sha256: "b9dd1da230753160f70e3864d24aa0bd1ca81cd8bceaf3709fd41e09d55214b1" },
+  { length: 12, sha256: "53ac39752d14c82c6972e6acd2f56dbfbaeeccb41e7e6371e95799d1ad09dad8" },
 ];
 
 function sha256(text: string): string {

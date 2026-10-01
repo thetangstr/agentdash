@@ -212,6 +212,66 @@ export async function readMcpSurface(repoRoot) {
 }
 
 // ---------------------------------------------------------------------------
+// What stays off the public site
+// ---------------------------------------------------------------------------
+
+/**
+ * Client and engagement names stay off the public site
+ * (doc/plans/2026-10-01-public-docs-section.md, "Content rules"). Two kinds of
+ * text in the server carry one:
+ *
+ *  - Engagement-specific tools. A tool name cannot be relabeled, so a tool
+ *    whose name matches ENGAGEMENT_PATTERN is left out of its page, and the
+ *    page header says how many were.
+ *  - Engagement-specific playbook guidance. A playbook `## ` section whose
+ *    heading or body matches is left out of playbooks.md, whole; the sections
+ *    kept are quoted byte for byte, and the header says how many were left out.
+ *
+ * The pattern is the name as a word: `Ross`, `ross-review`,
+ * `request_ross_assessment`, `rossEvidence` match; `across` and `gross` do
+ * not. Anything that still matches after omission fails generation
+ * (assertNothingPrivate), so a new mention elsewhere is caught here rather
+ * than published.
+ */
+export const ENGAGEMENT_PATTERN = /(?<![A-Za-z])[Rr]oss(?![a-z])/;
+export const OMITTED_REASON = "engagement-specific";
+
+export function omitEngagementTools(tools) {
+  const kept = tools.filter((tool) => !ENGAGEMENT_PATTERN.test(tool.name));
+  return { kept, omitted: tools.length - kept.length };
+}
+
+/** A playbook split at its `## ` headings; the text before the first one is a section too. */
+export function playbookSections(text) {
+  const sections = [];
+  let current = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith("## ") && current.length > 0) {
+      sections.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+  }
+  sections.push(current.join("\n"));
+  return sections;
+}
+
+/** The playbook with every engagement-specific section left out, and how many were. */
+export function omitEngagementSections(text) {
+  const sections = playbookSections(text);
+  const kept = sections.filter((section) => !ENGAGEMENT_PATTERN.test(section));
+  return { text: kept.join("\n"), omitted: sections.length - kept.length };
+}
+
+function plural(count, noun) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function omissionNote(count, noun) {
+  return `> ${plural(count, noun)} omitted: ${OMITTED_REASON}.`;
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
@@ -231,7 +291,14 @@ function literal(value) {
 export function schemaType(schema) {
   if (!schema || typeof schema !== "object") return "any";
   if ("const" in schema) return literal(schema.const);
-  if (Array.isArray(schema.enum)) return schema.enum.map((value) => literal(value)).join(" | ");
+  if (Array.isArray(schema.enum)) {
+    // A private profile's value is left out, not relabeled: nobody outside
+    // that profile can send it, so it is not a choice a reader has.
+    const values = schema.enum.filter((value) => !(typeof value === "string" && isPrivateProfile(value)));
+    const omitted = schema.enum.length - values.length;
+    const listed = values.map((value) => literal(value)).join(" | ");
+    return omitted > 0 ? `${listed} (${plural(omitted, "value")} omitted)` : listed;
+  }
   const union = schema.anyOf ?? schema.oneOf;
   if (Array.isArray(union)) {
     const objectForms = union.filter((option) => option?.type === "object" && option.properties).length;
@@ -346,10 +413,11 @@ function frontMatter(title, summary) {
   return ["---", `title: ${JSON.stringify(title)}`, `summary: ${JSON.stringify(summary)}`, "---", ""].join("\n");
 }
 
-function header(commit, lines) {
+function header(commit, lines, notes = []) {
   return [
     `> Generated at commit \`${commit}\` by \`${GENERATOR_REL}\`.`,
     "> Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.",
+    ...notes,
     "",
     ...lines,
     "",
@@ -401,9 +469,13 @@ const ASSISTANT_SCOPE_HEADINGS = (scopes) => [
 
 export function renderToolPage(page, surface, commit) {
   const text = SURFACE_TEXT[page.surface];
-  const tools = surface.connections[text.connection].tools;
+  const listed = surface.connections[text.connection].tools;
+  const { kept: tools, omitted } = omitEngagementTools(listed);
+  const notes = omitted > 0 ? [omissionNote(omitted, "tool")] : [];
   const lines = [
-    `**${tools.length} tools** — measured: the length of the \`tools/list\` response. Source: ${text.source}.`,
+    `**${listed.length} tools** — measured: the length of the \`tools/list\` response` +
+      (omitted > 0 ? `; ${tools.length} are documented here and ${omitted} ${omitted === 1 ? "is" : "are"} omitted as ${OMITTED_REASON}` : "") +
+      `. Source: ${text.source}.`,
     "",
     "Each tool's description is its inline string, verbatim. The input table is rendered from the JSON schema the server advertises in `tools/list`" +
       (page.surface === "human"
@@ -416,19 +488,20 @@ export function renderToolPage(page, surface, commit) {
     lines.push(
       "",
       "Over `POST /api/mcp/assistant` the grant's scopes filter this list (`src/assistant/index.ts`): the read tools are always served, the work tools only with " +
-        `\`${surface.scopes.work}\`, the gated tools only with \`${surface.scopes.decide}\`. Over stdio no scopes apply and all ${tools.length} are served. ` +
+        `\`${surface.scopes.work}\`, the gated tools only with \`${surface.scopes.decide}\`. Over stdio no scopes apply and all ${listed.length} are served. ` +
         "Which tool needs which scope is measured by listing the surface with each scope set.",
     );
     for (const { scope, heading } of ASSISTANT_SCOPE_HEADINGS(surface.scopes)) {
       const group = tools.filter((tool) => surface.assistantScopeOf.get(tool.name) === scope);
-      sections.push(`## ${heading}\n\n${group.length} tools.\n`);
+      const groupOmitted = listed.filter((tool) => surface.assistantScopeOf.get(tool.name) === scope).length - group.length;
+      sections.push(`## ${heading}\n\n${plural(group.length, "tool")}${groupOmitted > 0 ? `; ${groupOmitted} omitted: ${OMITTED_REASON}` : ""}.\n`);
       for (const tool of group) sections.push(renderTool(tool, "###"));
     }
   } else {
     for (const tool of tools) sections.push(renderTool(tool));
   }
-  lines.push("", `Tools, in the order \`tools/list\` returns them: ${tools.map((tool) => `\`${tool.name}\``).join(", ")}.`);
-  return `${frontMatter(page.title, text.summary)}\n${header(commit, lines)}\n${sections.join("\n")}`.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  lines.push("", `Tools${omitted > 0 ? " documented here" : ""}, in the order \`tools/list\` returns them: ${tools.map((tool) => `\`${tool.name}\``).join(", ")}.`);
+  return `${frontMatter(page.title, text.summary)}\n${header(commit, lines, notes)}\n${sections.join("\n")}`.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
 /** Which connections are given what, as "label" lists. */
@@ -502,20 +575,24 @@ export function renderPlaybooksPage(surface, commit) {
   const lines = [
     "A playbook is the operating contract a connected harness is given: the server sends it as the MCP `instructions` string when the session starts, and serves the same text as the `agentdash://playbook` resource. There are four, one per kind of caller. `selectPlaybook` in `packages/mcp-server/src/playbook.ts` picks among the first three; the human toolset always gets the fourth (`src/index.ts`).",
     "",
-    "Each is quoted verbatim from its constant. \"Served to\" is measured: the `instructions` a server started in each connection shape actually sent.",
+    "Each is quoted verbatim from its constant, except that a section of engagement-specific guidance is left out whole; the page header and the playbook's own line say how many. \"Served to\" is measured: the `instructions` a server started in each connection shape actually sent.",
   ];
   const sections = [];
+  let omittedTotal = 0;
   for (const playbook of surface.playbooks) {
     const served = servedBy(surface, (listing) => listing.instructions === playbook.text);
     if (served.length === 0) throw new Error(`${playbook.name} is served to no connection shape`);
-    const fence = fenceFor(playbook.text);
+    const { text, omitted } = omitEngagementSections(playbook.text);
+    omittedTotal += omitted;
+    const fence = fenceFor(text);
     sections.push(
       `## \`${playbook.name}\``,
       "",
-      `Defined in \`${playbook.file}\`. Served to: ${served.join("; ")}.`,
+      `Defined in \`${playbook.file}\`. Served to: ${served.join("; ")}.` +
+        (omitted > 0 ? ` ${plural(omitted, "section")} omitted: ${OMITTED_REASON}.` : ""),
       "",
       `${fence}markdown`,
-      playbook.text.replace(/\n+$/, ""),
+      text.replace(/\n+$/, ""),
       fence,
       "",
     );
@@ -526,7 +603,7 @@ export function renderPlaybooksPage(surface, commit) {
       throw new Error(`connection ${connection.id} was sent instructions that match no playbook constant`);
     }
   }
-  return `${frontMatter("Playbooks", "The four operating contracts the MCP server sends as its instructions, verbatim, and which connection gets which.")}\n${header(commit, lines)}\n${sections.join("\n")}`
+  return `${frontMatter("Playbooks", "The four operating contracts the MCP server sends as its instructions, verbatim, and which connection gets which.")}\n${header(commit, lines, omittedTotal > 0 ? [omissionNote(omittedTotal, "section")] : [])}\n${sections.join("\n")}`
     .trimEnd() + "\n";
 }
 
@@ -567,7 +644,12 @@ function gitCommit(repoRoot) {
  * the pages stay verbatim everywhere else and say so where they are not. The
  * docs forbidden-token scan (ui/src/lib/docs.test.ts) enforces the result.
  */
-export const PRIVATE_PROFILE_PATTERN = /agentdash[-_]mk/gi;
+export const PRIVATE_PROFILE_PATTERN = /agentdash[\s_-]?mk/gi;
+
+/** Whether `value` is, or names, the private profile (non-global, so no lastIndex state). */
+export function isPrivateProfile(value) {
+  return new RegExp(PRIVATE_PROFILE_PATTERN.source, "i").test(value);
+}
 export const PRIVATE_PROFILE_LABEL = "[private profile]";
 
 export function redactPrivateProfile(content) {
@@ -584,6 +666,15 @@ export function redactPrivateProfile(content) {
   return lines.join("\n");
 }
 
+/** Fails generation when an engagement name survived omission. */
+export function assertNothingPrivate(rel, content) {
+  const match = ENGAGEMENT_PATTERN.exec(content);
+  if (match) {
+    const line = content.slice(0, match.index).split("\n").length;
+    throw new Error(`${rel}:${line} still names an engagement after omission; extend the omission rules in ${GENERATOR_REL}`);
+  }
+}
+
 /** Every generated file: repo-relative path → content. */
 export async function generateMcpReference(repoRoot, { commit = gitCommit(repoRoot) } = {}) {
   const surface = await readMcpSurface(repoRoot);
@@ -593,6 +684,7 @@ export async function generateMcpReference(repoRoot, { commit = gitCommit(repoRo
   files.set(PLAYBOOKS_REL, renderPlaybooksPage(surface, commit));
   files.set(CONNECT_PAGE_REL, renderConnectPage(readFileSync(path.join(repoRoot, CONNECT_README_REL), "utf8"), commit));
   for (const [rel, content] of files) files.set(rel, redactPrivateProfile(content));
+  for (const [rel, content] of files) assertNothingPrivate(rel, content);
   return files;
 }
 

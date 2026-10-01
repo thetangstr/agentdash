@@ -12,8 +12,11 @@ import {
   TOOL_PAGES,
   generateMcpReference,
   inputTable,
+  omitEngagementSections,
   redactPrivateProfile,
   renderConnectPage,
+  renderPlaybooksPage,
+  renderToolPage,
   schemaType,
   withoutCommitLine,
   writeGenerated,
@@ -145,13 +148,52 @@ test("input tables flatten nested objects and escape pipes", () => {
   assert.equal(inputTable({ type: "object", properties: {} }), "No input.");
 });
 
-test("the private profile name is replaced and the page says where", () => {
-  const page = `${commitLine("abc1234")}\n\nAgentDash-MK: does a thing. Enum: "agentdash_mk".\n`;
+test("the private profile name is replaced in every spelling, and the page says where", () => {
+  const page = `${commitLine("abc1234")}\n\nAgentDash-MK: does a thing. Enum: "agentdash_mk". Also AgentDash MK and agentdashmk.\n`;
   const redacted = redactPrivateProfile(page);
-  assert.doesNotMatch(redacted, /agentdash[-_]mk/i);
+  assert.doesNotMatch(redacted, /agentdash[\s_-]?mk/i);
   assert.ok(redacted.includes(`${PRIVATE_PROFILE_LABEL}: does a thing`));
-  assert.match(redacted, /in 2 places/);
+  assert.ok(redacted.includes(`Also ${PRIVATE_PROFILE_LABEL} and ${PRIVATE_PROFILE_LABEL}.`));
+  assert.match(redacted, /in 4 places/);
   assert.equal(redactPrivateProfile("no profile here"), "no profile here");
+});
+
+test("a private profile enum value is omitted, not relabeled", () => {
+  assert.equal(schemaType({ type: "string", enum: ["default", "agentdash_mk"] }), '`"default"` (1 value omitted)');
+  assert.equal(schemaType({ type: "string", enum: ["default", "agentdash mk", "agentdashmk"] }), '`"default"` (2 values omitted)');
+});
+
+const tool = (name, description = "Does a thing.") => ({ name, description, inputSchema: { type: "object", properties: {} } });
+
+test("an engagement-specific tool is left off its page, and the header counts it", () => {
+  const surface = { connections: { bridge: { tools: [tool("inbox_sync"), tool("ross_request_status"), tool("request_ross_assessment"), tool("crossover_report")] } } };
+  const page = renderToolPage({ surface: "bridge", rel: "docs/mcp/tools/bridge.md", title: "Bridge tools" }, surface, "abc1234");
+  assert.match(page, /^> 2 tools omitted: engagement-specific\.$/m);
+  assert.match(page, /\*\*4 tools\*\* — measured: the length of the `tools\/list` response; 2 are documented here and 2 are omitted/);
+  assert.doesNotMatch(page, /ross_|_ross/);
+  assert.match(page, /^## `inbox_sync`$/m);
+  assert.match(page, /^## `crossover_report`$/m, "a word that merely contains the letters is kept");
+  const single = renderToolPage({ surface: "bridge", rel: "x", title: "X" }, { connections: { bridge: { tools: [tool("a"), tool("ross_x")] } } }, "abc1234");
+  assert.match(single, /^> 1 tool omitted: engagement-specific\.$/m);
+  const none = renderToolPage({ surface: "bridge", rel: "x", title: "X" }, { connections: { bridge: { tools: [tool("a")] } } }, "abc1234");
+  assert.doesNotMatch(none, /omitted/);
+});
+
+test("an engagement-specific playbook section is left out whole and the rest is byte for byte", () => {
+  const playbook = "# Title\n\nIntro.\n\n## Keep\nAcross the board.\n\n## Asking Ross\nAsk Ross.\n\n## Also gone\nUse `ross_request_status`.\n\n## Last\nEnd.\n";
+  const { text, omitted } = omitEngagementSections(playbook);
+  assert.equal(omitted, 2);
+  assert.equal(text, "# Title\n\nIntro.\n\n## Keep\nAcross the board.\n\n## Last\nEnd.\n");
+  const surface = {
+    playbooks: [{ name: "P", file: "p.ts", text: playbook }],
+    connections: Object.fromEntries(
+      ["setup", "setup-agent", "agent", "agent-agent", "assistant", "human", "bridge", "bridge-agent"].map((id) => [id, { instructions: playbook }]),
+    ),
+  };
+  const page = renderPlaybooksPage(surface, "abc1234");
+  assert.match(page, /^> 2 sections omitted: engagement-specific\.$/m);
+  assert.match(page, /2 sections omitted: engagement-specific\.\n/);
+  assert.doesNotMatch(page, /\bRoss\b|ross_/);
 });
 
 test("the connect page is the README with its heading moved to front matter", () => {
@@ -170,12 +212,14 @@ test("the real reference: every page states the count it documents", async () =>
   for (const page of TOOL_PAGES) {
     const content = files.get(page.rel);
     const stated = Number(/\*\*(\d+) tools\*\*/.exec(content)?.[1]);
+    const omitted = Number(/^> (\d+) tools? omitted: engagement-specific\.$/m.exec(content)?.[1] ?? 0);
     const documented = (content.match(/^#{2,3} `[^`]+`$/gm) ?? []).length;
     assert.ok(stated > 0, `${page.rel} states no count`);
-    assert.equal(documented, stated, `${page.rel}: states ${stated} tools, documents ${documented}`);
+    assert.equal(documented + omitted, stated, `${page.rel}: states ${stated} tools, documents ${documented}, omits ${omitted}`);
   }
   for (const [rel, content] of files) {
-    assert.doesNotMatch(content, /agentdash[-_]mk/i, rel);
+    assert.doesNotMatch(content, /agentdash[\s_-]?mk/i, rel);
+    assert.doesNotMatch(content, /(?<![A-Za-z])[Rr]oss(?![a-z])/, rel);
     assert.doesNotMatch(content, /\{\{/, rel);
   }
   assert.ok(files.get(CONNECT_PAGE_REL).includes("npx -y agentdash-connect@latest"));

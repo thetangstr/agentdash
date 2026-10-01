@@ -3,20 +3,21 @@ title: "Assistant toolset"
 summary: "The person-facing toolset a cloud assistant relays to a person, filtered by the grant's OAuth scopes."
 ---
 
-> Generated at commit `c69c37f49` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `5f77b8a62` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
+> 2 tools omitted: engagement-specific.
 
-**19 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "assistant")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/assistant/tools.ts`, `src/assistant/work.ts` and `src/assistant/gated.ts`.
+**19 tools** — measured: the length of the `tools/list` response; 17 are documented here and 2 are omitted as engagement-specific. Source: `buildToolSurface(client, config, "assistant")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/assistant/tools.ts`, `src/assistant/work.ts` and `src/assistant/gated.ts`.
 
 Each tool's description is its inline string, verbatim. The input table is rendered from the JSON schema the server advertises in `tools/list` (`toolInputSchema` in `packages/mcp-server/src/schema.ts`, converted from the tool's zod schema). Nested objects are flattened: `a.b` is property `b` of object `a`, and `a[].b` is property `b` of each item of array `a`.
 
 Over `POST /api/mcp/assistant` the grant's scopes filter this list (`src/assistant/index.ts`): the read tools are always served, the work tools only with `agentdash:work`, the gated tools only with `agentdash:decide`. Over stdio no scopes apply and all 19 are served. Which tool needs which scope is measured by listing the surface with each scope set.
 
-Tools, in the order `tools/list` returns them: `whoami`, `whats_new`, `list_projects`, `get_project`, `find_work`, `get_work_item`, `explain_blocker`, `list_team`, `list_pending_decisions`, `ross_request_status`, `start_project`, `create_work_item`, `assign_work`, `comment_on_work`, `update_work_item`, `request_ross_assessment`, `prepare_decision`, `request_hire`, `confirm_action`.
+Tools documented here, in the order `tools/list` returns them: `whoami`, `whats_new`, `list_projects`, `get_project`, `find_work`, `get_work_item`, `explain_blocker`, `list_team`, `list_pending_decisions`, `start_project`, `create_work_item`, `assign_work`, `comment_on_work`, `update_work_item`, `prepare_decision`, `request_hire`, `confirm_action`.
 
 ## Read tools — every grant (`agentdash:read`)
 
-10 tools.
+9 tools; 1 omitted: engagement-specific.
 
 ### `whoami`
 
@@ -110,20 +111,9 @@ Annotations: `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: f
 |---|---|---|---|
 | `limit` | integer | no |  |
 
-### `ross_request_status`
-
-AgentDash: whether Ross has answered a request made with request_ross_assessment — answered, still pending, stale, or refused, with the answer when there is one.
-
-Annotations: `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`, `readOnlyHint: true`. Declares an output schema.
-
-| Property | Type | Required | Description |
-|---|---|---|---|
-| `ref` | string | yes | The task — identifier, title fragment, UUID or deep link |
-| `requestKey` | string | yes | The requestKey request_ross_assessment returned |
-
 ## Work tools — grants with `agentdash:work`
 
-6 tools.
+5 tools; 1 omitted: engagement-specific.
 
 ### `start_project`
 
@@ -187,18 +177,6 @@ Annotations: `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: f
 | `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no |  |
 | `title` | string | no |  |
 | `project` | string | no | A project — identifier, title fragment, UUID or deep link |
-
-### `request_ross_assessment`
-
-AgentDash: ask Ross, the task's assigned agent, a question about a task. Posts one request comment in the person's name; the answer arrives later — check it with ross_request_status.
-
-Annotations: `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`, `readOnlyHint: false`. Declares an output schema.
-
-| Property | Type | Required | Description |
-|---|---|---|---|
-| `ref` | string | yes | The task — identifier, title fragment, UUID or deep link |
-| `question` | string | yes | The person's question for Ross, in their words |
-| `requestKey` | string | no |  |
 
 ## Gated tools — grants with `agentdash:decide`
 

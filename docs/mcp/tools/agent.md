@@ -3,8 +3,8 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `c69c37f49` by `scripts/docs/generate-mcp-reference.mjs`.
-> Verbatim except for one substitution, in 5 places: the name of a product profile that is not public is shown as `[private profile]`.
+> Generated at commit `5f77b8a62` by `scripts/docs/generate-mcp-reference.mjs`.
+> Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
 **76 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "agent")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/tools.ts`, `src/journey.ts` and `src/harness.ts`, in that order.
@@ -672,7 +672,7 @@ AgentDash: explicitly create a new company (workspace). For full onboarding pref
 |---|---|---|---|
 | `name` | string | yes |  |
 | `description` | string \| null | no |  |
-| `productProfile` | `"default"` \| `"[private profile]"` | no |  |
+| `productProfile` | `"default"` (1 value omitted) | no |  |
 | `inviteCode` | string | no |  |
 | `budgetMonthlyCents` | integer | no | Default: `0`. |
 | `attachmentMaxBytes` | integer | no |  |

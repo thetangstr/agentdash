@@ -48,6 +48,9 @@ import { docSlugFromPathname } from "@/lib/docs-nav";
  *    Other code keeps `white-space: pre`: a shell command must not reflow.
  * The two whitespace rules are `!important`: index.css styles `.paperclip-markdown pre`
  * outside any layer, which beats a layered utility at any specificity.
+ * Both table rules make a table wider than its content would need, so each
+ * table also scrolls inside its own container (`scrollableTables`) and the
+ * page itself never scrolls sideways on a phone.
  */
 const DOC_BODY_CLASS =
   "[&_th]:whitespace-nowrap! [&_td:first-child]:min-w-40 [&_pre:has(code.language-markdown)]:whitespace-pre-wrap!";
@@ -251,7 +254,7 @@ function DocArticle({ docRef, tree }: { docRef: DocPageRef; tree: DocTab[] }) {
         <p className="text-sm text-destructive">This page could not be loaded. Reload to try again.</p>
       ) : null}
       {page ? (
-        <MarkdownBody linkIssueReferences={false} className={DOC_BODY_CLASS}>
+        <MarkdownBody linkIssueReferences={false} scrollableTables className={DOC_BODY_CLASS}>
           {renderGuide(page.body, { instanceUrl })}
         </MarkdownBody>
       ) : null}

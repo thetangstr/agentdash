@@ -1026,20 +1026,18 @@
         "explainblocker",
         "listteam",
         "listpendingdecisions",
-        "rossrequeststatus",
         "Work tools — grants with agentdash:work",
         "startproject",
         "createworkitem",
         "assignwork",
         "commentonwork",
         "updateworkitem",
-        "requestrossassessment",
         "Gated tools — grants with agentdash:decide",
         "preparedecision",
         "requesthire",
         "confirmaction"
       ],
-      "firstParagraph": "19 tools — measured: the length of the tools/list response. Source: buildToolSurface(client, config, \"assistant\") in packages/mcp-server/src/index.ts; the tools are defined in src/assistant/tools.ts, src/assistant/work.ts and src/assistant/gated.ts."
+      "firstParagraph": "19 tools — measured: the length of the tools/list response; 17 are documented here and 2 are omitted as engagement-specific. Source: buildToolSurface(client, config, \"assistant\") in packages/mcp-server/src/index.ts; the tools are defined in src/assistant/tools.ts,…"
     },
     {
       "slug": "mcp/tools/human",
