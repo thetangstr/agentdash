@@ -47,6 +47,7 @@
     "docs:openapi": "node scripts/docs/generate-openapi.mjs",
     "docs:api-changelog": "node scripts/docs/generate-api-changelog.mjs",
     "check:api-reference": "node scripts/ci/check-api-reference-drift.mjs",
+    "check:docs-content": "node scripts/ci/check-docs-forbidden-tokens.mjs",
     "smoke:openclaw-join": "./scripts/smoke/openclaw-join.sh",
     "smoke:openclaw-docker-ui": "./scripts/smoke/openclaw-docker-ui.sh",
     "smoke:openclaw-sse-standalone": "./scripts/smoke/openclaw-sse-standalone.sh",

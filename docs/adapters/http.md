@@ -1,51 +1,47 @@
 ---
-title: HTTP Adapter
-summary: HTTP webhook adapter
+title: HTTP adapter
+summary: Trigger an agent that runs as your own service with one HTTP request
 ---
 
-The `http` adapter sends a webhook request to an external agent service. The agent runs externally and Paperclip just triggers it.
+The `http` adapter sends one HTTP request to a service you run. The service does the work and calls the AgentDash API itself. The web UI's agent picker does not offer it; set it through the [agents API](/api/agents).
 
-## When to Use
+Source: `server/src/adapters/http/` (`index.ts`, `execute.ts`, `test.ts`).
 
-- Agent runs as an external service (cloud function, dedicated server)
-- Fire-and-forget invocation model
-- Integration with third-party agent platforms
+## When to use it
 
-## When Not to Use
+- The agent runs as a service somewhere else: a cloud function, a dedicated server, another platform.
+- Fire-and-forget is enough. The run ends when your service answers.
 
-- If the agent runs locally on the same machine (use `process`, `claude_local`, or `codex_local`)
-- If you need stdout capture and real-time run viewing
+If the agent runs on the server host and you want its output in the run log, use [`process`](/adapters/process) or a CLI adapter instead. The `http` adapter records no stdout.
 
-## Configuration
+## Configuration fields
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `url` | string | Yes | Webhook URL to POST to |
-| `headers` | object | No | Additional HTTP headers |
-| `timeoutSec` | number | No | Request timeout |
+|---|---|---|---|
+| `url` | string | Yes | Endpoint to call. Must be `http` or `https`. |
+| `method` | string | No | HTTP method. Default `POST`. |
+| `headers` | object | No | Extra request headers. `content-type: application/json` is always set. |
+| `payloadTemplate` | object | No | Fields merged into the request body. |
+| `timeoutMs` | number | No | Request timeout in milliseconds. `0` or unset means none. |
 
-## How It Works
+The adapter's built-in field list (`index.ts`) names `timeoutSec`, but `execute.ts` reads `timeoutMs`. Use `timeoutMs`.
 
-1. Paperclip sends a POST request to the configured URL
-2. The request body includes the execution context (agent ID, task info, wake reason)
-3. The external agent processes the request and calls back to the Paperclip API
-4. Response from the webhook is captured as the run result
+## Request body
 
-## Request Body
-
-The webhook receives a JSON payload with:
+The body is your `payloadTemplate` with three fields added:
 
 ```json
 {
-  "runId": "...",
   "agentId": "...",
-  "companyId": "...",
-  "context": {
-    "taskId": "...",
-    "wakeReason": "...",
-    "commentId": "..."
-  }
+  "runId": "...",
+  "context": { "...": "the run context: task, wake reason, comment, and so on" }
 }
 ```
 
-The external agent uses `PAPERCLIP_API_URL` and an API key to call back to Paperclip.
+## Result
+
+- A 2xx response ends the run as a success with the summary `HTTP <method> <url>`. The response body is not stored.
+- Any other status fails the run.
+- A timeout fails the run as timed out.
+
+The adapter does not pass an API key. Your service needs its own [agent API key](/api/api-keys) to call back to AgentDash.

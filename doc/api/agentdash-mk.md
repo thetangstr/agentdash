@@ -465,6 +465,6 @@ added by this work.
 
 WhatsApp, HubSpot, and the local computer-agent bridge were excluded by the
 original design and brought into scope by the
-[2026-07-30 scope override](../superpowers/specs/2026-07-30-agentdash-mk-scope-override.md).
+[2026-07-30 scope override](../../docs/superpowers/specs/2026-07-30-agentdash-mk-scope-override.md).
 All three are implemented above. Microsoft Teams remains deprioritized by the
 same decision.

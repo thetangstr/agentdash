@@ -1,76 +1,70 @@
 ---
 title: Managing Agents
-summary: Hiring, configuring, pausing, and terminating agents
+summary: Create, configure, test, pause, resume and terminate agents
 ---
 
-Agents are the employees of your autonomous company. As the board operator, you have full control over their lifecycle.
+You control every agent's lifecycle. For what an agent is, see [Agents, roles and autonomy](/concepts/agents-roles-and-autonomy); for stewarded and autonomous agents, see [Agent kinds and stewardship](/guides/board-operator/agent-kinds-and-stewardship).
 
-## Agent States
+Source: `ui/src/pages/NewAgent.tsx`, `ui/src/components/AgentConfigForm.tsx`, `server/src/routes/agents.ts`, `server/src/services/agents.ts`, `AGENT_STATUSES` in `packages/shared/src/constants.ts`.
+
+## Agent status
 
 | Status | Meaning |
-|--------|---------|
-| `active` | Ready to receive work |
-| `idle` | Active but no current heartbeat running |
-| `running` | Currently executing a heartbeat |
-| `error` | Last heartbeat failed |
-| `paused` | Manually paused or budget-paused |
-| `terminated` | Permanently deactivated (irreversible) |
+| --- | --- |
+| `active` | Ready to be woken |
+| `idle` | No run in progress |
+| `running` | A run is in progress |
+| `error` | The last run failed |
+| `paused` | Paused by a person or by a budget hard stop |
+| `pending_approval` | Hired, waiting for a `hire_agent` approval. Cannot be activated directly |
+| `terminated` | Permanently deactivated. Cannot be resumed |
 
-## Creating Agents
+## Create an agent
 
-Create agents from the Agents page. Each agent requires:
+**Agents → New agent**:
 
-- **Name** — unique identifier (used for @-mentions)
-- **Role** — `ceo`, `cto`, `manager`, `engineer`, `researcher`, etc.
-- **Reports to** — the agent's manager in the org tree
-- **Adapter type** — how the agent runs
-- **Adapter config** — runtime-specific settings (working directory, model, prompt, etc.)
-- **Capabilities** — short description of what this agent does
+- **Agent name** — also how others @-mention it
+- **Title** and **Role** (`general`, `engineer`, `researcher`, `designer`, `pm`, `qa`, `devops`, `security`, `cto`, `cmo`, `cfo`, `ceo`, `chief_of_staff`). On this page the first agent in an empty company is always `ceo`; the [setup wizard](/guides/board-operator/creating-a-company) creates a Chief of Staff instead.
+- **Reports to** — its manager. See [Org structure](/guides/board-operator/org-structure).
+- **Adapter** and its config — how the agent runs (working directory, model, instructions, environment). See [Adapters](/adapters/overview).
 
-Common adapter choices:
-- `claude_local` / `codex_local` / `opencode_local` for local coding agents
-- `openclaw_gateway` / `http` for webhook-based external agents
-- `process` for generic local command execution
+Press **Test Agent** to check the adapter can run before you save.
 
-For `opencode_local`, configure an explicit `adapterConfig.model` (`provider/model`).
-Paperclip validates the selected model against live `opencode models` output.
+Common adapters: `claude_local`, `codex_local`, `gemini_local`, `opencode_local`, `hermes_local` for local runtimes; `http` and `openclaw_gateway` for agents that run elsewhere; `process` for a plain local command. For `opencode_local`, set `adapterConfig.model` as `provider/model`; AgentDash checks it against `opencode models`.
 
-## Agent Hiring via Governance
+The page hires through `POST /api/companies/{companyId}/agent-hires`. When **Require your approval for new hires** is on (**Company Settings → Hiring**), the new agent waits in `pending_approval` until a `hire_agent` approval is decided, and the direct-create route (`POST /api/companies/{companyId}/agents`) answers `409`.
 
-Agents can request to hire subordinates. When this happens, you'll see a `hire_agent` approval in your approval queue. Review the proposed agent config and approve or reject.
+## Agents asking to hire
 
-## Configuring Agents
+An agent can ask to hire another. With the setting above on, you get a `hire_agent` approval showing the proposed config. Approve or reject it from **Decisions**. See [Approvals](/guides/board-operator/approvals).
 
-Edit an agent's configuration from the agent detail page:
+## Configure an agent
 
-- **Adapter config** — change model, prompt template, working directory, environment variables
-- **Heartbeat settings** — interval, cooldown, max concurrent runs, wake triggers
-- **Budget** — monthly spend limit
+On the agent's page:
 
-Use the "Test Environment" button to validate that the agent's adapter config is correct before running.
+- **Configuration** — adapter config, **Reports to**, capabilities, and **Test**. Run settings: **Run on a schedule** (interval), and under **Advanced Run Policy**: **Wake on demand**, **Cooldown (sec)**, **Max concurrent runs**.
+- **Instructions** — the agent's instruction bundle, starting with `AGENTS.md`.
+- **Budget** — its spend limit. See [Costs and budgets](/guides/board-operator/costs-and-budgets).
 
-## Pausing and Resuming
+**Wake on demand** also controls whether an assignment wakes the agent.
 
-Pause an agent to temporarily stop heartbeats:
+## Pause and resume
+
+Pausing stops new runs and cancels any run in progress. Board only.
 
 ```
 POST /api/agents/{agentId}/pause
-```
-
-Resume to restart:
-
-```
 POST /api/agents/{agentId}/resume
 ```
 
-Agents are also auto-paused when they hit 100% of their monthly budget.
+A budget hard stop pauses an agent too. See [Agents](/api/agents).
 
-## Terminating Agents
+## Terminate
 
-Termination is permanent and irreversible:
+**Terminate** on the agent's page, or:
 
 ```
 POST /api/agents/{agentId}/terminate
 ```
 
-Only terminate agents you're certain you no longer need. Consider pausing first.
+Board only, and permanent: a terminated agent cannot be resumed. Pause first if you are unsure. Do not delete an agent whose history you need — its runs and activity are the audit trail.

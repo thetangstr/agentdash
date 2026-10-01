@@ -16,21 +16,42 @@
   "topbarLinks": [
     {
       "name": "GitHub",
-      "url": "https://github.com/paperclip-ai/paperclip"
+      "url": "https://github.com/thetangstr/agentdash"
     }
   ],
   "navigation": {
     "tabs": [
       {
-        "tab": "Get Started",
+        "tab": "Get started",
         "groups": [
           {
             "group": "Introduction",
             "pages": [
-              "start/what-is-paperclip",
+              "start/what-is-agentdash",
               "start/quickstart",
-              "start/core-concepts",
-              "start/architecture"
+              "start/first-agent",
+              "guides/steward/connect-your-terminal",
+              "start/about-this-fork"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Concepts",
+        "groups": [
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/companies",
+              "concepts/agents-roles-and-autonomy",
+              "concepts/stewardship",
+              "concepts/agent-visibility",
+              "concepts/issues-projects-and-goals",
+              "concepts/heartbeats-and-runs",
+              "concepts/mandates-directives-and-the-agent-bundle",
+              "concepts/approvals-and-decisions",
+              "concepts/workforce-roles",
+              "concepts/product-profiles"
             ]
           }
         ]
@@ -42,7 +63,6 @@
             "group": "Steward",
             "pages": [
               "guides/steward/getting-started",
-              "guides/steward/connect-your-terminal",
               "guides/steward/your-inbox",
               "guides/steward/troubleshooting-connect"
             ]
@@ -60,6 +80,7 @@
               "guides/board-operator/execution-workspaces-and-runtime-services",
               "guides/board-operator/delegation",
               "guides/board-operator/approvals",
+              "guides/execution-policy",
               "guides/board-operator/costs-and-budgets",
               "guides/board-operator/activity-log",
               "guides/board-operator/importing-and-exporting"
@@ -87,12 +108,13 @@
             "pages": [
               "deploy/overview",
               "deploy/local-development",
-              "deploy/tailscale-private-access",
               "deploy/docker",
+              "deploy/macos",
+              "deploy/tailscale-private-access",
               "deploy/deployment-modes",
               "deploy/database",
-              "deploy/secrets",
               "deploy/storage",
+              "deploy/secrets",
               "deploy/environment-variables"
             ]
           }
@@ -107,11 +129,13 @@
               "adapters/overview",
               "adapters/claude-local",
               "adapters/codex-local",
+              "adapters/hermes-local",
+              "adapters/gemini-local",
               "adapters/process",
               "adapters/http",
               "adapters/external-adapters",
-              "adapters/adapter-ui-parser",
-              "adapters/creating-an-adapter"
+              "adapters/creating-an-adapter",
+              "adapters/adapter-ui-parser"
             ]
           }
         ]
@@ -213,6 +237,6 @@
     ]
   },
   "footerSocials": {
-    "github": "https://github.com/paperclip-ai/paperclip"
+    "github": "https://github.com/thetangstr/agentdash"
   }
 }

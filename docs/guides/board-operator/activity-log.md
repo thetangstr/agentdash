@@ -1,55 +1,57 @@
 ---
 title: Activity Log
-summary: Audit trail for all mutations
+summary: The audit trail of who changed what, and how to use it when something goes wrong
 ---
 
-Every mutation in Paperclip is recorded in the activity log. This provides a complete audit trail of what happened, when, and who did it.
+AgentDash writes an activity entry for changes across the company: who acted, what they did, and to what.
 
-## What Gets Logged
+Source: `packages/db/src/schema/activity_log.ts`, `server/src/routes/activity.ts`, `ui/src/pages/Activity.tsx`.
 
-- Agent creation, updates, pausing, resuming, termination
-- Issue creation, status changes, assignments, comments
-- Approval creation, approval/rejection decisions
-- Budget changes
-- Company configuration changes
+## What is logged
 
-## Viewing Activity
+Examples, by area:
 
-### Web UI
+- **Agents** — created, updated, paused (`agent.paused`), resumed, terminated (`agent.terminated`), budget changes (`agent.budget_updated`)
+- **Issues** — created, status changes, assignments, comments
+- **Approvals** — filed and decided (`approval.approved`, `approval.emergency_override`)
+- **Budgets** — changes (`company.budget_updated`) and threshold crossings (`budget.soft_threshold_crossed`)
+- **Company** — settings changes (`company.updated`), imports (`company.imported`)
 
-The Activity section in the sidebar shows a chronological feed of all events across the company. You can filter by:
+## Read it in the UI
 
-- Agent
-- Entity type (issue, agent, approval)
-- Time range
+**More → Activity** in the sidebar shows the latest 200 entries, newest first. **Filter by type** narrows them to one entity type.
 
-### API
+## Read it through the API
 
 ```
 GET /api/companies/{companyId}/activity
 ```
 
-Query parameters:
+| Parameter | Filters to |
+| --- | --- |
+| `agentId` | One agent's actions |
+| `entityType` | One kind of entity, e.g. `issue`, `agent`, `approval`, `project`, `goal`, `company`, `budget_incident` |
+| `entityId` | One entity |
+| `since` | Entries after an ISO 8601 timestamp (`400` if invalid) |
+| `limit` | At most this many entries |
 
-- `agentId` — filter to a specific agent's actions
-- `entityType` — filter by entity type (`issue`, `agent`, `approval`)
-- `entityId` — filter to a specific entity
+See [Activity](/api/activity).
 
-## Activity Record Format
+## What an entry holds
 
-Each activity entry includes:
+| Field | What it is |
+| --- | --- |
+| `actorType`, `actorId` | Who acted — an agent, a person, or the system |
+| `action` | What was done, e.g. `agent.paused` |
+| `entityType`, `entityId` | What was affected |
+| `agentId`, `runId` | The agent and run involved, when there is one |
+| `details` | A JSON object with the specifics. Its contents vary by action |
+| `origin` | Where the change came from (`server`, `manual`, or empty) |
+| `createdAt` | When |
 
-- **Actor** — which agent or user performed the action
-- **Action** — what was done (created, updated, commented, etc.)
-- **Entity** — what was affected (issue, agent, approval)
-- **Details** — specifics of the change (old and new values)
-- **Timestamp** — when it happened
+## Debugging with it
 
-## Using Activity for Debugging
-
-When something goes wrong, the activity log is your first stop:
-
-1. Find the agent or task in question
-2. Filter the activity log to that entity
-3. Walk through the timeline to understand what happened
-4. Check for missed status updates, failed checkouts, or unexpected assignments
+1. Find the agent or issue in question.
+2. Filter the log to it (`entityId`, or `agentId`).
+3. Walk the timeline.
+4. Look for missed status updates, failed checkouts and unexpected assignments, then open the matching run on the agent's page.

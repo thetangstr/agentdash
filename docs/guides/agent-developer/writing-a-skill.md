@@ -1,60 +1,65 @@
 ---
 title: Writing a Skill
-summary: SKILL.md format and best practices
+summary: The SKILL.md format, how a company's skills reach an agent's runtime, and how to write one that works
 ---
 
-Skills are reusable instructions that agents can invoke during their heartbeats. They're markdown files that teach agents how to perform specific tasks.
+A skill is a reusable set of instructions an agent loads when its task calls for it. It is a folder with a `SKILL.md` file. A company keeps its skills in **Settings → Agents → Skills**, and adapters make them available to each agent's runtime.
 
-## Skill Structure
+Source: `server/src/routes/company-skills.ts`, `server/src/services/company-skills.ts`, `packages/adapters/claude-local/src/server/prompt-cache.ts`, `packages/adapters/codex-local/src/server/execute.ts`.
 
-A skill is a directory containing a `SKILL.md` file with YAML frontmatter:
+## Structure
 
 ```
-skills/
-└── my-skill/
-    ├── SKILL.md          # Main skill document
-    └── references/       # Optional supporting files
-        └── examples.md
+my-skill/
+├── SKILL.md          # the skill
+└── references/       # optional supporting files
+    └── examples.md
 ```
 
-## SKILL.md Format
+## SKILL.md
 
 ```markdown
 ---
 name: my-skill
 description: >
-  Short description of what this skill does and when to use it.
-  This acts as routing logic — the agent reads this to decide
-  whether to load the full skill content.
+  What this skill does and when to use it. The agent reads this
+  to decide whether to load the rest, so write it as a decision.
 ---
 
 # My Skill
 
-Detailed instructions for the agent...
+Instructions for the agent...
 ```
 
-### Frontmatter Fields
+- **name** — a unique, kebab-case identifier.
+- **description** — when to use it, and when not to. This is routing logic, not marketing.
 
-- **name** — unique identifier for the skill (kebab-case)
-- **description** — routing description that tells the agent when to use this skill. Write it as decision logic, not marketing copy.
+## At runtime
 
-## How Skills Work at Runtime
+1. The agent sees each skill's name and description.
+2. It decides whether a skill fits the task.
+3. If so, it loads the full `SKILL.md`.
+4. It follows it.
 
-1. Agent sees skill metadata (name + description) in its context
-2. Agent decides whether the skill is relevant to its current task
-3. If relevant, agent loads the full SKILL.md content
-4. Agent follows the instructions in the skill
+Only the metadata sits in the base prompt; the full text loads on demand.
 
-This keeps the base prompt small — full skill content is only loaded on demand.
+## Add a skill to the company
 
-## Best Practices
+**Settings → Agents → Skills** lists the company's skills. You can create one there, import one, or scan the company's project workspaces for skills. The matching routes are under `/api/companies/{companyId}/skills` (`POST`, `POST .../import`, `POST .../scan-projects`); see the [route index](/api/route-index).
 
-- **Write descriptions as routing logic** — include "use when" and "don't use when" guidance
-- **Be specific and actionable** — agents should be able to follow skills without ambiguity
-- **Include code examples** — concrete API calls and command examples are more reliable than prose
-- **Keep skills focused** — one skill per concern; don't combine unrelated procedures
-- **Reference files sparingly** — put supporting detail in `references/` rather than bloating the main SKILL.md
+Company skills travel with a company export. See [Importing and exporting](/guides/board-operator/importing-and-exporting).
 
-## Skill Injection
+## How adapters inject skills
 
-Adapters are responsible for making skills discoverable to their agent runtime. The `claude_local` adapter uses a temp directory with symlinks and `--add-dir`. The `codex_local` adapter uses the global skills directory. See the [Creating an Adapter](/adapters/creating-an-adapter) guide for details.
+- **`claude_local`** links the agent's skills into a `.claude/skills` folder under a content-hashed cache directory (under `~/.paperclip/instances/<instance>/companies/<companyId>/`) and passes that directory to Claude Code with `--add-dir`.
+- **`codex_local`** links them into `$CODEX_HOME/skills`. By default `CODEX_HOME` is a per-company managed home under `~/.paperclip/instances/<instance>/companies/<companyId>/codex-home`, not your global `~/.codex`.
+
+Other adapters do their own thing; see [Creating an adapter](/adapters/creating-an-adapter).
+
+## Write one that works
+
+- **Make the description a decision** — include "use when" and "do not use when".
+- **Be specific.** An agent should be able to follow it without guessing.
+- **Show commands and API calls.** They work better than prose.
+- **One concern per skill.**
+- **Put detail in `references/`**, not in a long `SKILL.md`.

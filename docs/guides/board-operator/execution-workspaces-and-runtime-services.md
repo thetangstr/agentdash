@@ -1,74 +1,80 @@
 ---
-title: Execution Workspaces And Runtime Services
-summary: How project runtime configuration, execution workspaces, and issue runs fit together
+title: Execution Workspaces and Runtime Services
+summary: Where an issue's code lives, how isolated workspaces work, and how workspace services and jobs are started and stopped
 ---
 
-This guide documents the intended runtime model for projects, execution workspaces, and issue runs in Paperclip.
+A **project workspace** is a project's checkout. An **execution workspace** is where an issue's run actually works: the project checkout itself, or an isolated copy with its own branch. Either can define **services** (long-running commands, such as a dev server) and **jobs** (one-shot commands). Nothing starts them automatically.
 
-Paperclip now presents this as a workspace-command model:
+Source: `packages/shared/src/types/workspace-runtime.ts`, `server/src/services/workspace-runtime.ts`, `server/src/routes/execution-workspaces.ts`, `server/src/routes/projects.ts`, `server/src/services/heartbeat.ts`, `ui/src/components/WorkspaceRuntimeControls.tsx`.
 
-- `Services` are long-running commands that stay supervised.
-- `Jobs` are one-shot commands that run once and exit.
-- Raw runtime JSON is still available for advanced config, but it is no longer the primary mental model.
+## Isolated workspaces are an experimental setting
 
-## Project runtime configuration
+Isolated workspaces are off by default. An instance admin turns them on under **Instance settings → Experimental → Enable Isolated Workspaces** (`enableIsolatedWorkspaces`).
 
-You can define how to run a project on the project workspace itself.
+While it is off, the workspace pickers are hidden, the **Workspaces** page redirects away, and issue workspace settings are ignored: every run works in the project's own checkout. Service and job controls still work.
 
-- Project workspace runtime config describes the services and jobs available for that project checkout.
-- This is the default runtime configuration that child execution workspaces may inherit.
-- Defining the config does not start anything by itself.
+## Services and jobs
 
-## Manual runtime control
+Define them on the project workspace. That definition is the default every execution workspace in the project inherits. An execution workspace can override it with its own; turn inheritance back on to drop the override.
 
-Workspace commands are manually controlled from the UI.
+- **Services** stay running and are supervised. Actions: start, stop, restart. Each service also has a desired state: `running`, `stopped` or `manual`.
+- **Jobs** run once and exit. Action: run.
+- The raw JSON is still editable under **Advanced**.
 
-- Project workspace services are started and stopped from the project workspace UI, and project jobs can be run on demand there.
-- Execution workspace services are started and stopped from the execution workspace UI, and execution-workspace jobs can be run on demand there.
-- Paperclip does not automatically start or stop these workspace services as part of issue execution.
-- Paperclip also does not automatically restart workspace services on server boot.
+Defining a service starts nothing.
 
-## Execution workspace inheritance
+## Who starts them
 
-Execution workspaces isolate code and runtime state from the project primary workspace.
+- **People**, from the project workspace page or the execution workspace page.
+- **Agents**, with the MCP tools `control_issue_workspace_services` (start, stop, restart), `wait_for_issue_workspace_service` (polls until a service is up; 60-second default timeout) and `get_issue_workspace_runtime`. See the [agent toolset](/mcp/tools/agent).
 
-- An isolated execution workspace has its own checkout path, branch, and local runtime instance.
-- The runtime configuration may inherit from the linked project workspace by default.
-- The execution workspace may override that runtime configuration with its own workspace-specific settings.
-- The inherited configuration answers "which commands exist and how to run them", but any running service process is still specific to that execution workspace.
+AgentDash does **not** start configured services as part of a run. Before a run, configured services are stripped from the run's config; the run only records services the adapter itself reports.
 
-## Issues and execution workspaces
+On server start, AgentDash re-adopts service processes that are still alive and healthy, and marks the rest stopped. It does not restart stopped services.
 
-Issues are attached to execution workspace behavior, not to automatic runtime management.
+The endpoints:
 
-- An issue may create a new execution workspace when you choose an isolated workspace mode.
-- An issue may reuse an existing execution workspace when you choose reuse.
-- Multiple issues may intentionally share one execution workspace so they can work against the same branch and running runtime services.
-- Assigning or running an issue does not automatically start or stop workspace services for that workspace.
+```
+POST /api/projects/{projectId}/workspaces/{workspaceId}/runtime-services/{action}
+POST /api/projects/{projectId}/workspaces/{workspaceId}/runtime-commands/{action}
+POST /api/execution-workspaces/{workspaceId}/runtime-services/{action}
+POST /api/execution-workspaces/{workspaceId}/runtime-commands/{action}
+```
 
-## Execution workspace lifecycle
+These are internal routes; see the [route index](/api/route-index).
 
-Execution workspaces are durable until a human closes them.
+## Issues and workspaces
 
-- The UI can archive an execution workspace.
-- Closing an execution workspace stops its runtime services and cleans up its workspace artifacts when allowed.
-- Shared workspaces that point at the project primary checkout are treated more conservatively during cleanup than disposable isolated workspaces.
+With isolated workspaces on, each issue has a workspace preference:
 
-## Resolved workspace logic during heartbeat runs
+| Value | Meaning |
+| --- | --- |
+| `inherit` | Use the project's default |
+| `shared_workspace` | Work in the project's own checkout |
+| `isolated_workspace` | Create an isolated workspace for this issue |
+| `reuse_existing` | Reuse an existing execution workspace |
+| `operator_branch` | Work on an operator's branch |
+| `agent_default` | Let the agent's adapter decide |
 
-Heartbeat still resolves a workspace for the run, but that is about code location and session continuity, not runtime-service control.
+A project's default mode is one of `shared_workspace`, `isolated_workspace`, `operator_branch` or `adapter_default`.
 
-1. Heartbeat resolves a base workspace for the run.
-2. Paperclip realizes the effective execution workspace, including creating or reusing a worktree when needed.
-3. Paperclip persists execution-workspace metadata such as paths, refs, and provisioning settings.
-4. Heartbeat passes the resolved code workspace to the agent run.
-5. Workspace runtime services remain manual UI-managed controls rather than automatic heartbeat-managed services.
+Several issues can share one execution workspace on purpose, so they work against the same branch and the same running services. Assigning or running an issue never starts or stops services.
 
-## Current implementation guarantees
+Source: `packages/shared/src/validators/issue.ts`.
 
-With the current implementation:
+## What a run does with the workspace
 
-- Project workspace command config is the fallback for execution workspace UI controls.
-- Execution workspace runtime overrides are stored on the execution workspace.
-- Heartbeat runs do not auto-start workspace services.
-- Server startup does not auto-restart workspace services.
+1. AgentDash resolves the workspace for the run.
+2. It creates or reuses the execution workspace — for example a git worktree.
+3. It stores the workspace's paths, refs and provisioning settings.
+4. It passes the workspace to the agent's run.
+
+This is about where the code is and session continuity. It never starts services.
+
+## Close a workspace
+
+Execution workspaces last until someone closes them. **Close workspace** on the workspace page checks it is safe to close, stops its services, then cleans up. A failed cleanup leaves the workspace `cleanup_failed`, with **Retry close**.
+
+Cleanup is conservative with shared checkouts. Closing a `shared_workspace` only unlinks its issues. Worktrees and branches are removed only if AgentDash created them, and a directory that contains the project checkout is never deleted.
+
+Workspace statuses: `active`, `idle`, `in_review`, `archived`, `cleanup_failed`.

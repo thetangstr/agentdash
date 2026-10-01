@@ -2,69 +2,42 @@
   "source": "docs/docs.json",
   "pages": [
     {
-      "slug": "start/what-is-paperclip",
-      "title": "What is Paperclip?",
-      "summary": "The control plane for autonomous AI companies",
+      "slug": "start/what-is-agentdash",
+      "title": "What is AgentDash?",
+      "summary": "A workspace where AI agents do a company's work, each one answerable to a named person",
       "headings": [
-        "The Problem",
-        "What Paperclip Does",
-        "Two Layers",
-        "1. Control Plane (Paperclip)",
-        "2. Execution Services (Adapters)",
-        "Core Principle"
+        "What you get",
+        "How agents run",
+        "Where it runs"
       ],
-      "firstParagraph": "Paperclip is the control plane for autonomous AI companies. It is the infrastructure backbone that enables AI workforces to operate with structure, governance, and accountability."
+      "firstParagraph": "AgentDash is where a company runs its AI agents. Every agent belongs to one company, works from issues, and is answerable to a named person. You decide what it may do alone and what waits for you."
     },
     {
       "slug": "start/quickstart",
-      "title": "Quickstart",
-      "summary": "Get Paperclip running in minutes",
+      "title": "Start on AgentDash Cloud",
+      "summary": "Sign up for a hosted workspace, claim it, and get through the three setup steps",
       "headings": [
-        "Quick Start (Recommended)",
-        "Local Development",
-        "What's Next"
+        "1. Sign up",
+        "2. Wait for your workspace",
+        "3. Claim it",
+        "4. Set it up",
+        "Next",
+        "Signing in later"
       ],
-      "firstParagraph": "Get Paperclip running locally in under 5 minutes."
+      "firstParagraph": "AgentDash Cloud gives you your own workspace at your-name.agentdash.cloud, with a Chief of Staff agent already in it. Setup takes a few minutes, plus however long the waitlist is."
     },
     {
-      "slug": "start/core-concepts",
-      "title": "Core Concepts",
-      "summary": "Companies, agents, issues, delegation, heartbeats, and governance",
+      "slug": "start/first-agent",
+      "title": "Your first company and agent",
+      "summary": "What a new workspace contains, planning with the Chief of Staff, hiring an agent, and taking one on as its steward",
       "headings": [
-        "Company",
-        "Agents",
-        "Issues (Tasks)",
-        "Status Lifecycle",
-        "Delegation",
-        "Heartbeats",
-        "Governance"
+        "What is already there",
+        "Plan with your Chief of Staff",
+        "Hire an agent yourself",
+        "Give it work",
+        "Run an agent from your own terminal"
       ],
-      "firstParagraph": "Paperclip organizes autonomous AI work around six key concepts."
-    },
-    {
-      "slug": "start/architecture",
-      "title": "Architecture",
-      "summary": "Stack overview, request flow, and adapter model",
-      "headings": [
-        "Stack Overview",
-        "Technology Stack",
-        "Repository Structure",
-        "Request Flow",
-        "Adapter Model",
-        "Key Design Decisions"
-      ],
-      "firstParagraph": "Paperclip is a monorepo with four main layers."
-    },
-    {
-      "slug": "guides/steward/getting-started",
-      "title": "Getting Started as a Steward",
-      "summary": "Your first sign-in, what My Agent is, and the three things to do in your first twenty minutes",
-      "headings": [
-        "Before you start",
-        "First sign-in",
-        "The three steps"
-      ],
-      "firstParagraph": "You are a steward: one person who runs one agent from their own terminal and answers for what it does. Being set up means three things, in this order — you can sign in and see your agent on My Agent, your terminal is connected, and you have decided one real approval from your…"
+      "firstParagraph": "A new workspace already has a company, you as its owner, and one agent: the Chief of Staff. This page covers what to do with them. It assumes you have finished Start on AgentDash Cloud; on a self-hosted instance, create a company first."
     },
     {
       "slug": "guides/steward/connect-your-terminal",
@@ -78,6 +51,139 @@
         "Undo"
       ],
       "firstParagraph": "One command, generated for you on My Agent, pairs your Claude Code with your agent and gives you your own inbox. Ten minutes — and the code inside the command expires in ten minutes, so do this at your terminal, on the machine you actually work from."
+    },
+    {
+      "slug": "start/about-this-fork",
+      "title": "About this fork",
+      "summary": "The open-source project AgentDash is forked from, and why some names in the code still carry its name",
+      "headings": [
+        "The upstream project",
+        "Names that still carry the upstream name",
+        "Source and license"
+      ],
+      "firstParagraph": "AgentDash is a fork of an open-source control plane for AI agents, released under the MIT license. This page names that project and explains the names it left behind in the code."
+    },
+    {
+      "slug": "concepts/companies",
+      "title": "Companies",
+      "summary": "The top-level workspace that owns every agent, issue, project, goal and budget in AgentDash.",
+      "headings": [
+        "Status",
+        "Settings that change behavior",
+        "People in a company"
+      ],
+      "firstParagraph": "A company is one workspace. Every agent, issue, project, goal, approval and cost record belongs to exactly one company, and company-scoped list and create routes start with /api/companies/{companyId}. One AgentDash instance can hold several companies."
+    },
+    {
+      "slug": "concepts/agents-roles-and-autonomy",
+      "title": "Agents, roles and autonomy",
+      "summary": "What an agent is in AgentDash, the 13 roles, the two autonomy kinds and the agent statuses.",
+      "headings": [
+        "Autonomy kinds",
+        "Roles",
+        "Statuses"
+      ],
+      "firstParagraph": "An agent is a worker in a company. It has a name, a role, an adapter that runs it (adapterType), a manager (reportsTo), a budget, and a kind: stewarded or autonomous."
+    },
+    {
+      "slug": "concepts/stewardship",
+      "title": "Stewardship",
+      "summary": "The one-to-one pairing between a person and the agent they run, and how AgentDash decides who is accountable for an agent.",
+      "headings": [
+        "The pairing",
+        "Who is accountable",
+        "Changing a pairing"
+      ],
+      "firstParagraph": "A stewardship pairs one person with one stewarded agent. The person is the agent's steward: they run it from their own terminal, look after it, and answer for what it does."
+    },
+    {
+      "slug": "concepts/agent-visibility",
+      "title": "Agent visibility",
+      "summary": "Who may see which agents — the rule, the two admin-only settings, and why a hidden agent answers 404.",
+      "headings": [
+        "The two knobs",
+        "The rule",
+        "Hidden means 404, not 403"
+      ],
+      "firstParagraph": "Agent visibility decides which agents a company member can see at all. By default every member sees every agent. An admin can switch a company, or a single agent, so that members see only the agents they answer for."
+    },
+    {
+      "slug": "concepts/issues-projects-and-goals",
+      "title": "Issues, projects and goals",
+      "summary": "How work is organized in AgentDash — issues are the unit of work, projects group them, goals say why — with every status value from code.",
+      "headings": [
+        "Issues",
+        "Projects",
+        "Goals"
+      ],
+      "firstParagraph": "An issue is one unit of work with one assignee. A project groups issues toward a deliverable. A goal states an outcome; goals nest, and projects and issues can point at one."
+    },
+    {
+      "slug": "concepts/heartbeats-and-runs",
+      "title": "Heartbeats and runs",
+      "summary": "How AgentDash wakes an agent, what a run records, and every wakeup, run and liveness value from code.",
+      "headings": [
+        "Why an agent wakes",
+        "Wakeup requests",
+        "Run status",
+        "Liveness",
+        "Runs and issues"
+      ],
+      "firstParagraph": "A heartbeat is one wake of an agent. AgentDash queues a wakeup request, starts the agent through its adapter, and records the attempt as a run in heartbeatruns. What the agent does during the run is up to the agent; AgentDash decides when to wake it and what context to send."
+    },
+    {
+      "slug": "concepts/mandates-directives-and-the-agent-bundle",
+      "title": "Mandates, directives and the agent bundle",
+      "summary": "The three things that shape what an agent does — its instruction bundle (with the mandate file), steward directives, and mandate grants of delegated authority.",
+      "headings": [
+        "The instruction bundle",
+        "Directives",
+        "Mandate grants"
+      ],
+      "firstParagraph": "Three different things tell an agent what to do. The instruction bundle holds its standing instructions; its entry file is the agent's mandate. Directives are free text a steward pushes to their own agent. A mandate grant (the mandates table) is a bounded delegation of authority…"
+    },
+    {
+      "slug": "concepts/approvals-and-decisions",
+      "title": "Approvals and decisions",
+      "summary": "Approvals are requests that wait on a person; the Decisions page is where a person sees everything waiting on them.",
+      "headings": [
+        "Approval types",
+        "Approval status",
+        "Who decides",
+        "The Decisions page",
+        "Issue review decisions"
+      ],
+      "firstParagraph": "An approval is a request that waits on a person: an agent asks to hire, to spend past a limit, or to go ahead with a plan. The Decisions page is the one place a person sees what is waiting on them, approvals included."
+    },
+    {
+      "slug": "concepts/workforce-roles",
+      "title": "Workforce roles",
+      "summary": "Versioned role templates that pin an agent's work instructions, and the enrollment that ties an agent to one.",
+      "headings": [
+        "The version-1 templates",
+        "Enrollment",
+        "Readiness",
+        "Who can do what"
+      ],
+      "firstParagraph": "A workforce role is a versioned template that describes a kind of work: responsibilities, the company facts it needs, procedures, quality checks and a starter job. A workforce enrollment pins one agent to one template version. A role describes work; it never grants authority."
+    },
+    {
+      "slug": "concepts/product-profiles",
+      "title": "Product profiles",
+      "summary": "Every company has a product profile; a workspace may have extra capabilities that its operator switched on.",
+      "headings": [],
+      "firstParagraph": "Every company carries a product profile. Most workspaces use the default, and the core product described in these docs works the same everywhere."
+    },
+    {
+      "slug": "guides/steward/getting-started",
+      "title": "Getting Started as a Steward",
+      "summary": "Your first sign-in, what My Agent is, and the three things to do in your first twenty minutes",
+      "headings": [
+        "Before you start",
+        "First sign-in",
+        "The three steps"
+      ],
+      "firstParagraph": "You are a steward: one person who runs one agent from their own terminal and answers for what it does. Being set up means three things, in this order — you can sign in and see your agent on My Agent, your terminal is connected, and you have decided one real approval from your…"
     },
     {
       "slug": "guides/steward/your-inbox",
@@ -100,42 +206,37 @@
     {
       "slug": "guides/board-operator/dashboard",
       "title": "Dashboard",
-      "summary": "Understanding the Paperclip dashboard",
+      "summary": "What the Home page shows, what to act on first, and the dashboard API",
       "headings": [
-        "What You See",
-        "Using the Dashboard",
-        "Key Metrics to Watch",
+        "What you see",
+        "What to act on",
         "Dashboard API"
       ],
-      "firstParagraph": "The dashboard gives you a real-time overview of your autonomous company's health."
+      "firstParagraph": "Home in the sidebar is the company dashboard. It updates live as agents work."
     },
     {
       "slug": "guides/board-operator/creating-a-company",
       "title": "Creating a Company",
-      "summary": "Set up your first autonomous AI company",
+      "summary": "Create a company with the setup wizard — name, first agent, mandate, goal, first task, launch",
       "headings": [
-        "Step 1: Create the Company",
-        "Step 2: Set a Goal",
-        "Step 3: Create the CEO Agent",
-        "Step 4: Build the Org Chart",
-        "Step 5: Set Budgets",
-        "Step 6: Launch"
+        "The wizard",
+        "After the wizard"
       ],
-      "firstParagraph": "A company is the top-level unit in Paperclip. Everything — agents, tasks, goals, budgets — lives under a company."
+      "firstParagraph": "A company holds everything else: agents, issues, projects, goals, budgets. See Companies."
     },
     {
       "slug": "guides/board-operator/managing-agents",
       "title": "Managing Agents",
-      "summary": "Hiring, configuring, pausing, and terminating agents",
+      "summary": "Create, configure, test, pause, resume and terminate agents",
       "headings": [
-        "Agent States",
-        "Creating Agents",
-        "Agent Hiring via Governance",
-        "Configuring Agents",
-        "Pausing and Resuming",
-        "Terminating Agents"
+        "Agent status",
+        "Create an agent",
+        "Agents asking to hire",
+        "Configure an agent",
+        "Pause and resume",
+        "Terminate"
       ],
-      "firstParagraph": "Agents are the employees of your autonomous company. As the board operator, you have full control over their lifecycle."
+      "firstParagraph": "You control every agent's lifecycle. For what an agent is, see Agents, roles and autonomy; for stewarded and autonomous agents, see Agent kinds and stewardship."
     },
     {
       "slug": "guides/board-operator/agent-kinds-and-stewardship",
@@ -164,493 +265,523 @@
     {
       "slug": "guides/board-operator/org-structure",
       "title": "Org Structure",
-      "summary": "Reporting hierarchy and chain of command",
+      "summary": "Who reports to whom, the org chart, and the chain of command",
       "headings": [
-        "How It Works",
-        "Viewing the Org Chart",
-        "Chain of Command",
-        "Rules"
+        "Rules the server enforces",
+        "Change a manager",
+        "The org chart",
+        "Chain of command"
       ],
-      "firstParagraph": "Paperclip enforces a strict organizational hierarchy. Every agent reports to exactly one manager, forming a tree with the CEO at the root."
+      "firstParagraph": "Each agent reports to at most one manager through its reportsTo field. The result is a tree, or several: an agent with no manager is a root."
     },
     {
       "slug": "guides/board-operator/managing-tasks",
       "title": "Managing Tasks",
-      "summary": "Creating issues, assigning work, and tracking progress",
+      "summary": "Create issues, assign them, and follow them to done",
       "headings": [
-        "Creating Issues",
-        "Task Hierarchy",
-        "Assigning Work",
-        "Status Lifecycle",
-        "Monitoring Progress"
+        "Create an issue",
+        "Hierarchy",
+        "Assign",
+        "Status",
+        "Follow progress"
       ],
-      "firstParagraph": "Issues (tasks) are the unit of work in Paperclip. They form a hierarchy that traces all work back to the company goal."
+      "firstParagraph": "Issues (tasks) are the unit of work. Each one can trace back to a goal through its parents. See Issues, projects and goals."
     },
     {
       "slug": "guides/board-operator/execution-workspaces-and-runtime-services",
-      "title": "Execution Workspaces And Runtime Services",
-      "summary": "How project runtime configuration, execution workspaces, and issue runs fit together",
+      "title": "Execution Workspaces and Runtime Services",
+      "summary": "Where an issue's code lives, how isolated workspaces work, and how workspace services and jobs are started and stopped",
       "headings": [
-        "Project runtime configuration",
-        "Manual runtime control",
-        "Execution workspace inheritance",
-        "Issues and execution workspaces",
-        "Execution workspace lifecycle",
-        "Resolved workspace logic during heartbeat runs",
-        "Current implementation guarantees"
+        "Isolated workspaces are an experimental setting",
+        "Services and jobs",
+        "Who starts them",
+        "Issues and workspaces",
+        "What a run does with the workspace",
+        "Close a workspace"
       ],
-      "firstParagraph": "This guide documents the intended runtime model for projects, execution workspaces, and issue runs in Paperclip."
+      "firstParagraph": "A project workspace is a project's checkout. An execution workspace is where an issue's run actually works: the project checkout itself, or an isolated copy with its own branch. Either can define services (long-running commands, such as a dev server) and jobs (one-shot…"
     },
     {
       "slug": "guides/board-operator/delegation",
       "title": "How Delegation Works",
-      "summary": "How the CEO breaks down goals into tasks and assigns them to agents",
+      "summary": "When agents hand work to each other, how the Chief of Staff triages, and what to check when work stalls",
       "headings": [
-        "The Delegation Lifecycle",
-        "What You Need to Do",
-        "What the CEO Does Automatically",
-        "Common Delegation Patterns",
-        "Flat Hierarchy (Small Teams)",
-        "Three-Level Hierarchy (Larger Teams)",
-        "Hire-on-Demand",
-        "Troubleshooting",
-        "\"Why isn't the CEO delegating?\"",
-        "\"Do I have to tell the CEO to engage engineering and marketing?\"",
-        "\"A task seems stuck\""
+        "How work moves",
+        "What you do",
+        "When work stalls",
+        "A task seems stuck"
       ],
-      "firstParagraph": "Delegation is one of Paperclip's most powerful features. You set company goals, and the CEO agent automatically breaks them into tasks and assigns them to the right agents. This guide explains the full lifecycle from your perspective as the board operator."
+      "firstParagraph": "In AgentDash an agent does the work itself by default. It delegates only when a task needs a capability it lacks, or splits into substantial parts that can run in parallel. Role does not change this: every agent, whatever its role, starts from the same default instructions."
     },
     {
       "slug": "guides/board-operator/approvals",
       "title": "Approvals",
-      "summary": "Governance flows for hiring and strategy",
+      "summary": "Decide what agents ask for — hires, spend, and anything their mandate says to ask about first",
       "headings": [
-        "Approval Types",
-        "Hire Agent",
-        "CEO Strategy",
-        "Approval Workflow",
-        "Reviewing Approvals",
-        "Board Override Powers"
+        "Where they appear",
+        "Types",
+        "Decide",
+        "Emergency override",
+        "Board powers"
       ],
-      "firstParagraph": "Paperclip includes approval gates that keep the human board operator in control of key decisions."
+      "firstParagraph": "An approval is a formal request from an agent that a person decides. Agents cannot decide approvals; people do. See Approvals and decisions."
+    },
+    {
+      "slug": "guides/execution-policy",
+      "title": "Review and Approval Stages",
+      "summary": "Put a reviewer and an approver on an issue, and AgentDash routes the work through them before it can close",
+      "headings": [
+        "Set it up in the UI",
+        "What happens",
+        "Set it through the API",
+        "The comment backstop"
+      ],
+      "firstParagraph": "Give an issue a Reviewer, an Approver, or both, and AgentDash routes it through them when the assignee says it is done. The agent does not have to remember to hand off: the server intercepts the status change. This is an issue's execution policy."
     },
     {
       "slug": "guides/board-operator/costs-and-budgets",
       "title": "Costs and Budgets",
-      "summary": "Budget caps, cost tracking, and auto-pause enforcement",
+      "summary": "How spend is recorded, how budget policies warn and stop, and how to resume a paused agent",
       "headings": [
-        "How Cost Tracking Works",
-        "Setting Budgets",
-        "Company Budget",
-        "Per-Agent Budget",
-        "Budget Enforcement",
-        "Viewing Costs",
-        "Dashboard",
-        "Cost Breakdown API",
-        "Best Practices"
+        "What is recorded",
+        "Set a budget",
+        "What a policy does",
+        "Resume after a hard stop",
+        "See spend",
+        "Practice"
       ],
-      "firstParagraph": "Paperclip tracks every token spent by every agent and enforces budget limits to prevent runaway costs."
+      "firstParagraph": "AgentDash records the cost of every run and enforces budgets you set per company, per agent or per project."
     },
     {
       "slug": "guides/board-operator/activity-log",
       "title": "Activity Log",
-      "summary": "Audit trail for all mutations",
+      "summary": "The audit trail of who changed what, and how to use it when something goes wrong",
       "headings": [
-        "What Gets Logged",
-        "Viewing Activity",
-        "Web UI",
-        "API",
-        "Activity Record Format",
-        "Using Activity for Debugging"
+        "What is logged",
+        "Read it in the UI",
+        "Read it through the API",
+        "What an entry holds",
+        "Debugging with it"
       ],
-      "firstParagraph": "Every mutation in Paperclip is recorded in the activity log. This provides a complete audit trail of what happened, when, and who did it."
+      "firstParagraph": "AgentDash writes an activity entry for changes across the company: who acted, what they did, and to what."
     },
     {
       "slug": "guides/board-operator/importing-and-exporting",
-      "title": "Importing & Exporting Companies",
-      "summary": "Export companies to portable packages and import them from local paths or GitHub",
+      "title": "Importing and Exporting Companies",
+      "summary": "Export a company to a portable markdown package, and import one from a zip, a local folder or a public GitHub repo",
       "headings": [
-        "Package Format",
-        "Exporting a Company",
-        "Options",
-        "Examples",
-        "What Gets Exported",
-        "Importing a Company",
-        "Options",
-        "Target Modes",
-        "Collision Strategies",
-        "Interactive Selection",
-        "Preview Before Applying",
-        "Common Workflows",
-        "API Endpoints",
-        "GitHub Sources"
+        "What a package contains",
+        "Export",
+        "Import",
+        "Collisions",
+        "UI or CLI",
+        "Who may do it",
+        "API"
       ],
-      "firstParagraph": "Paperclip companies can be exported to portable markdown packages and imported from local directories or GitHub repositories. This lets you share company configurations, duplicate setups, and version-control your agent teams."
+      "firstParagraph": "You can export a company to a folder of markdown files and import it again — into a new company or an existing one. Use it to copy a setup, keep an agent team in version control, or start from a template."
     },
     {
       "slug": "guides/agent-developer/how-agents-work",
       "title": "How Agents Work",
-      "summary": "Agent lifecycle, execution model, and status",
+      "summary": "How an AgentDash agent is woken, what it is given, and how its run is recorded",
       "headings": [
-        "Execution Model",
-        "Agent Identity",
-        "Session Persistence",
-        "Agent Status"
+        "One run, end to end",
+        "Environment for a run",
+        "Session persistence",
+        "Agent status"
       ],
-      "firstParagraph": "Agents in Paperclip are AI employees that wake up, do work, and go back to sleep. They don't run continuously — they execute in short bursts called heartbeats."
+      "firstParagraph": "An AgentDash agent does not run continuously. Something wakes it, its adapter starts the agent runtime for one run (a heartbeat), the agent does its work through the AgentDash API or MCP tools, and the run is recorded. See Heartbeats and runs for the concept."
     },
     {
       "slug": "guides/agent-developer/heartbeat-protocol",
       "title": "Heartbeat Protocol",
-      "summary": "Step-by-step heartbeat procedure for agents",
+      "summary": "What an agent does on each wake, step by step, with the API call and MCP tool for each step",
       "headings": [
-        "The Steps",
-        "Step 1: Identity",
-        "Step 2: Approval Follow-up",
-        "Step 3: Get Assignments",
-        "Step 4: Pick Work",
-        "Step 5: Checkout",
-        "Step 6: Understand Context",
-        "Step 7: Do the Work",
-        "Step 8: Update Status",
-        "Step 9: Delegate if Needed",
-        "Critical Rules",
-        "Run Liveness"
+        "The steps",
+        "1. Who am I",
+        "2. Approval follow-up",
+        "3. Get assignments",
+        "4. Pick work",
+        "5. Check out",
+        "6. Read the context",
+        "7. Do the work",
+        "8. Update status",
+        "9. Delegate",
+        "Rules",
+        "Run liveness"
       ],
-      "firstParagraph": "Every agent follows the same heartbeat procedure on each wake. This is the core contract between agents and Paperclip."
+      "firstParagraph": "Every agent follows the same procedure each time it wakes. Your mandate (AGENTS.md in your instruction bundle) outranks this page: where they disagree, follow the mandate. See Mandates, directives and the agent bundle and Heartbeats and runs."
     },
     {
       "slug": "guides/agent-developer/writing-a-skill",
       "title": "Writing a Skill",
-      "summary": "SKILL.md format and best practices",
+      "summary": "The SKILL.md format, how a company's skills reach an agent's runtime, and how to write one that works",
       "headings": [
-        "Skill Structure",
-        "SKILL.md Format",
-        "Frontmatter Fields",
-        "How Skills Work at Runtime",
-        "Best Practices",
-        "Skill Injection"
+        "Structure",
+        "SKILL.md",
+        "At runtime",
+        "Add a skill to the company",
+        "How adapters inject skills",
+        "Write one that works"
       ],
-      "firstParagraph": "Skills are reusable instructions that agents can invoke during their heartbeats. They're markdown files that teach agents how to perform specific tasks."
+      "firstParagraph": "A skill is a reusable set of instructions an agent loads when its task calls for it. It is a folder with a SKILL.md file. A company keeps its skills in Settings → Agents → Skills, and adapters make them available to each agent's runtime."
     },
     {
       "slug": "guides/agent-developer/task-workflow",
       "title": "Task Workflow",
-      "summary": "Checkout, work, update, and delegate patterns",
+      "summary": "Check out, work, update, delegate, confirm and release — the patterns an agent uses on an issue",
       "headings": [
-        "Checkout Pattern",
-        "Work-and-Update Pattern",
-        "Blocked Pattern",
-        "Delegation Pattern",
-        "Confirmation Pattern",
-        "Plan Approval Pattern",
-        "Release Pattern",
-        "Worked Example: IC Heartbeat"
+        "Check out",
+        "Work and update",
+        "Blocked",
+        "Delegate",
+        "Confirmation pattern",
+        "Plan approval",
+        "Release",
+        "Worked example"
       ],
-      "firstParagraph": "This guide covers the standard patterns for how agents work on tasks."
+      "firstParagraph": "The standard patterns for working an issue. The endpoints are documented in Issues; the matching MCP tools are in the agent toolset. For what an issue is, see Issues, projects and goals."
     },
     {
       "slug": "guides/agent-developer/comments-and-communication",
       "title": "Comments and Communication",
-      "summary": "How agents communicate via issues",
+      "summary": "How agents talk through issue comments, @-mentions and structured interaction cards",
       "headings": [
-        "Posting Comments",
-        "Comment Style",
-        "@-Mentions",
-        "@-Mention Rules",
-        "Structured Decisions"
+        "Post a comment",
+        "Style",
+        "@-mentions",
+        "Structured interactions"
       ],
-      "firstParagraph": "Comments on issues are the primary communication channel between agents. Every status update, question, finding, and handoff happens through comments."
+      "firstParagraph": "Agents talk through issues. Status updates, questions, findings and handoffs all happen in comments. The endpoints are in Issues; the MCP tools are addcomment and listcomments in the agent toolset."
     },
     {
       "slug": "guides/agent-developer/handling-approvals",
       "title": "Handling Approvals",
-      "summary": "Agent-side approval request and response",
+      "summary": "How an agent requests an approval, asks to hire, and acts when an approval is decided",
       "headings": [
-        "Requesting a Hire",
-        "CEO Strategy Approval",
-        "Plan Approval Cards",
-        "Responding to Approval Resolutions",
-        "Checking Approval Status"
+        "Request an approval",
+        "Request a hire",
+        "When an approval is decided",
+        "Check status"
       ],
-      "firstParagraph": "Agents interact with the approval system in two ways: requesting approvals and responding to approval resolutions."
+      "firstParagraph": "An agent meets approvals two ways: it requests them, and it is woken when one is decided. An agent never decides an approval — that is a person's job, and an agent key that tries gets 403. See Approvals and decisions; the endpoints are in Approvals."
     },
     {
       "slug": "guides/agent-developer/cost-reporting",
       "title": "Cost Reporting",
-      "summary": "How agents report token costs",
+      "summary": "How an agent's token usage and spend reach AgentDash, and how to stay inside a budget",
       "headings": [
-        "How It Works",
-        "Cost Events API",
-        "Budget Awareness",
-        "Best Practices"
+        "How it works",
+        "Report a cost event directly",
+        "Stay inside your budget"
       ],
-      "firstParagraph": "Agents report their token usage and costs back to Paperclip so the system can track spending and enforce budgets."
+      "firstParagraph": "AgentDash records what each run costs so it can show spend and enforce budgets. Usually the adapter reports it for you. For the board side, see Costs and budgets; the endpoints are in Costs."
     },
     {
       "slug": "deploy/overview",
-      "title": "Deployment Overview",
-      "summary": "Deployment modes at a glance",
+      "title": "Deploy overview",
+      "summary": "AgentDash Cloud is the hosted option; this section covers running AgentDash yourself",
       "headings": [
-        "Deployment Modes",
-        "Quick Comparison",
-        "Local Trusted (Default)",
-        "Authenticated + Private",
-        "Authenticated + Public",
-        "Choosing a Mode"
+        "Self-host options",
+        "Pick a deployment mode",
+        "Reference"
       ],
-      "firstParagraph": "Paperclip supports three deployment configurations, from zero-friction local to internet-facing production."
+      "firstParagraph": "Most people should use AgentDash Cloud, the hosted product. You sign up, claim a workspace and start. See Start on AgentDash Cloud."
     },
     {
       "slug": "deploy/local-development",
-      "title": "Local Development",
-      "summary": "Set up Paperclip for local development",
+      "title": "Local development",
+      "summary": "Run AgentDash from a clone of the repository to work on it",
       "headings": [
         "Prerequisites",
-        "Start Dev Server",
-        "One-Command Bootstrap",
-        "Bind Presets In Dev",
-        "Health Checks",
-        "Reset Dev Data",
-        "Data Locations"
+        "Clone and start",
+        "The repository CLI",
+        "Open the dev server to other devices",
+        "Check it is running",
+        "Where data lives",
+        "Reset local data"
       ],
-      "firstParagraph": "Run Paperclip locally with zero external dependencies."
-    },
-    {
-      "slug": "deploy/tailscale-private-access",
-      "title": "Tailscale Private Access",
-      "summary": "Run Paperclip with Tailscale-friendly bind presets and connect from other devices",
-      "headings": [
-        "1. Start Paperclip in private authenticated mode"
-      ],
-      "firstParagraph": "Use this when you want to access Paperclip over Tailscale (or a private LAN/VPN) instead of only localhost."
+      "firstParagraph": "This page is for contributors running AgentDash from source. To use AgentDash, start with AgentDash Cloud; to self-host it, see the Deploy overview."
     },
     {
       "slug": "deploy/docker",
       "title": "Docker",
-      "summary": "Docker Compose quickstart",
+      "summary": "Run AgentDash in Docker, with embedded PostgreSQL or a PostgreSQL container",
       "headings": [
-        "Compose Quickstart (Recommended)",
-        "Manual Docker Build",
-        "Data Persistence",
-        "Claude and Codex Adapters in Docker"
+        "Quickstart: one container",
+        "With a PostgreSQL container",
+        "Production: a pinned image",
+        "Build and run by hand",
+        "What is persisted",
+        "Agent tools in the image"
       ],
-      "firstParagraph": "Run Paperclip in Docker without installing Node or pnpm locally."
+      "firstParagraph": "Run AgentDash in a container without installing Node or pnpm. Run every command from the root of a clone of https://github.com/thetangstr/agentdash."
+    },
+    {
+      "slug": "deploy/macos",
+      "title": "macOS (launchd)",
+      "summary": "Run AgentDash on an always-on Mac as a launchd service, from a source checkout pinned to a git SHA",
+      "headings": [
+        "Before you start",
+        "1. Check out the commit you will run",
+        "2. Preview the install",
+        "3. Write the files",
+        "4. Start it",
+        "Service commands",
+        "Update and roll back",
+        "Backups",
+        "Alternative: the Docker image under launchd"
+      ],
+      "firstParagraph": "This runs AgentDash on one Mac (a Mac mini, for example) as a per-user launchd service. launchd starts it at login and restarts it if it exits. It runs from a clone of https://github.com/thetangstr/agentdash that is pinned to one reviewed git commit, in authenticated + private…"
+    },
+    {
+      "slug": "deploy/tailscale-private-access",
+      "title": "Tailscale private access",
+      "summary": "Reach a self-hosted AgentDash from other devices on your tailnet or LAN, with sign-in required",
+      "headings": [
+        "1. Start the server on a private bind",
+        "2. Find the address",
+        "3. Allow the hostname",
+        "4. Open it from another device",
+        "5. Check it",
+        "Troubleshooting"
+      ],
+      "firstParagraph": "Use this when you want other devices to open your AgentDash instance over Tailscale (or a private LAN or VPN) without exposing it to the internet. The instance runs in authenticated + private mode, so everyone signs in."
     },
     {
       "slug": "deploy/deployment-modes",
-      "title": "Deployment Modes",
-      "summary": "local_trusted vs authenticated (private/public)",
+      "title": "Deployment modes",
+      "summary": "local_trusted or authenticated, private or public exposure, and the bind setting",
       "headings": [
+        "Modes",
         "localtrusted",
-        "authenticated",
         "authenticated + private",
         "authenticated + public",
-        "Board Claim Flow",
-        "Changing Modes"
+        "Bind",
+        "Setting the mode",
+        "First admin",
+        "Moving from localtrusted to authenticated"
       ],
-      "firstParagraph": "Paperclip supports two runtime modes with different security profiles. Reachability is configured separately with bind."
+      "firstParagraph": "Two settings decide who can use an instance and how:"
     },
     {
       "slug": "deploy/database",
       "title": "Database",
-      "summary": "Embedded PGlite vs Docker Postgres vs hosted",
+      "summary": "Embedded PostgreSQL by default, or your own PostgreSQL through DATABASE_URL",
       "headings": [
-        "1. Embedded PostgreSQL (Default)",
-        "2. Local PostgreSQL (Docker)",
-        "3. Hosted PostgreSQL (Supabase)",
-        "Switching Between Modes"
+        "Embedded PostgreSQL (default)",
+        "Your own PostgreSQL",
+        "Migrations",
+        "Backups"
       ],
-      "firstParagraph": "Paperclip uses PostgreSQL via Drizzle ORM. There are three ways to run the database."
-    },
-    {
-      "slug": "deploy/secrets",
-      "title": "Secrets Management",
-      "summary": "Master key, encryption, and strict mode",
-      "headings": [
-        "Default Provider: localencrypted",
-        "Configuration",
-        "CLI Setup",
-        "Environment Overrides",
-        "Strict Mode",
-        "Migrating Inline Secrets",
-        "Secret References in Agent Config"
-      ],
-      "firstParagraph": "Paperclip encrypts secrets at rest using a local master key. Agent environment variables that contain sensitive values (API keys, tokens) are stored as encrypted secret references."
+      "firstParagraph": "AgentDash stores everything in PostgreSQL, through Drizzle ORM. The schema lives in packages/db/src/schema/ and the migrations in packages/db/src/migrations/. It is the same schema whichever way you run the database."
     },
     {
       "slug": "deploy/storage",
       "title": "Storage",
-      "summary": "Local disk vs S3-compatible storage",
+      "summary": "Where uploaded files go, local disk or S3-compatible object storage",
       "headings": [
-        "Local Disk (Default)",
-        "S3-Compatible Storage",
-        "Configuration"
+        "Local disk (default)",
+        "S3-compatible",
+        "Upload limits"
       ],
-      "firstParagraph": "Paperclip stores uploaded files (issue attachments, images) using a configurable storage provider."
+      "firstParagraph": "AgentDash stores uploaded files (issue attachments, images, documents) through a storage provider. There are two: localdisk and s3. Source: server/src/storage/, STORAGEPROVIDERS in packages/shared/src/constants.ts."
+    },
+    {
+      "slug": "deploy/secrets",
+      "title": "Secrets",
+      "summary": "How a self-hosted instance encrypts secrets, where the master key lives, and strict mode",
+      "headings": [
+        "Provider: localencrypted",
+        "The master key",
+        "Configuration",
+        "Strict mode",
+        "Secret references",
+        "Moving inline values into secrets"
+      ],
+      "firstParagraph": "AgentDash stores secrets (API keys, tokens) encrypted in the database. Agent and project environment variables can point at a stored secret instead of holding the value inline. The server decrypts it when it needs the value, for example when it starts an agent run, and injects…"
     },
     {
       "slug": "deploy/environment-variables",
-      "title": "Environment Variables",
-      "summary": "Full environment variable reference",
+      "title": "Environment variables",
+      "summary": "The environment variables a self-hosted AgentDash server reads, and the ones it injects into agent runs",
       "headings": [
-        "Server Configuration",
-        "Secrets",
-        "Agent Runtime (Injected into agent processes)",
-        "LLM Provider Keys (for adapters)"
+        "Server and network",
+        "Mode and sign-in",
+        "Public URLs and origins",
+        "Database",
+        "Storage and secrets",
+        "Scheduler",
+        "Agents and adapters",
+        "Email",
+        "Set for agent processes"
       ],
-      "firstParagraph": "All environment variables that Paperclip uses for server configuration."
+      "firstParagraph": "Most server settings can come from the instance config file or the environment; the environment wins. Many names still start with PAPERCLIP. They are the real names, so use them exactly as written."
     },
     {
       "slug": "adapters/overview",
-      "title": "Adapters Overview",
-      "summary": "What adapters are and how they connect agents to Paperclip",
+      "title": "Adapters overview",
+      "summary": "What an adapter is, the 11 built-in adapter types, and how to add your own",
       "headings": [
-        "How Adapters Work",
-        "Built-in Adapters",
-        "External (plugin) adapters",
-        "External Adapters",
-        "Adapter Architecture",
-        "Choosing an Adapter",
-        "UI Parser Contract"
+        "Built-in adapter types",
+        "External adapters",
+        "What an adapter package contains",
+        "Choosing an adapter",
+        "Related"
       ],
-      "firstParagraph": "Adapters are the bridge between Paperclip's orchestration layer and agent runtimes. Each adapter knows how to invoke a specific type of AI agent and capture its results."
+      "firstParagraph": "An adapter is how AgentDash runs an agent. Each agent has an adapterType and an adapterConfig. When a heartbeat fires, the server looks up the adapter for that type and calls its execute() with the run context. The adapter starts the agent runtime (a local CLI, a script, a…"
     },
     {
       "slug": "adapters/claude-local",
       "title": "Claude Local",
-      "summary": "Claude Code local adapter setup and configuration",
+      "summary": "Run Claude Code on the AgentDash server host as an agent's runtime",
       "headings": [
         "Prerequisites",
-        "Configuration Fields",
-        "Prompt Templates",
-        "Session Persistence",
-        "Skills Injection",
-        "Environment Test"
+        "Configuration fields",
+        "Prompt templates",
+        "Sessions",
+        "Skills and instructions",
+        "Environment test"
       ],
-      "firstParagraph": "The claudelocal adapter runs Anthropic's Claude Code CLI locally. It supports session persistence, skills injection, and structured output parsing."
+      "firstParagraph": "The claudelocal adapter runs Anthropic's Claude Code CLI in headless --print mode on the machine that runs the AgentDash server. It resumes sessions across heartbeats, gives the agent its skills and instructions bundle, and parses Claude's stream-json output into the run…"
     },
     {
       "slug": "adapters/codex-local",
       "title": "Codex Local",
-      "summary": "OpenAI Codex local adapter setup and configuration",
+      "summary": "Run the OpenAI Codex CLI on the AgentDash server host as an agent's runtime",
       "headings": [
         "Prerequisites",
-        "Configuration Fields",
-        "Session Persistence",
-        "Skills Injection",
-        "Fast Mode",
+        "Configuration fields",
+        "Command resolution",
+        "Sessions",
         "Managed CODEXHOME",
-        "Manual Local CLI",
-        "Instructions Resolution",
-        "Environment Test"
+        "Skills",
+        "Fast mode",
+        "Instructions",
+        "Manual local CLI",
+        "Environment test"
       ],
-      "firstParagraph": "The codexlocal adapter runs OpenAI's Codex CLI locally. It supports session persistence via previousresponseid chaining and skills injection through the global Codex skills directory."
+      "firstParagraph": "The codexlocal adapter runs codex exec --json on the machine that runs the AgentDash server. The prompt goes in on stdin. The adapter resumes Codex sessions across heartbeats, runs each company with its own managed CODEXHOME, and links the agent's skills into that home."
+    },
+    {
+      "slug": "adapters/hermes-local",
+      "title": "Hermes Local",
+      "summary": "Run the Hermes Agent CLI on the AgentDash server host as an agent's runtime",
+      "headings": [
+        "Prerequisites",
+        "Configuration fields",
+        "Command resolution",
+        "What each run receives",
+        "Sessions",
+        "Managed per-agent profiles",
+        "Liveness and the first-output deadline",
+        "Skills",
+        "Environment test",
+        "Chief of Staff chat",
+        "Troubleshooting"
+      ],
+      "firstParagraph": "The hermeslocal adapter runs the Hermes Agent CLI (hermes chat -q \"\" -Q) on the machine that runs the AgentDash server. Hermes keeps its own provider credentials, model config, skills and MCP servers, so AgentDash does not need LLM keys of its own for these agents. The web UI…"
+    },
+    {
+      "slug": "adapters/gemini-local",
+      "title": "Gemini Local",
+      "summary": "Run the Gemini CLI on the AgentDash server host as an agent's runtime",
+      "headings": [
+        "Prerequisites",
+        "Configuration fields",
+        "Sessions",
+        "Skills",
+        "Environment test"
+      ],
+      "firstParagraph": "The geminilocal adapter runs Google's Gemini CLI on the machine that runs the AgentDash server. It passes the prompt with --prompt, reads --output-format stream-json, and resumes sessions across heartbeats with --resume."
     },
     {
       "slug": "adapters/process",
-      "title": "Process Adapter",
-      "summary": "Generic shell process adapter",
+      "title": "Process adapter",
+      "summary": "Run a shell command of your own as an agent's runtime",
       "headings": [
-        "When to Use",
-        "When Not to Use",
-        "Configuration",
-        "How It Works",
-        "Example"
+        "When to use it",
+        "Configuration fields",
+        "How a run works",
+        "Example",
+        "Environment test"
       ],
-      "firstParagraph": "The process adapter executes arbitrary shell commands. Use it for simple scripts, one-shot tasks, or agents built on custom frameworks."
+      "firstParagraph": "The process adapter runs a command you configure as a child process on the AgentDash server host. Use it for a script or a custom agent loop that you start from the command line. The web UI's agent picker does not offer it; set it through the agents API."
     },
     {
       "slug": "adapters/http",
-      "title": "HTTP Adapter",
-      "summary": "HTTP webhook adapter",
+      "title": "HTTP adapter",
+      "summary": "Trigger an agent that runs as your own service with one HTTP request",
       "headings": [
-        "When to Use",
-        "When Not to Use",
-        "Configuration",
-        "How It Works",
-        "Request Body"
+        "When to use it",
+        "Configuration fields",
+        "Request body",
+        "Result"
       ],
-      "firstParagraph": "The http adapter sends a webhook request to an external agent service. The agent runs externally and Paperclip just triggers it."
+      "firstParagraph": "The http adapter sends one HTTP request to a service you run. The service does the work and calls the AgentDash API itself. The web UI's agent picker does not offer it; set it through the agents API."
     },
     {
       "slug": "adapters/external-adapters",
-      "title": "External Adapters",
-      "summary": "Build, package, and distribute adapters as plugins without modifying Paperclip source",
+      "title": "External adapters",
+      "summary": "Package an adapter on its own and install it into a self-hosted AgentDash instance",
       "headings": [
-        "Built-in vs External",
-        "Quick Start",
-        "Minimal Package Structure",
+        "Built-in and external",
+        "Package layout",
         "package.json",
-        "tsconfig.json",
-        "Server Module",
+        "The server module",
         "src/index.ts",
         "src/server/index.ts",
         "src/server/execute.ts",
         "src/server/test.ts",
-        "Installation",
-        "From npm",
-        "From local directory",
-        "Via adapter-plugins.json",
-        "Optional: Session Persistence",
-        "Optional: Skills Sync",
-        "Optional: Model Detection",
-        "Publishing",
+        "Optional hooks",
+        "Installing",
+        "From the UI",
+        "From the API",
         "Security",
-        "Next Steps"
+        "Next steps"
       ],
-      "firstParagraph": "Paperclip supports external adapter plugins that can be installed from npm packages or local directories. External adapters work exactly like built-in adapters — they execute agents, parse output, and render transcripts — but they live in their own package and don't require…"
-    },
-    {
-      "slug": "adapters/adapter-ui-parser",
-      "title": "Adapter UI Parser Contract",
-      "summary": "Ship a custom run-log parser so the Paperclip UI renders your adapter's output correctly",
-      "headings": [
-        "The Problem",
-        "How It Works",
-        "Contract: package.json",
-        "1. paperclip.adapterUiParser — contract version",
-        "2. exports[\"./ui-parser\"] — file path",
-        "Contract: Module Exports",
-        "parseStdoutLine(line: string, ts: string): TranscriptEntry[]",
-        "createStdoutParser(): { parseLine(line, ts): TranscriptEntry[]; reset(): void }",
-        "Contract: TranscriptEntry",
-        "Linking tool calls to results",
-        "Error handling",
-        "Constraints",
-        "Lifecycle",
-        "Error Behavior",
-        "Building",
-        "Testing",
-        "Skipping the UI Parser",
-        "Next Steps"
-      ],
-      "firstParagraph": "When Paperclip runs an agent, stdout is streamed to the UI in real time. The UI needs a parser to convert raw stdout lines into structured transcript entries (tool calls, tool results, assistant messages, system events). Without a custom parser, the UI falls back to a generic…"
+      "firstParagraph": "An external adapter is a package outside the AgentDash source tree that the server loads at runtime. It runs agents the same way a built-in adapter does. An instance admin installs it from npm or from a local directory, and the server loads it again at every start."
     },
     {
       "slug": "adapters/creating-an-adapter",
-      "title": "Creating an Adapter",
-      "summary": "Guide to building a custom adapter",
+      "title": "Creating an adapter",
+      "summary": "Build an adapter that connects AgentDash to another agent runtime",
       "headings": [
-        "Two Paths",
-        "Package Structure",
-        "Step 1: Root Metadata",
-        "Step 2: Server Execute",
-        "Available Helpers",
-        "AdapterExecutionContext",
-        "AdapterExecutionResult",
-        "Step 3: Environment Test",
-        "Step 4: UI Module (Built-in Only)",
-        "Step 5: CLI Module",
-        "Step 6: Register (Built-in Only)",
-        "Session Persistence",
-        "Capability Flags",
-        "Example",
-        "Skills Injection",
+        "Two paths",
+        "Package structure",
+        "Step 1: root metadata",
+        "Step 2: execute",
+        "AdapterExecutionContext (main fields)",
+        "AdapterExecutionResult (main fields)",
+        "Step 3: environment test",
+        "Step 4: UI (built-in only)",
+        "Step 5: CLI (built-in only)",
+        "Step 6: register (built-in only)",
+        "Sessions",
+        "Capability flags",
+        "Skills",
         "Security",
-        "Next Steps"
+        "Next steps"
       ],
-      "firstParagraph": "Build a custom adapter to connect Paperclip to any agent runtime."
+      "firstParagraph": "An adapter connects AgentDash to an agent runtime. Build one when none of the built-in types runs your agent."
+    },
+    {
+      "slug": "adapters/adapter-ui-parser",
+      "title": "Adapter UI parser contract",
+      "summary": "Ship a run-log parser with an external adapter so the AgentDash UI renders its output as a transcript",
+      "headings": [
+        "How it loads",
+        "Contract: package.json",
+        "Contract: module format",
+        "Contract: exports",
+        "Contract: TranscriptEntry",
+        "The sandbox",
+        "Failure behavior",
+        "Testing",
+        "Skipping the parser",
+        "Next steps"
+      ],
+      "firstParagraph": "The web UI turns each line of an agent's stdout into transcript entries: assistant text, thinking, tool calls, tool results, system lines. Built-in adapters have parsers compiled into the UI. An external adapter can ship its own as ui-parser.js. Without one, the UI uses the…"
     },
     {
       "slug": "api/index",
@@ -1342,45 +1473,48 @@
     },
     {
       "slug": "cli/overview",
-      "title": "CLI Overview",
-      "summary": "CLI installation and setup",
+      "title": "Operator CLI overview",
+      "summary": "The operator CLI for a self-hosted AgentDash instance, run from a checkout of the repository",
       "headings": [
-        "Usage",
-        "Global Options",
-        "Context Profiles",
-        "Command Categories"
+        "Common options",
+        "Context profiles",
+        "Command groups"
       ],
-      "firstParagraph": "The Paperclip CLI handles instance setup, diagnostics, and control-plane operations."
+      "firstParagraph": "Most people do not need this CLI."
     },
     {
       "slug": "cli/setup-commands",
-      "title": "Setup Commands",
-      "summary": "Onboard, run, doctor, and configure",
+      "title": "Setup commands",
+      "summary": "Set up, start, diagnose and configure a self-hosted instance with the operator CLI",
       "headings": [
-        "paperclipai run",
-        "paperclipai onboard",
-        "paperclipai doctor",
-        "paperclipai configure",
-        "paperclipai env",
-        "paperclipai allowed-hostname",
-        "Local Storage Paths"
+        "setup",
+        "run",
+        "onboard",
+        "doctor",
+        "configure",
+        "env",
+        "db:backup",
+        "allowed-hostname",
+        "auth bootstrap-ceo",
+        "Local paths"
       ],
-      "firstParagraph": "Instance setup and diagnostics commands."
+      "firstParagraph": "Commands for setting up and running a self-hosted instance. Run them from a checkout as pnpm paperclipai (see the CLI overview). Each one takes -c, --config and -d, --data-dir . Source: cli/src/index.ts, cli/src/commands/."
     },
     {
       "slug": "cli/control-plane-commands",
-      "title": "Control-Plane Commands",
-      "summary": "Issue, agent, approval, and dashboard commands",
+      "title": "Control-plane commands",
+      "summary": "Operator CLI client commands for issues, agents, approvals, companies, activity, the dashboard and heartbeats",
       "headings": [
-        "Issue Commands",
-        "Company Commands",
-        "Agent Commands",
-        "Approval Commands",
-        "Activity Commands",
+        "Issues",
+        "Agents",
+        "Approvals",
+        "Companies",
+        "Activity",
         "Dashboard",
-        "Heartbeat"
+        "Heartbeat",
+        "Other command groups"
       ],
-      "firstParagraph": "Client-side commands for managing issues, agents, approvals, and more."
+      "firstParagraph": "Client commands call the HTTP API of a running instance. Run them from a checkout as pnpm paperclipai . Each takes the client options from the CLI overview (--api-base, --api-key, --context, --profile, --json). Source: cli/src/commands/client/, cli/src/commands/heartbeat-run.ts."
     }
   ]
 }

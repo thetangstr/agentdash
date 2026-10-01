@@ -948,4 +948,4 @@ approvals with an explicit emergency override, a server-backed personal inbox,
 and Telegram/Teams channels. Default-profile behavior is unchanged.
 
 Design: [`docs/superpowers/specs/2026-07-28-agentdash-mk-design.md`](../docs/superpowers/specs/2026-07-28-agentdash-mk-design.md).
-API: [`docs/api/agentdash-mk.md`](../docs/api/agentdash-mk.md).
+API: [`doc/api/agentdash-mk.md`](api/agentdash-mk.md).

@@ -1,287 +1,157 @@
 ---
-title: Adapter UI Parser Contract
-summary: Ship a custom run-log parser so the Paperclip UI renders your adapter's output correctly
+title: Adapter UI parser contract
+summary: Ship a run-log parser with an external adapter so the AgentDash UI renders its output as a transcript
 ---
 
-When Paperclip runs an agent, stdout is streamed to the UI in real time. The UI needs a **parser** to convert raw stdout lines into structured transcript entries (tool calls, tool results, assistant messages, system events). Without a custom parser, the UI falls back to a generic shell parser that treats every non-system line as `assistant` output — tool commands leak as plain text, durations are lost, and errors are invisible.
+The web UI turns each line of an agent's stdout into transcript entries: assistant text, thinking, tool calls, tool results, system lines. Built-in adapters have parsers compiled into the UI. An external adapter can ship its own as `ui-parser.js`. Without one, the UI uses the generic `process` parser, which shows the output as plain lines.
 
-## The Problem
+Source: `server/src/adapters/plugin-loader.ts` (server side), `ui/src/adapters/dynamic-loader.ts` and `ui/src/adapters/sandboxed-parser-worker.ts` (browser side), `TranscriptEntry` in `packages/adapter-utils/src/types.ts`.
 
-Most agent CLIs emit structured stdout with tool calls, progress indicators, and multi-line output. For example:
+## How it loads
 
-```
-[hermes] Session resumed: abc123
-┊ 💬 Thinking about how to approach this...
-┊ $ ls /home/user/project
-┊ [done] $ ls /home/user/project — /src /README.md  0.3s
-┊ 💬 I see the project structure. Let me read the README.
-┊ read /home/user/project/README.md
-┊ [done] read — Project Overview: A CLI tool for...  1.2s
-The project is a CLI tool. Here's what I found:
-- It uses TypeScript
-- Tests are in /tests
-```
-
-Without a parser, the UI shows all of this as raw `assistant` text — the tool calls and results are indistinguishable from the agent's actual response.
-
-With a parser, the UI renders:
-
-- `Thinking about how to approach this...` as a collapsible thinking block
-- `$ ls /home/user/project` as a tool call card (collapsed)
-- `0.3s` duration as a tool result card
-- `The project is a CLI tool...` as the assistant's response
-
-## How It Works
-
-```
-┌──────────────────┐     package.json        ┌──────────────────┐
-│  Adapter Package  │─── exports["./ui-parser"] ──→│  dist/ui-parser.js │
-│  (npm / local)    │                          │  (zero imports)  │
-└──────────────────┘                          └────────┬─────────┘
-                                                       │ plugin-loader reads at startup
-                                                       ▼
-┌──────────────────┐   GET /api/:type/ui-parser.js   ┌──────────────────┐
-│  Paperclip Server  │◄────────────────────────────────│  uiParserCache    │
-│  (in-memory)      │                                 └──────────────────┘
-└────────┬─────────┘
-         │ serves JS to browser
-         ▼
-┌──────────────────┐   fetch() + eval   ┌──────────────────┐
-│  Paperclip UI     │─────────────────────→│  parseStdoutLine │
-│  (dynamic loader) │   registers parser  │  (per-adapter)   │
-└──────────────────┘                     └──────────────────┘
-```
-
-1. **Build time** — You compile `src/ui-parser.ts` to `dist/ui-parser.js` (zero runtime imports)
-2. **Server startup** — Plugin loader reads the file and caches it in memory
-3. **UI load** — When the user opens a run, the UI fetches the parser from `GET /api/:type/ui-parser.js`
-4. **Runtime** — The fetched module is eval'd and registered. All subsequent lines use the real parser
+1. **Package.** The adapter's `package.json` points `exports["./ui-parser"]` at a built JavaScript file.
+2. **Server.** When the plugin loader loads the adapter (at start, install, reload or reinstall), it reads that file and caches the text in memory. On a cache miss it reads it again on demand. A path that resolves outside the package directory is skipped.
+3. **Route.** `GET /api/adapters/:type/ui-parser.js` serves the cached text. It returns 404 when the adapter ships no parser.
+4. **Browser.** The first time the UI parses output for that adapter type, it fetches the file and starts a dedicated Web Worker. Until the worker is ready, lines go through the fallback parser (the generic one, or the built-in parser when the external adapter overrides a built-in type).
+5. **Parsing.** Each line is posted to the worker. Results come back asynchronously, are cached per line, and the transcript re-renders. A line can appear a frame late.
 
 ## Contract: package.json
-
-### 1. `paperclip.adapterUiParser` — contract version
 
 ```json
 {
   "paperclip": {
     "adapterUiParser": "1.0.0"
-  }
-}
-```
-
-The Paperclip host checks this field. If the major version is unsupported, the host logs a warning and falls back to the generic parser instead of executing potentially incompatible code.
-
-| Host expects | Adapter declares | Result |
-|---|---|---|
-| `1.x` | `1.0.0` | Parser loaded |
-| `1.x` | `2.0.0` | Warning logged, generic parser used |
-| `1.x` | (missing) | Parser loaded (grace period — future versions may require it) |
-
-### 2. `exports["./ui-parser"]` — file path
-
-```json
-{
+  },
   "exports": {
-    ".": "./dist/server/index.js",
+    ".": "./dist/index.js",
     "./ui-parser": "./dist/ui-parser.js"
   }
 }
 ```
 
-## Contract: Module Exports
+| Server supports | Adapter declares | Result |
+|---|---|---|
+| `1.x` | `1.0.0` | Parser served |
+| `1.x` | `2.0.0` | Warning logged; no parser served |
+| `1.x` | nothing | Parser served, with an info log |
 
-Your `dist/ui-parser.js` must export **at least one** of:
+## Contract: module format
 
-### `parseStdoutLine(line: string, ts: string): TranscriptEntry[]`
+The worker does not import your file as an ES module. It evaluates the text as the body of a function:
 
-Static parser. Called for each line of adapter stdout.
-
-```ts
-export function parseStdoutLine(line: string, ts: string): TranscriptEntry[] {
-  if (line.startsWith("[my-agent]")) {
-    return [{ kind: "system", ts, text: line }];
-  }
-  return [{ kind: "assistant", ts, text: line }];
-}
+```js
+new Function("exports", "module", "self", "globalThis", '"use strict";\n{\n' + source + "\n}")
 ```
 
-### `createStdoutParser(): { parseLine(line, ts): TranscriptEntry[]; reset(): void }`
+So:
 
-Stateful parser factory. Preferred if your parser needs to track multi-line continuation, command nesting, or other cross-call state.
+- **No `import` or `export` statements.** They are a syntax error in a function body, and the parser fails to load.
+- **Assign your functions to `exports` or `module.exports`.** If `module.exports` has keys, it wins; otherwise `exports` is used.
+- `self` and `globalThis` are `undefined` inside your code.
 
-```ts
+Compiling `ui-parser.ts` with TypeScript's `"module": "commonjs"` produces this shape (`exports.parseStdoutLine = ...`). Keep the file free of runtime dependencies; nothing else is loaded with it.
+
+## Contract: exports
+
+Export at least one of:
+
+**`parseStdoutLine(line: string, ts: string): TranscriptEntry[]`.** Called for each stdout line. If present, it is used.
+
+**`createStdoutParser(): { parseLine(line, ts): TranscriptEntry[] }`.** Used only when `parseStdoutLine` is absent. The worker calls it once and keeps that one instance for its lifetime, so state carries across all lines the worker sees. `reset()` is not called.
+
+```js
+"use strict";
 let counter = 0;
 
-export function createStdoutParser() {
-  let suppressContinuation = false;
-
-  function parseLine(line: string, ts: string): TranscriptEntry[] {
-    const trimmed = line.trim();
-    if (!trimmed) return [];
-
-    if (suppressContinuation) {
-      if (/^[\d.]+s$/.test(trimmed)) {
-        suppressContinuation = false;
-        return [];
-      }
-      return []; // swallow continuation lines
-    }
-
-    if (trimmed.startsWith("[tool-done]")) {
-      const id = `tool-${++counter}`;
-      suppressContinuation = true;
-      return [
-        { kind: "tool_call", ts, name: "shell", input: {}, toolUseId: id },
-        { kind: "tool_result", ts, toolUseId: id, content: trimmed, isError: false },
-      ];
-    }
-
-    return [{ kind: "assistant", ts, text: trimmed }];
+function parseStdoutLine(line, ts) {
+  const text = line.trim();
+  if (!text) return [];
+  if (text.startsWith("[my-agent]")) return [{ kind: "system", ts, text }];
+  if (text.startsWith("[tool-done]")) {
+    const id = "tool-" + ++counter;
+    return [
+      { kind: "tool_call", ts, name: "shell", input: {}, toolUseId: id },
+      { kind: "tool_result", ts, toolUseId: id, content: text, isError: false },
+    ];
   }
-
-  function reset() {
-    suppressContinuation = false;
-  }
-
-  return { parseLine, reset };
+  return [{ kind: "assistant", ts, text }];
 }
-```
 
-If both are exported, `createStdoutParser` takes priority.
+exports.parseStdoutLine = parseStdoutLine;
+```
 
 ## Contract: TranscriptEntry
 
-Each entry must match one of these discriminated union shapes:
+Each entry is one of these shapes (`packages/adapter-utils/src/types.ts`):
 
 ```ts
-// Assistant message
 { kind: "assistant"; ts: string; text: string; delta?: boolean }
-
-// Thinking / reasoning
 { kind: "thinking"; ts: string; text: string; delta?: boolean }
-
-// User message (rare — usually from agent-initiated prompts)
 { kind: "user"; ts: string; text: string }
-
-// Tool invocation
 { kind: "tool_call"; ts: string; name: string; input: unknown; toolUseId?: string }
-
-// Tool result
-{ kind: "tool_result"; ts: string; toolUseId: string; content: string; isError: boolean }
-
-// System / adapter messages
-{ kind: "system"; ts: string; text: string }
-
-// Stderr / errors
+{ kind: "tool_result"; ts: string; toolUseId: string; toolName?: string; content: string; isError: boolean }
+{ kind: "init"; ts: string; model: string; sessionId: string }
+{ kind: "result"; ts: string; text: string; inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number; subtype: string; isError: boolean; errors: string[] }
 { kind: "stderr"; ts: string; text: string }
-
-// Raw stdout (fallback)
+{ kind: "system"; ts: string; text: string }
 { kind: "stdout"; ts: string; text: string }
+{ kind: "diff"; ts: string; changeType: "add" | "remove" | "context" | "hunk" | "file_header" | "truncation"; text: string }
 ```
 
-### Linking tool calls to results
+Pair a `tool_call` with its `tool_result` through the same `toolUseId`. Set `isError: true` on a failed tool result.
 
-Use `toolUseId` to pair `tool_call` and `tool_result` entries. The UI renders them as collapsible cards.
+## The sandbox
 
-```ts
-const id = `my-tool-${++counter}`;
-return [
-  { kind: "tool_call", ts, name: "read", input: { path: "/src/main.ts" }, toolUseId: id },
-  { kind: "tool_result", ts, toolUseId: id, content: "const main = () => {...}", isError: false },
-];
-```
+The worker removes network, storage and escape APIs before it evaluates your code: `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `importScripts`, `Worker`, `SharedWorker`, `Blob`, `URL.createObjectURL`, `navigator.sendBeacon`, `BroadcastChannel`, `indexedDB` and others. There is no DOM. Your code can only compute.
 
-### Error handling
+Write the parser so that:
 
-Set `isError: true` on tool results to show a red indicator:
+- it never throws. A line whose parse throws comes back as no entries, so it vanishes from the transcript. Return `[{ kind: "stdout", ts, text: line }]` for anything you cannot parse.
+- the same `(line, ts)` gives the same output. Results are cached per line.
+- module-level code only declares and exports functions.
 
-```ts
-{ kind: "tool_result", ts, toolUseId: id, content: "ENOENT: no such file", isError: true }
-```
-
-## Constraints
-
-1. **Zero runtime imports.** Your file is loaded via `URL.createObjectURL` + dynamic `import()` in the browser. No `import`, no `require`, no top-level `await`.
-
-2. **No DOM / Node.js APIs.** Runs in a browser sandbox. Use only vanilla JS (ES2020+).
-
-3. **No side effects.** Module-level code must not modify globals, access `window`, or perform I/O. Only declare and export functions.
-
-4. **Deterministic.** Given the same `(line, ts)` input, the same output must be produced. This matters for log replay.
-
-5. **Error-tolerant.** Never throw. Return `[{ kind: "stdout", ts, text: line }]` for any line you can't parse, rather than crashing the transcript.
-
-6. **File size.** Keep under 50 KB. This is served per-request and eval'd in the browser.
-
-## Lifecycle
-
-| Event | What happens |
-|---|---|
-| Server starts | Plugin loader reads `exports["./ui-parser"]`, reads the file, caches in memory |
-| UI opens run | `getUIAdapter(type)` called. If no built-in parser, kicks off async `fetch(/api/:type/ui-parser.js)` |
-| First lines arrive | Generic process parser handles them immediately (no blocking). Dynamic parser loads in background |
-| Parser loads | `registerUIAdapter()` called. All subsequent line parsing uses the real parser |
-| Parser fails (404, eval error) | Warning logged to console. Generic parser continues. Failed type is cached — no retries |
-| Server restart | In-memory cache is repopulated from adapter packages |
-
-## Error Behavior
+## Failure behavior
 
 | Failure | What happens |
 |---|---|
-| Module syntax error (import fails) | Caught, logged, falls back to generic parser. No retries. |
-| Returns wrong shape | Individual entries with missing fields are silently ignored by the transcript builder. |
-| Throws at runtime | Caught per-line. That line falls back to generic. Parser stays registered for future lines. |
-| 404 (no ui-parser export) | Type added to failed-loads set. Generic parser from first call onward. |
-| Contract version mismatch | Server logs warning, skips loading. Generic parser used. |
+| No `./ui-parser` export, or the route returns 404 | Fallback parser. The type is marked failed and not fetched again. |
+| Contract major version not `1` | The server serves no parser. Same as 404. |
+| Syntax error, or no usable export | Worker init fails. Fallback parser; marked failed. |
+| Worker not ready within 5 seconds | Same as an init failure. |
+| A single line throws | That line yields no entries. The parser stays loaded. |
 
-## Building
-
-```sh
-# Compile TypeScript to JavaScript
-tsc src/ui-parser.ts --outDir dist --target ES2020 --module ES2020 --declaration false
-```
-
-Your `tsconfig.json` can handle this automatically — just make sure `ui-parser.ts` is included in the build and outputs to `dist/ui-parser.js`.
+A failed type stays failed until the browser page reloads, or until an admin reloads or reinstalls the adapter from **Instance settings → Adapters**.
 
 ## Testing
 
-Test your parser locally by running it against sample stdout:
+Run the built file the way the worker does:
 
-```ts
-// test-parser.ts
-import { createStdoutParser } from "./dist/ui-parser.js";
+```js
+// test-parser.mjs
+import fs from "node:fs";
 
-const parser = createStdoutParser();
-const sampleLines = [
-  "[my-agent] Starting session abc123",
-  "Thinking about the task...",
-  "$ ls /home/user/project",
-  "[done] $ ls — /src /README.md  0.3s",
-  "I'll read the README now.",
-  "Error: file not found",
-];
+const source = fs.readFileSync("./dist/ui-parser.js", "utf8");
+const exports = {};
+const module = { exports };
+new Function("exports", "module", "self", "globalThis", '"use strict";\n{\n' + source + "\n}")(
+  exports, module, undefined, undefined,
+);
+const mod = Object.keys(module.exports).length > 0 ? module.exports : exports;
 
-for (const line of sampleLines) {
-  const entries = parser.parseLine(line, new Date().toISOString());
-  for (const entry of entries) {
-    console.log(`  ${entry.kind}:`, entry.text ?? entry.name ?? entry.content);
-  }
+for (const line of ["[my-agent] start", "[tool-done] ls", "All done."]) {
+  console.log(mod.parseStdoutLine(line, new Date().toISOString()));
 }
 ```
 
-Run with: `npx tsx test-parser.ts`
+```sh
+node test-parser.mjs
+```
 
-## Skipping the UI Parser
+## Skipping the parser
 
-If your adapter's stdout is simple (no tool markers, no special formatting), you can skip the UI parser entirely. The generic `process` parser will handle it — every non-system line becomes `assistant` output. This is fine for:
+If your adapter prints plain text, leave out `exports["./ui-parser"]`. The generic parser shows each line as output.
 
-- Agents that output plain text responses
-- Custom scripts that just print results
-- Simple CLIs without structured output
+## Next steps
 
-To skip it, simply don't include `exports["./ui-parser"]` in your `package.json`.
-
-## Next Steps
-
-- [External Adapters](/adapters/external-adapters) — full guide to building adapter packages
-- [Creating an Adapter](/adapters/creating-an-adapter) — adapter internals and built-in integration
+- [External adapters](/adapters/external-adapters)
+- [Creating an adapter](/adapters/creating-an-adapter)

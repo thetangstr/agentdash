@@ -1,7 +1,8 @@
 // The hashed forbidden-token list for the public docs, and the scan that uses it.
-// One copy: ui/src/lib/docs.test.ts scans every bundled page with it, and
-// scripts/docs/generate-api-changelog.mjs withholds any release-note line it
-// hits. Node builtins only (the changelog generator runs in the PR workflow's
+// One copy: ui/src/lib/docs.test.ts scans every bundled page with it,
+// scripts/ci/check-docs-forbidden-tokens.mjs scans every page the nav lists
+// with it in the policy job, and scripts/docs/generate-api-changelog.mjs
+// withholds any release-note line it hits. Node builtins only (the changelog generator runs in the PR workflow's
 // policy job, which has no install).
 
 import { createHash } from "node:crypto";
@@ -36,6 +37,11 @@ export const FORBIDDEN_TOKENS = [
   { length: 13, sha256: "37c999ba9fb7fc5b18a5786b2399cb2711ea412cc1de92246a6725712e56c21a" },
   // An engagement-specific product name (PR 3b review).
   { length: 6, sha256: "3908a3427811a92cb0a40293e10ac1ddc89dafb531404a784d792ae61d152d39" },
+  // A personal network handle, and a bare short name (PR 4 review). The scan
+  // starts windows at word starts only, so the 4-character one matches words
+  // that begin with it, never ones that merely contain it.
+  { length: 10, sha256: "9841cbc4448b3f02046ab6fe44cf212c069cd3cd85567a58ce1e6f90e9939319" },
+  { length: 4, sha256: "fbd8dafe1f79f47371dd79d334d9a6c1aaab28c14b9533417462629d576639f3" },
 ];
 
 export function sha256(text) {

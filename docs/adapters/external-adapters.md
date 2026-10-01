@@ -1,117 +1,85 @@
 ---
-title: External Adapters
-summary: Build, package, and distribute adapters as plugins without modifying Paperclip source
+title: External adapters
+summary: Package an adapter on its own and install it into a self-hosted AgentDash instance
 ---
 
-Paperclip supports external adapter plugins that can be installed from npm packages or local directories. External adapters work exactly like built-in adapters — they execute agents, parse output, and render transcripts — but they live in their own package and don't require changes to Paperclip's source code.
+An external adapter is a package outside the AgentDash source tree that the server loads at runtime. It runs agents the same way a built-in adapter does. An instance admin installs it from npm or from a local directory, and the server loads it again at every start.
 
-## Built-in vs External
+Source: `server/src/adapters/plugin-loader.ts`, `server/src/services/adapter-plugin-store.ts`, `server/src/routes/adapters.ts`.
+
+## Built-in and external
 
 | | Built-in | External |
 |---|---|---|
-| Source location | Inside `paperclip-fork/packages/adapters/` | Separate npm package or local directory |
-| Registration | Hardcoded in three registries | Loaded at startup via plugin system |
-| UI parser | Static import at build time | Dynamically loaded from API (see [UI Parser](/adapters/adapter-ui-parser)) |
-| Distribution | Ships with Paperclip | Published to npm or linked via `file:` |
-| Updates | Requires Paperclip release | Independent versioning |
+| Where it lives | `packages/adapters/*` or `server/src/adapters/` | Its own npm package or local directory |
+| How it is registered | Imported in the server, UI and CLI registries | Loaded at server start from the adapter plugin store |
+| Run transcript in the UI | Parser imported at build time | Optional `ui-parser.js`, fetched and run in a sandbox ([UI parser contract](/adapters/adapter-ui-parser)) |
+| Config form in the UI | Hand-written React fields | Generated from `getConfigSchema()`, if the adapter provides it |
+| Updates | Ship with an AgentDash release | Versioned on their own |
 
-## Quick Start
+The type key must not be one of the [11 built-in types](/adapters/overview). `POST /api/adapters/install` refuses a package whose type is built in (409).
 
-### Minimal Package Structure
+## Package layout
 
 ```
 my-adapter/
   package.json
   tsconfig.json
   src/
-    index.ts            # Shared metadata (type, label, models)
+    index.ts            # type, label, models, agentConfigurationDoc; re-exports createServerAdapter
     server/
-      index.ts          # createServerAdapter() factory
-      execute.ts        # Core execution logic
-      parse.ts          # Output parsing
-      test.ts           # Environment diagnostics
-    ui-parser.ts        # Self-contained UI transcript parser
+      index.ts          # createServerAdapter()
+      execute.ts        # runs the agent
+      test.ts           # environment checks
+    ui-parser.ts        # optional; see the UI parser contract
 ```
 
 ### package.json
 
 ```json
 {
-  "name": "my-paperclip-adapter",
+  "name": "my-agentdash-adapter",
   "version": "1.0.0",
   "type": "module",
-  "license": "MIT",
   "paperclip": {
     "adapterUiParser": "1.0.0"
   },
   "exports": {
     ".": "./dist/index.js",
-    "./server": "./dist/server/index.js",
     "./ui-parser": "./dist/ui-parser.js"
   },
   "files": ["dist"],
-  "scripts": {
-    "build": "tsc"
-  },
+  "scripts": { "build": "tsc" },
   "dependencies": {
-    "@paperclipai/adapter-utils": "^2026.325.0",
-    "picocolors": "^1.1.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "@paperclipai/adapter-utils": "<version>"
   }
 }
 ```
 
-Key fields:
-
 | Field | Purpose |
-|-------|---------|
-| `exports["."]` | Entry point — must export `createServerAdapter` |
-| `exports["./ui-parser"]` | Self-contained UI parser module (optional but recommended) |
-| `paperclip.adapterUiParser` | Contract version for the UI parser (`"1.0.0"`) |
-| `files` | Limits what gets published — only `dist/` |
+|---|---|
+| `exports["."]` (or `main`) | The module the loader imports. It must export `createServerAdapter`. |
+| `exports["./ui-parser"]` | Optional. The file served to the UI as the run-log parser. |
+| `paperclip.adapterUiParser` | The UI parser contract version. The server supports major version `1`. |
 
-### tsconfig.json
+Types and helpers come from `@paperclipai/adapter-utils` (`packages/adapter-utils` in the AgentDash repository). Build against the copy in your AgentDash checkout so the types match the server you install into.
 
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "Node16",
-    "moduleResolution": "Node16",
-    "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true,
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true
-  },
-  "include": ["src"]
-}
-```
+## The server module
 
-## Server Module
-
-The plugin loader calls `createServerAdapter()` from your package root. This function must return a `ServerAdapterModule`.
+The loader imports the package entry, calls `createServerAdapter()`, and rejects the package if the result has no `type` (`validateAdapterModule` in `plugin-loader.ts`).
 
 ### src/index.ts
 
 ```ts
-export const type = "my_adapter";     // snake_case, globally unique
+export const type = "my_agent";          // snake_case, unique on the instance
 export const label = "My Agent (local)";
-
-export const models = [
-  { id: "model-a", label: "Model A" },
-];
-
-export const agentConfigurationDoc = `# my_adapter configuration
+export const models = [{ id: "model-a", label: "Model A" }];
+export const agentConfigurationDoc = `# my_agent configuration
 Use when: ...
 Don't use when: ...
+Core fields: ...
 `;
 
-// Required by plugin-loader convention
 export { createServerAdapter } from "./server/index.js";
 ```
 
@@ -124,93 +92,77 @@ import { execute } from "./execute.js";
 import { testEnvironment } from "./test.js";
 
 export function createServerAdapter(): ServerAdapterModule {
-  return {
-    type,
-    execute,
-    testEnvironment,
-    models,
-    agentConfigurationDoc,
-  };
+  return { type, execute, testEnvironment, models, agentConfigurationDoc };
 }
 ```
 
 ### src/server/execute.ts
 
-The core execution function. Receives an `AdapterExecutionContext` and returns an `AdapterExecutionResult`.
+`execute` receives an `AdapterExecutionContext` and returns an `AdapterExecutionResult` (both in `packages/adapter-utils/src/types.ts`).
 
 ```ts
-import type {
-  AdapterExecutionContext,
-  AdapterExecutionResult,
-} from "@paperclipai/adapter-utils";
-
+import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
 import {
-  runChildProcess,
+  asNumber,
+  asString,
   buildPaperclipEnv,
   renderTemplate,
+  runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 
-export async function execute(
-  ctx: AdapterExecutionContext,
-): Promise<AdapterExecutionResult> {
-  const { config, agent, runtime, context, onLog, onMeta } = ctx;
+export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+  const { runId, agent, config, context, onLog, authToken } = ctx;
 
-  // 1. Read config with safe helpers
-  const cwd = String(config.cwd ?? "/tmp");
-  const command = String(config.command ?? "my-agent");
-  const timeoutSec = Number(config.timeoutSec ?? 300);
+  const cwd = asString(config.cwd, process.cwd());
+  const command = asString(config.command, "my-agent");
 
-  // 2. Build environment with Paperclip vars injected
+  // PAPERCLIP_AGENT_ID, PAPERCLIP_COMPANY_ID, PAPERCLIP_API_URL
   const env = buildPaperclipEnv(agent);
+  // Present only when the module sets supportsLocalAgentJwt: true
+  if (authToken) env.PAPERCLIP_API_KEY = authToken;
+  env.PAPERCLIP_RUN_ID = runId;
 
-  // 3. Render prompt template
-  const prompt = config.promptTemplate
-    ? renderTemplate(String(config.promptTemplate), {
-        agentId: agent.id,
-        agentName: agent.name,
-        companyId: agent.companyId,
-        runId: ctx.runId,
-        taskId: context.taskId ?? "",
-        taskTitle: context.taskTitle ?? "",
-      })
-    : "Continue your work.";
-
-  // 4. Spawn process
-  const result = await runChildProcess(command, {
-    args: [prompt],
-    cwd,
-    env,
-    timeout: timeoutSec * 1000,
-    graceMs: 10_000,
-    onStdout: (chunk) => onLog("stdout", chunk),
-    onStderr: (chunk) => onLog("stderr", chunk),
+  const prompt = renderTemplate(asString(config.promptTemplate, "Continue your work."), {
+    agentId: agent.id,
+    companyId: agent.companyId,
+    runId,
+    agent,
+    context,
   });
 
-  // 5. Return structured result
+  const proc = await runChildProcess(runId, command, [prompt], {
+    cwd,
+    env,
+    timeoutSec: asNumber(config.timeoutSec, 0),
+    graceSec: asNumber(config.graceSec, 15),
+    onLog,
+  });
+
   return {
-    exitCode: result.exitCode,
-    timedOut: result.timedOut,
-    // Include session state for persistence
-    sessionParams: { /* ... */ },
+    exitCode: proc.exitCode,
+    signal: proc.signal,
+    timedOut: proc.timedOut,
+    errorMessage: proc.exitCode === 0 ? null : `exited with code ${proc.exitCode}`,
   };
 }
 ```
 
-#### Available Helpers from `@paperclipai/adapter-utils`
+Helpers from `@paperclipai/adapter-utils/server-utils` (`packages/adapter-utils/src/server-utils.ts`):
 
 | Helper | Purpose |
-|--------|---------|
-| `runChildProcess(command, opts)` | Spawn a child process with timeout, grace period, and streaming callbacks |
-| `buildPaperclipEnv(agent)` | Inject `PAPERCLIP_*` environment variables |
-| `renderTemplate(template, data)` | `{{variable}}` substitution in prompt templates |
-| `asString(v)`, `asNumber(v)`, `asBoolean(v)` | Safe config value extraction |
+|---|---|
+| `runChildProcess(runId, command, args, opts)` | Spawn with timeout, grace period and streamed logs. Returns `exitCode`, `signal`, `timedOut`, `stdout`, `stderr`. |
+| `buildPaperclipEnv(agent)` | `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_API_URL` |
+| `renderTemplate(template, data)` | `{{path.to.value}}` substitution |
+| `asString`, `asNumber`, `asBoolean`, `asStringArray`, `parseObject` | Read config values safely. Each scalar helper takes a fallback. |
 
 ### src/server/test.ts
 
-Validates the adapter configuration before running. Returns structured diagnostics.
+`testEnvironment` returns checks with a `code`, a `level` (`info`, `warn`, `error`) and a `message`, plus optional `hint` and `detail`. The overall `status` is `pass`, `warn` or `fail`.
 
 ```ts
 import type {
+  AdapterEnvironmentCheck,
   AdapterEnvironmentTestContext,
   AdapterEnvironmentTestResult,
 } from "@paperclipai/adapter-utils";
@@ -218,175 +170,87 @@ import type {
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
-  const checks = [];
-
-  // Example: check CLI is installed
-  checks.push({
-    level: "info",
-    message: "My Agent CLI v1.2.0 detected",
-    code: "cli_detected",
-  });
-
-  // Example: check working directory
+  const checks: AdapterEnvironmentCheck[] = [];
   const cwd = String(ctx.config.cwd ?? "");
   if (!cwd.startsWith("/")) {
     checks.push({
+      code: "invalid_cwd",
       level: "error",
       message: `Working directory must be absolute: "${cwd}"`,
-      hint: "Use /home/user/project or /workspace",
-      code: "invalid_cwd",
     });
   }
-
   return {
     adapterType: ctx.adapterType,
-    status: checks.some(c => c.level === "error") ? "fail" : "pass",
+    status: checks.some((c) => c.level === "error") ? "fail" : "pass",
     checks,
     testedAt: new Date().toISOString(),
   };
 }
 ```
 
-Check levels:
+## Optional hooks
 
-| Level | Meaning | Effect |
-|-------|---------|--------|
-| `info` | Informational | Shown in test results |
-| `warn` | Non-blocking issue | Shown with yellow indicator |
-| `error` | Blocks execution | Prevents agent from running |
+All optional fields of `ServerAdapterModule` are available to external adapters:
 
-## Installation
+| Field | Use |
+|---|---|
+| `sessionCodec` | Validate, store and label session state for resume. See [Creating an adapter](/adapters/creating-an-adapter). |
+| `sessionManagement` | Session compaction policy. If you omit it, the server uses the registry's policy for your type, if any. |
+| `listSkills`, `syncSkills` | Report and install the agent's skills. The UI shows a skills tab when either is set. |
+| `listModels`, `refreshModels`, `modelProfiles`, `listModelProfiles` | Model discovery |
+| `detectModel` | Read the default model from the runtime's local config |
+| `getConfigSchema` | Declarative form fields for the agent config UI |
+| `onHireApproved` | Called when a hire for an agent on this adapter is approved |
+| `getQuotaWindows` | Report provider quota windows |
+| Capability flags | `supportsLocalAgentJwt`, `supportsInstructionsBundle`, `instructionsPathKey`, `requiresMaterializedRuntimeSkills`. See [Creating an adapter](/adapters/creating-an-adapter#capability-flags). |
 
-### From npm
+## Installing
+
+Adapter management is for an instance admin. The install, remove, reload and toggle routes call `assertInstanceAdmin`: the caller must be a board user with instance admin, or the implicit local board in `local_trusted` mode. Listing adapters and reading a config schema or UI parser only needs board access (`assertBoardOrgAccess`).
+
+### From the UI
+
+**Instance settings → Adapters** (`/instance/settings/adapters`) installs a package by npm name or by local path, and can enable, disable, reload, reinstall or remove it.
+
+### From the API
 
 ```sh
-# Via the Paperclip UI
-# Settings → Adapters → Install from npm → "my-paperclip-adapter"
-
-# Or via API
-curl -X POST http://localhost:3102/api/adapters \
-  -H "Authorization: Bearer <token>" \
+# From npm (optionally pin a version)
+curl -X POST {{instanceUrl}}/api/adapters/install \
+  -H "Authorization: Bearer <board-api-key>" \
   -H "Content-Type: application/json" \
-  -d '{"packageName": "my-paperclip-adapter"}'
-```
+  -d '{"packageName": "my-agentdash-adapter", "version": "1.0.0"}'
 
-### From local directory
-
-```sh
-curl -X POST http://localhost:3102/api/adapters \
-  -H "Authorization: Bearer <token>" \
+# From a local directory on the server host
+curl -X POST {{instanceUrl}}/api/adapters/install \
+  -H "Authorization: Bearer <board-api-key>" \
   -H "Content-Type: application/json" \
-  -d '{"localPath": "/home/user/my-adapter"}'
+  -d '{"packageName": "/home/me/my-adapter", "isLocalPath": true}'
 ```
 
-Local adapters are symlinked into Paperclip's adapter directory. Changes to the source are picked up on server restart.
+An npm package is installed with `npm install --no-save` into `$PAPERCLIP_HOME/adapter-plugins/`. A local directory is loaded in place; nothing is copied. Either way the record goes into `$PAPERCLIP_HOME/adapter-plugins.json` (`PAPERCLIP_HOME` defaults to `~/.paperclip`), and the server loads it at every start.
 
-### Via adapter-plugins.json
-
-For development, you can also edit `~/.paperclip/adapter-plugins.json` directly:
-
-```json
-[
-  {
-    "packageName": "my-paperclip-adapter",
-    "localPath": "/home/user/my-adapter",
-    "type": "my_adapter",
-    "installedAt": "2026-03-30T12:00:00.000Z"
-  }
-]
-```
-
-## Optional: Session Persistence
-
-If your agent runtime supports sessions (conversation continuity across heartbeats), implement a session codec:
-
-```ts
-import type { AdapterSessionCodec } from "@paperclipai/adapter-utils";
-
-export const sessionCodec: AdapterSessionCodec = {
-  deserialize(raw) {
-    if (typeof raw !== "object" || raw === null) return null;
-    const r = raw as Record<string, unknown>;
-    return r.sessionId ? { sessionId: String(r.sessionId) } : null;
-  },
-  serialize(params) {
-    return params?.sessionId ? { sessionId: String(params.sessionId) } : null;
-  },
-  getDisplayId(params) {
-    return params?.sessionId ? String(params.sessionId) : null;
-  },
-};
-```
-
-Include it in `createServerAdapter()`:
-
-```ts
-return { type, execute, testEnvironment, sessionCodec, /* ... */ };
-```
-
-## Optional: Skills Sync
-
-If your agent runtime supports skills/plugins, implement `listSkills` and `syncSkills`:
-
-```ts
-return {
-  type,
-  execute,
-  testEnvironment,
-  async listSkills(ctx) {
-    return {
-      adapterType: ctx.adapterType,
-      supported: true,
-      mode: "ephemeral",
-      desiredSkills: [],
-      entries: [],
-      warnings: [],
-    };
-  },
-  async syncSkills(ctx, desiredSkills) {
-    // Install desired skills into the runtime
-    return { /* same shape as listSkills */ };
-  },
-};
-```
-
-## Optional: Model Detection
-
-If your runtime has a local config file that specifies the default model:
-
-```ts
-async function detectModel() {
-  // Read ~/.my-agent/config.yaml or similar
-  return {
-    model: "anthropic/claude-sonnet-4",
-    provider: "anthropic",
-    source: "~/.my-agent/config.yaml",
-    candidates: ["anthropic/claude-sonnet-4", "openai/gpt-4o"],
-  };
-}
-
-return { type, execute, testEnvironment, detectModel: () => detectModel() };
-```
-
-## Publishing
-
-```sh
-npm run build
-npm publish
-```
-
-Other Paperclip users can then install your adapter by package name from the UI or API.
+| Route | What it does |
+|---|---|
+| `GET /api/adapters` | List built-in and external adapters, with `source`, `disabled`, version and capabilities |
+| `POST /api/adapters/install` | Install from npm or a local path |
+| `PATCH /api/adapters/:type` | `{ "disabled": true }` hides an adapter from agent creation; existing agents keep working |
+| `POST /api/adapters/:type/reload` | Re-import the package from disk without a restart |
+| `POST /api/adapters/:type/reinstall` | Pull the latest npm version and reload. Not for local-path installs. |
+| `DELETE /api/adapters/:type` | Unregister an external adapter (and `npm uninstall` it). Built-ins cannot be removed. |
+| `GET /api/adapters/:type/config-schema` | The adapter's `getConfigSchema()` result |
+| `GET /api/adapters/:type/ui-parser.js` | The adapter's UI parser, if it ships one |
 
 ## Security
 
-- Treat agent output as untrusted — parse defensively, never `eval()` agent output
-- Inject secrets via environment variables, not in prompts
-- Configure network access controls if the runtime supports them
-- Always enforce timeout and grace period — don't let agents run forever
-- The UI parser module runs in a browser sandbox — it must have zero runtime imports and no side effects
+- Installing an adapter runs its code inside the AgentDash server process. Install only packages you trust.
+- Treat agent output as untrusted. Parse it; never evaluate it.
+- Pass secrets through environment variables, not prompts.
+- Always enforce a timeout and a grace period.
+- The UI parser runs in a locked-down Web Worker in the browser. See the [UI parser contract](/adapters/adapter-ui-parser).
 
-## Next Steps
+## Next steps
 
-- [UI Parser Contract](/adapters/adapter-ui-parser) — add a custom run-log parser so the UI renders your adapter's output correctly
-- [Creating an Adapter](/adapters/creating-an-adapter) — full walkthrough of adapter internals
-- [How Agents Work](/guides/agent-developer/how-agents-work) — understand the heartbeat lifecycle your adapter serves
+- [UI parser contract](/adapters/adapter-ui-parser)
+- [Creating an adapter](/adapters/creating-an-adapter)
+- [How agents work](/guides/agent-developer/how-agents-work)

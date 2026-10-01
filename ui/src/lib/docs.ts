@@ -42,18 +42,18 @@ export const PUBLIC_DOC_SLUGS: ReadonlySet<string> = new Set(docsRoutes.slugs);
  */
 const docModules = import.meta.glob(
   [
-    "../../../docs/start/{what-is-paperclip,quickstart,core-concepts,architecture}.{md,mdx}",
+    "../../../docs/start/{what-is-agentdash,quickstart,first-agent,about-this-fork}.{md,mdx}",
+    "../../../docs/concepts/{companies,agents-roles-and-autonomy,stewardship,agent-visibility,issues-projects-and-goals,heartbeats-and-runs,mandates-directives-and-the-agent-bundle,approvals-and-decisions,workforce-roles,product-profiles}.{md,mdx}",
+    "../../../docs/guides/execution-policy.{md,mdx}",
     "../../../docs/guides/steward/{getting-started,connect-your-terminal,your-inbox,troubleshooting-connect}.{md,mdx}",
     "../../../docs/guides/board-operator/{dashboard,creating-a-company,managing-agents,agent-kinds-and-stewardship,onboard-a-steward,org-structure,managing-tasks,execution-workspaces-and-runtime-services,delegation,approvals,costs-and-budgets,activity-log,importing-and-exporting}.{md,mdx}",
     "../../../docs/guides/agent-developer/{how-agents-work,heartbeat-protocol,writing-a-skill,task-workflow,comments-and-communication,handling-approvals,cost-reporting}.{md,mdx}",
-    "../../../docs/deploy/{overview,local-development,tailscale-private-access,docker,deployment-modes,database,secrets,storage,environment-variables}.{md,mdx}",
-    "../../../docs/adapters/{overview,claude-local,codex-local,process,http,external-adapters,adapter-ui-parser,creating-an-adapter}.{md,mdx}",
+    "../../../docs/deploy/{overview,local-development,docker,macos,tailscale-private-access,deployment-modes,database,storage,secrets,environment-variables}.{md,mdx}",
+    "../../../docs/adapters/{overview,claude-local,codex-local,hermes-local,gemini-local,process,http,external-adapters,creating-an-adapter,adapter-ui-parser}.{md,mdx}",
     "../../../docs/api/{index,authentication,api-keys,conventions,versioning,reference,health,companies,agents,issues,projects,goals,approvals,routines,costs,activity,dashboard,secrets,human-control,bridge,mcp,oauth,changelog,route-index}.{md,mdx}",
     "../../../docs/mcp/{overview,connecting,toolsets,resources,playbooks}.{md,mdx}",
     "../../../docs/mcp/tools/{agent,setup,assistant,human,bridge}.{md,mdx}",
     "../../../docs/cli/{agentdash-connect,agentdash-mcp,overview,setup-commands,control-plane-commands}.{md,mdx}",
-    "!../../../docs/api/agentdash-mk.{md,mdx}",
-    "!../../../docs/deploy/ross-private-host.{md,mdx}",
     "!../../../docs/superpowers/**",
     "!../../../docs/agents/**",
     "!../../../docs/design/**",

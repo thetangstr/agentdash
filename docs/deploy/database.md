@@ -1,77 +1,80 @@
 ---
 title: Database
-summary: Embedded PGlite vs Docker Postgres vs hosted
+summary: Embedded PostgreSQL by default, or your own PostgreSQL through DATABASE_URL
 ---
 
-Paperclip uses PostgreSQL via Drizzle ORM. There are three ways to run the database.
+AgentDash stores everything in PostgreSQL, through Drizzle ORM. The schema lives in `packages/db/src/schema/` and the migrations in `packages/db/src/migrations/`. It is the same schema whichever way you run the database.
 
-## 1. Embedded PostgreSQL (Default)
+There are two ways to run it. `DATABASE_URL` decides which.
 
-Zero config. If you don't set `DATABASE_URL`, the server starts an embedded PostgreSQL instance automatically.
+| `DATABASE_URL` | Database |
+|---|---|
+| Not set | Embedded PostgreSQL, started by the server |
+| Set | Your PostgreSQL server |
 
-```sh
-pnpm dev
-```
+A `database.connectionString` in the instance config (with `database.mode: "postgres"`) works the same as `DATABASE_URL`; the environment variable wins. Source: `server/src/config.ts`.
 
-On first start, the server:
+## Embedded PostgreSQL (default)
 
-1. Creates `~/.paperclip/instances/default/db/` for storage
-2. Ensures the `paperclip` database exists
-3. Runs migrations automatically
-4. Starts serving requests
+No setup. If `DATABASE_URL` is not set, the server starts PostgreSQL itself, from the `embedded-postgres` package (major version 18, per `server/package.json`).
 
-Data persists across restarts. To reset: `rm -rf ~/.paperclip/instances/default/db`.
+On first start the server:
 
-The Docker quickstart also uses embedded PostgreSQL by default.
+1. creates the data directory, `~/.paperclip/instances/default/db/` by default;
+2. starts PostgreSQL on port `54329`, or the next free port if that one is taken;
+3. creates the `paperclip` database;
+4. applies all migrations.
 
-## 2. Local PostgreSQL (Docker)
+Data persists across restarts. The Docker quickstart uses this mode too, with the data under the container's `/paperclip`.
 
-For a full PostgreSQL server locally:
+The data directory and port can be changed in the instance config (`database.embeddedPostgresDataDir`, `database.embeddedPostgresPort`). Set `PAPERCLIP_EMBEDDED_POSTGRES_VERBOSE=true` to log PostgreSQL's own output. Source: `server/src/index.ts`.
 
-```sh
-docker compose up -d
-```
+## Your own PostgreSQL
 
-This starts PostgreSQL 17 on `localhost:5432`. Set the connection string:
-
-```sh
-cp .env.example .env
-# DATABASE_URL=postgres://paperclip:paperclip@localhost:5432/paperclip
-```
-
-Push the schema:
+Set `DATABASE_URL` to a standard connection string:
 
 ```sh
-DATABASE_URL=postgres://paperclip:paperclip@localhost:5432/paperclip \
-  npx drizzle-kit push
+DATABASE_URL=postgres://user:password@db-host:5432/agentdash
 ```
 
-## 3. Hosted PostgreSQL (Supabase)
+To try it locally, `docker/docker-compose.yml` runs PostgreSQL 17 next to the server (see [Docker](/deploy/docker)).
 
-For production, use a hosted provider like [Supabase](https://supabase.com/).
+The client (`packages/db/src/client.ts`) uses postgres.js with its defaults, which include prepared statements. Point `DATABASE_URL` at a direct or session-mode connection, not a transaction-mode pooler.
 
-1. Create a project at [database.new](https://database.new)
-2. Copy the connection string from Project Settings > Database
-3. Set `DATABASE_URL` in your `.env`
+Set `DATABASE_MIGRATION_URL` if migrations need different credentials (for example, a role that owns the schema). The server uses it for migrations and `DATABASE_URL` for everything else.
 
-Use the **direct connection** (port 5432) for migrations and the **pooled connection** (port 6543) for the application.
+## Migrations
 
-If using connection pooling, disable prepared statements:
+At startup the server checks for pending migrations before it serves anything:
 
-```ts
-// packages/db/src/client.ts
-export function createDb(url: string) {
-  const sql = postgres(url, { prepare: false });
-  return drizzlePg(sql, { schema });
-}
+- `PAPERCLIP_MIGRATION_AUTO_APPLY=true`: apply them.
+- Otherwise, `PAPERCLIP_MIGRATION_PROMPT=never`: refuse to start.
+- Otherwise, in an interactive terminal: ask.
+- Otherwise (launchd, Docker, systemd): apply them.
+
+A fresh embedded database is always migrated. To apply migrations by hand from a clone:
+
+```sh
+pnpm db:migrate
 ```
 
-## Switching Between Modes
+Source: `server/src/index.ts`, `packages/db/src/migrate.ts`.
 
-| `DATABASE_URL` | Mode |
-|----------------|------|
-| Not set | Embedded PostgreSQL |
-| `postgres://...localhost...` | Local Docker PostgreSQL |
-| `postgres://...supabase.com...` | Hosted Supabase |
+## Backups
 
-The Drizzle schema (`packages/db/src/schema/`) is the same regardless of mode.
+The server backs up its own database on a schedule. It is on by default: every 60 minutes, kept for 7 days, written to `~/.paperclip/instances/default/data/backups`.
+
+| Variable | Default |
+|---|---|
+| `PAPERCLIP_DB_BACKUP_ENABLED` | `true` |
+| `PAPERCLIP_DB_BACKUP_INTERVAL_MINUTES` | `60` |
+| `PAPERCLIP_DB_BACKUP_RETENTION_DAYS` | `7` |
+| `PAPERCLIP_DB_BACKUP_DIR` | `<instance>/data/backups` |
+
+For a one-off backup from a clone:
+
+```sh
+pnpm paperclipai db:backup
+```
+
+A database backup does not include uploaded files or the secrets master key. Back those up too; see [Storage](/deploy/storage) and [Secrets](/deploy/secrets).

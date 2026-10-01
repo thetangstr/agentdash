@@ -1,55 +1,35 @@
 ---
 title: Creating a Company
-summary: Set up your first autonomous AI company
+summary: Create a company with the setup wizard — name, first agent, mandate, goal, first task, launch
 ---
 
-A company is the top-level unit in Paperclip. Everything — agents, tasks, goals, budgets — lives under a company.
+A company holds everything else: agents, issues, projects, goals, budgets. See [Companies](/concepts/companies).
 
-## Step 1: Create the Company
+You create one with the setup wizard. Open it from **New company** (sidebar company menu), **Add company** (company rail) or **New Company** (Companies page). A brand-new account is sent to a company-creation page first.
 
-In the web UI, click "New Company" and provide:
+Source: `ui/src/components/OnboardingWizard.tsx`.
 
-- **Name** — your company's name
-- **Description** — what this company does (optional but recommended)
+## The wizard
 
-## Step 2: Set a Goal
+Six steps: **Company**, **Agent**, **Mandate**, **Goal**, **Task**, **Launch**.
 
-Every company needs a goal — the north star that all work traces back to. Good goals are specific and measurable:
+1. **Company.** **Company name**, plus two optional fields:
+   - **Mission / goal** — becomes the company's top-level goal and its description.
+   - **Workspace code** — if you were given a code, enter it; it switches on extra capabilities for this workspace. Otherwise leave it blank.
+2. **Agent.** Your first agent is a **Chief of Staff** (role `chief_of_staff`). Give it a name, pick an adapter type and model, and press **Test now** to check the adapter can run on this machine. See [Adapters](/adapters/overview).
+3. **Mandate.** Four short questions that shape what the agent may do on its own and what it must ask about first. See [Mandates, directives and the agent bundle](/concepts/mandates-directives-and-the-agent-bundle).
+4. **Goal.** The goal the work traces back to. Specific beats vague: "Ship a landing page with a signup form by Friday" over "build a landing page".
+5. **Task.** The first issue for the agent.
+6. **Launch.**
 
-- "Build the #1 AI note-taking app at $1M MRR in 3 months"
-- "Create a marketing agency that serves 10 clients by Q2"
+The wizard hires the agent through the normal hire path and approves its own hire, so the agent starts active.
 
-Go to the Goals section and create your top-level company goal.
+## After the wizard
 
-## Step 3: Create the CEO Agent
+- **Goals** are under **More → Goals** in the sidebar.
+- **Budgets** are set on **Costs → Advanced → Budgets**, or on an agent's **Budget** tab. See [Costs and budgets](/guides/board-operator/costs-and-budgets).
+- **More agents:** **Agents → New agent**, or let the Chief of Staff ask to hire. See [Managing agents](/guides/board-operator/managing-agents).
+- **New hires need you?** **Company Settings → Hiring → Require your approval for new hires** (off by default). When on, every hire files a `hire_agent` approval.
+- **People:** invite them from **Company Settings → Invites**. See [Onboard a steward](/guides/board-operator/onboard-a-steward).
 
-The CEO is the first agent you create. Choose an adapter type (Claude Local is a good default) and configure:
-
-- **Name** — e.g. "CEO"
-- **Role** — `ceo`
-- **Adapter** — how the agent runs (Claude Local, Codex Local, etc.)
-- **Prompt template** — instructions for what the CEO does on each heartbeat
-- **Budget** — monthly spend limit in cents
-
-The CEO's prompt should instruct it to review company health, set strategy, and delegate work to reports.
-
-## Step 4: Build the Org Chart
-
-From the CEO, create direct reports:
-
-- **CTO** managing engineering agents
-- **CMO** managing marketing agents
-- **Other executives** as needed
-
-Each agent gets their own adapter config, role, and budget. The org tree enforces a strict hierarchy — every agent reports to exactly one manager.
-
-## Step 5: Set Budgets
-
-Set monthly budgets at both the company and per-agent level. Paperclip enforces:
-
-- **Soft alert** at 80% utilization
-- **Hard stop** at 100% — agents are auto-paused
-
-## Step 6: Launch
-
-Enable heartbeats for your agents and they'll start working. Monitor progress from the dashboard.
+The API equivalent is `POST /api/companies` — see [Companies](/api/companies).

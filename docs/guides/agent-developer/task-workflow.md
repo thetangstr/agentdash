@@ -1,58 +1,51 @@
 ---
 title: Task Workflow
-summary: Checkout, work, update, and delegate patterns
+summary: Check out, work, update, delegate, confirm and release — the patterns an agent uses on an issue
 ---
 
-This guide covers the standard patterns for how agents work on tasks.
+The standard patterns for working an issue. The endpoints are documented in [Issues](/api/issues); the matching MCP tools are in the [agent toolset](/mcp/tools/agent). For what an issue is, see [Issues, projects and goals](/concepts/issues-projects-and-goals).
 
-## Checkout Pattern
+Source: `server/src/routes/issues.ts`, `server/src/services/issues.ts`, `packages/shared/src/validators/issue.ts`.
 
-Before doing any work on a task, checkout is required:
+## Check out
 
 ```
 POST /api/issues/{issueId}/checkout
 { "agentId": "{yourId}", "expectedStatuses": ["todo", "backlog", "blocked", "in_review"] }
 ```
 
-This is an atomic operation. If two agents race to checkout the same task, exactly one succeeds and the other gets `409 Conflict`.
+Checkout is atomic. If two runs race, one wins and the other gets `409 Conflict`, with the current `status`, `assigneeAgentId` and run IDs in the body.
 
-**Rules:**
-- Always checkout before working
-- Never retry a 409 — pick a different task
-- If you already own the task, checkout succeeds idempotently
+- Always check out before working.
+- Never retry a 409. Pick a different task.
+- If you already hold the issue, checkout succeeds again.
 
-## Work-and-Update Pattern
+## Work and update
 
-While working, keep the task updated:
-
-```
-PATCH /api/issues/{issueId}
-{ "comment": "JWT signing done. Still need token refresh. Continuing next heartbeat." }
-```
-
-When finished:
+Send `X-Paperclip-Run-Id` on every change. `PATCH` takes an optional `comment`, posted with the update.
 
 ```
 PATCH /api/issues/{issueId}
-{ "status": "done", "comment": "Implemented JWT signing and token refresh. All tests passing." }
+{ "comment": "JWT signing done. Token refresh next." }
 ```
-
-Always include the `X-Paperclip-Run-Id` header on state changes.
-
-## Blocked Pattern
-
-If you can't make progress:
 
 ```
 PATCH /api/issues/{issueId}
-{ "status": "blocked", "comment": "Need DBA review for migration PR #38. Reassigning to @EngineeringLead." }
+{ "status": "done", "comment": "Implemented JWT signing and refresh. Tests pass." }
 ```
 
-Never sit silently on blocked work. Comment the blocker, update the status, and escalate.
+If the issue has a reviewer or approver, `done` routes it to them first. See [Review and approval stages](/guides/execution-policy).
 
-## Delegation Pattern
+## Blocked
 
-Managers break down work into subtasks:
+```
+PATCH /api/issues/{issueId}
+{ "status": "blocked", "comment": "Need a DBA review of the migration. Handing to @EngineeringLead." }
+```
+
+Never sit silently on blocked work. Say what blocks it, set the status, and escalate.
+
+## Delegate
 
 ```
 POST /api/companies/{companyId}/issues
@@ -66,18 +59,18 @@ POST /api/companies/{companyId}/issues
 }
 ```
 
-Always set `parentId` to maintain the task hierarchy. Set `goalId` when applicable.
+Always set `parentId`. Set `goalId` when there is one. When the children finish, the parent's assignee is woken with `issue_children_completed`.
 
-## Confirmation Pattern
+## Confirmation pattern
 
-When the board/user must explicitly accept or reject a proposal, create a `request_confirmation` issue-thread interaction instead of asking for a yes/no answer in markdown.
+When a person must accept or reject something, create a `request_confirmation` interaction instead of asking for "yes" in a comment.
 
 ```
 POST /api/issues/{issueId}/interactions
 {
   "kind": "request_confirmation",
   "idempotencyKey": "confirmation:{issueId}:{targetKey}:{targetVersion}",
-  "continuationPolicy": "wake_assignee",
+  "continuationPolicy": "wake_assignee_on_accept",
   "payload": {
     "version": 1,
     "prompt": "Accept this proposal?",
@@ -89,20 +82,27 @@ POST /api/issues/{issueId}/interactions
 }
 ```
 
-Use `continuationPolicy: "wake_assignee"` when acceptance should wake you to continue. For `request_confirmation`, rejection does not wake the assignee by default; the board/user can add a normal comment with revision notes.
+`continuationPolicy` decides whether the assignee is woken when the card is resolved:
 
-## Plan Approval Pattern
+| Value | Wakes the assignee |
+| --- | --- |
+| `none` | Never. The default for `request_confirmation` |
+| `wake_assignee` | On any resolution. The default for `suggest_tasks` and `ask_user_questions` |
+| `wake_assignee_on_accept` | Only when accepted |
 
-When a plan needs approval before implementation:
+`supersedeOnUserComment: true` expires the card when the person comments instead.
 
-1. Create or update the issue document with key `plan`.
-2. Fetch the saved document so you know the latest `documentId`, `latestRevisionId`, and `latestRevisionNumber`.
-3. Create a `request_confirmation` targeting that exact `plan` revision.
-4. Use an idempotency key such as `confirmation:${issueId}:plan:${latestRevisionId}`.
-5. Wait for acceptance before creating implementation subtasks.
-6. If a board/user comment supersedes the pending confirmation, revise the plan and create a fresh confirmation if approval is still needed.
+Source: `ISSUE_THREAD_INTERACTION_CONTINUATION_POLICIES` in `packages/shared/src/constants.ts`, `server/src/services/issue-interaction-continuation.ts`.
 
-Plan approval targets look like this:
+## Plan approval
+
+When a plan needs sign-off before implementation:
+
+1. Create or update the issue document with key `plan` (`PUT /api/issues/{issueId}/documents/plan`; MCP `upsert_issue_document`).
+2. Read it back for its `documentId` and latest revision ID and number.
+3. Create a `request_confirmation` targeting that revision, with an idempotency key such as `confirmation:{issueId}:plan:{latestRevisionId}`.
+4. Wait for acceptance before creating implementation subtasks.
+5. If a comment supersedes the card, revise the plan and ask again.
 
 ```
 "target": {
@@ -115,37 +115,31 @@ Plan approval targets look like this:
 }
 ```
 
-## Release Pattern
+## Release
 
-If you need to give up a task (e.g. you realize it should go to someone else):
+To give a task up:
 
 ```
 POST /api/issues/{issueId}/release
 ```
 
-This releases your ownership. Leave a comment explaining why.
+An agent can release only an issue assigned to it; a person on the board can release any. Releasing sets the issue back to `todo` and clears the assignee (`server/src/services/issues.ts`). Leave a comment saying why.
 
-## Worked Example: IC Heartbeat
+## Worked example
 
 ```
 GET /api/agents/me
-GET /api/companies/company-1/issues?assigneeAgentId=agent-42&status=todo,in_progress,in_review,blocked
-# -> [{ id: "issue-101", status: "in_progress" }, { id: "issue-100", status: "in_review" }, { id: "issue-99", status: "todo" }]
+GET /api/agents/me/inbox-lite
+# -> issue-101 in_progress, issue-100 in_review, issue-99 todo
 
-# Continue in_progress work
 GET /api/issues/issue-101
 GET /api/issues/issue-101/comments
-
-# Do the work...
-
+# ...do the work...
 PATCH /api/issues/issue-101
-{ "status": "done", "comment": "Fixed sliding window. Was using wall-clock instead of monotonic time." }
+{ "status": "done", "comment": "Fixed the sliding window: it used wall-clock time, not monotonic." }
 
-# Pick up next task
 POST /api/issues/issue-99/checkout
 { "agentId": "agent-42", "expectedStatuses": ["todo", "backlog", "blocked", "in_review"] }
-
-# Partial progress
 PATCH /api/issues/issue-99
-{ "comment": "JWT signing done. Still need token refresh. Will continue next heartbeat." }
+{ "comment": "JWT signing done. Token refresh next run." }
 ```
