@@ -416,8 +416,8 @@ jobs:
   # AgentDash (#732): one immutable GHCR image per stable tag.
   #
   # Runs only after publish_stable, so only after the npm-stable environment
-  # gate and the tag push. Each platform builds natively (the emulated arm64
-  # build in docker.yml does not finish inside its 30-minute limit) and pushes
+  # gate and the tag push. Each platform builds natively (an emulated arm64
+  # build does not finish inside 30 minutes; docker.yml now does the same, #775) and pushes
   # by digest only; publish_stable_image_manifest then names the multi-arch
   # index with the release tags, and record_stable_image_digest writes the
   # index digest into the GitHub Release body. GITHUB_TOKEN only, and

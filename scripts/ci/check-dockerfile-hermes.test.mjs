@@ -66,4 +66,6 @@ test("Hermes state and wrappers default to the /paperclip Volume, without HERMES
 test("the Docker workflow smoke-tests Hermes on pull requests", () => {
   assert.match(DOCKER_WORKFLOW, /scripts\/docker\/hermes-smoke\.sh/);
   assert.match(DOCKER_WORKFLOW, /load:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}/);
+  // AgentDash (#775): on both native platforms, not just amd64.
+  assert.match(DOCKER_WORKFLOW, /hermes-smoke\.sh "agentdash-pr:\$\{\{ matrix\.arch \}\}"/);
 });

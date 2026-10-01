@@ -45,6 +45,8 @@ Every stable release publishes an immutable multi-arch image (linux/amd64 and li
 
 `latest` is not touched by releases: `.github/workflows/docker.yml` owns it (tip of `main`, plus `sha-<7>`).
 
+A stable tag with no image (anything cut before #732, up to `v2026.925.0`) can get one after the fact: dispatch the `Docker` workflow from `main` with `release_tag` set, e.g. `gh workflow run docker.yml --ref main -f release_tag=v2026.924.0`. It builds the tag's commit natively for both platforms and pushes `:vYYYY.MDD.P` and `:YYYY.MDD.P`, and refuses if either tag already exists. It does not edit the GitHub Release body.
+
 `provision-box.sh` checks GHCR for the image before deploying and stops if it is missing. Fallbacks:
 
 - `--from-source` uploads `git archive <tag>` and has Railway build the Dockerfile. Use it for tags cut before #732 (everything up to `v2026.925.0`, including the launch box's `v2026.924.0`) or if GHCR is unavailable. It is slower (about 10 to 15 minutes per build) but pins the exact tagged tree.
