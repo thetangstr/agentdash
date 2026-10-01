@@ -65,7 +65,7 @@ function NotScheduledBadge() {
   return (
     <span
       className="whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-      title="No heartbeat schedule: this agent only runs when someone wakes it."
+      title="This agent only runs when someone wakes it."
     >
       Not scheduled
     </span>
@@ -153,7 +153,7 @@ export function Agents() {
   }, [setBreadcrumbs]);
 
   if (!selectedCompanyId) {
-    return <EmptyState icon={Bot} message="Select a company to view agents." />;
+    return <EmptyState icon={Bot} message="Select a workspace to view agents." />;
   }
 
   if (isLoading) {

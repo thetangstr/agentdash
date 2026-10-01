@@ -220,7 +220,7 @@ describe("CommandPalette", () => {
     ]) {
       expect(labels.some((text) => text.startsWith(label)), `expected "${label}"`).toBe(true);
     }
-    for (const label of ["Plugins", "Experimental", "Heartbeats", "Override"]) {
+    for (const label of ["Plugins", "Experimental", "Schedules", "Override"]) {
       expect(labels.some((text) => text.startsWith(label)), `unexpected "${label}"`).toBe(false);
     }
     act(() => {
@@ -228,7 +228,7 @@ describe("CommandPalette", () => {
     });
   });
 
-  it("adds Heartbeats, Plugins and Experimental for an instance admin", async () => {
+  it("adds Schedules, Plugins and Experimental for an instance admin", async () => {
     mockCapabilitiesApi.get.mockResolvedValue({ capabilities: {}, membershipRole: "owner", isInstanceAdmin: true });
     const { root } = renderWithQueryClient(<CommandPalette />, container);
     act(() => {
@@ -237,7 +237,7 @@ describe("CommandPalette", () => {
     await waitForAssertion(() => {
       expect(container.textContent).toContain("Plugins");
     });
-    expect(container.textContent).toContain("Heartbeats");
+    expect(container.textContent).toContain("Schedules");
     expect(container.textContent).toContain("Experimental");
     act(() => {
       root.unmount();

@@ -193,7 +193,7 @@ describe("SettingsSidebar", () => {
       { id: "p-1", packageName: "@acme/plugin", manifestJson: { displayName: "Acme" } },
     ]);
     const root = await render();
-    expect(groupLinks("agents").map((l) => l.label)).toEqual(["Workforce roles", "Skills", "Environments", "Adapters", "Heartbeats"]);
+    expect(groupLinks("agents").map((l) => l.label)).toEqual(["Workforce roles", "Skills", "Environments", "Adapters", "Schedules"]);
     expect(groupLinks("instance")).toEqual([
       { label: "General", href: "/instance/settings/general" },
       { label: "Access", href: "/instance/settings/access" },

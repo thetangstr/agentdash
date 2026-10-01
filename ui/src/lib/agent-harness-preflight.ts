@@ -37,7 +37,7 @@ export function getAgentCreateHarnessPreflightGate(input: {
     return {
       canCreate: false,
       reason: "pending",
-      message: "Agent harness preflight is still running.",
+      message: "The setup check is still running.",
     };
   }
   if (input.errorMessage) {
@@ -58,7 +58,7 @@ export function getAgentCreateHarnessPreflightGate(input: {
     return {
       canCreate: false,
       reason: "not_passed",
-      message: "The latest harness preflight did not pass. Resolve the checks, then test again.",
+      message: "The latest setup check did not pass. Resolve the checks, then test again.",
     };
   }
   if (input.passedConfigKey !== input.currentConfigKey) {

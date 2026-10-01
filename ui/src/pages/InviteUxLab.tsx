@@ -424,7 +424,7 @@ function InviteResultPreview({
             <div className="border border-zinc-800 p-3">
               <p className="mb-1 text-xs text-zinc-500">Approval page</p>
               <a className="text-sm text-zinc-200 underline underline-offset-2" href="/company/settings/access">
-                Company Settings → Access
+                Settings → Access
               </a>
             </div>
             <p className="text-xs text-zinc-500">
@@ -465,7 +465,7 @@ function AuthScreenPreview({ mode, error }: { mode: "sign_in" | "sign_up"; error
             <p className="mt-1 text-sm text-muted-foreground">
               {mode === "sign_in"
                 ? "Use your email and password to access this instance."
-                : "Create an account for this instance. Email confirmation is not required in v1."}
+                : "Create an account for this instance. Email confirmation is not required."}
             </p>
             <div className="mt-6 space-y-4">
               {mode === "sign_up" ? (
@@ -897,7 +897,7 @@ export function InviteUxLab() {
           />
           <InviteResultPreview
             title="Request to join Acme Robotics"
-            description="Ask them to visit Company Settings → Access to approve your request."
+            description="Ask them to visit Settings → Access to approve your request."
           />
         </div>
       </LabSection>

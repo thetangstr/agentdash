@@ -117,14 +117,15 @@ describe("what reaches the screen", () => {
       { onRunPreflight: () => undefined },
     );
 
-    expect(html).toContain("Harness preflight failed");
+    expect(html).toContain("Setup check failed");
+    expect(html).not.toMatch(/preflight/i);
     expect(html).toContain("Missing API key");
-    expect(html).toContain("Add the provider key");
-    expect(html).toContain("Run preflight");
+    expect(html).toContain("Add the provider key, then rerun setup check.");
+    expect(html).toContain("Check setup");
   });
 
   it("renders warnings", () => {
-    expect(render(evidence({ status: "warn" }))).toContain("Harness preflight has warnings");
+    expect(render(evidence({ status: "warn" }))).toContain("Setup check has warnings");
   });
 
   /**

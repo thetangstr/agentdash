@@ -187,11 +187,11 @@ function AwaitingJoinApprovalPanel({
               href={approvalUrl}
               className="text-sm text-foreground underline underline-offset-2 hover:text-foreground"
             >
-              Company Settings → Access
+              Settings → Access
             </a>
           </div>
           <p className="text-sm text-muted-foreground">
-            Ask them to visit <a href={approvalUrl} className="text-foreground underline underline-offset-2 hover:text-foreground">Company Settings → Access</a> to approve your request.
+            Ask them to visit <a href={approvalUrl} className="text-foreground underline underline-offset-2 hover:text-foreground">Settings → Access</a> to approve your request.
           </p>
           <p className="text-xs text-muted-foreground">
             Refresh this page after you've been approved — you'll be redirected automatically.
