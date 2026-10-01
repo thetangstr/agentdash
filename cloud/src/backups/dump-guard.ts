@@ -548,7 +548,10 @@ export function deferredStatement(statement: string): string | null {
       const cmds = Array.isArray(b.cmds) ? b.cmds : [];
       if (cmds.length !== 1 || !isObj(cmds[0])) return null;
       const cmd = (cmds[0] as Obj).AlterTableCmd;
-      if (!isObj(cmd) || cmd.subtype !== "AT_AddConstraint" || !isObj(cmd.def)) return null;
+      if (!isObj(cmd)) return null;
+      // A trigger's enabled state (DISABLE / ENABLE REPLICA / ENABLE ALWAYS TRIGGER).
+      if (["AT_DisableTrig", "AT_EnableReplicaTrig", "AT_EnableAlwaysTrig", "AT_EnableTrig"].includes(String(cmd.subtype))) return "trigger state";
+      if (cmd.subtype !== "AT_AddConstraint" || !isObj(cmd.def)) return null;
       const con = (cmd.def as Obj).Constraint;
       return isObj(con) && con.contype === "CONSTR_CHECK" ? "check constraint" : null;
     }

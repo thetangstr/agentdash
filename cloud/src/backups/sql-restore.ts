@@ -397,8 +397,26 @@ export async function replayDump(file: string, connectionString: string): Promis
       // Extended protocol (simple: false): the server accepts exactly ONE
       // statement per call, so nothing the parser did not see can ride along.
       if (piece.kind === "copy") {
-        const writable = (await sql.unsafe(piece.command, [], EXTENDED_PROTOCOL).writable()) as Writable;
-        const failed = new Promise<never>((_, reject) => writable.once("error", reject));
+        // AgentDash (GH #907 review): a COPY the server refuses is reported only
+        // through the query's own reject(), a no-op once the query resolved
+        // with the stream; the stream then never finishes or errors and the
+        // replay would hang. Capture that rejection so the block fails.
+        const query = sql.unsafe(piece.command, [], EXTENDED_PROTOCOL) as unknown as { reject: (error: unknown) => void; writable(): Promise<Writable> };
+        let copyError: unknown = null;
+        let failCopy: ((error: unknown) => void) | null = null;
+        const originalReject = query.reject;
+        query.reject = (error: unknown) => {
+          copyError ??= error;
+          failCopy?.(error);
+          originalReject(error);
+        };
+        const writable = await query.writable();
+        const failed = new Promise<never>((_, reject) => {
+          if (copyError) reject(copyError);
+          failCopy = reject;
+          writable.once("error", reject);
+        });
+        failed.catch(() => {});
         try {
           for await (const line of piece.payload) {
             // The payload streams: write line by line, honouring backpressure.

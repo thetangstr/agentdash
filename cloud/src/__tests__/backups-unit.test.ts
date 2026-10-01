@@ -464,6 +464,10 @@ describe("dump guard (libpg_query AST allowlist)", () => {
       ["CREATE OR REPLACE VIEW \"public\".\"v\" AS\n SELECT pg_read_file('/etc/passwd') AS a;", "view"],
       ["CREATE MATERIALIZED VIEW \"public\".\"m\" AS\n SELECT 1 AS a\nWITH DATA;", "materialized view"],
       ['ALTER TABLE "public"."t" ADD CONSTRAINT "c" CHECK ((a > 0));', "check constraint"],
+      ['ALTER TABLE "public"."t" ADD CONSTRAINT "c" CHECK ((a > 0)) NOT VALID;', "check constraint"],
+      ['ALTER TABLE "public"."t" DISABLE TRIGGER "trg";', "trigger state"],
+      ['ALTER TABLE "public"."t" ENABLE REPLICA TRIGGER "trg";', "trigger state"],
+      ['ALTER TABLE "public"."t" ENABLE ALWAYS TRIGGER "trg";', "trigger state"],
     ];
     for (const [s, what] of deferred) {
       expect(deferredStatement(s), s).toBe(what);

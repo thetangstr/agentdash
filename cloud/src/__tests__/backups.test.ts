@@ -34,7 +34,7 @@ import { runRestoreTool } from "../backups/restore-tool.js";
 import { buildReference, loadBoxMigrations, type BoxMigration } from "../backups/schema-verify.js";
 import { createEncryptStream } from "../backups/envelope.js";
 import { STATEMENT_BREAKPOINT } from "../backups/dump-guard.js";
-import { EXTENDED_PROTOCOL } from "../backups/sql-restore.js";
+import { EXTENDED_PROTOCOL, replayDump } from "../backups/sql-restore.js";
 import { encryptField, parseKeyring } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { accounts, boxBackups, boxEvents, boxes, type BoxState } from "../db/schema.js";
@@ -447,6 +447,21 @@ describe("off-box backup round trip", () => {
       expect(code, name).toBe(1);
       expect(errs.join("\n"), name).toMatch(why);
     }
+  });
+
+  // AgentDash (GH #907 review): a COPY row the server refuses used to hang the
+  // replay forever (postgres.js reported it nowhere the stream could see).
+  it("a COPY block the server refuses fails the replay promptly instead of hanging", async () => {
+    const dump = await freshDump();
+    const broken = tamper(dump, (sql) => sql.replace(/(COPY "drizzle"\."__drizzle_migrations" \([^)]*\) FROM stdin;\n)/, "$1not-a-number\tx\t1\n"));
+    expect(broken).not.toBe(dump);
+    const t = await sandboxDatabase();
+    const outcome = await Promise.race([
+      replayDump(broken, t.url).then(() => "resolved", (err: unknown) => err),
+      new Promise((resolve) => setTimeout(() => resolve("hung"), 20_000).unref()),
+    ]);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toMatch(/invalid input syntax/);
   });
 
   it("the applied migrations come from the restored table and must be ours", async () => {

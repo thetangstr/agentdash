@@ -67,11 +67,14 @@ type ExtensionDefinition = {
 };
 
 // AgentDash (GH #907): schema objects the pg_dump-less engine used to drop.
+// `depends_on` holds catalog keys: `c:<pg_class oid>` for a relation (or a
+// relation's row type), `p:<pg_proc oid>` for a function.
 type FunctionDefinition = {
+  oid: string;
   schema_name: string;
   function_name: string;
   definition: string;
-  uses_row_type: boolean;
+  depends_on: string[];
 };
 
 type CheckConstraintDefinition = {
@@ -79,6 +82,7 @@ type CheckConstraintDefinition = {
   tablename: string;
   constraint_name: string;
   definition: string;
+  validated: boolean;
 };
 
 type ViewDefinition = {
@@ -94,7 +98,10 @@ type ViewDefinition = {
 type TriggerDefinition = {
   schema_name: string;
   tablename: string;
+  trigger_name: string;
   definition: string;
+  /** pg_trigger.tgenabled: O (default, origin/local), D (disabled), R (replica), A (always). */
+  enabled: "O" | "D" | "R" | "A";
 };
 
 type SchemaObjectDefinitions = {
@@ -102,6 +109,24 @@ type SchemaObjectDefinitions = {
   checks: CheckConstraintDefinition[];
   views: ViewDefinition[];
   triggers: TriggerDefinition[];
+};
+
+/** One function or view to write, with the catalog keys it needs created first. */
+type SchemaNode = {
+  key: string;
+  kind: "function" | "view" | "matview";
+  label: string;
+  statement: string;
+  depends_on: string[];
+};
+
+type SchemaNodeSections = {
+  /** Before the tables: functions that need no relation, so defaults, CHECKs and indexes can call them. */
+  beforeTables: SchemaNode[];
+  /** Right after the tables, before constraints and data: views, and functions that need a relation. */
+  afterTables: SchemaNode[];
+  /** After the data: materialized views (WITH DATA) and whatever depends on them. */
+  afterData: SchemaNode[];
 };
 
 const DEFAULT_BACKUP_WRITE_BUFFER_BYTES = 1024 * 1024;
@@ -456,19 +481,35 @@ async function* readRestoreStatements(backupFile: string): AsyncGenerator<string
 async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Promise<SchemaObjectDefinitions> {
   await sql`SELECT set_config('search_path', 'pg_catalog', false)`;
   try {
+    // A function's dependencies, from pg_depend: relations it names (a
+    // BEGIN ATOMIC body records them), the relation behind any row type in its
+    // signature (array element types included), and other functions.
     const functions = await sql<FunctionDefinition[]>`
-      SELECT n.nspname AS schema_name,
+      SELECT p.oid::text AS oid,
+             n.nspname AS schema_name,
              p.proname AS function_name,
              pg_get_functiondef(p.oid) AS definition,
-             EXISTS (
-               SELECT 1
-               FROM pg_type t
-               LEFT JOIN pg_type et ON et.oid = t.typelem AND t.typelem <> 0
-               WHERE (t.oid = p.prorettype
-                      OR t.oid = ANY(p.proargtypes::oid[])
-                      OR t.oid = ANY(coalesce(p.proallargtypes, '{}'::oid[])))
-                 AND (t.typrelid <> 0 OR coalesce(et.typrelid, 0) <> 0)
-             ) AS uses_row_type
+             ARRAY(
+               SELECT DISTINCT dep.k FROM (
+                 SELECT 'c:' || d.refobjid::text AS k
+                 FROM pg_depend d
+                 WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                   AND d.refclassid = 'pg_class'::regclass
+                 UNION
+                 SELECT 'c:' || (CASE WHEN t.typrelid <> 0 THEN t.typrelid ELSE et.typrelid END)::text
+                 FROM pg_depend d
+                 JOIN pg_type t ON t.oid = d.refobjid
+                 LEFT JOIN pg_type et ON et.oid = t.typelem AND t.typelem <> 0
+                 WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                   AND d.refclassid = 'pg_type'::regclass
+                   AND (t.typrelid <> 0 OR coalesce(et.typrelid, 0) <> 0)
+                 UNION
+                 SELECT 'p:' || d.refobjid::text
+                 FROM pg_depend d
+                 WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                   AND d.refclassid = 'pg_proc'::regclass AND d.refobjid <> p.oid
+               ) dep
+             ) AS depends_on
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
@@ -483,7 +524,8 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
       SELECT n.nspname AS schema_name,
              t.relname AS tablename,
              c.conname AS constraint_name,
-             pg_get_constraintdef(c.oid) AS definition
+             pg_get_constraintdef(c.oid) AS definition,
+             c.convalidated AS validated
       FROM pg_constraint c
       JOIN pg_class t ON t.oid = c.conrelid
       JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -501,12 +543,12 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
              pg_get_viewdef(v.oid) AS definition,
              v.reloptions::text[] AS reloptions,
              ARRAY(
-               SELECT DISTINCT d.refobjid::text
+               SELECT DISTINCT (CASE WHEN d.refclassid = 'pg_class'::regclass THEN 'c:' ELSE 'p:' END) || d.refobjid::text
                FROM pg_rewrite r
                JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = r.oid
                WHERE r.ev_class = v.oid
-                 AND d.refclassid = 'pg_class'::regclass
-                 AND d.refobjid <> v.oid
+                 AND d.refclassid IN ('pg_class'::regclass, 'pg_proc'::regclass)
+                 AND NOT (d.refclassid = 'pg_class'::regclass AND d.refobjid = v.oid)
              ) AS depends_on
       FROM pg_class v
       JOIN pg_namespace n ON n.oid = v.relnamespace
@@ -521,7 +563,9 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
     const triggers = await sql<TriggerDefinition[]>`
       SELECT n.nspname AS schema_name,
              c.relname AS tablename,
-             pg_get_triggerdef(t.oid) AS definition
+             t.tgname AS trigger_name,
+             pg_get_triggerdef(t.oid) AS definition,
+             t.tgenabled::text AS enabled
       FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -535,24 +579,13 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
   }
 }
 
-/** AgentDash (GH #907): views in an order where each one follows the views it reads from. */
-function orderViewsByDependency(views: ViewDefinition[]): ViewDefinition[] {
-  const byOid = new Map(views.map((view) => [view.oid, view]));
-  const ordered: ViewDefinition[] = [];
-  const state = new Map<string, "visiting" | "done">();
-  const visit = (view: ViewDefinition) => {
-    const seen = state.get(view.oid);
-    if (seen === "done" || seen === "visiting") return;
-    state.set(view.oid, "visiting");
-    for (const dep of view.depends_on) {
-      const target = byOid.get(dep);
-      if (target) visit(target);
-    }
-    state.set(view.oid, "done");
-    ordered.push(view);
-  };
-  for (const view of views) visit(view);
-  return ordered;
+/**
+ * AgentDash (GH #907): an identifier inside a `--` comment. A quoted name may
+ * contain a newline, which would end the comment and turn the rest of the
+ * name into SQL on restore; pg_dump replaces CR and LF the same way.
+ */
+function commentSafe(value: string): string {
+  return value.replace(/[\r\n]/g, " ");
 }
 
 function stripTrailingSemicolon(definition: string): string {
@@ -566,6 +599,81 @@ function viewStatement(view: ViewDefinition): string {
   return view.relkind === "m"
     ? `CREATE MATERIALIZED VIEW ${name}${options} AS\n${body}\nWITH DATA;`
     : `CREATE OR REPLACE VIEW ${name}${options} AS\n${body};`;
+}
+
+/** Each node after the nodes it depends on (depth-first; dependencies outside `nodes` already exist). */
+function orderByDependency(nodes: SchemaNode[]): SchemaNode[] {
+  const byKey = new Map(nodes.map((node) => [node.key, node]));
+  const ordered: SchemaNode[] = [];
+  const state = new Map<string, "visiting" | "done">();
+  const visit = (node: SchemaNode) => {
+    if (state.has(node.key)) return;
+    state.set(node.key, "visiting");
+    for (const dep of node.depends_on) {
+      const target = byKey.get(dep);
+      if (target) visit(target);
+    }
+    state.set(node.key, "done");
+    ordered.push(node);
+  };
+  for (const node of nodes) visit(node);
+  return ordered;
+}
+
+/**
+ * AgentDash (GH #907): place every function and view in the earliest section
+ * where what it needs already exists, then order each section by dependency.
+ *   - a materialized view needs the data (it is created WITH DATA);
+ *   - a function or view that needs a relation (a table's or a view's row
+ *     type, or a BEGIN ATOMIC body that reads one) waits until after the tables;
+ *   - anything that needs a later node moves to that node's section.
+ */
+function planSchemaNodes(functions: FunctionDefinition[], views: ViewDefinition[]): SchemaNodeSections {
+  const nodes: SchemaNode[] = [
+    ...functions.map((fn): SchemaNode => ({
+      key: `p:${fn.oid}`,
+      kind: "function",
+      label: `Function: ${commentSafe(`${fn.schema_name}.${fn.function_name}`)}`,
+      statement: `${stripTrailingSemicolon(fn.definition)};`,
+      depends_on: fn.depends_on,
+    })),
+    ...views.map((view): SchemaNode => ({
+      key: `c:${view.oid}`,
+      kind: view.relkind === "m" ? "matview" : "view",
+      label: `${view.relkind === "m" ? "Materialized view" : "View"}: ${commentSafe(`${view.schema_name}.${view.view_name}`)}`,
+      statement: viewStatement(view),
+      depends_on: view.depends_on,
+    })),
+  ];
+  const byKey = new Map(nodes.map((node) => [node.key, node]));
+  const rank = new Map<string, number>();
+  for (const node of nodes) {
+    const needsRelation = node.kind !== "function" || node.depends_on.some((dep) => dep.startsWith("c:"));
+    rank.set(node.key, node.kind === "matview" ? 2 : needsRelation ? 1 : 0);
+  }
+  // Raise each node to the latest section among its dependencies, until stable.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const node of nodes) {
+      let next = rank.get(node.key)!;
+      for (const dep of node.depends_on) {
+        if (byKey.has(dep)) next = Math.max(next, rank.get(dep)!);
+      }
+      if (next !== rank.get(node.key)) {
+        rank.set(node.key, next);
+        changed = true;
+      }
+    }
+  }
+  const section = (r: number) => orderByDependency(nodes.filter((node) => rank.get(node.key) === r));
+  return { beforeTables: section(0), afterTables: section(1), afterData: section(2) };
+}
+
+/** AgentDash (GH #907): pg_get_triggerdef does not carry tgenabled; restore it when it is not the default. */
+function triggerEnableStatement(trigger: TriggerDefinition): string | null {
+  const action = { D: "DISABLE TRIGGER", R: "ENABLE REPLICA TRIGGER", A: "ENABLE ALWAYS TRIGGER" }[trigger.enabled as "D" | "R" | "A"];
+  if (!action) return null;
+  return `ALTER TABLE ${quoteQualifiedName(trigger.schema_name, trigger.tablename)} ${action} ${quoteIdentifier(trigger.trigger_name)};`;
 }
 
 export function createBufferedTextFileWriter(filePath: string, maxBufferedBytes = DEFAULT_BACKUP_WRITE_BUFFER_BYTES) {
@@ -733,10 +841,9 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     // AgentDash (GH #907): CHECK constraints, views, functions and triggers,
     // read once up front and emitted below in dependency-safe order.
     const schemaObjects = await readSchemaObjectDefinitions(sql);
-    const leadingFunctions = schemaObjects.functions.filter((fn) => !fn.uses_row_type);
-    const rowTypeFunctions = schemaObjects.functions.filter((fn) => fn.uses_row_type);
+    const schemaNodes = planSchemaNodes(schemaObjects.functions, schemaObjects.views);
     const checkConstraints = schemaObjects.checks.filter((check) => includedTableNames.has(tableKey(check.schema_name, check.tablename)));
-    const views = orderViewsByDependency(schemaObjects.views);
+    const views = schemaObjects.views;
     const viewNames = new Set(views.map((view) => tableKey(view.schema_name, view.view_name)));
     const triggers = schemaObjects.triggers.filter((trigger) => {
       const key = tableKey(trigger.schema_name, trigger.tablename);
@@ -744,10 +851,12 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     });
     for (const fn of schemaObjects.functions) includedSchemas.add(fn.schema_name);
     for (const view of views) includedSchemas.add(view.schema_name);
-    const emitFunctions = (functions: FunctionDefinition[]) => {
-      for (const fn of functions) {
-        emit(`-- Function: ${fn.schema_name}.${fn.function_name}`);
-        emitStatement(`${stripTrailingSemicolon(fn.definition)};`);
+    const emitSchemaNodes = (heading: string, nodes: SchemaNode[]) => {
+      if (nodes.length === 0) return;
+      emit(`-- ${heading}`);
+      for (const node of nodes) {
+        emit(`-- ${node.label}`);
+        emitStatement(node.statement);
       }
       emit("");
     };
@@ -834,13 +943,10 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
-    // AgentDash (GH #907): functions before tables, so column defaults, CHECK
-    // constraints and index expressions can call them. Functions whose
-    // signature uses a table's row type wait until the tables exist.
-    if (leadingFunctions.length > 0) {
-      emit("-- Functions");
-      emitFunctions(leadingFunctions);
-    }
+    // AgentDash (GH #907): functions that need no relation go before the
+    // tables, so column defaults, CHECK constraints and index expressions can
+    // call them (see planSchemaNodes for the other sections).
+    emitSchemaNodes("Functions", schemaNodes.beforeTables);
 
     if (sequences.length > 0) {
       emit("-- Sequences");
@@ -875,7 +981,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         ORDER BY ordinal_position
       `;
 
-      emit(`-- Table: ${schema_name}.${tablename}`);
+      emit(`-- Table: ${commentSafe(`${schema_name}.${tablename}`)}`);
       emitStatement(`DROP TABLE IF EXISTS ${qualifiedTableName} CASCADE;`);
 
       const colDefs: string[] = [];
@@ -930,10 +1036,10 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
-    if (rowTypeFunctions.length > 0) {
-      emit("-- Functions using table row types");
-      emitFunctions(rowTypeFunctions);
-    }
+    // AgentDash (GH #907): views, and functions that need a relation (a row
+    // type in the signature, or a BEGIN ATOMIC body that reads a table or
+    // view), each after what it depends on.
+    emitSchemaNodes("Views and functions that use relations", schemaNodes.afterTables);
 
     const ownedSequences = sequences.filter((seq) => seq.owner_table && seq.owner_column);
     if (ownedSequences.length > 0) {
@@ -1032,11 +1138,14 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
-    // AgentDash (GH #907): CHECK constraints, before the data so every loaded
-    // row is checked exactly as on the source. NOT VALID ones stay NOT VALID.
-    if (checkConstraints.length > 0) {
+    // AgentDash (GH #907): validated CHECK constraints, before the data so
+    // every loaded row is checked exactly as on the source. NOT VALID ones
+    // come after the data (below), as pg_dump does: the rows they never
+    // checked would otherwise be refused on load.
+    const validatedChecks = checkConstraints.filter((check) => check.validated);
+    if (validatedChecks.length > 0) {
       emit("-- Check constraints");
-      for (const check of checkConstraints) {
+      for (const check of validatedChecks) {
         emitStatement(
           `ALTER TABLE ${quoteQualifiedName(check.schema_name, check.tablename)} ADD CONSTRAINT ${quoteIdentifier(check.constraint_name)} ${check.definition};`,
         );
@@ -1082,10 +1191,14 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       `;
       const colNames = cols.map((c) => `"${c.column_name}"`).join(", ");
 
-      emit(`-- Data for: ${schema_name}.${tablename} (${count[0]!.n} rows)`);
+      emit(`-- Data for: ${commentSafe(`${schema_name}.${tablename}`)} (${count[0]!.n} rows)`);
 
       const nullifiedColumns = nullifiedColumnsByTable.get(currentTableKey) ?? new Set<string>();
-      if (backupEngine !== "javascript" && nullifiedColumns.size === 0) {
+      // AgentDash (GH #907 review): a COPY header must stay on one line (the
+      // restore reads it as one), so a table or column whose quoted name holds
+      // a CR or LF is written as INSERTs instead.
+      const namesFitOneLine = ![schema_name, tablename, ...cols.map((c) => c.column_name)].some((name) => /[\r\n]/.test(name));
+      if (backupEngine !== "javascript" && nullifiedColumns.size === 0 && namesFitOneLine) {
         emit(`COPY ${qualifiedTableName} (${colNames}) FROM stdin;`);
         await writer.writeRaw("\n");
         const copySql = postgres(opts.connectionString, { max: 1, connect_timeout: connectTimeout });
@@ -1139,21 +1252,31 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
-    // AgentDash (GH #907): views (each after the views it reads), then
-    // triggers, after the data so no trigger sees the restore's own writes.
-    if (views.length > 0) {
-      emit("-- Views");
-      for (const view of views) {
-        emit(`-- View: ${view.schema_name}.${view.view_name}`);
-        emitStatement(viewStatement(view));
+    // AgentDash (GH #907): NOT VALID CHECK constraints after the data, still
+    // NOT VALID, so rows that predate them restore as they were.
+    const notValidChecks = checkConstraints.filter((check) => !check.validated);
+    if (notValidChecks.length > 0) {
+      emit("-- Check constraints (NOT VALID)");
+      for (const check of notValidChecks) {
+        emitStatement(
+          `ALTER TABLE ${quoteQualifiedName(check.schema_name, check.tablename)} ADD CONSTRAINT ${quoteIdentifier(check.constraint_name)} ${check.definition};`,
+        );
       }
       emit("");
     }
+
+    // AgentDash (GH #907): materialized views (WITH DATA) and what depends on
+    // them, then triggers, after the data so no trigger sees the restore's
+    // own writes. A trigger keeps its enabled state (pg_get_triggerdef does
+    // not carry it).
+    emitSchemaNodes("Materialized views", schemaNodes.afterData);
 
     if (triggers.length > 0) {
       emit("-- Triggers");
       for (const trigger of triggers) {
         emitStatement(`${stripTrailingSemicolon(trigger.definition)};`);
+        const enable = triggerEnableStatement(trigger);
+        if (enable) emitStatement(enable);
       }
       emit("");
     }
@@ -1251,8 +1374,30 @@ async function restoreCopyBlock(
   sql: ReturnType<typeof postgres>,
   copy: { command: string; payload: string },
 ): Promise<void> {
-  const writable = (await sql.unsafe(copy.command).writable()) as NodeJS.WritableStream;
+  // AgentDash (GH #907 review): when the server refuses the COPY (a bad row, a
+  // CHECK violation), postgres.js reports it only through the query's own
+  // reject(), which is a no-op by then because the query already resolved
+  // with the stream; the stream never finishes or errors, and the restore
+  // used to hang forever. Capture that rejection and fail the block with it.
+  const query = sql.unsafe(copy.command) as unknown as {
+    reject: (error: unknown) => void;
+    writable(): Promise<NodeJS.WritableStream>;
+  };
+  let copyError: unknown = null;
+  let failCopy: ((error: unknown) => void) | null = null;
+  const originalReject = query.reject;
+  query.reject = (error: unknown) => {
+    copyError ??= error;
+    failCopy?.(error);
+    originalReject(error);
+  };
+  const writable = await query.writable();
   await new Promise<void>((resolve, reject) => {
+    if (copyError) {
+      reject(copyError);
+      return;
+    }
+    failCopy = reject;
     writable.on("error", reject);
     writable.on("finish", resolve);
     if (copy.payload.length > 0) writable.write(copy.payload);

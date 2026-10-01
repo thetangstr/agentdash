@@ -442,7 +442,15 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
             FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE p.prokind IN ('f', 'p') AND ${userNs}
               AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')`),
-          triggers: await rows(`SELECT pg_get_triggerdef(t.oid) AS e FROM pg_trigger t WHERE NOT t.tgisinternal`),
+          checksValidated: await rows(`
+            SELECT n.nspname || '.' || t.relname || '.' || c.conname || ' validated=' || c.convalidated::text AS e
+            FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE c.contype = 'c' AND ${userNs}`),
+          triggers: await rows(`SELECT pg_get_triggerdef(t.oid) || ' enabled=' || t.tgenabled::text AS e FROM pg_trigger t WHERE NOT t.tgisinternal`),
+          tables: await rows(`
+            SELECT n.nspname || '.' || c.relname || ':' || c.relkind::text AS e
+            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'v', 'm') AND ${userNs}`),
           nullsNotDistinct: await rows(`
             SELECT pg_get_indexdef(i.indexrelid) AS e
             FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -469,19 +477,40 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
             (${company!.id}, 'system', 'issues', 'issue-1', 'v1', 'issue.created', now(), 'dedupe-1')
         `;
 
-        const result = await runDatabaseBackup({
-          connectionString: sourceConnectionString,
-          backupDir,
-          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
-          filenamePrefix: "paperclip-schema-objects-test",
-        });
-        await runDatabaseRestore({
-          connectionString: restoreConnectionString,
-          backupFile: result.backupFile,
-        });
+        // Review cases (PR #929), all in the same source database:
+        //  - a NOT VALID CHECK over a row that violates it (must restore, still NOT VALID);
+        //  - a function and a table whose quoted names contain newlines and SQL
+        //    (a `--` comment line must not let that SQL run on restore);
+        //  - a disabled trigger (must come back disabled);
+        //  - a function returning a VIEW's row type, a BEGIN ATOMIC function
+        //    that reads a table, a view calling it, and a materialized view
+        //    (each must be created after what it needs).
+        await sourceSql.unsafe(`
+          CREATE TABLE "public"."nv_rows" ("id" int PRIMARY KEY, "n" int NOT NULL);
+          INSERT INTO "public"."nv_rows" VALUES (1, -5), (2, 7);
+          ALTER TABLE "public"."nv_rows" ADD CONSTRAINT "nv_rows_n_positive" CHECK ("n" > 0) NOT VALID;
+          CREATE FUNCTION "public"."nv_touch"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$;
+          CREATE TRIGGER "nv_rows_touch" BEFORE UPDATE ON "public"."nv_rows" FOR EACH ROW EXECUTE FUNCTION "public"."nv_touch"();
+          ALTER TABLE "public"."nv_rows" DISABLE TRIGGER "nv_rows_touch";
+          CREATE TRIGGER "nv_rows_touch_always" BEFORE INSERT ON "public"."nv_rows" FOR EACH ROW EXECUTE FUNCTION "public"."nv_touch"();
+          ALTER TABLE "public"."nv_rows" ENABLE ALWAYS TRIGGER "nv_rows_touch_always";
+          CREATE FUNCTION "public"."x
+CREATE TABLE injected_by_name (z int);
+--"() RETURNS int LANGUAGE sql AS 'select 1';
+          CREATE TABLE "public"."t
+CREATE TABLE injected_by_table (z int);
+--" ("id" int);
+          INSERT INTO "public"."t
+CREATE TABLE injected_by_table (z int);
+--" VALUES (1);
+          CREATE VIEW "public"."nv_view" AS SELECT "id", "n" FROM "public"."nv_rows";
+          CREATE FUNCTION "public"."nv_view_rows"() RETURNS SETOF "public"."nv_view" LANGUAGE sql AS 'SELECT * FROM public.nv_view';
+          CREATE FUNCTION "public"."nv_count"() RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT count(*) FROM "public"."nv_rows"; END;
+          CREATE VIEW "public"."nv_counted" AS SELECT "public"."nv_count"() AS "c";
+          CREATE MATERIALIZED VIEW "public"."nv_mat" AS SELECT count(*) AS "c" FROM "public"."nv_rows";
+        `);
 
         const source = await catalog(sourceSql);
-        const restored = await catalog(restoreSql);
 
         // The migrated schema really has each kind of object, so equality is not vacuous.
         expect(source.checks.length).toBeGreaterThan(0);
@@ -490,24 +519,67 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
         expect(source.triggers.some((trigger) => trigger.includes("evaluation_events_no_update_trg"))).toBe(true);
         expect(source.triggers.some((trigger) => trigger.includes("evaluation_events_no_delete_trg"))).toBe(true);
         expect(source.nullsNotDistinct.some((index) => index.includes("plugin_state_unique_entry_idx"))).toBe(true);
+        expect(source.checksValidated).toContain("public.nv_rows.nv_rows_n_positive validated=false");
+        expect(source.triggers.some((trigger) => trigger.includes("nv_rows_touch ") && trigger.endsWith("enabled=D"))).toBe(true);
+        expect(source.triggers.some((trigger) => trigger.includes("nv_rows_touch_always") && trigger.endsWith("enabled=A"))).toBe(true);
 
-        expect(restored.checks).toEqual(source.checks);
-        expect(restored.views).toEqual(source.views);
-        expect(restored.functions).toEqual(source.functions);
-        expect(restored.triggers).toEqual(source.triggers);
-        expect(restored.nullsNotDistinct).toEqual(source.nullsNotDistinct);
-        expect(restored.constraints).toEqual(source.constraints);
-        expect(restored.indexes).toEqual(source.indexes);
+        // Both engines: the default (COPY) and the JavaScript one (INSERTs).
+        for (const engine of ["auto", "javascript"] as const) {
+          const targetConnectionString = engine === "auto"
+            ? restoreConnectionString
+            : await createSiblingDatabase(sourceConnectionString, "paperclip_schema_objects_restore_js");
+          const targetSql = engine === "auto"
+            ? restoreSql
+            : postgres(targetConnectionString, { max: 1, onnotice: () => {} });
+          try {
+            const result = await runDatabaseBackup({
+              connectionString: sourceConnectionString,
+              backupDir,
+              retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+              filenamePrefix: `paperclip-schema-objects-${engine}`,
+              backupEngine: engine,
+            });
+            await runDatabaseRestore({
+              connectionString: targetConnectionString,
+              backupFile: result.backupFile,
+            });
 
-        // The ledger row came back, and the immutability trigger still guards it.
-        const [ledger] = await restoreSql<{ n: number }[]>`SELECT count(*)::int AS n FROM evaluation_events`;
-        expect(ledger?.n).toBe(1);
-        await expect(
-          restoreSql`UPDATE evaluation_events SET event_type = 'tampered'`,
-        ).rejects.toThrow(/append-only: UPDATE refused/);
-        await expect(restoreSql`DELETE FROM evaluation_events`).rejects.toThrow(/append-only: DELETE refused/);
-        // The view answers queries against the restored tables.
-        await expect(restoreSql`SELECT count(*) FROM issue_review_timeline_v`).resolves.toBeDefined();
+            const restored = await catalog(targetSql);
+            expect(restored.checks, engine).toEqual(source.checks);
+            expect(restored.checksValidated, engine).toEqual(source.checksValidated);
+            expect(restored.views, engine).toEqual(source.views);
+            expect(restored.functions, engine).toEqual(source.functions);
+            expect(restored.triggers, engine).toEqual(source.triggers);
+            expect(restored.nullsNotDistinct, engine).toEqual(source.nullsNotDistinct);
+            expect(restored.constraints, engine).toEqual(source.constraints);
+            expect(restored.indexes, engine).toEqual(source.indexes);
+            // Same tables, views and materialized views: nothing injected by a name.
+            expect(restored.tables, engine).toEqual(source.tables);
+            const [injected] = await targetSql<{ name: string | null; table: string | null }[]>`
+              SELECT to_regclass('public.injected_by_name')::text AS name, to_regclass('public.injected_by_table')::text AS table
+            `;
+            expect(injected, engine).toEqual({ name: null, table: null });
+
+            // The ledger row came back, and the immutability trigger still guards it.
+            const [ledger] = await targetSql<{ n: number }[]>`SELECT count(*)::int AS n FROM evaluation_events`;
+            expect(ledger?.n, engine).toBe(1);
+            await expect(
+              targetSql`UPDATE evaluation_events SET event_type = 'tampered'`,
+            ).rejects.toThrow(/append-only: UPDATE refused/);
+            await expect(targetSql`DELETE FROM evaluation_events`).rejects.toThrow(/append-only: DELETE refused/);
+            // The views, the BEGIN ATOMIC function and the materialized view answer.
+            await expect(targetSql`SELECT count(*) FROM issue_review_timeline_v`).resolves.toBeDefined();
+            const [answers] = await targetSql<{ violating: number; counted: number; mat: number; via_view: number }[]>`
+              SELECT (SELECT count(*)::int FROM nv_rows WHERE n <= 0) AS violating,
+                     (SELECT c::int FROM nv_counted) AS counted,
+                     (SELECT c::int FROM nv_mat) AS mat,
+                     (SELECT count(*)::int FROM nv_view_rows()) AS via_view
+            `;
+            expect(answers, engine).toEqual({ violating: 1, counted: 2, mat: 2, via_view: 2 });
+          } finally {
+            if (targetSql !== restoreSql) await targetSql.end();
+          }
+        }
       } finally {
         process.env.PAPERCLIP_PG_DUMP_PATH = savedEnv.PAPERCLIP_PG_DUMP_PATH;
         process.env.PAPERCLIP_PSQL_PATH = savedEnv.PAPERCLIP_PSQL_PATH;
@@ -518,6 +590,57 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
       }
     },
     180_000,
+  );
+
+  // AgentDash (GH #907 review): a COPY block the server refuses used to hang
+  // the restore forever (postgres.js reported the error nowhere the stream
+  // could see). It must fail promptly with the server's error.
+  it(
+    "fails a restore promptly when the server refuses a COPY block",
+    async () => {
+      const restoreConnectionString = await createTempDatabase();
+      const backupDir = createTempDir("paperclip-db-restore-copy-error-");
+      const backupFile = path.join(backupDir, "copy-error.sql");
+      const breakpoint = "-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
+      const savedPsql = process.env.PAPERCLIP_PSQL_PATH;
+      process.env.PAPERCLIP_PSQL_PATH = path.join(os.tmpdir(), "no-such-psql");
+      try {
+        await fs.promises.writeFile(
+          backupFile,
+          [
+            "BEGIN;",
+            breakpoint,
+            "CREATE TABLE public.copy_error_test (id integer PRIMARY KEY, n integer NOT NULL CHECK (n > 0));",
+            breakpoint,
+            "-- Data for: public.copy_error_test (2 rows)",
+            "COPY \"public\".\"copy_error_test\" (\"id\", \"n\") FROM stdin;",
+            "1\t5",
+            "2\t-1",
+            "\\.",
+            breakpoint,
+            "COMMIT;",
+            breakpoint,
+          ].join("\n"),
+          "utf8",
+        );
+
+        const startedAt = Date.now();
+        const outcome = await Promise.race([
+          runDatabaseRestore({ connectionString: restoreConnectionString, backupFile }).then(
+            () => "resolved",
+            (error: unknown) => error,
+          ),
+          new Promise((resolve) => setTimeout(() => resolve("hung"), 15_000).unref()),
+        ]);
+        expect(outcome).toBeInstanceOf(Error);
+        expect((outcome as Error).message).toMatch(/copy_error_test_n_check|violates check constraint/);
+        expect(Date.now() - startedAt).toBeLessThan(15_000);
+      } finally {
+        if (savedPsql === undefined) delete process.env.PAPERCLIP_PSQL_PATH;
+        else process.env.PAPERCLIP_PSQL_PATH = savedPsql;
+      }
+    },
+    60_000,
   );
 
   it(
