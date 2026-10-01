@@ -19,6 +19,7 @@ const LETTER_ONLY_UPPERCASE_PREFIX_RE = /^[A-Z]{2,}$/;
 const HEX_ONLY_PREFIX_RE = /^[0-9A-F]+-/i;
 const UUID_NEIGHBOR_BEFORE_RE = /[0-9a-f]-$/i;
 const UUID_NEIGHBOR_AFTER_RE = /^-[0-9a-f]/i;
+const FULL_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const ISSUE_SCHEME_RE = /^issue:\/\/:?([^?#\s]+)(?:[?#].*)?$/i;
 const ISSUE_REFERENCE_TOKEN_RE = /issue:\/\/:?[^\s<>()]+|https?:\/\/[^\s<>()]+|\/(?:[^\s<>()/]+\/)*issues\/[A-Z][A-Z0-9]+-\d+(?=$|[\s<>)\],.;!?:])|\b[A-Z][A-Z0-9]+-\d+\b/gi;
 
@@ -148,8 +149,27 @@ function createIssueLinkNode(value: string, href: string, childType: "text" | "i
   };
 }
 
-function isInsideUuid(value: string, token: string, start: number, end: number): boolean {
+function isInsideUuid(
+  value: string,
+  token: string,
+  start: number,
+  end: number,
+  options: IssueReferenceOptions | undefined,
+): boolean {
   if (!HEX_ONLY_PREFIX_RE.test(token)) return false;
+  // AgentDash (GH #863 item 3): a company whose prefix is all hex (ABC, CAF, FAB,
+  // BED, DEF) would otherwise lose `ABC-12-fix-login` and `re-ABC-12`, because
+  // their neighbours look like UUID groups. A known company prefix is trusted
+  // unless the token really sits inside a complete UUID.
+  const prefix = token.match(BARE_ISSUE_IDENTIFIER_PARTS_RE)?.[1];
+  const knownPrefixes = normalizedIssuePrefixes(options);
+  if (prefix && knownPrefixes?.has(prefix.toUpperCase())) {
+    for (const uuid of value.matchAll(FULL_UUID_RE)) {
+      const uuidStart = uuid.index ?? 0;
+      if (start >= uuidStart && end <= uuidStart + uuid[0].length) return true;
+    }
+    return false;
+  }
   return UUID_NEIGHBOR_BEFORE_RE.test(value.slice(Math.max(0, start - 2), start))
     || UUID_NEIGHBOR_AFTER_RE.test(value.slice(end, end + 2));
 }
@@ -167,7 +187,7 @@ function linkifyIssueReferencesInText(value: string, options: IssueReferenceOpti
     const end = start + raw.length;
     const { core, trailing } = splitTrailingPunctuation(raw);
     const isBareToken = BARE_ISSUE_IDENTIFIER_RE.test(core);
-    if (isBareToken && isInsideUuid(value, core, start, start + core.length)) continue;
+    if (isBareToken && isInsideUuid(value, core, start, start + core.length, options)) continue;
     const issueRef = parseIssueReference(core, options, isBareToken);
     if (!issueRef) continue;
 

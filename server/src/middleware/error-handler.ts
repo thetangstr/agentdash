@@ -6,6 +6,7 @@ import { trackErrorHandlerCrash } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { recordServerError } from "../observability/error-sink.js";
 import { unwrapPgError } from "../lib/pg-error.js";
+import { logger } from "./logger.js";
 
 /** SQLSTATE invalid_text_representation — a value Postgres could not cast. */
 const PG_INVALID_TEXT_REPRESENTATION = "22P02";
@@ -24,6 +25,40 @@ function isInvalidUuidInput(err: unknown): boolean {
     typeof pg.message === "string" &&
     /invalid input syntax for type uuid/i.test(pg.message)
   );
+}
+
+const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * AgentDash (GH #863 item 4): the 400 above also hides the server's own bugs
+ * that pass a bad uuid (a name where an id belongs, a stale variable). Keep a
+ * warn-level trail: the route pattern, the method, and which path/query
+ * parameters are not uuid-shaped. Names only, never values: a parameter can
+ * be a secret (`/invites/:token`).
+ */
+function nonUuidParamNames(source: unknown): string[] {
+  if (!source || typeof source !== "object") return [];
+  const names: string[] = [];
+  for (const [name, value] of Object.entries(source as Record<string, unknown>)) {
+    if (typeof value === "string" && value.length > 0 && !UUID_SHAPE_RE.test(value)) names.push(name);
+  }
+  return names;
+}
+
+export function invalidUuidLogFields(req: Request) {
+  const routePath = (req as Request & { route?: { path?: unknown } }).route?.path;
+  return {
+    method: req.method,
+    route: typeof routePath === "string" ? `${req.baseUrl ?? ""}${routePath}` : null,
+    path: redactPathForLog(req.originalUrl ?? ""),
+    nonUuidParams: nonUuidParamNames(req.params),
+    nonUuidQuery: nonUuidParamNames(req.query),
+  };
+}
+
+/** Drop the query string; it can carry tokens and is summarised by name above. */
+function redactPathForLog(url: string): string {
+  return url.split("?")[0] ?? "";
 }
 
 export interface ErrorContext {
@@ -95,6 +130,10 @@ export function errorHandler(
   }
 
   if (isInvalidUuidInput(err)) {
+    logger.warn(
+      invalidUuidLogFields(req),
+      "invalid uuid reached the database; answered 400 (caller error, or a server bug if no listed parameter explains it)",
+    );
     res.status(400).json({ error: "Invalid identifier" });
     return;
   }

@@ -328,6 +328,8 @@ export function originBootReport(input: {
   allowedHostnames: string[];
   authPublicBaseUrl?: string;
   env: OriginEnv;
+  /** Configured single-sign-on providers (e.g. `["google"]`). */
+  ssoProviders?: string[];
 }): { warnings: string[]; info: string[] } {
   const { env } = input;
   const declared = input.declaredOrigins;
@@ -368,6 +370,42 @@ export function originBootReport(input: {
     info.push(
       `PAPERCLIP_ORIGINS is set without PAPERCLIP_CANONICAL_ORIGIN; canonical origin taken as ${canonical ?? "(none)"}.`,
     );
+  }
+
+  // AgentDash (GH #863 item 1): declared mode names TLS-door session cookies
+  // `__Secure-<prefix>.session_token`. Legacy mode with an http:// (or unset)
+  // auth base URL used the plain name on every door, so the first boot with
+  // PAPERCLIP_ORIGINS set signs out everyone who was signed in on a TLS door.
+  // Boot cannot tell a first boot from a later one, so the note is
+  // conditional; it is harmless after the first sign-in.
+  const tlsDeclared = declared.filter((origin) => origin.startsWith("https://"));
+  const legacyBaseUrl = [...AUTH_BASE_URL_ALIASES, "PAPERCLIP_PUBLIC_URL"]
+    .map((name) => env[name]?.trim())
+    .find((value): value is string => Boolean(value));
+  if (tlsDeclared.length > 0 && !legacyBaseUrl?.toLowerCase().startsWith("https://")) {
+    warnings.push(
+      `Sessions on TLS door(s) ${tlsDeclared.join(", ")} now use the __Secure- cookie name. If this instance `
+        + "ran without PAPERCLIP_ORIGINS before, everyone signed in on those doors is signed out once and must "
+        + "sign in again (see doc/DOCKER.md, Declared origins).",
+    );
+  }
+
+  // GH #863 item 1 (verified): the OAuth state cookie follows the same rule
+  // (`__Secure-<prefix>.state` on https, `<prefix>.state` on http) and the
+  // provider callback lands on the canonical origin. Single sign-on started on
+  // a door whose scheme differs from the canonical's sets the state cookie
+  // under the other name, and the callback fails with a state mismatch.
+  const ssoProviders = input.ssoProviders ?? [];
+  if (ssoProviders.length > 0 && canonical) {
+    const canonicalScheme = canonical.slice(0, canonical.indexOf(":"));
+    const otherScheme = declared.filter((origin) => !origin.startsWith(`${canonicalScheme}:`));
+    if (otherScheme.length > 0) {
+      warnings.push(
+        `Single sign-on (${ssoProviders.join(", ")}) only completes when started on the canonical origin ${canonical}; `
+          + `started on ${otherScheme.join(", ")} it fails with a state mismatch, because the state cookie is named `
+          + "per scheme. Send people to the canonical origin to sign in with SSO.",
+      );
+    }
   }
 
   const aliases = deprecatedOriginAliasesInUse(env);

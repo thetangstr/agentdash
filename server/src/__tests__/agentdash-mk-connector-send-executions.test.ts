@@ -29,6 +29,10 @@ import { connectorSendExecutionRoutes } from "../routes/connector-send-execution
 import { hubspotConnectorRoutes } from "../routes/hubspot-connector.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { connectorService } from "../services/connectors.js";
+import {
+  connectorSendExecutionService,
+  describeConnectorSendOutcome,
+} from "../services/connector-send-execution.js";
 import { __resetHubspotLimiterState } from "../services/hubspot-connector.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -447,5 +451,62 @@ describeEmbeddedPostgres("agentdash-mk outcome_unknown operator surface", () => 
       .where(eq(activityLog.companyId, ctx.company.id));
     const reconcileLog = activity.find((row) => row.action === "connector_send.reconciled");
     expect(reconcileLog?.actorId).toBe(ctx.steward.principalId);
+  });
+
+  // -- GH #863 item 5: a transient error before the claim sent nothing -------
+
+  async function fileAndApprove(ctx: Awaited<ReturnType<typeof seed>>) {
+    const filed = await call(makeApp(agentActor(ctx.company.id, ctx.agent.id)), (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${ctx.company.id}/hubspot/contacts/write`)
+        .send({ operation: "create", properties: PROPERTIES }),
+    );
+    expect(filed.status, JSON.stringify(filed.body)).toBe(202);
+    await db.update(approvals).set({ status: "approved" }).where(eq(approvals.id, filed.body.approvalId));
+    return filed.body.approvalId as string;
+  }
+
+  it("reports a failed claim insert as not sent, not as outcome unknown", async () => {
+    const approvalId = await fileAndApprove(await seed());
+
+    // A database that drops the connection on the claim insert, and only there.
+    const flakyDb = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "insert") {
+          return (table: unknown) => {
+            if (table === connectorSendExecutions) throw new Error("Connection terminated unexpectedly");
+            return target.insert(table as never);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as TestDb;
+
+    const report = await connectorSendExecutionService(flakyDb).executeForApproval(approvalId);
+
+    expect(report).toEqual({
+      outcome: "failed",
+      refused: false,
+      reason: "executor_error_before_send",
+      provider: "hubspot",
+      detail: null,
+    });
+    expect(describeConnectorSendOutcome(report!)).toContain("Nothing was delivered");
+    expect(crmWriteCount).toBe(0);
+    const rows = await db
+      .select()
+      .from(connectorSendExecutions)
+      .where(eq(connectorSendExecutions.approvalId, approvalId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("still reports outcome unknown once the claim is written and the provider is ambiguous", async () => {
+    const approvalId = await fileAndApprove(await seed());
+
+    const report = await connectorSendExecutionService(db).executeForApproval(approvalId);
+
+    expect(report?.outcome).toBe("outcome_unknown");
+    expect(crmWriteCount).toBe(1);
   });
 });
