@@ -21,6 +21,8 @@ import { publishLiveEvent } from "../services/live-events.js";
 import { accessService } from "../services/access.js";
 import { agentService } from "../services/agents.js";
 import { companyService } from "../services/companies.js";
+import { claimBoardOwnership, getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "../board-claim.js";
+import { logger } from "../middleware/logger.js";
 
 const require = createRequire(import.meta.url);
 const WebSocket = require("ws") as new (url: string, opts?: { headers?: Record<string, string> }) => {
@@ -55,6 +57,7 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   let faultyServer: Server | null = null;
   let faultyUrl = "";
   let dbMode: "ok" | "error" | "hang" = "ok";
+  let faultySelects = 0;
   const COMPANY = randomUUID();
   const OTHER_COMPANY = randomUUID();
 
@@ -74,6 +77,7 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     });
     return new Proxy(db, {
       get(target, prop, receiver) {
+        if (prop === "select") faultySelects += 1;
         if (prop === "select" && dbMode !== "ok") {
           return () => {
             if (dbMode === "error") throw new Error("simulated database failure");
@@ -405,6 +409,79 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
       expect(await closeCodeWithin(client, 5000)).toBe(1008);
     } finally {
       dbMode = "ok";
+    }
+  });
+
+  it("two back-to-back access changes on one socket revoke it once and leak nothing", async () => {
+    const removed = await addUser();
+    const kept = await addUser();
+    const listenersBefore = liveEventAccessListenerCount();
+    const revokeLogs = vi.spyOn(logger, "info");
+
+    try {
+      await db.update(companyMemberships).set({ status: "archived" }).where(eq(companyMemberships.id, removed.membershipId));
+      publishLiveEventAccessChange({ kind: "user", userId: removed.userId, companyId: COMPANY, reason: "first change" });
+      publishLiveEventAccessChange({ kind: "user", userId: removed.userId, companyId: COMPANY, reason: "second change" });
+      expect(await closeCodeWithin(removed.client, 5000)).toBe(1008);
+      // A third change after the close is a no-op.
+      publishLiveEventAccessChange({ kind: "user", userId: removed.userId, companyId: COMPANY, reason: "late change" });
+      await settle([kept.client]);
+
+      const revokes = revokeLogs.mock.calls.filter(
+        ([fields, message]) =>
+          message === "live websocket access revoked; closing" &&
+          (fields as { actorId?: string }).actorId === removed.userId,
+      );
+      expect(revokes).toHaveLength(1);
+      expect(kept.client.isOpen()).toBe(true);
+      expect(liveEventAccessListenerCount()).toBe(listenersBefore);
+    } finally {
+      revokeLogs.mockRestore();
+    }
+  });
+
+  it("coalesces changes that arrive while a check is still queued into one re-check", async () => {
+    const mkUser = async () => {
+      const userId = `user-${randomUUID()}`;
+      await db.insert(companyMemberships).values({ companyId: COMPANY, principalType: "user", principalId: userId, status: "active", membershipRole: "member" });
+      return { userId, client: await connect({ "x-test-user": userId }, faultyUrl) };
+    };
+    const one = await mkUser();
+    const many = await mkUser();
+    const change = (userId: string) =>
+      publishLiveEventAccessChange({ kind: "user", userId, companyId: COMPANY, reason: "burst" });
+    const settleChecks = () => new Promise((resolve) => setTimeout(resolve, 300));
+
+    faultySelects = 0;
+    change(one.userId);
+    await settleChecks();
+    const singleCost = faultySelects;
+    expect(singleCost).toBeGreaterThan(0);
+
+    faultySelects = 0;
+    change(many.userId);
+    change(many.userId);
+    change(many.userId);
+    await settleChecks();
+    expect(faultySelects).toBe(singleCost);
+    expect(many.client.isOpen()).toBe(true);
+  });
+
+  it("publishes access changes when the board is claimed", async () => {
+    const claimant = `user-${randomUUID()}`;
+    await db.insert(instanceUserRoles).values({ userId: "local-board", role: "instance_admin" });
+    await initializeBoardClaimChallenge(db, { deploymentMode: "authenticated" });
+    const url = new URL(getBoardClaimWarningUrl("localhost", 3100)!);
+    const token = url.pathname.split("/").pop()!;
+    const seen: LiveEventAccessChange[] = [];
+    const unsubscribe = subscribeLiveEventAccessChanges((change) => seen.push(change));
+    try {
+      const result = await claimBoardOwnership(db, { token, code: url.searchParams.get("code") ?? undefined, userId: claimant });
+      expect(result.status).toBe("claimed");
+      expect(seen).toContainEqual({ kind: "user", userId: "local-board", reason: "board ownership claimed" });
+      expect(seen).toContainEqual({ kind: "user", userId: claimant, reason: "board ownership claimed" });
+    } finally {
+      unsubscribe();
     }
   });
 

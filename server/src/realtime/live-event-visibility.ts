@@ -326,14 +326,13 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       return value;
     }
 
-    async function projectVisible(req: Request, projectId: string): Promise<boolean> {
+    async function projectVisible(req: Request, projectId: string, epoch: number): Promise<boolean> {
       const row = (await loadCompanyProjects(companyId)).get(projectId);
       // Unknown here means another company or a dangling id; isProjectIdVisible
       // treats a dangling reference as company-visible, and a foreign project
       // cannot reach this company's stream.
       if (!row) return true;
       const generation = generationOf(companyId);
-      const epoch = actorEpoch;
       const cached = decisions.get(projectId);
       if (cached && cached.generation === generation && cached.expiresAt > now()) return cached.visible;
       const visible = await isProjectVisible(db, req, row);
@@ -354,6 +353,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       const details = payload?.details;
       const related = relatedIssueIdsInActivityDetails(details);
       if (related.length === 0) return event;
+      const epoch = actorEpoch; // before the actor is read: see projectVisible
       const req = await currentReq();
       if (seesEverything(req, companyId)) return event;
       const projectsById = await projectsOfIssues(related.filter((id) => isCanonicalUuid(id)));
@@ -361,7 +361,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       for (const [issueId, projectId] of projectsById) {
         // Unknown issue: fail closed. No project: company-visible.
         if (projectId === undefined) continue;
-        if (projectId === null || (await projectVisible(req, projectId))) visible.add(issueId);
+        if (projectId === null || (await projectVisible(req, projectId, epoch))) visible.add(issueId);
       }
       const pruned = pruneRelatedIssuesInActivityDetails(details, (id) => visible.has(id));
       if (pruned === details) return event;
@@ -382,6 +382,9 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     return Object.assign(shouldDeliver, { redactForSubscriber, invalidateActor });
 
     async function shouldDeliver(event: LiveEvent): Promise<boolean> {
+      // AgentDash (GH #708): the epoch is read before any actor is loaded, so an
+      // invalidation at any later await keeps this call's decisions out of the cache.
+      const epoch = actorEpoch;
       // Agent visibility (2026-09-30): an event about an agent the subscriber
       // cannot see is not delivered, whatever project it is in. The scope is
       // cached on the actor request, which currentReq() keeps for ACTOR_TTL_MS.
@@ -402,7 +405,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
         return ![...rows.values()].some((row) => row.visibility === "restricted");
       }
       for (const projectId of ref.projectIds) {
-        if (!(await projectVisible(req, projectId))) return false;
+        if (!(await projectVisible(req, projectId, epoch))) return false;
       }
       return true;
     }

@@ -339,6 +339,8 @@ export function setupLiveEventsWebSocketServer(
     // An access-change re-check in flight. Events published after the change
     // wait for it, so none slips out between the commit and the close.
     pendingCheck: Promise<void> | null;
+    // A chained check that has not started yet; it will read the state after any later change too.
+    queuedCheck: boolean;
     // Consecutive heartbeat re-checks that failed with a database error.
     errorStreak: number;
   };
@@ -409,10 +411,17 @@ export function setupLiveEventsWebSocketServer(
   const unsubscribeAccessChanges = subscribeLiveEventAccessChanges((change) => {
     for (const [socket, access] of accessByClient) {
       if (access.revoked || !accessChangeMatches(change, access.context)) continue;
-      // Chained: a second change waits for the first, none is overwritten.
+      // Coalesced: a check queued but not started will read the committed state
+      // of this change too (changes publish after commit), so reuse it.
+      if (access.queuedCheck) continue;
+      access.queuedCheck = true;
+      // Chained: a change during a running check waits for it, none is overwritten.
       const previous = access.pendingCheck ?? Promise.resolve();
       const check: Promise<void> = previous
-        .then(() => recheckClient(socket, access, change.reason, { failClosed: true }))
+        .then(() => {
+          access.queuedCheck = false;
+          return recheckClient(socket, access, change.reason, { failClosed: true });
+        })
         .then((allowed) => {
           // Still allowed (e.g. admin demoted to member): apply the new role to the next event.
           if (allowed) access.invalidateActor();
@@ -461,6 +470,7 @@ export function setupLiveEventsWebSocketServer(
       revoked: false,
       invalidateActor: shouldDeliver.invalidateActor,
       pendingCheck: null,
+      queuedCheck: false,
       errorStreak: 0,
     };
     accessByClient.set(socket, access);
