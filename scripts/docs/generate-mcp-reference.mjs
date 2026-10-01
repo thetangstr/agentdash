@@ -233,7 +233,12 @@ export async function readMcpSurface(repoRoot) {
  * (assertNothingPrivate), so a new mention elsewhere is caught here rather
  * than published.
  */
-export const ENGAGEMENT_PATTERN = /(?<![A-Za-z])[Rr]oss(?![a-z])/;
+export const ENGAGEMENT_PATTERN = /(?<![A-Za-z])[Rr]oss(?![a-z])|execos/i;
+
+/** An enum or const value named after an engagement (PR 3b review): left out of the input tables. */
+export function isEngagementValue(value) {
+  return typeof value === "string" && ENGAGEMENT_PATTERN.test(value);
+}
 export const OMITTED_REASON = "engagement-specific";
 
 export function omitEngagementTools(tools) {
@@ -290,14 +295,22 @@ function literal(value) {
 /** A JSON schema's type, compactly: `string`, `"a" \| "b"`, `array of object`, `string \| null`. */
 export function schemaType(schema) {
   if (!schema || typeof schema !== "object") return "any";
-  if ("const" in schema) return literal(schema.const);
+  if ("const" in schema) {
+    if (isEngagementValue(schema.const)) return `string (1 value omitted: ${OMITTED_REASON})`;
+    return literal(schema.const);
+  }
   if (Array.isArray(schema.enum)) {
     // A private profile's value is left out, not relabeled: nobody outside
-    // that profile can send it, so it is not a choice a reader has.
-    const values = schema.enum.filter((value) => !(typeof value === "string" && isPrivateProfile(value)));
+    // that profile can send it, so it is not a choice a reader has. An
+    // engagement's value is left out the same way, and says so.
+    const values = schema.enum.filter(
+      (value) => !(typeof value === "string" && isPrivateProfile(value)) && !isEngagementValue(value),
+    );
     const omitted = schema.enum.length - values.length;
+    const engagement = schema.enum.some(isEngagementValue);
     const listed = values.map((value) => literal(value)).join(" | ");
-    return omitted > 0 ? `${listed} (${plural(omitted, "value")} omitted)` : listed;
+    if (omitted === 0) return listed;
+    return `${listed || "string"} (${plural(omitted, "value")} omitted${engagement ? `: ${OMITTED_REASON}` : ""})`;
   }
   const union = schema.anyOf ?? schema.oneOf;
   if (Array.isArray(union)) {

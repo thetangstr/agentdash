@@ -21,7 +21,9 @@ A company admin means the `owner` or `admin` role. An instance admin, and the lo
 
 ### Visibility
 
-A project is open to the whole company by default (`visibility: "company"`). A **restricted** project (`visibility: "restricted"`) is visible only to company admins, the person who created it, and the people and agents on its access list (`server/src/routes/visibility.ts`). For anyone else it does not exist: the list leaves it out, and reading it answers 404 `Project not found`, never 403. See [Conventions](/api/conventions).
+A project is open to the whole company by default (`visibility: "company"`). A **restricted** project (`visibility: "restricted"`) is visible only to company admins, the person who created it, and the people and agents on its access list (`server/src/routes/visibility.ts`). For anyone else it does not exist: the list leaves it out, and reading it answers 404 `Project not found`. See [Conventions](/api/conventions).
+
+One exception today: `PATCH /api/projects/{id}` checks who may edit before it checks visibility (`assertCanEditOwnedResource`, `server/src/routes/projects.ts`), so a member of the same company who is not on a restricted project's list, and is not its creator or an admin, gets 403 `Only the project's creator or an admin can change it.` rather than 404. That confirms the project exists; it is filed as a server bug.
 
 When an update restricts a project that has a lead agent, that agent is added to the access list in the same request, so it keeps seeing the project it works on.
 
@@ -90,7 +92,7 @@ curl -X POST https://your-instance.example/api/companies/$COMPANY_ID/projects \
 | `name` | string | Required, non-empty. See *Names* below. |
 | `description` | string or null | |
 | `status` | `backlog` · `planned` · `in_progress` · `completed` · `cancelled` | Default `backlog`. |
-| `goalIds` | array of UUIDs | The [goals](/api/goals) this project serves, from the same company. `goalId` (one UUID) still works but is deprecated. |
+| `goalIds` | array of UUIDs | The [goals](/api/goals) this project serves. The server does not check today that they belong to the same company. `goalId` (one UUID) still works but is deprecated. |
 | `leadAgentId` | UUID or null | The agent that leads the project. |
 | `targetDate` | string or null | |
 | `color` | string or null | If omitted, the server picks one from its palette. |

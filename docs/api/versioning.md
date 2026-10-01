@@ -3,7 +3,7 @@ title: Versioning and deprecation
 summary: What may change in the API contract and when, how a breaking change is announced, and what internal routes promise.
 ---
 
-The API contract is version **`v1`**. Additive changes ship in any release. A breaking change to a contract operation is announced in the release notes at least one stable release before it lands, and the old shape keeps working for 60 days after the announcement.
+The API contract is version **`v1`**. Under the policy proposed here, additive changes may ship in any release, and a breaking change to a contract operation will be announced in the release notes at least one stable release before it lands, with the old shape kept working for 60 days after the announcement.
 
 > **Status:** proposed 2026-10-01, in force from the first stable release that ships this page. Releases before that made no such promise, and some changed contract routes without notice. The [API changelog](/api/changelog) collects the API-affecting lines of their notes.
 
@@ -28,6 +28,10 @@ These are **breaking**:
 - **Removing** an operation, a path, a request field or a response field.
 - **Renaming** any of them, including a path parameter or a query parameter.
 - **Narrowing accepted input**: an optional field becoming required, a limit lowered, a value or format that used to be accepted now refused.
+- **Adding a required field or header** to a request.
+- **Narrowing who may call an operation**: a credential, role or permission that was accepted no longer is.
+- **Changing a field's type or nullability**, in a request or a response — including a field that was never null becoming nullable.
+- **Changing a success status code**, such as 200 becoming 201 or 202.
 
 A breaking change follows this sequence:
 
@@ -41,7 +45,7 @@ During the 60 days the operation stays in the contract and keeps working. Its `s
 
 - **Error text.** The `error` string is for people and may change in any release. Match on the status code, then on `code` where one is documented ([Conventions](/api/conventions)).
 - **Rate limits and defaults** described on [Conventions](/api/conventions). They are measured from the code, not promised.
-- **Status codes for error cases.** This page does not yet decide whether changing one counts as breaking. Until it does, such a change is listed in the release notes under **Upgrade notes**, as v2026.930.1 did when an unknown blocker id moved from 422 to 404.
+- **Status codes for error cases.** This page does not yet decide whether changing one counts as breaking (a changed *success* code does, above). Until it does, such a change is listed in the release notes under **Upgrade notes**, as v2026.930.1 did when an unknown blocker id moved from 422 to 404.
 - **Internal routes.** See the next section.
 
 ## Internal routes promise nothing

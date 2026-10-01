@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +7,8 @@ import docsRoutes from "@/generated/docs-routes.json";
 // The denylist has one copy, in the generator script; UI runtime code never
 // imports it, so it is never in a shipped chunk.
 import { DOCS_PATH_DENYLIST, isDeniedDocPath } from "../../../scripts/docs/build-search-index.mjs";
+// The hashed list and its scan live with the scripts so the changelog generator uses the same copy.
+import { FORBIDDEN_TOKENS, forbiddenTokenOffsets, sha256 } from "../../../scripts/docs/forbidden-tokens.mjs";
 import {
   INSTANCE_URL_TOKEN,
   PUBLIC_DOC_SLUGS,
@@ -290,73 +291,6 @@ describe("docs: the bundled set", () => {
     }
   });
 });
-
-/**
- * Customer, instance and people identifiers that must never be on the public
- * site. Stored as SHA-256 of the lowercase token, with its length, only so the
- * tokens are not printed in clear in this file and its diffs. This is NOT a
- * secret: the tokens are short and guessable, and anyone with a guess list can
- * recover them from these hashes. Every token starts with a letter or digit,
- * so the scan hashes, for each token length, the window at every word start
- * in the page's lowercase text: the start of the text, or a letter or digit
- * right after anything else (a space, `.`, `@`, `/`, `(`, `-`, `_`, …). That
- * finds a token wherever it begins a word — on its own, in a hostname, an
- * address, a path or an identifier — and costs roughly a tenth of hashing
- * every window. It does not find a token glued onto the end of a longer run
- * of letters and digits (`xtoken`). Hyphenated spellings are listed
- * separately; a bare short name is not, where it would match inside ordinary
- * words.
- */
-const FORBIDDEN_TOKENS: ReadonlyArray<{ length: number; sha256: string }> = [
-  { length: 7, sha256: "4998fa28eb8d38a27eff147fb68e1ad03ea01658fb5eec10aabadbaf37ffe565" },
-  { length: 7, sha256: "b9de7ec8cd4acc8522ecc7ac274f10fa904242ae15b9d05cd7a393a95bb7dd75" },
-  { length: 12, sha256: "3e7cb594871023585497489bc000d29e482cda61bca9c8693020b3a85f40053c" },
-  { length: 12, sha256: "0536debeda2dbcfc02c055b13ce259457871d9224cf501a302e1c751eb28c1f2" },
-  { length: 6, sha256: "0c59fcbbac92f38fa899db945fa4e6d4b252a224b7003eb7839c80f7899544fc" },
-  { length: 5, sha256: "b9cbfe962ddda6952b584988cbf7d074a35ec1e99ef71853447cb0eb91bb6547" },
-  { length: 5, sha256: "2d07d002c88b7c7546f7c81175b0fd8ef3843654895574b81ba28573d4373a96" },
-  { length: 12, sha256: "68b7730d0f4346654432e894c673760d287e3ee7a7509c4c6f802f216301c4b7" },
-  { length: 12, sha256: "b9dd1da230753160f70e3864d24aa0bd1ca81cd8bceaf3709fd41e09d55214b1" },
-  { length: 12, sha256: "53ac39752d14c82c6972e6acd2f56dbfbaeeccb41e7e6371e95799d1ad09dad8" },
-  { length: 13, sha256: "37c999ba9fb7fc5b18a5786b2399cb2711ea412cc1de92246a6725712e56c21a" },
-];
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
-const ALNUM = /[a-z0-9]/;
-
-/** Offsets where a word starts: a letter or digit at the start of the text or after a non-alphanumeric character. */
-function wordStarts(lower: string): number[] {
-  const starts: number[] = [];
-  for (let i = 0; i < lower.length; i += 1) {
-    if (ALNUM.test(lower[i]!) && (i === 0 || !ALNUM.test(lower[i - 1]!))) starts.push(i);
-  }
-  return starts;
-}
-
-/** Offsets at which a window starting a word in `text` hashes to one of `tokens`. */
-function forbiddenTokenOffsets(
-  text: string,
-  tokens: ReadonlyArray<{ length: number; sha256: string }> = FORBIDDEN_TOKENS,
-): number[] {
-  const lower = text.toLowerCase();
-  const byLength = new Map<number, Set<string>>();
-  for (const token of tokens) {
-    if (!byLength.has(token.length)) byLength.set(token.length, new Set());
-    byLength.get(token.length)!.add(token.sha256);
-  }
-  const offsets: number[] = [];
-  const starts = wordStarts(lower);
-  for (const [length, hashes] of byLength) {
-    for (const i of starts) {
-      if (i + length > lower.length) break;
-      if (hashes.has(sha256(lower.slice(i, i + length)))) offsets.push(i);
-    }
-  }
-  return offsets.sort((a, b) => a - b);
-}
 
 describe("docs: the forbidden-token scan itself", () => {
   it("finds a hashed token anywhere in the text, case-insensitively, and nothing else", () => {

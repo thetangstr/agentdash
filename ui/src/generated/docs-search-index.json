@@ -721,7 +721,7 @@
         "Where breaking changes are listed",
         "How the contract is kept"
       ],
-      "firstParagraph": "The API contract is version v1. Additive changes ship in any release. A breaking change to a contract operation is announced in the release notes at least one stable release before it lands, and the old shape keeps working for 60 days after the announcement."
+      "firstParagraph": "The API contract is version v1. Under the policy proposed here, additive changes may ship in any release, and a breaking change to a contract operation will be announced in the release notes at least one stable release before it lands, with the old shape kept working for 60 days…"
     },
     {
       "slug": "api/reference",

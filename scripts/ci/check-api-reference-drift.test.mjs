@@ -176,7 +176,7 @@ test("OpenAPI helpers: Express paths, component names, and the private-profile r
     b: { anyOf: [{ const: hidden }, { type: "null" }] },
     c: { type: "string", enum: ["x", "y"] },
   });
-  assert.deepEqual(redacted.a, { type: "string", enum: ["default"], description: "Other values may appear." });
+  assert.deepEqual(redacted.a, { type: "string", enum: ["default"], description: "1 value omitted: private. Other values may appear." });
   assert.deepEqual(redacted.b, { anyOf: [{ type: "null" }] });
   assert.deepEqual(redacted.c, { type: "string", enum: ["x", "y"] });
   assert.doesNotMatch(JSON.stringify(redacted), new RegExp(hidden));
@@ -389,4 +389,32 @@ test("changelog: withheld spellings, interface names, numbered items, attributio
     NOTE("v1.0.0", "2026-01-01", "## Behaviour Changes You Must Read First\n\n- Agents now start paused.\n\n## Testing\n\n- The route suite grew."),
   ]);
   assert.deepEqual(selection.releases[0].kept.map((line) => line.text), ["Agents now start paused."]);
+});
+
+test("changelog: a line with an email, an IP address, a private hostname or the engagement's product is withheld and counted", () => {
+  const productName = ["Exec", "OS"].join("");
+  const selection = selectApiChanges([
+    NOTE(
+      "v1.0.0",
+      "2026-01-01",
+      [
+        "## Fixed",
+        "",
+        "- `GET /api/a` now answers 404 (reported by someone@example.com).",
+        "- `GET /api/b` was unreachable from 10.1.2.3.",
+        "- `GET /api/c` is served on build-box.local too.",
+        `- \`POST /api/d\` accepts the ${productName} origin.`,
+        "- `GET /api/e` answers 404 on v2026.930.1 and later.",
+      ].join("\n"),
+    ),
+  ]);
+  assert.deepEqual(selection.releases[0].kept.map((line) => line.text), ["`GET /api/e` answers 404 on v2026.930.1 and later."]);
+  assert.deepEqual(selection.withheld, {
+    "carrying an email address": 1,
+    "carrying an IP address": 1,
+    "carrying a private hostname": 1,
+    "engagement-specific": 1,
+  });
+  // The hashed list is consulted too, so a name in it is withheld without being spelled out here.
+  assert.ok(WITHHELD_LINE_RULES.some((rule) => /hashed list/.test(rule.reason)));
 });

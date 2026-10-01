@@ -3254,12 +3254,12 @@ components:
       type: string
       enum:
         - manual
-        - execos_request
         - routine_execution
         - stale_active_run_evaluation
         - harness_liveness_escalation
         - issue_productivity_review
         - stranded_issue_recovery
+      description: "1 value omitted: engagement-specific. Other values may appear."
     CheckoutIssueRequest:
       type: object
       properties:
@@ -3415,7 +3415,7 @@ components:
       type: string
       enum:
         - default
-      description: Other values may appear.
+      description: "1 value omitted: private. Other values may appear."
     CompanySecret:
       type: object
       properties:
@@ -3654,7 +3654,7 @@ components:
           type: string
           enum:
             - default
-          description: Other values may appear.
+          description: "1 value omitted: private. Other values may appear."
         inviteCode:
           type: string
           minLength: 1
@@ -3849,8 +3849,8 @@ components:
             - "null"
         originKind:
           type: string
-          enum:
-            - execos_request
+          enum: []
+          description: "1 value omitted: engagement-specific. Other values may appear."
         originId:
           type:
             - string
@@ -7707,7 +7707,7 @@ components:
           type: string
           enum:
             - default
-          description: Other values may appear.
+          description: "1 value omitted: private. Other values may appear."
         inviteCode:
           type: string
           minLength: 1

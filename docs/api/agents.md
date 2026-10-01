@@ -258,7 +258,7 @@ curl -X POST https://your-instance.example/api/agents/$AGENT_ID/keys \
 | Status | When |
 | --- | --- |
 | 400 | `Validation error` — `name` is an empty string or not a string. |
-| 403 | `Board access required` — the caller is an agent. |
+| 403 | `Board access required` — the caller is an agent. The body is validated first, so an agent that sends an invalid body gets the 400 instead. |
 | 403 | `Missing permission: agents:create`. |
 | 403 | Not a member, or an inactive membership (messages above). |
 | 404 | `Agent not found`. |

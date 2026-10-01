@@ -85,12 +85,15 @@ curl -X POST https://your-instance.example/api/companies \
 | 400 | `Validation error` — the body fails the schema. |
 | 400 | `code: "pro_requires_corp_email"` — on a deployment that requires a company email, creating an *additional* company from a free-mail address. |
 | 403 | `Board access required` — the caller is an agent. |
-| 409 | `code: "domain_already_claimed"` — a company for your email domain already exists; ask its administrator to invite you. Carries `existingCompanyId` (null if a concurrent create won and its row could not be read back). |
 | 409 | `code: "already_member"` — only with `?fromSignup=1`: you already belong to a company. Carries `existingCompanyId`. |
 | 409 | `code: "single_company_installation"` — a free self-hosted installation already has its one company. Carries `existingCompanyId` and `upgradeUrl`. |
 | 409 | `code: "single_company_installation"`, `error: "This hosted box already has a workspace…"` — a hosted instance holds exactly one company. |
 
-The `409` bodies for an existing domain, an existing membership and a free installation put their text in `message`, not `error`, and the domain conflict raced by a concurrent create carries no text at all. Match on `code`.
+The `409` bodies for an existing membership and a free installation put their text in `message`, not `error`. Match on `code`.
+
+The body is validated before the caller is checked, so an agent that sends an invalid body gets the 400, not the 403.
+
+A company for your email domain may already exist. That is not an error: the server mounts these routes with multi-tenant domains allowed (`server/src/app.ts`), so the new company is created anyway, and if another company already holds the domain it is stored without one (`server/src/services/companies.ts`). Ask the existing company's administrator for an invite if you meant to join it.
 
 ## Update a company
 
@@ -127,7 +130,7 @@ An agent may call this only if it is the company's **CEO agent**, and its body i
 | --- | --- |
 | 400 | `Validation error` — the body fails the schema, or an agent sent a field other than `brandColor` / `logoAssetId`. |
 | 403 | `Only CEO agents or board users may update company settings` — an agent that is not the CEO agent. |
-| 403 | `An agent cannot change the company's name or description…` — the CEO agent sent `name` or `description`. |
+| 403 | `An agent cannot change the company's …` — the CEO agent sent `name` or `description`; the message names the field or fields it sent. |
 | 403 | `Company owner or admin access required` — a member who is not an administrator sent `agentVisibilityDefault`. |
 | 403 | Not a member, an inactive membership, or an agent key for another company (messages above). |
 | 404 | `Company not found`. |

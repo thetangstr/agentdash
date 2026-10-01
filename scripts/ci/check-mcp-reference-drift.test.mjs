@@ -224,3 +224,10 @@ test("the real reference: every page states the count it documents", async () =>
   }
   assert.ok(files.get(CONNECT_PAGE_REL).includes("npx -y agentdash-connect@latest"));
 });
+
+test("an engagement-named enum or const value is left out of the input table, and says so", () => {
+  const value = ["exec", "os_request"].join("");
+  assert.equal(schemaType({ type: "string", const: value }), "string (1 value omitted: engagement-specific)");
+  assert.equal(schemaType({ type: "string", enum: ["manual", value] }), '`"manual"` (1 value omitted: engagement-specific)');
+  assert.equal(schemaType({ type: "string", enum: ["a", "b"] }), '`"a"` | `"b"`');
+});

@@ -74,7 +74,7 @@ curl -X POST https://your-instance.example/api/companies/$COMPANY_ID/secrets \
 | Status | When |
 | --- | --- |
 | 400 | `Validation error` — the body fails the schema, or `provider` is not one of the four. |
-| 403 | `Board access required` — the caller is an agent. |
+| 403 | `Board access required` — the caller is an agent. The body is validated first, so an agent that sends an invalid body gets the 400 instead. |
 | 403 | Not a member, or an inactive membership (messages above). |
 | 409 | `Secret already exists: <name>` — the company already has a secret with this name. |
 | 422 | `Secret names starting with github-token- are reserved for connections.` |
@@ -105,7 +105,7 @@ curl -X POST https://your-instance.example/api/secrets/$SECRET_ID/rotate \
 | Status | When |
 | --- | --- |
 | 400 | `Validation error` — the body fails the schema. |
-| 403 | `Board access required` — the caller is an agent. |
+| 403 | `Board access required` — the caller is an agent. The body is validated first, so an agent that sends an invalid body gets the 400 instead. |
 | 403 | `This secret belongs to a connection (for example GitHub). Only a workspace owner or admin can change it…` — a member who is not an owner or admin, on a connection-owned secret. |
 | 403 | Not a member of the secret's company, or an inactive membership (messages above). |
 | 404 | `Secret not found`. |

@@ -9,13 +9,21 @@ summary: "The API-affecting lines of every AgentDash release note, newest first.
 
 This page selects lines by their words, so it can include a line about an internal route and can miss a change worded without any of them. The release notes are the record; [the versioning policy](/api/versioning) says how a change to [the contract](/api/reference) is announced.
 
-5 lines withheld (2 engagement-specific, 1 naming the private product profile, 2 naming the upstream project): they matched the rule above but describe material that is not public.
+6 lines withheld (3 engagement-specific, 1 naming the private product profile, 2 naming the upstream project): they matched the rule above but describe material that is not public.
 
 ## v2026.1001.1 — 2026-10-01
+
+**Changed**
+
+- **An exhausted recovery budget holds until a named person acts:** A board user clears the block with **Clear recovery block & retry** (`POST /issues/:id/recovery-budget/clear`), which also resumes automatic retries. Clearing while a one-run authorization is pending cancels that run and records it.
+- **An exhausted recovery budget holds until a named person acts:** Or a person authorizes **exactly one run** while the block stays: **Authorize one run** on the issue page (a review then confirm dialog), or `task_recovery.remediate` through `/api/human-control` with a named board key. That run can't continue on its own; the authorization expires after 15 minutes by default.
+- **An exhausted recovery budget holds until a named person acts:** Who can authorize: company admins, holders of `agents:create`, and the agent's steward, accountable person or creator. Plain members and viewers see the block but get `403`, also through board keys.
 
 **Fixed**
 
 - **The Agent visibility setting now reads back.** Company reads went through an explicit column list that did not include `agentVisibilityDefault`, so `GET /companies/:id` and the `PATCH` response never carried it. The server enforced the saved value (the rule reads the column directly), but the radio under Settings › Members & access always showed *Everyone sees every agent*, whatever an administrator had saved. The column is in the list, and the route test now asserts the value on both the read and the write response.
+- A `400 Invalid identifier` is logged at warn with the route and parameter names (#900).
+- The model-key nudge cooldown is atomic, and `/billing/status` answers `404` for an unknown company (#843).
 
 ## v2026.1001.0 — 2026-10-01
 
@@ -27,15 +35,8 @@ This page selects lines by their words, so it can include a line about an intern
 **Changed**
 
 - **One shell for every company:** `GET /companies/:id/me/agent` and the assign route now answer `404` in a company without stewardship, before any agent or stewardship row is created. Creating an agent pairs its creator as steward only where stewardship is on.
-- **An exhausted recovery budget holds until a named person acts:** A board user clears the block with **Clear recovery block & retry** (`POST /issues/:id/recovery-budget/clear`), which also resumes automatic retries. Clearing while a one-run authorization is pending cancels that run and records it.
-- **An exhausted recovery budget holds until a named person acts:** Or a person authorizes **exactly one run** while the block stays: **Authorize one run** on the issue page (a review then confirm dialog), or `task_recovery.remediate` through `/api/human-control` with a named board key. That run can't continue on its own; the authorization expires after 15 minutes by default.
-- **An exhausted recovery budget holds until a named person acts:** Who can authorize: company admins, holders of `agents:create`, and the agent's steward, accountable person or creator. Plain members and viewers see the block but get `403`, also through board keys.
+- **Recovery budget clears only on Clear** (#877). Moving an issue out of `blocked`, commenting to reopen it, or reassigning it no longer clears an exhausted recovery budget; `POST /issues/:id/recovery-budget/clear` is the only clear. A run a person starts directly still goes ahead; automatic, linked, agent-, system- and assistant-started wakes are refused while the marker stands. PATCH and comment responses carry a `recoveryBudgetNotice` while it does.
 - **Issue acceptance re-checks current authority** (#881). PATCH, comment and tree writes re-read the caller's credential, membership, grants, project access and every selected row under share locks, then re-check immediately before the write; field changes, comment, execution decision, references and audits commit in one transaction, and live events publish only after commit. An explicit but invalid `Bearer` or `x-agent-key` header is unauthenticated rather than falling back to the local operator. The restricted-project guard now covers agents too. Seven acceptance blocks are added to the default agent mandate.
-
-**Fixed**
-
-- A `400 Invalid identifier` is logged at warn with the route and parameter names (#900).
-- The model-key nudge cooldown is atomic, and `/billing/status` answers `404` for an unknown company (#843).
 
 ## v2026.930.1 — 2026-09-30
 
@@ -49,7 +50,6 @@ This page selects lines by their words, so it can include a line about an intern
 
 **Also in v2026.930.0, missing from its notes**
 
-- **ExecOS request identity** (#844, migration `0138`). Issue create accepts `originKind: "execos_request"` plus `originId`. A second create with the same origin in the same company returns `409 EXECOS_REQUEST_ALREADY_RECORDED`, and the MCP `create_issue` tool passes both fields through. Agents and assistant grants can't write ExecOS-origin fields: the middleware answers 403 and the route 400.
 - **Invalid ids return 400 on every route** (#855). Any uuid-cast error (Postgres 22P02) now returns `400 Invalid identifier` and is no longer logged as a server error, not only on the bridge routes.
 
 **Upgrade notes**

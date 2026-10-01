@@ -37,11 +37,23 @@ const CONTRACT_REL = "docs/api/contract.json";
 const SHARED_DIR_REL = "packages/shared";
 
 /**
- * Enum values that name a private product profile. The contract is a public
- * page; a client's profile id is kept off it (the plan's Decisions, item 3).
- * Removed from every generated enum; the schema says other values may appear.
+ * Enum values kept off the public contract, with the reason the schema prints:
+ * a client's product profile id (the plan's Decisions, item 3), and an issue
+ * origin named after a specific engagement (PR 3b review). Removed from every
+ * generated enum; the schema says how many were omitted and why, and that
+ * other values may appear.
  */
-export const REDACTED_ENUM_VALUES = ["agentdash_mk"];
+export const REDACTED_ENUM_REASONS = {
+  agentdash_mk: "private",
+  execos_request: "engagement-specific",
+};
+export const REDACTED_ENUM_VALUES = Object.keys(REDACTED_ENUM_REASONS);
+
+/** The description an enum gets for the values removed from it. */
+export function omittedValuesNote(removed) {
+  const reasons = [...new Set(removed.map((value) => REDACTED_ENUM_REASONS[value]))].sort().join(", ");
+  return `${removed.length} value${removed.length === 1 ? "" : "s"} omitted: ${reasons}. Other values may appear.`;
+}
 
 const ERROR_SCHEMA = {
   type: "object",
@@ -226,7 +238,8 @@ export function redactEnums(node) {
       const kept = value.filter((item) => !REDACTED_ENUM_VALUES.includes(item));
       if (kept.length !== value.length) {
         out.enum = kept;
-        out.description = [node.description, "Other values may appear."].filter(Boolean).join(" ");
+        const removed = value.filter((item) => REDACTED_ENUM_VALUES.includes(item));
+        out.description = [node.description, omittedValuesNote(removed)].filter(Boolean).join(" ");
         continue;
       }
     }

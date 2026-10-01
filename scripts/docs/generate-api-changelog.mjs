@@ -27,9 +27,10 @@
 //
 // The output is a public page and the notes are not written for one, so the
 // same rule the route index applies to route files applies here to lines: a
-// line that names the private product profile, the engagement, a customer or
-// instance, or the upstream project is dropped and counted, by reason, in the
-// page header.
+// line that names the private product profile, the engagement, a customer,
+// person or instance (the hashed list in scripts/docs/forbidden-tokens.mjs),
+// or the upstream project, or that carries an email address, an IP address or
+// a private hostname, is dropped and counted, by reason, in the page header.
 // ui/src/lib/docs.test.ts scans the committed page for the hashed forbidden
 // tokens like every other bundled page.
 //
@@ -41,12 +42,23 @@
 // Usage: node scripts/docs/generate-api-changelog.mjs [--check]
 
 import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { forbiddenTokenOffsets } from "./forbidden-tokens.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const API_CHANGELOG_REL = "docs/api/changelog.md";
 const RELEASES_DIR_REL = "releases";
 const CONTRACT_REL = "docs/api/contract.json";
+
+/** A dotted quad whose four parts are octets (so `1.2.3` versions and `2026.930.1` do not match). */
+const IPV4 = {
+  test: (text) =>
+    [...text.matchAll(/(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.]*\d)/g)].some((match) =>
+      match.slice(1, 5).every((part) => Number(part) <= 255),
+    ),
+};
+/** A hostname whose last label is one only a private network resolves. */
+const PRIVATE_HOST = /\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|intranet|corp|home|localdomain|ts\.net)\b/i;
 
 /**
  * Why a line is withheld, checked in order; the first match is the reason the
@@ -55,12 +67,20 @@ const CONTRACT_REL = "docs/api/contract.json";
  */
 export const WITHHELD_LINE_RULES = [
   { reason: "naming the private product profile", pattern: /agentdash[\s_-]?mk|(?<![a-z0-9])mk(?![a-z0-9])/i },
-  { reason: "engagement-specific", pattern: /\bross\b/i },
+  { reason: "engagement-specific", pattern: /\bross\b|execos/i },
   { reason: "naming a customer or instance", pattern: /mkthink|mkboard|mkmini/i },
   // The public pages name the upstream project on one page only (the plan's
   // content rules). A literal `X-Paperclip-…` header or `PAPERCLIP_…` variable
   // is an interface name and stays; any other spelling is withheld.
   { reason: "naming the upstream project", pattern: { test: (text) => /paperclip/i.test(stripInterfaceNames(text)) } },
+  // Beyond the word list: anything that identifies a person, a machine or a
+  // network. The hashed list (scripts/docs/forbidden-tokens.mjs, the one the
+  // docs tests scan every bundled page with) covers customer, instance and
+  // people names without printing them here.
+  { reason: "naming a customer, person or instance (hashed list)", pattern: { test: (text) => forbiddenTokenOffsets(text).length > 0 } },
+  { reason: "carrying an email address", pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/ },
+  { reason: "carrying an IP address", pattern: { test: (text) => IPV4.test(text) } },
+  { reason: "carrying a private hostname", pattern: PRIVATE_HOST },
 ];
 
 /**

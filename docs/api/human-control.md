@@ -9,7 +9,7 @@ Human control lets a person act through their own board key — usually from a l
 
 ## Who may call it
 
-Every operation takes a **named, verified, unexpired board key** and nothing else. A session cookie, an assistant grant, an agent key, an agent run token and the implicit local operator are all refused with 403 `Named board-key human authentication required` (`capture()` in `server/src/services/human-control.ts:69-73`, and again in `server/src/services/human-control/authority.ts:332`). A request with no credential gets the same 403, not a 401.
+Every operation takes a **named, verified, unexpired board key** and nothing else. A session cookie, an assistant grant, an agent key, an agent run token and the implicit local operator are all refused with 403 `Named board-key human authentication required` (`capture()` in `server/src/services/human-control.ts:69-73`, and again in `server/src/services/human-control/authority.ts:332`). A request with no credential gets the same 403, not a 401. On the four `POST` operations the body is parsed first, so an invalid body answers 400 `Validation error` before any credential check.
 
 The key carries no extra authority here. Each operation still checks the person's current company membership and the permission its action needs, as the matching page in the web app would. Choosing a target grants nothing. How to get a board key is on [API keys](/api/api-keys); how the server resolves it is on [Authentication](/api/authentication).
 

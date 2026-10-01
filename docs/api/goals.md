@@ -79,8 +79,8 @@ curl -X POST https://your-instance.example/api/companies/$COMPANY_ID/goals \
 | `description` | string or null | Optional. |
 | `level` | `company` · `team` · `agent` · `task` | Optional, default `task`. |
 | `status` | `planned` · `active` · `achieved` · `cancelled` | Optional, default `planned`. |
-| `parentId` | UUID or null | Optional. The goal this one rolls up to, in the same company. |
-| `ownerAgentId` | UUID or null | Optional. The agent that owns the goal, in the same company. Owning a goal does not let the agent change it. |
+| `parentId` | UUID or null | Optional. The goal this one rolls up to. Not validated today: the server does not check that it is in the same company or that it would not form a cycle, and an id that does not exist answers 500 (`server/src/services/goals.ts`). |
+| `ownerAgentId` | UUID or null | Optional. The agent that owns the goal. Owning a goal does not let the agent change it. Not validated today: the server does not check the agent's company, and an id that does not exist answers 500. |
 
 **Response** `201` — the new `Goal`.
 
