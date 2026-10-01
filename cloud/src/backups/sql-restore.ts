@@ -19,7 +19,7 @@ import { once } from "node:events";
 import type { Readable, Writable } from "node:stream";
 import { createGunzip } from "node:zlib";
 import postgres from "postgres";
-import { checkStatement, copyFromStdinCommand, initDumpGuard, isPgBlankLine, isPgCommentLine, MAX_STATEMENT_BYTES, pgTrim, STATEMENT_BREAKPOINT } from "./dump-guard.js";
+import { checkStatement, copyFromStdinCommand, deferredStatement, initDumpGuard, isPgBlankLine, isPgCommentLine, MAX_STATEMENT_BYTES, pgTrim, STATEMENT_BREAKPOINT } from "./dump-guard.js";
 
 export { STATEMENT_BREAKPOINT };
 export { parseCopyFromStdin } from "./dump-guard.js";
@@ -266,6 +266,8 @@ export async function* statements(file: string): AsyncGenerator<DumpPiece> {
 export interface DumpScan {
   statements: number;
   copyBlocks: number;
+  /** AgentDash (GH #907): CHECK constraints, views, functions and triggers the dump carries; never run, re-created from our migrations. */
+  skipped: number;
   /** The first refusals (statement index and reason). Empty means the dump may be replayed. */
   refused: Array<{ index: number; reason: string }>;
 }
@@ -274,12 +276,15 @@ export interface DumpScan {
 export async function scanDump(file: string): Promise<DumpScan> {
   await initDumpGuard();
   if (!(await hasStatementBreakpoints(file))) {
-    return { statements: 0, copyBlocks: 0, refused: [{ index: 0, reason: "not a backup-lib statement-breakpoint dump (plain pg_dump output is not replayed: it would need psql)" }] };
+    return { statements: 0, copyBlocks: 0, skipped: 0, refused: [{ index: 0, reason: "not a backup-lib statement-breakpoint dump (plain pg_dump output is not replayed: it would need psql)" }] };
   }
-  const scan: DumpScan = { statements: 0, copyBlocks: 0, refused: [] };
+  const scan: DumpScan = { statements: 0, copyBlocks: 0, skipped: 0, refused: [] };
   try {
     for await (const piece of statements(file)) {
-      const reason = checkStatement(piece.text);
+      // AgentDash (GH #907): a schema object replay skips is not a refusal.
+      const deferred = piece.kind === "sql" ? deferredStatement(piece.text) : null;
+      if (deferred) scan.skipped++;
+      const reason = deferred ? null : checkStatement(piece.text);
       if (reason && scan.refused.length < 20) scan.refused.push({ index: scan.statements, reason });
       if (piece.kind === "copy") {
         scan.copyBlocks++;
@@ -313,6 +318,8 @@ export class ReplayRefused extends Error {
 export interface RestoreStats {
   statements: number;
   copyBlocks: number;
+  /** AgentDash (GH #907): schema objects in the dump that replay did not run (re-created from our migrations afterwards). */
+  skipped: number;
 }
 
 /**
@@ -369,21 +376,52 @@ export async function replayDump(file: string, connectionString: string): Promis
     throw new ReplayRefused(`the dump failed the safety check: ${scan.refused.map((r) => `#${r.index} ${r.reason}`).join("; ")}`);
   }
   const sql = postgres(connectionString, { max: 1, connect_timeout: 10, onnotice: () => {} });
-  const stats: RestoreStats = { statements: 0, copyBlocks: 0 };
+  const stats: RestoreStats = { statements: 0, copyBlocks: 0, skipped: 0 };
   try {
     const [v] = await sql<Array<{ v: number }>>`select current_setting('server_version_num')::int as v`;
     if (!v || !extensionSchemaSafe(v.v)) {
       throw new ReplayRefused(`the sandbox's PostgreSQL (server_version_num ${v?.v ?? "unreadable"}) predates the CREATE EXTENSION … WITH SCHEMA search_path fixes (CVE-2022-2625, CVE-2023-39417); replay requires 11.21 / 12.16 / 13.12 / 14.9 / 15.4 / 16.0 or later`);
     }
     for await (const piece of statements(file)) {
+      // AgentDash (GH #907): CHECK constraints, views, functions and triggers
+      // written by the box are never executed; schema-verify re-creates them
+      // from our own migrations.
+      if (piece.kind === "sql" && deferredStatement(piece.text)) {
+        stats.skipped++;
+        stats.statements++;
+        continue;
+      }
       // Checked again: the file could have changed since the scan.
       const reason = checkStatement(piece.text);
       if (reason) throw new ReplayRefused(`statement #${stats.statements} failed the safety check: ${reason}`);
       // Extended protocol (simple: false): the server accepts exactly ONE
       // statement per call, so nothing the parser did not see can ride along.
       if (piece.kind === "copy") {
-        const writable = (await sql.unsafe(piece.command, [], EXTENDED_PROTOCOL).writable()) as Writable;
-        const failed = new Promise<never>((_, reject) => writable.once("error", reject));
+        // AgentDash (GH #907 review): a COPY the server refuses is reported only
+        // through the query's own reject(), a no-op once the query resolved
+        // with the stream; the stream then never finishes or errors and the
+        // replay would hang. Capture that rejection so the block fails.
+        const query = sql.unsafe(piece.command, [], EXTENDED_PROTOCOL) as unknown as { reject: (error: unknown) => void; writable(): Promise<Writable> };
+        // This hooks a postgres.js internal (pinned to 3.4.8 in package.json).
+        // If a future version drops it, fail loudly instead of hanging again.
+        if (typeof query.reject !== "function") {
+          throw new Error("replayDump: postgres.js query.reject is not a function; this version of postgres.js is not supported for COPY replay (pinned 3.4.8)");
+        }
+        let copyError: unknown = null;
+        let failCopy: ((error: unknown) => void) | null = null;
+        const originalReject = query.reject;
+        query.reject = (error: unknown) => {
+          copyError ??= error;
+          failCopy?.(error);
+          originalReject(error);
+        };
+        const writable = await query.writable();
+        const failed = new Promise<never>((_, reject) => {
+          if (copyError) reject(copyError);
+          failCopy = reject;
+          writable.once("error", reject);
+        });
+        failed.catch(() => {});
         try {
           for await (const line of piece.payload) {
             // The payload streams: write line by line, honouring backpressure.

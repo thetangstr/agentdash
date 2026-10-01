@@ -16,7 +16,7 @@ import { createDecryptStream, createEncryptStream, ENVELOPE_MAGIC, FRAME_PLAINTE
 import { EMPTY_SHA256, S3Store, signV4, uriEncode } from "../backups/s3.js";
 import { isoWeek, selectPrunable } from "../backups/service.js";
 import { DumpTooLarge, extensionSchemaSafe, MAX_LINE_BYTES, MAX_STATEMENT_LINES, parseCopyFromStdin, scanDump, statements } from "../backups/sql-restore.js";
-import { checkStatement, initDumpGuard, MAX_STATEMENT_BYTES, STATEMENT_BREAKPOINT } from "../backups/dump-guard.js";
+import { checkStatement, deferredStatement, initDumpGuard, MAX_STATEMENT_BYTES, STATEMENT_BREAKPOINT } from "../backups/dump-guard.js";
 import { ConfigError } from "../config.js";
 import { escrowKeyId } from "../railway/secrets.js";
 import { Secret } from "../secret.js";
@@ -453,5 +453,37 @@ describe("dump guard (libpg_query AST allowlist)", () => {
   });
   it("caps statement size", () => {
     expect(checkStatement(`INSERT INTO "public"."t" ("a") VALUES ('${"x".repeat(MAX_STATEMENT_BYTES)}');`)).toMatch(/larger than/);
+  });
+  // AgentDash (GH #907): backup-lib now writes these; replay skips them (never runs them) and
+  // schema-verify re-creates them from our migrations.
+  it("marks the schema objects backup-lib writes as skipped, never as runnable", () => {
+    const deferred: Array<[string, string]> = [
+      ["SET LOCAL check_function_bodies = false;", "SET LOCAL check_function_bodies"],
+      ["-- Function: public.f\nCREATE OR REPLACE FUNCTION public.f()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$ BEGIN RETURN OLD; END; $function$\n;", "function"],
+      ["CREATE TRIGGER t BEFORE UPDATE ON public.x FOR EACH ROW EXECUTE FUNCTION f();", "trigger"],
+      ["CREATE OR REPLACE VIEW \"public\".\"v\" AS\n SELECT pg_read_file('/etc/passwd') AS a;", "view"],
+      ["CREATE MATERIALIZED VIEW \"public\".\"m\" AS\n SELECT 1 AS a\nWITH DATA;", "materialized view"],
+      ['ALTER TABLE "public"."t" ADD CONSTRAINT "c" CHECK ((a > 0));', "check constraint"],
+      ['ALTER TABLE "public"."t" ADD CONSTRAINT "c" CHECK ((a > 0)) NOT VALID;', "check constraint"],
+      ['ALTER TABLE "public"."t" DISABLE TRIGGER "trg";', "trigger state"],
+      ['ALTER TABLE "public"."t" ENABLE REPLICA TRIGGER "trg";', "trigger state"],
+      ['ALTER TABLE "public"."t" ENABLE ALWAYS TRIGGER "trg";', "trigger state"],
+    ];
+    for (const [s, what] of deferred) {
+      expect(deferredStatement(s), s).toBe(what);
+      // Still refused by the run-path check, so nothing can execute one by mistake.
+      expect(checkStatement(s), s).not.toBeNull();
+    }
+    const never = [
+      "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'select 1'; DROP TABLE x;",
+      "SET check_function_bodies = false;",
+      "SET LOCAL search_path = evil;",
+      'ALTER TABLE "public"."t" ADD CONSTRAINT "c" UNIQUE ("a");',
+      "COPY \"public\".\"t\" (\"a\") FROM stdin;\nCREATE VIEW v AS SELECT 1;\n\\.",
+      "CREATE TABLE \"public\".\"t\" AS SELECT 1;",
+      "DO $$ BEGIN PERFORM 1; END $$;",
+      "BEGIN;",
+    ];
+    for (const s of never) expect(deferredStatement(s), s).toBeNull();
   });
 });

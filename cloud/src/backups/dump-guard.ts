@@ -18,6 +18,10 @@
 //   VALUES (constants only), SELECT setval(<literal>, <literal>, <literal>),
 //   COPY <table> (<columns>) FROM STDIN.
 //
+// AgentDash (GH #907): backup-lib also writes CHECK constraints, views,
+// functions and triggers. Those are refused here and SKIPPED by replay (see
+// deferredStatement below); schema-verify re-creates them from our migrations.
+//
 // Any other node, any unknown field, more than one statement, and any
 // function call outside FUNCTION_ALLOWLIST is refused. Expressions (column
 // defaults, partial-index predicates, index expressions) may only use
@@ -493,5 +497,65 @@ export function checkStatement(statement: string): string | null {
   } catch (err) {
     if (err instanceof Refused) return err.message;
     throw err;
+  }
+}
+
+/**
+ * AgentDash (GH #907): backup-lib now also writes CHECK constraints, views,
+ * functions and triggers (plus `SET LOCAL check_function_bodies = false`
+ * ahead of the functions), so a box's own restore is self-contained. Replay
+ * NEVER runs those from a box-written dump: a function body or a view is
+ * arbitrary code. They are skipped here and re-created afterwards from OUR
+ * migrations only (schema-verify.ts repairFromReference), exactly as for
+ * older dumps that did not carry them. checkStatement still refuses them, so
+ * nothing that only checks statements can run one by mistake.
+ *
+ * Returns what the statement is when replay should skip it, or null. A COPY
+ * block or anything that is not exactly one such statement is never skipped.
+ * Call initDumpGuard() first.
+ */
+export function deferredStatement(statement: string): string | null {
+  const body = stripLeadingComments(statement);
+  if (!body || parseCopyFromStdin(body)) return null;
+  if (Buffer.byteLength(body, "utf8") > MAX_STATEMENT_BYTES) return null;
+  let parsed: { stmts?: Array<{ stmt?: unknown }> };
+  try {
+    parsed = parseSync(body) as { stmts?: Array<{ stmt?: unknown }> };
+  } catch {
+    return null;
+  }
+  const stmts = parsed.stmts ?? [];
+  if (stmts.length !== 1) return null;
+  const stmt = stmts[0]!.stmt;
+  if (!isObj(stmt)) return null;
+  const keys = Object.keys(stmt);
+  if (keys.length !== 1) return null;
+  const type = keys[0]!;
+  const b = stmt[type];
+  if (!isObj(b)) return null;
+  switch (type) {
+    case "CreateFunctionStmt":
+      return "function";
+    case "CreateTrigStmt":
+      return "trigger";
+    case "ViewStmt":
+      return "view";
+    case "CreateTableAsStmt":
+      return b.objtype === "OBJECT_MATVIEW" ? "materialized view" : null;
+    case "VariableSetStmt":
+      return b.name === "check_function_bodies" && b.is_local === true ? "SET LOCAL check_function_bodies" : null;
+    case "AlterTableStmt": {
+      const cmds = Array.isArray(b.cmds) ? b.cmds : [];
+      if (cmds.length !== 1 || !isObj(cmds[0])) return null;
+      const cmd = (cmds[0] as Obj).AlterTableCmd;
+      if (!isObj(cmd)) return null;
+      // A trigger's enabled state (DISABLE / ENABLE REPLICA / ENABLE ALWAYS TRIGGER).
+      if (["AT_DisableTrig", "AT_EnableReplicaTrig", "AT_EnableAlwaysTrig", "AT_EnableTrig"].includes(String(cmd.subtype))) return "trigger state";
+      if (cmd.subtype !== "AT_AddConstraint" || !isObj(cmd.def)) return null;
+      const con = (cmd.def as Obj).Constraint;
+      return isObj(con) && con.contype === "CONSTR_CHECK" ? "check constraint" : null;
+    }
+    default:
+      return null;
   }
 }
