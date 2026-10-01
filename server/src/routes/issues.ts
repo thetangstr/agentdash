@@ -31,6 +31,7 @@ import {
   issueVisibilityCondition,
   listVisibleIssueIds,
   projectScopedVisibilityCondition,
+  redactHiddenIssueRefsOnRows,
   resolveAgentVisibility,
   truncateAncestorsAtInvisible,
   visibleAgentIdsFor,
@@ -959,7 +960,10 @@ export function issueRoutes(
       offset,
     });
     // A5: a visible issue's blockedBy must not name an invisible blocker.
-    res.json(await filterVisibleBlockedByOnRows(db, req, companyId, result));
+    // GH #863: and its parentId / blockerAttention samples must not name one either.
+    res.json(
+      await redactHiddenIssueRefsOnRows(db, req, companyId, await filterVisibleBlockedByOnRows(db, req, companyId, result)),
+    );
   });
 
   router.get("/companies/:companyId/labels", async (req, res) => {
@@ -1058,6 +1062,10 @@ export function issueRoutes(
         documentsSvc.getIssueDocumentByKey(issue.id, ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY),
         currentExecutionWorkspacePromise,
       ]);
+    // GH #863: parentId and the blocker-attention samples follow visibility too.
+    const [visibleRefs] = await redactHiddenIssueRefsOnRows(db, req, issue.companyId, [
+      { parentId: issue.parentId, blockerAttention },
+    ]);
 
     res.json({
       issue: {
@@ -1066,12 +1074,12 @@ export function issueRoutes(
         title: issue.title,
         description: issue.description,
         status: issue.status,
-        ...(blockerAttention ? { blockerAttention } : {}),
+        ...(visibleRefs!.blockerAttention ? { blockerAttention: visibleRefs!.blockerAttention } : {}),
         productivityReview,
         priority: issue.priority,
         projectId: issue.projectId,
         goalId: goal?.id ?? issue.goalId,
-        parentId: issue.parentId,
+        parentId: visibleRefs!.parentId,
         blockedBy: relations.blockedBy,
         blocks: relations.blocks,
         assigneeAgentId: issue.assigneeAgentId,
@@ -1175,11 +1183,16 @@ export function issueRoutes(
       ? await executionWorkspacesSvc.getById(issue.executionWorkspaceId)
       : null;
     const workProducts = await workProductsSvc.listForIssue(issue.id);
+    // GH #863: parentId and the blocker-attention samples follow visibility too.
+    const [visibleRefs] = await redactHiddenIssueRefsOnRows(db, req, issue.companyId, [
+      { parentId: issue.parentId, blockerAttention },
+    ]);
     res.json({
       ...issue,
+      parentId: visibleRefs!.parentId,
       goalId: goal?.id ?? issue.goalId,
       ancestors,
-      ...(blockerAttention ? { blockerAttention } : {}),
+      ...(visibleRefs!.blockerAttention ? { blockerAttention: visibleRefs!.blockerAttention } : {}),
       productivityReview,
       blockedBy: relations.blockedBy,
       blocks: relations.blocks,
@@ -2213,6 +2226,9 @@ export function issueRoutes(
       action: "issue.deleted",
       entityType: "issue",
       entityId: issue.id,
+      // AgentDash (GH #863, #864 follow-up): the row is already gone, so the
+      // live-events filter cannot look its project up; carry it on the event.
+      details: { projectId: issue.projectId ?? null },
     });
 
     res.json(issue);

@@ -1,5 +1,5 @@
 // AgentDash: goals-eval-hitl
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
@@ -21,7 +21,13 @@ import {
   type VerdictEntityType,
 } from "@paperclipai/shared";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
-import { logActivity, logAuthzRefusal } from "./activity-log.js";
+import {
+  insertActivity,
+  logActivity,
+  logAuthzRefusal,
+  type ActivityPublication,
+  type LogActivityInput,
+} from "./activity-log.js";
 import type { approvalService } from "./approvals.js";
 import type { issueApprovalService } from "./issue-approvals.js";
 
@@ -104,9 +110,24 @@ function entityIdFor(input: CreateVerdictInput): string {
 export interface VerdictsServiceDeps {
   approvalsService?: ReturnType<typeof approvalService>;
   issueApprovalsService?: ReturnType<typeof issueApprovalService>;
+  /** Collect activity publications instead of publishing (see recordActivity). */
+  onActivity?: (publication: ActivityPublication) => void;
 }
 
 export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
+  /**
+   * GH #863 (#867 follow-up): a caller that runs `create` inside a
+   * transaction passes `onActivity`, so the row is written in the
+   * transaction but its live/plugin events are published only after commit.
+   */
+  async function recordActivity(input: LogActivityInput): Promise<void> {
+    if (deps?.onActivity) {
+      deps.onActivity(await insertActivity(db, input));
+      return;
+    }
+    await logActivity(db, input);
+  }
+
   async function loadIssue(companyId: string, issueId: string) {
     const row = await db
       .select({
@@ -174,13 +195,16 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
   ): Promise<void> {
     const NEUTRAL_VIOLATION_MSG = "reviewer must not be the assignee";
 
-    const refusal = (): void => {
+    // GH #863 (#867 follow-up): awaited. Fire-and-forget let the insert run
+    // after a caller's transaction (the escalation sweep passes one) had
+    // already finished, where it failed or raced the commit.
+    const refusal = async (): Promise<void> => {
       try {
         // M4: req may be the anonymous stand-in used by service-level callers
         // (orchestrator, bridge). When the reviewer identity is known — and it
         // always is when this guard fires — attribute the refusal to them.
         const descriptor = req.actor.type === "none" ? actorForReviewer(input) : undefined;
-        void Promise.resolve(
+        await Promise.resolve(
           logAuthzRefusal(db, {
             req,
             actor: descriptor
@@ -213,7 +237,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         issue.assigneeAgentId &&
         input.reviewerAgentId === issue.assigneeAgentId
       ) {
-        refusal();
+        await refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       if (
@@ -221,7 +245,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         issue.assigneeUserId &&
         input.reviewerUserId === issue.assigneeUserId
       ) {
-        refusal();
+        await refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       return;
@@ -234,7 +258,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         project.leadAgentId &&
         input.reviewerAgentId === project.leadAgentId
       ) {
-        refusal();
+        await refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       return;
@@ -247,7 +271,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         goal.ownerAgentId &&
         input.reviewerAgentId === goal.ownerAgentId
       ) {
-        refusal();
+        await refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       return;
@@ -315,7 +339,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
       normalizeShapeError(err);
     }
 
-    await logActivity(db, {
+    await recordActivity({
       companyId: data.companyId,
       actorType: actor.actorType,
       actorId: actor.actorId,
@@ -368,7 +392,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         });
       }
 
-      await logActivity(db, {
+      await recordActivity({
         companyId: data.companyId,
         actorType: actor.actorType,
         actorId: actor.actorId,
@@ -413,10 +437,18 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
       .orderBy(asc(verdicts.createdAt));
   }
 
+  /**
+   * The latest closing verdict. `options.since` limits it to the current
+   * review round (GH #863, #867 follow-up): the review queue passes the
+   * item's `enqueuedAt`, which resets each time the issue re-enters
+   * in_review, so a `failed` verdict from an earlier round no longer dequeues
+   * the revised work before anyone has reviewed it.
+   */
   async function closingVerdictFor(
     companyId: string,
     entityType: VerdictEntityType,
     entityId: string,
+    options: { since?: Date | null } = {},
   ): Promise<VerdictRow | null> {
     const fk = entityFkColumn(entityType);
     return db
@@ -428,6 +460,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
           eq(verdicts.entityType, entityType),
           eq(fk, entityId),
           inArray(verdicts.outcome, COVERED_OUTCOMES as string[]),
+          options.since ? gte(verdicts.createdAt, options.since) : undefined,
         ),
       )
       .orderBy(desc(verdicts.createdAt))

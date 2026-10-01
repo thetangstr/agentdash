@@ -6,6 +6,8 @@ import type { LiveEvent } from "@paperclipai/shared";
 import {
   isCanonicalUuid,
   isProjectVisible,
+  pruneRelatedIssuesInActivityDetails,
+  relatedIssueIdsInActivityDetails,
   resolveAgentVisibility,
   seesEverything,
 } from "../routes/visibility.js";
@@ -104,6 +106,22 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
+/**
+ * For an `issue.deleted` activity event that carries its project (written
+ * since GH #863): the project id, or null for an issue with no project.
+ * Undefined for any other event, or an older delete event without it.
+ */
+function deletedIssueProjectOf(event: LiveEvent): string | null | undefined {
+  if (event.type !== "activity.logged") return undefined;
+  const payload = asRecord(event.payload) ?? {};
+  if (payload.action !== "issue.deleted" || payload.entityType !== "issue") return undefined;
+  const details = asRecord(payload.details);
+  if (!details || !("projectId" in details)) return undefined;
+  const projectId = details.projectId;
+  if (projectId === null) return null;
+  return typeof projectId === "string" ? projectId : undefined;
+}
+
 /** Which issues, runs and projects does this event carry content about? */
 export function liveEventRefs(event: LiveEvent): LiveEventRefs {
   const refs: LiveEventRefs = { issueIds: [], runIds: [], projectIds: [], agentIds: [], malformed: false };
@@ -123,7 +141,13 @@ export function liveEventRefs(event: LiveEvent): LiveEventRefs {
   if (event.type === "activity.logged") {
     const entityType = payload.entityType;
     if (entityType === "agent") add(refs.agentIds, payload.entityId, false);
-    if (entityType === "issue") add(refs.issueIds, payload.entityId, true);
+    const deletedIssueProject = deletedIssueProjectOf(event);
+    if (deletedIssueProject !== undefined) {
+      // GH #863 (#864 follow-up): the issue row is gone; its project travels
+      // on the event. A null project is company-visible, like any issue.
+      if (deletedIssueProject) add(refs.projectIds, deletedIssueProject, true);
+      if (typeof payload.entityId !== "string" || !isCanonicalUuid(payload.entityId)) refs.malformed = true;
+    } else if (entityType === "issue") add(refs.issueIds, payload.entityId, true);
     else if (entityType === "project") add(refs.projectIds, payload.entityId, true);
     else if (entityType === "heartbeat_run" || entityType === "run") add(refs.runIds, payload.entityId, true);
     add(refs.runIds, payload.runId, false);
@@ -141,6 +165,10 @@ export function liveEventRefs(event: LiveEvent): LiveEventRefs {
 export function createLiveEventVisibility(db: Db, opts: { now?: () => number } = {}) {
   const now = opts.now ?? (() => Date.now());
   const issueProject = new TtlCache<string | null>(ISSUE_TTL_MS, now);
+  // GH #863 (#864 follow-up): a deleted issue's last project, kept as long as
+  // a run on it can still emit events, so those events resolve instead of
+  // failing closed.
+  const deletedIssueProject = new TtlCache<string | null>(RUN_TTL_MS, now);
   const runIssue = new TtlCache<string | null>(RUN_TTL_MS, now);
   const companyProjects = new TtlCache<Promise<Map<string, ProjectRow>>>(PROJECTS_TTL_MS, now);
   const projectGeneration = new Map<string, number>();
@@ -158,6 +186,8 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       projectGeneration.set(event.companyId, generationOf(event.companyId) + 1);
     } else if (payload.entityType === "issue" && typeof payload.entityId === "string") {
       issueProject.delete(payload.entityId);
+      const deletedProject = deletedIssueProjectOf(event);
+      if (deletedProject !== undefined) deletedIssueProject.set(payload.entityId, deletedProject);
     }
   }
 
@@ -185,7 +215,9 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     const missing: string[] = [];
     for (const id of issueIds) {
       const hit = issueProject.get(id);
+      const deleted = hit === undefined ? deletedIssueProject.get(id) : undefined;
       if (hit !== undefined) out.set(id, hit);
+      else if (deleted !== undefined) out.set(id, deleted);
       else missing.push(id);
     }
     if (missing.length > 0) {
@@ -304,7 +336,36 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       return visible;
     }
 
-    return async function shouldDeliver(event: LiveEvent): Promise<boolean> {
+    /**
+     * GH #863 (#868 follow-up): an activity event this subscriber may receive
+     * can still name OTHER issues in its details (blockers, referenced
+     * issues). Entries for issues the subscriber cannot see are pruned, the
+     * same rule the REST activity routes apply. Returns the event itself when
+     * nothing is hidden, so the common case allocates nothing.
+     */
+    async function redactForSubscriber(event: LiveEvent): Promise<LiveEvent> {
+      if (event.type !== "activity.logged") return event;
+      const payload = asRecord(event.payload);
+      const details = payload?.details;
+      const related = relatedIssueIdsInActivityDetails(details);
+      if (related.length === 0) return event;
+      const req = await currentReq();
+      if (seesEverything(req, companyId)) return event;
+      const projectsById = await projectsOfIssues(related.filter((id) => isCanonicalUuid(id)));
+      const visible = new Set<string>();
+      for (const [issueId, projectId] of projectsById) {
+        // Unknown issue: fail closed. No project: company-visible.
+        if (projectId === undefined) continue;
+        if (projectId === null || (await projectVisible(req, projectId))) visible.add(issueId);
+      }
+      const pruned = pruneRelatedIssuesInActivityDetails(details, (id) => visible.has(id));
+      if (pruned === details) return event;
+      return { ...event, payload: { ...payload, details: pruned } };
+    }
+
+    return Object.assign(shouldDeliver, { redactForSubscriber });
+
+    async function shouldDeliver(event: LiveEvent): Promise<boolean> {
       // Agent visibility (2026-09-30): an event about an agent the subscriber
       // cannot see is not delivered, whatever project it is in. The scope is
       // cached on the actor request, which currentReq() keeps for ACTOR_TTL_MS.
@@ -328,7 +389,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
         if (!(await projectVisible(req, projectId))) return false;
       }
       return true;
-    };
+    }
   }
 
   return { resolveEvent, createSubscriberFilter };

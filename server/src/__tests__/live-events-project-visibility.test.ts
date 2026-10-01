@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createRequire } from "node:module";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agentApiKeys,
@@ -64,6 +65,31 @@ describe("liveEventRefs", () => {
     });
     // A malformed agent id is simply not a reference; it never fails closed.
     expect(liveEventRefs({ ...base, type: "agent.status", payload: { agentId: "not-an-id" } }).malformed).toBe(false);
+  });
+
+  it("reads a deleted issue's project from the issue.deleted event instead of the gone row (GH #863)", () => {
+    const refs = liveEventRefs({
+      ...base,
+      type: "activity.logged",
+      payload: { action: "issue.deleted", entityType: "issue", entityId: issueId, details: { projectId } },
+    });
+    expect(refs).toEqual({ issueIds: [], runIds: [], projectIds: [projectId], agentIds: [], malformed: false });
+    // No project: nothing to resolve, company-visible like any project-less issue.
+    expect(
+      liveEventRefs({
+        ...base,
+        type: "activity.logged",
+        payload: { action: "issue.deleted", entityType: "issue", entityId: issueId, details: { projectId: null } },
+      }).projectIds,
+    ).toEqual([]);
+    // An older delete event without the project still resolves the issue (and fails closed).
+    expect(
+      liveEventRefs({
+        ...base,
+        type: "activity.logged",
+        payload: { action: "issue.deleted", entityType: "issue", entityId: issueId },
+      }).issueIds,
+    ).toEqual([issueId]);
   });
 
   it("flags a non-canonical entity id as unresolvable (fail closed)", () => {
@@ -269,6 +295,87 @@ describeEmbeddedPostgres("live events respect restricted project visibility", ()
     await settle([admin, outsider]);
     expect(admin.events.some((e) => e.payload.runId === unknownRun)).toBe(true);
     expect(outsider.events.some((e) => e.payload.runId === unknownRun)).toBe(false);
+  });
+
+  // GH #863 (#868 follow-up): a visible issue's blocker change can name a
+  // restricted blocker; the entry is pruned per subscriber, not the event.
+  it("prunes a restricted blocker from a visible issue's blockers_updated event for off-list subscribers", async () => {
+    const creator = await asUser("sam");
+    const outsider = await asUser("outsider");
+    const outsideAgent = await asAgent(OUTSIDE_TOKEN);
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "user",
+      actorId: "sam",
+      action: "issue.blockers_updated",
+      entityType: "issue",
+      entityId: OPEN_ISSUE,
+      details: {
+        blockedByIssueIds: [SECRET_ISSUE],
+        addedBlockedByIssueIds: [SECRET_ISSUE],
+        removedBlockedByIssueIds: [],
+        blockedByIssues: [{ id: SECRET_ISSUE, identifier: "SEC-1", title: "Secret issue" }],
+        addedBlockedByIssues: [{ id: SECRET_ISSUE, identifier: "SEC-1", title: "Secret issue" }],
+        removedBlockedByIssues: [],
+      },
+    });
+    await settle([creator, outsider, outsideAgent]);
+
+    const blockersEvent = (c: Client) =>
+      c.events.find((e) => e.type === "activity.logged" && e.payload.action === "issue.blockers_updated");
+    expect(JSON.stringify(blockersEvent(creator))).toContain("Secret issue");
+    for (const c of [outsider, outsideAgent]) {
+      const event = blockersEvent(c);
+      expect(event).toBeDefined();
+      expect(JSON.stringify(event)).not.toContain("Secret issue");
+      expect(JSON.stringify(event)).not.toContain(SECRET_ISSUE);
+      expect((event!.payload.details as Record<string, unknown>).blockedByIssues).toEqual([]);
+    }
+  });
+
+  // GH #863 (#864 follow-up): the issue row is gone when issue.deleted is
+  // logged; its project travels on the event, so delivery is decided by it.
+  it("delivers issue.deleted, and later run events on the deleted issue, by the issue's last project", async () => {
+    const creator = await asUser("sam");
+    const outsider = await asUser("outsider");
+    const goneOpen = randomUUID();
+    const goneSecret = randomUUID();
+    const goneOpenRun = randomUUID();
+    await db.insert(issues).values([
+      { id: goneOpen, companyId: COMPANY, projectId: OPEN_PROJECT, title: "Doomed open", status: "todo" },
+      { id: goneSecret, companyId: COMPANY, projectId: SECRET_PROJECT, title: "Doomed secret", status: "todo" },
+    ]);
+    await db.insert(heartbeatRuns).values({
+      id: goneOpenRun,
+      companyId: COMPANY,
+      agentId: LEAD_AGENT,
+      status: "running",
+      contextSnapshot: { issueId: goneOpen },
+    });
+    for (const [issueId, projectId] of [[goneOpen, OPEN_PROJECT], [goneSecret, SECRET_PROJECT]] as const) {
+      await db.delete(issues).where(eq(issues.id, issueId));
+      await logActivity(db, {
+        companyId: COMPANY,
+        actorType: "user",
+        actorId: "sam",
+        action: "issue.deleted",
+        entityType: "issue",
+        entityId: issueId,
+        details: { projectId },
+      });
+    }
+    publishLiveEvent({
+      companyId: COMPANY,
+      type: "heartbeat.run.log",
+      payload: { runId: goneOpenRun, agentId: LEAD_AGENT, ts: new Date().toISOString(), stream: "stdout", chunk: "after delete" },
+    });
+    await settle([creator, outsider]);
+
+    expect(sawIssue(creator, goneOpen)).toBe(true);
+    expect(sawIssue(creator, goneSecret)).toBe(true);
+    expect(sawIssue(outsider, goneOpen)).toBe(true);
+    expect(sawIssue(outsider, goneSecret)).toBe(false);
+    expect(sawRunLog(outsider, goneOpenRun)).toBe(true);
   });
 
   it("applies an access-list change on the next event, without waiting for a cache TTL", async () => {

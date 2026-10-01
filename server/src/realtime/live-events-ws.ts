@@ -269,7 +269,17 @@ export function setupLiveEventsWebSocketServer(
           logger.warn({ err, companyId: context.companyId, type: event.type }, "live event visibility check failed");
         }
         if (!deliver || socket.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify(event));
+        // GH #863: prune blocker / referenced-issue entries this subscriber
+        // cannot see. A failure drops the event (fail closed).
+        let outgoing = event;
+        try {
+          outgoing = await shouldDeliver.redactForSubscriber(event);
+        } catch (err) {
+          logger.warn({ err, companyId: context.companyId, type: event.type }, "live event redaction failed");
+          return;
+        }
+        if (socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify(outgoing));
       });
     });
 
