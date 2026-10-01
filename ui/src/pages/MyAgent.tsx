@@ -190,10 +190,10 @@ export default function MyAgent() {
 
   // One UX for every company: stewardship is switched on per workspace by the
   // SERVER, not by this page. `/me/inbox` is the capability-gated route (404
-  // when stewardship is off), so it is asked first. `/me/agent` is not gated
-  // and provisions a personal agent on first visit, so it must only run once
-  // the inbox has confirmed the capability is on — otherwise opening this page
-  // in a workspace without stewardship would create an agent as a side effect.
+  // when stewardship is off), so it is asked first. `/me/agent` provisions a
+  // personal agent on first visit; the server gates it too (404, nothing
+  // created, when stewardship is off), and this page still asks it only once
+  // the inbox has confirmed the capability is on.
   const inbox = useQuery({
     queryKey: queryKeys.myAgent.inbox(selectedCompanyId ?? ""),
     queryFn: () => stewardshipsApi.getMyInbox(selectedCompanyId!),

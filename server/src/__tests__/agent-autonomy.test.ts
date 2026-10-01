@@ -31,12 +31,13 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
 
 type TestDb = ReturnType<typeof createDb>;
 
-async function createCompany(db: TestDb) {
+async function createCompany(db: TestDb, productProfile: "default" | "agentdash_mk" = "default") {
   return db
     .insert(companies)
     .values({
       name: `Autonomy ${randomUUID()}`,
       issuePrefix: `AU${randomUUID().slice(0, 6).toUpperCase()}`,
+      productProfile,
     })
     .returning()
     .then((rows) => rows[0]!);
@@ -362,7 +363,7 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
     });
 
     it("refuses `steward` on the agent PATCH instead of silently dropping it", async () => {
-      const company = await createCompany(db);
+      const company = await createCompany(db, "agentdash_mk");
       const userId = await createMember(db, company.id);
       const agent = await createAgent(db, company.id);
       const app = await createApp(db, makeBoardActor(company.id, userId));
@@ -379,6 +380,20 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
       expect(response.body.error).toMatch(/agent-stewardships/);
     });
 
+    it("does not point a workspace without stewardship at a route that would 404", async () => {
+      const company = await createCompany(db, "default");
+      const userId = await createMember(db, company.id);
+      const agent = await createAgent(db, company.id);
+      const app = await createApp(db, makeBoardActor(company.id, userId));
+
+      const response = await requestApp(app, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}`).send({ steward: userId }),
+      );
+      expect(response.status).toBe(422);
+      expect(response.body.error).not.toMatch(/agent-stewardships/);
+      expect(response.body.error).toMatch(/not enabled for this workspace/);
+    });
+
     it("guards the key path on the kind, not on the caller", () => {
       expect(() => assertAgentMayHoldKey({ name: "Scribe", autonomy: "stewarded" })).not.toThrow();
       expect(() => assertAgentMayHoldKey({ name: "Scribe", autonomy: "autonomous" })).toThrow(
@@ -389,7 +404,7 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
 
   describe("creating an agent", () => {
     it("creates a stewarded agent by default and pairs the creator with it", async () => {
-      const company = await createCompany(db);
+      const company = await createCompany(db, "agentdash_mk");
       const userId = await createMember(db, company.id);
       const app = await createApp(db, makeBoardActor(company.id, userId));
 
@@ -414,6 +429,34 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
           ),
         );
       expect(pairing).toHaveLength(1);
+    });
+
+    it("pairs nobody on a workspace without stewardship, and the agent can still go autonomous", async () => {
+      const company = await createCompany(db, "default");
+      const userId = await createMember(db, company.id);
+      const app = await createApp(db, makeBoardActor(company.id, userId));
+
+      const response = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
+          name: "Personal",
+          role: "engineer",
+          adapterType: "hermes_local",
+          adapterConfig: {},
+        }),
+      );
+      expect(response.status).toBe(201);
+      expect(response.body.autonomy).toBe("stewarded");
+      const pairings = await db
+        .select()
+        .from(agentStewardships)
+        .where(eq(agentStewardships.companyId, company.id));
+      expect(pairings).toHaveLength(0);
+
+      // No live pairing, so nothing blocks the autonomy change.
+      const patched = await requestApp(app, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${response.body.id}`).send({ autonomy: "autonomous" }),
+      );
+      expect(patched.status).toBe(200);
     });
 
     it("makes the creator accountable for an autonomous agent, and pairs nobody with it", async () => {

@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
+import { isSidebarMoreRoute } from "./SidebarMoreGroup";
 
 const mockHeartbeatsApi = vi.hoisted(() => ({
   liveRunsForCompany: vi.fn(),
@@ -448,6 +449,28 @@ describe("Sidebar", () => {
       await act(async () => root.unmount());
     });
 
+    it("opens itself on one of its own pages, without changing the remembered state", async () => {
+      mockLocation.pathname = "/PAP/costs";
+      const root = await renderSidebar();
+      expect(findMoreTrigger()?.getAttribute("aria-expanded")).toBe("true");
+      const costs = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/costs");
+      expect(costs).toBeDefined();
+      expect(localStorage.getItem("agentdash.sidebarMoreExpanded:company-1:user-1")).toBeNull();
+      // A hand collapse there is respected.
+      await toggleMore();
+      expect(findMoreTrigger()?.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => root.unmount());
+      mockLocation.pathname = "/PAP/dashboard";
+    });
+
+    it("recognises its routes with or without the company prefix", () => {
+      expect(isSidebarMoreRoute("/PAP/goals")).toBe(true);
+      expect(isSidebarMoreRoute("/PAP/goals/g-1")).toBe(true);
+      expect(isSidebarMoreRoute("/activity")).toBe(true);
+      expect(isSidebarMoreRoute("/PAP/dashboard")).toBe(false);
+      expect(isSidebarMoreRoute("/PAP/goalsx")).toBe(false);
+    });
+
     it("falls back to collapsed when storage throws", async () => {
       const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
         throw new Error("blocked");
@@ -503,8 +526,9 @@ describe("Sidebar", () => {
       const help = container.querySelector('button[aria-label="Help"]');
       expect(help).not.toBeNull();
       expect(document.body.querySelector('[role="menu"]')).toBeNull();
+      // The shared DropdownMenu opens on pointerdown (mouse) or Enter/Space.
       await act(async () => {
-        help!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        help!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       });
       await flushReact();
       const menu = document.body.querySelector('[role="menu"]');

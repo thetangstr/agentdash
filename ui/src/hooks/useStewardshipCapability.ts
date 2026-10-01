@@ -2,10 +2,11 @@
 // says — never read from the company's product profile.
 //
 // `/me/inbox` is the stewardship route behind the server's capability gate: it
-// answers 404 when stewardship is off for the workspace. Some stewardship
-// routes (assignment, `/me/agent`) are not gated themselves, so surfaces that
-// write through them ask this first. It shares MyAgent's query key, so it costs
-// at most one request per company.
+// answers 404 when stewardship is off for the workspace. `/me/agent` and the
+// assign/transfer/release routes answer the same 404, so a write can never
+// land where the capability is off; surfaces ask this first so they do not
+// offer the action at all. It shares MyAgent's query key, so it costs at most
+// one request per company.
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { stewardshipsApi } from "@/api/stewardships";
 import { isCapabilityNotFound } from "@/components/AvailableOnRequest";

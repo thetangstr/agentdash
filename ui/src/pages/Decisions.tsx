@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Link } from "@/lib/router";
 import {
   Check,
@@ -11,18 +10,16 @@ import {
   X,
 } from "lucide-react";
 import type { WaitingOnYouDecision, WaitingOnYouTask } from "@paperclipai/shared";
-import { dashboardApi } from "../api/dashboard";
-import { decisionsListLength } from "../hooks/useDecisionsBadge";
+import { decisionsListLength, useDecisionsCount } from "../hooks/useDecisionsBadge";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
-import { queryKeys } from "../lib/queryKeys";
 import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { cn } from "../lib/utils";
-import { DecisionsOtherSources, useDecisionsOtherSources } from "./DecisionsOtherSources";
+import { DecisionsOtherSources } from "./DecisionsOtherSources";
 
 /**
  * AgentDash: UX-7 (GH #788) — one Decisions page instead of Inbox +
@@ -128,17 +125,16 @@ export function Decisions() {
     setBreadcrumbs([{ label: "Decisions" }]);
   }, [setBreadcrumbs]);
 
-  const { data: waiting, isLoading, error } = useQuery({
-    queryKey: queryKeys.home.waitingOnYou(selectedCompanyId ?? ""),
-    queryFn: () => dashboardApi.waitingOnYou(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-    refetchInterval: 30_000,
-  });
-  const shownApprovalIds = useMemo(
-    () => new Set((waiting?.decisions ?? []).map((decision) => decision.approvalId)),
-    [waiting],
-  );
-  const otherSources = useDecisionsOtherSources(selectedCompanyId, shownApprovalIds);
+  // The same hook the sidebar, mobile and Home badges read, so the header
+  // count is exactly the number they show.
+  const {
+    waiting,
+    isLoading,
+    error,
+    sources: otherSources,
+    main: mainCount,
+    total: decisionsTotal,
+  } = useDecisionsCount(selectedCompanyId);
 
   if (!selectedCompanyId) {
     return <p className="text-sm text-muted-foreground">Select a company first.</p>;
@@ -153,7 +149,6 @@ export function Decisions() {
   const manualTasks = waiting?.tasksAssignedToYou ?? [];
   const otherTasks = waiting?.otherTasksAssignedToYou ?? [];
   const otherTasksTotal = waiting?.otherTasksAssignedToYouTotal ?? otherTasks.length;
-  const mainCount = decisionsListLength(waiting);
   const moreDecisions = (waiting?.total ?? 0) - decisions.length;
   const moreTasks = (waiting?.tasksAssignedToYouTotal ?? 0) - manualTasks.length;
 
@@ -167,7 +162,7 @@ export function Decisions() {
             data-testid="decisions-count"
             className="inline-flex min-w-6 items-center justify-center rounded-full bg-muted px-2 py-0.5 text-xs font-semibold tabular-nums"
           >
-            {mainCount}
+            {decisionsTotal}
           </span>
         ) : null}
       </div>
@@ -178,7 +173,7 @@ export function Decisions() {
         </p>
       ) : null}
 
-      {waiting && mainCount === 0 && otherSources.total === 0 ? (
+      {waiting && decisionsTotal === 0 ? (
         <div
           data-testid="decisions-empty"
           className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-center"
