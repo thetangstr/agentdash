@@ -7,6 +7,7 @@ import type { CloudDb } from "./db/client.js";
 import { type Refusal, requireAdmin, type RequireAdminOptions } from "./auth.js";
 import { operatorAudit } from "./db/schema.js";
 import type { Logger } from "./logger.js";
+import { backupRoutes, type BackupRouteDeps } from "./backups/routes.js";
 import { internalRoutes } from "./routes/internal.js";
 import { backfillEdgeSecrets } from "./railway/edge-backfill.js";
 import { RailwayClient } from "./railway/client.js";
@@ -34,6 +35,8 @@ export function createApp(opts: {
   frontDoor?: FrontDoor;
   /** SC-10 (GH #771): the ops alert transports by name, for `alerts test`. Defaults to the log. */
   alertTransports?: Array<{ name: string; alerter: Alerter }>;
+  /** GH #733: off-box backups (status works without them; run/download answer 409). */
+  backups?: BackupRouteDeps;
 }): Express {
   const { db, config, log } = opts;
   const frontDoor = opts.frontDoor ?? makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
@@ -70,7 +73,8 @@ export function createApp(opts: {
       detail: { reason: r.reason, socketIp: r.socketIp, method: r.method, path: r.path, failures: r.failures ?? null },
     });
   };
-  app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log, {
+  const adminGuard = requireAdmin(config, log, { onRefused, ...opts.admin });
+  app.use("/internal", adminGuard, internalRoutes(db, log, {
     frontDoor,
     invites: inviteService(db, config.dataKeys),
     // AgentDash (SC-12, GH #773): rollouts resolve the release's GHCR digest.
@@ -90,6 +94,9 @@ export function createApp(opts: {
       : {}),
   }), // AgentDash (SC-10, GH #771): fleet status, box health, suspend and wake, alerts test.
   monitorRoutes(db, log, { edgeLive: config.edgeLive, transports: opts.alertTransports ?? [{ name: "log", alerter: logAlerter(log) }] }));
+
+  // AgentDash (GH #733): off-box backup status, manual runs and downloads (same guard as above).
+  app.use("/internal", adminGuard, backupRoutes(db, log, opts.backups ?? { staleHours: 36 }));
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not found" });

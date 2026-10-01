@@ -246,7 +246,8 @@ Measured on the launch box (runbook §1): `web` 0.46 GB and Postgres 0.13 GB of 
 ### 6.2 Backups
 
 - **Railway snapshots,** daily and weekly, on both volumes, set at provisioning (Pro): the database, and `/paperclip` with the Hermes home and the customer's provider key. This closes #733 for these boxes. Plus a **pre-upgrade snapshot** and **master key escrow** (§3.3).
-- The server's hourly on-volume backup stays but is not off-box. **Off-Railway encrypted pg_dumps** are post-launch; `backup-box.sh` stays the manual deep backup. A monthly restore test restores a random box's snapshot into a throwaway project.
+- The server's hourly on-volume backup stays but is not off-box. `backup-box.sh` stays the manual deep backup. A monthly restore test restores a random box's snapshot into a throwaway project.
+- **Off-Railway encrypted database backups** (GH #733, moved to launch): nightly per active box, the control plane pulls a fresh dump from the box's token-protected `POST /api/agentdash/backup-export`, encrypts it to an offline backup key (the control plane cannot decrypt), uploads it to an S3-compatible bucket, and keeps 7 daily plus 4 weekly. The offline `backup-restore` tool restores into a throwaway database and checks it against the export's counts; the monthly restore test runs it too. Runbook: `doc/runbooks/cloud-control-plane.md` §7.
 
 ### 6.3 Monitoring
 

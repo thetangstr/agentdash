@@ -8,6 +8,7 @@
 // password are never stored here at all.
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   bigserial,
   boolean,
   check,
@@ -668,5 +669,64 @@ export const boxUpgrades = pgTable(
     // At most one upgrade in flight per box (a rollout's and a single-box one cannot overlap).
     uniqueIndex("box_upgrades_one_live_per_box_uq").on(t.boxId).where(sql`state in ('queued', 'running', 'rolling_back')`),
     check("box_upgrades_state_ck", inList("state", BOX_UPGRADE_STATES)),
+  ],
+);
+
+// ---- Off-box backups (GH #733) -----------------------------------------
+
+export const BACKUP_TRIGGERS = ["scheduled", "manual"] as const;
+export type BackupTrigger = (typeof BACKUP_TRIGGERS)[number];
+export const BACKUP_STATES = ["running", "succeeded", "failed", "pruned"] as const;
+export type BackupState = (typeof BACKUP_STATES)[number];
+
+/**
+ * One off-box database backup of a box (cloud/src/backups/). The object in
+ * the store is encrypted to the offline backup key; this row holds only where
+ * it is and what it should hash to. A scheduled backup is one row per box per
+ * UTC day (the unique index is the claim: a retry re-claims the same row).
+ * The runtime role has no DELETE: a pruned backup keeps its row as `pruned`.
+ */
+export const boxBackups = pgTable(
+  "box_backups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    boxId: uuid("box_id")
+      .notNull()
+      .references(() => boxes.id),
+    trigger: text("trigger").$type<BackupTrigger>().notNull(),
+    /** The UTC day (YYYY-MM-DD) the backup belongs to. */
+    backupDay: text("backup_day").notNull(),
+    state: text("state").$type<BackupState>().notNull().default("running"),
+    attempt: integer("attempt").notNull().default(1),
+    lockedBy: text("locked_by"),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    /** Path inside the bucket prefix. */
+    objectPath: text("object_path"),
+    /** Encrypted size and SHA-256 (hex) of the stored object. */
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
+    sha256: text("sha256"),
+    /** Plaintext (gzipped dump) size. */
+    plainBytes: bigint("plain_bytes", { mode: "number" }),
+    /** Id of the offline public key the backup is sealed to. */
+    sealedTo: text("sealed_to"),
+    format: text("format"),
+    /** Core-table row counts the box reported (numbers only). */
+    counts: jsonb("counts").$type<Record<string, number | null>>(),
+    release: text("release"),
+    /** Redacted. */
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    prunedAt: timestamp("pruned_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("box_backups_box_idx").on(t.boxId, t.createdAt),
+    uniqueIndex("box_backups_scheduled_day_uq")
+      .on(t.boxId, t.backupDay)
+      .where(sql`"trigger" = 'scheduled'`),
+    check("box_backups_trigger_ck", inList("trigger", BACKUP_TRIGGERS)),
+    check("box_backups_state_ck", inList("state", BACKUP_STATES)),
   ],
 );

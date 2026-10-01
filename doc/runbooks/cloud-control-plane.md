@@ -142,3 +142,64 @@ $A boxes unhold <slug>
 **One job per box:** the job runner never runs two jobs of one box at once, and holds every other job (close-signup, delete, suspend) of a box whose upgrade is running or rolling back.
 
 **Not covered yet:** the deployment `meta` digest read and the Railway snapshot and rollback mutations (`volumeInstanceBackupCreate`, `deploymentRollback`) are exercised against the fake Railway only; the first live run on two boxes (#773 acceptance) confirms them. If Railway's `meta` does not name the digest, every upgrade rolls back and holds its box (safe, loud): fix the read before a fleet rollout. Boxes do not report `releaseCommit` until their image carries a release marker.
+## 8. Off-box backups (GH #733)
+
+Three layers protect a hosted box's data, from fastest restore to most independent:
+
+| Layer | What | Where | Restores |
+|---|---|---|---|
+| Railway snapshots | both volumes (database and `/paperclip`), daily and weekly, set by the provisioner's `snapshots` step (Pro workspace) | Railway | a whole volume, in the Railway dashboard |
+| **Off-box database backup** | an encrypted logical dump of the box's database, nightly, 7 daily plus 4 weekly | S3-compatible bucket outside Railway | the database, with the `backup-restore` tool |
+| `scripts/hosted/backup-box.sh` | the manual deep backup (dump, `/paperclip` tarball, snapshots) | the operator's machine | see `hosted-box.md` §9 |
+
+The server's hourly backup on the box's own Volume stays, but it is not off-box.
+
+**How the nightly backup works.** From `CLOUD_BACKUP_HOUR_UTC` (default 08:00 UTC, before the 02:00 Pacific upgrade window), the control plane claims one row per active box per UTC day in `box_backups`, reads the box's `AGENTDASH_BACKUP_TOKEN` from Railway (in memory only), and calls `POST /api/agentdash/backup-export` on the box's Railway host with that token and the box's edge secret. The box writes a fresh dump (the same library as its hourly backup) to a temp directory and streams it; the control plane encrypts it on the fly to the **backup public key** (libsodium sealed data key plus XChaCha20-Poly1305 secretstream, header authenticated), uploads it, records its size and SHA-256, and prunes the box to 7 daily plus 4 weekly backups. A failure is retried 30 minutes later, up to 3 times a day. **The control plane cannot decrypt a backup**: like the master key escrow (section 3), only the offline secret key opens one.
+
+**Boxes made before this change** have no `AGENTDASH_BACKUP_TOKEN` and run a release without the export route. The first backup attempt sets the token with `skipDeploys` (box event `backup_token_installed`) and fails with `token_pending_deploy`; once the box's next deploy runs a release with the route, backups start. New boxes get the token at provisioning.
+
+**Variables on `cloud-control`** (all four `CLOUD_BACKUP_S3_*` credentials together or none; a partial set refuses to start):
+
+| Variable | Value |
+|---|---|
+| `CLOUD_BACKUP_S3_ENDPOINT` | the store's https endpoint, e.g. `https://<account id>.r2.cloudflarestorage.com` (R2) or `https://s3.us-west-2.amazonaws.com` |
+| `CLOUD_BACKUP_S3_BUCKET` | a **dedicated, private** bucket, e.g. `agentdash-box-backups`; turn on object versioning or object lock if the store offers it |
+| `CLOUD_BACKUP_S3_REGION` | default `auto` (R2); the bucket's region for AWS |
+| `CLOUD_BACKUP_S3_ACCESS_KEY_ID`, `CLOUD_BACKUP_S3_SECRET_ACCESS_KEY` | a key scoped to that one bucket: read, write and delete objects, nothing else |
+| `CLOUD_BACKUP_S3_PREFIX` | default `boxes` |
+| `CLOUD_BACKUP_S3_VIRTUAL_HOSTED` | `true` for `<bucket>.<host>` URLs; default path style, which R2 and MinIO need |
+| `CLOUD_BACKUP_PUBLIC_KEY` | the backup public key (below). Falls back to `CLOUD_ESCROW_PUBLIC_KEY`, with a warning |
+| `CLOUD_BACKUP_HOUR_UTC`, `CLOUD_BACKUP_RETAIN_DAILY`, `CLOUD_BACKUP_RETAIN_WEEKLY`, `CLOUD_BACKUP_CONCURRENCY`, `CLOUD_BACKUP_MAX_ATTEMPTS`, `CLOUD_BACKUP_STALE_HOURS` | defaults 8, 7, 4, 2, 3, 36 |
+
+**The backup key pair (founder, once).** On the offline machine: `pnpm --filter @agentdash/cloud-control escrow keygen --out-dir <dir>`; set the printed public key as `CLOUD_BACKUP_PUBLIC_KEY` and keep the secret key under the section 3 custody rules, in its own password-manager note. A separate pair from the escrow key keeps the two duties apart; using the escrow pair works too. Rotation follows section 3: each backup names its key id, so keep an old secret key until the last backup sealed to it has been pruned (about 5 weeks).
+
+**Operator commands.**
+
+```sh
+pnpm --filter @agentdash/cloud-control admin backups status          # fleet: last good backup, age, stale boxes
+pnpm --filter @agentdash/cloud-control admin backups list <slug>     # a box's backups
+pnpm --filter @agentdash/cloud-control admin backups run <slug>      # back up now (e.g. before risky work)
+pnpm --filter @agentdash/cloud-control admin backups download <backup id> <file>   # still encrypted; SHA-256 checked
+```
+
+**Alerts.** The service reports `backup_succeeded`, `backup_failed`, `backup_gave_up`, `backup_token_installed` and `backup_pruned` through its `onEvent` hook (logged today), and `staleBackups()` / `admin backups status` list active boxes with no good backup in `CLOUD_BACKUP_STALE_HOURS`. SC-10 wires those to the ops channel.
+
+**Restore test (monthly, and after any change here).** On the offline machine with the backup key directory:
+
+```sh
+pnpm --filter @agentdash/cloud-control admin backups list <random active slug>
+pnpm --filter @agentdash/cloud-control admin backups download <newest backup id> ./box.adbk
+pnpm --filter @agentdash/cloud-control backup-restore inspect --in ./box.adbk
+pnpm --filter @agentdash/cloud-control backup-restore restore --in ./box.adbk --key-dir <dir>
+rm -P ./box.adbk
+```
+
+`restore` decrypts into a mode-700 temp directory, restores into a **throwaway** embedded Postgres, compares the restored core-table counts with the counts the box reported at export time (the migration count must match), prints `RESTORE TEST PASSED` or `FAILED`, and deletes the database and the plaintext. Record the date, slug, backup id and timings on the ops log.
+
+**Real restore (box database lost or corrupted).** Never restore over a live box: the tool refuses any target database that holds users or companies.
+
+1. Provision a throwaway replacement `<slug>-restore` on the same release (the slug rule leaves room for the suffix), and do not claim it.
+2. Recover the old box's master key from escrow (section 3) and set it, with the old `BETTER_AUTH_SECRET`, on the replacement.
+3. Open a temporary TCP proxy to the replacement's Postgres (as `backup-box.sh` does), then `backup-restore restore --in ./box.adbk --key-dir <dir> --into <its postgres URL>`. The guard passes because the replacement has no users; the dump drops and recreates every table it holds.
+4. Delete the proxy and redeploy the replacement. `curl -s https://<its railway host>/api/health` must answer `"status":"ok"`; then sign in as the customer's admin, and only then point the router and the box row at it.
+

@@ -10,6 +10,10 @@ runAdmin(process.argv.slice(2), process.env, {
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
     return Buffer.concat(chunks).toString("utf8");
   },
+  writeFile: async (path, data) => {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(path, data, { mode: 0o600, flag: "wx" });
+  },
 }).then(
   (code) => process.exit(code),
   (err: unknown) => {

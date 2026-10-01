@@ -50,6 +50,7 @@ import { findProjectsByName } from "./delete.js";
 import { assertBoxProjectName, boxProjectDescription, boxProjectName, projectTag } from "./names.js";
 import { newAuthSecret, newClaimCode, newEdgeSecret, newMasterKey, newPostgresPassword, sealToEscrow } from "./secrets.js";
 import { validateNewSlug, validateSlug } from "./slug.js";
+import { BACKUP_TOKEN_VAR, newBackupToken } from "../backups/service.js";
 
 /** Railway's Postgres image, major pinned (spike §2.2: the template now defaults to 18). */
 export const PG_IMAGE = "ghcr.io/railwayapp-templates/postgres-ssl:17";
@@ -447,6 +448,8 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
         }
         let generatedMasterKey: string | null = null;
         if (!names.has("BETTER_AUTH_SECRET")) vars.BETTER_AUTH_SECRET = newAuthSecret();
+        // AgentDash (GH #733): the off-box backup export's token, read back from Railway by cloud/src/backups.
+        if (!names.has(BACKUP_TOKEN_VAR)) vars[BACKUP_TOKEN_VAR] = newBackupToken();
         if (!names.has("PAPERCLIP_SECRETS_MASTER_KEY")) {
           generatedMasterKey = newMasterKey();
           vars.PAPERCLIP_SECRETS_MASTER_KEY = generatedMasterKey;

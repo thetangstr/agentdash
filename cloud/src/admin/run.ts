@@ -1,12 +1,16 @@
 // AgentDash: the operator CLI's logic, separate from the process wrapper so
 // tests can drive it. It talks to /internal/* with the admin bearer and
 // refuses to run at all without one.
+import { createHash } from "node:crypto";
+
 export interface AdminIo {
   out: (line: string) => void;
   err: (line: string) => void;
   fetch: typeof fetch;
   /** Reads all of stdin (for `invites import`). */
   readStdin?: () => Promise<string>;
+  /** Writes a new file, mode 600, refusing to overwrite (for `backups download`). */
+  writeFile?: (path: string, data: Uint8Array) => Promise<void>;
 }
 
 export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <command>
@@ -52,6 +56,12 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   waitlist approve <id>      approve a waiting entry (the person is emailed)
   waitlist approve-next <n>  approve the oldest n waiting entries
   waitlist release           give approved entries their job if provisioning is open now (also runs every minute)
+  backups status             off-box backup status for the fleet (last good backup, age, stale boxes)
+  backups list <slug>        a box's off-box backups, newest first
+  backups run <slug>         back a box up now (runs in the background; check with backups list)
+  backups download <id> <file>
+                             save a backup's encrypted file; restore it offline with
+                             pnpm --filter @agentdash/cloud-control backup-restore restore --in <file> --key-dir <dir>
 
 env: CLOUD_CONTROL_URL (default http://localhost:3200; https required for any non-local host),
      CLOUD_ADMIN_TOKEN (required)`;
@@ -194,6 +204,31 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
   if (group === "waitlist" && action === "release" && rest.length === 0) return print(await call("POST", "/waitlist/release"));
   if (group === "waitlist" && action === "approve" && rest.length === 1) {
     return print(await call("POST", `/waitlist/${encodeURIComponent(rest[0]!)}/approve`));
+  }
+  // AgentDash (GH #733): off-box backups.
+  if (group === "backups" && action === "status" && rest.length === 0) return print(await call("GET", "/backups"));
+  if (group === "backups" && action === "list" && rest.length === 1) return print(await call("GET", `/boxes/${encodeURIComponent(rest[0]!)}/backups`));
+  if (group === "backups" && action === "run" && rest.length === 1) return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/backups`));
+  if (group === "backups" && action === "download" && rest.length === 2) {
+    if (!io.writeFile) {
+      io.err("backups download needs a file writer");
+      return 2;
+    }
+    const res = await io.fetch(`${base}/internal/backups/${encodeURIComponent(rest[0]!)}/download`, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      io.err(`error ${res.status}: ${await res.text()}`);
+      return 1;
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const want = res.headers.get("x-agentdash-backup-sha256");
+    const got = createHash("sha256").update(bytes).digest("hex");
+    if (want && want !== got) {
+      io.err(`download corrupted: sha256 ${got}, expected ${want}`);
+      return 1;
+    }
+    await io.writeFile(rest[1]!, bytes);
+    io.out(`wrote ${bytes.length} bytes to ${rest[1]} (sha256 ${got}; still encrypted: open it with the backup-restore tool)`);
+    return 0;
   }
   io.err(USAGE);
   return 64;
