@@ -87,6 +87,13 @@ describe("vercel.json redirects for the old app (GH #837 review)", () => {
     }
   });
 
+  it("serves the public docs at /docs and every page under it, and nothing that only starts with docs", () => {
+    for (const path of ["/docs", "/docs/", "/docs/start/what-is-agentdash", "/docs/mcp/overview", "/docs/api/reference"]) {
+      expect(redirectFor(path), path).toBeNull();
+    }
+    for (const path of ["/docsx", "/documents"]) expect(redirectFor(path), path).toBe("/find");
+  });
+
   it("sends the old app's sign-in routes to /find and its sign-up routes to /start", () => {
     const cases: Record<string, string> = {
       "/auth": "/find", "/auth/callback": "/find", "/login": "/find", "/signin": "/find", "/sign-in": "/find",

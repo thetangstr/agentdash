@@ -87,6 +87,7 @@ export const NAV_LINKS = [
   { label: "How it works", href: "/#how-it-works" },
   { label: "Demo", href: "/demo" },
   { label: "MCP setup", href: "/mcp" },
+  { label: "Docs", href: "/docs" },
   { label: "Consulting", href: "/consulting" },
   { label: "About", href: "/about" },
 ] as const;

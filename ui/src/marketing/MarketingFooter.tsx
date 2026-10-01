@@ -22,6 +22,7 @@ export function MarketingFooter() {
               <li><a href="/#how-it-works">How it works</a></li>
               <li><a href="/demo">Interactive demo</a></li>
               <li><a href="/mcp">MCP setup</a></li>
+              <li><a href="/docs">Docs</a></li>
               <li><a href={CTA.selfHost.href} target="_blank" rel="noreferrer">Self-host on GitHub</a></li>
               <li><a href={CTA.signIn.href}>Sign in</a></li>
             </ul>

@@ -18,7 +18,11 @@ export function Guides() {
         <h1 className="text-xl font-bold text-foreground">Guides</h1>
         <p className="text-sm text-muted-foreground">
           How to work with your agent from your own terminal, and how to bring someone else on.
-          Every address below is this instance's own.
+          Every address below is this instance's own. For everything else, see{" "}
+          <Link to="/docs" className="underline">
+            the full documentation
+          </Link>
+          .
         </p>
       </div>
 
