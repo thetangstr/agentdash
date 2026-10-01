@@ -118,15 +118,16 @@ export function agentStewardshipRoutes(db: Db) {
     if (await stewardships.hasStewardshipHistory(companyId, userId)) return null;
 
     const user = await db
-      .select({ name: authUsers.name, email: authUsers.email })
+      .select({ name: authUsers.name })
       .from(authUsers)
       .where(eq(authUsers.id, userId))
       .then((rows) => rows[0]);
 
-    // First name, or the local part of the address. `create` deduplicates the
-    // name for us, so two Megans do not collide.
-    const person =
-      (user?.name ?? "").trim().split(/\s+/)[0] || (user?.email ?? "").split("@")[0] || "My";
+    // First name. `create` deduplicates the name for us, so two Megans do not
+    // collide. AgentDash (GH #505): never the local part of the address -- an
+    // agent's name is read by every agent and member in the company, so it
+    // would publish the mailbox name the directory now withholds.
+    const person = (user?.name ?? "").trim().split(/\s+/)[0] || "Teammate";
 
     const agent = await agentService(db).create(companyId, {
       name: `${person}'s agent`,

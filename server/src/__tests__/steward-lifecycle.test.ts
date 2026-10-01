@@ -455,6 +455,24 @@ describeEmbeddedPostgres("steward lifecycle and steward-scoped connect codes", (
       expect(res.body.stewardship?.userId).toBe(member);
     });
 
+    // AgentDash (GH #505): the agent's name is company-wide, so it must not
+    // carry the mailbox name the directory withholds.
+    it("names a nameless member's personal agent without their email local part", async () => {
+      const company = await createCompany(db);
+      const member = await createMember(db, company.id, "member");
+      await db
+        .update(authUsers)
+        .set({ name: "", email: "private.mailbox@example.test" })
+        .where(eq(authUsers.id, member));
+      const memberApp = createApp(db, boardActor(company.id, member, "member"));
+      const res = await call(memberApp, (baseUrl) =>
+        request(baseUrl).get(`/api/companies/${company.id}/me/agent`),
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.agent?.name).toBe("Teammate's agent");
+      expect(JSON.stringify(res.body)).not.toContain("private");
+    });
+
     it("ignores a leftover open pairing on a terminated agent when reading", async () => {
       // A row written before termination ended pairings (the migration closes
       // these; the read must not depend on it having run).

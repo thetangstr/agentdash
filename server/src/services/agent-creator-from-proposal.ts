@@ -134,6 +134,11 @@ ${userVoice || "No interview context was captured."}
 `;
 }
 
+// AgentDash: member-email-visibility (GH #505) is inherited from the canonical
+// default bundle: agents resolve people to `userId` + name through
+// /companies/:companyId/people; member email addresses are never returned to
+// agent callers (people, user-directory, steward/accountable on agent reads).
+
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry
 // or destructive compensation; separate setup/persistence/link phases stay truthful.

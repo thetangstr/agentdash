@@ -104,6 +104,8 @@ import {
 import { inviteSignupBoundEmail } from "../services/invites.js";
 import { isHostedBox } from "../services/license.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
+// AgentDash (GH #505): one predicate for who may read member email addresses.
+import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 // AgentDash (GH #708): membership changes re-check open live-event sockets.
 import { publishLiveEventAccessChange, publishMembershipAccessChange } from "../realtime/live-events-access.js";
 import {
@@ -4432,16 +4434,25 @@ export function accessRoutes(
    *
    * Deliberately NOT returning `grants`: an agent needs to resolve a person,
    * not to audit them.
+   *
+   * AgentDash (GH #505): nor email addresses, except to callers who manage
+   * members (see member-email-visibility.ts). Agents resolve a person by name
+   * to a `userId`; the address is not needed for that and does not travel.
+   * The key stays on the wire as null so readers' shapes do not change.
    */
   router.get("/companies/:companyId/people", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const members = await loadCompanyMemberRecords(db, companyId);
+    const [members, canViewEmails] = await Promise.all([
+      loadCompanyMemberRecords(db, companyId),
+      canViewMemberEmails(access, req, companyId),
+    ]);
     res.json({
       people: members.map((member) => ({
         userId: member.principalId,
         name: member.user?.name ?? null,
-        email: member.user?.email ?? null,
+        // AgentDash (GH #505): null unless this caller may see member emails.
+        email: visibleMemberEmail(req, canViewEmails, member.principalId, member.user?.email),
         status: member.status,
         membershipRole: member.membershipRole,
       })),
@@ -4461,11 +4472,32 @@ export function accessRoutes(
     });
   });
 
+  // AgentDash (GH #505): the directory is readable by anything with company
+  // access -- agents included -- because labels, pickers and @-mentions need to
+  // resolve a user id to a name. Email addresses are not part of that: agents,
+  // and members who do not manage members, get `email: null` for everyone but
+  // themselves. Admins keep addresses; the members page itself reads
+  // `/members`, which is gated on `users:manage_permissions`.
   router.get("/companies/:companyId/user-directory", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const users = await loadCompanyUserDirectory(db, companyId);
-    res.json({ users });
+    const [users, canViewEmails] = await Promise.all([
+      loadCompanyUserDirectory(db, companyId),
+      canViewMemberEmails(access, req, companyId),
+    ]);
+    res.json({
+      users: users.map((entry) =>
+        entry.user
+          ? {
+              ...entry,
+              user: {
+                ...entry.user,
+                email: visibleMemberEmail(req, canViewEmails, entry.principalId, entry.user.email),
+              },
+            }
+          : entry,
+      ),
+    });
   });
 
   router.patch(
