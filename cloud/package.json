@@ -20,7 +20,7 @@
     "express": "^5.1.0",
     "libpg-query": "18.1.5",
     "libsodium-wrappers": "^0.8.4",
-    "postgres": "^3.4.5"
+    "postgres": "3.4.8"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

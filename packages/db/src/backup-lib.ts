@@ -1383,6 +1383,13 @@ async function restoreCopyBlock(
     reject: (error: unknown) => void;
     writable(): Promise<NodeJS.WritableStream>;
   };
+  // This hooks a postgres.js internal (pinned to 3.4.8 in package.json). If a
+  // future version drops it, fail loudly instead of silently hanging again.
+  if (typeof query.reject !== "function") {
+    throw new Error(
+      "restoreCopyBlock: postgres.js query.reject is not a function; this version of postgres.js is not supported for COPY restore (pinned 3.4.8)",
+    );
+  }
   let copyError: unknown = null;
   let failCopy: ((error: unknown) => void) | null = null;
   const originalReject = query.reject;

@@ -402,6 +402,11 @@ export async function replayDump(file: string, connectionString: string): Promis
         // with the stream; the stream then never finishes or errors and the
         // replay would hang. Capture that rejection so the block fails.
         const query = sql.unsafe(piece.command, [], EXTENDED_PROTOCOL) as unknown as { reject: (error: unknown) => void; writable(): Promise<Writable> };
+        // This hooks a postgres.js internal (pinned to 3.4.8 in package.json).
+        // If a future version drops it, fail loudly instead of hanging again.
+        if (typeof query.reject !== "function") {
+          throw new Error("replayDump: postgres.js query.reject is not a function; this version of postgres.js is not supported for COPY replay (pinned 3.4.8)");
+        }
         let copyError: unknown = null;
         let failCopy: ((error: unknown) => void) | null = null;
         const originalReject = query.reject;
