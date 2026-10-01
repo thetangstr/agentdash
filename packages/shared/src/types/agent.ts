@@ -1,10 +1,11 @@
 import type {
   AgentAdapterType,
   AgentAutonomy,
-  ModelProfileKey,
-  PauseReason,
   AgentRole,
   AgentStatus,
+  AgentVisibility,
+  ModelProfileKey,
+  PauseReason,
 } from "../constants.js";
 import type {
   CompanyMembership,
@@ -223,6 +224,12 @@ export interface Agent {
    * missing value as `stewarded`.
    */
   autonomy?: AgentAutonomy;
+  /**
+   * Agent visibility (2026-09-30): 'company' (every member), 'owner' (admins
+   * and the people who answer for it), or null to inherit the company default.
+   * Optional on the type for the same reason `autonomy` is.
+   */
+  visibility?: AgentVisibility | null;
   /**
    * The human answerable for this agent's work, or null when nobody is.
    *

@@ -46,6 +46,14 @@ export type AgentStatus = (typeof AGENT_STATUSES)[number];
 export const AGENT_AUTONOMY_KINDS = ["stewarded", "autonomous"] as const;
 export type AgentAutonomy = (typeof AGENT_AUTONOMY_KINDS)[number];
 
+/**
+ * Agent visibility (2026-09-30). 'company': every member sees the agent.
+ * 'owner': only admins and the people who answer for it. An agent with no
+ * value inherits its company's `agentVisibilityDefault`.
+ */
+export const AGENT_VISIBILITIES = ["company", "owner"] as const;
+export type AgentVisibility = (typeof AGENT_VISIBILITIES)[number];
+
 // AgentDash (cos-onboarding Phase A): `claude_api` and `hermes_local` are
 // added for discoverability (autocomplete + exhaustive-switch hints used by
 // CoS deep-interview prompt-depth selection). The type already widens to

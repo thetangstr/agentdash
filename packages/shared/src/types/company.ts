@@ -1,4 +1,4 @@
-import type { CompanyProductProfile, CompanyStatus, PauseReason } from "../constants.js";
+import type { AgentVisibility, CompanyProductProfile, CompanyStatus, PauseReason } from "../constants.js";
 
 export interface Company {
   id: string;
@@ -16,6 +16,11 @@ export interface Company {
   requireBoardApprovalForNewAgents: boolean;
   /** AgentDash: new issues with no status given start as `todo` instead of `backlog`. */
   newIssuesStartAsTodo: boolean;
+  /**
+   * Agent visibility (2026-09-30): what an agent with no visibility of its own
+   * resolves to. 'company' is the default and today's behaviour.
+   */
+  agentVisibilityDefault?: AgentVisibility;
   feedbackDataSharingEnabled: boolean;
   feedbackDataSharingConsentAt: Date | null;
   feedbackDataSharingConsentByUserId: string | null;
