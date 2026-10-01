@@ -1,4 +1,6 @@
+import type { HumanTarget } from '@paperclipai/shared';
 export interface PaperclipMcpConfig {
+  humanTarget?: HumanTarget;
   apiUrl: string;
   apiKey: string;
   companyId: string | null;

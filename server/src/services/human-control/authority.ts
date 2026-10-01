@@ -15,6 +15,7 @@ import { hydrateInteraction, resolveQuestionCreateInput } from '../issue-thread-
 import { agentAccountabilityService } from '../agent-accountability.js';
 import { getDefaultCompanyGoal } from '../goals.js';
 import { workforceService, type WorkforceSkillStages } from '../workforce.js';
+import { boardAuthService } from '../board-auth.js';
 import { waitingOnYouService } from '../waiting-on-you.js';
 import type { WorkforceQuestionDependency } from '../workforce-inputs.js';
 
@@ -299,6 +300,46 @@ export function foundationAuthority(req: Request) {
         },
         stageFailure: stage,
       };
+    },
+    async global(executor: Db, selectedCompanyId?: string) {
+      const state: Collection = { witnesses: new Map(), sealed: false };
+      const companyIds = new Set<string>();
+      async function read() {
+        const facts = await identity.readPrincipal(executor);
+        if (!facts.userId || facts.source !== 'board_key') throw forbidden('Named board-key human authentication required');
+        for (const value of facts.witnesses) record(state, value.key, value.lock);
+        if (selectedCompanyId) {
+          const grants = await executor.select().from(principalPermissionGrants).where(and(eq(principalPermissionGrants.companyId, selectedCompanyId), eq(principalPermissionGrants.principalType, 'user'), eq(principalPermissionGrants.principalId, facts.userId), eq(principalPermissionGrants.permissionKey, 'agents:create')));
+          for (const value of grants) row(state, '10:permission', principalPermissionGrants, value.id);
+        }
+        const access = await boardAuthService(executor).resolveBoardAccess(facts.userId);
+        if (!access.user) throw forbidden('Human connection is no longer authorized');
+        const members = await executor.select().from(companyMemberships).where(and(eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, facts.userId), eq(companyMemberships.status, 'active')));
+        for (const value of members) row(state, '09:membership', companyMemberships, value.id);
+        const query = executor.select({ id: companies.id, name: companies.name }).from(companies);
+        const choices = access.isInstanceAdmin ? await query : access.companyIds.length ? await query.where(inArray(companies.id, access.companyIds)) : [];
+        if (state.sealed && choices.some(value => !companyIds.has(value.id))) throw conflict('Current authority changed during acceptance');
+        req.actor = { ...original, companyIds: access.companyIds, memberships: access.memberships, isInstanceAdmin: access.isInstanceAdmin };
+        return { companies: choices, source: 'board_key', user: access.user, isInstanceAdmin: access.isInstanceAdmin,
+          memberships: access.memberships, targets: [{ kind: 'self' }, { kind: 'instance' }, { kind: 'public' }, ...choices.map(value => ({ kind: 'company', companyId: value.id }))] };
+      }
+      const preliminary = await read();
+      // Review P1 (#859): never lock every company. Identity/discover run on
+      // every human MCP call; an instance admin would otherwise take a row lock
+      // on each company and serialize against spend and heartbeat writers. The
+      // choice set is pinned by the sealed re-read below (a newly visible
+      // company is a conflict). Only a selected company is held, with FOR KEY
+      // SHARE, which blocks its deletion but not ordinary company updates.
+      for (const value of preliminary.companies) companyIds.add(value.id);
+      if (selectedCompanyId && companyIds.has(selectedCompanyId)) {
+        await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, selectedCompanyId)).for('key share');
+      }
+      await read();
+      for (const value of [...state.witnesses.values()].sort((a,b) => a.key.localeCompare(b.key))) await executor.execute(value.lock);
+      state.sealed = true;
+      const value = await read();
+      identity.checkTime();
+      return { value, async seal() { const value = await read(); identity.checkTime(); return value; } };
     },
     async stage(executor: Db, selection: FoundationSelection) {
       // Review P1 (#859): never FOR UPDATE. A read (readiness polling,
