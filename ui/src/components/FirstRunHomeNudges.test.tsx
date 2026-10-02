@@ -115,7 +115,8 @@ describe("FirstRunHomeNudges", () => {
     await act(async () => dismiss.click());
     expect(container.querySelector('[data-testid="first-run-home-resume"]')).toBeNull();
     expect(mockDismiss).toHaveBeenCalledWith("c1", CONNECT_GITHUB_DISMISSAL_KEY);
-    expect(window.localStorage.getItem("agentdash.connectGithubCard.dismissed.c1")).toBe("1");
+    // Per person: nothing is kept in the (possibly shared) browser.
+    expect(window.localStorage.getItem("agentdash.connectGithubCard.dismissed.c1")).toBeNull();
   });
 
   it("stays hidden on another browser when the server has the dismissal", async () => {

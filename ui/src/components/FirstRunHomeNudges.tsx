@@ -7,8 +7,9 @@
 //     phone", linking to the in-app assistant instructions. Dismissible.
 // The repo step is optional (not every company works in code): it reads
 // "Working with code? Connect GitHub", can be dismissed per person per company
-// (stored server-side as the `home:connect-github` dismissal, with a
-// localStorage copy), and disappears once the company ships work without one.
+// (stored server-side as the `home:connect-github` dismissal, which is keyed
+// by the signed-in user; no browser copy, since a browser can be shared by
+// several people), and disappears once the company ships work without one.
 // Only when the server says so (`showHomeNudge`): a hosted box, and a company
 // created after the first run shipped or one with no issues yet. Established
 // companies and self-hosted installs see nothing; /setup stays reachable.
@@ -47,10 +48,6 @@ function dismissKey(companyId: string) {
   return `agentdash.connectAssistantCard.dismissed.${companyId}`;
 }
 
-function githubDismissKey(companyId: string) {
-  return `agentdash.connectGithubCard.dismissed.${companyId}`;
-}
-
 function readFlag(key: string): boolean {
   try {
     return window.localStorage.getItem(key) === "1";
@@ -75,7 +72,8 @@ export function repoStepHidden(status: Partial<Pick<FirstRunStatus, "repo">>, di
 export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
   const queryClient = useQueryClient();
   const [dismissed, setDismissed] = useState(() => readFlag(dismissKey(companyId)));
-  const [githubDismissedLocally, setGithubDismissedLocally] = useState(() => readFlag(githubDismissKey(companyId)));
+  // Hides the card at once, before (or even if) the server save lands.
+  const [githubDismissedNow, setGithubDismissedNow] = useState(false);
   const { data } = useQuery({
     queryKey: queryKeys.firstRun(companyId),
     queryFn: () => firstRunApi.status(companyId),
@@ -95,7 +93,7 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
     },
   });
   const githubDismissed =
-    githubDismissedLocally ||
+    githubDismissedNow ||
     (Array.isArray(dismissals.data) &&
       dismissals.data.some((dismissal) => dismissal.itemKey === CONNECT_GITHUB_DISMISSAL_KEY));
   // AgentDash (GH #793): once a grant exists the card has done its job — only
@@ -127,8 +125,7 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
             aria-label="Dismiss the Connect GitHub card"
             className="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={() => {
-              writeFlag(githubDismissKey(companyId));
-              setGithubDismissedLocally(true);
+              setGithubDismissedNow(true);
               dismissGithub.mutate();
             }}
           >

@@ -67,4 +67,12 @@ describe("inbox dismissal routes", () => {
     expect(res.status).toBe(400);
     expect(mockDismiss).not.toHaveBeenCalled();
   });
+
+  it("allows only the one Home card key, not the whole home: namespace", async () => {
+    for (const itemKey of ["home:foo", "home:connect-github-extra", "home:"]) {
+      const res = await request(app()).post("/api/companies/company-1/inbox-dismissals").send({ itemKey });
+      expect(res.status).toBe(400);
+    }
+    expect(mockDismiss).not.toHaveBeenCalled();
+  });
 });

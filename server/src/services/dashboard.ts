@@ -196,7 +196,14 @@ export function dashboardService(db: Db) {
     // hidden projects' budget policies, incidents and overrides out of counts.
     summary: async (
       companyId: string,
-      opts: { agentVisibleWhere?: SQL; issueVisibleWhere?: SQL; budgetVisibleWhere?: SQL; approvalVisibleWhere?: SQL } = {},
+      opts: {
+        agentVisibleWhere?: SQL;
+        issueVisibleWhere?: SQL;
+        budgetVisibleWhere?: SQL;
+        approvalVisibleWhere?: SQL;
+        /** AgentDash: cost events this actor may see (agent + project visibility). */
+        costVisibleWhere?: SQL;
+      } = {},
     ) => {
       const company = await db
         .select()
@@ -268,6 +275,7 @@ export function dashboardService(db: Db) {
           and(
             eq(costEvents.companyId, companyId),
             gte(costEvents.occurredAt, monthStart),
+            opts.costVisibleWhere,
           ),
         );
 
