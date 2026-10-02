@@ -20,6 +20,7 @@ import { dispatchLLM } from "../services/dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, STALLED_REPLY_RETRY_AFTER_MS, isNoBalanceFailure, postDispatchFailure } from "../services/cos-dispatch-failure.js";
 import { buildPhase0Greeting } from "../services/onboarding-orchestrator.js";
 import { cosIssueActionForDb, type CosIssueAction } from "../services/cos-issue-action.js";
+import { listCompanyMemberNames } from "../services/cos-plan-naming.js";
 import { visibleAgentIdsFor } from "./visibility.js";
 
 const COMPANY_INBOX_TITLE = "Company Inbox";
@@ -32,7 +33,7 @@ export function conversationRoutes(
   const router = Router();
   const svc = conversationService(db);
   // AgentDash (scan 3, lane G): CoS task proposals and their confirmation.
-  const issueAction = opts.issueAction ?? cosIssueActionForDb(db, { postMessage: (input) => svc.postMessage(input) });
+  const issueAction = opts.issueAction ?? cosIssueActionForDb(db);
   const agents = agentService(db);
 
   const cosResolver = {
@@ -73,6 +74,8 @@ export function conversationRoutes(
       deepInterviewSpecs: deepInterviewSpecsLoader(db),
       // AgentDash (scan 3, lane G): the CoS may create and assign one task per reply.
       issueAction: issueAction,
+      // AgentDash (scan 4, lane N): never name a proposed agent after a member.
+      memberNames: (companyId: string) => listCompanyMemberNames(db, companyId),
     } as any),
     cosResolver,
   });
@@ -365,6 +368,8 @@ export function conversationRoutes(
       companyId: conversation.companyId,
       conversationId: conversation.id,
       cardMessageId: req.params.messageId as string,
+      // AgentDash (scan 4, lane N): "Create and start" starts it now (todo).
+      start: (req.body as { start?: unknown } | undefined)?.start === true,
       actor: {
         userId: req.actor.userId,
         source: req.actor.source ?? null,
@@ -386,6 +391,7 @@ export function conversationRoutes(
     }
     const conversation = await loadAuthorizedConversation(req);
     const result = await issueAction.dismissProposal({
+      companyId: conversation.companyId,
       conversationId: conversation.id,
       cardMessageId: req.params.messageId as string,
       actor: { userId: req.actor.userId },

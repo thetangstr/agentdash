@@ -23,8 +23,13 @@
 // request's own visibility and authority; the card is claimed with a
 // compare-and-set (pending -> creating), so two clicks or a retry create one
 // issue, and the issue records the card as its origin. The issue is created
-// through the normal issue service (company default status), with references
-// synced, an issue.created activity entry and the assignee's wake-up.
+// through the normal issue service (company default status, or `todo` when the
+// requester picks "Create and start"), with references synced, an
+// issue.created activity entry and the assignee's wake-up.
+//
+// Scan 4, lane N: the card itself turns into the "Task created" card. Nothing
+// else is posted (a second issue_created_v1 message used to double it); each
+// state change is pushed to every open chat as message.updated instead.
 //
 // Every refusal is a short, polite note; nothing here throws.
 
@@ -39,8 +44,11 @@ import { heartbeatService } from "./heartbeat.js";
 import { issueService } from "./issues.js";
 import { issueReferenceService } from "./issue-references.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
+import { defaultStatusForNewIssue, type NewIssueStatus } from "./issue-start-policy.js";
+import { emitMessageUpdated } from "../realtime/conversation-events.js";
 
 export const ISSUE_PROPOSAL_CARD_KIND = "issue_proposal_v1";
+/** Legacy: older conversations hold a separate "Task created" message of this kind. */
 export const ISSUE_CREATED_CARD_KIND = "issue_created_v1";
 /** issues.origin_kind for a task created from a confirmed CoS proposal; origin_id is the card's message id. */
 export const COS_CHAT_ORIGIN_KIND = "cos_chat_request";
@@ -134,6 +142,11 @@ export interface IssueProposalPayload {
   issueId?: string;
   identifier?: string | null;
   issueStatus?: string;
+  /**
+   * The company's status for a new issue when the card was posted. With
+   * `backlog` the card offers "Create" (parks it) and "Create and start".
+   */
+  defaultStatus?: NewIssueStatus;
 }
 
 export interface IssueCreatedPayload {
@@ -162,17 +175,22 @@ export interface CosIssueActionDeps {
       assigneeAgentId: string;
       createdByUserId: string;
       originId: string;
+      /** Set only for "Create and start"; otherwise the company default applies. */
+      status?: "todo";
     },
   ) => Promise<CreatedIssue>;
   syncReferences: (issueId: string) => Promise<void>;
   logActivity: (input: Parameters<typeof logActivity>[1]) => Promise<void>;
   heartbeat: () => IssueAssignmentWakeupDeps;
-  postCreatedCard?: (input: {
-    conversationId: string;
+  /** The company's status for a new issue with none named. */
+  defaultStatus?: (companyId: string) => Promise<NewIssueStatus>;
+  /** Push a card's new state to every open chat (message.updated). */
+  publishCardUpdate?: (input: {
     companyId: string;
-    cosAgentId: string;
-    payload: IssueCreatedPayload;
-  }) => Promise<void>;
+    conversationId: string;
+    messageId: string;
+    payload: IssueProposalPayload;
+  }) => void;
 }
 
 export type CosIssueProposalResult = { ok: true; payload: IssueProposalPayload } | { ok: false; note: string };
@@ -209,6 +227,15 @@ function readProposal(value: unknown): IssueProposalPayload | null {
 }
 
 export function cosIssueAction(deps: CosIssueActionDeps) {
+  /** Best effort: a viewer who misses it still sees the new state on reload. */
+  function publish(companyId: string, conversationId: string, messageId: string, payload: IssueProposalPayload) {
+    try {
+      deps.publishCardUpdate?.({ companyId, conversationId, messageId, payload });
+    } catch (err) {
+      logger.warn({ err, messageId }, "cos-issue-action: could not push the card update");
+    }
+  }
+
   /** Same-company, can take work, visible to this person, not the CoS. */
   async function checkAssignee(
     companyId: string,
@@ -268,6 +295,12 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
         if ((await deps.countRecentProposals(input.conversationId, since)) >= COS_PROPOSAL_CAP.max) {
           return { ok: false, note: COS_ISSUE_NOTES.capped };
         }
+        let defaultStatus: NewIssueStatus | undefined;
+        try {
+          defaultStatus = deps.defaultStatus ? await deps.defaultStatus(input.companyId) : undefined;
+        } catch (err) {
+          logger.warn({ err, companyId: input.companyId }, "cos-issue-action: could not read the default issue status");
+        }
         return {
           ok: true,
           payload: {
@@ -279,6 +312,7 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
             requesterUserId: requester.userId,
             triggerMessageId: input.triggerMessageId,
             cosAgentId: input.cosAgentId,
+            ...(defaultStatus ? { defaultStatus } : {}),
           },
         };
       } catch (err) {
@@ -293,6 +327,8 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
       conversationId: string;
       cardMessageId: string;
       actor: CosIssueRequester;
+      /** "Create and start": the issue starts as `todo` (and wakes the assignee) whatever the default. */
+      start?: boolean;
     }): Promise<CosIssueConfirmResult> => {
       const card = await deps.getCard(input.conversationId, input.cardMessageId);
       const proposal = card && card.cardKind === ISSUE_PROPOSAL_CARD_KIND ? readProposal(card.cardPayload) : null;
@@ -323,6 +359,7 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
             assigneeAgentId: checked.agent.id,
             createdByUserId: input.actor.userId,
             originId: input.cardMessageId,
+            ...(input.start ? { status: "todo" as const } : {}),
           }));
       } catch (err) {
         logger.warn({ err, conversationId: input.conversationId }, "cos-issue-action: could not create the issue");
@@ -352,7 +389,9 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
 
       // From here the issue exists; everything else is best effort.
       try {
-        await deps.claimCard(input.cardMessageId, "creating", done);
+        if (await deps.claimCard(input.cardMessageId, "creating", done)) {
+          publish(input.companyId, input.conversationId, input.cardMessageId, done);
+        }
       } catch (err) {
         logger.warn({ err, issueId: issue.id }, "cos-issue-action: could not mark the task card created");
       }
@@ -391,18 +430,6 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
         requestedByActorType: "user",
         requestedByActorId: input.actor.userId,
       });
-      if (deps.postCreatedCard) {
-        try {
-          await deps.postCreatedCard({
-            conversationId: input.conversationId,
-            companyId: input.companyId,
-            cosAgentId: proposal.cosAgentId,
-            payload: created,
-          });
-        } catch (err) {
-          logger.warn({ err, issueId: issue.id }, "cos-issue-action: could not post the task card");
-        }
-      }
       return { ok: true, issue, payload: done, created };
     },
 
@@ -411,6 +438,8 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
       conversationId: string;
       cardMessageId: string;
       actor: { userId: string };
+      /** For the live update to other viewers; omitted, nothing is pushed. */
+      companyId?: string;
     }): Promise<{ ok: true; payload: IssueProposalPayload } | { ok: false; code: "not_found" | "forbidden" | "conflict"; note: string }> => {
       const card = await deps.getCard(input.conversationId, input.cardMessageId);
       const proposal = card && card.cardKind === ISSUE_PROPOSAL_CARD_KIND ? readProposal(card.cardPayload) : null;
@@ -422,6 +451,7 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
       if (proposal.status !== "pending" || !(await deps.claimCard(input.cardMessageId, "pending", next))) {
         return { ok: false, code: "conflict", note: COS_ISSUE_NOTES.alreadyHandled };
       }
+      if (input.companyId) publish(input.companyId, input.conversationId, input.cardMessageId, next);
       return { ok: true, payload: next };
     },
   };
@@ -434,20 +464,7 @@ export type CosIssueAction = ReturnType<typeof cosIssueAction>;
  * Services are built on first use, so mounting the conversation routes costs
  * nothing until the CoS actually hands out work.
  */
-export function cosIssueActionForDb(
-  db: Db,
-  opts: {
-    postMessage?: (input: {
-      conversationId: string;
-      authorKind: "agent";
-      authorId: string;
-      body: string;
-      cardKind: string;
-      cardPayload: Record<string, unknown>;
-      companyId: string;
-    }) => Promise<unknown>;
-  } = {},
-): CosIssueAction {
+export function cosIssueActionForDb(db: Db): CosIssueAction {
   let agents: ReturnType<typeof agentService> | null = null;
   let access: ReturnType<typeof accessService> | null = null;
   let issues: ReturnType<typeof issueService> | null = null;
@@ -499,11 +516,13 @@ export function cosIssueActionForDb(
     },
     findIssueByOrigin: async (companyId, originId) =>
       (await getIssues().getByOrigin(companyId, COS_CHAT_ORIGIN_KIND, originId)) as CreatedIssue | null,
-    // No status: the company's default for new issues applies.
+    // No status: the company's default for new issues applies. "Create and
+    // start" passes `todo`.
     createIssue: async (companyId, input) =>
       (await getIssues().create(companyId, {
         title: input.title,
         description: input.description,
+        ...(input.status ? { status: input.status } : {}),
         priority: "medium",
         assigneeAgentId: input.assigneeAgentId,
         createdByUserId: input.createdByUserId,
@@ -515,18 +534,15 @@ export function cosIssueActionForDb(
     },
     logActivity: (input) => logActivity(db, input),
     heartbeat: () => (heartbeat ??= heartbeatService(db)),
-    postCreatedCard: opts.postMessage
-      ? async ({ conversationId, companyId, cosAgentId, payload }) => {
-          await opts.postMessage!({
-            conversationId,
-            authorKind: "agent",
-            authorId: cosAgentId,
-            body: "",
-            cardKind: ISSUE_CREATED_CARD_KIND,
-            cardPayload: payload as unknown as Record<string, unknown>,
-            companyId,
-          });
-        }
-      : undefined,
+    defaultStatus: (companyId) => defaultStatusForNewIssue(db, companyId),
+    publishCardUpdate: ({ companyId, conversationId, messageId, payload }) => {
+      emitMessageUpdated({
+        id: messageId,
+        conversationId,
+        companyId,
+        cardKind: ISSUE_PROPOSAL_CARD_KIND,
+        cardPayload: payload as unknown as Record<string, unknown>,
+      });
+    },
   });
 }

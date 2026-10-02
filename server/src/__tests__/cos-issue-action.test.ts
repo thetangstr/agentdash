@@ -89,7 +89,7 @@ function makeDeps(overrides: Partial<CosIssueActionDeps> = {}, card: IssuePropos
     syncReferences: vi.fn().mockResolvedValue(undefined),
     logActivity: vi.fn().mockResolvedValue(undefined),
     heartbeat: () => ({ wakeup }),
-    postCreatedCard: vi.fn().mockResolvedValue(undefined),
+    publishCardUpdate: vi.fn(),
     ...overrides,
   };
   return { deps, wakeup, state };
@@ -108,8 +108,8 @@ function propose(deps: CosIssueActionDeps, overrides: Record<string, unknown> = 
   });
 }
 
-function confirm(deps: CosIssueActionDeps, actor = requester()) {
-  return cosIssueAction(deps).confirmProposal({ companyId, conversationId, cardMessageId, actor });
+function confirm(deps: CosIssueActionDeps, actor = requester(), start?: boolean) {
+  return cosIssueAction(deps).confirmProposal({ companyId, conversationId, cardMessageId, actor, ...(start ? { start } : {}) });
 }
 
 describe("parseCreateIssueTrailer", () => {
@@ -173,6 +173,21 @@ describe("cosIssueAction.proposeFromTrailer", () => {
       },
     });
     expect(deps.createIssue).not.toHaveBeenCalled();
+  });
+
+  // Scan 4, lane N: the card knows the company default, so it can offer
+  // "Create" and "Create and start" when new work parks in the backlog.
+  it("records the company's default status for a new issue on the card", async () => {
+    const { deps } = makeDeps({ defaultStatus: vi.fn().mockResolvedValue("backlog") });
+    await expect(propose(deps)).resolves.toMatchObject({ ok: true, payload: { defaultStatus: "backlog" } });
+    expect(deps.defaultStatus).toHaveBeenCalledWith(companyId);
+  });
+
+  it("still proposes when the default status cannot be read", async () => {
+    const { deps } = makeDeps({ defaultStatus: vi.fn().mockRejectedValue(new Error("db down")) });
+    const result = await propose(deps);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.payload).not.toHaveProperty("defaultStatus");
   });
 
   it("refuses an invalid trailer politely", async () => {
@@ -264,8 +279,17 @@ describe("cosIssueAction.confirmProposal", () => {
     );
     // A backlog issue (this company's default) waits; nobody is woken.
     expect(wakeup).not.toHaveBeenCalled();
-    expect(deps.postCreatedCard).toHaveBeenCalled();
     expect(state.card?.status).toBe("created");
+    // Scan 4, lane N: the proposal card itself becomes the created card; its
+    // new state is pushed live once, and no second "Task created" message is posted.
+    expect(deps.publishCardUpdate).toHaveBeenCalledTimes(1);
+    expect(deps.publishCardUpdate).toHaveBeenCalledWith({
+      companyId,
+      conversationId,
+      messageId: cardMessageId,
+      payload: expect.objectContaining({ status: "created", issueId: "issue-1", identifier: "ACM-7", issueStatus: "backlog" }),
+    });
+    expect(deps).not.toHaveProperty("postCreatedCard");
     expect(COS_CHAT_ORIGIN_KIND).toBe("cos_chat_request");
   });
 
@@ -275,6 +299,24 @@ describe("cosIssueAction.confirmProposal", () => {
     });
     await expect(confirm(deps)).resolves.toMatchObject({ ok: true, created: { status: "todo" } });
     expect(wakeup).toHaveBeenCalledWith(agentId, expect.objectContaining({ reason: "issue_assigned", requestedByActorId: founder }));
+  });
+
+  it("starts the work now on \"Create and start\", whatever the default", async () => {
+    const { deps, wakeup } = makeDeps({
+      createIssue: vi.fn().mockResolvedValue({ id: "issue-3", identifier: "ACM-9", title: "T", status: "todo", assigneeAgentId: agentId }),
+    });
+    await expect(confirm(deps, requester(), true)).resolves.toMatchObject({ ok: true, created: { status: "todo" } });
+    expect((deps.createIssue as any).mock.calls[0][1]).toMatchObject({ status: "todo" });
+    expect(wakeup).toHaveBeenCalledWith(agentId, expect.objectContaining({ reason: "issue_assigned" }));
+  });
+
+  it("keeps the created issue when the live update cannot be pushed", async () => {
+    const { deps } = makeDeps({
+      publishCardUpdate: vi.fn(() => {
+        throw new Error("bus down");
+      }),
+    });
+    await expect(confirm(deps)).resolves.toMatchObject({ ok: true });
   });
 
   it("creates one issue for two clicks", async () => {
@@ -331,7 +373,6 @@ describe("cosIssueAction.confirmProposal", () => {
   it("keeps the created issue when a follow-up step fails", async () => {
     const { deps } = makeDeps({
       logActivity: vi.fn().mockRejectedValue(new Error("x")),
-      postCreatedCard: vi.fn().mockRejectedValue(new Error("x")),
       syncReferences: vi.fn().mockRejectedValue(new Error("x")),
     });
     await expect(confirm(deps)).resolves.toMatchObject({ ok: true });
@@ -350,5 +391,17 @@ describe("cosIssueAction.dismissProposal", () => {
       ok: true,
     });
     expect(state.card?.status).toBe("dismissed");
+  });
+
+  // GH #986 item 2: other viewers see "Not now" live.
+  it("pushes the declined state to every open chat", async () => {
+    const { deps } = makeDeps();
+    await cosIssueAction(deps).dismissProposal({ companyId, conversationId, cardMessageId, actor: { userId: founder } });
+    expect(deps.publishCardUpdate).toHaveBeenCalledWith({
+      companyId,
+      conversationId,
+      messageId: cardMessageId,
+      payload: expect.objectContaining({ status: "dismissed" }),
+    });
   });
 });

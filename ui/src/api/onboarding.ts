@@ -173,7 +173,9 @@ export const onboardingApi = {
   }) => api.post<{ ok: true }>("/onboarding/agent/reject", input),
   // Phase D: read the latest agent_plan_proposal_v1 card and materialize the
   // agents server-side. Returns the new company-id + new agent ids.
-  confirmPlan: (input: { conversationId: string }) =>
+  // AgentDash (scan 4, lane N): messageId names the card clicked; the server
+  // refuses (409 superseded_plan) when a newer plan replaced it.
+  confirmPlan: (input: { conversationId: string; messageId?: string }) =>
     api.post<{ companyId: string; createdAgentIds: string[] }>(
       "/onboarding/confirm-plan",
       input,

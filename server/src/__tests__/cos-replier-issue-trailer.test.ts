@@ -294,3 +294,17 @@ describe("CoS prompts stay in plain language", () => {
     expect(llm.mock.calls[0]![0].system).toContain(COS_PLAIN_LANGUAGE_GUIDANCE);
   });
 });
+
+// AgentDash (scan 4, lane N): the CoS said "Confirm below and he'll get
+// started" while the task landed in the backlog. The wording is neutral; the
+// card decides whether the work starts now.
+describe("steady-state task wording", () => {
+  it("asks for a neutral 'add this to their list' sentence, never a promise to start", async () => {
+    const { llm, replier } = setup(trailerText);
+    await reply(replier);
+    const system = llm.mock.calls[0]![0].system as string;
+    expect(system).toContain("I can add this to Ellie's list; confirm below.");
+    expect(system).toContain("Never say they will start, get started or begin right away");
+    expect(system).not.toContain("say in one sentence who you'd give it to");
+  });
+});

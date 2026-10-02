@@ -548,6 +548,9 @@ export const LIVE_EVENT_TYPES = [
   "plugin.worker.restarted",
   "message.created",
   "message.read",
+  // AgentDash (scan 4, lane N): a card message changed state (plan hired,
+  // task created or declined), so every open chat re-renders it.
+  "message.updated",
 ] as const;
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
 
