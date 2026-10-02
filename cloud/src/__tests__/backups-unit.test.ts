@@ -384,6 +384,18 @@ describe("dump guard (libpg_query AST allowlist)", () => {
     "-- Data for: public.t (1 rows)\nCOPY \"public\".\"t\" (\"a\") FROM stdin;\nPROGRAM; DROP TABLE x; \\! rm -rf /\n\\.",
     "INSERT INTO \"public\".\"t\" (\"a\", \"b\") VALUES ($paperclip$COPY x FROM PROGRAM 'rm'; DROP TABLE t; \\! ls$paperclip$, NULL);",
     "SELECT setval('\"public\".\"issues_id_seq\"', 300, true);",
+    // AgentDash (GH #944): CREATE DOMAIN and CREATE TYPE … AS (…) execute in
+    // replay — CREATE TABLE statements name them. Domain CHECK constraints
+    // ride inline (ALTER DOMAIN cannot add one once an array of the domain
+    // backs a column), and so do generated columns with allowlist-clean
+    // expressions.
+    'CREATE DOMAIN "public"."short_code" AS character varying(8) NOT NULL;',
+    'CREATE DOMAIN "public"."d" AS text DEFAULT \'x\'::text CONSTRAINT "d_check" CHECK (((VALUE)::text <> \'\'::text));',
+    'CREATE DOMAIN "public"."collated" AS text COLLATE "en_US";',
+    'CREATE TYPE "public"."pair" AS ("a" integer, "b" text);',
+    'CREATE TYPE "public"."weighted" AS ("sub" public.pair, "w" numeric(5,2));',
+    'CREATE TABLE "public"."t" ("a" int, "g" int GENERATED ALWAYS AS ((a * 2)) STORED);',
+    'CREATE TABLE "public"."t" ("a" int, "g" int GENERATED ALWAYS AS ((a * 2)) VIRTUAL);',
     // ASCII whitespace Postgres itself accepts — tabs, form feed, CR — is fine.
     "  -- a comment\r\n\t\fBEGIN;",
     "COMMIT;",
@@ -438,7 +450,17 @@ describe("dump guard (libpg_query AST allowlist)", () => {
     ["SELECT setval('s', (SELECT 1), true);", /A_Const|SubLink/],
     ['CREATE TABLE "public"."t" ("a" text DEFAULT (SELECT 1));', /SubLink is not allowed/],
     ['CREATE TABLE "public"."t" ("a" int) INHERITS ("public"."u");', /field inhRelations/],
-    ['CREATE TABLE "public"."t" ("a" int GENERATED ALWAYS AS (pg_backend_pid()) STORED);', /CONSTR_GENERATED|generated/],
+    ['CREATE TABLE "public"."t" ("a" int GENERATED ALWAYS AS (pg_backend_pid()) STORED);', /function pg_backend_pid\(\) is not allowed/],
+    // AgentDash (GH #939, #944): a default, generation expression or domain
+    // CHECK that calls anything but an allowlisted builtin is refused outright
+    // when written inline — backup-lib never emits those inline; it defers
+    // them to ALTER statements that replay skips instead.
+    ['CREATE TABLE "public"."t" ("a" int GENERATED ALWAYS AS (public.f()) STORED);', /schema-qualified function/],
+    ['CREATE DOMAIN "public"."d" AS text DEFAULT public.f();', /schema-qualified function/],
+    ['CREATE DOMAIN "public"."d" AS text CHECK (pg_read_file(\'/x\') <> \'\');', /function pg_read_file\(\) is not allowed/],
+    ['CREATE TYPE "public"."p" AS (a int DEFAULT 1);', /does not parse|field constraints/],
+    ['ALTER TABLE "public"."t" ADD COLUMN "g" bigint;', /subtype|only ADD CONSTRAINT/],
+    ['ALTER TABLE "public"."t" ALTER COLUMN "c" DROP DEFAULT;', /field name|only ADD CONSTRAINT/],
     ['CREATE INDEX i ON public.t USING btree ((pg_read_file(\'/x\')));', /function pg_read_file\(\) is not allowed/],
     ['DROP TABLE "public"."t";', /only IF EXISTS/],
     ['DROP FUNCTION IF EXISTS f();', /only tables and sequences/],
@@ -457,7 +479,9 @@ describe("dump guard (libpg_query AST allowlist)", () => {
   // AgentDash (GH #907): backup-lib now writes these; replay skips them (never runs them) and
   // schema-verify re-creates them from our migrations.
   it("marks the schema objects backup-lib writes as skipped, never as runnable", () => {
-    const deferred: Array<[string, string]> = [
+    // Third element, when false, means the skipped statement is fine on its
+    // own (a marked deferred constraint/index) and checkStatement accepts it.
+    const deferred: Array<[string, string, boolean?]> = [
       ["SET LOCAL check_function_bodies = false;", "SET LOCAL check_function_bodies"],
       ["-- Function: public.f\nCREATE OR REPLACE FUNCTION public.f()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$ BEGIN RETURN OLD; END; $function$\n;", "function"],
       ["CREATE TRIGGER t BEFORE UPDATE ON public.x FOR EACH ROW EXECUTE FUNCTION f();", "trigger"],
@@ -468,21 +492,48 @@ describe("dump guard (libpg_query AST allowlist)", () => {
       ['ALTER TABLE "public"."t" DISABLE TRIGGER "trg";', "trigger state"],
       ['ALTER TABLE "public"."t" ENABLE REPLICA TRIGGER "trg";', "trigger state"],
       ['ALTER TABLE "public"."t" ENABLE ALWAYS TRIGGER "trg";', "trigger state"],
+      // AgentDash (GH #939): the deferred shape of a column default that calls
+      // a later function — expression-bearing, so replay never runs it.
+      ['ALTER TABLE "public"."t" ALTER COLUMN "lazy" SET DEFAULT public.late_fn();', "column default"],
+      ['ALTER TABLE "public"."t" ALTER COLUMN "lazy" SET DEFAULT now();', "column default"],
+      // AgentDash (GH #944): the deferred shape of a generated column whose
+      // expression needed a later object, and the domain alterations.
+      ['ALTER TABLE "public"."t" ADD COLUMN "g" bigint GENERATED ALWAYS AS (public.f()) STORED;', "generated column"],
+      ['ALTER TABLE "public"."t" ADD COLUMN "g" bigint GENERATED ALWAYS AS (a * 2) VIRTUAL;', "generated column"],
+      ['ALTER DOMAIN "public"."d" SET DEFAULT public.late_fn();', "domain alteration"],
+      ['ALTER DOMAIN "public"."d" ADD CONSTRAINT "d_check" CHECK ((VALUE <> \'\'));', "domain alteration"],
+      // A constraint or index that only exists because a column was added
+      // late carries the marker comment and is skipped whatever its shape —
+      // note the shapes are fine on their own; it is the missing column that
+      // makes them un-runnable, so checkStatement must not be the gate.
+      ['-- Indexes of tables with late columns\n-- paperclip deferred schema object\nCREATE INDEX i ON public.t (g);', "deferred schema object", false],
+      ['-- paperclip deferred schema object\nALTER TABLE "public"."t" ADD CONSTRAINT "t_pkey" PRIMARY KEY ("g");', "deferred schema object", false],
+      ['-- paperclip deferred schema object\nALTER TABLE "public"."a" ADD CONSTRAINT "a_fk" FOREIGN KEY ("g") REFERENCES "public"."b" ("id");', "deferred schema object", false],
     ];
-    for (const [s, what] of deferred) {
+    for (const [s, what, runRefused = true] of deferred) {
       expect(deferredStatement(s), s).toBe(what);
       // Still refused by the run-path check, so nothing can execute one by mistake.
-      expect(checkStatement(s), s).not.toBeNull();
+      if (runRefused) expect(checkStatement(s), s).not.toBeNull();
     }
     const never = [
       "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'select 1'; DROP TABLE x;",
       "SET check_function_bodies = false;",
       "SET LOCAL search_path = evil;",
       'ALTER TABLE "public"."t" ADD CONSTRAINT "c" UNIQUE ("a");',
+      'ALTER TABLE "public"."t" ADD CONSTRAINT "c" PRIMARY KEY ("a");',
+      'ALTER TABLE "public"."t" ALTER COLUMN "lazy" DROP DEFAULT;',
+      'ALTER TABLE "public"."t" ADD COLUMN "g" bigint;',
+      'ALTER TABLE "public"."t" ADD COLUMN "g" bigint DEFAULT 1;',
       "COPY \"public\".\"t\" (\"a\") FROM stdin;\nCREATE VIEW v AS SELECT 1;\n\\.",
       "CREATE TABLE \"public\".\"t\" AS SELECT 1;",
       "DO $$ BEGIN PERFORM 1; END $$;",
       "BEGIN;",
+      // The marker is only a leading comment of the chunk — the same text
+      // inside a row's string literal is data, not a skip signal.
+      "INSERT INTO \"public\".\"t\" (\"a\") VALUES (E'one\n-- paperclip deferred schema object\ntwo');",
+      "-- Data for: public.t (1 rows)\nINSERT INTO \"public\".\"t\" (\"a\") VALUES (E'one\n-- paperclip deferred schema object\ntwo');",
+      // An ordinary schema object with no marker is never "deferred".
+      'CREATE DOMAIN "public"."d" AS text CHECK (VALUE <> \'\');',
     ];
     for (const s of never) expect(deferredStatement(s), s).toBeNull();
   });

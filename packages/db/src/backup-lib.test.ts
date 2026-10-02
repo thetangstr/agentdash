@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { createBufferedTextFileWriter, runDatabaseBackup, runDatabaseRestore } from "./backup-lib.js";
@@ -26,6 +27,66 @@ async function createTempDatabase(): Promise<string> {
   const db = await startEmbeddedPostgresTestDatabase("paperclip-db-backup-");
   cleanups.push(db.cleanup);
   return db.connectionString;
+}
+
+// AgentDash (GH #939, #944): point pg_dump and psql at paths that do not
+// exist — this host has both binaries, but these tests must exercise the
+// JavaScript backup engine and the postgres.js restore fallback, never the
+// real tools.
+function forceJavaScriptBackupAndRestore(): void {
+  const saved = {
+    PAPERCLIP_PG_DUMP_PATH: process.env.PAPERCLIP_PG_DUMP_PATH,
+    PAPERCLIP_PSQL_PATH: process.env.PAPERCLIP_PSQL_PATH,
+  };
+  process.env.PAPERCLIP_PG_DUMP_PATH = path.join(os.tmpdir(), "no-such-pg_dump");
+  process.env.PAPERCLIP_PSQL_PATH = path.join(os.tmpdir(), "no-such-psql");
+  cleanups.push(() => {
+    if (saved.PAPERCLIP_PG_DUMP_PATH === undefined) delete process.env.PAPERCLIP_PG_DUMP_PATH;
+    else process.env.PAPERCLIP_PG_DUMP_PATH = saved.PAPERCLIP_PG_DUMP_PATH;
+    if (saved.PAPERCLIP_PSQL_PATH === undefined) delete process.env.PAPERCLIP_PSQL_PATH;
+    else process.env.PAPERCLIP_PSQL_PATH = saved.PAPERCLIP_PSQL_PATH;
+  });
+}
+
+// The brief pins TZ=America/Los_Angeles for these tests — set it inside each
+// one so a case run standalone still sees it.
+function useLosAngelesTimezone(): void {
+  const saved = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  cleanups.push(() => {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+  });
+}
+
+// GH #939/#944 review helper: apply a schema, take a backup, restore it into a
+// sibling database and hand back the dump text plus live connections.
+async function backupAndRestore(
+  name: string,
+  setup: string,
+  engine: "auto" | "javascript" = "javascript",
+): Promise<{ dump: string; sourceSql: ReturnType<typeof postgres>; restoreSql: ReturnType<typeof postgres> }> {
+  forceJavaScriptBackupAndRestore();
+  const sourceConnectionString = await createTempDatabase();
+  const restoreConnectionString = await createSiblingDatabase(sourceConnectionString, `paperclip_${name}_target`);
+  const backupDir = createTempDir(`paperclip-db-${name}-`);
+  const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+  const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+  cleanups.push(async () => {
+    await sourceSql.end();
+    await restoreSql.end();
+  });
+  await sourceSql.unsafe(setup);
+  const result = await runDatabaseBackup({
+    connectionString: sourceConnectionString,
+    backupDir,
+    retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+    filenamePrefix: `paperclip-${name}`,
+    backupEngine: engine,
+  });
+  const dump = gunzipSync(fs.readFileSync(result.backupFile)).toString("utf8");
+  await runDatabaseRestore({ connectionString: restoreConnectionString, backupFile: result.backupFile });
+  return { dump, sourceSql, restoreSql };
 }
 
 async function createSiblingDatabase(connectionString: string, databaseName: string): Promise<string> {
@@ -785,6 +846,531 @@ CREATE TABLE injected_by_table (z int);
     60_000,
   );
 
+  // AgentDash (GH #939): a column DEFAULT that calls a function which can only
+  // be created after the tables (it reads one) used to be emitted inline, so
+  // the restore died parsing the default before the function existed. pg_dump
+  // emits it as ALTER TABLE … SET DEFAULT afterwards — the dump must do the
+  // same and the restored column must still carry the default.
+  it(
+    "restores a column default that calls a function created only after the tables",
+    async () => {
+      forceJavaScriptBackupAndRestore();
+      const sourceConnectionString = await createTempDatabase();
+      const restoreConnectionString = await createSiblingDatabase(
+        sourceConnectionString,
+        "paperclip_late_default_restore_target",
+      );
+      const backupDir = createTempDir("paperclip-db-late-default-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+
+      try {
+        await sourceSql.unsafe(`
+          CREATE TABLE public.late_default_ref (n integer);
+          INSERT INTO public.late_default_ref VALUES (7), (9);
+          -- BEGIN ATOMIC records a real pg_depend edge to the table, so the
+          -- dump must place this function after the tables — after any CREATE
+          -- TABLE that would have carried the default inline.
+          CREATE FUNCTION public.late_default_fn() RETURNS bigint LANGUAGE sql
+            BEGIN ATOMIC SELECT count(*) FROM public.late_default_ref; END;
+          CREATE TABLE public.late_default_rows (
+            id integer PRIMARY KEY,
+            counted bigint DEFAULT public.late_default_fn()
+          );
+          INSERT INTO public.late_default_rows (id, counted) VALUES (1, 99), (2, 5);
+        `);
+
+        const result = await runDatabaseBackup({
+          connectionString: sourceConnectionString,
+          backupDir,
+          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          filenamePrefix: "paperclip-late-default",
+          backupEngine: "javascript",
+        });
+
+        const dump = gunzipSync(fs.readFileSync(result.backupFile)).toString("utf8");
+        const createTableAt = dump.indexOf('CREATE TABLE "public"."late_default_rows"');
+        const functionAt = dump.indexOf("CREATE OR REPLACE FUNCTION public.late_default_fn");
+        const setDefaultAt = dump.indexOf(
+          'ALTER TABLE "public"."late_default_rows" ALTER COLUMN "counted" SET DEFAULT public.late_default_fn()',
+        );
+        expect(createTableAt).toBeGreaterThanOrEqual(0);
+        expect(functionAt).toBeGreaterThanOrEqual(0);
+        expect(setDefaultAt).toBeGreaterThan(functionAt);
+        // The default must not appear inside the CREATE TABLE itself.
+        const createTableBody = dump.slice(createTableAt, dump.indexOf(");", createTableAt));
+        expect(createTableBody).not.toContain("late_default_fn");
+
+        await runDatabaseRestore({
+          connectionString: restoreConnectionString,
+          backupFile: result.backupFile,
+        });
+
+        const [column] = await restoreSql.unsafe<{ generated: string; default_expr: string | null }[]>(`
+          SELECT a.attgenerated::text AS generated, pg_get_expr(ad.adbin, ad.adrelid) AS default_expr
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+          WHERE n.nspname = 'public' AND c.relname = 'late_default_rows' AND a.attname = 'counted'
+        `);
+        expect(column?.generated).toBe("");
+        expect(column?.default_expr).toBe("late_default_fn()");
+
+        const rows = await restoreSql.unsafe<{ id: number; counted: number }[]>(
+          `SELECT id, counted::int AS counted FROM public.late_default_rows ORDER BY id`,
+        );
+        expect(rows).toEqual([
+          { id: 1, counted: 99 },
+          { id: 2, counted: 5 },
+        ]);
+        // The restored default still runs.
+        await restoreSql.unsafe(`INSERT INTO public.late_default_rows (id) VALUES (3)`);
+        const [inserted] = await restoreSql.unsafe<{ counted: number }[]>(
+          `SELECT counted::int AS counted FROM public.late_default_rows WHERE id = 3`,
+        );
+        expect(inserted?.counted).toBe(2);
+      } finally {
+        await sourceSql.end();
+        await restoreSql.end();
+      }
+    },
+    60_000,
+  );
+
+  // AgentDash (GH #944): the information_schema column query flattened a
+  // domain column to the base type, losing the domain's NOT NULL, DEFAULT and
+  // CHECK constraints. The catalog-driven dump must recreate the domain first
+  // and keep it on the column — including a domain built on another domain.
+  it(
+    "round-trips domains with their base types, NOT NULL, defaults and CHECK constraints",
+    async () => {
+      forceJavaScriptBackupAndRestore();
+      const sourceConnectionString = await createTempDatabase();
+      const restoreConnectionString = await createSiblingDatabase(
+        sourceConnectionString,
+        "paperclip_domains_restore_target",
+      );
+      const backupDir = createTempDir("paperclip-db-domains-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+
+      const domainCatalog = async (db: ReturnType<typeof postgres>) => ({
+        domains: (await db.unsafe<{ e: string }[]>(`
+          SELECT t.typname || ' AS ' || format_type(t.typbasetype, t.typtypmod)
+                 || ' notnull=' || t.typnotnull::text
+                 || coalesce(' default=' || pg_get_expr(t.typdefaultbin, 0), '') AS e
+          FROM pg_type t
+          JOIN pg_namespace n ON n.oid = t.typnamespace
+          WHERE t.typtype = 'd' AND n.nspname = 'public'
+          ORDER BY t.typname`)).map((row) => row.e),
+        domainConstraints: (await db.unsafe<{ e: string }[]>(`
+          SELECT t.typname || '.' || c.conname || ' ' || pg_get_constraintdef(c.oid)
+                 || ' validated=' || c.convalidated::text AS e
+          FROM pg_constraint c
+          JOIN pg_type t ON t.oid = c.contypid
+          JOIN pg_namespace n ON n.oid = t.typnamespace
+          WHERE n.nspname = 'public'
+          ORDER BY t.typname, c.conname`)).map((row) => row.e),
+        columns: (await db.unsafe<{ e: string }[]>(`
+          SELECT a.attname || ' ' || format_type(a.atttypid, a.atttypmod)
+                 || ' notnull=' || a.attnotnull::text AS e
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relname = 'domain_rows'
+            AND a.attnum > 0 AND NOT a.attisdropped
+          ORDER BY a.attnum`)).map((row) => row.e),
+      });
+
+      try {
+        await sourceSql.unsafe(`
+          CREATE DOMAIN public.short_code AS varchar(8) CHECK (VALUE <> '') NOT NULL;
+          CREATE DOMAIN public.code_defaulted AS public.short_code DEFAULT 'hi';
+          CREATE TABLE public.domain_rows (
+            id integer PRIMARY KEY,
+            code public.short_code,
+            defaulted public.code_defaulted,
+            codes public.short_code[]
+          );
+          INSERT INTO public.domain_rows (id, code, defaulted, codes)
+          VALUES (1, 'AB-12', 'ZZ-99', '{AB-12,CD-34}'::public.short_code[]),
+                 (2, 'CD-34', DEFAULT, '{}'::public.short_code[]);
+        `);
+
+        const source = await domainCatalog(sourceSql);
+        // The source really has the domain (the check is not vacuous).
+        expect(source.domains.some((d) => d.startsWith("short_code AS character varying(8) notnull=true"))).toBe(true);
+        expect(source.columns).toContain("code short_code notnull=false");
+
+        const result = await runDatabaseBackup({
+          connectionString: sourceConnectionString,
+          backupDir,
+          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          filenamePrefix: "paperclip-domains",
+          backupEngine: "javascript",
+        });
+
+        const dump = gunzipSync(fs.readFileSync(result.backupFile)).toString("utf8");
+        // CREATE DOMAIN comes before the table that uses it (and before any
+        // array column — PostgreSQL refuses ALTER DOMAIN once an array of the
+        // domain backs a column, so the CHECK must be inside CREATE DOMAIN).
+        const domainAt = dump.indexOf('CREATE DOMAIN "public"."short_code"');
+        expect(domainAt).toBeGreaterThanOrEqual(0);
+        expect(dump.indexOf('CREATE TABLE "public"."domain_rows"')).toBeGreaterThan(domainAt);
+        expect(dump.slice(domainAt, dump.indexOf(";", domainAt))).toContain("CHECK");
+
+        await runDatabaseRestore({
+          connectionString: restoreConnectionString,
+          backupFile: result.backupFile,
+        });
+
+        const restored = await domainCatalog(restoreSql);
+        expect(restored.domains).toEqual(source.domains);
+        expect(restored.domainConstraints).toEqual(source.domainConstraints);
+        expect(restored.columns).toEqual(source.columns);
+
+        const rows = await restoreSql.unsafe<{ id: number; code: string; defaulted: string; codes: string }[]>(
+          `SELECT id, code::text AS code, defaulted::text AS defaulted, codes::text AS codes FROM public.domain_rows ORDER BY id`,
+        );
+        expect(rows).toEqual([
+          { id: 1, code: "AB-12", defaulted: "ZZ-99", codes: "{AB-12,CD-34}" },
+          { id: 2, code: "CD-34", defaulted: "hi", codes: "{}" },
+        ]);
+        // The CHECK survived: an empty string must be refused.
+        await expect(
+          restoreSql.unsafe(`INSERT INTO public.domain_rows (id, code) VALUES (9, '')`),
+        ).rejects.toThrow(/short_code_check/);
+      } finally {
+        await sourceSql.end();
+        await restoreSql.end();
+      }
+    },
+    60_000,
+  );
+
+  // AgentDash (GH #944): information_schema rebuilt temporal and bit typmods
+  // lossily — timestamp(3) came back plain timestamp, bit(5) lost its length.
+  // format_type(atttypid, atttypmod) preserves them; pin the exact spellings.
+  it(
+    "round-trips temporal, interval, bit and numeric typmods exactly",
+    async () => {
+      useLosAngelesTimezone();
+      forceJavaScriptBackupAndRestore();
+      const sourceConnectionString = await createTempDatabase();
+      const restoreConnectionString = await createSiblingDatabase(
+        sourceConnectionString,
+        "paperclip_typmods_restore_target",
+      );
+      const backupDir = createTempDir("paperclip-db-typmods-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+
+      // ::text renders in the SERVER session's TimeZone/DateStyle/IntervalStyle,
+      // not this process's TZ — pin all three so the value assertions are the
+      // same on a UTC CI runner as on an America/Los_Angeles dev box.
+      const pinSessionGucs = async (db: ReturnType<typeof postgres>) =>
+        db.unsafe(
+          `SET TIME ZONE 'America/Los_Angeles'; SET datestyle = 'ISO, MDY'; SET intervalstyle = 'postgres';`,
+        );
+      await pinSessionGucs(sourceSql);
+      await pinSessionGucs(restoreSql);
+
+      const columnTypes = async (db: ReturnType<typeof postgres>) =>
+        (await db.unsafe<{ e: string }[]>(`
+          SELECT a.attname || ' ' || format_type(a.atttypid, a.atttypmod) AS e
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relname = 'typmod_rows'
+            AND a.attnum > 0 AND NOT a.attisdropped
+          ORDER BY a.attnum`)).map((row) => row.e);
+
+      try {
+        await sourceSql.unsafe(`
+          CREATE TABLE public.typmod_rows (
+            id integer PRIMARY KEY,
+            ts timestamp(3) NOT NULL,
+            tstz timestamptz(0),
+            tm time(4),
+            iv interval year to month,
+            ivs interval second(3),
+            b bit(5),
+            vb varbit(9),
+            vc varchar(7),
+            nn numeric(9,4)
+          );
+          INSERT INTO public.typmod_rows
+            (id, ts, tstz, tm, iv, ivs, b, vb, vc, nn)
+          VALUES
+            (1, '2026-01-02 03:04:05.678', '2026-01-02 03:04:05+00', '12:13:14.5678',
+             '1 year 2 months', '5.678 seconds', '10101', '101', 'abc', 12.3456);
+        `);
+
+        const source = await columnTypes(sourceSql);
+        expect(source).toContain("ts timestamp(3) without time zone");
+        expect(source).toContain("tstz timestamp(0) with time zone");
+        expect(source).toContain("iv interval year to month");
+        expect(source).toContain("b bit(5)");
+        expect(source).toContain("vb bit varying(9)");
+
+        const result = await runDatabaseBackup({
+          connectionString: sourceConnectionString,
+          backupDir,
+          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          filenamePrefix: "paperclip-typmods",
+          backupEngine: "javascript",
+        });
+
+        await runDatabaseRestore({
+          connectionString: restoreConnectionString,
+          backupFile: result.backupFile,
+        });
+
+        expect(await columnTypes(restoreSql)).toEqual(source);
+
+        const valueRows = async (db: ReturnType<typeof postgres>) =>
+          db.unsafe<Record<string, string>[]>(`
+            SELECT ts::text AS ts, tstz::text AS tstz, tm::text AS tm, iv::text AS iv,
+                   ivs::text AS ivs, b::text AS b, vb::text AS vb, vc, nn::text AS nn
+            FROM public.typmod_rows
+          `);
+        const expected = await valueRows(sourceSql);
+        const rows = await valueRows(restoreSql);
+        // Both sides render under the pinned GUCs, so this equality is a pure
+        // schema/data fidelity check; on failure vitest prints the diff.
+        expect(rows).toEqual(expected);
+        expect(rows).toEqual([{
+          ts: "2026-01-02 03:04:05.678",
+          tstz: "2026-01-01 19:04:05-08",
+          tm: "12:13:14.5678",
+          iv: "1 year 2 mons",
+          ivs: "00:00:05.678",
+          b: "10101",
+          vb: "101",
+          vc: "abc",
+          nn: "12.3456",
+        }]);
+      } finally {
+        await sourceSql.end();
+        await restoreSql.end();
+      }
+    },
+    60_000,
+  );
+
+  // AgentDash (GH #944): an array of a domain or composite type was emitted
+  // with a mangled type name (the information_schema UDT spellings), so the
+  // CREATE TABLE failed or silently changed type. The catalog spellings keep
+  // them — and recreate the composite types they name, before the tables.
+  it(
+    "round-trips arrays of domains and composite types",
+    async () => {
+      forceJavaScriptBackupAndRestore();
+      const sourceConnectionString = await createTempDatabase();
+      const restoreConnectionString = await createSiblingDatabase(
+        sourceConnectionString,
+        "paperclip_arrays_restore_target",
+      );
+      const backupDir = createTempDir("paperclip-db-arrays-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+
+      const typeCatalog = async (db: ReturnType<typeof postgres>) => ({
+        composites: (await db.unsafe<{ e: string }[]>(`
+          SELECT t.typname || ' (' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || ')' AS e
+          FROM pg_type t
+          JOIN pg_namespace n ON n.oid = t.typnamespace
+          JOIN pg_class tc ON tc.oid = t.typrelid AND tc.relkind = 'c'
+          JOIN pg_attribute a ON a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped
+          WHERE n.nspname = 'public'
+          ORDER BY t.typname, a.attnum`)).map((row) => row.e),
+        columns: (await db.unsafe<{ e: string }[]>(`
+          SELECT a.attname || ' ' || format_type(a.atttypid, a.atttypmod) AS e
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relname = 'array_rows'
+            AND a.attnum > 0 AND NOT a.attisdropped
+          ORDER BY a.attnum`)).map((row) => row.e),
+      });
+
+      try {
+        await sourceSql.unsafe(`
+          CREATE DOMAIN public.array_code AS text CHECK (length(VALUE) > 0);
+          CREATE TYPE public.pair AS (a integer, b text);
+          CREATE TYPE public.weighted_pair AS (sub public.pair, w numeric(5,2));
+          CREATE TABLE public.array_rows (
+            id integer PRIMARY KEY,
+            codes public.array_code[],
+            pairs public.pair[],
+            weighted public.weighted_pair
+          );
+          INSERT INTO public.array_rows (id, codes, pairs, weighted)
+          VALUES (1, '{x,y}'::public.array_code[],
+                  ARRAY[ROW(1,'one')::public.pair, ROW(2,'two')::public.pair],
+                  ROW(ROW(9,'nine')::public.pair, 3.14)::public.weighted_pair);
+        `);
+
+        const source = await typeCatalog(sourceSql);
+        expect(source.columns).toContain("codes array_code[]");
+        expect(source.columns).toContain("pairs pair[]");
+
+        const result = await runDatabaseBackup({
+          connectionString: sourceConnectionString,
+          backupDir,
+          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          filenamePrefix: "paperclip-arrays",
+          backupEngine: "javascript",
+        });
+
+        const dump = gunzipSync(fs.readFileSync(result.backupFile)).toString("utf8");
+        expect(dump).toContain('CREATE TYPE "public"."pair" AS');
+        expect(dump).toContain('"codes" public.array_code[]');
+        expect(dump.indexOf('CREATE DOMAIN "public"."array_code"')).toBeGreaterThanOrEqual(0);
+
+        await runDatabaseRestore({
+          connectionString: restoreConnectionString,
+          backupFile: result.backupFile,
+        });
+
+        const restored = await typeCatalog(restoreSql);
+        expect(restored.composites).toEqual(source.composites);
+        expect(restored.columns).toEqual(source.columns);
+
+        const rows = await restoreSql.unsafe<{ codes: string; pairs: string; weighted: string }[]>(
+          `SELECT codes::text AS codes, pairs::text AS pairs, weighted::text AS weighted FROM public.array_rows`,
+        );
+        expect(rows).toEqual([{
+          codes: "{x,y}",
+          pairs: '{"(1,one)","(2,two)"}',
+          weighted: '("(9,nine)",3.14)',
+        }]);
+        // The domain still enforces its CHECK through the array column.
+        await expect(
+          restoreSql.unsafe(`INSERT INTO public.array_rows (id, codes) VALUES (9, '{""}'::public.array_code[])`),
+        ).rejects.toThrow();
+      } finally {
+        await sourceSql.end();
+        await restoreSql.end();
+      }
+    },
+    60_000,
+  );
+
+  // AgentDash (GH #944): generated columns were written as plain columns and
+  // then INSERTed into — which PostgreSQL refuses. They must be emitted as
+  // GENERATED ALWAYS AS (…) STORED, left out of every row statement, and —
+  // when the expression calls a function created after the tables — added by
+  // a deferred ALTER TABLE … ADD COLUMN, with the constraint that uses it.
+  it(
+    "round-trips generated columns, including one whose expression calls a later function",
+    async () => {
+      forceJavaScriptBackupAndRestore();
+      const sourceConnectionString = await createTempDatabase();
+      const backupDir = createTempDir("paperclip-db-generated-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+
+      const generatedCatalog = async (db: ReturnType<typeof postgres>) =>
+        (await db.unsafe<{ e: string }[]>(`
+          SELECT c.relname || '.' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod)
+                 || ' generated=' || a.attgenerated::text
+                 || coalesce(' expr=' || pg_get_expr(ad.adbin, ad.adrelid), '') AS e
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+          WHERE n.nspname = 'public' AND c.relname IN ('gen_plain', 'gen_late')
+            AND a.attnum > 0 AND NOT a.attisdropped
+          ORDER BY c.relname, a.attnum`)).map((row) => row.e);
+
+      try {
+        await sourceSql.unsafe(`
+          CREATE TABLE public.gen_ref (n integer);
+          INSERT INTO public.gen_ref VALUES (4);
+          CREATE FUNCTION public.gen_count_fn() RETURNS bigint LANGUAGE sql IMMUTABLE
+            BEGIN ATOMIC SELECT count(*) FROM public.gen_ref; END;
+          CREATE TABLE public.gen_plain (
+            id integer PRIMARY KEY,
+            doubled integer GENERATED ALWAYS AS (id * 2) STORED
+          );
+          CREATE TABLE public.gen_late (
+            id integer,
+            counted bigint GENERATED ALWAYS AS (public.gen_count_fn()) STORED,
+            PRIMARY KEY (id, counted)
+          );
+          INSERT INTO public.gen_plain (id) VALUES (1), (2);
+          INSERT INTO public.gen_late (id) VALUES (1);
+        `);
+
+        const source = await generatedCatalog(sourceSql);
+        expect(source).toContain("gen_plain.doubled integer generated=s expr=(id * 2)");
+        expect(source.some((e) => e.startsWith("gen_late.counted bigint generated=s"))).toBe(true);
+
+        // Both engines: generated columns must stay out of COPY headers too.
+        for (const engine of ["auto", "javascript"] as const) {
+          const targetConnectionString = await createSiblingDatabase(
+            sourceConnectionString,
+            `paperclip_generated_restore_${engine}`,
+          );
+          const targetSql = postgres(targetConnectionString, { max: 1, onnotice: () => {} });
+          try {
+            const result = await runDatabaseBackup({
+              connectionString: sourceConnectionString,
+              backupDir,
+              retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+              filenamePrefix: `paperclip-generated-${engine}`,
+              backupEngine: engine,
+            });
+
+            const dump = gunzipSync(fs.readFileSync(result.backupFile)).toString("utf8");
+            // The plain generated column stays inline; the function-dependent
+            // one is added after the function exists.
+            expect(dump).toContain('"doubled" integer GENERATED ALWAYS AS ((id * 2)) STORED');
+            const addColumnAt = dump.indexOf('ALTER TABLE "public"."gen_late" ADD COLUMN "counted"');
+            expect(addColumnAt).toBeGreaterThan(
+              dump.indexOf("CREATE OR REPLACE FUNCTION public.gen_count_fn"),
+            );
+            // No row statement ever names a generated column.
+            for (const line of dump.split("\n")) {
+              if (line.startsWith('INSERT INTO "public"."gen_') || line.startsWith('COPY "public"."gen_')) {
+                expect(line).not.toContain('"doubled"');
+                expect(line).not.toContain('"counted"');
+              }
+            }
+
+            await runDatabaseRestore({
+              connectionString: targetConnectionString,
+              backupFile: result.backupFile,
+            });
+
+            expect(await generatedCatalog(targetSql), engine).toEqual(source);
+            const rows = await targetSql.unsafe<{ id: number; doubled: number }[]>(
+              `SELECT id, doubled FROM public.gen_plain ORDER BY id`,
+            );
+            expect(rows, engine).toEqual([
+              { id: 1, doubled: 2 },
+              { id: 2, doubled: 4 },
+            ]);
+            const lateRows = await targetSql.unsafe<{ id: number; counted: number }[]>(
+              `SELECT id, counted::int AS counted FROM public.gen_late`,
+            );
+            expect(lateRows, engine).toEqual([{ id: 1, counted: 1 }]);
+            // The deferred PRIMARY KEY still enforces on the late column.
+            await expect(
+              targetSql.unsafe(`INSERT INTO public.gen_late (id) VALUES (1)`),
+            ).rejects.toThrow();
+          } finally {
+            await targetSql.end();
+          }
+        }
+      } finally {
+        await sourceSql.end();
+      }
+    },
+    120_000,
+  );
+
   it(
     "restores legacy public-only backups without migration history",
     async () => {
@@ -828,5 +1414,282 @@ CREATE TABLE injected_by_table (z int);
       }
     },
     20_000,
+  );
+
+  // GH #944 review: generated columns calling built-in functions (lower,
+  // to_tsvector) stay inline — the function is never "emitted" — and a view or
+  // index on them restores in the right order.
+  it(
+    "keeps generated columns on built-in functions inline, with their view and index",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("genbuiltin", `
+        CREATE TABLE public.people (
+          id integer PRIMARY KEY,
+          email text,
+          email_lc text GENERATED ALWAYS AS (lower(email)) STORED,
+          search tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(email, ''))) STORED
+        );
+        CREATE INDEX people_lc ON public.people (email_lc);
+        CREATE INDEX people_search ON public.people USING gin (search);
+        CREATE VIEW public.people_v AS SELECT id, email_lc FROM public.people;
+        INSERT INTO public.people (id, email) VALUES (1, 'A@B.com');
+      `);
+      const createT = dump.indexOf('CREATE TABLE "public"."people"');
+      const body = dump.slice(createT, dump.indexOf(");", createT));
+      expect(body).toContain("GENERATED ALWAYS AS (lower(email)) STORED");
+      expect(body).toContain("to_tsvector('english'");
+      expect(dump.indexOf('ADD COLUMN "email_lc"')).toBe(-1);
+      expect(dump.indexOf('ADD COLUMN "search"')).toBe(-1);
+
+      expect(await restoreSql.unsafe(`SELECT email_lc FROM public.people_v`)).toEqual([{ email_lc: "a@b.com" }]);
+      const idx = await restoreSql.unsafe<{ e: string }[]>(`
+        SELECT indexdef AS e FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'people' ORDER BY indexname`);
+      expect(idx.map((r) => r.e).join("\n")).toContain("email_lc");
+      expect(idx.map((r) => r.e).join("\n")).toContain("search");
+    },
+    180_000,
+  );
+
+  // GH #944 review: names and CHECK text that contain quotes, semicolons and
+  // comment markers must round-trip byte-for-byte — through quoteIdentifier,
+  // through the emitted string literal, and past the statement splitter.
+  it(
+    "round-trips adversarially quoted identifiers and CHECK text",
+    async () => {
+      useLosAngelesTimezone();
+      const { restoreSql } = await backupAndRestore("adverse", `
+        CREATE DOMAIN public."d;drop" AS text CONSTRAINT "c""x" CHECK (VALUE <> 'a''); DROP TABLE x; --');
+        CREATE TABLE public."t""x" ("c""1" public."d;drop");
+        INSERT INTO public."t""x" VALUES ('b');
+      `);
+      const rows = await restoreSql.unsafe(`SELECT "c""1" AS c FROM public."t""x"`);
+      expect(rows).toEqual([{ c: "b" }]);
+      // The domain's CHECK is still there and still enforced.
+      await expect(restoreSql.unsafe(`INSERT INTO public."t""x" VALUES ('a''); DROP TABLE x; --')`)).rejects.toThrow();
+    },
+    180_000,
+  );
+
+  // GH #944 review: a generated column calling a function that needs NO
+  // relation stays inline, and a view over a generated column added late is
+  // emitted only after its ALTER TABLE … ADD COLUMN.
+  it(
+    "orders views after the generated columns they read, inline or deferred",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("gen_view", `
+        CREATE FUNCTION public.base_norm(t text) RETURNS text LANGUAGE sql IMMUTABLE
+          BEGIN ATOMIC SELECT lower(t); END;
+        CREATE TABLE public.e (email text);
+        ALTER TABLE public.e ADD COLUMN email_n text
+          GENERATED ALWAYS AS (public.base_norm(email)) STORED;
+        CREATE TABLE public.late_ref (n integer);
+        INSERT INTO public.late_ref VALUES (1), (2);
+        CREATE FUNCTION public.late_count() RETURNS bigint LANGUAGE sql IMMUTABLE
+          BEGIN ATOMIC SELECT count(*) FROM public.late_ref; END;
+        CREATE TABLE public.late_t (id integer, counted bigint GENERATED ALWAYS AS (public.late_count()) STORED);
+        CREATE VIEW public.ve AS SELECT email_n FROM public.e;
+        CREATE VIEW public.vlate AS SELECT counted FROM public.late_t;
+        INSERT INTO public.e VALUES ('Foo@Bar.com');
+        INSERT INTO public.late_t (id) VALUES (1);
+      `);
+      // email_n's function exists before the tables: the column stays inline.
+      const createE = dump.indexOf('CREATE TABLE "public"."e"');
+      expect(dump.slice(createE, dump.indexOf(");", createE))).toMatch(/GENERATED ALWAYS AS .*base_norm\(email\).*STORED/);
+      expect(dump.indexOf('ADD COLUMN "email_n"')).toBe(-1);
+      expect(dump.indexOf('CREATE OR REPLACE VIEW "public"."ve"')).toBeGreaterThan(createE);
+      // counted's function reads a table: the column is added late, and the
+      // view that reads it comes after the ADD COLUMN.
+      const addCounted = dump.indexOf('ALTER TABLE "public"."late_t" ADD COLUMN "counted"');
+      expect(addCounted).toBeGreaterThanOrEqual(0);
+      expect(dump.indexOf('CREATE OR REPLACE VIEW "public"."vlate"')).toBeGreaterThan(addCounted);
+
+      expect(await restoreSql.unsafe(`SELECT email_n FROM public.ve`)).toEqual([{ email_n: "foo@bar.com" }]);
+      expect(await restoreSql.unsafe(`SELECT counted::int AS counted FROM public.vlate`)).toEqual([{ counted: 2 }]);
+    },
+    180_000,
+  );
+
+  // GH #944 review: a domain DEFAULT reading a sequence must come after the
+  // sequence's CREATE — and the sequence's position dump-side is the Sequences
+  // section, which precedes the Types.
+  it(
+    "emits sequences before a domain whose default reads one",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("domseq", `
+        CREATE SEQUENCE public.dseq START 5;
+        CREATE DOMAIN public.dom AS integer DEFAULT nextval('public.dseq');
+        CREATE TABLE public.uses_dom (id integer PRIMARY KEY, d public.dom);
+        INSERT INTO public.uses_dom (id) VALUES (1);
+      `);
+      const seqAt = dump.indexOf('CREATE SEQUENCE "public"."dseq"');
+      const domAt = dump.indexOf('CREATE DOMAIN "public"."dom"');
+      expect(seqAt).toBeGreaterThanOrEqual(0);
+      expect(domAt).toBeGreaterThan(seqAt);
+
+      expect(await restoreSql.unsafe(`SELECT d FROM public.uses_dom`)).toEqual([{ d: 5 }]);
+      await restoreSql.unsafe(`INSERT INTO public.uses_dom (id) VALUES (2)`);
+      expect(await restoreSql.unsafe(`SELECT d FROM public.uses_dom WHERE id = 2`)).toEqual([{ d: 6 }]);
+    },
+    180_000,
+  );
+
+  // GH #944 review: a domain CHECK calling a pre-table user function must be
+  // INSIDE CREATE DOMAIN (after the function) — deferring it to ALTER DOMAIN
+  // would fail once an array of the domain backs a column.
+  it(
+    "inlines a domain CHECK that calls a pre-table function and keeps it valid through arrays",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("domcheck", `
+        CREATE FUNCTION public.is_pos(v integer) RETURNS boolean LANGUAGE sql IMMUTABLE
+          BEGIN ATOMIC SELECT v > 0; END;
+        CREATE DOMAIN public.pos_int AS integer CHECK (public.is_pos(VALUE));
+        CREATE TABLE public.uses_dom (id integer PRIMARY KEY, d public.pos_int, ds public.pos_int[]);
+        INSERT INTO public.uses_dom VALUES (1, 3, '{3,7}'::public.pos_int[]);
+      `);
+      const domAt = dump.indexOf('CREATE DOMAIN "public"."pos_int"');
+      const domStmt = dump.slice(domAt, dump.indexOf(";", domAt));
+      expect(domStmt).toContain("is_pos");
+      expect(domAt).toBeGreaterThan(dump.indexOf("CREATE OR REPLACE FUNCTION public.is_pos"));
+      expect(dump.indexOf('ALTER DOMAIN "public"."pos_int"')).toBe(-1);
+
+      expect(await restoreSql.unsafe(`SELECT ds::text AS ds FROM public.uses_dom`)).toEqual([{ ds: "{3,7}" }]);
+      await expect(restoreSql.unsafe(`INSERT INTO public.uses_dom VALUES (2, -1, '{}')`)).rejects.toThrow();
+      await expect(restoreSql.unsafe(`INSERT INTO public.uses_dom VALUES (3, 1, '{-2}')`)).rejects.toThrow();
+    },
+    180_000,
+  );
+
+  // GH #944 review: a domain built on an ARRAY of another domain must be
+  // emitted after the element domain — the element dependency comes through
+  // the array's typelem, which a bare t: edge would miss.
+  it(
+    "orders a domain over an array of another domain after it",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("domarr", `
+        CREATE DOMAIN public.z_item AS text CHECK (VALUE <> '');
+        CREATE DOMAIN public.a_list AS public.z_item[];
+        CREATE TABLE public.uses_list (id integer PRIMARY KEY, items public.a_list);
+        INSERT INTO public.uses_list VALUES (1, '{x,y}'::public.a_list);
+      `);
+      const itemAt = dump.indexOf('CREATE DOMAIN "public"."z_item"');
+      const listAt = dump.indexOf('CREATE DOMAIN "public"."a_list"');
+      expect(itemAt).toBeGreaterThanOrEqual(0);
+      expect(listAt).toBeGreaterThan(itemAt);
+
+      const rows = await restoreSql.unsafe<{ items: string }[]>(`SELECT items::text AS items FROM public.uses_list`);
+      expect(rows).toEqual([{ items: "{x,y}" }]);
+    },
+    180_000,
+  );
+
+  // GH #944 review: a composite type whose attribute is a relation's ROW TYPE
+  // cannot be created until that table exists.
+  it(
+    "emits a composite type over a table row type after the tables",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("rowtype", `
+        CREATE TABLE public.base (id integer, t text);
+        CREATE TYPE public.wrap AS (b public.base, extra integer);
+        CREATE TABLE public.uses_wrap (id integer PRIMARY KEY, w public.wrap);
+        INSERT INTO public.base VALUES (1, 'one');
+        INSERT INTO public.uses_wrap VALUES (1, ROW(ROW(1,'one')::public.base, 9)::public.wrap);
+      `);
+      const tableAt = dump.indexOf('CREATE TABLE "public"."base"');
+      const typeAt = dump.indexOf('CREATE TYPE "public"."wrap"');
+      expect(tableAt).toBeGreaterThanOrEqual(0);
+      expect(typeAt).toBeGreaterThan(tableAt);
+
+      const rows = await restoreSql.unsafe<{ w: string }[]>(`SELECT w::text AS w FROM public.uses_wrap`);
+      expect(rows).toEqual([{ w: '("(1,one)",9)' }]);
+    },
+    180_000,
+  );
+
+  // GH #944 review: a column name containing a double quote must survive both
+  // the COPY header and the INSERT column list — and the restore must parse
+  // it back.
+  it(
+    "round-trips a column name containing a double quote on both engines",
+    async () => {
+      useLosAngelesTimezone();
+      const setup = `
+        CREATE TABLE public.qt ("we""ird" integer PRIMARY KEY, b text);
+        INSERT INTO public.qt VALUES (1, 'hello');
+      `;
+      for (const engine of ["auto", "javascript"] as const) {
+        const { restoreSql } = await backupAndRestore(`quoted_${engine}`, setup, engine);
+        expect(await restoreSql.unsafe(`SELECT "we""ird" AS w, b FROM public.qt`)).toEqual([{ w: 1, b: "hello" }]);
+      }
+    },
+    360_000,
+  );
+
+  // GH #944 review: a foreign key to a UNIQUE (non-PK) column needs that
+  // uniqueness in place first — FK emission comes after unique constraints
+  // and indexes.
+  it(
+    "emits a foreign key after the unique constraint it references",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("fkuniq", `
+        CREATE TABLE public.a (id integer, uk integer UNIQUE);
+        CREATE TABLE public.b (id integer PRIMARY KEY, a_uk integer REFERENCES public.a (uk));
+        INSERT INTO public.a VALUES (1, 10);
+        INSERT INTO public.b VALUES (1, 10);
+      `);
+      const fkAt = dump.indexOf("FOREIGN KEY");
+      const uniqueAt = dump.indexOf("UNIQUE");
+      expect(fkAt).toBeGreaterThanOrEqual(0);
+      // The UNIQUE clause inside CREATE TABLE a is catalog-recreated as a
+      // constraint statement — either way it must precede the FK.
+      expect(uniqueAt).toBeGreaterThanOrEqual(0);
+      expect(fkAt).toBeGreaterThan(uniqueAt);
+      const fkSection = dump.indexOf("-- Foreign keys");
+      expect(fkSection).toBeGreaterThanOrEqual(0);
+      expect(dump.indexOf("-- Unique constraints")).toBeLessThan(fkSection);
+
+      await expect(restoreSql.unsafe(`INSERT INTO public.b VALUES (2, 999)`)).rejects.toThrow();
+      await restoreSql.unsafe(`INSERT INTO public.b VALUES (2, 10)`);
+      expect(await restoreSql.unsafe(`SELECT count(*)::int AS n FROM public.b`)).toEqual([{ n: 2 }]);
+    },
+    180_000,
+  );
+
+  // GH #944 review: generated expression with a cast, plus a unique index and
+  // an FK that both reference ordinary columns — ordering through the
+  // post-table sections must hold while the generated column is deferred.
+  it(
+    "restores a generated column with a cast alongside unique and foreign keys",
+    async () => {
+      useLosAngelesTimezone();
+      const { dump, restoreSql } = await backupAndRestore("gencast", `
+        CREATE TABLE public.a2 (id integer PRIMARY KEY, v integer UNIQUE);
+        CREATE TABLE public.late_ref2 (n integer);
+        CREATE FUNCTION public.late_count2() RETURNS bigint LANGUAGE sql IMMUTABLE
+          BEGIN ATOMIC SELECT count(*) FROM public.late_ref2; END;
+        CREATE TABLE public.b2 (
+          id integer PRIMARY KEY,
+          a_v integer REFERENCES public.a2 (v),
+          n bigint GENERATED ALWAYS AS (a_v::bigint + public.late_count2()) STORED
+        );
+        CREATE UNIQUE INDEX b2_av_idx ON public.b2 (a_v);
+        INSERT INTO public.a2 VALUES (1, 10);
+        INSERT INTO public.b2 (id, a_v) VALUES (1, 10);
+      `);
+      expect(dump.indexOf('ALTER TABLE "public"."b2" ADD COLUMN "n"')).toBeGreaterThanOrEqual(0);
+      expect(dump.indexOf("-- Foreign keys")).toBeGreaterThan(dump.indexOf("-- Unique constraints"));
+
+      const rows = await restoreSql.unsafe<{ n: number }[]>(`SELECT n::int AS n FROM public.b2`);
+      expect(rows).toEqual([{ n: 10 }]);
+      await expect(restoreSql.unsafe(`INSERT INTO public.b2 (id, a_v) VALUES (2, 999)`)).rejects.toThrow();
+      await expect(restoreSql.unsafe(`INSERT INTO public.b2 (id, a_v) VALUES (3, 10)`)).rejects.toThrow();
+    },
+    180_000,
   );
 });

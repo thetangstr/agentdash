@@ -43,6 +43,8 @@ export type RunDatabaseRestoreOptions = {
 };
 
 type SequenceDefinition = {
+  /** The sequence's pg_class oid — a 'c:' catalog key the backup emits before the tables. */
+  sequence_oid: string;
   sequence_schema: string;
   sequence_name: string;
   data_type: string;
@@ -83,6 +85,8 @@ type CheckConstraintDefinition = {
   constraint_name: string;
   definition: string;
   validated: boolean;
+  /** The columns conkey records — a check that names a column added late must wait for it. */
+  column_names: string[];
 };
 
 type ViewDefinition = {
@@ -104,17 +108,103 @@ type TriggerDefinition = {
   enabled: "O" | "D" | "R" | "A";
 };
 
+// AgentDash (GH #944): domains and standalone composite types, so CREATE
+// TABLE can name them (a column of a domain, or an array of either) instead
+// of flattening a domain to its base type or failing on a composite that was
+// never recreated.
+type DomainDefinition = {
+  oid: string;
+  schema_name: string;
+  domain_name: string;
+  /** format_type(typbasetype, typtypmod): the base type exactly as declared. */
+  base_type: string;
+  not_null: boolean;
+  /** Qualified collation name, or null when the domain uses its base type's. */
+  collation: string | null;
+  default_expr: string | null;
+  /**
+   * Catalog keys for everything pg_depend records on the domain: `t:<pg_type
+   * oid>` for referenced types (its base type among them), `p:<pg_proc oid>`
+   * for functions the default expression calls, `c:<pg_class oid>` for
+   * relations the default touches (a sequence, or a relation's row type).
+   */
+  depends_on: string[];
+};
+
+type DomainConstraintDefinition = {
+  schema_name: string;
+  domain_name: string;
+  constraint_name: string;
+  /** pg_get_constraintdef output, including a trailing NOT VALID when applicable. */
+  definition: string;
+  validated: boolean;
+  depends_on: string[];
+};
+
+type CompositeAttributeDefinition = {
+  attribute_name: string;
+  /** format_type(atttypid, atttypmod): the attribute type exactly as declared. */
+  attribute_type: string;
+  collation: string | null;
+};
+
+type CompositeTypeDefinition = {
+  oid: string;
+  /** The composite's hidden pg_class row (relkind 'c'); a valid pre-table dependency target. */
+  class_oid: string;
+  schema_name: string;
+  type_name: string;
+  attributes: CompositeAttributeDefinition[];
+  /** `t:<pg_type oid>` keys for every attribute type (and array element type). */
+  depends_on: string[];
+};
+
+// AgentDash (GH #944): one table column, read from pg_attribute so the type
+// is format_type(atttypid, atttypmod) — exact, unlike rebuilding it from
+// information_schema (which lost temporal precision, bit lengths, domains
+// and composite types).
+type TableColumnDefinition = {
+  schema_name: string;
+  tablename: string;
+  /** The table's pg_class oid — part of the `a:<oid>:<attnum>` key a deferred column gets. */
+  table_oid: string;
+  column_name: string;
+  attnum: number;
+  type_name: string;
+  /** The column type's pg_type oid — used to spot columns typed by a wave-2 domain/composite. */
+  type_oid: string;
+  /** For an array column, the element type's oid (a domain/composite behind a `coltype[]`). */
+  elem_type_oid: string | null;
+  not_null: boolean;
+  /** '' for an ordinary column, 's' for GENERATED ALWAYS AS (…) STORED, 'v' for VIRTUAL. */
+  generated: "" | "s" | "v";
+  generated_expr: string | null;
+  column_default: string | null;
+  /**
+   * AgentDash (GH #939): catalog keys for the column's pg_attrdef entry —
+   * the DEFAULT's dependencies for an ordinary column, the generation
+   * expression's for a generated one. `p:<pg_proc oid>` for a called
+   * function, `c:<pg_class oid>` for a sequence or a relation's row type,
+   * `t:<pg_type oid>` for a cast type.
+   */
+  default_depends_on: string[];
+};
+
 type SchemaObjectDefinitions = {
   functions: FunctionDefinition[];
   checks: CheckConstraintDefinition[];
   views: ViewDefinition[];
   triggers: TriggerDefinition[];
+  domains: DomainDefinition[];
+  domainConstraints: DomainConstraintDefinition[];
+  composites: CompositeTypeDefinition[];
+  columns: TableColumnDefinition[];
 };
 
-/** One function or view to write, with the catalog keys it needs created first. */
+/** One function, view or standalone type to write, with the catalog keys it needs created first. */
 type SchemaNode = {
   key: string;
-  kind: "function" | "view" | "matview";
+  kind: "function" | "view" | "matview" | "type" | "column";
   label: string;
   statement: string;
   depends_on: string[];
@@ -135,6 +225,14 @@ const BACKUP_CLI_STDERR_BYTES = 64 * 1024;
 const BACKUP_BREAKPOINT_DETECT_BYTES = 64 * 1024;
 
 const STATEMENT_BREAKPOINT = "-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
+
+// AgentDash (GH #944): marks a schema statement that exists only because a
+// column was added late (a deferred generated column). On-box restore runs it
+// normally — it is a leading comment inside the statement's chunk — while the
+// off-box replay guard (cloud/src/backups/dump-guard.ts deferredStatement)
+// treats the whole chunk as skipped: the column it references is never
+// created in replay, so running the constraint or index would fail.
+const DEFERRED_SCHEMA_MARKER = "-- paperclip deferred schema object";
 
 function sanitizeRestoreErrorMessage(error: unknown): string {
   if (error && typeof error === "object") {
@@ -485,12 +583,67 @@ async function* readRestoreStatements(backupFile: string): AsyncGenerator<string
   }
 }
 
+// AgentDash (GH #939, #944): the pg_depend rows an expression-bearing
+// catalog object (a column default, a domain's default or one of its CHECK
+// constraints) records, as catalog keys: `p:<pg_proc oid>` for a called
+// function, `c:<pg_class oid>` for a relation (a sequence, or a table/view's
+// row type reached through a pg_type dependency — `t:<pg_type oid>` carries
+// that same type's key so types can be ordered among themselves). Column- and
+// auto-level rows (refobjsubid > 0, deptype 'a'/'i'/'e') are not expression
+// dependencies.
+function dependencyKeysSql(classid: "pg_attrdef" | "pg_constraint" | "pg_type", objidExpr: string): string {
+  return `ARRAY(
+    SELECT DISTINCT dep.k FROM (
+      SELECT 'p:' || d.refobjid::text AS k
+      FROM pg_depend d
+      WHERE d.classid = '${classid}'::regclass AND d.objid = ${objidExpr}
+        AND d.deptype = 'n' AND d.refclassid = 'pg_proc'::regclass AND d.refobjsubid = 0
+      UNION
+      SELECT 'c:' || d.refobjid::text
+      FROM pg_depend d
+      WHERE d.classid = '${classid}'::regclass AND d.objid = ${objidExpr}
+        AND d.deptype = 'n' AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid = 0
+      UNION
+      SELECT 't:' || d.refobjid::text
+      FROM pg_depend d
+      WHERE d.classid = '${classid}'::regclass AND d.objid = ${objidExpr}
+        AND d.deptype = 'n' AND d.refclassid = 'pg_type'::regclass AND d.refobjsubid = 0
+      UNION
+      -- A dependency on a relation's ROW TYPE (or an array of one) surfaces
+      -- under the relation's own key: it is only satisfied once that table,
+      -- view or materialized view exists.
+      SELECT 'c:' || COALESCE(NULLIF(pt.typrelid, 0), NULLIF(pet.typrelid, 0))::text
+      FROM pg_depend d
+      JOIN pg_type pt ON pt.oid = d.refobjid
+      LEFT JOIN pg_type pet ON pet.oid = pt.typelem AND pt.typelem <> 0
+      WHERE d.classid = '${classid}'::regclass AND d.objid = ${objidExpr}
+        AND d.deptype = 'n' AND d.refclassid = 'pg_type'::regclass AND d.refobjsubid = 0
+        AND COALESCE(NULLIF(pt.typrelid, 0), NULLIF(pet.typrelid, 0)) IS NOT NULL
+      UNION
+      -- A dependency on an ARRAY type implies one on its element, so a domain
+      -- over some_domain[] is ordered after some_domain itself.
+      SELECT 't:' || pt.typelem::text
+      FROM pg_depend d
+      JOIN pg_type pt ON pt.oid = d.refobjid
+      WHERE d.classid = '${classid}'::regclass AND d.objid = ${objidExpr}
+        AND d.deptype = 'n' AND d.refclassid = 'pg_type'::regclass AND d.refobjsubid = 0
+        AND pt.typelem <> 0
+    ) dep
+  )`;
+}
+
 // AgentDash (GH #907): read CHECK constraints, views, functions and triggers
 // from the catalog so a pg_dump-less backup is self-contained. Definitions
 // come from pg_get_*def() under `search_path = pg_catalog`, so every name the
 // server prints is schema-qualified (as pg_dump does) and replays correctly
 // whatever search_path the restore session has. Extension-owned objects are
 // left to CREATE EXTENSION.
+//
+// AgentDash (GH #944): also domains, their constraints, standalone composite
+// types and table columns. Column types come from format_type(atttypid,
+// atttypmod) rather than information_schema: exact for every typmod
+// (timestamp(3), bit(n), interval fields) and for user-defined types
+// (domains, composites and arrays of them).
 async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Promise<SchemaObjectDefinitions> {
   await sql`SELECT set_config('search_path', 'pg_catalog', false)`;
   try {
@@ -521,6 +674,14 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
                  FROM pg_depend d
                  WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
                    AND d.refclassid = 'pg_proc'::regclass AND d.refobjid <> p.oid
+                 UNION
+                 -- Column-level references (a SQL-language body can record
+                 -- them) so a function reading a late-added column is ordered
+                 -- after its deferred ADD COLUMN.
+                 SELECT 'a:' || d.refobjid::text || ':' || d.refobjsubid::text
+                 FROM pg_depend d
+                 WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                   AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid > 0
                ) dep
              ) AS depends_on
       FROM pg_proc p
@@ -538,7 +699,13 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
              t.relname AS tablename,
              c.conname AS constraint_name,
              pg_get_constraintdef(c.oid) AS definition,
-             c.convalidated AS validated
+             c.convalidated AS validated,
+             COALESCE(
+               (SELECT array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum))
+                FROM pg_attribute a
+                WHERE a.attrelid = t.oid AND a.attnum = ANY(c.conkey)),
+               '{}'
+             ) AS column_names
       FROM pg_constraint c
       JOIN pg_class t ON t.oid = c.conrelid
       JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -556,12 +723,24 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
              pg_get_viewdef(v.oid) AS definition,
              v.reloptions::text[] AS reloptions,
              ARRAY(
-               SELECT DISTINCT (CASE WHEN d.refclassid = 'pg_class'::regclass THEN 'c:' ELSE 'p:' END) || d.refobjid::text
-               FROM pg_rewrite r
-               JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = r.oid
-               WHERE r.ev_class = v.oid
-                 AND d.refclassid IN ('pg_class'::regclass, 'pg_proc'::regclass)
-                 AND NOT (d.refclassid = 'pg_class'::regclass AND d.refobjid = v.oid)
+               SELECT DISTINCT dep.k FROM (
+                 SELECT (CASE WHEN d.refclassid = 'pg_class'::regclass THEN 'c:' ELSE 'p:' END) || d.refobjid::text AS k
+                 FROM pg_rewrite r
+                 JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = r.oid
+                 WHERE r.ev_class = v.oid
+                   AND d.refclassid IN ('pg_class'::regclass, 'pg_proc'::regclass)
+                   AND NOT (d.refclassid = 'pg_class'::regclass AND d.refobjid = v.oid)
+                 UNION
+                 -- A column-level reference (refobjsubid = attnum) matters when
+                 -- the column itself is created late: an a:<class>:<attnum>
+                 -- key lets this view be ordered after the deferred ADD COLUMN.
+                 SELECT 'a:' || d.refobjid::text || ':' || d.refobjsubid::text
+                 FROM pg_rewrite r
+                 JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = r.oid
+                 WHERE r.ev_class = v.oid
+                   AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid > 0
+                   AND d.refobjid <> v.oid
+               ) dep
              ) AS depends_on
       FROM pg_class v
       JOIN pg_namespace n ON n.oid = v.relnamespace
@@ -586,7 +765,177 @@ async function readSchemaObjectDefinitions(sql: ReturnType<typeof postgres>): Pr
         AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
       ORDER BY n.nspname, c.relname, t.tgname
     `;
-    return { functions: [...functions], checks: [...checks], views: [...views], triggers: [...triggers] };
+    // AgentDash (GH #944): user-defined domains, recreated before the tables
+    // so a column keeps the domain instead of silently degrading to the base
+    // type. Validated CHECK constraints go inline in CREATE DOMAIN (PostgreSQL
+    // refuses ALTER DOMAIN … ADD CONSTRAINT once a column of an array of the
+    // domain exists); only NOT VALID constraints or ones needing a later
+    // object wait for a post-data ALTER DOMAIN, like the deferred defaults.
+    const domains = await sql<DomainDefinition[]>`
+      SELECT t.oid::text AS oid,
+             n.nspname AS schema_name,
+             t.typname AS domain_name,
+             format_type(t.typbasetype, t.typtypmod) AS base_type,
+             t.typnotnull AS not_null,
+             CASE WHEN t.typcollation <> 0 AND t.typcollation <> bt.typcollation
+                  THEN quote_ident(cn.nspname) || '.' || quote_ident(co.collname)
+                  ELSE NULL END AS collation,
+             CASE WHEN t.typdefaultbin IS NOT NULL THEN pg_get_expr(t.typdefaultbin, 0) END AS default_expr,
+             ${sql.unsafe(dependencyKeysSql("pg_type", "t.oid"))} AS depends_on
+      FROM pg_type t
+      JOIN pg_namespace n ON n.oid = t.typnamespace
+      JOIN pg_type bt ON bt.oid = t.typbasetype
+      LEFT JOIN pg_collation co ON co.oid = t.typcollation
+      LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
+      WHERE t.typtype = 'd'
+        AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_depend d
+          WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
+        )
+      ORDER BY n.nspname, t.typname
+    `;
+    const domainConstraints = await sql<DomainConstraintDefinition[]>`
+      SELECT n.nspname AS schema_name,
+             t.typname AS domain_name,
+             c.conname AS constraint_name,
+             pg_get_constraintdef(c.oid) AS definition,
+             c.convalidated AS validated,
+             ${sql.unsafe(dependencyKeysSql("pg_constraint", "c.oid"))} AS depends_on
+      FROM pg_constraint c
+      JOIN pg_type t ON t.oid = c.contypid
+      JOIN pg_namespace n ON n.oid = t.typnamespace
+      WHERE c.contypid <> 0
+        AND c.contype = 'c'
+        AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_depend d
+          WHERE d.classid = 'pg_constraint'::regclass AND d.objid = c.oid AND d.deptype = 'e'
+        )
+      ORDER BY n.nspname, t.typname, c.conname
+    `;
+    // AgentDash (GH #944): standalone composite types (a pg_class of relkind
+    // 'c' behind the pg_type — table row types are typrelid'd to a relkind
+    // 'r'/'v'/… relation and must never be recreated). One row per attribute.
+    const compositeAttributes = await sql<{
+      oid: string;
+      class_oid: string;
+      schema_name: string;
+      type_name: string;
+      attribute_name: string;
+      attribute_type: string;
+      attribute_collation: string | null;
+      attr_type_oid: string;
+      elem_type_oid: string | null;
+      attr_class_oid: string | null;
+      elem_class_oid: string | null;
+    }[]>`
+      SELECT t.oid::text AS oid,
+             t.typrelid::text AS class_oid,
+             n.nspname AS schema_name,
+             t.typname AS type_name,
+             a.attname AS attribute_name,
+             format_type(a.atttypid, a.atttypmod) AS attribute_type,
+             CASE WHEN a.attcollation <> 0 AND a.attcollation <> at.typcollation
+                  THEN quote_ident(cn.nspname) || '.' || quote_ident(co.collname)
+                  ELSE NULL END AS attribute_collation,
+             a.atttypid::text AS attr_type_oid,
+             CASE WHEN at.typelem <> 0 THEN at.typelem::text ELSE NULL END AS elem_type_oid,
+             -- The pg_class behind a row type: a table's row type means this
+             -- composite cannot be created until that table exists.
+             CASE WHEN at.typrelid <> 0 THEN at.typrelid::text ELSE NULL END AS attr_class_oid,
+             CASE WHEN at.typelem <> 0 AND et.typrelid <> 0 THEN et.typrelid::text ELSE NULL END AS elem_class_oid
+      FROM pg_type t
+      JOIN pg_namespace n ON n.oid = t.typnamespace
+      JOIN pg_class tc ON tc.oid = t.typrelid AND tc.relkind = 'c'
+      JOIN pg_attribute a ON a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped
+      JOIN pg_type at ON at.oid = a.atttypid
+      LEFT JOIN pg_type et ON et.oid = at.typelem AND at.typelem <> 0
+      LEFT JOIN pg_collation co ON co.oid = a.attcollation
+      LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
+      WHERE t.typtype = 'c'
+        AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_depend d
+          WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
+        )
+      ORDER BY n.nspname, t.typname, a.attnum
+    `;
+    const compositeByOid = new Map<string, CompositeTypeDefinition>();
+    for (const row of compositeAttributes) {
+      let composite = compositeByOid.get(row.oid);
+      if (!composite) {
+        composite = {
+          oid: row.oid,
+          class_oid: row.class_oid,
+          schema_name: row.schema_name,
+          type_name: row.type_name,
+          attributes: [],
+          depends_on: [],
+        };
+        compositeByOid.set(row.oid, composite);
+      }
+      composite.attributes.push({
+        attribute_name: row.attribute_name,
+        attribute_type: row.attribute_type,
+        collation: row.attribute_collation,
+      });
+      for (const typeOid of [row.attr_type_oid, row.elem_type_oid]) {
+        const key = `t:${typeOid}`;
+        if (typeOid && typeOid !== row.oid && !composite.depends_on.includes(key)) {
+          composite.depends_on.push(key);
+        }
+      }
+      // A `c:` key for a relation row type (a table, a view); the hidden
+      // classes of other standalone composites land in preTableClassOids.
+      for (const classOid of [row.attr_class_oid, row.elem_class_oid]) {
+        const key = `c:${classOid}`;
+        if (classOid && !composite.depends_on.includes(key)) {
+          composite.depends_on.push(key);
+        }
+      }
+    }
+    const composites = [...compositeByOid.values()];
+    // AgentDash (GH #939, #944): every visible column of every user table
+    // (relkind 'r' or 'p'), with the catalog-exact type and default and the
+    // default's dependencies — the latter decides whether the default can be
+    // emitted inline or must defer to a post-function ALTER TABLE … SET DEFAULT.
+    const columns = await sql<TableColumnDefinition[]>`
+      SELECT n.nspname AS schema_name,
+             c.oid::text AS table_oid,
+             c.relname AS tablename,
+             a.attname AS column_name,
+             a.attnum,
+             format_type(a.atttypid, a.atttypmod) AS type_name,
+             a.attnotnull AS not_null,
+             a.attgenerated::text AS generated,
+             CASE WHEN a.attgenerated <> '' AND ad.oid IS NOT NULL
+                  THEN pg_get_expr(ad.adbin, ad.adrelid) END AS generated_expr,
+             CASE WHEN a.attgenerated = '' AND ad.oid IS NOT NULL
+                  THEN pg_get_expr(ad.adbin, ad.adrelid) END AS column_default,
+             a.atttypid::text AS type_oid,
+             CASE WHEN at.typelem <> 0 THEN at.typelem::text ELSE NULL END AS elem_type_oid,
+             ${sql.unsafe(dependencyKeysSql("pg_attrdef", "ad.oid"))} AS default_depends_on
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_type at ON at.oid = a.atttypid
+      LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+      WHERE c.relkind IN ('r', 'p')
+        AND a.attnum > 0 AND NOT a.attisdropped
+        AND ${sql.unsafe(nonSystemSchemaPredicate("n.nspname"))}
+      ORDER BY n.nspname, c.relname, a.attnum
+    `;
+    return {
+      functions: [...functions],
+      checks: [...checks],
+      views: [...views],
+      triggers: [...triggers],
+      domains: [...domains],
+      domainConstraints: [...domainConstraints],
+      composites,
+      columns: [...columns],
+    };
   } finally {
     await sql`RESET search_path`;
   }
@@ -612,6 +961,36 @@ function viewStatement(view: ViewDefinition): string {
   return view.relkind === "m"
     ? `CREATE MATERIALIZED VIEW ${name}${options} AS\n${body}\nWITH DATA;`
     : `CREATE OR REPLACE VIEW ${name}${options} AS\n${body};`;
+}
+
+// AgentDash (GH #944): CREATE TYPE … AS (…) for a standalone composite —
+// table row types are excluded by the relkind = 'c' check in the query.
+function compositeCreateStatement(composite: CompositeTypeDefinition): string {
+  const attributes = composite.attributes.map((attribute) =>
+    `${quoteIdentifier(attribute.attribute_name)} ${attribute.attribute_type}${attribute.collation ? ` COLLATE ${attribute.collation}` : ""}`,
+  );
+  return `CREATE TYPE ${quoteQualifiedName(composite.schema_name, composite.type_name)} AS (${attributes.join(", ")});`;
+}
+
+// AgentDash (GH #944): CREATE DOMAIN carrying the base type (with its typmod),
+// collation, NOT NULL, validated CHECK constraints and — when the default's
+// dependencies are already in place — the default. Constraints go inline
+// whenever possible: ALTER DOMAIN … ADD CONSTRAINT is rejected entirely once a
+// column of an ARRAY of the domain exists, so deferring a constraint that did
+// not need to wait would break restore.
+function domainCreateStatement(
+  domain: DomainDefinition,
+  emitDefault: boolean,
+  constraints: DomainConstraintDefinition[],
+): string {
+  let statement = `CREATE DOMAIN ${quoteQualifiedName(domain.schema_name, domain.domain_name)} AS ${domain.base_type}`;
+  if (domain.collation) statement += ` COLLATE ${domain.collation}`;
+  if (emitDefault && domain.default_expr != null) statement += ` DEFAULT ${domain.default_expr}`;
+  for (const constraint of constraints) {
+    statement += ` CONSTRAINT ${quoteIdentifier(constraint.constraint_name)} ${constraint.definition}`;
+  }
+  if (domain.not_null) statement += ` NOT NULL`;
+  return `${statement};`;
 }
 
 /** Each node after the nodes it depends on (depth-first; dependencies outside `nodes` already exist). */
@@ -641,8 +1020,9 @@ function orderByDependency(nodes: SchemaNode[]): SchemaNode[] {
  *     type, or a BEGIN ATOMIC body that reads one) waits until after the tables;
  *   - anything that needs a later node moves to that node's section.
  */
-function planSchemaNodes(functions: FunctionDefinition[], views: ViewDefinition[]): SchemaNodeSections {
+function planSchemaNodes(functions: FunctionDefinition[], views: ViewDefinition[], columns: SchemaNode[] = []): SchemaNodeSections {
   const nodes: SchemaNode[] = [
+    ...columns,
     ...functions.map((fn): SchemaNode => ({
       key: `p:${fn.oid}`,
       kind: "function",
@@ -662,7 +1042,13 @@ function planSchemaNodes(functions: FunctionDefinition[], views: ViewDefinition[
   const rank = new Map<string, number>();
   for (const node of nodes) {
     const needsRelation = node.kind !== "function" || node.depends_on.some((dep) => dep.startsWith("c:"));
-    rank.set(node.key, node.kind === "matview" ? 2 : needsRelation ? 1 : 0);
+    // A deferred column is added AFTER the data: a generation expression that
+    // reads another table (through a function) must see that table fully
+    // loaded, and adding the column post-data lets Postgres compute the
+    // stored value once instead of per-row against half-loaded tables.
+    // Anything depending on the a:<class>:<attnum> key is pulled to rank 2
+    // by the propagation loop below.
+    rank.set(node.key, node.kind === "matview" || node.kind === "column" ? 2 : needsRelation ? 1 : 0);
   }
   // Raise each node to the latest section among its dependencies, until stable.
   for (let changed = true; changed;) {
@@ -680,6 +1066,33 @@ function planSchemaNodes(functions: FunctionDefinition[], views: ViewDefinition[
   }
   const section = (r: number) => orderByDependency(nodes.filter((node) => rank.get(node.key) === r));
   return { beforeTables: section(0), afterTables: section(1), afterData: section(2) };
+}
+
+function foreignKeyStatement(fk: {
+  constraint_name: string;
+  source_schema: string;
+  source_table: string;
+  source_columns: string[];
+  target_schema: string;
+  target_table: string;
+  target_columns: string[];
+  update_rule: string;
+  delete_rule: string;
+}): string {
+  const srcCols = fk.source_columns.map(quoteIdentifier).join(", ");
+  const tgtCols = fk.target_columns.map(quoteIdentifier).join(", ");
+  return `ALTER TABLE ${quoteQualifiedName(fk.source_schema, fk.source_table)} ADD CONSTRAINT ${quoteIdentifier(fk.constraint_name)} FOREIGN KEY (${srcCols}) REFERENCES ${quoteQualifiedName(fk.target_schema, fk.target_table)} (${tgtCols}) ON UPDATE ${fk.update_rule} ON DELETE ${fk.delete_rule};`;
+}
+
+function uniqueConstraintStatement(u: {
+  constraint_name: string;
+  schema_name: string;
+  tablename: string;
+  column_names: string[];
+  nulls_not_distinct: boolean;
+}): string {
+  const cols = u.column_names.map(quoteIdentifier).join(", ");
+  return `ALTER TABLE ${quoteQualifiedName(u.schema_name, u.tablename)} ADD CONSTRAINT ${quoteIdentifier(u.constraint_name)} UNIQUE${u.nulls_not_distinct ? " NULLS NOT DISTINCT" : ""} (${cols});`;
 }
 
 /** AgentDash (GH #907): pg_get_triggerdef does not carry tgenabled; restore it when it is not the default. */
@@ -854,7 +1267,6 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     // AgentDash (GH #907): CHECK constraints, views, functions and triggers,
     // read once up front and emitted below in dependency-safe order.
     const schemaObjects = await readSchemaObjectDefinitions(sql);
-    const schemaNodes = planSchemaNodes(schemaObjects.functions, schemaObjects.views);
     const checkConstraints = schemaObjects.checks.filter((check) => includedTableNames.has(tableKey(check.schema_name, check.tablename)));
     const views = schemaObjects.views;
     const viewNames = new Set(views.map((view) => tableKey(view.schema_name, view.view_name)));
@@ -864,6 +1276,10 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     });
     for (const fn of schemaObjects.functions) includedSchemas.add(fn.schema_name);
     for (const view of views) includedSchemas.add(view.schema_name);
+    // AgentDash (GH #944): a domain or composite type may be the only object
+    // living in its schema.
+    for (const domain of schemaObjects.domains) includedSchemas.add(domain.schema_name);
+    for (const composite of schemaObjects.composites) includedSchemas.add(composite.schema_name);
     const emitSchemaNodes = (heading: string, nodes: SchemaNode[]) => {
       if (nodes.length === 0) return;
       emit(`-- ${heading}`);
@@ -895,6 +1311,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
 
     const allSequences = await sql<SequenceDefinition[]>`
       SELECT
+        seq.oid::text AS sequence_oid,
         s.sequence_schema,
         s.sequence_name,
         s.data_type,
@@ -919,6 +1336,38 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     const sequences = allSequences.filter(
       (seq) => !seq.owner_table || includedTableNames.has(tableKey(seq.owner_schema ?? "public", seq.owner_table)),
     );
+
+    // AgentDash (GH #939, #944): a column default, generation expression,
+    // domain default or domain CHECK goes inline in CREATE TABLE/DOMAIN only
+    // when everything it touches already exists at that point. That rules out
+    // a function this dump emits LATER than the pre-table function section
+    // (one that itself needs a table, or a data-loaded materialized view) and
+    // any relation outside the pre-table set given below. Only emitted
+    // (user/extension) functions can defer an expression — a built-in
+    // (pg_catalog) function is never "emitted", so an expression that calls
+    // only built-ins always stays inline. One deliberate caveat: on off-box
+    // replay the guard refuses an inline expression naming a function outside
+    // its allowlist — including a schema-qualified user function — which fails
+    // closed rather than silently mis-restoring. Everything late waits for a
+    // post-table/post-data ALTER, exactly as pg_dump emits a default that
+    // calls a later function.
+    const emittedFunctionOids = new Set(schemaObjects.functions.map((fn) => fn.oid));
+    const sequenceOids = new Set(sequences.map((seq) => seq.sequence_oid));
+    const compositeClassOids = new Set(schemaObjects.composites.map((composite) => composite.class_oid));
+    const compositeKeyByClassOid = new Map(schemaObjects.composites.map((composite) => [composite.class_oid, `t:${composite.oid}`]));
+    // `preTableClassOids` treats every composite class as available — a type
+    // that actually lands post-table raises its dependents' wave instead.
+    const preTableClassOids = new Set<string>([...sequenceOids, ...compositeClassOids]);
+    // An expression may go inline only when every function it calls will be
+    // emitted before the tables (`early`) and every relation it names exists
+    // there too (`preTableClasses`: sequences and composite-type classes are
+    // created before the tables; any other relation is not).
+    const hasPostTableDependency = (depends_on: string[], early: Set<string>, preTableClasses: Set<string> = preTableClassOids) =>
+      depends_on.some((dep) =>
+        dep.startsWith("p:")
+          ? emittedFunctionOids.has(dep.slice(2)) && !early.has(dep.slice(2))
+          : dep.startsWith("c:") && !preTableClasses.has(dep.slice(2)),
+      );
 
     const schemas = new Set<string>(includedSchemas);
     for (const seq of sequences) schemas.add(seq.sequence_schema);
@@ -956,11 +1405,6 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
-    // AgentDash (GH #907): functions that need no relation go before the
-    // tables, so column defaults, CHECK constraints and index expressions can
-    // call them (see planSchemaNodes for the other sections).
-    emitSchemaNodes("Functions", schemaNodes.beforeTables);
-
     if (sequences.length > 0) {
       emit("-- Sequences");
       for (const seq of sequences) {
@@ -973,60 +1417,246 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
-    // Get full CREATE TABLE DDL via column info
-    for (const { schema_name, tablename } of tables) {
+    // AgentDash (GH #944): columns were read from pg_attribute up front in
+    // readSchemaObjectDefinitions — group them per table (already in attnum
+    // order). format_type keeps every typmod and resolves domains, composite
+    // types and arrays of them to valid, schema-qualified spellings.
+    const columnsByTable = new Map<string, TableColumnDefinition[]>();
+    for (const column of schemaObjects.columns) {
+      const key = tableKey(column.schema_name, column.tablename);
+      const list = columnsByTable.get(key);
+      if (list) list.push(column);
+      else columnsByTable.set(key, [column]);
+    }
+
+    // AgentDash (GH #939, #944): which expressions may go inline is a
+    // fixpoint. A generated column marked late becomes an `a:<class>:<attnum>`
+    // schema node; a view or function that reads that column (its own `a:`
+    // pg_depend edge) is then planned after it — which can in turn defer more
+    // expressions that call that function. `lateColumns` only ever grows
+    // (deferring is always safe, just later), so the loop converges.
+    //
+    // Types emit in up to three waves: wave 0 before the functions; wave 1
+    // after the pre-table functions a domain's inline default or CHECK may
+    // call; wave 2 after the tables, for a composite with an attribute of a
+    // relation's row type. Domain CHECK constraints ride inside CREATE DOMAIN
+    // whenever they can — PostgreSQL refuses ALTER DOMAIN … ADD CONSTRAINT
+    // once a column of an array of the domain exists, so a constraint only
+    // waits for a post-data ALTER DOMAIN when it is NOT VALID or its
+    // expression needs an object emitted after the tables.
+    const deferredDomainDefaults: DomainDefinition[] = [];
+    const deferredDomainConstraints: DomainConstraintDefinition[] = [];
+    const lateColumns = new Map<string, TableColumnDefinition>();
+    const deferredColumnDef = (col: TableColumnDefinition) =>
+      `${quoteIdentifier(col.column_name)} ${col.type_name} GENERATED ALWAYS AS (${col.generated_expr}) ${col.generated === "s" ? "STORED" : "VIRTUAL"}${col.not_null ? " NOT NULL" : ""}`;
+    let schemaNodes: SchemaNodeSections;
+    let earlyFunctionOids = new Set<string>();
+    let typeNodes: SchemaNode[] = [];
+    let typeWave = new Map<string, number>();
+    let tableTimeClassOids = new Set<string>();
+    for (;;) {
+      schemaNodes = planSchemaNodes(
+        schemaObjects.functions,
+        schemaObjects.views,
+        [...lateColumns.values()].map((col): SchemaNode => ({
+          key: `a:${col.table_oid}:${col.attnum}`,
+          kind: "column",
+          label: `Deferred column: ${commentSafe(`${col.schema_name}.${col.tablename}.${col.column_name}`)}`,
+          statement: `ALTER TABLE ${quoteQualifiedName(col.schema_name, col.tablename)} ADD COLUMN ${deferredColumnDef(col)};`,
+          depends_on: col.default_depends_on,
+        })),
+      );
+      earlyFunctionOids = new Set(
+        schemaNodes.beforeTables.filter((node) => node.kind === "function").map((node) => node.key.slice(2)),
+      );
+      const isLate = (depends_on: string[], preTableClasses: Set<string> = preTableClassOids) =>
+        hasPostTableDependency(depends_on, earlyFunctionOids, preTableClasses);
+
+      deferredDomainDefaults.length = 0;
+      deferredDomainConstraints.length = 0;
+      typeNodes = [
+        ...schemaObjects.composites.map((composite): SchemaNode => ({
+          key: `t:${composite.oid}`,
+          kind: "type",
+          label: `Type: ${commentSafe(`${composite.schema_name}.${composite.type_name}`)}`,
+          statement: compositeCreateStatement(composite),
+          depends_on: composite.depends_on,
+        })),
+        ...schemaObjects.domains.map((domain): SchemaNode => {
+          const emitDefault = domain.default_expr != null && !isLate(domain.depends_on);
+          if (domain.default_expr != null && !emitDefault) deferredDomainDefaults.push(domain);
+          const inlineConstraints: DomainConstraintDefinition[] = [];
+          for (const constraint of schemaObjects.domainConstraints) {
+            const belongsToDomain =
+              constraint.schema_name === domain.schema_name && constraint.domain_name === domain.domain_name;
+            if (!belongsToDomain) continue;
+            if (constraint.validated && !isLate(constraint.depends_on)) {
+              inlineConstraints.push(constraint);
+            } else {
+              deferredDomainConstraints.push(constraint);
+            }
+          }
+          return {
+            key: `t:${domain.oid}`,
+            kind: "type",
+            label: `Domain: ${commentSafe(`${domain.schema_name}.${domain.domain_name}`)}`,
+            statement: domainCreateStatement(domain, emitDefault, inlineConstraints),
+            // Order the domain after the types and functions its default and
+            // its inline CHECK constraints name (its own key excluded) — the
+            // function references are what can push it into wave 1.
+            depends_on: [
+              ...domain.depends_on,
+              ...inlineConstraints.flatMap((constraint) =>
+                constraint.depends_on.filter((dep) => dep !== `t:${domain.oid}`)),
+            ],
+          };
+        }),
+      ];
+      // Wave: 0 = before the functions, 1 = after the pre-table functions but
+      // still before the tables, 2 = after the tables. Raised to fixpoint
+      // over type and class dependencies.
+      typeWave = new Map(typeNodes.map((node) => [node.key, 0]));
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const node of typeNodes) {
+          let next = typeWave.get(node.key)!;
+          for (const dep of node.depends_on) {
+            let depWave = 0;
+            if (dep.startsWith("t:")) {
+              depWave = typeWave.get(dep) ?? 0;
+            } else if (dep.startsWith("c:")) {
+              const oid = dep.slice(2);
+              const compositeKey = compositeKeyByClassOid.get(oid);
+              depWave = sequenceOids.has(oid) ? 0 : compositeKey !== undefined ? (typeWave.get(compositeKey) ?? 0) : 2;
+            } else if (dep.startsWith("p:")) {
+              depWave = emittedFunctionOids.has(dep.slice(2)) ? 1 : 0;
+            }
+            next = Math.max(next, depWave);
+          }
+          if (next !== typeWave.get(node.key)) {
+            typeWave.set(node.key, next);
+            changed = true;
+          }
+        }
+      }
+      // The classes a column default or generation expression may name while
+      // still going inline: sequences and every composite that lands before
+      // the tables. Anything else (a table, a wave-2 composite) defers it.
+      tableTimeClassOids = new Set<string>([
+        ...sequenceOids,
+        ...schemaObjects.composites
+          .filter((composite) => typeWave.get(`t:${composite.oid}`)! < 2)
+          .map((composite) => composite.class_oid),
+      ]);
+
+      let grew = false;
+      for (const col of schemaObjects.columns) {
+        if (col.generated === "") continue;
+        const key = `${col.schema_name}.${col.tablename}.${col.column_name}`;
+        if (lateColumns.has(key)) continue;
+        if (!isLate(col.default_depends_on, tableTimeClassOids)) continue;
+        lateColumns.set(key, col);
+        grew = true;
+      }
+      if (!grew) break;
+    }
+    const typeWaveSection = (w: number) => orderByDependency(typeNodes.filter((node) => typeWave.get(node.key) === w));
+    const deferredColumnDefs = new Map([...lateColumns].map(([key, col]) => [key, deferredColumnDef(col)]));
+    const deferredColumnNamesByTable = new Map<string, Set<string>>();
+    for (const col of lateColumns.values()) {
+      const key = tableKey(col.schema_name, col.tablename);
+      const set = deferredColumnNamesByTable.get(key) ?? new Set<string>();
+      set.add(col.column_name);
+      deferredColumnNamesByTable.set(key, set);
+    }
+    const deferredDefaults: { schema_name: string; tablename: string; column_name: string; column_default: string }[] = [];
+    const deferredPrimaryKeys: { schema_name: string; tablename: string; constraint_name: string; column_names: string[] }[] = [];
+
+    emitSchemaNodes("Types", typeWaveSection(0));
+
+    // AgentDash (GH #907): functions that need no relation go before the
+    // tables, so column defaults, CHECK constraints and index expressions can
+    // call them (see planSchemaNodes for the other sections).
+    emitSchemaNodes("Functions", schemaNodes.beforeTables);
+
+    // A domain whose inline default or CHECK calls a pre-table function comes
+    // after those functions but still before any table that can name it.
+    emitSchemaNodes("Types that call pre-table functions", typeWaveSection(1));
+
+    // Get full CREATE TABLE DDL via column info. Tables and wave-2 types are
+    // emitted INTERLEAVED: a composite over a table's row type waits for that
+    // table, while a table whose column is typed by a wave-2 domain/composite
+    // waits for that type — so each table is created only once every type it
+    // names exists, and each wave-2 type once the relations it reads exist.
+    const wave2Nodes = typeWaveSection(2);
+    const wave2Keys = new Set(wave2Nodes.map((node) => node.key));
+    const wave2TypeOids = new Set([...wave2Keys].map((key) => key.slice(2)));
+    const emittedWave2 = new Set<string>();
+    const emittedClassOids = new Set<string>();
+    const classOidByTable = new Map<string, string>();
+    for (const col of schemaObjects.columns) {
+      const key = tableKey(col.schema_name, col.tablename);
+      if (!classOidByTable.has(key)) classOidByTable.set(key, col.table_oid);
+    }
+    const wave2DepsByTable = new Map<string, Set<string>>();
+    for (const col of schemaObjects.columns) {
+      for (const typeOid of [col.type_oid, col.elem_type_oid]) {
+        if (!typeOid || !wave2TypeOids.has(typeOid)) continue;
+        const key = tableKey(col.schema_name, col.tablename);
+        const set = wave2DepsByTable.get(key) ?? new Set<string>();
+        set.add(`t:${typeOid}`);
+        wave2DepsByTable.set(key, set);
+      }
+    }
+    const wave2Ready = (node: SchemaNode) =>
+      node.depends_on.every((dep) => {
+        if (dep.startsWith("t:")) return !wave2Keys.has(dep) || emittedWave2.has(dep);
+        if (dep.startsWith("c:")) {
+          const oid = dep.slice(2);
+          const compositeKey = compositeKeyByClassOid.get(oid);
+          if (compositeKey !== undefined) return !wave2Keys.has(compositeKey) || emittedWave2.has(compositeKey);
+          return emittedClassOids.has(oid);
+        }
+        // A p: dep that still mattered was deferred out of the statement; a:
+        // column deps cannot occur in a CREATE TYPE/DOMAIN.
+        return true;
+      });
+
+    const emitTable = async ({ schema_name, tablename }: TableDefinition) => {
       const qualifiedTableName = quoteQualifiedName(schema_name, tablename);
-      const columns = await sql<{
-        column_name: string;
-        data_type: string;
-        udt_schema: string;
-        udt_name: string;
-        is_nullable: string;
-        column_default: string | null;
-        character_maximum_length: number | null;
-        numeric_precision: number | null;
-        numeric_scale: number | null;
-      }[]>`
-        SELECT column_name, data_type, udt_schema, udt_name, is_nullable, column_default,
-               character_maximum_length, numeric_precision, numeric_scale
-        FROM information_schema.columns
-        WHERE table_schema = ${schema_name} AND table_name = ${tablename}
-        ORDER BY ordinal_position
-      `;
+      const currentTableKey = tableKey(schema_name, tablename);
+      const columns = columnsByTable.get(currentTableKey) ?? [];
 
       emit(`-- Table: ${commentSafe(`${schema_name}.${tablename}`)}`);
       emitStatement(`DROP TABLE IF EXISTS ${qualifiedTableName} CASCADE;`);
 
+      const deferredColumnNames = deferredColumnNamesByTable.get(currentTableKey) ?? new Set<string>();
       const colDefs: string[] = [];
       for (const col of columns) {
-        let typeStr: string;
-        if (col.data_type === "USER-DEFINED") {
-          typeStr = quoteQualifiedName(col.udt_schema, col.udt_name);
-        } else if (col.data_type === "ARRAY") {
-          const elementType = col.udt_name.replace(/^_/, "");
-          typeStr = col.udt_schema === "pg_catalog"
-            ? `${elementType}[]`
-            : `${quoteQualifiedName(col.udt_schema, elementType)}[]`;
-        } else if (col.data_type === "character varying") {
-          typeStr = col.character_maximum_length
-            ? `varchar(${col.character_maximum_length})`
-            : "varchar";
-        } else if (col.data_type === "numeric" && col.numeric_precision != null) {
-          typeStr =
-            col.numeric_scale != null
-              ? `numeric(${col.numeric_precision}, ${col.numeric_scale})`
-              : `numeric(${col.numeric_precision})`;
-        } else {
-          typeStr = col.data_type;
+        if (deferredColumnDefs.has(`${schema_name}.${tablename}.${col.column_name}`)) continue;
+        let def = `${quoteIdentifier(col.column_name)} ${col.type_name}`;
+        if (col.generated !== "") {
+          def += ` GENERATED ALWAYS AS (${col.generated_expr}) ${col.generated === "s" ? "STORED" : "VIRTUAL"}`;
+        } else if (col.column_default != null) {
+          // AgentDash (GH #939): a default that calls a function the dump has
+          // not emitted yet cannot go inline — the restore would fail before
+          // the function exists.
+          if (hasPostTableDependency(col.default_depends_on, earlyFunctionOids, tableTimeClassOids)) {
+            deferredDefaults.push({
+              schema_name,
+              tablename,
+              column_name: col.column_name,
+              column_default: col.column_default,
+            });
+          } else {
+            def += ` DEFAULT ${col.column_default}`;
+          }
         }
-
-        let def = `  "${col.column_name}" ${typeStr}`;
-        if (col.column_default != null) def += ` DEFAULT ${col.column_default}`;
-        if (col.is_nullable === "NO") def += " NOT NULL";
-        colDefs.push(def);
+        if (col.not_null) def += " NOT NULL";
+        colDefs.push(`  ${def}`);
       }
 
-      // Primary key
+      // Primary key — deferred with the columns it references.
       const pk = await sql<{ constraint_name: string; column_names: string[] }[]>`
         SELECT c.conname AS constraint_name,
                array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS column_names
@@ -1038,8 +1668,12 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         GROUP BY c.conname
       `;
       for (const p of pk) {
-        const cols = p.column_names.map((c) => `"${c}"`).join(", ");
-        colDefs.push(`  CONSTRAINT "${p.constraint_name}" PRIMARY KEY (${cols})`);
+        const cols = p.column_names.map(quoteIdentifier).join(", ");
+        if (p.column_names.some((name) => deferredColumnNames.has(name))) {
+          deferredPrimaryKeys.push({ schema_name, tablename, constraint_name: p.constraint_name, column_names: p.column_names });
+        } else {
+          colDefs.push(`  CONSTRAINT ${quoteIdentifier(p.constraint_name)} PRIMARY KEY (${cols})`);
+        }
       }
 
       emit(`CREATE TABLE ${qualifiedTableName} (`);
@@ -1047,7 +1681,49 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit(");");
       emitStatementBoundary();
       emit("");
+    };
+
+    const pendingTables = [...tables];
+    const pendingWave2 = [...wave2Nodes];
+    let emittedWave2Heading = false;
+    const emitWave2Node = (node: SchemaNode) => {
+      if (!emittedWave2Heading) {
+        emit("-- Types that use relation row types");
+        emittedWave2Heading = true;
+      }
+      emit(`-- ${node.label}`);
+      emitStatement(node.statement);
+      emittedWave2.add(node.key);
+    };
+    while (pendingTables.length > 0 || pendingWave2.length > 0) {
+      let progressed = false;
+      // Forward order: typeWaveSection returns dependencies before dependents.
+      for (let i = 0; i < pendingWave2.length; i++) {
+        if (!wave2Ready(pendingWave2[i]!)) continue;
+        emitWave2Node(pendingWave2[i]!);
+        pendingWave2.splice(i, 1);
+        i--;
+        progressed = true;
+      }
+      for (let i = 0; i < pendingTables.length; i++) {
+        const table = pendingTables[i]!;
+        const needed = wave2DepsByTable.get(tableKey(table.schema_name, table.tablename));
+        if (needed && [...needed].some((dep) => !emittedWave2.has(dep))) continue;
+        await emitTable(table);
+        const classOid = classOidByTable.get(tableKey(table.schema_name, table.tablename));
+        if (classOid) emittedClassOids.add(classOid);
+        pendingTables.splice(i, 1);
+        i--;
+        progressed = true;
+      }
+      if (progressed) continue;
+      // No satisfiable node left (a wave-2 type waiting on a view, or an
+      // impossible cycle): flush the rest in dependency order, best effort.
+      for (const node of pendingWave2) emitWave2Node(node);
+      pendingWave2.length = 0;
+      for (const table of pendingTables.splice(0)) await emitTable(table);
     }
+    if (emittedWave2Heading) emit("");
 
     // AgentDash (GH #907): views, and functions that need a relation (a row
     // type in the signature, or a BEGIN ATOMIC body that reads a table or
@@ -1099,22 +1775,17 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       GROUP BY c.conname, srcn.nspname, src.relname, tgtn.nspname, tgt.relname, c.confupdtype, c.confdeltype
       ORDER BY srcn.nspname, src.relname, c.conname
     `;
-    const fks = allForeignKeys.filter(
+    const allIncludedFks = allForeignKeys.filter(
       (fk) => includedTableNames.has(tableKey(fk.source_schema, fk.source_table))
         && includedTableNames.has(tableKey(fk.target_schema, fk.target_table)),
     );
-
-    if (fks.length > 0) {
-      emit("-- Foreign keys");
-      for (const fk of fks) {
-        const srcCols = fk.source_columns.map((c) => `"${c}"`).join(", ");
-        const tgtCols = fk.target_columns.map((c) => `"${c}"`).join(", ");
-        emitStatement(
-          `ALTER TABLE ${quoteQualifiedName(fk.source_schema, fk.source_table)} ADD CONSTRAINT "${fk.constraint_name}" FOREIGN KEY (${srcCols}) REFERENCES ${quoteQualifiedName(fk.target_schema, fk.target_table)} (${tgtCols}) ON UPDATE ${fk.update_rule} ON DELETE ${fk.delete_rule};`,
-        );
-      }
-      emit("");
-    }
+    // A foreign key that names a column added late, on either side, waits for it too.
+    const touchesLateColumn = (schema_name: string, tablename: string, columnNames: string[]) => {
+      const late = deferredColumnNamesByTable.get(tableKey(schema_name, tablename));
+      return late != null && columnNames.some((name) => late.has(name));
+    };
+    // Foreign keys are emitted below, after unique constraints and indexes —
+    // the uniqueness they reference must exist first.
 
     // Unique constraints
     const allUniqueConstraints = await sql<{
@@ -1140,13 +1811,14 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       GROUP BY c.conname, n.nspname, t.relname
       ORDER BY n.nspname, t.relname, c.conname
     `;
-    const uniques = allUniqueConstraints.filter((entry) => includedTableNames.has(tableKey(entry.schema_name, entry.tablename)));
+    const allIncludedUniques = allUniqueConstraints.filter((entry) => includedTableNames.has(tableKey(entry.schema_name, entry.tablename)));
+    const deferredUniques = allIncludedUniques.filter((entry) => touchesLateColumn(entry.schema_name, entry.tablename, entry.column_names));
+    const uniques = allIncludedUniques.filter((entry) => !deferredUniques.includes(entry));
 
     if (uniques.length > 0) {
       emit("-- Unique constraints");
       for (const u of uniques) {
-        const cols = u.column_names.map((c) => `"${c}"`).join(", ");
-        emitStatement(`ALTER TABLE ${quoteQualifiedName(u.schema_name, u.tablename)} ADD CONSTRAINT "${u.constraint_name}" UNIQUE${u.nulls_not_distinct ? " NULLS NOT DISTINCT" : ""} (${cols});`);
+        emitStatement(uniqueConstraintStatement(u));
       }
       emit("");
     }
@@ -1155,7 +1827,8 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     // every loaded row is checked exactly as on the source. NOT VALID ones
     // come after the data (below), as pg_dump does: the rows they never
     // checked would otherwise be refused on load.
-    const validatedChecks = checkConstraints.filter((check) => check.validated);
+    const deferredTableChecks = checkConstraints.filter((check) => touchesLateColumn(check.schema_name, check.tablename, check.column_names));
+    const validatedChecks = checkConstraints.filter((check) => check.validated && !deferredTableChecks.includes(check));
     if (validatedChecks.length > 0) {
       emit("-- Check constraints");
       for (const check of validatedChecks) {
@@ -1178,12 +1851,35 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         )
       ORDER BY schemaname, tablename, indexname
     `;
-    const indexes = allIndexes.filter((entry) => includedTableNames.has(tableKey(entry.schema_name, entry.tablename)));
+    const allIncludedIndexes = allIndexes.filter((entry) => includedTableNames.has(tableKey(entry.schema_name, entry.tablename)));
+    const deferredIndexes = allIncludedIndexes.filter((entry) => deferredColumnNamesByTable.has(tableKey(entry.schema_name, entry.tablename)));
+    const indexes = allIncludedIndexes.filter((entry) => !deferredIndexes.includes(entry));
 
     if (indexes.length > 0) {
       emit("-- Indexes");
       for (const idx of indexes) {
         emitStatement(`${idx.indexdef};`);
+      }
+      emit("");
+    }
+
+    // Foreign keys come after unique constraints and indexes: the uniqueness
+    // an FK references (a UNIQUE constraint or a plain unique index on the
+    // target) must exist first. An FK is deferred when it names a column
+    // added late on either side, or when its target table had an index
+    // deferred — that index may be the uniqueness the FK needs.
+    const deferredIndexTables = new Set(deferredIndexes.map((entry) => tableKey(entry.schema_name, entry.tablename)));
+    const deferredForeignKeys = allIncludedFks.filter(
+      (fk) => touchesLateColumn(fk.source_schema, fk.source_table, fk.source_columns)
+        || touchesLateColumn(fk.target_schema, fk.target_table, fk.target_columns)
+        || deferredIndexTables.has(tableKey(fk.target_schema, fk.target_table)),
+    );
+    const fks = allIncludedFks.filter((fk) => !deferredForeignKeys.includes(fk));
+
+    if (fks.length > 0) {
+      emit("-- Foreign keys");
+      for (const fk of fks) {
+        emitStatement(foreignKeyStatement(fk));
       }
       emit("");
     }
@@ -1195,14 +1891,11 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       const count = await sql.unsafe<{ n: number }[]>(`SELECT count(*)::int AS n FROM ${qualifiedTableName}`);
       if (excludedTableNames.has(currentTableKey) || (count[0]?.n ?? 0) === 0) continue;
 
-      // Get column info for this table
-      const cols = await sql<{ column_name: string; data_type: string }[]>`
-        SELECT column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = ${schema_name} AND table_name = ${tablename}
-        ORDER BY ordinal_position
-      `;
-      const colNames = cols.map((c) => `"${c.column_name}"`).join(", ");
+      // AgentDash (GH #944): the stored (non-generated) columns in attnum
+      // order — generated columns are never read or written, their values
+      // are recomputed from the expression on restore.
+      const cols = (columnsByTable.get(currentTableKey) ?? []).filter((col) => col.generated === "");
+      const colNames = cols.map((c) => quoteIdentifier(c.column_name)).join(", ");
 
       emit(`-- Data for: ${commentSafe(`${schema_name}.${tablename}`)} (${count[0]!.n} rows)`);
 
@@ -1236,9 +1929,9 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       await sql`SELECT set_config('search_path', 'pg_catalog', false)`;
       let columnTypes: { column_name: string; type_name: string }[];
       try {
-        // A domain is unwrapped to its base type (through nested domains): the
-        // table DDL above writes a domain column as its base type, and a base
-        // value still assigns to a domain column if the domain is restored.
+        // A domain is unwrapped to its base type (through nested domains): a
+        // base value still assigns to a domain column when the domain is
+        // restored. Generated columns are skipped — they are never written.
         columnTypes = await sql<{ column_name: string; type_name: string }[]>`
           WITH RECURSIVE resolved AS (
             SELECT a.attname, a.atttypid AS type_oid, a.atttypmod AS type_mod, 0 AS depth
@@ -1246,7 +1939,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = ${schema_name} AND c.relname = ${tablename}
-              AND a.attnum > 0 AND NOT a.attisdropped
+              AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
             UNION ALL
             SELECT r.attname, t.typbasetype, t.typtypmod, r.depth + 1
             FROM resolved r
@@ -1310,8 +2003,9 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
     }
 
     // AgentDash (GH #907): NOT VALID CHECK constraints after the data, still
-    // NOT VALID, so rows that predate them restore as they were.
-    const notValidChecks = checkConstraints.filter((check) => !check.validated);
+    // NOT VALID, so rows that predate them restore as they were. Checks of a
+    // table that gained a column late wait for it, below.
+    const notValidChecks = checkConstraints.filter((check) => !check.validated && !deferredTableChecks.includes(check));
     if (notValidChecks.length > 0) {
       emit("-- Check constraints (NOT VALID)");
       for (const check of notValidChecks) {
@@ -1322,11 +2016,90 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       emit("");
     }
 
-    // AgentDash (GH #907): materialized views (WITH DATA) and what depends on
-    // them, then triggers, after the data so no trigger sees the restore's
-    // own writes. A trigger keeps its enabled state (pg_get_triggerdef does
-    // not carry it).
-    emitSchemaNodes("Materialized views", schemaNodes.afterData);
+    // AgentDash (GH #907, #944): materialized views (WITH DATA), deferred
+    // generated columns (added now, so a stored value is computed once over
+    // fully loaded tables) and whatever depends on either, then triggers —
+    // after the data so no trigger or generation expression sees the
+    // restore's own writes. A trigger keeps its enabled state
+    // (pg_get_triggerdef does not carry it).
+    emitSchemaNodes("Materialized views and deferred columns", schemaNodes.afterData);
+
+    // AgentDash (GH #939, #944): everything that could not go inline and had
+    // to wait until every function and relation exists. pg_dump emits the
+    // same shapes post-table: a column default that calls a later function
+    // becomes ALTER TABLE … ALTER COLUMN … SET DEFAULT; a domain's late
+    // constraints and defaults become ALTER DOMAIN. Generated columns that
+    // needed a later object were added just above as ordered schema nodes.
+    if (deferredPrimaryKeys.length > 0) {
+      emit("-- Primary keys of tables with late columns");
+      for (const p of deferredPrimaryKeys) {
+        const cols = p.column_names.map(quoteIdentifier).join(", ");
+        emit(DEFERRED_SCHEMA_MARKER);
+        emitStatement(
+          `ALTER TABLE ${quoteQualifiedName(p.schema_name, p.tablename)} ADD CONSTRAINT ${quoteIdentifier(p.constraint_name)} PRIMARY KEY (${cols});`,
+        );
+      }
+      emit("");
+    }
+    if (deferredUniques.length > 0) {
+      emit("-- Unique constraints of tables with late columns");
+      for (const u of deferredUniques) {
+        emit(DEFERRED_SCHEMA_MARKER);
+        emitStatement(uniqueConstraintStatement(u));
+      }
+      emit("");
+    }
+    if (deferredTableChecks.length > 0) {
+      emit("-- Check constraints of tables with late columns");
+      for (const check of deferredTableChecks) {
+        emit(DEFERRED_SCHEMA_MARKER);
+        emitStatement(
+          `ALTER TABLE ${quoteQualifiedName(check.schema_name, check.tablename)} ADD CONSTRAINT ${quoteIdentifier(check.constraint_name)} ${check.definition};`,
+        );
+      }
+      emit("");
+    }
+    if (deferredIndexes.length > 0) {
+      emit("-- Indexes of tables with late columns");
+      for (const idx of deferredIndexes) {
+        emit(DEFERRED_SCHEMA_MARKER);
+        emitStatement(`${idx.indexdef};`);
+      }
+      emit("");
+    }
+    // Deferred foreign keys come last among the constraint kinds: one may
+    // reference a deferred unique constraint or index above.
+    if (deferredForeignKeys.length > 0) {
+      emit("-- Foreign keys of tables with late columns");
+      for (const fk of deferredForeignKeys) {
+        emit(DEFERRED_SCHEMA_MARKER);
+        emitStatement(foreignKeyStatement(fk));
+      }
+      emit("");
+    }
+    if (deferredDomainDefaults.length > 0 || deferredDomainConstraints.length > 0) {
+      emit("-- Domain alterations");
+      for (const domain of deferredDomainDefaults) {
+        emitStatement(
+          `ALTER DOMAIN ${quoteQualifiedName(domain.schema_name, domain.domain_name)} SET DEFAULT ${domain.default_expr};`,
+        );
+      }
+      for (const constraint of deferredDomainConstraints) {
+        emitStatement(
+          `ALTER DOMAIN ${quoteQualifiedName(constraint.schema_name, constraint.domain_name)} ADD CONSTRAINT ${quoteIdentifier(constraint.constraint_name)} ${constraint.definition};`,
+        );
+      }
+      emit("");
+    }
+    if (deferredDefaults.length > 0) {
+      emit("-- Column defaults that call a later object");
+      for (const col of deferredDefaults) {
+        emitStatement(
+          `ALTER TABLE ${quoteQualifiedName(col.schema_name, col.tablename)} ALTER COLUMN ${quoteIdentifier(col.column_name)} SET DEFAULT ${col.column_default};`,
+        );
+      }
+      emit("");
+    }
 
     if (triggers.length > 0) {
       emit("-- Triggers");
