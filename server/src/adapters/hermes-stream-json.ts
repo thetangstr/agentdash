@@ -270,6 +270,15 @@ export function createHermesStreamJsonCapture() {
       return usage.inputTokens > 0 || usage.outputTokens > 0 ? usage : null;
     },
     /**
+     * A dollar cost only if the stream's result event states one explicitly
+     * (`cost_usd`). Current Hermes reports tokens only, so this is usually null.
+     */
+    streamCostUsd(): number | null {
+      const final = asRecord(resultEvent);
+      const cost = final?.cost_usd;
+      return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : null;
+    },
+    /**
      * Put the stream's answer, session and error on the result. A run that
      * never produced a stream event (old Hermes, or it died before init) is
      * returned untouched. Usage is left to the ledger.
@@ -288,9 +297,13 @@ export function createHermesStreamJsonCapture() {
       } else {
         delete patched.summary;
       }
-      // The vendored adapter regex-scans stdout for token counts; over JSONL
-      // that is noise. The session ledger is the source of truth.
+      // The vendored adapter regex-scans stdout+stderr for token counts and a
+      // cost ("cost: 12", "spent 3 minutes" both read as dollars). Over a JSONL
+      // stream that includes every tool's output, so both guesses are noise,
+      // and applyHermesSessionUsage would prefer that cost over the ledger's.
+      // The session ledger is the only usage and cost source.
       delete patched.usage;
+      delete patched.costUsd;
 
       if (sessionId && options.persistSession) {
         patched.sessionParams = { ...(asRecord(result.sessionParams) ?? {}), sessionId };
@@ -307,6 +320,7 @@ export function createHermesStreamJsonCapture() {
         result: finalText,
         session_id: sessionId ?? existingJson.session_id ?? null,
         usage: null,
+        cost_usd: null,
         output_format: "stream-json",
       };
       return patched;
@@ -323,15 +337,21 @@ export function createHermesStreamJsonCapture() {
 export function applyHermesStreamUsageFallback(
   result: AdapterExecutionResult,
   streamUsage: HermesStreamUsage | null,
+  streamCostUsd: number | null = null,
 ): AdapterExecutionResult {
   if (result.usage || !streamUsage) return result;
   const resultJson = asRecord(result.resultJson) ?? {};
+  // num_turns is deliberately not carried: heartbeat diffs it as a cumulative
+  // session counter, and this Hermes stream does not report one anyway.
+  const explicitCost = result.costUsd == null && streamCostUsd !== null ? { costUsd: streamCostUsd } : {};
   return {
     ...result,
+    ...explicitCost,
     usage: { ...streamUsage },
     resultJson: {
       ...resultJson,
       usage: { ...streamUsage },
+      ...(streamCostUsd !== null ? { cost_usd: streamCostUsd } : {}),
       usageBasis: "per_run",
       meteringStatus: "adapter_reported",
       ledgerMeteringStatus: resultJson.meteringStatus ?? null,

@@ -878,7 +878,9 @@ async function executeHermesFailClosed(
   const metered = await withHermesSessionUsage(sanitizeHermesExecutionResult(structured), ctx);
   // The session ledger is the source of truth for usage; the stream's per-run
   // counts are only a marked fallback when the ledger could not be read.
-  const result = streamJson ? applyHermesStreamUsageFallback(metered, run.capture.streamUsage()) : metered;
+  const result = streamJson
+    ? applyHermesStreamUsageFallback(metered, run.capture.streamUsage(), run.capture.streamCostUsd())
+    : metered;
   return guard.failClosed(result);
 }
 

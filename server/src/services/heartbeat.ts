@@ -1473,6 +1473,11 @@ export function pickUsageBaseline(
   /** Cumulative session counters, when the baseline run recorded them. */
   numTurns: number | null;
   numToolCalls: number | null;
+  /**
+   * AgentDash: the baseline's totals are an estimate (ledger baseline + a
+   * per-run fallback), not a ledger reading. See deriveUsageDeltaAfterPerRunBaseline.
+   */
+  fromPerRunFallback: boolean;
 } | null {
   for (const row of rows) {
     const totals = readRawUsageTotals(row.usageJson);
@@ -1485,9 +1490,29 @@ export function pickUsageBaseline(
       totals,
       numTurns,
       numToolCalls,
+      fromPerRunFallback: parseObject(row.usageJson).usageSource === "per_run",
     };
   }
   return null;
+}
+
+/**
+ * AgentDash: the delta for a cumulative reading taken after a per-run
+ * fallback row. That row's stored total is the previous ledger total plus the
+ * stream's own per-run count, so it can sit above what the ledger later says
+ * for the same work. A lower reading here is that overlap, not a reset of the
+ * session counter: the reset rule in deriveNormalizedUsageDelta would bill the
+ * whole cumulative value again. Each field is billed only above the stored
+ * total, and the reading becomes the new baseline (its raw totals are stored
+ * as usual), so the overlap is billed zero rather than twice.
+ */
+export function deriveUsageDeltaAfterPerRunBaseline(current: UsageTotals | null, previous: UsageTotals): UsageTotals | null {
+  if (!current) return null;
+  return {
+    inputTokens: Math.max(0, current.inputTokens - previous.inputTokens),
+    cachedInputTokens: Math.max(0, current.cachedInputTokens - previous.cachedInputTokens),
+    outputTokens: Math.max(0, current.outputTokens - previous.outputTokens),
+  };
 }
 
 export function deriveNormalizedUsageDelta(current: UsageTotals | null, previous: UsageTotals | null): UsageTotals | null {
@@ -2670,7 +2695,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
     }
     return {
-      normalizedUsage: deriveNormalizedUsageDelta(rawUsage, previousRawUsage),
+      normalizedUsage:
+        baseline?.fromPerRunFallback && previousRawUsage
+          ? deriveUsageDeltaAfterPerRunBaseline(rawUsage, previousRawUsage)
+          : deriveNormalizedUsageDelta(rawUsage, previousRawUsage),
       storedRawUsage: rawUsage,
       previousRawUsage,
       derivedFromSessionTotals: previousRawUsage !== null,

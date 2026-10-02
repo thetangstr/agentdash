@@ -328,7 +328,7 @@ if (step.ledger) {
   const db = new DatabaseSync(process.env.AGENTDASH_HERMES_STATE_DB);
   db.exec("CREATE TABLE IF NOT EXISTS session_model_usage (session_id TEXT, model TEXT, billing_provider TEXT, api_call_count INTEGER, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, estimated_cost_usd REAL, actual_cost_usd REAL)");
   db.prepare("DELETE FROM session_model_usage WHERE session_id = ?").run(step.ledger.session);
-  db.prepare("INSERT INTO session_model_usage VALUES (?, 'glm-5.3-flash', 'zai', 1, ?, ?, 0, 0, 0)").run(step.ledger.session, step.ledger.input, step.ledger.output);
+  db.prepare("INSERT INTO session_model_usage VALUES (?, 'glm-5.3-flash', 'zai', 1, ?, ?, 0, ?, ?)").run(step.ledger.session, step.ledger.input, step.ledger.output, step.ledger.costUsd || 0, step.ledger.costUsd || 0);
   db.close();
 }
 if (step.requiresNoFormat && argv.includes("--format")) {
@@ -345,7 +345,7 @@ interface PlanStep {
   stderr?: string;
   exit?: number;
   requiresNoFormat?: boolean;
-  ledger?: { session: string; input: number; output: number };
+  ledger?: { session: string; input: number; output: number; costUsd?: number };
 }
 
 function streamRun(sessionId: string, perRun: { input: number; output: number }, events: string[] = []): string {
@@ -464,6 +464,76 @@ describe("hermes_local stream-json: metering, guard and downgrade", () => {
     expect(
       deriveNormalizedUsageDelta({ inputTokens: 1800, cachedInputTokens: 0, outputTokens: 200 }, perRun.storedRawUsage),
     ).toEqual({ inputTokens: 300, cachedInputTokens: 0, outputTokens: 40 });
+  });
+
+  it("takes cost only from the ledger, not from 'spent'/'cost' text in tool output", async () => {
+    const session = "20261001_cost_01";
+    const toolOutput = JSON.stringify({ output: "Build spent 3 minutes; cost: 12 widgets", exit_code: 0, error: null });
+    await setup([
+      {
+        stdout: streamRun(session, { input: 900, output: 90 }, [
+          JSON.stringify({ type: "tool_use", name: "terminal", input: { command: "make" }, timestamp: 4 }),
+          JSON.stringify({ type: "tool_result", name: "terminal", output: toolOutput, is_error: false, timestamp: 5 }),
+        ]),
+        ledger: { session, input: 900, output: 90, costUsd: 0.42 },
+      },
+    ]);
+
+    const result = await runOnce(null);
+
+    expect(result.costUsd).toBe(0.42);
+    expect(result.usage).toMatchObject({ inputTokens: 900, outputTokens: 90 });
+    expect((result.resultJson as Record<string, unknown>).usageBasis).toBeUndefined();
+  });
+
+  it("does not take a cost from tool output in the per-run fallback either", async () => {
+    const session = "20261001_cost_02";
+    const toolOutput = JSON.stringify({ output: "spent 3 minutes, cost: 12", exit_code: 0, error: null });
+    await setup(
+      [
+        {
+          stdout: streamRun(session, { input: 300, output: 30 }, [
+            JSON.stringify({ type: "tool_result", name: "terminal", output: toolOutput, is_error: false, timestamp: 5 }),
+          ]),
+        },
+      ],
+      { ledger: false },
+    );
+
+    const result = await runOnce(null);
+
+    expect(result.resultJson).toMatchObject({ usageBasis: "per_run" });
+    expect(result.costUsd ?? null).toBeNull();
+  });
+
+  it("bills zero for the overlap when a ledger reading comes in below a per-run fallback baseline", async () => {
+    const { pickUsageBaseline, deriveUsageDeltaAfterPerRunBaseline, deriveNormalizedUsageDelta } = await import(
+      "../services/heartbeat.js"
+    );
+    // Run 2 fell back to the stream: stored running total = ledger 1000 + 500.
+    const baseline = pickUsageBaseline([
+      {
+        id: "run-2",
+        usageJson: { inputTokens: 500, rawInputTokens: 1500, rawOutputTokens: 160, usageSource: "per_run" },
+      },
+    ]);
+    expect(baseline?.fromPerRunFallback).toBe(true);
+    // Run 3's ledger says the session total is 1400: run 2 really used 400.
+    const reading = { inputTokens: 1400, cachedInputTokens: 0, outputTokens: 150 };
+    // The plain reset rule would bill all 1400 again...
+    expect(deriveNormalizedUsageDelta(reading, baseline!.totals).inputTokens).toBe(1400);
+    // ...the per-run-aware rule bills nothing for the overlap; 1400 becomes the new baseline.
+    expect(deriveUsageDeltaAfterPerRunBaseline(reading, baseline!.totals)).toEqual({
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+    });
+    // Above the stored total, only the excess is billed.
+    expect(
+      deriveUsageDeltaAfterPerRunBaseline({ inputTokens: 1700, cachedInputTokens: 0, outputTokens: 200 }, baseline!.totals),
+    ).toEqual({ inputTokens: 200, cachedInputTokens: 0, outputTokens: 40 });
+    // A ledger-derived baseline keeps the existing behaviour.
+    expect(pickUsageBaseline([{ id: "run-1", usageJson: { rawInputTokens: 1000 } }])?.fromPerRunFallback).toBe(false);
   });
 
   it("fails the run closed when the clarify fallback arrives JSON-escaped and split across events", async () => {
