@@ -45,6 +45,13 @@ Every stable release publishes an immutable multi-arch image (linux/amd64 and li
 
 `latest` is not touched by releases: `.github/workflows/docker.yml` owns it (tip of `main`, plus `sha-<7>`).
 
+**Hermes pin** (`HERMES_REF` / `HERMES_COMMIT` in the Dockerfile; every PR build runs `scripts/docker/hermes-smoke.sh` on both arches):
+
+| Pin | Commit | Why |
+|-----|--------|-----|
+| `v2026.9.11` | `939e45c9` | First Hermes in the image (#738) |
+| `v2026.9.24` | `f97608f1` | `chat --format stream-json` for structured run transcripts (#962). Ledger schema unchanged (v30); `-p NAME` is now lowercased before validation, mirrored in `hermes-profile-args.ts` |
+
 A stable tag with no image (anything cut before #732, up to `v2026.925.0`) can get one after the fact: dispatch the `Docker` workflow from `main` with `release_tag` set, e.g. `gh workflow run docker.yml --ref main -f release_tag=v2026.924.0`. It builds the tag's commit natively for both platforms and pushes `:vYYYY.MDD.P` and `:YYYY.MDD.P`, and refuses if either tag already exists. It does not edit the GitHub Release body.
 
 `provision-box.sh` checks GHCR for the image before deploying and stops if it is missing. Fallbacks:

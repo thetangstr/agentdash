@@ -192,7 +192,7 @@ function readWrapperProfile(
  * AgentDash: the Hermes root and profile layout, as Hermes itself resolves it
  * (hermes_cli/main.py `_apply_profile_override`, hermes_cli/profiles.py
  * `resolve_profile_env`, hermes_constants.py `get_default_hermes_root`,
- * pinned v2026.9.11).
+ * pinned v2026.9.24).
  *
  * - With a profile (`-p NAME`, or the managed profile), the run's home is
  *   `<root>/profiles/NAME`, where `<root>` is the `HERMES_HOME` the process

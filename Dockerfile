@@ -87,8 +87,8 @@ RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" &
 # scripts/docker/hermes-smoke.sh against the image. Record the bump in the
 # Railway runbook (#675).
 FROM base AS hermes
-ARG HERMES_REF=v2026.9.11
-ARG HERMES_COMMIT=939e45c91d751fadd94dcd1b873ac3cb44846213
+ARG HERMES_REF=v2026.9.24
+ARG HERMES_COMMIT=f97608f178d1ffeca59860195ab7da295f7c8e5f
 COPY --from=uv_source /uv /usr/local/bin/uv
 ENV UV_PYTHON=/usr/bin/python3 \
   UV_PYTHON_DOWNLOADS=never \

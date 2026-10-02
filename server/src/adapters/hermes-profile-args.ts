@@ -29,11 +29,14 @@ function canonicalProfile(raw: string): string | null {
 
 /**
  * The profile Hermes selects from an argv, exactly as its pre-parse does
- * (hermes_cli/main.py `_scan_profile_flag`, pinned v2026.9.11): the FIRST
- * `-p NAME` / `--profile NAME` whose NAME is a valid profile id, or
- * `--profile=NAME`; a `-p` followed by anything else ends the scan with no
- * profile, and so does `--`. Returns the canonical name, `"default"` for the
- * root profile, or null when the argv selects none.
+ * (hermes_cli/main.py `_scan_profile_flag`, pinned v2026.9.24): the FIRST
+ * `-p NAME` / `--profile NAME` whose NAME, trimmed and lowercased, is a valid
+ * profile id, or `--profile=NAME`; a `-p` followed by anything else ends the
+ * scan with no profile, and so does `--`. Returns the canonical name,
+ * `"default"` for the root profile, or null when the argv selects none.
+ *
+ * v2026.9.24 canonicalises the `-p` value before validating it, so `-p Work`
+ * selects `work`; v2026.9.11 rejected it and ended the scan.
  */
 export function hermesProfileFromArgv(tokens: unknown): string | null {
   if (!Array.isArray(tokens)) return null;
@@ -43,8 +46,7 @@ export function hermesProfileFromArgv(tokens: unknown): string | null {
     if (token === "--") return null;
     if (token === "-p" || token === "--profile") {
       const next = tokens[index + 1];
-      if (typeof next === "string" && HERMES_PROFILE_ID.test(next)) return next;
-      return null;
+      return typeof next === "string" ? canonicalProfile(next) : null;
     }
     if (token.startsWith("--profile=")) return canonicalProfile(token.slice("--profile=".length));
   }
