@@ -72,7 +72,16 @@ interface CosStateService {
     nextPhase: "goals" | "plan" | "materializing" | "ready",
     opts?: { proposalMessageId?: string | null },
   ): Promise<unknown>;
+  // Compare-and-set: moves the phase only while it is still `fromPhase`.
+  // Returns null when another reply already moved it.
+  advancePhaseIf(
+    conversationId: string,
+    fromPhase: "goals" | "plan" | "materializing" | "ready",
+    nextPhase: "goals" | "plan" | "materializing" | "ready",
+  ): Promise<unknown | null>;
 }
+
+const PLAN_CARD_KIND = "agent_plan_proposal_v1";
 
 // AgentDash (Phase F): minimal spec view that the cos-replier reads from a
 // deep_interview_specs row. Mirrors the columns the prompt builder needs.
@@ -240,13 +249,21 @@ function isGoalsPatch(
 // AgentDash (first-session stall): a goals-phase reply that announces the
 // plan ("Let me pull together the working plan") without flipping
 // phase_decision used to leave the user waiting for a plan that only came
-// after they nudged the CoS. These two checks let the server treat that reply
-// as an advance once the interview has what the plan needs.
-const PLAN_ANNOUNCEMENT_RE =
-  /\b(?:pull|put|draw|draft|sketch|build|assemble|map|lay|write|work)(?:s|ing|ed)?\b[^.?!\n]{0,40}\b(?:plan|team)\b|\b(?:let me|i'?ll|i will|i'?m going to|going to)\b[^.?!\n]{0,40}\b(?:plan|team)\b/i;
+// after they nudged the CoS. The server treats such a reply as an advance once
+// the interview has what the plan needs. The wording must be about producing a
+// plan or proposal ("put together the plan", "draft a proposal"); a mention of
+// the team ("Let me ask about your current team.") or a question about plans
+// does not count.
+const PLAN_ANNOUNCEMENT_RES = [
+  /\b(?:put|puts|putting|pull|pulls|pulling)\s+together\b[^.?!\n]{0,30}\b(?:plan|proposal)s?\b/i,
+  /\b(?:put|puts|putting|pull|pulls|pulling)\b[^.?!\n]{0,30}\b(?:plan|proposal)s?\b\s+together\b/i,
+  /\b(?:draft|drafts|drafting|build|builds|building|draw up|drawing up|sketch|sketching|prepare|preparing|write up|writing up)\b[^.?!\n]{0,30}\b(?:plan|proposal)s?\b/i,
+];
 
 export function announcesPlan(body: string): boolean {
-  return PLAN_ANNOUNCEMENT_RE.test(body);
+  // Only statements count: a sentence that ends in "?" is asking, not announcing.
+  const statements = body.split(/(?<=[.!?\n])/).filter((sentence) => !sentence.trim().endsWith("?"));
+  return statements.some((sentence) => PLAN_ANNOUNCEMENT_RES.some((re) => re.test(sentence)));
 }
 
 export function goalsReadyForPlan(goals: CosStateRow["goals"]): boolean {
@@ -344,26 +361,46 @@ export function cosReplier(deps: Deps) {
       const { body, trailer } = parseTrailer(text);
       const visibleBody = body.length > 0 ? body : text.trimEnd();
 
+      const post = (messageBody: string) =>
+        deps.conversations.postMessage({
+          conversationId: input.conversationId,
+          authorKind: "agent",
+          authorId: input.cosAgentId,
+          body: messageBody,
+        });
+
       // Posts the plan card, records it as the current proposal, then posts
-      // the visible body that introduces it.
+      // the visible body that introduces it. Throws only when the card itself
+      // could not be posted; once the card is up, a later failure is logged
+      // and the card stands (confirm-plan reads the latest card).
       const postPlan = async (plan: AgentPlanProposalV1Payload, planBody: string) => {
         const cardMsg = await deps.conversations.postMessage({
           conversationId: input.conversationId,
           authorKind: "agent",
           authorId: input.cosAgentId,
           body: "",
-          cardKind: "agent_plan_proposal_v1",
+          cardKind: PLAN_CARD_KIND,
           cardPayload: plan as unknown as Record<string, unknown>,
         });
-        await cosState?.advancePhase(input.conversationId, "plan", {
-          proposalMessageId: cardMsg?.id ?? null,
-        });
-        return deps.conversations.postMessage({
-          conversationId: input.conversationId,
-          authorKind: "agent",
-          authorId: input.cosAgentId,
-          body: planBody,
-        });
+        try {
+          await cosState?.advancePhase(input.conversationId, "plan", {
+            proposalMessageId: cardMsg?.id ?? null,
+          });
+          return await post(planBody);
+        } catch (err) {
+          logger.warn(
+            { err, conversationId: input.conversationId },
+            "cos-replier: plan card posted but recording it or its intro failed",
+          );
+          return cardMsg;
+        }
+      };
+
+      const planCardExists = async (): Promise<boolean> => {
+        if (typeof deps.conversations.hasCard === "function") {
+          return Boolean(await deps.conversations.hasCard(input.conversationId, PLAN_CARD_KIND));
+        }
+        return recent.some((m: any) => m.cardKind === PLAN_CARD_KIND);
       };
 
       // Apply state transitions BEFORE posting messages so subsequent turns see the new phase.
@@ -381,16 +418,37 @@ export function cosReplier(deps: Deps) {
               trailer?.phase_decision === "advance_to_plan" ||
               (goalsReadyForPlan(goals) && announcesPlan(visibleBody));
             if (advance) {
-              await cosState.advancePhase(input.conversationId, "plan");
               // AgentDash (first-session stall): run the plan turn now, in
               // the same reply, so the plan card arrives without the user
-              // having to nudge the CoS.
-              const goalsMsg = await deps.conversations.postMessage({
-                conversationId: input.conversationId,
-                authorKind: "agent",
-                authorId: input.cosAgentId,
-                body: visibleBody,
-              });
+              // having to nudge the CoS. Only the reply that moves the phase
+              // from "goals" to "plan" runs it, and only when no plan card
+              // exists yet, so two messages at once yield one card.
+              const claimed = await cosState.advancePhaseIf(input.conversationId, "goals", "plan");
+              if (!claimed) return await post(visibleBody);
+              // Any exit without a plan card gives the phase back, so the next
+              // message retries the transition cleanly.
+              const release = async (reason: string, err?: unknown) => {
+                logger.warn({ err, conversationId: input.conversationId }, `cos-replier: ${reason}`);
+                try {
+                  await cosState.advancePhaseIf(input.conversationId, "plan", "goals");
+                } catch (releaseErr) {
+                  logger.warn(
+                    { err: releaseErr, conversationId: input.conversationId },
+                    "cos-replier: could not return the phase to goals",
+                  );
+                }
+              };
+              let goalsMsg: unknown;
+              try {
+                goalsMsg = await post(visibleBody);
+                if (await planCardExists()) {
+                  // A plan is already on the table; keep the phase at "plan".
+                  return goalsMsg;
+                }
+              } catch (err) {
+                await release("could not post the goals reply", err);
+                return null;
+              }
               let planText: string;
               try {
                 planText = await deps.llm(
@@ -402,37 +460,35 @@ export function cosReplier(deps: Deps) {
                 );
                 await cosState.recordTurn(input.conversationId);
               } catch (err) {
-                // The goals reply is already posted; the next user turn runs
-                // the plan prompt (phase is now "plan").
-                logger.warn(
-                  { err, conversationId: input.conversationId },
-                  "cos-replier: follow-up plan turn failed",
-                );
+                await release("follow-up plan turn failed", err);
                 return goalsMsg;
               }
               const planReply = parseTrailer(planText);
               const planBody = planReply.body.length > 0 ? planReply.body : planText.trimEnd();
               if (isAgentPlanPayload(planReply.trailer?.plan)) {
-                return postPlan(planReply.trailer!.plan, planBody);
+                try {
+                  return await postPlan(planReply.trailer!.plan, planBody);
+                } catch (err) {
+                  await release("could not post the plan card", err);
+                  return goalsMsg;
+                }
               }
-              logger.warn(
-                { conversationId: input.conversationId },
-                "cos-replier: follow-up plan turn returned no valid plan payload",
-              );
+              await release("follow-up plan turn returned no valid plan payload");
               if (planBody && planBody !== visibleBody) {
-                return deps.conversations.postMessage({
-                  conversationId: input.conversationId,
-                  authorKind: "agent",
-                  authorId: input.cosAgentId,
-                  body: planBody,
-                });
+                try {
+                  return await post(planBody);
+                } catch (err) {
+                  logger.warn({ err, conversationId: input.conversationId }, "cos-replier: could not post the plan reply");
+                }
               }
               return goalsMsg;
             }
           } else if (state.phase === "plan" && trailer) {
             // Plan phase: post visible body + a second message carrying the card.
             if (isAgentPlanPayload(trailer.plan)) {
-              return postPlan(trailer.plan, visibleBody);
+              // Awaited so a failed card post lands in the catch below; the
+              // phase is already "plan", so the next message retries.
+              return await postPlan(trailer.plan, visibleBody);
             }
             if (!trailer.plan) {
               logger.warn(

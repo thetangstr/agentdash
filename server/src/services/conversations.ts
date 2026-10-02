@@ -95,6 +95,16 @@ export function conversationService(db: Db) {
       return true;
     },
 
+    // AgentDash: whether any message of this card kind exists in the conversation.
+    hasCard: async (conversationId: string, cardKind: string) => {
+      const rows = await db
+        .select({ id: assistantMessages.id })
+        .from(assistantMessages)
+        .where(and(eq(assistantMessages.conversationId, conversationId), eq(assistantMessages.cardKind, cardKind)))
+        .limit(1);
+      return rows.length > 0;
+    },
+
     postMessage: async (input: {
       conversationId: string;
       authorKind: "user" | "agent";

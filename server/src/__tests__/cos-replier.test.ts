@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  announcesPlan,
   cosReplier,
   parseTrailer,
   defaultAgentPlanAdapterType,
@@ -159,6 +160,7 @@ describe("cosReplier.reply (phase-aware path)", () => {
       recordTurn: vi.fn().mockResolvedValue(undefined),
       setGoals: vi.fn().mockResolvedValue(undefined),
       advancePhase: vi.fn().mockResolvedValue(undefined),
+      advancePhaseIf: vi.fn().mockResolvedValue({ phase: "plan" }),
     };
     const llm = vi.fn().mockResolvedValue(
       [
@@ -183,7 +185,7 @@ describe("cosReplier.reply (phase-aware path)", () => {
       longTerm: "self-running ops",
       constraints: { teamSize: 12 },
     });
-    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
+    expect(cosState.advancePhaseIf).toHaveBeenCalledWith("conv1", "goals", "plan");
     // Body posted is just the visible part — fenced JSON stripped.
     expect(conversations.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ body: "Got it.", authorKind: "agent" }),
@@ -304,89 +306,233 @@ describe("cosReplier.reply (plan arrives in the same turn)", () => {
     JSON.stringify({ phase_decision: "stay_in_plan", plan: planPayload }),
     "```",
   ].join("\n");
+  const advancingGoalsBody =
+    "So: launch in 90 days, a self-running content engine in a year, two people. Let me pull together the working plan.";
+  const advancingGoalsReply = [
+    advancingGoalsBody,
+    "```json",
+    JSON.stringify({
+      captured: { shortTerm: "launch in 90 days", longTerm: "self-running content engine", constraints: { teamSize: 2, budget: "lean" } },
+      phase_decision: "advance_to_plan",
+    }),
+    "```",
+  ].join("\n");
+  const isPlanPrompt = (input: { system: string }) => input.system.includes("Propose a concrete agent team");
 
-  function setup(goals: Record<string, unknown>, goalsReply: string) {
+  // A conversation + state fake that behaves like the real services: the
+  // phase move is a compare-and-set and hasCard reads what was posted.
+  function makeWorld(initialGoals: Record<string, unknown> = {}) {
+    const posted: any[] = [];
     let n = 0;
+    const world = {
+      phase: "goals" as string,
+      goals: { ...initialGoals } as Record<string, any>,
+      failCardPosts: 0,
+    };
     const conversations = {
-      paginate: vi.fn().mockResolvedValue([{ role: "user", content: "Two of us, small budget, keep it lean." }]),
-      postMessage: vi.fn(async (msg: any) => ({ id: msg.cardKind ? "msg-card" : `msg-${++n}` })),
+      paginate: vi.fn(async () => [{ role: "user", content: "Two of us, small budget, keep it lean." }]),
+      postMessage: vi.fn(async (msg: any) => {
+        if (msg.cardKind && world.failCardPosts > 0) {
+          world.failCardPosts -= 1;
+          throw new Error("db down");
+        }
+        await Promise.resolve();
+        const row = { ...msg, id: msg.cardKind ? `card-${++n}` : `msg-${++n}` };
+        posted.push(row);
+        return row;
+      }),
+      hasCard: vi.fn(async (_id: string, kind: string) => posted.some((m) => m.cardKind === kind)),
     };
     const cosState = {
-      getOrCreate: vi.fn().mockResolvedValue({
+      getOrCreate: vi.fn(async () => ({
         conversationId: "conv1",
-        phase: "goals",
-        goals,
+        phase: world.phase,
+        goals: world.goals,
         proposalMessageId: null,
         turnsInPhase: 3,
+      })),
+      recordTurn: vi.fn(async () => undefined),
+      setGoals: vi.fn(async (_id: string, patch: any) => {
+        world.goals = { ...world.goals, ...patch };
       }),
-      recordTurn: vi.fn().mockResolvedValue(undefined),
-      setGoals: vi.fn().mockResolvedValue(undefined),
-      advancePhase: vi.fn().mockResolvedValue(undefined),
+      advancePhase: vi.fn(async (_id: string, next: string) => {
+        world.phase = next;
+      }),
+      advancePhaseIf: vi.fn(async (_id: string, from: string, next: string) => {
+        await Promise.resolve();
+        if (world.phase !== from) return null;
+        world.phase = next;
+        return { phase: next };
+      }),
     };
-    const llm = vi.fn().mockResolvedValueOnce(goalsReply).mockResolvedValueOnce(planReply);
-    return { conversations, cosState, llm };
+    return { world, posted, conversations, cosState };
   }
 
   it("posts the plan card in the same turn when the goals reply advances", async () => {
-    const goalsBody =
-      "So: launch in 90 days, a self-running content engine in a year, two people. Let me pull together the working plan.";
-    const goalsReply = [
-      goalsBody,
-      "```json",
-      JSON.stringify({
-        captured: { shortTerm: "launch in 90 days", longTerm: "self-running content engine", constraints: { teamSize: 2, budget: "lean" } },
-        phase_decision: "advance_to_plan",
-      }),
-      "```",
-    ].join("\n");
-    const { conversations, cosState, llm } = setup({}, goalsReply);
+    const { posted, conversations, cosState, world } = makeWorld();
+    const llm = vi.fn().mockResolvedValueOnce(advancingGoalsReply).mockResolvedValueOnce(planReply);
 
     await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
 
     expect(llm).toHaveBeenCalledTimes(2);
     // The follow-up turn runs the plan prompt with the goals captured this turn.
     expect(llm.mock.calls[1][0].system).toContain("launch in 90 days");
-    expect(llm.mock.calls[1][0].system).toContain("Propose a concrete agent team");
-    const posted = conversations.postMessage.mock.calls.map(([m]: any[]) => m.cardKind ?? m.body);
-    expect(posted).toEqual([
-      goalsBody,
+    expect(isPlanPrompt(llm.mock.calls[1][0])).toBe(true);
+    expect(posted.map((m) => m.cardKind ?? m.body)).toEqual([
+      advancingGoalsBody,
       "agent_plan_proposal_v1",
       "Here's the team I'd start with. Want me to set them up, or revise?",
     ]);
-    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
-    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan", { proposalMessageId: "msg-card" });
+    expect(cosState.advancePhaseIf).toHaveBeenCalledWith("conv1", "goals", "plan");
+    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan", { proposalMessageId: "card-2" });
+    expect(world.phase).toBe("plan");
   });
 
   it("treats a plan announcement as an advance once the goals are complete, even without the decision flag", async () => {
+    const { posted, conversations, cosState } = makeWorld({ shortTerm: "launch", longTerm: "grow" });
     const goalsReply = [
       "Got it, budget stays lean. Let me pull together the working plan.",
       "```json",
       JSON.stringify({ captured: { constraints: { budget: "lean" } }, phase_decision: "stay_in_goals" }),
       "```",
     ].join("\n");
-    const { conversations, cosState, llm } = setup({ shortTerm: "launch", longTerm: "grow" }, goalsReply);
+    const llm = vi.fn().mockResolvedValueOnce(goalsReply).mockResolvedValueOnce(planReply);
 
     await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
 
     expect(llm).toHaveBeenCalledTimes(2);
-    expect(conversations.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }),
-    );
+    expect(posted.filter((m) => m.cardKind === "agent_plan_proposal_v1")).toHaveLength(1);
+  });
+
+  it("does not treat a mention of the team as a plan announcement", async () => {
+    const { posted, conversations, cosState, world } = makeWorld({ shortTerm: "launch", longTerm: "grow" });
+    const goalsReply = [
+      "Budget noted. Let me ask about your current team.",
+      "```json",
+      JSON.stringify({ captured: { constraints: { budget: "lean" } }, phase_decision: "stay_in_goals" }),
+      "```",
+    ].join("\n");
+    const llm = vi.fn().mockResolvedValueOnce(goalsReply);
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
+
+    expect(llm).toHaveBeenCalledTimes(1);
+    expect(world.phase).toBe("goals");
+    expect(posted.map((m) => m.body)).toEqual(["Budget noted. Let me ask about your current team."]);
   });
 
   it("keeps interviewing when the goals are incomplete", async () => {
+    const { posted, conversations, cosState } = makeWorld();
     const goalsReply = [
       "Launch in 90 days, noted. What does success look like a year out?",
       "```json",
       JSON.stringify({ captured: { shortTerm: "launch" }, phase_decision: "stay_in_goals" }),
       "```",
     ].join("\n");
-    const { conversations, cosState, llm } = setup({}, goalsReply);
+    const llm = vi.fn().mockResolvedValueOnce(goalsReply);
 
     await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
 
     expect(llm).toHaveBeenCalledTimes(1);
-    expect(cosState.advancePhase).not.toHaveBeenCalled();
-    expect(conversations.postMessage).toHaveBeenCalledTimes(1);
+    expect(cosState.advancePhaseIf).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(1);
+  });
+
+  // Review of #953: two messages at once must not yield two plan cards.
+  it("yields one plan card when two messages are answered at once", async () => {
+    const { posted, conversations, cosState } = makeWorld();
+    const llm = vi.fn(async (input: { system: string }) => (isPlanPrompt(input) ? planReply : advancingGoalsReply));
+    const replier = cosReplier({ conversations, llm, cosState } as any);
+
+    await Promise.all([
+      replier.reply({ conversationId: "conv1", cosAgentId: "cos1" }),
+      replier.reply({ conversationId: "conv1", cosAgentId: "cos1" }),
+    ]);
+
+    expect(posted.filter((m) => m.cardKind === "agent_plan_proposal_v1")).toHaveLength(1);
+    // Two goals turns, one plan turn.
+    expect(llm.mock.calls.filter(([input]) => isPlanPrompt(input))).toHaveLength(1);
+  });
+
+  it("skips the plan step when a plan card already exists", async () => {
+    const { posted, conversations, cosState } = makeWorld();
+    posted.push({ id: "old-card", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload });
+    const llm = vi.fn().mockResolvedValueOnce(advancingGoalsReply).mockResolvedValueOnce(planReply);
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
+
+    expect(llm).toHaveBeenCalledTimes(1);
+    expect(posted.filter((m) => m.cardKind === "agent_plan_proposal_v1")).toHaveLength(1);
+  });
+
+  // Review of #953: a failed card post is caught, the phase goes back to
+  // goals, and the next message retries cleanly.
+  it("returns the phase to goals when the plan card cannot be posted, and the next message retries", async () => {
+    const { world, posted, conversations, cosState } = makeWorld();
+    world.failCardPosts = 1;
+    const llm = vi.fn(async (input: { system: string }) => (isPlanPrompt(input) ? planReply : advancingGoalsReply));
+    const replier = cosReplier({ conversations, llm, cosState } as any);
+
+    await expect(replier.reply({ conversationId: "conv1", cosAgentId: "cos1" })).resolves.toBeDefined();
+    expect(cosState.advancePhaseIf).toHaveBeenCalledWith("conv1", "plan", "goals");
+    expect(world.phase).toBe("goals");
+    expect(posted.filter((m) => m.cardKind)).toHaveLength(0);
+
+    await replier.reply({ conversationId: "conv1", cosAgentId: "cos1" });
+    expect(world.phase).toBe("plan");
+    expect(posted.filter((m) => m.cardKind === "agent_plan_proposal_v1")).toHaveLength(1);
+  });
+
+  it("returns the phase to goals when the follow-up plan turn yields no plan", async () => {
+    const { world, posted, conversations, cosState } = makeWorld();
+    const llm = vi.fn().mockResolvedValueOnce(advancingGoalsReply).mockResolvedValueOnce("Hmm, let me think.");
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
+
+    expect(world.phase).toBe("goals");
+    expect(posted.filter((m) => m.cardKind)).toHaveLength(0);
+  });
+
+  it("catches a failed card post in the plan phase and still answers", async () => {
+    const { world, posted, conversations, cosState } = makeWorld();
+    world.phase = "plan";
+    world.failCardPosts = 1;
+    const llm = vi.fn().mockResolvedValueOnce(planReply);
+
+    await expect(
+      cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" }),
+    ).resolves.toBeDefined();
+
+    expect(world.phase).toBe("plan");
+    expect(posted.map((m) => m.body)).toEqual(["Here's the team I'd start with. Want me to set them up, or revise?"]);
+  });
+});
+
+describe("announcesPlan", () => {
+  it("matches plan-specific announcements", () => {
+    for (const text of [
+      "Let me pull together the working plan.",
+      "I'll put together a plan for you.",
+      "Let me put the plan together.",
+      "I'll draft a proposal now.",
+      "Give me a second to draw up a team plan.",
+      "I'm building your plan.",
+    ]) {
+      expect(announcesPlan(text), text).toBe(true);
+    }
+  });
+
+  it("does not match team mentions, questions or plain plan talk", () => {
+    for (const text of [
+      "Let me ask about your current team.",
+      "I'll work with your team on that.",
+      "Tell me about the team you have today.",
+      "What's your plan for hiring?",
+      "Should I put together a plan?",
+      "Do you already have a budget plan?",
+      "Got it. What would you build first?",
+    ]) {
+      expect(announcesPlan(text), text).toBe(false);
+    }
   });
 });

@@ -20,10 +20,27 @@ const ROLE_KEYWORD_RULES: ReadonlyArray<{ role: AgentRole; keywords: readonly st
   { role: "engineer", keywords: ["engineer", "engineering", "developer", "dev", "programmer", "coder", "software", "frontend", "backend", "fullstack", "full_stack", "mobile"] },
 ];
 
-// Roles a plan card may not hand out: there is exactly one Chief of Staff per
-// company (looked up by role), so a proposed "chief_of_staff" hire must not
-// create a second one.
-const RESERVED_ROLES: ReadonlySet<AgentRole> = new Set(["chief_of_staff"]);
+// Roles a plan card may never hand out. The plan card is model-written, so a
+// role that carries authority must not be reachable from it:
+// - "ceo": defaultPermissionsForRole grants canCreateAgents, and the routes
+//   give a CEO agent company-wide authority (agents.ts, issues.ts,
+//   companies.ts, access.ts, workspace-runtime-service-authz.ts).
+// - "chief_of_staff": exactly one per company, looked up by role, and the
+//   onboarding and billing flows act through it.
+// Such a proposal is hired as "general"; its wording survives as the title.
+export const PRIVILEGED_PLAN_ROLES: ReadonlySet<AgentRole> = new Set<AgentRole>(["ceo", "chief_of_staff"]);
+
+// Free-text spellings of the privileged roles ("Chief Executive Officer",
+// "Chief of Staff", "CEO & founder").
+function namesPrivilegedRole(normalized: string): boolean {
+  const tokens = normalized.split("_");
+  return (
+    tokens.includes("ceo") ||
+    normalized.includes("chief_executive") ||
+    normalized.includes("chief_of_staff") ||
+    normalized.includes("chiefofstaff")
+  );
+}
 
 function normalizeRoleText(role: string): string {
   return role.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -39,13 +56,21 @@ function hasKeyword(normalized: string, keyword: string): boolean {
 /** Map a proposed role string to the nearest AGENT_ROLES value ("general" when nothing fits). */
 export function mapProposedAgentRole(proposedRole: string): AgentRole {
   const normalized = normalizeRoleText(proposedRole);
-  if (!normalized) return "general";
+  if (!normalized || namesPrivilegedRole(normalized)) return "general";
+  return withoutPrivilege(matchRole(normalized));
+}
+
+function matchRole(normalized: string): AgentRole {
   const exact = (AGENT_ROLES as readonly string[]).find((role) => role === normalized) as AgentRole | undefined;
-  if (exact) return RESERVED_ROLES.has(exact) ? "general" : exact;
+  if (exact) return exact;
   for (const rule of ROLE_KEYWORD_RULES) {
     if (rule.keywords.some((keyword) => hasKeyword(normalized, keyword))) return rule.role;
   }
   return "general";
+}
+
+function withoutPrivilege(role: AgentRole): AgentRole {
+  return PRIVILEGED_PLAN_ROLES.has(role) ? "general" : role;
 }
 
 /** Human title for a proposed role: "research_analyst" -> "Research Analyst". Free text is kept as written. */

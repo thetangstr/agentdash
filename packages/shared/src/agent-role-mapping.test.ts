@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_ROLES } from "./constants.js";
-import { mapProposedAgentRole, proposedRoleTitle } from "./agent-role-mapping.js";
+import { PRIVILEGED_PLAN_ROLES, mapProposedAgentRole, proposedRoleTitle } from "./agent-role-mapping.js";
 
 describe("mapProposedAgentRole", () => {
   it("maps the roles a live CoS plan proposed onto the role enum", () => {
@@ -25,6 +25,37 @@ describe("mapProposedAgentRole", () => {
     expect(mapProposedAgentRole("")).toBe("general");
     expect(mapProposedAgentRole("customer_happiness")).toBe("general");
     expect(mapProposedAgentRole("guide")).toBe("general");
+  });
+
+  // Review of #953: a model-written plan role must never reach a role that
+  // carries authority (ceo has canCreateAgents and company-wide access).
+  it("maps every privileged role, in any spelling, to general", () => {
+    for (const role of [
+      "ceo",
+      "CEO",
+      " Ceo ",
+      "chief_executive_officer",
+      "Chief Executive Officer",
+      "CEO & founder",
+      "acting-ceo",
+      "chief_of_staff",
+      "Chief of Staff",
+      "CHIEF-OF-STAFF",
+    ]) {
+      expect(mapProposedAgentRole(role)).toBe("general");
+    }
+  });
+
+  it("never returns a privileged role for any input", () => {
+    const inputs = [...AGENT_ROLES, "ceo_assistant", "chief", "executive", "founder", "owner", "admin", "board"];
+    for (const input of inputs) {
+      expect(PRIVILEGED_PLAN_ROLES.has(mapProposedAgentRole(input))).toBe(false);
+    }
+  });
+
+  it("keeps the privileged wording as the title", () => {
+    expect(proposedRoleTitle("ceo")).toBe("CEO");
+    expect(proposedRoleTitle("chief_of_staff")).toBe("Chief Of Staff");
   });
 
   it("always returns a member of AGENT_ROLES", () => {

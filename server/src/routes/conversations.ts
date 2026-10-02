@@ -67,13 +67,18 @@ export function conversationRoutes(db: Db) {
   });
 
   // AgentDash (first-session test, Lane A item 4): a fresh company's inbox used
-  // to open empty, so the founder faced a blank Ask page. When the inbox is
-  // created for a company whose only agent is the Chief of Staff, the CoS opens
-  // the conversation with the interview's first question. Best effort: a
-  // failure here never blocks returning the inbox.
+  // to open empty, so the founder faced a blank Ask page. The CoS opens the
+  // inbox with the interview's first question, but only for a genuinely fresh
+  // company (#953 review):
+  // - no conversation existed before this inbox, so no CoS interview has run
+  //   (cos onboarding state is per conversation, so none exists either) and a
+  //   founder who finished the /cos interview is never greeted again;
+  // - the company has never hired: its only agent, terminated ones included,
+  //   is the Chief of Staff.
+  // Best effort: a failure here never blocks returning the inbox.
   async function postCosOpener(companyId: string, conversationId: string) {
     try {
-      const all = await agents.list(companyId);
+      const all = await agents.list(companyId, { includeTerminated: true });
       const cos = all.find((a: any) => a.role === "chief_of_staff");
       if (!cos || all.some((a: any) => a.role !== "chief_of_staff")) return;
       let companyName: string | null = null;
@@ -120,13 +125,16 @@ export function conversationRoutes(db: Db) {
 
     let conversation = await svc.findByCompany(companyId, { title: COMPANY_INBOX_TITLE });
     if (!conversation) {
+      // Any earlier conversation (e.g. the /cos bootstrap one) means the
+      // company is not fresh: it already has its CoS thread and greeting.
+      const earlierConversation = await svc.findByCompany(companyId);
       conversation = await svc.create({
         companyId,
         userId: req.actor.userId,
         title: COMPANY_INBOX_TITLE,
       });
       await svc.addParticipant(conversation.id, req.actor.userId, "owner");
-      await postCosOpener(companyId, conversation.id);
+      if (!earlierConversation) await postCosOpener(companyId, conversation.id);
     }
     res.json(conversation);
   });
