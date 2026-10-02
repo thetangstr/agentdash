@@ -38,9 +38,14 @@ vi.mock("../api/conversations", () => ({
 
 // Mock useCompany so CoSConversation can read the company context.
 // Tests expect bootstrap path (no company selected), matching original behavior.
+const mockCompanyState = vi.hoisted(() => ({
+  companies: [] as Array<{ id: string }>,
+  selectedCompanyId: null as string | null,
+}));
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
-    selectedCompanyId: null,
+    companies: mockCompanyState.companies,
+    selectedCompanyId: mockCompanyState.selectedCompanyId,
     selectedCompany: null,
     loading: false,
   }),
@@ -103,6 +108,8 @@ describe("CoSConversation", () => {
     root = createRoot(container);
     mockUseMessages.mockReturnValue([]);
     mockBootstrap.mockReset();
+    mockCompanyState.companies = [];
+    mockCompanyState.selectedCompanyId = null;
     mockSendInvites.mockReset();
     mockChatPanelProps.mockClear();
     // On-prem default: no Hermes provider step.
@@ -127,6 +134,22 @@ describe("CoSConversation", () => {
     });
 
     expect(container.textContent).toContain("Setting up your workspace");
+  });
+
+  it("does not bootstrap with no company while the loaded company list has no selection yet", async () => {
+    // AgentDash: in the commit where the company list loads, CompanyProvider has
+    // not auto-selected yet. Bootstrapping then (with no companyId) set up a
+    // Chief of Staff in some other company the user belongs to.
+    mockCompanyState.companies = [{ id: "c-route" }, { id: "c-other" }];
+    mockCompanyState.selectedCompanyId = null;
+    mockBootstrap.mockReturnValue(new Promise(() => {}));
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
+    });
+
+    expect(mockBootstrap).not.toHaveBeenCalled();
   });
 
   it("renders ChatPanel after bootstrap resolves", async () => {
