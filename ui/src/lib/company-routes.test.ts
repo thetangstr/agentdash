@@ -96,6 +96,13 @@ describe("board route roots stay in step with the router", () => {
   });
 });
 
+ it('treats cos (Ask) as a company route so links reach the sidebar Layout', () => {
+ expect(applyCompanyPrefix('/cos', 'ACME')).toBe('/ACME/cos');
+ expect(applyCompanyPrefix('/cos?x=1#y', 'ACME')).toBe('/ACME/cos?x=1#y');
+ expect(extractCompanyPrefixFromPath('/cos')).toBeNull();
+ expect(extractCompanyPrefixFromPath('/ACME/cos')).toBe('ACME');
+ });
+
  it('treats workforce as a company route and preserves its query and brief anchor', () => {
  expect(applyCompanyPrefix('/workforce?agent=a#company-brief', 'ACME')).toBe('/ACME/workforce?agent=a#company-brief');
  });

@@ -1,4 +1,4 @@
-import { Link } from "@/lib/router";
+import { Link, Navigate, useLocation } from "@/lib/router";
 // AgentDash: CoSConversation — onboarding v2 entry point
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import { useCompany } from "../context/CompanyContext";
 import type { CardContext } from "../components/cards";
 import { HermesProviderStep } from "../components/onboarding/HermesProviderStep";
 import { refreshAccessQueries } from "../lib/access-refresh";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
 
 // AgentDash (GH #786): the CoS page header and suggested first messages.
 export const COS_HEADER_LINE = "Tell me what you want built. I'll staff it and ask you only when it's your call.";
@@ -34,7 +35,57 @@ interface BootstrapState {
   conversationId: string;
 }
 
-export function CoSConversation() {
+/**
+ * How the conversation sits on the page.
+ * - "fullscreen": the founder's first session, before any company exists
+ *   (bare /cos during bootstrap). There is no Layout to sit in yet.
+ * - "embedded": Ask inside the company Layout at /:prefix/cos, with the
+ *   sidebar. The chat fills the content area; only the message list scrolls.
+ */
+export type CoSConversationLayout = "fullscreen" | "embedded";
+
+/**
+ * AgentDash: the bare /cos route. Onboarding, emails, the claim hand-off and
+ * older links all point here. Once a company exists, Ask belongs inside the
+ * sidebar Layout, so this redirects to the selected company's /:prefix/cos
+ * (keeping any query or hash). A brand-new founder with no company yet gets
+ * the full-screen bootstrap conversation instead.
+ */
+export function CoSEntryRoute() {
+  const { companies, selectedCompany, loading } = useCompany();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        Setting up your workspace…
+      </div>
+    );
+  }
+
+  const targetCompany = selectedCompany ?? companies[0] ?? null;
+  if (targetCompany) {
+    return (
+      <Navigate
+        to={`/${targetCompany.issuePrefix}/cos${location.search}${location.hash}`}
+        replace
+      />
+    );
+  }
+
+  return <CoSConversation layout="fullscreen" />;
+}
+
+/** AgentDash: Ask at /:prefix/cos, rendered inside the sidebar Layout. */
+export function CoSAskPage() {
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Ask" }]);
+  }, [setBreadcrumbs]);
+  return <CoSConversation layout="embedded" />;
+}
+
+export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConversationLayout } = {}) {
   const { selectedCompanyId, loading: companiesLoading } = useCompany();
   const [bootstrapped, setBootstrapped] = useState<BootstrapState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -204,6 +255,7 @@ export function CoSConversation() {
     <CoSConversationView
       bootstrapped={bootstrapped}
       cardContext={cardContext}
+      layout={layout}
     />
   );
 }
@@ -214,9 +266,11 @@ export function CoSConversation() {
 function CoSConversationView({
   bootstrapped,
   cardContext,
+  layout,
 }: {
   bootstrapped: BootstrapState;
   cardContext: CardContext;
+  layout: CoSConversationLayout;
 }) {
   // #209: feed the composer's @mention typeahead with the company's agents.
   const { data: agents } = useQuery({
@@ -257,22 +311,36 @@ function CoSConversationView({
   }
 
   return (
-    <div className="fixed inset-0 flex flex-col">
-      <div className="border-b px-4 py-2 text-sm"><Link to="/workforce" className="underline">Review hired roles, company knowledge and first jobs</Link></div>
-      <ChatPanel
-        conversationId={bootstrapped.conversationId}
-        companyId={bootstrapped.companyId}
-        cardContext={cardContext}
-        agentDirectory={agentDirectory}
-        headerProps={{ agentRole: COS_HEADER_LINE }}
-        suggestions={COS_SUGGESTED_MESSAGES}
-        emptyState={
-          <div className="rounded-lg border border-border-soft bg-surface-raised p-4 text-sm">
-            <p className="font-medium">{COS_EMPTY_STATE_TITLE}</p>
-            <p className="mt-1 text-text-secondary">{COS_EMPTY_STATE_BODY}</p>
-          </div>
-        }
-      />
+    <div
+      data-testid="cos-conversation"
+      data-layout={layout}
+      className={
+        layout === "embedded"
+          // Fill Layout's <main> content area: a fixed height on mobile (the
+          // page itself scrolls there), the full main height from md up (main
+          // scrolls there, so h-full keeps it from ever needing to). Only the
+          // message list inside ChatPanel scrolls; the composer stays pinned.
+          ? "flex h-[calc(100dvh-10rem)] min-h-[420px] flex-col overflow-hidden rounded-lg border border-border md:h-full md:min-h-0"
+          : "fixed inset-0 flex flex-col"
+      }
+    >
+      <div className="shrink-0 border-b px-4 py-2 text-sm"><Link to="/workforce" className="underline">Review hired roles, company knowledge and first jobs</Link></div>
+      <div className="min-h-0 flex-1">
+        <ChatPanel
+          conversationId={bootstrapped.conversationId}
+          companyId={bootstrapped.companyId}
+          cardContext={cardContext}
+          agentDirectory={agentDirectory}
+          headerProps={{ agentRole: COS_HEADER_LINE }}
+          suggestions={COS_SUGGESTED_MESSAGES}
+          emptyState={
+            <div className="rounded-lg border border-border-soft bg-surface-raised p-4 text-sm">
+              <p className="font-medium">{COS_EMPTY_STATE_TITLE}</p>
+              <p className="mt-1 text-text-secondary">{COS_EMPTY_STATE_BODY}</p>
+            </div>
+          }
+        />
+      </div>
     </div>
   );
 }

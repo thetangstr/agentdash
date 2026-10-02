@@ -103,8 +103,17 @@ test("a new workspace goes through the first run to Home with its first issue as
   expect(engineer?.id).toBe(status.firstIssue.assigneeAgentId);
 
   // Optional planning: the CoS chat, with its header line and suggestions.
+  // Ask lives inside the sidebar Layout at /:prefix/cos, with Ask highlighted.
   await page.getByTestId("home-plan-with-cos").click();
-  await expect(page).toHaveURL(/\/cos$/);
+  await expect(page).toHaveURL(/\/[^/]+\/cos$/);
+  await expect(page.getByTestId("cos-conversation")).toHaveAttribute("data-layout", "embedded");
+  await expect(page.getByRole("link", { name: "Ask", exact: true }).first()).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "Work", exact: true }).first()).toBeVisible();
   await expect(page.getByText("Tell me what you want built.")).toBeVisible();
   await expect(page.getByTestId("chat-suggestions")).toBeVisible();
+
+  // Bare /cos (onboarding, emails) redirects to the company-prefixed Ask.
+  await page.goto(`${BASE_URL}/cos`);
+  await expect(page).toHaveURL(/\/[^/]+\/cos$/);
+  await expect(page.getByTestId("cos-conversation")).toHaveAttribute("data-layout", "embedded");
 });

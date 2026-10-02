@@ -89,7 +89,7 @@ import { SharedArtifactPage } from "./pages/SharedArtifact";
 import { TrialClaimPage } from "./pages/TrialClaim";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
-import { CoSConversation } from "./pages/CoSConversation";
+import { CoSAskPage, CoSEntryRoute } from "./pages/CoSConversation";
 import { MemberOnboardingPage } from "./pages/MemberOnboarding";
 import { ServerUnreachableOverlay } from "@/components/ServerUnreachableOverlay";
 // AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
@@ -134,6 +134,8 @@ function boardRoutes() {
       {/* AgentDash (GH #786): assistant connection instructions until Settings › Connections (#793) */}
       <Route path="connect-assistant" element={<ConnectAssistant />} />
       <Route path="dashboard/live" element={<DashboardLive />} />
+      {/* AgentDash: Ask — the Chief of Staff conversation, inside the sidebar Layout. */}
+      <Route path="cos" element={<CoSAskPage />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
@@ -387,8 +389,11 @@ export function App() {
               path so a brand-new, company-less account can reach it to bind the
               trial workspace. */}
           <Route path="trial/claim" element={<TrialClaimPage />} />
-          {/* AgentDash: CoS onboarding v2 conversation */}
-          <Route path="cos" element={<CoSConversation />} />
+          {/* AgentDash: bare /cos — onboarding, emails and the claim hand-off
+              link here. With a company it redirects to /:prefix/cos (Ask inside
+              the sidebar Layout); a founder with no company yet gets the
+              full-screen bootstrap conversation. */}
+          <Route path="cos" element={<CoSEntryRoute />} />
           {/* AgentDash (GH #786): hosted first run — model key, GitHub, first issue */}
           <Route path="setup" element={<FirstRunPage />} />
           {/* AgentDash (GH #677): OAuth consent for assistant MCP clients.
