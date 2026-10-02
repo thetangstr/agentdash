@@ -10,11 +10,27 @@ const baseMessage = {
   id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   conversationId,
   role: "user" as const,
+  authorUserId: userId,
   content: "Hello world",
   cardKind: null,
   cardPayload: null,
   createdAt: new Date("2026-05-01T00:00:00.000Z"),
 };
+
+const failedReplyCard = {
+  id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  conversationId,
+  role: "agent" as const,
+  cardKind: "cos_dispatch_error_v1",
+  cardPayload: { reason: "x", retryMessageId: baseMessage.id },
+  content: "CoS couldn't reply: x. Retry",
+  createdAt: new Date("2026-05-01T00:00:05.000Z"),
+};
+
+/** The conversation ends on the person's message followed by its failure card. */
+function conversationEndsOnFailedReply(mock: { latestByRole: ReturnType<typeof vi.fn> }) {
+  mock.latestByRole.mockImplementation(async (_id: string, role: string) => (role === "agent" ? failedReplyCard : baseMessage));
+}
 
 const mockConversationService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -25,6 +41,8 @@ const mockConversationService = vi.hoisted(() => ({
   findByCompany: vi.fn(),
   create: vi.fn(),
   addParticipant: vi.fn(),
+  getMessage: vi.fn(),
+  latestByRole: vi.fn(),
 }));
 
 const mockAgentService = vi.hoisted(() => ({
@@ -378,6 +396,227 @@ describe.sequential("conversation routes", () => {
           .send({}),
       );
       expect(res.status).toBe(400);
+    });
+
+    // A Coding Plan that lapses stays pinned; a no-balance failure (Z.AI code
+    // 1113, not a rate limit) re-probes once and, if the pin moved, dispatches again.
+    describe("no-balance failures", () => {
+      const noBalance = new Error(
+        'Adapter "hermes_local" failed ([dispatch-llm] hermes exited 1: HTTP 429: Insufficient balance or no resource package) and the adapter/model invariant refuses to retry.',
+      );
+      const send = async () => {
+        const app = await createApp(boardActor);
+        await requestApp(app, (base) =>
+          request(base).post(`/api/conversations/${conversationId}/messages`).send({ body: "Hello world" }),
+        );
+      };
+
+      it("re-pins the endpoint and dispatches once more before showing an error", async () => {
+        const repinEndpoint = vi.fn().mockResolvedValue({ repinned: true });
+        vi.doMock("../services/hermes-provider-reconcile.js", () => ({ hermesProviderReconciler: () => ({ repinEndpoint }) }));
+        mockDispatchOnMessage.mockRejectedValueOnce(noBalance).mockResolvedValueOnce(undefined);
+        await send();
+        await vi.waitFor(() => expect(mockDispatchOnMessage).toHaveBeenCalledTimes(2));
+        expect(repinEndpoint).toHaveBeenCalledTimes(1);
+        // Only the person's own message was posted: no error card.
+        expect(mockConversationService.postMessage).toHaveBeenCalledTimes(1);
+      });
+
+      it("shows the error card when the pin did not move, and does not loop", async () => {
+        const repinEndpoint = vi.fn().mockResolvedValue({ repinned: false, skipped: "rate_limited" });
+        vi.doMock("../services/hermes-provider-reconcile.js", () => ({ hermesProviderReconciler: () => ({ repinEndpoint }) }));
+        mockAgentService.list.mockResolvedValue([{ id: "cos-agent", role: "chief_of_staff" }]);
+        mockDispatchOnMessage.mockRejectedValue(noBalance);
+        await send();
+        await vi.waitFor(() => expect(mockConversationService.postMessage).toHaveBeenCalledTimes(2));
+        expect(mockDispatchOnMessage).toHaveBeenCalledTimes(1);
+        expect(mockConversationService.postMessage.mock.calls[1]![0]).toMatchObject({
+          cardKind: "cos_dispatch_error_v1",
+          cardPayload: { hint: expect.stringContaining("re-save") },
+        });
+      });
+
+      it("does not re-pin for a rate limit", async () => {
+        const repinEndpoint = vi.fn();
+        vi.doMock("../services/hermes-provider-reconcile.js", () => ({ hermesProviderReconciler: () => ({ repinEndpoint }) }));
+        mockAgentService.list.mockResolvedValue([{ id: "cos-agent", role: "chief_of_staff" }]);
+        mockDispatchOnMessage.mockRejectedValue(new Error("hermes exited 1: HTTP 429: Rate limit reached (code 1302)"));
+        await send();
+        await vi.waitFor(() => expect(mockConversationService.postMessage).toHaveBeenCalledTimes(2));
+        expect(repinEndpoint).not.toHaveBeenCalled();
+        expect(mockConversationService.postMessage.mock.calls[1]![0].cardPayload.hint).toMatch(/limiting requests/);
+      });
+    });
+
+    // Regression (P0, v2026.1002.0): a failed CoS reply used to end in a log
+    // line only, and the chat sat silently on the person's message.
+    it("posts a 'CoS couldn't reply' card with a Retry target when dispatch fails", async () => {
+      mockAgentService.list.mockResolvedValue([{ id: "cos-agent", role: "chief_of_staff" }]);
+      mockDispatchOnMessage.mockRejectedValue(
+        new Error(
+          'Adapter "hermes_local" failed ([dispatch-llm] /usr/local/bin/hermes exited 1: session_id: 20261002_085216_21b463) ' +
+            "and the adapter/model invariant refuses to retry on a different adapter or model. Fix or reconfigure the adapter.",
+        ),
+      );
+      const app = await createApp(boardActor);
+      await requestApp(app, (base) =>
+        request(base)
+          .post(`/api/conversations/${conversationId}/messages`)
+          .send({ body: "Hello world" }),
+      );
+      await vi.waitFor(() => expect(mockConversationService.postMessage).toHaveBeenCalledTimes(2));
+      const failure = mockConversationService.postMessage.mock.calls[1]![0];
+      expect(failure).toMatchObject({
+        conversationId,
+        authorKind: "agent",
+        authorId: "cos-agent",
+        companyId,
+        cardKind: "cos_dispatch_error_v1",
+        cardPayload: { retryMessageId: baseMessage.id },
+      });
+      expect(failure.body).toBe(
+        "CoS couldn't reply: hermes_local: hermes exited 1: session_id: 20261002_085216_21b463. Retry",
+      );
+    });
+  });
+
+  describe("POST /:id/messages/:messageId/retry", () => {
+    it("re-dispatches the person's message without posting it again", async () => {
+      mockConversationService.getMessage.mockResolvedValue(baseMessage);
+      conversationEndsOnFailedReply(mockConversationService);
+      const app = await createApp(boardActor);
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(res.status).toBe(202);
+      await vi.waitFor(() =>
+        expect(mockDispatchOnMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ messageId: baseMessage.id, conversationId, companyId, body: "Hello world" }),
+        ),
+      );
+      expect(mockConversationService.getMessage).toHaveBeenCalledWith(conversationId, baseMessage.id);
+      expect(mockConversationService.postMessage).not.toHaveBeenCalled();
+    });
+
+    it("refuses to retry an agent message or one from another conversation", async () => {
+      const app = await createApp(boardActor);
+      mockConversationService.getMessage.mockResolvedValue({ ...baseMessage, role: "agent" });
+      const agentMsg = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(agentMsg.status).toBe(404);
+      mockConversationService.getMessage.mockResolvedValue(null);
+      const foreign = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(foreign.status).toBe(404);
+      expect(mockDispatchOnMessage).not.toHaveBeenCalled();
+    });
+
+    it("answers 409 unless the newest agent message is the failure card for exactly this message", async () => {
+      mockConversationService.getMessage.mockResolvedValue(baseMessage);
+      const app = await createApp(boardActor);
+      const retry = () =>
+        requestApp(app, (base) =>
+          request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+        );
+      // The CoS did reply (newest agent message is a normal reply).
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) =>
+        role === "agent" ? { ...failedReplyCard, cardKind: null, cardPayload: null } : baseMessage,
+      );
+      expect((await retry()).status).toBe(409);
+      // The card belongs to another message.
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) =>
+        role === "agent" ? { ...failedReplyCard, cardPayload: { retryMessageId: "someone-else" } } : baseMessage,
+      );
+      expect((await retry()).status).toBe(409);
+      // The person has since sent a newer message.
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) =>
+        role === "agent" ? failedReplyCard : { ...baseMessage, id: "newer" },
+      );
+      expect((await retry()).status).toBe(409);
+      expect(mockDispatchOnMessage).not.toHaveBeenCalled();
+    });
+
+    // The "CoS hasn't replied" Retry: a dispatch that hung or died leaves no error card.
+    it("accepts a Retry for a message nothing replied to once it is overdue, and refuses it while recent or answered", async () => {
+      const app = await createApp(boardActor);
+      const retry = () =>
+        requestApp(app, (base) =>
+          request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+        );
+      const old = { ...baseMessage, createdAt: new Date(Date.now() - 200_000) };
+      mockConversationService.getMessage.mockResolvedValue(old);
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) => (role === "agent" ? null : old));
+      expect((await retry()).status).toBe(202);
+      await vi.waitFor(() => expect(mockDispatchOnMessage).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Too recent: the reply may still be on its way.
+      const recent = { ...baseMessage, createdAt: new Date(Date.now() - 5_000) };
+      mockConversationService.getMessage.mockResolvedValue(recent);
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) => (role === "agent" ? null : recent));
+      expect((await retry()).status).toBe(409);
+
+      // Answered: an agent message came after it.
+      mockConversationService.getMessage.mockResolvedValue(old);
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) =>
+        role === "agent" ? { ...failedReplyCard, cardKind: null, cardPayload: null, createdAt: new Date() } : old,
+      );
+      expect((await retry()).status).toBe(409);
+      expect(mockDispatchOnMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets only one retry per conversation run at a time (two tabs)", async () => {
+      mockConversationService.getMessage.mockResolvedValue(baseMessage);
+      conversationEndsOnFailedReply(mockConversationService);
+      let release: () => void = () => undefined;
+      mockDispatchOnMessage.mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+      const app = await createApp(boardActor);
+      const retry = () =>
+        requestApp(app, (base) =>
+          request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+        );
+      expect((await retry()).status).toBe(202);
+      expect((await retry()).status).toBe(409);
+      release();
+      await vi.waitFor(async () => expect((await retry()).status).toBe(202));
+      release();
+      expect(mockDispatchOnMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a teammate retrying someone else's message, and a legacy message with no recorded author", async () => {
+      const app = await createApp(boardActor);
+      mockConversationService.getMessage.mockResolvedValue({ ...baseMessage, authorUserId: "someone-else" });
+      const other = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(other.status).toBe(403);
+      mockConversationService.getMessage.mockResolvedValue({ ...baseMessage, authorUserId: null });
+      const legacy = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(legacy.status).toBe(403);
+      expect(mockDispatchOnMessage).not.toHaveBeenCalled();
+    });
+
+    it("keeps the company-access check on retry", async () => {
+      mockConversationService.getMessage.mockResolvedValue(baseMessage);
+      conversationEndsOnFailedReply(mockConversationService);
+      const app = await createApp({ ...boardActor, companyIds: ["other-company"] });
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(res.status).toBe(403);
+      expect(mockDispatchOnMessage).not.toHaveBeenCalled();
+    });
+
+    it("rejects anonymous callers", async () => {
+      const app = await createApp(noActor);
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(res.status).toBe(401);
     });
   });
 

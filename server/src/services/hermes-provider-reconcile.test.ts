@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hermesProviderReconciler } from "./hermes-provider-reconcile.js";
+import { hermesProviderReconciler, resetRepinRateLimit } from "./hermes-provider-reconcile.js";
 import { HERMES_PROVIDER_MARKER } from "./hermes-provider-setup.js";
 
 const KEY = "zai-reconcile-key-0123456789";
@@ -20,6 +20,8 @@ describe("hermesProviderReconciler", () => {
     return hermesProviderReconciler({} as never, {
       setup: {
         env: {},
+        // Any probe is a rate limit: inconclusive, changes nothing, never leaves the machine.
+        fetch: (async () => new Response("{}", { status: 429 })) as never,
         profilesDir,
         runHermes: async (args) => {
           if (failOn && args[1] === failOn) throw new Error("boom");
@@ -51,7 +53,7 @@ describe("hermesProviderReconciler", () => {
 
   it("at boot, writes the secret's key into the template and the owner's agent profiles", async () => {
     const result = await reconciler().reconcileAll();
-    expect(result).toEqual({ status: "ok", updated: ["agentdash", PROFILE], failed: [] });
+    expect(result).toMatchObject({ status: "ok", updated: ["agentdash", PROFILE], failed: [], repinned: false });
     expect(await readFile(join(profilesDir, PROFILE, ".env"), "utf8")).toBe(`GLM_API_KEY=${KEY}\n`);
   });
 
@@ -72,5 +74,14 @@ describe("hermesProviderReconciler", () => {
     const result = await reconciler("company-2").reconcileAgent(AGENT);
     expect(result?.status).toBe("not_configured");
     expect(existsSync(join(profilesDir, PROFILE, ".env"))).toBe(false);
+  });
+
+  it("repinEndpoint only acts for the company that owns the template, and at most once per interval", async () => {
+    resetRepinRateLimit();
+    expect(await reconciler().repinEndpoint("company-2")).toEqual({ repinned: false, skipped: "not_configured" });
+    // The skipped call did not spend the rate limit.
+    expect(await reconciler().repinEndpoint("company-1")).toEqual({ repinned: false });
+    expect(await reconciler().repinEndpoint("company-1")).toEqual({ repinned: false, skipped: "rate_limited" });
+    resetRepinRateLimit();
   });
 });

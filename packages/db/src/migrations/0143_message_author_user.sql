@@ -1,0 +1,1 @@
+ALTER TABLE "assistant_messages" ADD COLUMN "author_user_id" text;

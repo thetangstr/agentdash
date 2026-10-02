@@ -6,6 +6,8 @@ import { ClipboardList } from "lucide-react";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
 import { agentsApi } from "../api/agents";
+import { authApi } from "../api/auth";
+import { queryKeys } from "../lib/queryKeys";
 import { conversationsApi } from "../api/conversations";
 import { useCompany } from "../context/CompanyContext";
 import type { CardContext } from "../components/cards";
@@ -340,6 +342,14 @@ function CoSConversationView({
     queryFn: () => agentsApi.list(bootstrapped.companyId),
     staleTime: 5 * 60 * 1000,
   });
+  // AgentDash: who is viewing, so Retry on a failed reply is offered only for
+  // their own messages.
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+    retry: false,
+  });
+  const viewerUserId = session?.user?.id ?? session?.session?.userId ?? null;
   const agentDirectory = (agents ?? []).map((a) => ({
     id: a.id,
     name: a.name,
@@ -394,6 +404,8 @@ function CoSConversationView({
           companyId={bootstrapped.companyId}
           cardContext={cardContext}
           agentDirectory={agentDirectory}
+          viewerUserId={viewerUserId}
+          hasChiefOfStaff={Boolean(bootstrapped.cosAgentId)}
           padComposerForSafeArea={layout === "fullscreen"}
           headerProps={{
             agentRole: COS_HEADER_LINE,

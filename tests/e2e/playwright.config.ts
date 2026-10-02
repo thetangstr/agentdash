@@ -15,7 +15,8 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   // These suites target dedicated multi-user configurations/ports and are
   // intentionally not part of the default local_trusted e2e run.
-  testIgnore: ["multi-user.spec.ts", "multi-user-authenticated.spec.ts", "uat-*.spec.ts", "claim-link.spec.ts"],
+  // cos-dispatch-failure runs with playwright-cos-dispatch.config.ts (fake Hermes).
+  testIgnore: ["multi-user.spec.ts", "multi-user-authenticated.spec.ts", "uat-*.spec.ts", "claim-link.spec.ts", "cos-dispatch-failure.spec.ts"],
   timeout: 60_000,
   retries: 0,
   // GH #782/#786: stub of GitHub's REST API shared by github-connect and first-run specs.

@@ -260,10 +260,40 @@ describe("conversationService WS bus emission", () => {
     );
   });
 
-  it("postMessage does NOT emit when companyId is omitted", async () => {
+  // Regression (CoS replies only appeared after a reload): agent posts from
+  // the CoS replier, summoner and onboarding routes omit companyId. The
+  // service resolves it from the conversation so the open chat gets the event.
+  it("postMessage resolves companyId from the conversation and emits when the caller omits it", async () => {
     mockEmitMessageCreated.mockClear();
     const { conversationService } = await import("../services/conversations.js");
-    const svc = conversationService(buildFakeDb());
+    const svc = conversationService(buildFakeDb(fakeMessageRow, [{ companyId: "company-from-conv" } as any]));
+    await svc.postMessage({
+      conversationId: "conv-1",
+      authorKind: "agent",
+      authorId: "cos-1",
+      body: "Here is the reply",
+    });
+    expect(mockEmitMessageCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "msg-1", companyId: "company-from-conv" }),
+    );
+  });
+
+  it("postMessage refuses a companyId that is not the conversation's, and never emits for it", async () => {
+    mockEmitMessageCreated.mockClear();
+    const { conversationService } = await import("../services/conversations.js");
+    const svc = conversationService(buildFakeDb(fakeMessageRow, [{ companyId: "company-from-conv" } as any]));
+    await expect(
+      svc.postMessage({ conversationId: "conv-1", authorKind: "agent", authorId: "cos-1", body: "x", companyId: "other-company" }),
+    ).rejects.toThrow(/does not match the conversation/);
+    expect(mockEmitMessageCreated).not.toHaveBeenCalled();
+    await svc.postMessage({ conversationId: "conv-1", authorKind: "agent", authorId: "cos-1", body: "x", companyId: "company-from-conv" });
+    expect(mockEmitMessageCreated).toHaveBeenCalledWith(expect.objectContaining({ companyId: "company-from-conv" }));
+  });
+
+  it("postMessage does not emit when neither the caller nor the conversation gives a companyId", async () => {
+    mockEmitMessageCreated.mockClear();
+    const { conversationService } = await import("../services/conversations.js");
+    const svc = conversationService(buildFakeDb(fakeMessageRow, []));
     await svc.postMessage({
       conversationId: "conv-1",
       authorKind: "user",

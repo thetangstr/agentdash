@@ -7,12 +7,17 @@ import { AgentPlanProposal } from "./AgentPlanProposal";
 // AgentDash: goals-eval-hitl card stubs (full components ship in Phase F/H)
 import { VerdictReviewCard } from "./VerdictReviewCard";
 import { HumanTasteGateCard } from "./HumanTasteGateCard";
+import { DispatchErrorCard } from "./DispatchErrorCard";
 
 export interface CardContext {
   onProposalConfirm?: () => void;
   onProposalReject?: (reason?: string) => void;
   onInviteSend?: (emails: string[]) => Promise<InviteSendResult | void>;
   onInviteSkip?: () => void;
+  /** AgentDash: re-dispatch a message whose reply failed (dispatch error card). */
+  onDispatchRetry?: (messageId: string) => Promise<void> | void;
+  /** AgentDash: whether this viewer may retry that message (only its author can). */
+  canDispatchRetry?: (messageId: string) => boolean;
 }
 
 export function CardRenderer({
@@ -59,6 +64,12 @@ export function CardRenderer({
       return <VerdictReviewCard payload={payload as any} />;
     case "human_taste_gate":
       return <HumanTasteGateCard payload={payload as any} />;
+    case "cos_dispatch_error_v1":
+      return <DispatchErrorCard payload={payload as any} onRetry={
+          context.canDispatchRetry && payload && typeof (payload as any).retryMessageId === "string" && !context.canDispatchRetry((payload as any).retryMessageId)
+            ? undefined
+            : context.onDispatchRetry
+        } />;
     default:
       return null;
   }
@@ -73,4 +84,5 @@ export {
   // AgentDash: goals-eval-hitl
   VerdictReviewCard,
   HumanTasteGateCard,
+  DispatchErrorCard,
 };

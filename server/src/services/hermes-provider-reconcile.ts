@@ -44,13 +44,47 @@ export function hermesProviderReconciler(db: Db, deps: HermesProviderReconcileDe
     async reconcileAgent(agentId: string) {
       const companyId = await companyOfAgent(agentId);
       if (!companyId) return null;
-      const result = await reconcileHermesProviderFromSecret(companyId, { agentIds: [agentId] }, setup);
+      // probe: "never" — this is awaited on the agent's first run, which must
+      // not wait on up to four provider requests. The boot reconcile pins the
+      // endpoint; the new profile just gets the pinned value.
+      const result = await reconcileHermesProviderFromSecret(companyId, { agentIds: [agentId], probe: "never" }, setup);
       if (result.failed.length > 0) {
         throw new Error(`could not write the provider key into ${result.failed.join(", ")}`);
       }
       return result;
     },
+    /**
+     * A dispatch failed with Z.AI's "no balance" (code 1113): the pinned
+     * endpoint may have lapsed. Probe the endpoints again and pin the one that
+     * answers, in every profile. Rate limited to once per REPIN_INTERVAL_MS per
+     * instance so a persistently empty account does not probe on every message.
+     * Returns whether the pinned endpoint changed (a Retry can then succeed).
+     */
+    async repinEndpoint(
+      forCompanyId: string,
+      now: number = Date.now(),
+    ): Promise<{ repinned: boolean; skipped?: "rate_limited" | "not_configured" }> {
+      // Only the company that owns the template's key can have a lapsed pin on
+      // it; a failure in any other company must not probe or spend the budget.
+      const companyId = await hermesProviderOwner(setup);
+      if (!companyId || companyId !== forCompanyId) return { repinned: false, skipped: "not_configured" };
+      if (lastRepinAt !== null && now - lastRepinAt < REPIN_INTERVAL_MS) return { repinned: false, skipped: "rate_limited" };
+      lastRepinAt = now;
+      const result = await reconcileHermesProviderFromSecret(
+        companyId,
+        { agentIds: await listAgentIds(companyId), probe: "force" },
+        setup,
+      );
+      return { repinned: Boolean(result.repinned) };
+    },
   };
+}
+
+const REPIN_INTERVAL_MS = 10 * 60 * 1000;
+let lastRepinAt: number | null = null;
+/** Test hook. */
+export function resetRepinRateLimit(): void {
+  lastRepinAt = null;
 }
 
 /** Register the provisioning hook and run the boot reconcile (non-fatal, logged). */

@@ -95,6 +95,27 @@ export function conversationService(db: Db) {
       return true;
     },
 
+    // AgentDash: one message, only when it belongs to this conversation.
+    getMessage: async (conversationId: string, messageId: string) => {
+      const rows = await db
+        .select()
+        .from(assistantMessages)
+        .where(and(eq(assistantMessages.id, messageId), eq(assistantMessages.conversationId, conversationId)))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    // AgentDash: the newest message of one role, or null.
+    latestByRole: async (conversationId: string, role: "user" | "agent") => {
+      const rows = await db
+        .select()
+        .from(assistantMessages)
+        .where(and(eq(assistantMessages.conversationId, conversationId), eq(assistantMessages.role, role)))
+        .orderBy(desc(assistantMessages.createdAt), desc(assistantMessages.id))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
     // AgentDash: whether any message of this card kind exists in the conversation.
     hasCard: async (conversationId: string, cardKind: string) => {
       const rows = await db
@@ -114,19 +135,41 @@ export function conversationService(db: Db) {
       cardPayload?: Record<string, unknown> | null;
       companyId?: string;
     }) => {
+      // AgentDash: the conversation decides the company, always. A caller that
+      // names one must name the conversation's; a caller that omits it (the
+      // CoS replier, summoner, onboarding routes) gets it from the conversation
+      // so message.created always reaches open chats.
+      let companyId = input.companyId ?? null;
+      try {
+        const conv = await db
+          .select({ companyId: assistantConversations.companyId })
+          .from(assistantConversations)
+          .where(eq(assistantConversations.id, input.conversationId))
+          .limit(1);
+        const owner = conv[0]?.companyId ?? null;
+        if (owner && input.companyId && input.companyId !== owner) {
+          throw new Error("postMessage: companyId does not match the conversation's company");
+        }
+        companyId = owner ?? companyId;
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("postMessage:")) throw err;
+        // Lookup failed: fall back to the caller's company; a reload still shows the message.
+      }
       const rows = await db
         .insert(assistantMessages)
         .values({
           conversationId: input.conversationId,
           role: input.authorKind,
+          // AgentDash: remember who wrote a person's message (Retry is theirs only).
+          authorUserId: input.authorKind === "user" ? input.authorId : null,
           content: input.body,
           cardKind: input.cardKind ?? null,
           cardPayload: input.cardPayload ?? null,
         })
         .returning();
       const row = rows[0]!;
-      if (input.companyId) {
-        emitMessageCreated({ ...row, companyId: input.companyId });
+      if (companyId) {
+        emitMessageCreated({ ...row, companyId });
       }
       return row;
     },

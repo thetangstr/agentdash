@@ -18,6 +18,8 @@ export interface Message {
   authorKind?: "user" | "agent";
   role?: "user" | "agent"; // upstream column name
   authorId?: string;
+  /** The signed-in person who wrote a user message (null on agent messages and old rows). */
+  authorUserId?: string | null;
   body?: string;
   content?: string; // upstream column name
   cardKind?: string | null;
@@ -37,6 +39,9 @@ export const conversationsApi = {
   },
   post: (id: string, body: string, companyId: string) =>
     api.post<Message>(`/conversations/${id}/messages`, { body, companyId }),
+  /** AgentDash: re-run the reply for one of the person's messages (Retry on a failed reply). */
+  retry: (id: string, messageId: string) =>
+    api.post<{ ok: boolean; messageId: string }>(`/conversations/${id}/messages/${messageId}/retry`, {}),
   read: (id: string, lastReadMessageId: string) =>
     api.patch(`/conversations/${id}/read`, { lastReadMessageId }),
   participants: (id: string) => api.get(`/conversations/${id}/participants`),

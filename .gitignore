@@ -103,3 +103,4 @@ sites/*/out/
 
 # AgentDash: Ross operator scripts are run with python3 -B; ignore bytecode if not
 scripts/ross/__pycache__/
+tests/e2e/fixtures/.fake-hermes-ok

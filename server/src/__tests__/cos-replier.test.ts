@@ -83,6 +83,35 @@ describe("cosReplier.parseTrailer", () => {
 });
 
 describe("cosReplier.reply (legacy single-arg path)", () => {
+  // Regression (CoS replies only appeared after a reload): every CoS post
+  // carries the companyId, so the conversation service publishes
+  // message.created and the open chat shows the reply live.
+  it("posts the reply with the companyId so the open chat gets message.created", async () => {
+    const conversations = {
+      paginate: vi.fn().mockResolvedValue([{ role: "user", content: "Quick check: are you there?" }]),
+      postMessage: vi.fn().mockResolvedValue({ id: "m1" }),
+    };
+    const llm = vi.fn().mockResolvedValue("Yes, I'm here.");
+    await cosReplier({ conversations, llm } as any).reply({ conversationId: "conv1", cosAgentId: "cos1", companyId: "co1" });
+    expect(conversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "conv1", body: "Yes, I'm here.", companyId: "co1" }),
+    );
+  });
+
+  it("keeps a 'CoS couldn't reply' card out of the model's history", async () => {
+    const conversations = {
+      paginate: vi.fn().mockResolvedValue([
+        { role: "agent", content: "CoS couldn't reply: hermes_local: no balance. Retry", cardKind: "cos_dispatch_error_v1" },
+        { role: "user", content: "Quick check: are you there?" },
+      ]),
+      postMessage: vi.fn().mockResolvedValue({ id: "m1" }),
+    };
+    const llm = vi.fn().mockResolvedValue("Yes.");
+    await cosReplier({ conversations, llm } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
+    const sent = llm.mock.calls[0][0].messages as Array<{ content: string }>;
+    expect(sent.map((m) => m.content)).toEqual(["Quick check: are you there?"]);
+  });
+
   it("loads last 20 messages, calls LLM, posts the reply authored by CoS", async () => {
     const conversations = {
       paginate: vi.fn().mockResolvedValue([
@@ -239,19 +268,19 @@ describe("cosReplier.reply (phase-aware path)", () => {
 
     expect(llm.mock.calls[0][0].system).toContain("hermes_local");
 
-    // First postMessage should be the card (empty body, agent_plan_proposal_v1).
+    // The intro comes first so the chat reads it above the card (they used to
+    // be created 2ms apart in the other order, so the card sat above its intro).
     expect(conversations.postMessage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        cardKind: "agent_plan_proposal_v1",
-        cardPayload: planPayload,
+        body: "Here's the team I'd build out — want me to set them up, or revise?",
       }),
     );
-    // Second postMessage should be the visible body.
     expect(conversations.postMessage).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        body: "Here's the team I'd build out — want me to set them up, or revise?",
+        cardKind: "agent_plan_proposal_v1",
+        cardPayload: planPayload,
       }),
     );
     expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan", {
@@ -380,11 +409,11 @@ describe("cosReplier.reply (plan arrives in the same turn)", () => {
     expect(isPlanPrompt(llm.mock.calls[1][0])).toBe(true);
     expect(posted.map((m) => m.cardKind ?? m.body)).toEqual([
       advancingGoalsBody,
-      "agent_plan_proposal_v1",
       "Here's the team I'd start with. Want me to set them up, or revise?",
+      "agent_plan_proposal_v1",
     ]);
     expect(cosState.advancePhaseIf).toHaveBeenCalledWith("conv1", "goals", "plan");
-    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan", { proposalMessageId: "card-2" });
+    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan", { proposalMessageId: "card-3" });
     expect(world.phase).toBe("plan");
   });
 
@@ -491,6 +520,26 @@ describe("cosReplier.reply (plan arrives in the same turn)", () => {
 
     expect(world.phase).toBe("goals");
     expect(posted.filter((m) => m.cardKind)).toHaveLength(0);
+  });
+
+  it("posts the dispatch error card (with Retry target) when the follow-up plan call throws", async () => {
+    const { world, posted, conversations, cosState } = makeWorld();
+    const llm = vi
+      .fn()
+      .mockResolvedValueOnce(advancingGoalsReply)
+      .mockRejectedValueOnce(new Error("hermes exited 1: HTTP 429: Insufficient balance or no resource package"));
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({
+      conversationId: "conv1",
+      cosAgentId: "cos1",
+      companyId: "co1",
+      triggerMessageId: "u1",
+    });
+
+    expect(world.phase).toBe("goals");
+    const card = posted.find((m) => m.cardKind === "cos_dispatch_error_v1");
+    expect(card).toBeDefined();
+    expect(card!.cardPayload).toMatchObject({ retryMessageId: "u1" });
   });
 
   it("catches a failed card post in the plan phase and still answers", async () => {
