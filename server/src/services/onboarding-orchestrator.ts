@@ -291,6 +291,8 @@ export function onboardingOrchestrator(deps: Deps) {
       // wrong company's chat. Refused before anything is written: 403 on
       // every route, 400 on the assessment route (strictCompanyId), which
       // validates its own body. No companyId keeps the legacy behaviour.
+      // Instance admins do NOT bypass this (PR #959 review): a CoS is never
+      // created in a workspace the caller does not belong to.
       if (options.companyId && !requestedMembership) {
         const message = "You are not an active member of that workspace.";
         if (options.strictCompanyId) throw badRequest(message);
