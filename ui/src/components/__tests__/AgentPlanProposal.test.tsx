@@ -71,11 +71,8 @@ describe("AgentPlanProposal", () => {
     expect(setItUp).toBeDefined();
     expect(revise).toBeDefined();
 
-    await act(async () => {
-      setItUp.click();
-    });
-    expect(onConfirm).toHaveBeenCalledOnce();
-
+    // Scan 4, lane N: a confirmed plan disables "Let me revise", so the revise
+    // flow is exercised first and "Set it up" last.
     // PR #210: "Let me revise" no longer fires onRevise immediately — it opens
     // an inline textarea + Send / Cancel form. Exercise the full flow:
     //   1. click "Let me revise" → form opens (textarea + Send button)
@@ -108,6 +105,14 @@ describe("AgentPlanProposal", () => {
     });
     expect(onRevise).toHaveBeenCalledOnce();
     expect(onRevise).toHaveBeenCalledWith("drop the QA");
+
+    // The buttons re-render once the revise form closes; find Set it up again.
+    const setItUpAgain = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("Set it up"))!;
+    await act(async () => {
+      setItUpAgain.click();
+    });
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("Team hired");
 
     await act(async () => {
       root.unmount();
