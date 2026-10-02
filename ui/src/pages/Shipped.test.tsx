@@ -25,6 +25,7 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const { Shipped, SHIPPED_EMPTY_TEXT } = await import("./Shipped");
+const { PHONE_WIDTH, mockViewportWidth } = await import("../lib/test-viewport");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -170,5 +171,47 @@ describe("Shipped page", () => {
     );
     await render();
     expect(container.querySelector('[data-testid="shipped-usage"]')?.textContent).toBe("1.0k tokens · $1.23");
+  });
+
+  describe("on a phone (390px)", () => {
+    let restoreViewport: () => void;
+    beforeEach(() => {
+      restoreViewport = mockViewportWidth(PHONE_WIDTH);
+    });
+    afterEach(() => {
+      restoreViewport();
+    });
+
+    it("renders compact cards: clamped title and state on one row, one meta line, tokens behind a tap", async () => {
+      mockIssuesApi.listShipped.mockResolvedValue(
+        feed([
+          item("5", { title: "A long pull request title" }),
+          item("6", { type: "document", url: null, status: "ready_for_review", reviewState: "needs_board_review", title: "Brief" }),
+        ]),
+      );
+      await render();
+
+      const [row, documentRow] = [...container.querySelectorAll('[data-testid="shipped-row"]')];
+      expect(row!.getAttribute("data-compact")).toBe("true");
+      const title = row!.querySelector('[data-testid="shipped-title"]')!;
+      expect(title.className).toContain("line-clamp-2");
+      expect(title.getAttribute("href")).toBe("https://github.com/acme/web/pull/5");
+      expect(title.parentElement?.querySelector('[data-testid="work-product-state"]')?.className).toContain("text-xs");
+      // Without a URL the title opens the issue.
+      expect(documentRow!.querySelector('a[href="/issues/ACME-6"]')?.textContent).toBe("Brief");
+      const meta = row!.querySelector('[data-testid="shipped-meta"]')!;
+      expect(meta.textContent).toBe(`ACME-5 · Maya · ${meta.textContent!.split(" · ")[2]}`);
+      expect(meta.className).toContain("truncate");
+
+      expect(row!.querySelector('[data-testid="shipped-usage"]')).toBeNull();
+      const toggle = row!.querySelector('[data-testid="shipped-usage-toggle"]') as HTMLButtonElement;
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle.className).toContain("size-11");
+      await act(async () => {
+        toggle.click();
+      });
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(row!.querySelector('[data-testid="shipped-usage"]')?.textContent).toBe("2.5k tokens");
+    });
   });
 });

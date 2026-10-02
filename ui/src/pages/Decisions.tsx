@@ -22,6 +22,7 @@ import { PageSkeleton } from "../components/PageSkeleton";
 import { cn } from "../lib/utils";
 import { DecisionsOtherSources } from "./DecisionsOtherSources";
 import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
+import { useIsPhone } from "../hooks/useIsPhone";
 
 /**
  * AgentDash: UX-7 (GH #788) — one Decisions page instead of Inbox +
@@ -39,6 +40,8 @@ import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
 
 const EMPTY_TEXT =
   "Nothing needs you. Agents ask here before hiring, spending over your limit, or doing anything that cannot be undone, like sending something outside the company.";
+// AgentDash: mobile lists — the phone's one-line empty state.
+export const EMPTY_SHORT_TEXT = "Nothing needs you right now.";
 
 // The badge math the sidebar and this page share lives in
 // hooks/useDecisionsBadge — re-exported here so the page stays its most
@@ -122,6 +125,7 @@ export function Decisions() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [showOther, setShowOther] = useState(false);
+  const isPhone = useIsPhone();
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Decisions" }]);
@@ -176,13 +180,25 @@ export function Decisions() {
       ) : null}
 
       {waiting && decisionsTotal === 0 ? (
-        <div
-          data-testid="decisions-empty"
-          className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-center"
-        >
-          <CircleCheck className="mb-3 h-8 w-8 text-muted-foreground/30" />
-          <p className="max-w-md px-4 text-sm text-muted-foreground">{EMPTY_TEXT}</p>
-        </div>
+        isPhone ? (
+          // AgentDash: mobile lists — one compact line on a phone.
+          <div
+            data-testid="decisions-empty"
+            data-compact="true"
+            className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-xs text-muted-foreground"
+          >
+            <CircleCheck className="h-4 w-4 shrink-0" />
+            <p className="min-w-0 flex-1">{EMPTY_SHORT_TEXT}</p>
+          </div>
+        ) : (
+          <div
+            data-testid="decisions-empty"
+            className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-center"
+          >
+            <CircleCheck className="mb-3 h-8 w-8 text-muted-foreground/30" />
+            <p className="max-w-md px-4 text-sm text-muted-foreground">{EMPTY_TEXT}</p>
+          </div>
+        )
       ) : null}
 
       {decisions.length > 0 ? (

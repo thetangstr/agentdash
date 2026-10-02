@@ -11,7 +11,14 @@ import { EmptyState } from "../components/EmptyState";
 import { TeamViewTabs } from "../components/TeamViewTabs";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { AgentIcon } from "../components/AgentIconPicker";
-import { Download, Maximize2, Minus, Network, Plus, Upload } from "lucide-react";
+import { Download, Maximize2, Minus, MoreHorizontal, Network, Plus, Upload } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useIsPhone } from "../hooks/useIsPhone";
 import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
 
 // Layout constants
@@ -175,6 +182,7 @@ export function OrgChart() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
+  const isPhone = useIsPhone();
 
   const { data: orgTree, isLoading } = useQuery({
     queryKey: queryKeys.org(selectedCompanyId!),
@@ -447,6 +455,43 @@ export function OrgChart() {
     );
   }
 
+  // AgentDash: mobile lists — a phone gets a readable, stacked tree instead of
+  // the pan-and-zoom canvas, whose fitted cards are too small to read at 390px.
+  if (isPhone) {
+    return (
+      <div className="space-y-3">
+        <TeamViewTabs active="org" />
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">
+            {allNodes.length} agent{allNodes.length === 1 ? "" : "s"}
+          </p>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" className="size-11 shrink-0" aria-label="More org chart actions">
+                <MoreHorizontal className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem className="min-h-11" onSelect={() => navigate("/company/import")}>
+                <Upload className="h-4 w-4" />
+                Import company
+              </DropdownMenuItem>
+              <DropdownMenuItem className="min-h-11" onSelect={() => navigate("/company/export")}>
+                <Download className="h-4 w-4" />
+                Export company
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <ul className="space-y-2" data-testid="org-chart-phone-tree" aria-label="Org chart">
+          {(orgTree ?? []).map((node) => (
+            <PhoneOrgTreeNode key={node.id} node={node} depth={0} agentMap={agentMap} />
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-[calc(100dvh-9rem)] min-h-[420px] flex-col md:h-full md:min-h-0">
       <TeamViewTabs active="org" className="mb-3 shrink-0" />
@@ -632,4 +677,64 @@ const roleLabels: Record<string, string> = AGENT_ROLE_LABELS;
 
 function roleLabel(role: string): string {
   return roleLabels[role] ?? role;
+}
+
+/** Indentation stops growing past this depth so deep trees stay readable at 390px. */
+const PHONE_TREE_MAX_INDENT_DEPTH = 3;
+
+function PhoneOrgTreeNode({
+  node,
+  depth,
+  agentMap,
+}: {
+  node: OrgNode;
+  depth: number;
+  agentMap: Map<string, Agent>;
+}) {
+  const agent = agentMap.get(node.id);
+  const dotColor = statusDotColor[node.status] ?? defaultDotColor;
+  const reports = node.reports ?? [];
+  return (
+    <li data-testid="org-chart-phone-node" data-depth={depth}>
+      <Link
+        to={agent ? agentUrl(agent) : `/agents/${node.id}`}
+        className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-inherit no-underline shadow-sm transition-colors hover:border-foreground/20"
+      >
+        <span className="relative shrink-0">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-muted">
+            <AgentIcon icon={agent?.icon} className="h-4 w-4 text-foreground/70" />
+          </span>
+          <span
+            className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card"
+            style={{ backgroundColor: dotColor }}
+            aria-hidden="true"
+          />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="break-words text-sm font-semibold leading-tight text-foreground">{node.name}</span>
+          <span className="mt-0.5 break-words text-xs leading-tight text-muted-foreground">
+            {agent?.title ?? roleLabel(node.role)}
+          </span>
+        </span>
+        {reports.length > 0 ? (
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {reports.length} {reports.length === 1 ? "report" : "reports"}
+          </span>
+        ) : null}
+      </Link>
+      {reports.length > 0 ? (
+        <ul
+          className={
+            depth < PHONE_TREE_MAX_INDENT_DEPTH
+              ? "ml-4 mt-2 space-y-2 border-l border-border pl-3"
+              : "mt-2 space-y-2"
+          }
+        >
+          {reports.map((child) => (
+            <PhoneOrgTreeNode key={child.id} node={child} depth={depth + 1} agentMap={agentMap} />
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  );
 }

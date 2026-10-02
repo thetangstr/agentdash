@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrgChart } from "./OrgChart";
+import { PHONE_WIDTH, mockViewportWidth } from "../lib/test-viewport";
 
 const navigateMock = vi.fn();
 const orgMock = vi.fn();
@@ -261,5 +262,59 @@ describe("OrgChart mobile gestures", () => {
     });
 
     expect(layer.style.transform).toBe("translate(-45px, 40px) scale(1.5)");
+  });
+});
+
+describe("OrgChart on a phone (390px)", () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  let queryClient: QueryClient;
+  let restoreViewport: () => void;
+
+  beforeEach(() => {
+    restoreViewport = mockViewportWidth(PHONE_WIDTH);
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    orgMock.mockResolvedValue(orgTree);
+    listMock.mockResolvedValue(agents);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    document.body.innerHTML = "";
+    restoreViewport();
+    vi.clearAllMocks();
+  });
+
+  it("renders a stacked, indented tree instead of the pan-and-zoom canvas", async () => {
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <OrgChart />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="org-chart-viewport"]')).toBeNull();
+    const tree = container.querySelector('[data-testid="org-chart-phone-tree"]')!;
+    expect(tree).not.toBeNull();
+    const nodes = Array.from(tree.querySelectorAll('[data-testid="org-chart-phone-node"]'));
+    expect(nodes.map((node) => node.getAttribute("data-depth"))).toEqual(["0", "1"]);
+    // The report is nested inside its manager's node, one level in.
+    expect(nodes[0]!.contains(nodes[1]!)).toBe(true);
+    expect(nodes[0]!.querySelector("a")?.getAttribute("href")).toBe("/agents/ceo");
+    expect(nodes[1]!.textContent).toContain("Engineer");
+
+    // Import and Export live in the ⋯ menu, not as two wide buttons.
+    expect(container.querySelector('[aria-label="More org chart actions"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Import company");
+    expect(container.textContent).not.toContain("Export company");
   });
 });

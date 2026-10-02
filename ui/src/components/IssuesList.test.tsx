@@ -8,6 +8,7 @@ import type { Issue } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IssuesList, isGroupOptionAvailableInView, resolveEffectiveGroupBy } from "./IssuesList";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PHONE_WIDTH, mockViewportWidth } from "../lib/test-viewport";
 
 const companyState = vi.hoisted(() => ({
   selectedCompanyId: "company-1",
@@ -1658,6 +1659,74 @@ describe("IssuesList", () => {
 
     act(() => {
       root.unmount();
+    });
+  });
+
+  describe("on a phone (390px)", () => {
+    let restoreViewport: () => void;
+    beforeEach(() => {
+      restoreViewport = mockViewportWidth(PHONE_WIDTH);
+    });
+    afterEach(() => {
+      restoreViewport();
+      document.body.innerHTML = "";
+    });
+
+    it("shows a full-width search, one Filter & view button and +, and always the list view", async () => {
+      // A board picked on a laptop must not reach the phone.
+      localStorage.setItem("paperclip:test-issues-phone", JSON.stringify({ viewMode: "board" }));
+      const issue = createIssue({ id: "issue-phone", identifier: "PAP-9", title: "Phone row issue" });
+
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[issue]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues-phone"
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(container.textContent).toContain("Phone row issue");
+      });
+      expect(mockKanbanBoard).not.toHaveBeenCalled();
+
+      const toolbar = container.querySelector('[data-testid="issues-phone-toolbar"]')!;
+      expect(toolbar).not.toBeNull();
+      expect(container.querySelector('[title="List view"]')).toBeNull();
+      expect(container.querySelector('[title="Board view"]')).toBeNull();
+      expect(container.querySelector('[title="Sort"]')).toBeNull();
+      expect(container.querySelector('[title="Group"]')).toBeNull();
+      const search = toolbar.querySelector('input[aria-label="Search issues"]') as HTMLInputElement;
+      expect(search.parentElement?.className).toContain("w-full");
+      expect(search.className).toContain("h-11");
+
+      const buttons = Array.from(toolbar.querySelectorAll("button"));
+      const filterAndView = buttons.find((button) => button.textContent?.includes("Filter & view"))!;
+      expect(filterAndView.className).toContain("h-11");
+      const create = toolbar.querySelector('button[aria-label="New Issue"]') as HTMLButtonElement;
+      expect(create.className).toContain("size-11");
+
+      await act(async () => {
+        filterAndView.click();
+      });
+      const sheet = document.body.querySelector('[data-testid="issues-phone-view-sheet"]')!;
+      expect(sheet).not.toBeNull();
+      expect(sheet.querySelector('section[aria-label="Sort"]')).not.toBeNull();
+      expect(sheet.querySelector('section[aria-label="Group"]')).not.toBeNull();
+      expect(sheet.textContent).toContain("Filters");
+
+      // The board-only grouping restriction does not apply: the phone is a list.
+      const assignee = Array.from(sheet.querySelectorAll('section[aria-label="Group"] button'))
+        .find((button) => button.textContent === "Assignee") as HTMLButtonElement;
+      expect(assignee.disabled).toBe(false);
+      expect(assignee.className).toContain("min-h-11");
+
+      act(() => {
+        root.unmount();
+      });
     });
   });
 });

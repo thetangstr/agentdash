@@ -95,9 +95,9 @@ export function Shipped() {
             </p>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:flex-nowrap">
           <Select value={projectId} onValueChange={setProjectId}>
-            <SelectTrigger className="h-8 w-[160px] text-xs" aria-label="Filter by project">
+            <SelectTrigger className="h-8 w-[160px] text-xs max-sm:h-11 max-sm:min-w-0 max-sm:flex-1" aria-label="Filter by project">
               <SelectValue placeholder="All projects" />
             </SelectTrigger>
             <SelectContent>
@@ -110,7 +110,7 @@ export function Shipped() {
             </SelectContent>
           </Select>
           <Select value={agentId} onValueChange={setAgentId}>
-            <SelectTrigger className="h-8 w-[160px] text-xs" aria-label="Filter by agent">
+            <SelectTrigger className="h-8 w-[160px] text-xs max-sm:h-11 max-sm:min-w-0 max-sm:flex-1" aria-label="Filter by agent">
               <SelectValue placeholder="All agents" />
             </SelectTrigger>
             <SelectContent>
@@ -146,7 +146,7 @@ export function Shipped() {
       ) : (
         <div className="divide-y divide-border rounded-lg border border-border">
           {items.map((product) => (
-            <ShippedWorkProductRow key={product.id} product={product} />
+            <ShippedWorkProductRow key={product.id} product={product} compactOnPhone />
           ))}
         </div>
       )}
