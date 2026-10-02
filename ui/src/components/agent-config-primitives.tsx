@@ -214,7 +214,7 @@ export function ToggleWithNumber({
           <input
             type="number"
             className="w-16 rounded-md border border-border px-2 py-0.5 bg-transparent outline-none text-xs font-mono text-center"
-            aria-label={[numberPrefix, numberLabel].filter(Boolean).join(" ")}
+            aria-label={`${numberPrefix ?? label} (${numberLabel})`}
             value={number}
             onChange={(e) => onNumberChange(Number(e.target.value))}
           />

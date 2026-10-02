@@ -1259,9 +1259,10 @@ export function NewIssueDialog() {
               <PopoverTrigger asChild>
                 <button
                   className={cn(
-                    "px-1.5 py-0.5 rounded text-xs font-semibold cursor-pointer hover:opacity-80 transition-opacity",
+                    "px-1.5 py-0.5 rounded text-xs font-semibold cursor-pointer hover:opacity-80 transition-opacity max-sm:min-w-11",
                     !dialogCompany?.brandColor && "bg-muted",
                   )}
+                  aria-label={`Company: ${dialogCompany?.name ?? ""}`.trim()}
                   disabled={isSubIssueMode}
                   style={
                     dialogCompany?.brandColor
@@ -1317,6 +1318,7 @@ export function NewIssueDialog() {
               variant="ghost"
               size="icon-xs"
               className="text-muted-foreground"
+              aria-label={expanded ? "Shrink dialog" : "Expand dialog"}
               onClick={() => setExpanded(!expanded)}
               disabled={createIssue.isPending}
             >
@@ -1462,7 +1464,7 @@ export function NewIssueDialog() {
                 <PopoverTrigger asChild>
                   <button
                     type="button"
-                    className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:bg-accent/50 transition-colors"
+                    className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:bg-accent/50 transition-colors max-sm:min-w-11"
                     title="Add reviewer or approver"
                   >
                     <MoreHorizontal className="h-4 w-4" />
@@ -1975,7 +1977,10 @@ export function NewIssueDialog() {
           {/* More (dates) */}
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
-              <button className="inline-flex items-center justify-center rounded-md border border-border p-1 text-xs hover:bg-accent/50 transition-colors text-muted-foreground">
+              <button
+                className="inline-flex items-center justify-center rounded-md border border-border p-1 text-xs hover:bg-accent/50 transition-colors text-muted-foreground max-sm:min-w-11"
+                aria-label="More options"
+              >
                 <MoreHorizontal className="h-3 w-3" />
               </button>
             </PopoverTrigger>

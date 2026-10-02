@@ -156,12 +156,16 @@
 }
 
 @media (pointer: coarse) {
-  button,
-  [role="button"],
-  input,
-  select,
-  textarea,
-  [data-slot="select-trigger"] {
+  /* Checkboxes, switches and radios keep their square or track shape; the
+   * label around them carries the 44px hit area. */
+  :is(
+      button,
+      [role="button"],
+      input:not([type="checkbox"], [type="radio"]),
+      select,
+      textarea,
+      [data-slot="select-trigger"]
+    ):not([data-slot="checkbox"], [role="checkbox"], [role="switch"], [role="radio"]) {
     min-height: 44px;
   }
 
@@ -210,7 +214,8 @@
    * pointer too, so a phone-width window gets the same 44px controls as a
    * phone: form fields (the Input / Textarea / SelectTrigger primitives set
    * this themselves with max-sm:, this also covers raw fields) and buttons.
-   * data-tap-exempt opts out, as for Button below. */
+   * data-tap-exempt opts out, as for Button below. Checkboxes, switches and
+ * radios keep their shape; their label carries the hit area. */
   :is(
       input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"]),
       select,
@@ -218,7 +223,14 @@
       button,
       [role="button"],
       [data-slot="select-trigger"]
-    ):not([data-tap-exempt], [data-slot="toggle"]) {
+    ):not(
+      [data-tap-exempt],
+      [data-slot="toggle"],
+      [data-slot="checkbox"],
+      [role="checkbox"],
+      [role="switch"],
+      [role="radio"]
+    ) {
     min-height: 44px;
   }
 

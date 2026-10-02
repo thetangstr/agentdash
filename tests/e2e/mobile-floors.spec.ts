@@ -5,7 +5,7 @@
  * shipped document, a plan document, a comment thread and one finished run
  * from a fake Claude CLI) through the public API, then opens each main nav
  * screen, the hire form with Advanced open, the issue page, /workforce, the
- * agent Configuration tab, a run transcript and every Settings page, at both
+ * agent Configuration tab, a run transcript, an open dialog and every Settings page, at both
  * phone widths with a fine pointer (plus 390 with touch), and audits the
  * whole page:
  *   - no horizontal page scroll,
@@ -17,7 +17,9 @@
  *   - no two interactive hit areas overlapping, within the same layer (fixed
  *     and sticky bars such as the bottom nav or a docked composer are compared
  *     only with their own contents, since what lies under them depends on the
- *     scroll position).
+ *     scroll position),
+ *   - no checkbox, switch or radio stretched out of shape (its label, not the
+ *     control, carries the 44px hit area).
  *
  * Inline links inside running text are exempt from the tap-target floor
  * (WCAG 2.5.8 "inline" exception). Anything else that has a justified reason to
@@ -221,6 +223,8 @@ type AuditResult = {
   taps: string[];
   unnamed: string[];
   overlaps: string[];
+  /** Checkboxes, switches and radios stretched out of shape (e.g. a 16×44 bar). */
+  misshapen: string[];
 };
 
 /** Runs in the page: overflow, small text, small or unnamed targets, overlapping hit areas. */
@@ -390,7 +394,20 @@ async function audit(page: Page): Promise<AuditResult> {
         }
       }
 
-      return { overflow, overflowers, small, taps, unnamed, overlaps };
+      // A checkbox, switch or radio keeps its square (or padded-square) shape:
+      // a blanket min-height must not stretch it into a bar. Its label carries
+      // the hit area instead.
+      const misshapen: string[] = [];
+      const shaped = "[role=checkbox], [role=switch], [role=radio], input[type=checkbox], input[type=radio]";
+      for (const el of Array.from(document.body.querySelectorAll(shaped))) {
+        if (!isShown(el)) continue;
+        const rect = el.getBoundingClientRect();
+        if (Math.abs(rect.width - rect.height) > 2) {
+          misshapen.push(`${Math.round(rect.width)}x${Math.round(rect.height)} ${describe(el)}`);
+        }
+      }
+
+      return { overflow, overflowers, small, taps, unnamed, overlaps, misshapen };
     },
     { viewportWidth, minTap: MIN_TAP, minFont: MIN_FONT },
   );
@@ -464,6 +481,18 @@ const PAGES: Target[] = [
       await expect(details).toHaveAttribute("open", "");
     },
   },
+  // An open dialog (New issue, from the agent header): Radix hides the page
+  // behind it from assistive tech, so the audit covers the dialog itself.
+  {
+    name: "dialog",
+    path: (s) => `agents/${s.agentId}`,
+    ready: (p) => main(p).getByRole("button", { name: "Assign Task", exact: true }),
+    prepare: async (p) => {
+      await main(p).getByRole("button", { name: "Assign Task", exact: true }).click();
+      await expect(p.getByRole("dialog")).toBeVisible();
+      await settle(p);
+    },
+  },
   { name: "workforce", path: () => "workforce", ready: (p) => main(p).getByRole("heading", { level: 1 }) },
   // A finished run: the readable transcript with inline code.
   {
@@ -534,6 +563,7 @@ test.describe("Phone floors on every main screen", () => {
           expect.soft(keep(result.taps), "tap targets under 44px").toEqual([]);
           expect.soft(keep(result.unnamed), "interactive elements without an accessible name").toEqual([]);
           expect.soft(keep(result.overlaps), "overlapping hit areas").toEqual([]);
+          expect.soft(keep(result.misshapen), "checkboxes, switches or radios out of shape").toEqual([]);
         });
       }
     });

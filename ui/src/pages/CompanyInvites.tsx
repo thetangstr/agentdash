@@ -204,7 +204,7 @@ export function CompanyInvites() {
                     value={option.value}
                     checked={checked}
                     onChange={() => setHumanRole(option.value)}
-                    className="mt-1 h-4 w-4 border-border text-foreground"
+                    className="mt-1 h-4 w-4 shrink-0 border-border text-foreground"
                   />
                   <span className="min-w-0 space-y-1">
                     <span className="flex flex-wrap items-center gap-2">
@@ -229,7 +229,7 @@ export function CompanyInvites() {
             type="checkbox"
             checked={autoApprove}
             onChange={(event) => setAutoApprove(event.target.checked)}
-            className="mt-1 h-4 w-4 border-border text-foreground"
+            className="mt-1 h-4 w-4 shrink-0 border-border text-foreground"
           />
           <span className="min-w-0 space-y-1">
             <span className="block text-sm font-medium">Auto-approve on accept</span>
