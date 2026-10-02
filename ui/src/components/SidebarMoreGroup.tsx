@@ -63,7 +63,7 @@ export function SidebarMoreGroup() {
         writeSidebarMoreExpanded(storageKey, next);
       }}
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium uppercase tracking-widest font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors">
+      <CollapsibleTrigger data-sidebar-nav-item="" className="flex w-full items-center gap-1.5 px-3 py-1.5 max-sm:min-h-11 text-[10px] font-medium uppercase tracking-widest font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors">
         <ChevronRight className={cn("h-3 w-3 transition-transform", shownOpen && "rotate-90")} />
         More
       </CollapsibleTrigger>

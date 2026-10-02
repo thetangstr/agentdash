@@ -67,7 +67,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
       )}
       aria-label="Mobile navigation"
     >
-      <div className="grid h-16 grid-cols-5 px-1">
+      <div className="grid h-16 grid-cols-5 pl-[max(0.25rem,env(safe-area-inset-left))] pr-[max(0.25rem,env(safe-area-inset-right))]">
         {items.map((item) => {
           if (item.type === "action") {
             const Icon = item.icon;
@@ -78,7 +78,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
                 type="button"
                 onClick={item.onClick}
                 className={cn(
-                  "relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-md text-[10px] font-medium transition-colors",
+                  "relative flex min-h-11 min-w-11 flex-col items-center justify-center gap-1 rounded-md text-xs font-medium transition-colors",
                   active
                     ? "text-foreground"
                     : "text-muted-foreground hover:text-foreground",
@@ -98,7 +98,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
               state={SIDEBAR_SCROLL_RESET_STATE}
               className={({ isActive }) =>
                 cn(
-                  "relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-md text-[10px] font-medium transition-colors",
+                  "relative flex min-h-11 min-w-11 flex-col items-center justify-center gap-1 rounded-md text-xs font-medium transition-colors",
                   isActive
                     ? "text-foreground"
                     : "text-muted-foreground hover:text-foreground",
@@ -110,7 +110,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
                   <span className="relative">
                     <Icon className={cn("h-[18px] w-[18px]", isActive && "stroke-[2.3]")} />
                     {item.badge != null && item.badge > 0 && (
-                      <span className="absolute -right-2 -top-2 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-text-inverse">
+                      <span className="absolute -right-2 -top-2 rounded-full bg-primary px-1.5 py-0.5 text-xs leading-none text-text-inverse">
                         {item.badge > 99 ? "99+" : item.badge}
                       </span>
                     )}

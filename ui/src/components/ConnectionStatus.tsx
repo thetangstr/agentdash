@@ -27,7 +27,7 @@ export function ConnectionStatus() {
         : "Offline";
 
   return (
-    <div className="flex items-center gap-1.5" title={label}>
+    <div className="flex items-center gap-1.5" title={label} data-testid="connection-status" role="status" aria-label={label}>
       <span className={`size-2 rounded-full ${color} shrink-0`} />
       <span className="text-xs text-muted-foreground hidden sm:inline">{label}</span>
     </div>

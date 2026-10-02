@@ -61,7 +61,8 @@ export function SettingsSidebar() {
           onClick={() => {
             if (isMobile) setSidebarOpen(false);
           }}
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          data-sidebar-nav-item=""
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 max-sm:min-h-11 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <ChevronLeft className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">{selectedCompany?.name ?? "Company"}</span>
@@ -98,7 +99,7 @@ export function SettingsSidebar() {
                       state={SIDEBAR_SCROLL_RESET_STATE}
                       className={({ isActive }) =>
                         [
-                          "rounded-md px-2 py-1.5 text-xs transition-colors",
+                          "rounded-md px-2 py-1.5 text-xs transition-colors max-sm:flex max-sm:min-h-11 max-sm:items-center",
                           isActive
                             ? "bg-accent text-foreground"
                             : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",

@@ -29,7 +29,10 @@ function GoalNode({ goal, children, allGoals, depth, goalLink, onSelect }: GoalN
     <>
       {hasChildren ? (
         <button
-          className="p-0.5"
+          type="button"
+          aria-label={expanded ? `Collapse ${goal.title}` : `Expand ${goal.title}`}
+          aria-expanded={expanded}
+          className="p-0.5 max-sm:-my-2 max-sm:-ml-3 max-sm:flex max-sm:h-11 max-sm:w-11 max-sm:shrink-0 max-sm:items-center max-sm:justify-center"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -41,16 +44,22 @@ function GoalNode({ goal, children, allGoals, depth, goalLink, onSelect }: GoalN
           />
         </button>
       ) : (
-        <span className="w-4" />
+        <span className="w-4 shrink-0 max-sm:-ml-3 max-sm:w-11" />
       )}
-      <span className="text-xs text-muted-foreground capitalize">{goal.level}</span>
-      <span className="flex-1 truncate">{goal.title}</span>
-      <StatusBadge status={goal.status} />
+      {/* AgentDash: mobile redesign — on phones the title wraps under the
+          level label instead of truncating; the status badge stays right. */}
+      <span className="flex min-w-0 flex-1 items-center gap-2 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
+        <span className="shrink-0 text-xs text-muted-foreground capitalize">{goal.level}</span>
+        <span className="min-w-0 flex-1 truncate max-sm:whitespace-normal max-sm:break-words">{goal.title}</span>
+      </span>
+      <span className="shrink-0">
+        <StatusBadge status={goal.status} />
+      </span>
     </>
   );
 
   const classes = cn(
-    "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer hover:bg-accent/50",
+    "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer hover:bg-accent/50 max-sm:min-h-11 max-sm:py-2",
   );
 
   return (

@@ -23,7 +23,7 @@ export function SidebarHelpMenu() {
           type="button"
           aria-label="Help"
           title="Help"
-          className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="flex h-8 w-8 max-sm:h-11 max-sm:w-11 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <CircleHelp className="h-4 w-4" />
         </button>

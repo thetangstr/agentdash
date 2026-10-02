@@ -11,6 +11,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { useIsPhone } from "../hooks/useIsPhone";
 import {
   Select,
   SelectContent,
@@ -47,6 +48,7 @@ export function Activity() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [filter, setFilter] = useState("all");
+  const isPhone = useIsPhone();
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Activity" }]);
@@ -121,7 +123,7 @@ export function Activity() {
     <div className="space-y-4">
       <div className="flex items-center justify-end">
         <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger className="w-[140px] h-8 text-xs">
+          <SelectTrigger className="w-[140px] h-8 text-xs max-sm:h-11 max-sm:w-full">
             <SelectValue placeholder="Filter by type" />
           </SelectTrigger>
           <SelectContent>
@@ -151,6 +153,7 @@ export function Activity() {
               userProfileMap={userProfileMap}
               entityNameMap={entityNameMap}
               entityTitleMap={entityTitleMap}
+              layout={isPhone ? "stacked" : "inline"}
             />
           ))}
         </div>

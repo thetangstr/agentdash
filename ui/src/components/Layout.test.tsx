@@ -132,13 +132,23 @@ vi.mock("../context/CompanyContext", () => ({
   }),
 }));
 
+const sidebarState = vi.hoisted(() => ({ isMobile: false }));
+
 vi.mock("../context/SidebarContext", () => ({
   useSidebar: () => ({
-    sidebarOpen: true,
+    sidebarOpen: !sidebarState.isMobile,
     setSidebarOpen: mockSetSidebarOpen,
     toggleSidebar: vi.fn(),
-    isMobile: false,
+    isMobile: sidebarState.isMobile,
   }),
+}));
+
+vi.mock("./ConnectionStatus", () => ({
+  ConnectionStatus: () => <div data-testid="connection-status-stub">Connected</div>,
+}));
+
+vi.mock("./ReportIssueButton", () => ({
+  ReportIssueButton: () => <button type="button">Report</button>,
 }));
 
 vi.mock("../hooks/useKeyboardShortcuts", () => ({
@@ -188,6 +198,7 @@ describe("Layout", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     currentPathname = "/PAP/dashboard";
+    sidebarState.isMobile = false;
     mockHealthApi.get.mockResolvedValue({
       status: "ok",
       deploymentMode: "authenticated",
@@ -297,4 +308,79 @@ describe("Layout", () => {
       });
     },
   );
+
+  // AgentDash: mobile redesign, lane C.
+  async function renderLayout() {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    return root;
+  }
+
+  it("on phones the status dot and report button sit in the sticky header, not over content", async () => {
+    sidebarState.isMobile = true;
+    const root = await renderLayout();
+
+    const cluster = container.querySelector("[data-testid='mobile-status-cluster']");
+    expect(cluster).not.toBeNull();
+    expect(cluster!.textContent).toContain("Connected");
+    expect(cluster!.textContent).toContain("Report");
+    expect(cluster!.parentElement!.className).toContain("sticky");
+    expect(container.querySelector(".fixed.bottom-4.right-4")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("on desktop the status cluster stays fixed bottom-right", async () => {
+    const root = await renderLayout();
+    expect(container.querySelector("[data-testid='mobile-status-cluster']")).toBeNull();
+    const fixed = container.querySelector(".fixed.bottom-4.right-4");
+    expect(fixed?.textContent).toContain("Connected");
+    await act(async () => root.unmount());
+  });
+
+  it("publishes --mobile-bottom-nav-offset: nav height while shown, 0px when hidden on scroll", async () => {
+    sidebarState.isMobile = true;
+    const html = document.documentElement;
+    const root = await renderLayout();
+
+    expect(html.style.getPropertyValue("--mobile-bottom-nav-offset")).toBe(
+      "calc(4rem + env(safe-area-inset-bottom, 0px))",
+    );
+    expect(html.dataset.mobileBottomNav).toBe("visible");
+
+    // Scroll down past the threshold: the nav hides and the offset drops to 0.
+    await act(async () => {
+      Object.defineProperty(window, "scrollY", { configurable: true, value: 400 });
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(html.style.getPropertyValue("--mobile-bottom-nav-offset")).toBe("0px");
+    expect(html.dataset.mobileBottomNav).toBe("hidden");
+
+    // Scroll back up: the nav returns.
+    await act(async () => {
+      Object.defineProperty(window, "scrollY", { configurable: true, value: 100 });
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(html.dataset.mobileBottomNav).toBe("visible");
+
+    await act(async () => root.unmount());
+    expect(html.style.getPropertyValue("--mobile-bottom-nav-offset")).toBe("");
+    expect(html.dataset.mobileBottomNav).toBeUndefined();
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+  });
+
+  it("publishes a 0px offset on desktop, where there is no bottom nav", async () => {
+    const root = await renderLayout();
+    expect(document.documentElement.style.getPropertyValue("--mobile-bottom-nav-offset")).toBe("0px");
+    expect(document.documentElement.dataset.mobileBottomNav).toBe("none");
+    await act(async () => root.unmount());
+  });
 });

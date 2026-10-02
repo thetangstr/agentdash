@@ -181,7 +181,7 @@ function FinanceSummaryCard({
           Account-level charges that do not map to a single inference request.
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-3 px-5 pb-5 pt-2 sm:grid-cols-2 xl:grid-cols-4">
+      <CardContent className="grid grid-cols-1 gap-3 px-5 pb-5 pt-2 sm:grid-cols-2 xl:grid-cols-4">
         <MetricTile
           label="Debits"
           value={formatCents(debitCents)}
@@ -651,7 +651,7 @@ export function Costs() {
                   Hard-stop spend limits for agents and projects. Provider subscription quota stays separate and appears under Providers.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-3 px-5 pb-5 pt-0 md:grid-cols-4">
+              <CardContent className="grid grid-cols-1 gap-3 px-5 pb-5 pt-0 md:grid-cols-4">
                 <MetricTile
                 label="Active incidents"
                 value={String(activeBudgetIncidents.length)}
@@ -687,7 +687,7 @@ export function Costs() {
                   Resolve hard stops here by raising the budget or explicitly keeping the scope paused.
                 </p>
                 </div>
-                <div className="grid gap-4 xl:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 {activeBudgetIncidents.map((incident) => (
                   <BudgetIncidentCard
                     key={incident.id}
@@ -722,7 +722,7 @@ export function Costs() {
                         : "Lifetime spend policies for execution-bound projects."}
                     </p>
                   </div>
-                  <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                     {rows.map((summary) => (
                       <BudgetPolicyCard
                         key={summary.policyId}
@@ -766,7 +766,7 @@ export function Costs() {
                 {providers.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No cost events in this period.</p>
                 ) : (
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   {providers.map((provider) => (
                     <ProviderQuotaCard
                       key={provider}
@@ -821,7 +821,7 @@ export function Costs() {
                 {billers.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No billable events in this period.</p>
                 ) : (
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   {billers.map((biller) => {
                     const row = (byBiller.get(biller) ?? [])[0];
                     if (!row) return null;
@@ -879,14 +879,14 @@ export function Costs() {
               eventCount={financeData?.summary.eventCount ?? 0}
             />
 
-            <div className="grid gap-4 xl:grid-cols-[1.2fr,0.95fr]">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr,0.95fr]">
               <div className="space-y-4">
                 <Card>
                 <CardHeader className="px-5 pt-5 pb-2">
                   <CardTitle className="text-base">By biller</CardTitle>
                   <CardDescription>Account-level financial events grouped by who charged or credited them.</CardDescription>
                 </CardHeader>
-                <CardContent className="grid gap-4 px-5 pb-5 pt-2 md:grid-cols-2">
+                <CardContent className="grid grid-cols-1 gap-4 px-5 pb-5 pt-2 md:grid-cols-2">
                   {(financeData?.byBiller.length ?? 0) === 0 ? (
                     <p className="text-sm text-muted-foreground">No finance events yet.</p>
                   ) : (
@@ -948,7 +948,7 @@ export function Costs() {
             </div>
           ) : null}
 
-          <div className="grid gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
             {/* "$0.00" and "we cannot measure this" are different claims, and only
                 one is true here: the local Hermes adapter emits no token counts, so
                 nothing downstream can compute a cost. Telling an owner they spent
@@ -1044,7 +1044,7 @@ export function Costs() {
           ) : (
             <>
               {activeBudgetIncidents.length > 0 ? (
-                <div className="grid gap-4 xl:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                   {activeBudgetIncidents.slice(0, 2).map((incident) => (
                     <BudgetIncidentCard
                       key={incident.id}
@@ -1062,7 +1062,7 @@ export function Costs() {
                 </div>
               ) : null}
 
-              <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.3fr,1fr]">
                 <Card data-testid="inference-ledger-card">
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">Inference ledger</CardTitle>
@@ -1163,7 +1163,7 @@ export function Costs() {
                 </Card>
               </div>
 
-              <div className="grid gap-4 xl:grid-cols-[1.25fr,0.95fr]">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.25fr,0.95fr]">
                 <Card>
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">By agent</CardTitle>
@@ -1266,7 +1266,7 @@ export function Costs() {
                             key={row.projectId ?? `unattributed-${index}`}
                             className="flex items-center justify-between gap-3 border border-border px-3 py-2 text-sm"
                           >
-                            <span className="truncate">{row.projectName ?? row.projectId ?? "Unattributed"}</span>
+                            <span className="min-w-0 truncate max-sm:whitespace-normal max-sm:break-words">{row.projectName ?? row.projectId ?? "Unattributed"}</span>
                             <span className="font-medium tabular-nums">{formatCents(row.costCents)}</span>
                           </div>
                         ))

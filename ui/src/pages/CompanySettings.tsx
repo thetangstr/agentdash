@@ -301,7 +301,8 @@ export function CompanySettings() {
           Appearance
         </div>
         <div className="space-y-3 rounded-md border border-border px-4 py-4">
-          <div className="flex items-start gap-4">
+          {/* AgentDash: mobile redesign — the logo stacks above the fields on phones. */}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
             <div className="shrink-0">
               <CompanyPatternIcon
                 companyName={companyName || selectedCompany.name}
@@ -310,7 +311,7 @@ export function CompanySettings() {
                 className="rounded-[14px]"
               />
             </div>
-            <div className="flex-1 space-y-3">
+            <div className="min-w-0 flex-1 space-y-3">
               <Field
                 label="Logo"
                 hint="Upload a PNG, JPEG, WEBP, GIF, or SVG logo image."
@@ -373,7 +374,7 @@ export function CompanySettings() {
                       }
                     }}
                     placeholder="Auto"
-                    className="w-28 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm font-mono outline-none"
+                    className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm font-mono outline-none"
                   />
                   {brandColor && (
                     <Button
@@ -400,7 +401,7 @@ export function CompanySettings() {
                       step={1}
                       value={attachmentMaxMiB}
                       onChange={(e) => setAttachmentMaxMiB(e.target.value)}
-                      className="w-28 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+                      className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
                     />
                     <span className="text-xs text-muted-foreground">MiB</span>
                   </div>

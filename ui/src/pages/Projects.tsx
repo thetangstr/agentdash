@@ -9,6 +9,8 @@ import { EntityRow } from "../components/EntityRow";
 import { StatusBadge } from "../components/StatusBadge";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { MobileList } from "../components/ResponsiveTable";
+import { useIsPhone } from "../hooks/useIsPhone";
 import { formatDate, projectUrl } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { Hexagon, Plus } from "lucide-react";
@@ -17,6 +19,7 @@ export function Projects() {
   const { selectedCompanyId } = useCompany();
   const { openNewProject } = useDialogActions();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const isPhone = useIsPhone();
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Projects" }]);
@@ -60,7 +63,24 @@ export function Projects() {
         />
       )}
 
-      {projects.length > 0 && (
+      {projects.length > 0 && isPhone && (
+        <MobileList
+          testId="projects-mobile-list"
+          ariaLabel="Projects"
+          rows={projects.map((project) => ({
+            key: project.id,
+            to: projectUrl(project),
+            primary: project.name,
+            secondary:
+              [project.description, project.targetDate ? `Due ${formatDate(project.targetDate)}` : null]
+                .filter(Boolean)
+                .join(" · ") || undefined,
+            trailing: <StatusBadge status={project.status} />,
+          }))}
+        />
+      )}
+
+      {projects.length > 0 && !isPhone && (
         <div className="border border-border">
           {projects.map((project) => (
             <EntityRow

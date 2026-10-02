@@ -51,10 +51,10 @@ export function SidebarTeamItem() {
       }}
     >
       <div className="relative">
-        <SidebarNavItem to="/agents" label="Team" icon={Users} className={cn("pr-9", activeClass)} />
+        <SidebarNavItem to="/agents" label="Team" icon={Users} className={cn("pr-9 max-sm:pr-12", activeClass)} />
         <CollapsibleTrigger
           aria-label={expanded ? "Hide agents" : "Show agents"}
-          className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+          className="absolute right-1 top-1/2 flex h-6 w-6 max-sm:h-11 max-sm:w-11 -translate-y-1/2 items-center justify-center text-muted-foreground/60 hover:text-muted-foreground transition-colors"
         >
           <ChevronRight className={cn("h-3 w-3 transition-transform", expanded && "rotate-90")} />
         </CollapsibleTrigger>

@@ -43,6 +43,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { FIRST_COMPANY_PATH } from "../lib/onboarding-route";
 import { isSettingsHubPath } from "../lib/settings-hub";
 import { scheduleMainContentFocus } from "../lib/main-content-focus";
+import { applyMobileBottomNavSignal } from "../lib/mobile-bottom-nav";
 import { cn } from "../lib/utils";
 import { NotFoundPage } from "../pages/NotFound";
 
@@ -283,6 +284,14 @@ export function Layout() {
     };
   }, [isMobile, updateMobileNavVisibility]);
 
+  // AgentDash: mobile redesign — publish the bottom nav's live height as
+  // --mobile-bottom-nav-offset (0px while it is hidden on scroll or absent),
+  // so bottom-docked UI such as chat composers can follow it.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    return applyMobileBottomNavSignal(document.documentElement, isMobile, mobileNavVisible);
+  }, [isMobile, mobileNavVisible]);
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
 
@@ -401,10 +410,28 @@ export function Layout() {
           {selectedCompany?.id ? <TrialBanner companyId={selectedCompany.id} /> : null}
           <div
             className={cn(
-              isMobile && "sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85",
+              isMobile && "sticky top-0 z-20 flex items-stretch bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85",
             )}
           >
-            <BreadcrumbBar />
+            {isMobile ? (
+              <>
+                <div className="min-w-0 flex-1">
+                  <BreadcrumbBar />
+                </div>
+                {/* AgentDash: mobile redesign — on phones the connection dot and
+                    the report button live in the sticky header instead of
+                    floating over the page content. */}
+                <div
+                  data-testid="mobile-status-cluster"
+                  className="flex shrink-0 items-center gap-2 border-b border-border pr-3"
+                >
+                  <ConnectionStatus />
+                  <ReportIssueButton />
+                </div>
+              </>
+            ) : (
+              <BreadcrumbBar />
+            )}
           </div>
           <div className={cn(isMobile ? "block" : "flex flex-1 min-h-0")}>
             <main
@@ -440,16 +467,13 @@ export function Layout() {
       <UpgradePromptModal />
       <ToastViewport />
       {/* Fixed connection status + issue reporting — bottom-right, always
-          visible. On mobile the bottom nav owns that edge, so sit above it. */}
-      <div
-        className={cn(
-          "fixed right-4 z-50 flex items-center gap-3",
-          isMobile ? "bottom-[calc(5rem+env(safe-area-inset-bottom))]" : "bottom-4",
-        )}
-      >
-        <ConnectionStatus />
-        <ReportIssueButton />
-      </div>
+          visible on desktop. On mobile they sit in the sticky header (above). */}
+      {!isMobile && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3">
+          <ConnectionStatus />
+          <ReportIssueButton />
+        </div>
+      )}
       </div>
     </GeneralSettingsProvider>
   );

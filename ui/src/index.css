@@ -170,6 +170,47 @@
   }
 }
 
+/* AgentDash: mobile redesign — Layout overrides this on <html> with the bottom
+ * nav's live height (see ui/src/lib/mobile-bottom-nav.ts). */
+:root {
+  --mobile-bottom-nav-offset: 0px;
+}
+
+/* AgentDash: mobile redesign — phone floors (narrower than 640px, the same
+ * edge as useIsPhone and Tailwind max-sm:). Desktop is untouched.
+ * 1. Readability: no text under 12px. The sub-12px arbitrary sizes used across
+ *    the app map to the --text-xs token on phones. These rules sit outside the
+ *    cascade layers on purpose, so they win over Tailwind's utilities layer.
+ * 2. Tap targets: menu items, listbox options and icon buttons get a 44px
+ *    minimum, matching the pointer:coarse rule above for narrow viewports
+ *    that report a fine pointer (desktop browsers narrowed to phone width). */
+@media (max-width: 639px) {
+  [class*="text-[8px]"],
+  [class*="text-[9px]"],
+  [class*="text-[10px]"],
+  [class*="text-[11px]"] {
+    font-size: var(--text-xs);
+  }
+
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="option"] {
+    min-height: 44px;
+  }
+
+  [data-slot="button"][data-size^="icon"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Room for two 12px initials in the extra-small avatar. */
+  [data-slot="avatar"][data-size="xs"] {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+}
+
 /* Dark mode scrollbars */
 .dark {
   color-scheme: dark;
