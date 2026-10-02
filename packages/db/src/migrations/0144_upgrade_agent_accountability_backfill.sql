@@ -65,6 +65,9 @@ CREATE OR REPLACE FUNCTION agentdash_backfill_agent_accountability(
   p_actor text
 ) RETURNS jsonb
 LANGUAGE plpgsql
+-- Pinned so a caller's search_path cannot substitute its own tables or
+-- functions for the ones named below.
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_paired integer := 0;
@@ -280,6 +283,10 @@ BEGIN
 END;
 $fn$;
 --> statement-breakpoint
+-- Only the owner role (the migration runner and the doctor CLI connect as it)
+-- may run the backfill; PostgreSQL grants EXECUTE to PUBLIC by default.
+REVOKE EXECUTE ON FUNCTION agentdash_backfill_agent_accountability(uuid, text, text) FROM PUBLIC;
+--> statement-breakpoint
 DO $$
 DECLARE
   r record;
@@ -327,7 +334,7 @@ BEGIN
   )
   SELECT
     string_agg(CASE WHEN humans > 1 THEN id::text || ' (' || name || ')' END, ', ' ORDER BY name),
-    string_agg(CASE WHEN humans = 1 AND NOT administered THEN id::text || ' (' || name || ')' END, ', ' ORDER BY name)
+    string_agg(CASE WHEN humans = 1 AND NOT coalesce(administered, false) THEN id::text || ' (' || name || ')' END, ', ' ORDER BY name)
   INTO v_multi, v_demoted
   FROM waiting;
 

@@ -54,7 +54,7 @@ async function createCompany(db: TestDb, name = `Backfill ${randomUUID()}`) {
     .then((rows) => rows[0]!);
 }
 
-async function createHuman(db: TestDb, companyId: string, role: "owner" | "admin" | "member" = "admin") {
+async function createHuman(db: TestDb, companyId: string, role: "owner" | "admin" | "member" | null = "admin") {
   const userId = randomUUID();
   const now = new Date();
   await db.insert(authUsers).values({
@@ -280,6 +280,11 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
     await createHuman(db, demoted.id, "member");
     const demotedHire = await createAgent(db, demoted.id, { title: "deployment_lead" });
 
+    // A sole human with no role at all is the same case as a demoted founder.
+    const roleless = await createCompany(db, "Roleless Co");
+    await createHuman(db, roleless.id, null);
+    const rolelessHire = await createAgent(db, roleless.id, { title: "deployment_lead" });
+
     const archived = await createCompany(db, "Archived Co");
     await createHuman(db, archived.id, "admin");
     const archivedHire = await createAgent(db, archived.id, { title: "deployment_lead" });
@@ -298,7 +303,23 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
     expect(multiNotice).not.toContain(demoted.id);
     const demotedNotice = notices.find((message) => message.includes("repair-founder-owner"));
     expect(demotedNotice).toContain(`${demoted.id} (Demoted Founder Co)`);
+    expect(demotedNotice).toContain(`${roleless.id} (Roleless Co)`);
+    expect(await agentRow(rolelessHire.id)).toMatchObject({ autonomy: "stewarded", title: "deployment_lead" });
     expect(notices.join("\n")).not.toContain(archived.id);
+  });
+
+  it("installs the backfill function with a pinned search_path and no EXECUTE for PUBLIC", async () => {
+    await runMigration();
+    const rows = (await db.execute(sql`
+      select p.proconfig as config,
+             has_function_privilege('public', p.oid, 'EXECUTE') as public_execute,
+             has_function_privilege(current_user, p.oid, 'EXECUTE') as owner_execute
+      from pg_proc p
+      where p.oid = 'agentdash_backfill_agent_accountability(uuid,text,text)'::regprocedure
+    `)) as unknown as Array<{ config: string[] | null; public_execute: boolean; owner_execute: boolean }>;
+    expect(rows[0]?.config).toEqual(["search_path=pg_catalog, public, pg_temp"]);
+    expect(rows[0]?.public_execute).toBe(false);
+    expect(rows[0]?.owner_execute).toBe(true);
   });
 
   it("maps underscore slugs exactly as the shared helpers do, minus executive roles", async () => {
