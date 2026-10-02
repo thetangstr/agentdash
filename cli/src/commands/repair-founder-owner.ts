@@ -31,7 +31,7 @@
 import os from "node:os";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import {
   activityLog,
   agents,
@@ -172,13 +172,49 @@ export async function findFounderOwnerCandidates(
 }
 
 export type FounderOwnerRepairOutcome =
-  | { status: "restored"; membershipId: string; pairedCosAgentId: string | null }
+  | { status: "restored"; membershipId: string; pairedCosAgentId: string | null; backfill: AgentAccountabilityBackfill | null }
   | { status: "already_owner" }
   | { status: "company_not_found" }
   | { status: "company_archived" }
   | { status: "company_has_owner_or_admin" }
   | { status: "no_active_membership" }
   | { status: "no_creator_evidence" };
+
+/**
+ * What migration 0144's backfill did for the company (see
+ * agentdash_backfill_agent_accountability). Null when the database predates
+ * that migration and the function does not exist.
+ */
+export interface AgentAccountabilityBackfill {
+  paired: number;
+  retitled: number;
+  madeAutonomous: number;
+  skippedHeldCredential: string[];
+  /** Set when the company is not eligible: another active human, or the user is not its owner/admin. */
+  skipped?: string;
+}
+
+/**
+ * AgentDash (canary1): migration 0144 repairs pre-#975 agents only where the
+ * sole human is an owner or admin, so a company whose founder was demoted
+ * could never be backfilled. Once this command restores the owner, run the
+ * same SQL function for that company, inside the repair's transaction. The
+ * function is idempotent, so a second run changes nothing.
+ */
+async function runAgentAccountabilityBackfill(
+  tx: Pick<Db, "execute">,
+  companyId: string,
+  userId: string,
+): Promise<AgentAccountabilityBackfill | null> {
+  const present = (await tx.execute(
+    sql`select to_regprocedure('agentdash_backfill_agent_accountability(uuid,text,text)') is not null as present`,
+  )) as unknown as Array<{ present: boolean }>;
+  if (!present[0]?.present) return null;
+  const rows = (await tx.execute(
+    sql`select agentdash_backfill_agent_accountability(${companyId}::uuid, ${userId}, ${REPAIR_ACTOR_ID}) as result`,
+  )) as unknown as Array<{ result: AgentAccountabilityBackfill }>;
+  return rows[0]?.result ?? null;
+}
 
 export interface RepairOperator {
   osUser: string;
@@ -241,6 +277,7 @@ export async function applyFounderOwnerRepair(
       .where(eq(companyMemberships.id, membership.id));
 
     const pairedCosAgentId = await pairWithChiefOfStaff(tx, input.companyId, input.userId);
+    const backfill = await runAgentAccountabilityBackfill(tx, input.companyId, input.userId);
 
     await tx.insert(activityLog).values({
       companyId: input.companyId,
@@ -262,10 +299,11 @@ export async function applyFounderOwnerRepair(
           : null,
         forced: !evidenced,
         pairedCosAgentId,
+        agentBackfill: backfill,
         operator: { osUser: operator.osUser, host: operator.host },
       },
     });
-    return { status: "restored", membershipId: membership.id, pairedCosAgentId } as const;
+    return { status: "restored", membershipId: membership.id, pairedCosAgentId, backfill } as const;
   });
 }
 
@@ -374,6 +412,20 @@ export async function repairFounderOwner(opts: {
           + (outcome.pairedCosAgentId ? ` and paired them with the Chief of Staff (${outcome.pairedCosAgentId}).` : ".")
           + " Open sessions pick up the new role on their next re-authorization or page load.",
       );
+      if (outcome.backfill?.skipped) {
+        p.log.info("Agent backfill skipped: the company has other active members, so who answers for each agent is theirs to decide.");
+      } else if (outcome.backfill) {
+        const b = outcome.backfill;
+        p.log.info(
+          `Agent backfill: ${b.madeAutonomous} made autonomous with them accountable, ${b.retitled} retitled, `
+            + `${b.paired} Chief of Staff paired.`
+            + (b.skippedHeldCredential.length > 0
+              ? ` Left stewarded because a person holds a key or connect code: ${b.skippedHeldCredential.join(", ")}.`
+              : ""),
+        );
+      } else {
+        p.log.warn("The agent backfill (migration 0144) is not installed in this database; agents were not repaired.");
+      }
     } else if (outcome.status === "already_owner") {
       p.log.info(`${opts.user} is already the owner. Nothing changed.`);
     } else {

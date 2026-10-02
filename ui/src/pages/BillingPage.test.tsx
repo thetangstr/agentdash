@@ -97,7 +97,7 @@ describe("BillingPage", () => {
   it("hides checkout and trial when the server reports billing unconfigured", async () => {
     rendered.push(await renderPage({ tier: "free", seatsPaid: 0, periodEnd: null, configured: false }));
     const text = rendered[0].container.textContent!;
-    expect(text).toContain("Billing isn't set up yet for your workspace.");
+    expect(text).toContain("Billing isn't turned on for this workspace.");
     expect(text).not.toContain("Pro trial, no card");
     expect(rendered[0].container.querySelector("button")).toBeNull();
   });

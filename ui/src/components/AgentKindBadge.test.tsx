@@ -117,11 +117,14 @@ describe("AgentKindBadge", () => {
       agentKindExplanation(autonomous),
     );
   });
-  it("renders nothing for an unpaired agent where stewards cannot be assigned, and the other kinds as usual", () => {
+  it("shows a neutral 'No one accountable' for an unpaired agent where stewards cannot be assigned, and the other kinds as usual", () => {
     act(() => {
       createRoot(container).render(<AgentKindBadge agent={unpaired} hideUnpaired />);
     });
-    expect(container.textContent).toBe("");
+    expect(container.textContent).toContain("No one accountable");
+    expect(container.textContent).not.toContain("Needs a steward");
+    expect(container.querySelector('[data-testid="agent-kind-unaccountable"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="agent-kind-unpaired"]')).toBeNull();
 
     container.remove();
     container = document.createElement("div");

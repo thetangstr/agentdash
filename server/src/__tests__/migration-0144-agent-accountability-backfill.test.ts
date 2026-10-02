@@ -5,6 +5,8 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
+  agentApiKeys,
+  agentConnectCodes,
   agents,
   agentStewardships,
   authUsers,
@@ -142,7 +144,7 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
     return db.select().from(activityLog).where(eq(activityLog.actorId, ACTOR));
   }
 
-  it("single-admin company: CoS gets the admin as steward, hires become autonomous with the admin accountable, titles and roles are repaired; a re-run is a no-op", async () => {
+  it("single-admin company: CoS gets the admin as steward, pre-#975 hires become autonomous with the admin accountable, slug titles and general roles are repaired; a re-run is a no-op", async () => {
     const company = await createCompany(db);
     const admin = await createHuman(db, company.id, "admin");
     const cos = await createAgent(db, company.id, { role: "chief_of_staff", title: "Chief of Staff" });
@@ -150,6 +152,7 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
     const content = await createAgent(db, company.id, { title: "content_lead" });
     const research = await createAgent(db, company.id, { title: "research_analyst" });
     const sales = await createAgent(db, company.id, { title: "sales_support" });
+    // A role someone chose: made autonomous, but its title and role are theirs.
     const engineer = await createAgent(db, company.id, { role: "engineer", title: "backend_dev" });
     const terminated = await createAgent(db, company.id, { title: "qa_lead", status: "terminated" });
 
@@ -165,9 +168,7 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
     expect(await agentRow(content.id)).toMatchObject({ autonomy: "autonomous", accountableUserId: admin, role: "general", title: "Content Lead" });
     expect(await agentRow(research.id)).toMatchObject({ role: "researcher", title: "Research Analyst" });
     expect(await agentRow(sales.id)).toMatchObject({ role: "general", title: "Sales Support" });
-    // A role someone chose is kept; only the slug title is humanised.
-    expect(await agentRow(engineer.id)).toMatchObject({ role: "engineer", title: "Backend Dev" });
-    // Terminated agents are history: untouched.
+    expect(await agentRow(engineer.id)).toMatchObject({ autonomy: "autonomous", role: "engineer", title: "backend_dev" });
     expect(await agentRow(terminated.id)).toMatchObject({ autonomy: "stewarded", accountableUserId: null, role: "general", title: "qa_lead" });
 
     const activity = await backfillActivity();
@@ -181,19 +182,43 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
       toAccountableUserId: admin,
       reason: "upgrade_backfill",
     });
-    expect(byAction("agent.updated")).toHaveLength(5);
+    expect(byAction("agent.updated")).toHaveLength(4);
     expect(byAction("agent.updated").find((row) => row.agentId === deploy.id)?.details).toMatchObject({
       changedTopLevelKeys: ["role", "title"],
       fromRole: "general",
       toRole: "devops",
       fromTitle: "deployment_lead",
       toTitle: "Deployment Lead",
+      reason: "upgrade_backfill",
     });
 
     const before = activity.length;
     await runMigration();
     expect(await backfillActivity()).toHaveLength(before);
     expect(await db.select().from(agentStewardships).where(eq(agentStewardships.companyId, company.id))).toHaveLength(1);
+  });
+
+  // Review of #994: step 3 used to rewrite agents outside the pre-#975 state.
+  it("leaves agents outside the pre-#975 state, and single-word titles, exactly as they were", async () => {
+    const company = await createCompany(db);
+    const admin = await createHuman(db, company.id, "admin");
+    const scout = await createAgent(db, company.id, { title: "scout", autonomy: "autonomous", accountableUserId: admin });
+    const custom = await createAgent(db, company.id, { title: "my_custom_bot", autonomy: "autonomous", accountableUserId: admin });
+    const runner = await createAgent(db, company.id, { title: "test_runner", autonomy: "autonomous", accountableUserId: admin });
+    const ceoTitled = await createAgent(db, company.id, { title: "ceo" });
+    const x = await createAgent(db, company.id, { title: "x" });
+    const hyphen = await createAgent(db, company.id, { title: "full-stack-engineer" });
+
+    await runMigration();
+
+    expect(await agentRow(scout.id)).toMatchObject({ role: "general", title: "scout" });
+    expect(await agentRow(custom.id)).toMatchObject({ role: "general", title: "my_custom_bot" });
+    expect(await agentRow(runner.id)).toMatchObject({ role: "general", title: "test_runner" });
+    // Pre-#975 but not a slug: made autonomous, title and role untouched.
+    expect(await agentRow(ceoTitled.id)).toMatchObject({ autonomy: "autonomous", role: "general", title: "ceo" });
+    expect(await agentRow(x.id)).toMatchObject({ autonomy: "autonomous", role: "general", title: "x" });
+    expect(await agentRow(hyphen.id)).toMatchObject({ role: "general", title: "full-stack-engineer" });
+    expect((await backfillActivity()).filter((row) => row.action === "agent.updated")).toHaveLength(0);
   });
 
   it("leaves the CoS alone when the sole human already stewards another agent, and still repairs the hires", async () => {
@@ -213,41 +238,80 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
     expect(await agentRow(personal.id)).toMatchObject({ autonomy: "stewarded", accountableUserId: null });
   });
 
-  it("is a no-op for a multi-human company and names it in a notice; a sole member who is not an admin is also left alone", async () => {
+  it("keeps an agent a person holds a credential for stewarded and names it; a 'default' key alone does not count", async () => {
+    const company = await createCompany(db);
+    await createHuman(db, company.id, "admin");
+    const keyed = await createAgent(db, company.id, { title: "sales_support" });
+    await db.insert(agentApiKeys).values({ agentId: keyed.id, companyId: company.id, name: "laptop", keyHash: randomUUID() });
+    const paired = await createAgent(db, company.id);
+    await db.insert(agentConnectCodes).values({
+      companyId: company.id,
+      agentId: paired.id,
+      codeHash: randomUUID(),
+      expiresAt: new Date(Date.now() + 60_000),
+      redeemedAt: new Date(),
+    });
+    const defaultOnly = await createAgent(db, company.id);
+    await db.insert(agentApiKeys).values({ agentId: defaultOnly.id, companyId: company.id, name: "default", keyHash: randomUUID() });
+    const revoked = await createAgent(db, company.id);
+    await db.insert(agentApiKeys).values({
+      agentId: revoked.id, companyId: company.id, name: "laptop", keyHash: randomUUID(), revokedAt: new Date(),
+    });
+
+    const notices = await runMigration();
+
+    expect(await agentRow(keyed.id)).toMatchObject({ autonomy: "stewarded", accountableUserId: null });
+    expect(await agentRow(paired.id)).toMatchObject({ autonomy: "stewarded", accountableUserId: null });
+    expect(await agentRow(defaultOnly.id)).toMatchObject({ autonomy: "autonomous" });
+    expect(await agentRow(revoked.id)).toMatchObject({ autonomy: "autonomous" });
+    const notice = notices.find((message) => message.includes("holds a key or redeemed connect code"));
+    expect(notice).toContain(keyed.id);
+    expect(notice).toContain(paired.id);
+    expect(notice).not.toContain(defaultOnly.id);
+  });
+
+  it("is a no-op for multi-human, demoted-founder and archived companies, naming the first two in notices", async () => {
     const multi = await createCompany(db, "Two Humans Co");
     await createHuman(db, multi.id, "admin");
     await createHuman(db, multi.id, "member");
     const multiHire = await createAgent(db, multi.id, { title: "deployment_lead" });
 
-    const memberOnly = await createCompany(db);
-    await createHuman(db, memberOnly.id, "member");
-    const memberHire = await createAgent(db, memberOnly.id, { title: "deployment_lead" });
+    const demoted = await createCompany(db, "Demoted Founder Co");
+    await createHuman(db, demoted.id, "member");
+    const demotedHire = await createAgent(db, demoted.id, { title: "deployment_lead" });
+
+    const archived = await createCompany(db, "Archived Co");
+    await createHuman(db, archived.id, "admin");
+    const archivedHire = await createAgent(db, archived.id, { title: "deployment_lead" });
+    await db.update(companies).set({ status: "archived" }).where(eq(companies.id, archived.id));
 
     const notices = await runMigration();
 
-    expect(await agentRow(multiHire.id)).toMatchObject({ autonomy: "stewarded", accountableUserId: null, role: "general", title: "deployment_lead" });
-    expect(await agentRow(memberHire.id)).toMatchObject({ autonomy: "stewarded", accountableUserId: null, role: "general", title: "deployment_lead" });
+    for (const id of [multiHire.id, demotedHire.id, archivedHire.id]) {
+      expect(await agentRow(id)).toMatchObject({ autonomy: "stewarded", accountableUserId: null, role: "general", title: "deployment_lead" });
+    }
     expect(await backfillActivity()).toHaveLength(0);
     expect(await db.select().from(agentStewardships)).toHaveLength(0);
 
-    const notice = notices.find((message) => message.startsWith("agentdash: migration 0144"));
-    expect(notice).toBeTruthy();
-    expect(notice).toContain(`${multi.id} (Two Humans Co)`);
-    expect(notice).not.toContain(memberOnly.id);
+    const multiNotice = notices.find((message) => message.includes("multi-human companies"));
+    expect(multiNotice).toContain(`${multi.id} (Two Humans Co)`);
+    expect(multiNotice).not.toContain(demoted.id);
+    const demotedNotice = notices.find((message) => message.includes("repair-founder-owner"));
+    expect(demotedNotice).toContain(`${demoted.id} (Demoted Founder Co)`);
+    expect(notices.join("\n")).not.toContain(archived.id);
   });
 
-  it("maps slugs exactly as the shared helpers do, minus executive roles", async () => {
+  it("maps underscore slugs exactly as the shared helpers do, minus executive roles", async () => {
     const company = await createCompany(db);
     await createHuman(db, company.id, "admin");
     const slugs = [
       "deployment_lead", "content_lead", "research_analyst", "sales_support", "marketing_manager",
-      "chief_executive_officer", "ceo_assistant", "chief_of_staff_aide", "cto", "tech_lead", "finance_ops",
+      "chief_executive_officer", "ceo_assistant", "chief_of_staff_aide", "tech_lead", "finance_ops",
       "security_engineer", "qa_lead", "test_automation", "contest_judge", "ux_researcher", "ui_designer",
-      "guide_writer", "pm", "product_manager", "dev_advocate", "development_lead", "backend_dev",
-      "full-stack-engineer", "sre_oncall", "platform_engineer", "data_scientist", "seo_specialist",
-      "growth_hacker", "project_coordinator", "customer_success", "ai_trainer", "researcher", "general",
-      "designer", "engineer", "devops", "privacy_officer", "release_manager", "mobile_dev", "cfo", "cmo",
-      "brand_designer", "infra_on_call", "bookkeeper", "copywriter", "3d_artist",
+      "guide_writer", "product_manager", "dev_advocate", "development_lead", "backend_dev",
+      "sre_oncall", "platform_engineer", "data_scientist", "seo_specialist", "growth_hacker",
+      "project_coordinator", "customer_success", "ai_trainer", "privacy_officer", "release_manager",
+      "mobile_dev", "brand_designer", "infra_on_call", "copy_writer", "3d_artist", "full_stack_engineer",
     ];
     const created = await Promise.all(slugs.map((slug) => createAgent(db, company.id, { title: slug })));
 

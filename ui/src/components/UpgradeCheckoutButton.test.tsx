@@ -65,7 +65,7 @@ describe("UpgradeCheckoutButton", () => {
     await click(rendered[0].container);
 
     const text = rendered[0].container.textContent!;
-    expect(text).toContain("Billing isn't set up yet for your workspace.");
+    expect(text).toContain("Billing isn't turned on for this workspace.");
   });
 
   it("keeps the generic retry message for any other failure", async () => {
