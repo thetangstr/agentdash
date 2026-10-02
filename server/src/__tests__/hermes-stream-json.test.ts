@@ -167,9 +167,16 @@ describe("hermes stream-json helpers", () => {
       signal: null,
       timedOut: false,
       summary: STREAM_JSON_STDOUT.slice(0, 2000),
+      // What the vendored adapter reports when the agent pins no model.
+      provider: "zai",
+      model: "Hermes configured default",
       resultJson: { result: STREAM_JSON_STDOUT, session_id: null, usage: null, cost_usd: null },
     };
     const result = capture.apply(vendored, { persistSession: true });
+    // Scan 3 lane H: the model the stream's system/init event named wins.
+    expect(capture.reportedModel()).toBe("glm-5.3-flash");
+    expect(result.model).toBe("glm-5.3-flash");
+    expect(result.provider).toBe("zai");
     expect(result.summary).toBe("Smoke test passed: hermes-smoke-ok.");
     expect(result.sessionParams).toEqual({ sessionId: "20261001_231546_52cd79" });
     expect(result.sessionDisplayId).toBe("20261001_231546_");
@@ -180,6 +187,7 @@ describe("hermes stream-json helpers", () => {
       result: "Smoke test passed: hermes-smoke-ok.",
       session_id: "20261001_231546_52cd79",
       output_format: "stream-json",
+      reported_model: "glm-5.3-flash",
     });
   });
 
@@ -275,6 +283,7 @@ describe("hermes_local execute with stream-json", () => {
     expect(argv.slice(argv.indexOf("--format"), argv.indexOf("--format") + 2)).toEqual(["--format", "stream-json"]);
     expect(result.summary).toBe("Smoke test passed: hermes-smoke-ok.");
     expect(result.sessionParams).toMatchObject({ sessionId: "20261001_231546_52cd79" });
+    expect(result.model).toBe("glm-5.3-flash");
     // The session_id bookkeeping line is logged as stdout, not as an error.
     expect(logs.some((log) => log.stream === "stdout" && log.chunk.includes("session_id: 20261001_231546_52cd79"))).toBe(true);
     expect(logs.some((log) => log.stream === "stderr" && log.chunk.includes("session_id:"))).toBe(false);

@@ -27,7 +27,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { AgentConfigForm } from "../components/AgentConfigForm";
 import { PageTabBar } from "../components/PageTabBar";
-import { adapterLabels, roleLabels, help } from "../components/agent-config-primitives";
+import { adapterLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
@@ -124,6 +124,7 @@ import {
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
+import { agentIdentityLine } from "../lib/agent-identity";
 import {
   applyAgentSkillSnapshot,
   arraysEqual,
@@ -346,7 +347,9 @@ function runMetrics(run: HeartbeatRun) {
   const cost =
     visibleRunCostUsd(usage, result);
   const provider = asNonEmptyString(usage?.provider) ?? null;
-  const model = asNonEmptyString(usage?.model) ?? null;
+  // AgentDash (scan 3, lane H): the model the runtime reported serving
+  // (Hermes stream-json system/init) wins over the configured placeholder.
+  const model = asNonEmptyString(result?.reported_model) ?? asNonEmptyString(usage?.model) ?? null;
   return {
     input,
     output,
@@ -1066,8 +1069,7 @@ export function AgentDetail() {
           <div className="min-w-0">
             <h2 className="text-2xl font-bold truncate">{agent.name}</h2>
             <p className="text-sm text-muted-foreground truncate">
-              {roleLabels[agent.role] ?? agent.role}
-              {agent.title ? ` - ${agent.title}` : ""}
+              {agentIdentityLine(agent)}
             </p>
           </div>
         </div>

@@ -99,3 +99,41 @@ export async function pairFounderWithAgent(
     return "failed";
   }
 }
+
+/**
+ * AgentDash (scan 3, lane H): who answers for an agent the onboarding plan
+ * hires.
+ *
+ * Stewardship is one person per agent and one agent per person (enforced by
+ * unique indexes on `agent_stewardships`), and the founder already stewards
+ * their Chief of Staff, so a plan hire can never also be stewarded by them.
+ * Left `stewarded` with nobody paired, every hire showed "Needs a steward"
+ * right after onboarding. Plan hires work under the Chief of Staff with no
+ * person at a terminal, which is exactly an autonomous agent, so they are
+ * created autonomous with the creating human accountable for them.
+ *
+ * Returns an empty object (the agent stays stewarded, as before) when the
+ * creator has no active membership in the company, e.g. an instance admin
+ * acting on someone else's workspace: an accountable person must be a member
+ * (agents_accountable_ck plus assertAccountableMember).
+ */
+export async function onboardingHireAccountability(
+  db: Pick<Db, "select">,
+  companyId: string,
+  userId: string | null | undefined,
+): Promise<{ autonomy: "autonomous"; accountableUserId: string } | Record<string, never>> {
+  if (!userId) return {};
+  const member = await db
+    .select({ id: companyMemberships.id })
+    .from(companyMemberships)
+    .where(
+      and(
+        eq(companyMemberships.companyId, companyId),
+        eq(companyMemberships.principalType, "user"),
+        eq(companyMemberships.principalId, userId),
+        eq(companyMemberships.status, "active"),
+      ),
+    )
+    .then((rows) => rows[0] ?? null);
+  return member ? { autonomy: "autonomous", accountableUserId: userId } : {};
+}

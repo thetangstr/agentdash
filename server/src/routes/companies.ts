@@ -612,9 +612,9 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     // invariant holds from the moment the company exists.
     //
     // GH #72: owners need `agents:create` to hit the agent-hires endpoint and
-    // configuration reads. setPrincipalPermission internally upserts membership
-    // as "member", so it must run BEFORE the "owner" re-assert below — otherwise
-    // its internal ensureMembership would leave the creator demoted to "member".
+    // configuration reads. setPrincipalPermission leaves an existing membership
+    // untouched (scan 3, lane H: it used to upsert "member", which demoted the
+    // creator later at /cos); the "owner" re-assert below is kept as a belt.
     await access.setPrincipalPermission(
       company.id,
       "user",

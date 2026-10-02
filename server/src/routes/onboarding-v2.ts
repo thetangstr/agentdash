@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { publishActivity, type ActivityPublication } from "../services/activity-log.js";
 import { acceptedHireNeedsRepair, completeManagedHire, onboardingMaterializationPause } from "../services/agent-creator-from-proposal.js";
 import { workforceService } from "../services/workforce.js";
-import { founderStewardshipDeps } from "../services/founder-stewardship.js";
+import { founderStewardshipDeps, onboardingHireAccountability } from "../services/founder-stewardship.js";
 import { type ActivityAcceptance } from "../services/activity-log.js";
 import { loadDefaultAgentInstructionsBundle } from "../services/default-agent-instructions.js";
 import { Router } from "express";
@@ -734,6 +734,9 @@ export function onboardingV2Routes(db: Db) {
     const previousHire = await readHireReceipt(companyId, conversationId, receiptKey);
     if (previousHire) throw consumedHire(previousHire);
     if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
+    // AgentDash (scan 3, lane H): plan hires answer to the human who confirmed
+    // the plan (autonomous, accountable = them) instead of "Needs a steward".
+    const hireAccountability = await onboardingHireAccountability(db, companyId, req.actor.userId);
     const accepted = await acceptOnboardingHires(companyId, conversationId, receiptKey, payload.agents.length, res, async (acceptance, index) => {
       const txAgents = agentService(acceptance.executor);
       if (index === 0) await cosOnboardingStateService(acceptance.executor).advancePhase(conversationId, 'materializing');
@@ -745,6 +748,7 @@ export function onboardingV2Routes(db: Db) {
         // wording stays as the title.
         name: planAgent.name, role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.role), adapterType: planAgent.adapterType,
         workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: {}, reportsTo: cos?.id ?? null,
+        ...hireAccountability,
         ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
       }, acceptance);
       return { created, planAgent, cosAgentId: cos?.id ?? null };

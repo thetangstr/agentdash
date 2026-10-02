@@ -208,6 +208,7 @@ export function createHermesStreamJsonCapture() {
   let text = "";
   let sawEvent = false;
   let sessionId: string | null = null;
+  let reportedModel: string | null = null;
   let resultEvent: HermesStreamResultEvent | null = null;
 
   /** Returns the decoded text of the event, if the line was one. */
@@ -224,6 +225,10 @@ export function createHermesStreamJsonCapture() {
     sawEvent = true;
     if (parsed.type === "system" && parsed.subtype === "init") {
       sessionId = asNonEmptyString(parsed.session_id) ?? sessionId;
+      // AgentDash (scan 3, lane H): the model Hermes actually resolved for this
+      // run. The vendored adapter only knows the configured value, which is
+      // "Hermes configured default" when the agent pins none.
+      reportedModel = asNonEmptyString(parsed.model)?.trim() ?? reportedModel;
     } else if (parsed.type === "text" && typeof parsed.text === "string") {
       if (text.length < MAX_CAPTURED_TEXT) text += parsed.text;
     } else if (parsed.type === "result") {
@@ -252,6 +257,10 @@ export function createHermesStreamJsonCapture() {
     /** Whether any stream-json event was seen (a run that rejected the flag sees none). */
     sawStreamEvents(): boolean {
       return sawEvent;
+    },
+    /** The model named by the stream's `system/init` event, if any. */
+    reportedModel(): string | null {
+      return reportedModel;
     },
     /**
      * The stream's per-run token counts. Never put on `result.usage` directly:
@@ -292,6 +301,9 @@ export function createHermesStreamJsonCapture() {
       const exitCode = typeof final?.exit_code === "number" ? final.exit_code : null;
 
       const patched: AdapterExecutionResult = { ...result };
+      // The served model, as Hermes reported it, is what the run header and
+      // runFacts.servedModel show; the configured placeholder is not a model.
+      if (reportedModel) patched.model = reportedModel;
       if (finalText) {
         patched.summary = finalText.slice(0, 2000);
       } else {
@@ -322,6 +334,7 @@ export function createHermesStreamJsonCapture() {
         usage: null,
         cost_usd: null,
         output_format: "stream-json",
+        ...(reportedModel ? { reported_model: reportedModel } : {}),
       };
       return patched;
     },

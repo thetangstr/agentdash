@@ -3,7 +3,7 @@ import type { agentInstructionsService } from './agent-instructions.js';
 import { workforceService } from './workforce.js';
 import { assertActivityAcceptance, type ActivityAcceptance } from './activity-log.js';
 import type { Db } from '@paperclipai/db';
-import type { AgentProposal, InterviewTurn } from "@paperclipai/shared";
+import { mapProposedAgentRole, proposedRoleTitle, type AgentProposal, type InterviewTurn } from "@paperclipai/shared";
 import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
@@ -58,7 +58,10 @@ export function agentCreatorFromProposal(deps: Deps) {
     const leader = await agents.getById(reportsToAgentId);
     if (!leader || leader.companyId !== companyId) throw notFound('Reporting agent not found');
     const data = {
-      name: proposal.name, role: 'general' as const, title: proposal.role,
+      // AgentDash (scan 3, lane H): the proposed role maps onto AGENT_ROLES
+      // (nearest fit, "general" only when nothing fits, never a privileged
+      // role) and its humanized wording is the title, as /confirm-plan does.
+      name: proposal.name, role: mapProposedAgentRole(proposal.role), title: proposedRoleTitle(proposal.role),
       adapterType: leader.adapterType, workforceTemplateId: proposal.workforceTemplateId,
       adapterConfig: {}, reportsTo: reportsToAgentId,
       ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,

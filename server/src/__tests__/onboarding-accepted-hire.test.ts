@@ -69,7 +69,7 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     };
     try {
       const response = await confirm(f); expect(response.status).toBe(201); expect(backend).toBeGreaterThan(0);
-      expect(await hires(f)).toHaveLength(1); expect((await hires(f))[0]).toMatchObject({ status: 'idle', adapterConfig: { nativeBundle: true } });
+      expect(await hires(f)).toHaveLength(1); expect((await hires(f))[0]).toMatchObject({ status: 'idle', adapterConfig: { nativeBundle: true }, role: 'cmo', title: 'Marketing' });
       expect((await confirm(f)).status).toBe(409); expect(await hires(f)).toHaveLength(1);
       expect((await db.select().from(assistantConversations).where(eq(assistantConversations.id,f.conversation.id)))[0].metadata).toMatchObject({ keep: 'unrelated' });
     } finally { stop(); }
