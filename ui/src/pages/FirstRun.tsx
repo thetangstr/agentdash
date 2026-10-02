@@ -17,6 +17,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import { firstRunApi, type FirstRunStep } from "@/api/firstRun";
 import { onboardingApi } from "@/api/onboarding";
 import { useCompany } from "@/context/CompanyContext";
@@ -30,8 +31,10 @@ import { RuntimeStep } from "@/components/onboarding/RuntimeStep";
 
 const STEP_LABELS: Array<{ step: Exclude<FirstRunStep, "done">; label: string }> = [
   { step: "model", label: "Your model" },
-  { step: "repo", label: "Your repo" },
-  { step: "first_issue", label: "First issue" },
+  // AgentDash (Scan 3, lane J): one flow for every company; the code and
+  // first-task steps are optional and say so.
+  { step: "repo", label: "Code (optional)" },
+  { step: "first_issue", label: "First task (optional)" },
 ];
 
 function StepIndicator({
@@ -48,7 +51,7 @@ function StepIndicator({
   );
   const currentIndex = steps.findIndex((entry) => entry.step === current);
   return (
-    <ol className="mx-auto mt-10 flex max-w-lg gap-4 px-6 text-xs" aria-label="Setup progress" data-testid="first-run-progress">
+    <ol className="mx-auto mt-10 flex max-w-lg flex-wrap gap-x-4 gap-y-1 px-6 text-xs" aria-label="Setup progress" data-testid="first-run-progress">
       {steps.map((entry, index) => {
         const state = current === "done" || index < currentIndex ? "done" : index === currentIndex ? "current" : "todo";
         return (
@@ -209,6 +212,9 @@ export function FirstRunPage() {
     );
   }
 
+  // The code and first-task steps can be skipped; Home keeps offering them.
+  const optionalStep = !showRuntime && (status.nextStep === "repo" || status.nextStep === "first_issue");
+
   return (
     <div className="min-h-screen bg-surface-page" data-testid="first-run">
       <StepIndicator
@@ -216,8 +222,34 @@ export function FirstRunPage() {
         showModel={status.model.required || showRuntime}
         modelLabel={showRuntime ? "Your runtime" : undefined}
       />
-      {!showRuntime && (status.nextStep === 'repo' || status.nextStep === 'first_issue') && <div className="mx-auto mt-6 max-w-lg rounded-lg border p-4 text-sm"><p>Marketing and sales roles can start without a repository.</p><Link className="underline" to={`/${company.issuePrefix}/workforce`}>Set up a marketing or sales role</Link></div>}
+      {optionalStep ? (
+        // px-6 matches the step bodies, so the notice keeps a gutter on a phone.
+        <div className="mx-auto mt-6 max-w-lg px-6" data-testid="first-run-optional-notice">
+          <div className="rounded-lg border p-4 text-sm">
+            <p>
+              {status.nextStep === "repo"
+                ? "This step is optional. Connect GitHub only if your team works on code."
+                : "This step is optional. You can give your team its first task now or later."}
+            </p>
+            <Link className="underline" to={`/${company.issuePrefix}/workforce`}>
+              Add a marketing, sales or operations role instead
+            </Link>
+          </div>
+        </div>
+      ) : null}
       {body}
+      {optionalStep ? (
+        <div className="mx-auto -mt-6 max-w-lg px-6 pb-12">
+          <Button
+            variant="ghost"
+            className="min-h-11 px-0 text-muted-foreground underline-offset-4 hover:underline"
+            data-testid="first-run-skip"
+            onClick={() => navigate(home, { replace: true })}
+          >
+            Skip for now
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

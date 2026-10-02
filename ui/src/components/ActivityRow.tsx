@@ -3,7 +3,7 @@ import { Identity } from "./Identity";
 import { IssueReferenceActivitySummary } from "./IssueReferenceActivitySummary";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
-import { formatActivityVerb } from "../lib/activity-format";
+import { formatActivityVerb, isSystemPlumbingActivity } from "../lib/activity-format";
 import { deriveProjectUrlKey, type ActivityEvent, type Agent } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "../lib/company-members";
 
@@ -53,8 +53,9 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
 
   const actor = event.actorType === "agent" ? agentMap.get(event.actorId) : null;
   const userProfile = event.actorType === "user" ? userProfileMap?.get(event.actorId) : null;
-  const actorName = actor?.name ?? (event.actorType === "system" ? "System" : userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));
-  const actorAvatarUrl = userProfile?.image ?? null;
+  const systemEvent = event.actorType === "system" || isSystemPlumbingActivity(event.action);
+  const actorName = systemEvent ? "System" : actor?.name ?? ( userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));
+  const actorAvatarUrl = systemEvent ? null : userProfile?.image ?? null;
 
   const stacked = layout === "stacked";
   const inner = stacked ? (

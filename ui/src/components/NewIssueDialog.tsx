@@ -431,6 +431,11 @@ export function NewIssueDialog() {
 
   const effectiveCompanyId = dialogCompanyId ?? selectedCompanyId;
   const dialogCompany = companies.find((c) => c.id === effectiveCompanyId) ?? selectedCompany;
+  // AgentDash (Scan 3, lane J): the dialog's starting status follows the
+  // company's "Start new issues right away" setting. It used to start on Todo
+  // regardless, so with the setting off the work still started at once.
+  const statusDefaultFor = (company: { newIssuesStartAsTodo?: boolean } | null | undefined) =>
+    company?.newIssuesStartAsTodo ? "todo" : "backlog";
   const isSubIssueMode = Boolean(newIssueDefaults.parentId);
   const parentIssueLabel = newIssueDefaults.parentIdentifier
     ?? (newIssueDefaults.parentId ? newIssueDefaults.parentId.slice(0, 8) : "");
@@ -764,7 +769,7 @@ export function NewIssueDialog() {
         ? "reuse_existing"
         : (newIssueDefaults.executionWorkspaceMode ?? defaultExecutionWorkspaceModeForProject(defaultProject));
       setIssueText(newIssueDefaults.title ?? "", newIssueDefaults.description ?? "");
-      setStatus(newIssueDefaults.status ?? "todo");
+      setStatus(newIssueDefaults.status ?? statusDefaultFor(selectedCompany));
       setPriority(newIssueDefaults.priority ?? "");
       setProjectId(defaultProjectId);
       setProjectWorkspaceId(defaultProjectWorkspaceId);
@@ -781,7 +786,7 @@ export function NewIssueDialog() {
         : null;
     } else if (newIssueDefaults.title) {
       setIssueText(newIssueDefaults.title, newIssueDefaults.description ?? "");
-      setStatus(newIssueDefaults.status ?? "todo");
+      setStatus(newIssueDefaults.status ?? statusDefaultFor(selectedCompany));
       setPriority(newIssueDefaults.priority ?? "");
       const defaultProjectId = newIssueDefaults.projectId ?? "";
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
@@ -803,7 +808,7 @@ export function NewIssueDialog() {
       const restoredProjectId = newIssueDefaults.projectId ?? draft.projectId;
       const restoredProject = orderedProjects.find((project) => project.id === restoredProjectId);
       setIssueText(draft.title, draft.description);
-      setStatus(draft.status || "todo");
+      setStatus(draft.status || statusDefaultFor(selectedCompany));
       setPriority(draft.priority);
       setAssigneeValue(
         newIssueDefaults.assigneeAgentId || newIssueDefaults.assigneeUserId
@@ -833,7 +838,7 @@ export function NewIssueDialog() {
       const defaultProjectId = newIssueDefaults.projectId ?? "";
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
       setIssueText("", "");
-      setStatus(newIssueDefaults.status ?? "todo");
+      setStatus(newIssueDefaults.status ?? statusDefaultFor(selectedCompany));
       setPriority(newIssueDefaults.priority ?? "");
       setProjectId(defaultProjectId);
       setProjectWorkspaceId(defaultProjectWorkspaceIdForProject(defaultProject));
@@ -850,7 +855,7 @@ export function NewIssueDialog() {
       setAcceptanceCriteriaDraft(acceptanceCriteriaTextFromDefaults(newIssueDefaults));
       executionWorkspaceDefaultProjectId.current = defaultProject ? defaultProjectId || null : null;
     }
-  }, [newIssueOpen, newIssueDefaults, orderedProjects, selectedCompanyId, setAcceptanceCriteriaDraft, setIssueText]);
+  }, [newIssueOpen, newIssueDefaults, orderedProjects, selectedCompanyId, selectedCompany, setAcceptanceCriteriaDraft, setIssueText]);
 
   useEffect(() => {
     if (!supportsAssigneeOverrides) {
@@ -921,6 +926,10 @@ export function NewIssueDialog() {
     if (isSubIssueMode) return;
     if (companyId === effectiveCompanyId) return;
     setDialogCompanyId(companyId);
+    // Follow the new company's start setting unless the person picked a status.
+    if (status === statusDefaultFor(dialogCompany)) {
+      setStatus(statusDefaultFor(companies.find((c) => c.id === companyId)));
+    }
     setAssigneeValue("");
     setReviewerValue("");
     setApproverValue("");

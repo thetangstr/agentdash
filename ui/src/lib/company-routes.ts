@@ -44,6 +44,11 @@ const BOARD_ROUTE_ROOTS = new Set([
   // prefix so it renders inside the sidebar Layout. Bare /cos still answers
   // and redirects to the selected company's /:prefix/cos.
   "cos",
+  // AgentDash (Scan 3, lane J): /:prefix/onboarding is a board route too.
+  // Without it "/WAN/onboarding" kept its prefix when remembered as a
+  // company-relative path, and switching companies then landed on
+  // "/WAN/WAN/onboarding" (a 404).
+  "onboarding",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance", "claim"]);

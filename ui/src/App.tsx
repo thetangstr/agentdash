@@ -248,15 +248,21 @@ function LegacySettingsRedirect() {
 }
 
 function OnboardingRoutePage() {
-  const { companies } = useCompany();
+  const { companies, selectedCompany } = useCompany();
   // AgentDash (GH #786): the wizard is retired from the hosted path. A hosted
   // box sends /onboarding to the first run (or to naming the workspace).
   const { data: health } = useQuery({ queryKey: queryKeys.health, queryFn: () => healthApi.get(), retry: false });
   const { openOnboarding } = useDialogActions();
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
-  const matchedCompany = companyPrefix
-    ? companies.find((company) => company.issuePrefix.toUpperCase() === companyPrefix.toUpperCase()) ?? null
-    : null;
+  // AgentDash (Scan 3, lane J): with any company, this page adds an agent to
+  // one — it never offers to create a second company (that is New Company).
+  const matchedCompany =
+    (companyPrefix
+      ? companies.find((company) => company.issuePrefix.toUpperCase() === companyPrefix.toUpperCase())
+      : null) ??
+    selectedCompany ??
+    companies[0] ??
+    null;
 
   if (health?.hostedBox) {
     return <Navigate to={companies.length > 0 ? "/setup" : "/company-create"} replace />;
@@ -264,14 +270,10 @@ function OnboardingRoutePage() {
 
   const title = matchedCompany
     ? `Add another agent to ${matchedCompany.name}`
-    : companies.length > 0
-      ? "Create another company"
-      : "Create your first company";
+    : "Create your first company";
   const description = matchedCompany
     ? "Run onboarding again to add an agent and a starter task for this company."
-    : companies.length > 0
-      ? "Run onboarding again to create another company and seed its first agent."
-      : "Get started by creating a company and your first agent.";
+    : "Get started by creating a company and your first agent.";
 
   return (
     <div className="mx-auto max-w-xl py-10">

@@ -29,30 +29,59 @@ export function isOnboardingPath(pathname: string): boolean {
   return false;
 }
 
+/**
+ * The company prefix of a "/:prefix/onboarding" path, read from the path
+ * itself. The wizard is mounted at the App root, outside the :companyPrefix
+ * route, so useParams() never sees the prefix there; reading it from params
+ * is what left a direct load of /WAN/onboarding on "Name your company".
+ */
+export function onboardingPathCompanyPrefix(pathname: string): string | undefined {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 2 && segments[1]?.toLowerCase() === "onboarding") {
+    return segments[0];
+  }
+  return undefined;
+}
+
+/**
+ * What the route-driven wizard opens on.
+ *
+ * AgentDash (Scan 3, lane J): the wizard never creates a second company for
+ * someone who already has one. When the person has any company, it opens on
+ * the agent step for the prefixed company, or else the selected one (or the
+ * first). Making another company is the explicit New Company action
+ * (NEW_COMPANY_PATH), not something the wizard falls into.
+ */
 export function resolveRouteOnboardingOptions(params: {
   pathname: string;
   companyPrefix?: string;
   companies: OnboardingRouteCompany[];
+  selectedCompanyId?: string | null;
 }): { initialStep: 1 | 2; companyId?: string } | null {
-  const { pathname, companyPrefix, companies } = params;
+  const { pathname, companies, selectedCompanyId } = params;
 
   if (!isOnboardingPath(pathname)) return null;
 
-  if (!companyPrefix) {
+  const companyPrefix = params.companyPrefix ?? onboardingPathCompanyPrefix(pathname);
+
+  const matchedCompany = companyPrefix
+    ? companies.find(
+        (company) =>
+          company.issuePrefix.toUpperCase() === companyPrefix.toUpperCase(),
+      ) ?? null
+    : null;
+
+  const company =
+    matchedCompany ??
+    companies.find((entry) => entry.id === selectedCompanyId) ??
+    companies[0] ??
+    null;
+
+  if (!company) {
     return { initialStep: 1 };
   }
 
-  const matchedCompany =
-    companies.find(
-      (company) =>
-        company.issuePrefix.toUpperCase() === companyPrefix.toUpperCase(),
-    ) ?? null;
-
-  if (!matchedCompany) {
-    return { initialStep: 1 };
-  }
-
-  return { initialStep: 2, companyId: matchedCompany.id };
+  return { initialStep: 2, companyId: company.id };
 }
 
 /**

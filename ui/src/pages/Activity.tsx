@@ -10,6 +10,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
+import { isSystemPlumbingActivity } from "../lib/activity-format";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { useIsPhone } from "../hooks/useIsPhone";
 import {
@@ -48,6 +49,8 @@ export function Activity() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [filter, setFilter] = useState("all");
+  // AgentDash (Scan 3, lane J): system plumbing is hidden unless asked for.
+  const [showSystem, setShowSystem] = useState(false);
   const isPhone = useIsPhone();
 
   useEffect(() => {
@@ -110,18 +113,34 @@ export function Activity() {
     return <PageSkeleton variant="list" />;
   }
 
-  const filtered =
-    data && filter !== "all"
-      ? data.filter((e) => e.entityType === filter)
-      : data;
+  const visible = data && !showSystem
+    ? data.filter((e) => !isSystemPlumbingActivity(e.action))
+    : data;
+  const hiddenSystemCount = (data?.length ?? 0) - (visible?.length ?? 0);
 
-  const entityTypes = data
-    ? [...new Set(data.map((e) => e.entityType))].sort()
+  const filtered =
+    visible && filter !== "all"
+      ? visible.filter((e) => e.entityType === filter)
+      : visible;
+
+  const entityTypes = visible
+    ? [...new Set(visible.map((e) => e.entityType))].sort()
     : [];
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end">
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        {(hiddenSystemCount > 0 || showSystem) && (
+          <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground sm:min-h-0" data-testid="activity-show-system">
+            <input
+              type="checkbox"
+              className="accent-foreground"
+              checked={showSystem}
+              onChange={(e) => setShowSystem(e.target.checked)}
+            />
+            Show system events
+          </label>
+        )}
         <Select value={filter} onValueChange={setFilter}>
           <SelectTrigger className="w-[140px] h-8 text-xs max-sm:h-11 max-sm:w-full">
             <SelectValue placeholder="Filter by type" />

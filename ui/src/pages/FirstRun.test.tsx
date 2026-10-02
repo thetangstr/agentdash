@@ -152,8 +152,19 @@ describe("FirstRunPage", () => {
   it("resumes at the repo step once the model is set", async () => {
     mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: true, done: true } }));
     await render();
-    expect(container.textContent).toContain("Connect your GitHub repo");
-    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Your repo");
+    expect(container.textContent).toContain("Using code? Connect GitHub");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Code (optional)");
+  });
+
+  // AgentDash (Scan 3, lane J): the code and first-task steps are optional.
+  it("lets the founder skip the optional GitHub step and go Home", async () => {
+    mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: true, done: true } }));
+    await render();
+    expect(container.querySelector('[data-testid="first-run-optional-notice"]')?.textContent).toContain("optional");
+    const skip = container.querySelector('[data-testid="first-run-skip"]') as HTMLButtonElement;
+    expect(skip.textContent).toBe("Skip for now");
+    act(() => skip.click());
+    expect(mockNavigate).toHaveBeenCalledWith(expect.stringMatching(/\/dashboard$/), { replace: true });
   });
 
   it("hides the model step when the box does not need one", async () => {
@@ -168,7 +179,8 @@ describe("FirstRunPage", () => {
     );
     mockCreate.mockResolvedValue({ issue: { id: "i1", identifier: "ACM-1", title: "Add a badge" }, created: true, hiredAgentId: "a1" });
     await render();
-    expect(container.textContent).toContain("What should we build first?");
+    expect(container.textContent).toContain("What should your team do first?");
+    expect(container.querySelector('[data-testid="first-run-skip"]')).not.toBeNull();
     expect(container.textContent).toContain("acme/app");
     const chip = [...container.querySelectorAll('[data-testid="first-issue-suggestions"] button')][0] as HTMLButtonElement;
     act(() => chip.click());

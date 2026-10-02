@@ -146,6 +146,20 @@ export function getAdapterLabel(type: string): string {
   return withSuffix(base, getTypeSuffix(type));
 }
 
+/**
+ * Where an agent runs, in plain words for a non-technical owner.
+ *
+ * AgentDash (Scan 3, lane J): the Team list showed "Hermes Agent (local)" in
+ * monospace. Every local harness (any `*_local` type, and Cursor) runs on the
+ * machine this workspace runs on, which is the fact that matters; the harness
+ * name stays available as the hover title.
+ */
+export function plainRuntimeLabel(type: string): string {
+  if (type.endsWith("_local") || type === "cursor") return "Runs on this computer";
+  if (type === "openclaw_gateway" || type === "http") return "Runs on another service";
+  return getAdapterLabel(type);
+}
+
 export function getAdapterLabels(): Record<string, string> {
   const suffixed: Record<string, string> = {};
   for (const [type, info] of Object.entries(adapterDisplayMap)) {

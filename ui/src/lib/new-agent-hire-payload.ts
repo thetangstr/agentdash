@@ -6,6 +6,8 @@ export function buildNewAgentHirePayload(input: {
   workforceTemplateId?: string;
   effectiveRole: string;
   title?: string;
+  /** What the agent should do, in the owner's words. */
+  capabilities?: string;
   reportsTo?: string | null;
   selectedSkillKeys?: string[];
   configValues: CreateConfigValues;
@@ -17,6 +19,7 @@ export function buildNewAgentHirePayload(input: {
     workforceTemplateId,
     effectiveRole,
     title,
+    capabilities,
     reportsTo,
     selectedSkillKeys = [],
     configValues,
@@ -29,6 +32,7 @@ export function buildNewAgentHirePayload(input: {
     role: effectiveRole,
     ...(workforceTemplateId ? { workforceTemplateId } : {}),
     ...(title?.trim() ? { title: title.trim() } : {}),
+    ...(capabilities?.trim() ? { capabilities: capabilities.trim() } : {}),
     ...(reportsTo ? { reportsTo } : {}),
     ...(selectedSkillKeys.length > 0 ? { desiredSkills: selectedSkillKeys } : {}),
     adapterType: configValues.adapterType,

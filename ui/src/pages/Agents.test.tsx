@@ -58,6 +58,7 @@ vi.mock("../api/heartbeats", () => ({
 
 vi.mock("../adapters/adapter-display-registry", () => ({
   getAdapterLabel: (type: string) => type,
+  plainRuntimeLabel: (type: string) => (type.endsWith("_local") ? "Runs on this computer" : type),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -157,7 +158,7 @@ describe("Agents", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("Not scheduled");
+    expect(container.textContent).toContain("Runs when asked");
   });
 
   it("says nothing about scheduling for an agent that does wake on its own", async () => {
@@ -176,7 +177,7 @@ describe("Agents", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).not.toContain("Not scheduled");
+    expect(container.textContent).not.toContain("Runs when asked");
   });
 
   it("shows the configured model beside the adapter on the all agents page", async () => {
@@ -191,7 +192,7 @@ describe("Agents", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("codex_local");
+    expect(container.textContent).toContain("Runs on this computer");
     expect(container.textContent).toContain("gpt-5.4");
   });
 
@@ -254,7 +255,7 @@ describe("Agents", () => {
       const kind = cards[0]!.querySelector('[data-testid^="agent-kind-"]')!;
       expect(kind.className).toContain("text-xs");
       expect(kind.className).not.toContain("text-[10px]");
-      expect(cards[0]!.textContent).toContain("Not scheduled");
+      expect(cards[0]!.textContent).toContain("Runs when asked");
       expect(cards[0]!.textContent).toContain("deployment_lead");
     });
 

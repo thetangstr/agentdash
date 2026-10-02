@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isOnboardingPath,
+  onboardingPathCompanyPrefix,
   resolveRouteOnboardingOptions,
   shouldRedirectCompanylessRouteToOnboarding,
 } from "./onboarding-route";
@@ -47,6 +48,37 @@ describe("resolveRouteOnboardingOptions", () => {
         companies: [],
       }),
     ).toEqual({ initialStep: 1 });
+  });
+});
+
+describe("resolveRouteOnboardingOptions (lane J: never a second company)", () => {
+  const companies = [
+    { id: "company-1", issuePrefix: "WAN" },
+    { id: "company-2", issuePrefix: "NOR" },
+  ];
+
+  it("reads the prefix from the path when params have none (wizard mounts outside the route)", () => {
+    expect(onboardingPathCompanyPrefix("/WAN/onboarding")).toBe("WAN");
+    expect(onboardingPathCompanyPrefix("/onboarding")).toBeUndefined();
+    expect(
+      resolveRouteOnboardingOptions({ pathname: "/nor/onboarding", companies }),
+    ).toEqual({ initialStep: 2, companyId: "company-2" });
+  });
+
+  it("opens the agent step for the selected company on the unprefixed route", () => {
+    expect(
+      resolveRouteOnboardingOptions({
+        pathname: "/onboarding",
+        companies,
+        selectedCompanyId: "company-2",
+      }),
+    ).toEqual({ initialStep: 2, companyId: "company-2" });
+  });
+
+  it("falls back to an existing company rather than step 1 for an unknown prefix", () => {
+    expect(
+      resolveRouteOnboardingOptions({ pathname: "/zzz/onboarding", companies }),
+    ).toEqual({ initialStep: 2, companyId: "company-1" });
   });
 });
 

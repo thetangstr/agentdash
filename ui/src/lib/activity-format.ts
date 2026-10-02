@@ -21,7 +21,32 @@ interface ActivityFormatOptions {
   currentUserId?: string | null;
 }
 
+/**
+ * AgentDash (Scan 3, lane J): machinery events a non-technical owner should
+ * not have to read. "environment lease acquired" and "agent harness preflight
+ * passed" filled the feed, attributed to whichever agent or person triggered
+ * them (the preflight one read as the CEO's own action). They are hidden from
+ * the default feeds and, when shown, are relabelled and attributed to System.
+ */
+const SYSTEM_PLUMBING_ACTIONS = new Set([
+  "environment.lease_acquired",
+  "environment.lease_released",
+  "environment.probed",
+  "environment.probed_unsaved",
+  "agent.harness_preflight_passed",
+  "agent.runtime_session_reset",
+]);
+
+export function isSystemPlumbingActivity(action: string): boolean {
+  return SYSTEM_PLUMBING_ACTIONS.has(action);
+}
+
 const ACTIVITY_ROW_VERBS: Record<string, string> = {
+  "environment.lease_acquired": "prepared a workspace for a run",
+  "environment.lease_released": "cleaned up a run's workspace",
+  "environment.probed": "checked a run environment",
+  "environment.probed_unsaved": "checked a run environment",
+  "agent.harness_preflight_passed": "confirmed this agent can run:",
   "issue.created": "created",
   "issue.updated": "updated",
   "issue.checked_out": "checked out",

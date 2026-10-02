@@ -137,8 +137,8 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
       <div>
         <h1 className="text-lg font-semibold">Choose where your agents run</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Your Chief of Staff and the agents it hires run on a coding agent installed on this machine. Check the one
-          you use, then talk to your Chief of Staff.
+          Your Chief of Staff and the agents it hires run on an AI assistant program installed on this computer.
+          Check the one you use, then talk to your Chief of Staff.
         </p>
       </div>
 
@@ -177,7 +177,8 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
                     {state?.loading && applying !== runtime.adapterType ? "Checking…" : "Check"}
                   </Button>
                   {canConfigure && !isCurrent ? (
-                    <Button size="sm" disabled={applying !== null} onClick={() => void use(runtime)}>
+                    // Secondary: the step has one primary action, "Continue".
+                    <Button variant="outline" size="sm" disabled={applying !== null} onClick={() => void use(runtime)}>
                       {applying === runtime.adapterType ? "Switching…" : `Use ${runtime.label}`}
                     </Button>
                   ) : null}

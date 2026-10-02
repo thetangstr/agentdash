@@ -8,8 +8,11 @@ import { test, expect } from "@playwright/test";
  * and the last test here). The wizard stays reachable for a deep link to
  * /onboarding, which is what this spec drives.
  *
- * Walks through the 4-step OnboardingWizard:
- *   Step 1 — Name your company
+ * The wizard never creates a company when one exists (Scan 3, lane J): the
+ * company is made through the API, the way New Company makes it, and the
+ * deep link /:prefix/onboarding opens on the agent step for it.
+ *
+ * Walks through the OnboardingWizard from the agent step:
  *   Step 2 — Create your first agent (adapter selection + config)
  *   Step 3 — Give it something to do (task creation)
  *   Step 4 — Ready to launch (summary + open issue)
@@ -34,17 +37,16 @@ const TASK_TITLE = "E2E test task";
 
 test.describe("Onboarding wizard", () => {
   test("completes full wizard flow", async ({ page }) => {
-    await page.goto("/onboarding");
+    const createRes = await page.request.post("/api/companies", {
+      data: { name: COMPANY_NAME },
+    });
+    expect(createRes.ok()).toBe(true);
+    const created = (await createRes.json()) as { issuePrefix: string };
 
-    const wizardHeading = page.locator("h3", { hasText: "Name your company" });
+    await page.goto(`/${created.issuePrefix}/onboarding`);
 
-    await expect(wizardHeading).toBeVisible({ timeout: 5_000 });
-
-    const companyNameInput = page.locator('input[placeholder="Acme Corp"]');
-    await companyNameInput.fill(COMPANY_NAME);
-
-    const nextButton = page.getByRole("button", { name: "Next" });
-    await nextButton.click();
+    // A direct load opens on the agent step, never on "Name your company".
+    await expect(page.locator("h3", { hasText: "Name your company" })).toHaveCount(0);
 
     await expect(
       page.locator("h3", { hasText: "Create your first agent" })
