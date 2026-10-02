@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
-import { ApiError } from "../api/client";
 import { agentsApi } from "../api/agents";
 import { conversationsApi } from "../api/conversations";
 import { useCompany } from "../context/CompanyContext";
@@ -12,6 +11,7 @@ import type { CardContext } from "../components/cards";
 import { HermesProviderStep } from "../components/onboarding/HermesProviderStep";
 import { refreshAccessQueries } from "../lib/access-refresh";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { ApiError } from "../api/client";
 
 // AgentDash (GH #786): the CoS page header and suggested first messages.
 export const COS_HEADER_LINE = "Tell me what you want built. I'll staff it and ask you only when it's your call.";
@@ -26,6 +26,12 @@ export const COS_SUGGESTED_MESSAGES = [
 // arrives. A fresh company's inbox normally opens with a server-posted CoS
 // greeting; this covers a conversation that has none yet.
 export const COS_EMPTY_STATE_TITLE = "Your Chief of Staff is ready.";
+// AgentDash: shown instead of a conversation that belongs to another company.
+export const COS_WRONG_COMPANY_MESSAGE =
+  "This company has no Chief of Staff conversation yet. Switch to a company that has one, or ask an owner or admin to open Ask here first.";
+// AgentDash (PR #956 review): bootstrap refused with 403 (not an owner/admin).
+export const COS_NOT_SET_UP_MESSAGE =
+  "Your workspace's Chief of Staff isn't set up yet. A workspace owner or admin sets it up the first time they open this page.";
 export const COS_EMPTY_STATE_BODY =
   "Tell me what you're trying to get done this quarter and where you want to be in a year. I'll propose a small team, hire it when you say so, and turn the goal into tasks.";
 
@@ -87,9 +93,16 @@ export function CoSAskPage() {
 
 export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConversationLayout } = {}) {
   const { selectedCompanyId, loading: companiesLoading } = useCompany();
-  const [bootstrapped, setBootstrapped] = useState<BootstrapState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notAvailable, setNotAvailable] = useState<string | null>(null);
+  // The state below is tagged with the company it was resolved for, so a
+  // company switch never renders the previous company's chat, even for the
+  // one frame before the effect clears it.
+  const [resolved, setResolved] = useState<
+    | { forCompanyId: string | null; kind: "ready"; conversation: BootstrapState }
+    | { forCompanyId: string | null; kind: "unavailable"; message: string }
+    | { forCompanyId: string | null; kind: "error"; message: string }
+    | null
+  >(null);
+  const [attempt, setAttempt] = useState(0);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -101,44 +114,67 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
     // bootstrap and create/reuse the wrong company.
     if (companiesLoading) return;
 
+    const forCompanyId = selectedCompanyId ?? null;
+
     // If a company is already selected in the sidebar, try to load its existing
     // CoS conversation first. Only fall back to bootstrap (which creates a
-    // company + CoS + conversation) if there's no selected company.
+    // company + CoS + conversation) when that company genuinely has none.
     async function resolve() {
-      if (selectedCompanyId) {
+      // A new company (or a retry) starts from nothing: never keep showing
+      // the previous company's chat or error while this one resolves.
+      setResolved(null);
+
+      if (forCompanyId) {
         try {
-          const conv = await conversationsApi.companyInbox(selectedCompanyId);
+          const conv = await conversationsApi.companyInbox(forCompanyId);
           if (cancelled) return;
           // Find the CoS agent for this company
-          const agents = await agentsApi.list(selectedCompanyId);
+          const agents = await agentsApi.list(forCompanyId);
           if (cancelled) return;
           const cos = agents.find((a) => a.role === "chief_of_staff") ?? agents[0];
           if (conv && cos) {
-            setBootstrapped({
-              companyId: selectedCompanyId,
-              cosAgentId: cos.id,
-              conversationId: conv.id,
+            setResolved({
+              forCompanyId,
+              kind: "ready",
+              conversation: { companyId: forCompanyId, cosAgentId: cos.id, conversationId: conv.id },
             });
             return;
           }
-          // No conversation exists yet — bootstrap will create it
-        } catch {
-          // Fall through to bootstrap
+          // No conversation or no CoS yet — bootstrap will create it.
+        } catch (err: unknown) {
+          if (cancelled) return;
+          // Only a genuine "no conversation" (404) falls through to bootstrap.
+          // Anything else (no access, server down) is surfaced, not papered
+          // over with a bootstrap that may answer for another company.
+          if (!(err instanceof ApiError && err.status === 404)) {
+            const message = err instanceof Error ? err.message : "Failed to load the conversation";
+            setResolved({ forCompanyId, kind: "error", message });
+            return;
+          }
         }
       }
 
       // First-time onboarding path: bootstrap creates company + CoS + conversation
       try {
-        const r = await onboardingApi.bootstrap(selectedCompanyId);
+        // AgentDash (#956): bootstrap binds to the selected company when the
+        // user is an active member of it.
+        const r = await onboardingApi.bootstrap(forCompanyId);
         if (cancelled) return;
         // AgentDash: bootstrap may have created the first company; refetch
         // the access queries so the gate does not judge on the old cache.
         await refreshAccessQueries(queryClient);
         if (cancelled) return;
-        setBootstrapped({
-          companyId: r.companyId,
-          cosAgentId: r.cosAgentId,
-          conversationId: r.conversationId,
+        // Bootstrap answers for the user's own workspace, which need not be
+        // the selected company. Never render another company's chat under
+        // the selected company's sidebar.
+        if (forCompanyId && r.companyId !== forCompanyId) {
+          setResolved({ forCompanyId, kind: "unavailable", message: COS_WRONG_COMPANY_MESSAGE });
+          return;
+        }
+        setResolved({
+          forCompanyId,
+          kind: "ready",
+          conversation: { companyId: r.companyId, cosAgentId: r.cosAgentId, conversationId: r.conversationId },
         });
       } catch (err: unknown) {
         if (cancelled) return;
@@ -147,15 +183,15 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
         // (409). A member who opens /cos first gets a plain explanation, not
         // an error page.
         if (err instanceof ApiError && (err.status === 403 || err.status === 409)) {
-          setNotAvailable(
-            err.status === 403
-              ? "Your workspace's Chief of Staff isn't set up yet. A workspace owner or admin sets it up the first time they open this page."
-              : err.message,
-          );
+          setResolved({
+            forCompanyId,
+            kind: "unavailable",
+            message: err.status === 403 ? COS_NOT_SET_UP_MESSAGE : err.message,
+          });
           return;
         }
         const msg = err instanceof Error ? err.message : "Failed to bootstrap workspace";
-        setError(msg);
+        setResolved({ forCompanyId, kind: "error", message: msg });
       }
     }
 
@@ -163,31 +199,20 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
     return () => {
       cancelled = true;
     };
-  }, [selectedCompanyId, companiesLoading, queryClient]);
+  }, [selectedCompanyId, companiesLoading, queryClient, attempt]);
 
-  if (notAvailable) {
-    return (
-      <div className="mx-auto max-w-lg p-8 text-center text-sm" data-testid="cos-not-available">
-        <p className="font-medium">Chief of Staff not available</p>
-        <p className="mt-2 text-muted-foreground">{notAvailable}</p>
-        <Link className="mt-4 inline-block underline" to="/dashboard">
-          Go to Home
-        </Link>
-      </div>
-    );
-  }
+  // Resolved for a different company than the one selected now: treat it as
+  // still loading until the effect answers for the current one.
+  const current = resolved && resolved.forCompanyId === (selectedCompanyId ?? null) ? resolved : null;
 
-  if (error) {
+  if (current?.kind === "error") {
     return (
       <div className="p-8 text-center">
         <div className="text-red-600 mb-2">Couldn't set up your workspace</div>
-        <div className="text-sm text-gray-600">{error}</div>
+        <div className="text-sm text-gray-600">{current.message}</div>
         <button
           className="mt-4 border px-4 py-2 rounded"
-          onClick={() => {
-            setError(null);
-            setBootstrapped(null);
-          }}
+          onClick={() => setAttempt((n) => n + 1)}
         >
           Try again
         </button>
@@ -195,13 +220,27 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
     );
   }
 
-  if (!bootstrapped) {
+  if (current?.kind === "unavailable") {
+    return (
+      <div className="mx-auto max-w-lg p-8 text-center text-sm" data-testid="cos-not-available">
+        <p className="font-medium">Chief of Staff not available</p>
+        <p className="mt-2 text-muted-foreground">{current.message}</p>
+        <Link className="mt-4 inline-block underline" to="/dashboard">
+          Go to Home
+        </Link>
+      </div>
+    );
+  }
+
+  if (current?.kind !== "ready") {
     return (
       <div className="p-8 text-center text-muted-foreground">
         Setting up your workspace…
       </div>
     );
   }
+
+  const bootstrapped = current.conversation;
 
   const cardContext: CardContext = {
     onProposalConfirm: async () => {

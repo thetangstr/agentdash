@@ -7,6 +7,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/client";
 
 type Company = { id: string; issuePrefix: string; name: string };
 
@@ -61,7 +62,9 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("./ChatPanel", () => ({
-  default: () => <div className="chat-panel" data-testid="chat-panel" />,
+  default: ({ conversationId, companyId }: { conversationId: string; companyId: string }) => (
+    <div className="chat-panel" data-testid="chat-panel" data-conversation={conversationId} data-company={companyId} />
+  ),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -219,5 +222,64 @@ describe("Ask routes", () => {
     expect(appSource).toContain('<Route path="cos" element={<CoSEntryRoute />} />');
     // The full-screen conversation is never mounted directly at the top level.
     expect(appSource).not.toMatch(/path="cos" element=\{<CoSConversation/);
+  });
+
+  it("shows the not-available notice when bootstrap answers for another company", async () => {
+    companyState.companies = [ACME];
+    companyState.selectedCompany = ACME;
+    // ACME has no conversation (404), so the page falls back to bootstrap,
+    // which answers with the user's own, different workspace.
+    mockCompanyInbox.mockRejectedValue(new ApiError("Not found", 404, null));
+    mockBootstrap.mockResolvedValue({ companyId: "c-other", cosAgentId: "cos-other", conversationId: "conv-other" });
+
+    await renderAt("/ACME/cos");
+
+    expect(mockBootstrap).toHaveBeenCalledTimes(1);
+    expect(mockBootstrap).toHaveBeenCalledWith(ACME.id);
+    expect(q("cos-not-available")).toBeTruthy();
+    expect(container.textContent).toContain("This company has no Chief of Staff conversation yet.");
+    expect(q("chat-panel")).toBeNull();
+    // Still inside the company's sidebar layout.
+    expect(q("sidebar")).toBeTruthy();
+  });
+
+  it("surfaces a non-404 inbox error instead of falling through to bootstrap", async () => {
+    companyState.companies = [ACME];
+    companyState.selectedCompany = ACME;
+    mockCompanyInbox.mockRejectedValue(new ApiError("Server exploded", 500, null));
+
+    await renderAt("/ACME/cos");
+
+    expect(mockBootstrap).not.toHaveBeenCalled();
+    expect(q("chat-panel")).toBeNull();
+    expect(container.textContent).toContain("Server exploded");
+    expect(container.textContent).toContain("Try again");
+  });
+
+  it("clears the previous company's chat as soon as the company switches", async () => {
+    const BETA: Company = { id: "c-beta", issuePrefix: "BETA", name: "Beta" };
+    companyState.companies = [ACME, BETA];
+    companyState.selectedCompany = ACME;
+    mockCompanyInbox.mockImplementation((companyId: string) =>
+      companyId === ACME.id ? Promise.resolve({ id: "conv-acme" }) : new Promise(() => {}),
+    );
+    mockAgentsList.mockResolvedValue([{ id: "cos-1", name: "CoS", role: "chief_of_staff" }]);
+
+    const { CoSConversation } = await import("./CoSConversation");
+    await act(async () => root.render(<MemoryRouter><CoSConversation layout="embedded" /></MemoryRouter>));
+    await act(async () => {});
+    await act(async () => {});
+    expect(q("chat-panel")?.getAttribute("data-conversation")).toBe("conv-acme");
+
+    // Switch to Beta, whose conversation never resolves in this test. The
+    // same tree re-renders (no remount), so only the company changes.
+    companyState.selectedCompany = BETA;
+    await act(async () => root.render(<MemoryRouter><CoSConversation layout="embedded" /></MemoryRouter>));
+    await act(async () => {});
+
+    expect(mockCompanyInbox).toHaveBeenCalledWith(BETA.id);
+    expect(q("chat-panel")).toBeNull();
+    expect(container.textContent).toContain("Setting up your workspace");
+    expect(mockBootstrap).not.toHaveBeenCalled();
   });
 });
