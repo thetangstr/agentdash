@@ -11,6 +11,7 @@ const mockStatus = vi.hoisted(() => vi.fn());
 const mockCreate = vi.hoisted(() => vi.fn());
 const mockAdapterStatus = vi.hoisted(() => vi.fn());
 const mockNavigate = vi.hoisted(() => vi.fn());
+const mockSetupHermesProvider = vi.hoisted(() => vi.fn());
 const mockCompany = vi.hoisted(() => ({
   selectedCompany: { id: "company-1", issuePrefix: "ACM" } as null | Record<string, string>,
   selectedCompanyId: "company-1" as string | null,
@@ -25,7 +26,7 @@ const mockRequestModelKey = vi.hoisted(() => vi.fn());
 vi.mock("@/api/onboarding", () => ({
   onboardingApi: {
     adapterStatus: mockAdapterStatus,
-    setupHermesProvider: vi.fn(),
+    setupHermesProvider: mockSetupHermesProvider,
     modelKeyAdmins: mockModelKeyAdmins,
     requestModelKey: mockRequestModelKey,
   },
@@ -68,7 +69,7 @@ describe("FirstRunPage", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
-    for (const mock of [mockStatus, mockCreate, mockAdapterStatus, mockNavigate, mockModelKeyAdmins, mockRequestModelKey]) mock.mockReset();
+    for (const mock of [mockStatus, mockCreate, mockAdapterStatus, mockNavigate, mockModelKeyAdmins, mockRequestModelKey, mockSetupHermesProvider]) mock.mockReset();
     mockModelKeyAdmins.mockResolvedValue({ admins: [] });
     mockCompany.selectedCompany = { id: "company-1", issuePrefix: "ACM" };
     mockCompany.selectedCompanyId = "company-1";
@@ -120,6 +121,28 @@ describe("FirstRunPage", () => {
     expect(container.textContent).toContain("Connect a model provider");
     const current = container.querySelector('[aria-current="step"]');
     expect(current?.textContent).toContain("Your model");
+  });
+
+  // AgentDash (first-session test, Lane A item 3): after the key the founder
+  // landed on a bare companies list instead of the CoS conversation.
+  it("goes to the CoS conversation once the model key is saved", async () => {
+    mockStatus.mockResolvedValue(status());
+    mockSetupHermesProvider.mockResolvedValue({ provider: "zai", model: "glm-5.3-flash", configured: true });
+    await render();
+    const key = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(key, "zai-key");
+      key.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mockSetupHermesProvider).toHaveBeenCalledWith(expect.objectContaining({ companyId: "company-1", apiKey: "zai-key" }));
+    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
   });
 
   it("resumes at the repo step once the model is set", async () => {

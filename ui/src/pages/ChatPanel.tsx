@@ -1,5 +1,5 @@
 // AgentDash: chat substrate page
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useMessages } from "../realtime/useMessages";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
@@ -14,6 +14,7 @@ export default function ChatPanel({
   cardContext,
   headerProps,
   suggestions,
+  emptyState,
 }: {
   conversationId: string;
   companyId: string;
@@ -22,6 +23,8 @@ export default function ChatPanel({
   headerProps?: ChatHeaderProps;
   /** AgentDash (GH #786): suggested first messages, shown until the person has sent one. */
   suggestions?: string[];
+  /** AgentDash: shown in place of the message list while the conversation has no messages. */
+  emptyState?: ReactNode;
 }) {
   const messages = useMessages(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -72,10 +75,14 @@ export default function ChatPanel({
             floating at the top with a big empty gap. As messages accumulate
             they push older content up and out via overflow-y-auto. */}
         <div className="max-w-2xl mx-auto min-h-full flex flex-col justify-end">
-          <MessageList
-            messages={messages}
-            cardContext={resolvedCardContext}
-          />
+          {messages.length === 0 && emptyState ? (
+            <div data-testid="chat-empty-state">{emptyState}</div>
+          ) : (
+            <MessageList
+              messages={messages}
+              cardContext={resolvedCardContext}
+            />
+          )}
           <div ref={bottomRef} aria-hidden="true" />
         </div>
       </div>

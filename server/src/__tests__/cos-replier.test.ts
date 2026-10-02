@@ -284,3 +284,109 @@ describe("cosReplier.reply (phase-aware path)", () => {
     );
   });
 });
+
+// AgentDash (first-session test, Lane A item 1): the CoS said "Let me pull
+// together the working plan" and then nothing arrived until the user nudged it.
+describe("cosReplier.reply (plan arrives in the same turn)", () => {
+  const planPayload = {
+    rationale: "research + content first",
+    agents: [
+      { role: "research_analyst", name: "Rae", adapterType: "hermes_local", responsibilities: ["map the market"], kpis: ["brief weekly"] },
+      { role: "content_lead", name: "Cole", adapterType: "hermes_local", responsibilities: ["write posts"], kpis: ["2 posts/week"] },
+    ],
+    alignmentToShortTerm: "launch",
+    alignmentToLongTerm: "grow",
+  };
+  const planReply = [
+    "Here's the team I'd start with. Want me to set them up, or revise?",
+    "",
+    "```json",
+    JSON.stringify({ phase_decision: "stay_in_plan", plan: planPayload }),
+    "```",
+  ].join("\n");
+
+  function setup(goals: Record<string, unknown>, goalsReply: string) {
+    let n = 0;
+    const conversations = {
+      paginate: vi.fn().mockResolvedValue([{ role: "user", content: "Two of us, small budget, keep it lean." }]),
+      postMessage: vi.fn(async (msg: any) => ({ id: msg.cardKind ? "msg-card" : `msg-${++n}` })),
+    };
+    const cosState = {
+      getOrCreate: vi.fn().mockResolvedValue({
+        conversationId: "conv1",
+        phase: "goals",
+        goals,
+        proposalMessageId: null,
+        turnsInPhase: 3,
+      }),
+      recordTurn: vi.fn().mockResolvedValue(undefined),
+      setGoals: vi.fn().mockResolvedValue(undefined),
+      advancePhase: vi.fn().mockResolvedValue(undefined),
+    };
+    const llm = vi.fn().mockResolvedValueOnce(goalsReply).mockResolvedValueOnce(planReply);
+    return { conversations, cosState, llm };
+  }
+
+  it("posts the plan card in the same turn when the goals reply advances", async () => {
+    const goalsBody =
+      "So: launch in 90 days, a self-running content engine in a year, two people. Let me pull together the working plan.";
+    const goalsReply = [
+      goalsBody,
+      "```json",
+      JSON.stringify({
+        captured: { shortTerm: "launch in 90 days", longTerm: "self-running content engine", constraints: { teamSize: 2, budget: "lean" } },
+        phase_decision: "advance_to_plan",
+      }),
+      "```",
+    ].join("\n");
+    const { conversations, cosState, llm } = setup({}, goalsReply);
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
+
+    expect(llm).toHaveBeenCalledTimes(2);
+    // The follow-up turn runs the plan prompt with the goals captured this turn.
+    expect(llm.mock.calls[1][0].system).toContain("launch in 90 days");
+    expect(llm.mock.calls[1][0].system).toContain("Propose a concrete agent team");
+    const posted = conversations.postMessage.mock.calls.map(([m]: any[]) => m.cardKind ?? m.body);
+    expect(posted).toEqual([
+      goalsBody,
+      "agent_plan_proposal_v1",
+      "Here's the team I'd start with. Want me to set them up, or revise?",
+    ]);
+    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
+    expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan", { proposalMessageId: "msg-card" });
+  });
+
+  it("treats a plan announcement as an advance once the goals are complete, even without the decision flag", async () => {
+    const goalsReply = [
+      "Got it, budget stays lean. Let me pull together the working plan.",
+      "```json",
+      JSON.stringify({ captured: { constraints: { budget: "lean" } }, phase_decision: "stay_in_goals" }),
+      "```",
+    ].join("\n");
+    const { conversations, cosState, llm } = setup({ shortTerm: "launch", longTerm: "grow" }, goalsReply);
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
+
+    expect(llm).toHaveBeenCalledTimes(2);
+    expect(conversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }),
+    );
+  });
+
+  it("keeps interviewing when the goals are incomplete", async () => {
+    const goalsReply = [
+      "Launch in 90 days, noted. What does success look like a year out?",
+      "```json",
+      JSON.stringify({ captured: { shortTerm: "launch" }, phase_decision: "stay_in_goals" }),
+      "```",
+    ].join("\n");
+    const { conversations, cosState, llm } = setup({}, goalsReply);
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({ conversationId: "conv1", cosAgentId: "cos1" });
+
+    expect(llm).toHaveBeenCalledTimes(1);
+    expect(cosState.advancePhase).not.toHaveBeenCalled();
+    expect(conversations.postMessage).toHaveBeenCalledTimes(1);
+  });
+});

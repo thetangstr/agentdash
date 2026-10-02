@@ -13,11 +13,19 @@ import { refreshAccessQueries } from "../lib/access-refresh";
 
 // AgentDash (GH #786): the CoS page header and suggested first messages.
 export const COS_HEADER_LINE = "Tell me what you want built. I'll staff it and ask you only when it's your call.";
+// Role-neutral: the first session is not always an engineering company
+// (first-session test, Lane A item 4).
 export const COS_SUGGESTED_MESSAGES = [
-  "Plan our next two weeks of engineering work",
-  "What should I hire for first?",
-  "Break my first issue into smaller issues",
+  "Plan this quarter with me",
+  "Who should I hire first?",
+  "Turn a goal into tasks",
 ];
+// AgentDash: what an empty CoS conversation says before the first message
+// arrives. A fresh company's inbox normally opens with a server-posted CoS
+// greeting; this covers a conversation that has none yet.
+export const COS_EMPTY_STATE_TITLE = "Your Chief of Staff is ready.";
+export const COS_EMPTY_STATE_BODY =
+  "Tell me what you're trying to get done this quarter and where you want to be in a year. I'll propose a small team, hire it when you say so, and turn the goal into tasks.";
 
 interface BootstrapState {
   companyId: string;
@@ -232,6 +240,12 @@ function CoSConversationView({
         agentDirectory={agentDirectory}
         headerProps={{ agentRole: COS_HEADER_LINE }}
         suggestions={COS_SUGGESTED_MESSAGES}
+        emptyState={
+          <div className="rounded-lg border border-border-soft bg-surface-raised p-4 text-sm">
+            <p className="font-medium">{COS_EMPTY_STATE_TITLE}</p>
+            <p className="mt-1 text-text-secondary">{COS_EMPTY_STATE_BODY}</p>
+          </div>
+        }
       />
     </div>
   );

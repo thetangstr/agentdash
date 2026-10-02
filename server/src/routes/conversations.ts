@@ -5,6 +5,7 @@ import { logger } from "../middleware/logger.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
+  companyService,
   conversationService,
   conversationDispatch,
   agentService,
@@ -16,6 +17,7 @@ import {
 import { llmSummonAdapter } from "../services/agent-summoner.js";
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
+import { buildPhase0Greeting } from "../services/onboarding-orchestrator.js";
 
 const COMPANY_INBOX_TITLE = "Company Inbox";
 
@@ -64,6 +66,34 @@ export function conversationRoutes(db: Db) {
     cosResolver,
   });
 
+  // AgentDash (first-session test, Lane A item 4): a fresh company's inbox used
+  // to open empty, so the founder faced a blank Ask page. When the inbox is
+  // created for a company whose only agent is the Chief of Staff, the CoS opens
+  // the conversation with the interview's first question. Best effort: a
+  // failure here never blocks returning the inbox.
+  async function postCosOpener(companyId: string, conversationId: string) {
+    try {
+      const all = await agents.list(companyId);
+      const cos = all.find((a: any) => a.role === "chief_of_staff");
+      if (!cos || all.some((a: any) => a.role !== "chief_of_staff")) return;
+      let companyName: string | null = null;
+      try {
+        companyName = (await companyService(db).getById(companyId))?.name ?? null;
+      } catch {
+        // The greeting falls back to the product name.
+      }
+      await svc.postMessage({
+        conversationId,
+        authorKind: "agent",
+        authorId: cos.id,
+        body: buildPhase0Greeting(null, companyName),
+        companyId,
+      });
+    } catch (err) {
+      logger.warn({ err, companyId, conversationId }, "could not post the CoS opener");
+    }
+  }
+
   // AgentDash (security): every `/:id` route resolves the conversation first
   // and authorizes against the conversation's own company. The company is
   // never taken from the request body — a caller-supplied companyId used to
@@ -96,6 +126,7 @@ export function conversationRoutes(db: Db) {
         title: COMPANY_INBOX_TITLE,
       });
       await svc.addParticipant(conversation.id, req.actor.userId, "owner");
+      await postCosOpener(companyId, conversation.id);
     }
     res.json(conversation);
   });

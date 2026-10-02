@@ -67,6 +67,8 @@ import {
   workforceTemplateIdSchema,
   FIXED_QUESTIONS,
   isAgentPlanPayload,
+  mapProposedAgentRole,
+  proposedRoleTitle,
   type AgentProposal,
   type AgentPlanProposalV1Payload,
   type InterviewState,
@@ -714,7 +716,10 @@ export function onboardingV2Routes(db: Db) {
       const cos = (await txAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
       const planAgent = payload.agents[index];
       const created = await txAgents.create(companyId, {
-        name: planAgent.name, role: 'general', title: planAgent.role, adapterType: planAgent.adapterType,
+        // AgentDash: keep the proposed role. It maps onto the AGENT_ROLES enum
+        // (nearest fit, "general" only when nothing fits) and the card's own
+        // wording stays as the title.
+        name: planAgent.name, role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.role), adapterType: planAgent.adapterType,
         workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: {}, reportsTo: cos?.id ?? null,
         ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
       }, acceptance);

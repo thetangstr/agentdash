@@ -120,7 +120,7 @@ ${JSON.stringify(state.goals, null, 2)}
 
 Ask the ONE most useful clarifying question per turn — never generic "tell me more". Reflect what you heard back in your own words first ("So short-term you want X, long-term you want Y. Got it."), then ask the next sharpest question.
 
-Once you have short-term + long-term + at least one constraint, transition to plan presentation by setting "phase_decision" to "advance_to_plan". Until then, keep it as "stay_in_goals".
+Once you have short-term + long-term + at least one constraint, transition to plan presentation by setting "phase_decision" to "advance_to_plan". Until then, keep it as "stay_in_goals". The plan is generated and shown right after a reply that advances, so never promise a plan ("let me pull together the plan") in a reply that stays in goals.
 
 Your reply MUST end with a fenced JSON block like:
 
@@ -237,6 +237,35 @@ function isGoalsPatch(
   return true;
 }
 
+// AgentDash (first-session stall): a goals-phase reply that announces the
+// plan ("Let me pull together the working plan") without flipping
+// phase_decision used to leave the user waiting for a plan that only came
+// after they nudged the CoS. These two checks let the server treat that reply
+// as an advance once the interview has what the plan needs.
+const PLAN_ANNOUNCEMENT_RE =
+  /\b(?:pull|put|draw|draft|sketch|build|assemble|map|lay|write|work)(?:s|ing|ed)?\b[^.?!\n]{0,40}\b(?:plan|team)\b|\b(?:let me|i'?ll|i will|i'?m going to|going to)\b[^.?!\n]{0,40}\b(?:plan|team)\b/i;
+
+export function announcesPlan(body: string): boolean {
+  return PLAN_ANNOUNCEMENT_RE.test(body);
+}
+
+export function goalsReadyForPlan(goals: CosStateRow["goals"]): boolean {
+  const constraints = goals.constraints ?? {};
+  return Boolean(goals.shortTerm?.trim()) && Boolean(goals.longTerm?.trim()) && Object.keys(constraints).length > 0;
+}
+
+function mergeGoals(
+  current: CosStateRow["goals"],
+  patch: { shortTerm?: string; longTerm?: string; constraints?: Record<string, unknown> },
+): CosStateRow["goals"] {
+  return {
+    ...current,
+    ...(patch.shortTerm !== undefined ? { shortTerm: patch.shortTerm } : {}),
+    ...(patch.longTerm !== undefined ? { longTerm: patch.longTerm } : {}),
+    constraints: { ...(current.constraints ?? {}), ...(patch.constraints ?? {}) },
+  };
+}
+
 export function cosReplier(deps: Deps) {
   const cosState = deps.cosState;
   const deepInterviewSpecs = deps.deepInterviewSpecs;
@@ -315,38 +344,95 @@ export function cosReplier(deps: Deps) {
       const { body, trailer } = parseTrailer(text);
       const visibleBody = body.length > 0 ? body : text.trimEnd();
 
+      // Posts the plan card, records it as the current proposal, then posts
+      // the visible body that introduces it.
+      const postPlan = async (plan: AgentPlanProposalV1Payload, planBody: string) => {
+        const cardMsg = await deps.conversations.postMessage({
+          conversationId: input.conversationId,
+          authorKind: "agent",
+          authorId: input.cosAgentId,
+          body: "",
+          cardKind: "agent_plan_proposal_v1",
+          cardPayload: plan as unknown as Record<string, unknown>,
+        });
+        await cosState?.advancePhase(input.conversationId, "plan", {
+          proposalMessageId: cardMsg?.id ?? null,
+        });
+        return deps.conversations.postMessage({
+          conversationId: input.conversationId,
+          authorKind: "agent",
+          authorId: input.cosAgentId,
+          body: planBody,
+        });
+      };
+
       // Apply state transitions BEFORE posting messages so subsequent turns see the new phase.
       if (cosState && state) {
         try {
           await cosState.recordTurn(input.conversationId);
-          if (state.phase === "goals" && trailer) {
-            const captured = trailer.captured;
+          if (state.phase === "goals") {
+            const captured = trailer?.captured;
+            let goals = state.goals ?? {};
             if (isGoalsPatch(captured)) {
               await cosState.setGoals(input.conversationId, captured);
+              goals = mergeGoals(goals, captured);
             }
-            if (trailer.phase_decision === "advance_to_plan") {
+            const advance =
+              trailer?.phase_decision === "advance_to_plan" ||
+              (goalsReadyForPlan(goals) && announcesPlan(visibleBody));
+            if (advance) {
               await cosState.advancePhase(input.conversationId, "plan");
-            }
-          } else if (state.phase === "plan" && trailer) {
-            // Plan phase: post visible body + a second message carrying the card.
-            if (isAgentPlanPayload(trailer.plan)) {
-              const cardMsg = await deps.conversations.postMessage({
-                conversationId: input.conversationId,
-                authorKind: "agent",
-                authorId: input.cosAgentId,
-                body: "",
-                cardKind: "agent_plan_proposal_v1",
-                cardPayload: trailer.plan as unknown as Record<string, unknown>,
-              });
-              await cosState.advancePhase(input.conversationId, "plan", {
-                proposalMessageId: cardMsg?.id ?? null,
-              });
-              return deps.conversations.postMessage({
+              // AgentDash (first-session stall): run the plan turn now, in
+              // the same reply, so the plan card arrives without the user
+              // having to nudge the CoS.
+              const goalsMsg = await deps.conversations.postMessage({
                 conversationId: input.conversationId,
                 authorKind: "agent",
                 authorId: input.cosAgentId,
                 body: visibleBody,
               });
+              let planText: string;
+              try {
+                planText = await deps.llm(
+                  {
+                    system: planPrompt({ ...state, phase: "plan", goals }),
+                    messages: [...messages, { role: "assistant", content: visibleBody }],
+                  },
+                  meter,
+                );
+                await cosState.recordTurn(input.conversationId);
+              } catch (err) {
+                // The goals reply is already posted; the next user turn runs
+                // the plan prompt (phase is now "plan").
+                logger.warn(
+                  { err, conversationId: input.conversationId },
+                  "cos-replier: follow-up plan turn failed",
+                );
+                return goalsMsg;
+              }
+              const planReply = parseTrailer(planText);
+              const planBody = planReply.body.length > 0 ? planReply.body : planText.trimEnd();
+              if (isAgentPlanPayload(planReply.trailer?.plan)) {
+                return postPlan(planReply.trailer!.plan, planBody);
+              }
+              logger.warn(
+                { conversationId: input.conversationId },
+                "cos-replier: follow-up plan turn returned no valid plan payload",
+              );
+              if (planBody && planBody !== visibleBody) {
+                return deps.conversations.postMessage({
+                  conversationId: input.conversationId,
+                  authorKind: "agent",
+                  authorId: input.cosAgentId,
+                  body: planBody,
+                });
+              }
+              return goalsMsg;
+            }
+          } else if (state.phase === "plan" && trailer) {
+            // Plan phase: post visible body + a second message carrying the card.
+            if (isAgentPlanPayload(trailer.plan)) {
+              return postPlan(trailer.plan, visibleBody);
             }
             if (!trailer.plan) {
               logger.warn(
