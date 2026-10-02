@@ -137,6 +137,17 @@ import { stripForeignHermesProfileConfig } from "./hermes-profile-args.js";
 import { defaultHermesCommand, pinDefaultHermesCommand } from "../services/adapter-command-resolution.js";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 import { withHermesSpawnWatch } from "./hermes-spawn-watch.js";
+import {
+  applyHermesStreamUsageFallback,
+  createHermesStreamJsonCapture,
+  hermesConfigPinsOutputFormat,
+  hermesRejectedStreamJsonFlag,
+  invalidateHermesStreamJsonProbe,
+  hermesStreamJsonDisabledByEnv,
+  hermesSupportsStreamJson,
+  isHermesBookkeepingStderr,
+  withHermesStreamJsonArgs,
+} from "./hermes-stream-json.js";
 
 // AgentDash: managed per-agent Hermes profiles. When enabled, each agent is
 // hired into its own Hermes profile (isolated model/MCP/skills/state) and runs
@@ -819,10 +830,57 @@ async function executeHermesFailClosed(
   ctx: Parameters<ServerAdapterModule["execute"]>[0],
 ): Promise<AdapterExecutionResult> {
   const guard = createHermesHumanQuestionGuard(ctx.onLog);
-  const result = await withHermesSessionUsage(
-    sanitizeHermesExecutionResult(await executeHermesLocal({ ...ctx, onLog: guard.onLog })),
-    ctx,
-  );
+  // AgentDash: structured transcript. Use Hermes' stream-json output when the
+  // installed binary supports it (see hermes-stream-json.ts), and route the
+  // `session_id:` bookkeeping line off stderr in either mode.
+  const agentConfig = readRecord(ctx.agent?.adapterConfig) ?? {};
+  const command = readNonEmptyString(agentConfig.hermesCommand) ?? getHermesCommandFromContext(ctx);
+  const wantsStreamJson = !hermesStreamJsonDisabledByEnv() && !hermesConfigPinsOutputFormat(agentConfig);
+
+  const attempt = async (streamJson: boolean) => {
+    const capture = createHermesStreamJsonCapture();
+    let stderrText = "";
+    const onLog = async (stream: "stdout" | "stderr", chunk: string) => {
+      if (stream === "stderr" && isHermesBookkeepingStderr(chunk)) return guard.onLog("stdout", chunk);
+      if (stream === "stderr" && stderrText.length < 64_000) stderrText += chunk;
+      await guard.onLog(stream, chunk);
+      // The clarify fallback arrives JSON-escaped (and possibly split across
+      // events) in stream-json mode; the guard also reads the decoded text.
+      if (streamJson && stream === "stdout") await guard.observeText(capture.feed(chunk));
+    };
+    const runCtx = streamJson
+      ? { ...ctx, onLog, agent: { ...ctx.agent, adapterConfig: withHermesStreamJsonArgs(agentConfig) } }
+      : { ...ctx, onLog };
+    const raw = await executeHermesLocal(runCtx);
+    if (streamJson) await guard.observeText(capture.flush());
+    return { raw, capture, stderrText };
+  };
+
+  let streamJson = wantsStreamJson && (await hermesSupportsStreamJson(command));
+  let run = await attempt(streamJson);
+  // A Hermes downgraded since the probe rejects the flag before doing any work:
+  // forget the probe and rerun this same run once in text mode.
+  if (
+    streamJson &&
+    (run.raw.exitCode ?? 0) !== 0 &&
+    !run.capture.sawStreamEvents() &&
+    hermesRejectedStreamJsonFlag(`${run.stderrText}\n${run.raw.errorMessage ?? ""}`)
+  ) {
+    invalidateHermesStreamJsonProbe(command);
+    await ctx.onLog("stdout", "[hermes] This Hermes does not support --format stream-json; retrying in text mode.\n");
+    streamJson = false;
+    run = await attempt(false);
+  }
+
+  const structured = streamJson
+    ? run.capture.apply(run.raw, { persistSession: agentConfig.persistSession !== false })
+    : run.raw;
+  const metered = await withHermesSessionUsage(sanitizeHermesExecutionResult(structured), ctx);
+  // The session ledger is the source of truth for usage; the stream's per-run
+  // counts are only a marked fallback when the ledger could not be read.
+  const result = streamJson
+    ? applyHermesStreamUsageFallback(metered, run.capture.streamUsage(), run.capture.streamCostUsd())
+    : metered;
   return guard.failClosed(result);
 }
 

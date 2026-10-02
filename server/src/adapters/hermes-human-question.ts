@@ -62,6 +62,9 @@ const FALLBACK_MARKERS: RegExp[] = [
   /did not provide a response within the time limit/i,
 ];
 
+/** Longer than any marker phrase, so one split across two events is still seen whole. */
+const DECODED_TAIL_CHARS = 200;
+
 // eslint-disable-next-line no-control-regex
 const ANSI_ESCAPES = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 
@@ -137,17 +140,31 @@ export function createHermesHumanQuestionGuard(
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
 ) {
   const evidence: string[] = [];
-  const guardedOnLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
-    await onLog(stream, chunk);
-    const marker = detectHermesHumanQuestionFallback(chunk);
+  const record = async (marker: string | null): Promise<void> => {
     if (!marker) return;
     evidence.push(marker);
     if (evidence.length === 1) {
       await onLog("stderr", renderHermesHumanQuestionFallbackLog(marker));
     }
   };
+  const guardedOnLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
+    await onLog(stream, chunk);
+    await record(detectHermesHumanQuestionFallback(chunk));
+  };
+  // Decoded text from a structured (stream-json) run, where the raw log holds
+  // the fallback JSON-escaped and a phrase can straddle two events. A tail of
+  // the previous text is kept so a marker split across events still matches.
+  let decodedTail = "";
+  const observeText = async (text: string): Promise<void> => {
+    if (!text) return;
+    const window = decodedTail + text;
+    const marker = detectHermesHumanQuestionFallback(window);
+    decodedTail = marker ? "" : window.slice(-DECODED_TAIL_CHARS);
+    await record(marker);
+  };
   return {
     onLog: guardedOnLog,
+    observeText,
     evidence: evidence as readonly string[],
     failClosed: (result: AdapterExecutionResult) => failClosedOnHermesHumanQuestionFallback(result, evidence),
   };
