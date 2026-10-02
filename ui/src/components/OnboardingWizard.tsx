@@ -470,6 +470,12 @@ export function OnboardingWizard() {
     enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen
   });
   const companyHasAgents = (existingAgents?.length ?? 0) > 0 && !createdAgentId;
+  // AgentDash (scan 4, lane O2): "CoS" is the first agent's name. A company
+  // that already has agents has its Chief of Staff, so the name starts empty
+  // (a role-based placeholder suggests one) unless the user typed something.
+  useEffect(() => {
+    if (companyHasAgents) setAgentName((current) => (current === "CoS" ? "" : current));
+  }, [companyHasAgents]);
   const getCapabilities = useAdapterCapabilities();
   const adapterCaps = getCapabilities(adapterType);
   const isLocalAdapter = adapterCaps.supportsInstructionsBundle || adapterCaps.supportsSkills || adapterCaps.supportsLocalAgentJwt;
@@ -1328,7 +1334,7 @@ export function OnboardingWizard() {
                     </label>
                     <input
                       className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                      placeholder="CoS"
+                      placeholder={companyHasAgents ? "e.g. Research Assistant" : "CoS"}
                       value={agentName}
                       onChange={(e) => setAgentName(e.target.value)}
                       autoFocus

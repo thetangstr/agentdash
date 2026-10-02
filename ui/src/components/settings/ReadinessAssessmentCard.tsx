@@ -1,12 +1,12 @@
 // AgentDash (GH #785, UX-4): the readiness assessment is optional. It left the
-// signup chain and lives here, under Settings → Advanced, for anyone who wants
+// signup chain and lives here, in Settings (Assessment), for anyone who wants
 // it. Same card for every company (one UX).
 import { Button } from "@/components/ui/button";
 
 export function ReadinessAssessmentCard() {
   return (
     <div className="space-y-4" data-testid="company-settings-advanced-section">
-      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Advanced</div>
+      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assessment</div>
       <div className="rounded-md border border-border px-4 py-4">
         <div className="text-sm font-medium">Readiness assessment</div>
         <p className="mt-1 text-sm text-muted-foreground">

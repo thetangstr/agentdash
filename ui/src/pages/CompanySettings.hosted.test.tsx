@@ -72,6 +72,13 @@ vi.mock("../context/CompanyContext", () => ({
   }),
 }));
 
+const reconciliation = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("@/components/settings/NeedsReconciliationPanel", () => ({
+  NeedsReconciliationPanel: () => <section data-testid="reconciliation-panel">Needs reconciliation</section>,
+  useNeedsReconciliationCount: () => reconciliation.count,
+}));
+
 vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
 }));
@@ -186,6 +193,46 @@ describe("CompanySettings Advanced section", () => {
     await waitForAssertion(() => {
       expect(container.textContent).toContain("New agent (advanced)");
     });
+    act(() => root.unmount());
+  });
+});
+
+// Review of #991: reconciliation stays under the collapsed Advanced section
+// only while nothing waits for a verdict.
+describe("CompanySettings reconciliation placement", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    mockHealthApi.get.mockResolvedValue({ status: "ok", hostedBox: false });
+  });
+
+  afterEach(() => {
+    document.body.removeChild(container);
+    reconciliation.count = 0;
+    vi.clearAllMocks();
+  });
+
+  it("keeps an empty reconciliation panel inside the collapsed Advanced section", async () => {
+    reconciliation.count = 0;
+    const { root } = render(container);
+    await flush();
+    const panel = container.querySelector('[data-testid="reconciliation-panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel!.closest('[data-testid="company-settings-advanced"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="company-settings-reconciliation-attention"]')).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("lifts the panel into the main page when sends wait for a verdict", async () => {
+    reconciliation.count = 2;
+    const { root } = render(container);
+    await flush();
+    const panels = container.querySelectorAll('[data-testid="reconciliation-panel"]');
+    expect(panels).toHaveLength(1);
+    expect(panels[0]!.closest('[data-testid="company-settings-advanced"]')).toBeNull();
+    expect(panels[0]!.closest('[data-testid="company-settings-reconciliation-attention"]')).not.toBeNull();
     act(() => root.unmount());
   });
 });

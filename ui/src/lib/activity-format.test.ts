@@ -8,6 +8,15 @@ describe("activity formatting", () => {
     ["agent-approver", { id: "agent-approver", name: "Approver Bot" } as Agent],
   ]);
 
+  // Scan 4 (lane O2): "backlog → todo" read as stored values.
+  it("words status changes the way the board does", () => {
+    const details = { status: "todo", _previous: { status: "backlog" } };
+    expect(formatIssueActivityAction("issue.updated", details)).toBe("changed the status from Backlog to To do");
+    expect(formatActivityVerb("issue.updated", { status: "in_review", _previous: { status: "in_progress" } })).toBe(
+      "changed status from In progress to In review on",
+    );
+  });
+
   it("formats blocker activity using linked issue identifiers", () => {
     const details = {
       addedBlockedByIssues: [

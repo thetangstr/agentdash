@@ -284,9 +284,12 @@ test.describe("Multi-user: Company Settings UI", () => {
   test("shows Team and Advanced (invite) sections on settings page", async ({ page }) => {
     await page.goto(`${BASE}/${companyPrefix}/company/settings`);
     await page.waitForLoadState("networkidle");
-    await expect(page.getByTestId("company-settings-invites-section")).toBeVisible({
+    // Scan 4: the OpenClaw invite sits inside the collapsed Advanced section.
+    await expect(page.getByTestId("company-settings-advanced")).toBeVisible({
       timeout: 10_000,
     });
+    await page.getByTestId("company-settings-advanced").locator("summary").click();
+    await expect(page.getByTestId("company-settings-invites-section")).toBeVisible();
     await expect(page.getByTestId("company-settings-team-section")).toBeVisible({
       timeout: 10_000,
     });

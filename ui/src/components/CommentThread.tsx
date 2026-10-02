@@ -23,6 +23,7 @@ import { formatAssigneeUserLabel } from "../lib/assignees";
 import type { IssueTimelineAssignee, IssueTimelineEvent } from "../lib/issue-timeline-events";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatDateTime } from "../lib/utils";
+import { issueStatusLabel } from "../lib/issue-status-label";
 import { restoreSubmittedCommentDraft } from "../lib/comment-submit-draft";
 import { PluginSlotOutlet } from "@/plugins/slots";
 
@@ -167,9 +168,9 @@ function shouldImplicitlyReopenComment(issueStatus: string | undefined, assignee
   return resumesToTodo && assigneeValue.startsWith("agent:");
 }
 
+// AgentDash (scan 4, lane O2): status changes read "Backlog → To do", not "backlog → todo".
 function humanizeValue(value: string | null): string {
-  if (!value) return "None";
-  return value.replace(/_/g, " ");
+  return issueStatusLabel(value);
 }
 
 function formatTimelineAssigneeLabel(

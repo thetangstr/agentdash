@@ -238,7 +238,7 @@ An npm package is installed with `npm install --no-save` into `$PAPERCLIP_HOME/a
 | `POST /api/adapters/:type/reload` | Re-import the package from disk without a restart |
 | `POST /api/adapters/:type/reinstall` | Pull the latest npm version and reload. Not for local-path installs. |
 | `DELETE /api/adapters/:type` | Unregister an external adapter (and `npm uninstall` it). Built-ins cannot be removed. |
-| `GET /api/adapters/:type/config-schema` | The adapter's `getConfigSchema()` result |
+| `GET /api/adapters/:type/config-schema` | The adapter's `getConfigSchema()` result (`{ "fields": [] }` when it has none) |
 | `GET /api/adapters/:type/ui-parser.js` | The adapter's UI parser, if it ships one |
 
 ## Security

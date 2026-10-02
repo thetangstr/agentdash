@@ -29,12 +29,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { AgentIcon } from "../components/AgentIconPicker";
 import { useIsPhone } from "../hooks/useIsPhone";
-import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
+import { type Agent } from "@paperclipai/shared";
 import { agentIdentityLine } from "../lib/agent-identity";
 
 import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 
-const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
 type FilterTab = "all" | "active" | "paused" | "error";
 
@@ -355,10 +354,10 @@ export function Agents() {
                         {getConfiguredModel(agent)
                           ?? (agent.adapterType === "hermes_local" ? "default*" : "—")}
                       </span>
-                      <span className="text-xs text-muted-foreground w-16 text-right">
+                      <span className="w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground">
                         {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
                       </span>
-                      <span className="flex w-20 justify-end gap-1">
+                      <span className="flex w-48 shrink-0 justify-end gap-1 whitespace-nowrap" data-testid="agent-row-schedule-status">
                         {isScheduled(agent) || agent.status === "terminated" ? null : <NotScheduledBadge />}
                         <StatusBadge status={agent.status} />
                       </span>
@@ -570,9 +569,8 @@ function OrgTreeNode({
           {agent && node.status !== "terminated" ? (
             <AgentKindBadge agent={agent} className="ml-2 align-middle" />
           ) : null}
-          <span className="text-xs text-muted-foreground ml-2">
-            {roleLabels[node.role] ?? node.role}
-            {agent?.title ? ` - ${agent.title}` : ""}
+          <span className="text-xs text-muted-foreground ml-2" data-testid="agent-org-row-identity">
+            {agentIdentityLine({ role: node.role, title: agent?.title ?? null })}
           </span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -610,12 +608,12 @@ function OrgTreeNode({
                 >
                   {getConfiguredModel(agent) ?? "—"}
                 </span>
-                <span className="text-xs text-muted-foreground w-16 text-right">
+                <span className="w-16 shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground">
                   {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
                 </span>
               </>
             )}
-            <span className="flex w-20 justify-end gap-1">
+            <span className="flex w-48 shrink-0 justify-end gap-1 whitespace-nowrap" data-testid="agent-row-schedule-status">
               {agent && !isScheduled(agent) && node.status !== "terminated" ? <NotScheduledBadge /> : null}
               <StatusBadge status={node.status} />
             </span>

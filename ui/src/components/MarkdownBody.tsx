@@ -85,6 +85,11 @@ const wrapAnywhereStyle: React.CSSProperties = {
   wordBreak: "break-word",
 };
 
+const headerWrapStyle: React.CSSProperties = {
+  overflowWrap: "normal",
+  wordBreak: "normal",
+};
+
 const scrollableBlockStyle: React.CSSProperties = {
   maxWidth: "100%",
   overflowX: "auto",
@@ -378,7 +383,10 @@ export function MarkdownBody({
       </td>
     ),
     th: ({ node: _node, style: tableHeaderStyle, children: tableHeaderChildren, ...tableHeaderProps }) => (
-      <th {...tableHeaderProps} style={mergeWrapStyle(tableHeaderStyle as React.CSSProperties | undefined)}>
+      // AgentDash (scan 4, lane O2): a header wraps between words only. With
+      // overflow-wrap:anywhere an empty "Initials" column shrank to one letter
+      // and the header read "Initia / ls".
+      <th {...tableHeaderProps} style={{ ...(tableHeaderStyle as React.CSSProperties | undefined), ...headerWrapStyle }}>
         {tableHeaderChildren}
       </th>
     ),

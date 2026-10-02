@@ -48,12 +48,12 @@ test("a new workspace goes through the first run to Home with its first issue as
 
   // One onboarding path: on a self-hosted install the first step after naming
   // the workspace is the runtime (Claude Code, Codex or Hermes), then the CoS.
-  await expect(page.getByTestId("first-run-progress")).toContainText("Your runtime");
+  await expect(page.getByTestId("first-run-progress")).toContainText("Your AI assistant");
   const runtime = page.getByTestId("first-run-runtime");
   await expect(runtime).toContainText("Claude Code");
   await expect(runtime).toContainText("Codex");
   await expect(runtime).toContainText("Hermes");
-  await expect(page.getByTestId("first-run-runtime-current")).toContainText("This instance runs on");
+  await expect(page.getByTestId("first-run-runtime-current")).toContainText("Your workspace uses");
   await page.getByRole("button", { name: "Continue to your Chief of Staff" }).click();
   await expect(page).toHaveURL(/\/cos$/);
 

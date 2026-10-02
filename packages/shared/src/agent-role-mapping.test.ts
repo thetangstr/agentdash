@@ -20,6 +20,46 @@ describe("mapProposedAgentRole", () => {
     expect(mapProposedAgentRole("Bookkeeper")).toBe("cfo");
   });
 
+  // Scan 4 (accounting-firm persona): bookkeeping phrases beat the generic
+  // job words ("coordinator" -> pm) without pulling unrelated jobs into cfo.
+  it("maps an accounting firm's plan hires to cfo", () => {
+    expect(mapProposedAgentRole("Month End Close Coordinator")).toBe("cfo");
+    expect(mapProposedAgentRole("Close Checklist Manager")).toBe("cfo");
+    expect(mapProposedAgentRole("Year-End Close Lead")).toBe("cfo");
+    expect(mapProposedAgentRole("Accounts Payable Clerk")).toBe("cfo");
+    expect(mapProposedAgentRole("Accounts Receivable Specialist")).toBe("cfo");
+    expect(mapProposedAgentRole("Bank Reconciliation Specialist")).toBe("cfo");
+    expect(mapProposedAgentRole("Payroll Coordinator")).toBe("cfo");
+    expect(mapProposedAgentRole("General Ledger Reviewer")).toBe("cfo");
+    expect(mapProposedAgentRole("Outreach Drafter")).toBe("cmo");
+  });
+
+  // Review of #991: the first cut also caught these. Each keeps the role it
+  // had before scan 4.
+  it.each([
+    ["QA Auditor", "qa"],
+    ["Code Audit Engineer", "engineer"],
+    ["Billing Engineer", "engineer"],
+    ["Ledger Engineer", "engineer"],
+    ["Tax Researcher", "researcher"],
+    ["Budget Analyst", "researcher"],
+    ["Accessibility Auditor", "general"],
+    ["Deal Close Specialist", "general"],
+    ["Ticket Close-out Coordinator", "pm"],
+    ["Financial Compliance Analyst", "cfo"],
+    ["Compliance Auditor", "security"],
+    ["Sales Closer", "general"],
+    ["Expense Report Tool Developer", "engineer"],
+    ["Invoice Template Designer", "designer"],
+  ])("keeps %s as %s", (title, role) => {
+    expect(mapProposedAgentRole(title)).toBe(role);
+  });
+
+  it("leaves the generic buckets when nothing specific fits", () => {
+    expect(mapProposedAgentRole("Client Email Coordinator")).toBe("pm");
+    expect(mapProposedAgentRole("Client Onboarding Lead")).toBe("general");
+  });
+
   it("never hands out a second chief of staff and falls back to general", () => {
     expect(mapProposedAgentRole("chief_of_staff")).toBe("general");
     expect(mapProposedAgentRole("")).toBe("general");
