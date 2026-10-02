@@ -119,6 +119,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Textarea } from "@/components/ui/textarea";
 import { AlertTriangle, ArrowDown, ArrowRight, Brain, Check, ChevronDown, Copy, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square, ThumbsDown, ThumbsUp } from "lucide-react";
 import { IssueBlockedNotice } from "./IssueBlockedNotice";
+import { useDockedComposerOffset } from "../hooks/useDockedComposerOffset";
 
 interface IssueChatMessageContext {
   feedbackDataSharingPreference: FeedbackDataSharingPreference;
@@ -1413,7 +1414,7 @@ function IssueChatUserMessage({
       ) : (
         <div
           className={cn(
-            "mt-1 flex items-center gap-1.5 px-1 opacity-0 transition-opacity group-hover:opacity-100",
+            "mt-1 flex items-center gap-1.5 px-1 opacity-0 transition-opacity group-hover:opacity-100 max-sm:opacity-100",
             isCurrentUser ? "justify-end" : "justify-start",
           )}
         >
@@ -1421,7 +1422,7 @@ function IssueChatUserMessage({
             <TooltipTrigger asChild>
               <a
                 href={anchorId ? `#${anchorId}` : undefined}
-                className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                className="text-[11px] text-muted-foreground hover:text-foreground hover:underline max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-center"
               >
                 {message.createdAt ? commentDateLabel(message.createdAt) : ""}
               </a>
@@ -1432,7 +1433,7 @@ function IssueChatUserMessage({
           </Tooltip>
           <button
             type="button"
-            className="inline-flex h-6 w-6 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+            className="inline-flex h-6 w-6 items-center justify-center text-muted-foreground transition-colors hover:text-foreground max-sm:h-11 max-sm:w-11"
             title="Copy message"
             aria-label="Copy message"
             onClick={() => {
@@ -1630,7 +1631,7 @@ function IssueChatAssistantMessage({
               <div className="mt-2 flex items-center gap-1">
                 <button
                   type="button"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground max-sm:h-11 max-sm:w-11"
                   title="Copy message"
                   aria-label="Copy message"
                   onClick={() => {
@@ -1654,7 +1655,7 @@ function IssueChatAssistantMessage({
                   <TooltipTrigger asChild>
                     <a
                       href={anchorId ? `#${anchorId}` : undefined}
-                      className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                      className="text-[11px] text-muted-foreground hover:text-foreground hover:underline max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-center"
                     >
                       {message.createdAt ? commentDateLabel(message.createdAt) : ""}
                     </a>
@@ -1808,7 +1809,7 @@ function IssueChatFeedbackButtons({
         type="button"
         disabled={isSaving}
         className={cn(
-          "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+          "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors max-sm:h-11 max-sm:w-11",
           visibleVote === "up"
             ? "text-green-600 dark:text-green-400"
             : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -1825,7 +1826,7 @@ function IssueChatFeedbackButtons({
             type="button"
             disabled={isSaving}
             className={cn(
-              "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+              "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors max-sm:h-11 max-sm:w-11",
               visibleVote === "down"
                 ? "text-amber-600 dark:text-amber-400"
                 : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -3270,6 +3271,8 @@ export function IssueChatThread({
   const virtualizedThreadRef = useRef<VirtualizedIssueChatThreadListHandle | null>(null);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const composerViewportAnchorRef = useRef<HTMLDivElement | null>(null);
+  // AgentDash: lets the phone toast stack clear the docked composer, not just the nav.
+  useDockedComposerOffset(composerViewportAnchorRef, showComposer);
   const composerViewportSnapshotRef = useRef<ReturnType<typeof captureComposerViewportSnapshot>>(null);
   const preserveComposerViewportRef = useRef(false);
   const pendingSubmitScrollRef = useRef(false);

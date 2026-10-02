@@ -99,7 +99,7 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   );
 
   const classes = cn(
-    stacked ? "min-h-11 px-3 py-2.5 text-sm" : "px-4 py-2 text-sm",
+    stacked ? "min-h-11 px-3 py-2.5 text-sm" : "px-4 py-2 text-sm max-sm:min-h-11",
     link && "cursor-pointer hover:bg-accent/50 transition-colors",
     className,
   );

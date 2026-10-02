@@ -84,18 +84,20 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
               href={titleHref}
               target="_blank"
               rel="noreferrer"
-              className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
+              className="min-w-0 flex-1 text-sm font-medium leading-5 hover:underline max-sm:-my-3 max-sm:py-3"
               data-testid="shipped-title"
             >
-              {workProductDisplayTitle(product.title)}
+              {/* The clamp lives inside so the phone padding (44px hit area) never shows a third line. */}
+              <span className="line-clamp-2">{workProductDisplayTitle(product.title)}</span>
             </a>
           ) : (
             <Link
               to={internalHref}
-              className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
+              className="min-w-0 flex-1 text-sm font-medium leading-5 hover:underline max-sm:-my-3 max-sm:py-3"
               data-testid="shipped-title"
             >
-              {workProductDisplayTitle(product.title)}
+              {/* The clamp lives inside so the phone padding (44px hit area) never shows a third line. */}
+              <span className="line-clamp-2">{workProductDisplayTitle(product.title)}</span>
             </Link>
           )}
           <WorkProductStateBadge product={product} className="text-xs" />

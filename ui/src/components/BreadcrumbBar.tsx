@@ -105,7 +105,13 @@ export function BreadcrumbBar() {
                       <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
                     ) : (
                       <BreadcrumbLink asChild>
-                        <Link to={crumb.href}>{crumb.label}</Link>
+                        {/* AgentDash: 44px tap target on phones; the 48px header has the room. */}
+                        <Link
+                          to={crumb.href}
+                          className="max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center"
+                        >
+                          {crumb.label}
+                        </Link>
                       </BreadcrumbLink>
                     )}
                   </BreadcrumbItem>

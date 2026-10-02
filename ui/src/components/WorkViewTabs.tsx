@@ -62,7 +62,7 @@ export function WorkViewTabs({ view }: { view: WorkView }) {
             aria-current={active ? "page" : undefined}
             data-testid={`work-view-${option}`}
             className={cn(
-              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-center",
               active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
             )}
           >

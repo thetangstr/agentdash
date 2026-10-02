@@ -507,14 +507,19 @@ const SecretField = React.memo(({
           onChange={(e) => onChange(e.target.value)}
           placeholder={String(defaultValue ?? "")}
           disabled={disabled}
-          className="pr-10"
+          className="pr-10 max-sm:pr-11"
           aria-invalid={!!error}
         />
+        {/* AgentDash: sits inside the input, so it is sized here (44px wide on
+            phones, the input's full height) rather than by the global phone
+            Button minimum, which would push it over the typed text. */}
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+          data-tap-exempt=""
+          aria-label={isVisible ? "Hide value" : "Show value"}
+          className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent max-sm:w-11"
           onClick={() => setIsVisible(!isVisible)}
           disabled={disabled}
         >
