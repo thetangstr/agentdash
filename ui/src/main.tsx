@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ApiError, isRetryableError } from "./api/client";
+import { installRateLimitRejectionGuard } from "./lib/rate-limit-rejections";
 import { CompanyProvider } from "./context/CompanyContext";
 import { LiveUpdatesProvider } from "./context/LiveUpdatesProvider";
 import { BreadcrumbProvider } from "./context/BreadcrumbContext";
@@ -38,6 +39,9 @@ if ("serviceWorker" in navigator) {
     });
   });
 }
+
+// AgentDash (scan 3 lane L): an unhandled 429 is a quiet warning, not a page error.
+installRateLimitRejectionGuard();
 
 const queryClient = new QueryClient({
   defaultOptions: {

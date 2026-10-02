@@ -23,6 +23,14 @@ export interface Capabilities {
   membershipRole: string | null;
   isInstanceAdmin: boolean;
   capabilities: Record<CapabilityKey, boolean>;
+  /**
+   * Workspace features, decided by the same server predicate that gates their
+   * routes. `null` means the server could not tell; absent on older servers.
+   * Either way the UI falls back to asking the gated route.
+   */
+  features?: {
+    stewardship: boolean | null;
+  };
 }
 
 export const capabilitiesApi = {

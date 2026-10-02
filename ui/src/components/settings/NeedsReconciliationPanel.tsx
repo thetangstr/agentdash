@@ -4,6 +4,7 @@ import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
 import { AvailableOnRequest, isCapabilityNotFound } from "@/components/AvailableOnRequest";
+import { useStewardshipFeature } from "@/hooks/useStewardshipCapability";
 import {
   connectorSendExecutionsApi,
   type ConnectorSendExecutionRow,
@@ -36,10 +37,14 @@ export function NeedsReconciliationPanel({ companyId }: Props) {
   const queryClient = useQueryClient();
   const listKey = ["connectorSendExecutions", companyId, "unresolved"] as const;
 
+  // AgentDash (scan 3 lane L): reconciliation is part of the stewardship
+  // feature. When /me/capabilities says it is off, the list is not asked just
+  // to read its 404.
+  const stewardshipFeature = useStewardshipFeature(companyId);
   const list = useQuery({
     queryKey: listKey,
     queryFn: () => connectorSendExecutionsApi.listUnresolved(companyId),
-    enabled: !!companyId,
+    enabled: !!companyId && (stewardshipFeature === "on" || stewardshipFeature === "unknown"),
     retry: false,
   });
 
@@ -80,7 +85,7 @@ export function NeedsReconciliationPanel({ companyId }: Props) {
   });
 
   const forbidden = list.error instanceof ApiError && list.error.status === 403;
-  const capabilityOff = isCapabilityNotFound(list.error);
+  const capabilityOff = stewardshipFeature === "off" || isCapabilityNotFound(list.error);
 
   return (
     <section aria-labelledby="reconcile-heading" className="space-y-3 rounded-lg border p-4">

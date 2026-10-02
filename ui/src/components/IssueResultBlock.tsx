@@ -2,7 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
-import { formatShippedUsage } from "../lib/shipped";
+import { TOKENS_COUNTED_NOTE, formatShippedUsage } from "../lib/shipped";
 import { ShippedWorkProductRow } from "./ShippedWorkProductRow";
 
 export function IssueResultBlock({ companyId, issueId }: { companyId: string; issueId: string }) {
@@ -22,7 +22,9 @@ export function IssueResultBlock({ companyId, issueId }: { companyId: string; is
     >
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 max-sm:py-1.5">
         <h3 className="text-sm font-medium">Result</h3>
-        <span className="text-xs text-muted-foreground">{formatShippedUsage(usage)}</span>
+        <span className="text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE}>
+          {formatShippedUsage(usage)}
+        </span>
       </div>
       <div className="divide-y divide-border">
         {items.map((product) => (

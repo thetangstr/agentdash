@@ -156,7 +156,18 @@ export function createAuthRateLimiter(opts: RateLimiterFactoryOptions = {}): Req
 
 export function createBillingRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
   if (isDisabled(opts)) return noopMiddleware;
-  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_BILLING_MAX", 20));
+  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_BILLING_MAX", 20), {
+    // AgentDash (scan 3 lane L): the abuse vector is checkout and portal
+    // sessions, not reading your own plan. GET /billing/status counted against
+    // the same 20-per-15-minutes budget, so ordinary navigation (the trial
+    // banner reads it) ran the budget out and the UI saw 122 429s in one
+    // session. Signed-in reads are skipped, exactly as the default limiter
+    // skips them; anonymous reads and every mutation stay limited.
+    skip(req) {
+      if (isPreflightMethod(req.method)) return true;
+      return isSafeReadMethod(req.method) && hasAuthenticatedActor(req);
+    },
+  });
 }
 
 export function createDefaultApiRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {

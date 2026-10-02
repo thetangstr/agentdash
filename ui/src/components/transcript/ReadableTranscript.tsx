@@ -150,7 +150,9 @@ function ToolStatusIcon({ status }: { status: ReadableToolItem["status"] }) {
 }
 
 function hasUsefulInput(item: ReadableToolRowItem): boolean {
-  if (item.summary.isCommand) return false;
+  // AgentDash (scan 3 lane L): a multi-statement script is labelled by one
+  // line, so the script itself is shown when the row is opened.
+  if (item.summary.isCommand) return Boolean(item.summary.script);
   if (item.input === null || item.input === undefined) return false;
   if (typeof item.input === "object" && Object.keys(item.input as object).length === 0) return false;
   return true;
@@ -228,7 +230,7 @@ export function ReadableToolRow({
           {hasUsefulInput(item) && (
             <div>
               <div className="mb-0.5 text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Input</div>
-              <CappedOutput text={formatToolPayload(item.input)} />
+              <CappedOutput text={item.summary.script ?? formatToolPayload(item.input)} />
             </div>
           )}
           {item.result ? (

@@ -7,7 +7,9 @@ import { useNavigate } from "@/lib/router";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { companiesApi } from "../api/companies";
 import { queryKeys } from "../lib/queryKeys";
-import { formatCents, relativeTime } from "../lib/utils";
+import { relativeTime } from "../lib/utils";
+import { companyUsageLine, runsWithoutOutputLine } from "../lib/company-card-figures";
+import { TOKENS_COUNTED_NOTE } from "../lib/token-figures";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +29,7 @@ import {
   Users,
   CircleDot,
   DollarSign,
+  Coins,
   Calendar,
 } from "lucide-react";
 
@@ -123,12 +126,14 @@ export function Companies() {
           const runsWithoutEvidence = companyStats?.runsSucceededWithoutEvidence ?? 0;
           const wastedPct =
             runsSucceeded > 0 ? Math.round((runsWithoutEvidence / runsSucceeded) * 100) : 0;
-          const budgetPct =
-            company.budgetMonthlyCents > 0
-              ? Math.round(
-                  (company.spentMonthlyCents / company.budgetMonthlyCents) * 100,
-                )
-              : 0;
+          const runsLine = runsWithoutOutputLine(runsSucceeded, runsWithoutEvidence);
+          // AgentDash (scan 3 lane L): tokens, not "$0.00", on a BYOK workspace.
+          const usage = companyUsageLine({
+            spentMonthlyCents: company.spentMonthlyCents,
+            budgetMonthlyCents: company.budgetMonthlyCents,
+            monthTokens: companyStats?.monthTokens,
+          });
+          const UsageIcon = usage.unmetered ? Coins : DollarSign;
 
           return (
             <div
@@ -258,24 +263,25 @@ export function Companies() {
                     {issueCount} {issueCount === 1 ? "issue" : "issues"}
                   </span>
                 </div>
-                {runsSucceeded > 0 ? (
+                {runsLine ? (
                   <div
                     className="flex items-center gap-1.5 tabular-nums"
-                    title={`${runsWithoutEvidence} of ${runsSucceeded} successful runs left no comment and no activity behind. "Succeeded" means the process exited zero, not that work happened.`}
+                    data-testid="company-card-runs-without-output"
+                    title="These runs finished without an error but left no comment and no activity behind."
                   >
                     <CircleDot className="h-3.5 w-3.5" />
-                    <span className={wastedPct >= 25 ? "text-destructive" : undefined}>
-                      {wastedPct}% of runs left nothing
-                    </span>
+                    <span className={wastedPct >= 25 ? "text-destructive" : undefined}>{runsLine}</span>
                   </div>
                 ) : null}
-                <div className="flex items-center gap-1.5 tabular-nums">
-                  <DollarSign className="h-3.5 w-3.5" />
+                <div
+                  className="flex items-center gap-1.5 tabular-nums"
+                  data-testid="company-card-usage"
+                  title={usage.unmetered ? TOKENS_COUNTED_NOTE : undefined}
+                >
+                  <UsageIcon className="h-3.5 w-3.5" />
                   <span>
-                    {formatCents(company.spentMonthlyCents)}
-                    {company.budgetMonthlyCents > 0
-                      ? <> / {formatCents(company.budgetMonthlyCents)} <span className="text-xs">({budgetPct}%)</span></>
-                      : <span className="text-xs ml-1">Unlimited budget</span>}
+                    {usage.text}
+                    {usage.note ? <span className="text-xs ml-1">{usage.note}</span> : null}
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 ml-auto">

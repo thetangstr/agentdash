@@ -3,6 +3,7 @@ import type { TranscriptEntry } from "../adapters";
 import {
   ReadableTranscriptBuilder,
   buildReadableTranscript,
+  commandLabel,
   updateReadableTranscript,
   formatRunDuration,
   isErrorLikeText,
@@ -78,6 +79,71 @@ describe("summarizeToolCall", () => {
     const summary = summarizeToolCall("Bash", { command: `echo ${"x".repeat(300)}` });
     expect(summary.target!.length).toBeLessThanOrEqual(96);
     expect(summary.target!.endsWith("…")).toBe(true);
+  });
+});
+
+describe("commandLabel (multi-line scripts)", () => {
+  it("leaves a single command alone", () => {
+    expect(commandLabel("pnpm test:run")).toBe("pnpm test:run");
+    expect(commandLabel("FOO=1 pnpm build")).toBe("FOO=1 pnpm build");
+    expect(commandLabel("cd ui")).toBe("cd ui");
+  });
+
+  it("skips set -e, assignments, cd and comments to the first real command", () => {
+    const script = [
+      "set -euo pipefail",
+      "# where the box lives",
+      'BASE="http://127.0.0.1:3100"',
+      "TOKEN=$(cat ~/.token)",
+      "export NODE_ENV=production",
+      "cd /srv/app",
+      'curl -s "$BASE/api/health" | jq .status',
+    ].join("\n");
+    expect(commandLabel(script)).toBe('curl -s "$BASE/api/health" | jq .status');
+  });
+
+  it("prefers an echo heading anywhere in the script", () => {
+    const script = [
+      "set -e",
+      "BASE=/tmp/x",
+      "ls $BASE",
+      'echo "=== Checking migrations ==="',
+      "pnpm db:migrate",
+    ].join("\n");
+    expect(commandLabel(script)).toBe("Checking migrations");
+    expect(commandLabel("set -e\necho '--- Build UI ---'\npnpm build")).toBe("Build UI");
+    expect(commandLabel("set -e; echo \"### Typecheck\"; pnpm -r typecheck")).toBe("Typecheck");
+  });
+
+  it("does not treat a plain echo as a heading", () => {
+    expect(commandLabel("set -e\necho done\npnpm build")).toBe("echo done");
+  });
+
+  it("splits && and ; outside quotes but not inside them", () => {
+    expect(commandLabel("set -e && cd ui && pnpm vitest run")).toBe("pnpm vitest run");
+    expect(commandLabel("cd ui; grep -n 'a;b && c' file.ts")).toBe("grep -n 'a;b && c' file.ts");
+  });
+
+  it("falls back to the first statement when everything is set-up", () => {
+    expect(commandLabel("set -e\nBASE=1\ncd /tmp")).toBe("set -e");
+  });
+
+  it("labels a Bash call by its first real command and keeps the whole script", () => {
+    const script = "set -e\nBASE=https://example.test\ncurl -s $BASE/health";
+    const summary = summarizeToolCall("Bash", { command: script });
+    expect(summary.label).toBe("Ran curl -s $BASE/health");
+    expect(summary.isCommand).toBe(true);
+    expect(summary.script).toBe(script);
+  });
+
+  it("unwraps shell wrappers before labelling", () => {
+    const summary = summarizeToolCall("shell", { command: ["bash", "-lc", "set -e\ncd repo\ngit status"] });
+    expect(summary.target).toBe("git status");
+    expect(summary.script).toBe("set -e\ncd repo\ngit status");
+  });
+
+  it("carries no script when the label already is the command", () => {
+    expect(summarizeToolCall("Bash", { command: "git status" }).script).toBeUndefined();
   });
 });
 

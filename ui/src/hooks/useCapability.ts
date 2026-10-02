@@ -17,9 +17,13 @@ import { capabilitiesApi, type CapabilityKey } from "../api/capabilities";
  * appears and then 403s, which is exactly what this reduces rather than
  * something it can create.
  */
+export function capabilitiesQueryKey(companyId: string | null | undefined) {
+  return ["me", "capabilities", companyId] as const;
+}
+
 export function useCapabilities(companyId: string | null | undefined) {
   return useQuery({
-    queryKey: ["me", "capabilities", companyId] as const,
+    queryKey: capabilitiesQueryKey(companyId),
     queryFn: () => capabilitiesApi.get(companyId!),
     enabled: Boolean(companyId),
     staleTime: 60_000,

@@ -68,6 +68,7 @@ export interface DashboardSummary {
      * box cost is not metered (cost is billed by the model provider), so Home
      * shows tokens when monthSpendCents is zero and this is not.
      */
+    /** Input + output tokens; cached input is not counted. */
     monthTokens: number;
     monthBudgetCents: number;
     monthUtilizationPercent: number;

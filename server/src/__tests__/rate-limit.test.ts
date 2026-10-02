@@ -196,6 +196,36 @@ describe("rate-limit middleware (#160)", () => {
     expect(blocked.status).toBe(429);
   });
 
+  // AgentDash (scan 3 lane L): GET /billing/status shared the checkout
+  // budget, so the trial banner's reads produced 122 429s in one session.
+  it("billing limiter lets a signed-in person read their plan, and still caps billing writes", async () => {
+    delete process.env.NODE_ENV;
+    process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
+    process.env.AGENTDASH_RATE_LIMIT_BILLING_MAX = "2";
+    const { createBillingRateLimiter } = await loadFactories();
+
+    const app = express();
+    app.set("trust proxy", true);
+    app.use((req, _res, next) => {
+      (req as any).actor = { type: "board", userId: "alice" };
+      next();
+    });
+    app.use(createBillingRateLimiter({ deploymentMode: "authenticated" }));
+    app.get("/status", (_req, res) => res.json({ ok: true }));
+    app.post("/checkout-session", (_req, res) => res.json({ ok: true }));
+
+    for (let i = 0; i < 10; i++) {
+      const read = await request(app).get("/status").set("X-Forwarded-For", "10.0.0.31");
+      expect(read.status).toBe(200);
+    }
+    for (let i = 0; i < 2; i++) {
+      const write = await request(app).post("/checkout-session").set("X-Forwarded-For", "10.0.0.31");
+      expect(write.status).toBe(200);
+    }
+    const blocked = await request(app).post("/checkout-session").set("X-Forwarded-For", "10.0.0.31");
+    expect(blocked.status).toBe(429);
+  });
+
   it("authenticated requests key on actor.userId, not IP", async () => {
     delete process.env.NODE_ENV;
     process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";

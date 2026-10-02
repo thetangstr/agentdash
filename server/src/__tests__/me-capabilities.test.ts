@@ -22,13 +22,13 @@ const COMPANY = "11111111-1111-4111-8111-111111111111";
 const mockAccess = vi.hoisted(() => ({ canUser: vi.fn() }));
 vi.mock("../services/index.js", () => ({ accessService: () => mockAccess }));
 
-function appFor(actor: Record<string, unknown>) {
+function appFor(actor: Record<string, unknown>, db: unknown = {}) {
   const app = express();
   app.use((req, _res, next) => {
     (req as unknown as { actor: unknown }).actor = actor;
     next();
   });
-  app.use("/api", meCapabilityRoutes({} as never));
+  app.use("/api", meCapabilityRoutes(db as never));
   // Surface thrown HttpErrors as their status rather than a 500.
   app.use((err: { status?: number; message?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     res.status(err.status ?? 500).json({ error: err.message });
@@ -102,5 +102,58 @@ describe("GET /api/me/capabilities", () => {
     const outsider = { ...human("owner"), companyIds: ["22222222-2222-4222-8222-222222222222"] };
     const res = await request(appFor(outsider)).get(`/api/me/capabilities?companyId=${COMPANY}`);
     expect(res.status).toBe(403);
+  });
+
+  // AgentDash (scan 3 lane L): the stewardship feature, answered with a 200
+  // instead of discovered through a gated route's 404.
+  describe("features.stewardship", () => {
+    function dbWithProfile(productProfile: string | null) {
+      return {
+        select: () => ({
+          from: () => ({
+            where: () => Promise.resolve(productProfile ? [{ id: COMPANY, productProfile }] : []),
+          }),
+        }),
+      };
+    }
+
+    it("is true where the stewardship routes are on", async () => {
+      mockAccess.canUser.mockResolvedValue(false);
+      const res = await request(appFor(human("member"), dbWithProfile("agentdash_mk"))).get(
+        `/api/me/capabilities?companyId=${COMPANY}`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.features).toEqual({ stewardship: true });
+    });
+
+    it("is false where those routes would answer 404", async () => {
+      mockAccess.canUser.mockResolvedValue(true);
+      const res = await request(appFor(human("owner"), dbWithProfile("default"))).get(
+        `/api/me/capabilities?companyId=${COMPANY}`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.features).toEqual({ stewardship: false });
+    });
+
+    it("is null, not false, when the lookup fails", async () => {
+      mockAccess.canUser.mockResolvedValue(true);
+      const failing = {
+        select: () => {
+          throw new Error("db down");
+        },
+      };
+      const res = await request(appFor(human("owner"), failing)).get(`/api/me/capabilities?companyId=${COMPANY}`);
+      expect(res.status).toBe(200);
+      expect(res.body.features).toEqual({ stewardship: null });
+    });
+
+    it("still refuses a company the caller cannot see", async () => {
+      const outsider = { ...human("owner"), companyIds: ["22222222-2222-4222-8222-222222222222"] };
+      const res = await request(appFor(outsider, dbWithProfile("agentdash_mk"))).get(
+        `/api/me/capabilities?companyId=${COMPANY}`,
+      );
+      expect(res.status).toBe(403);
+      expect(res.body.features).toBeUndefined();
+    });
   });
 });

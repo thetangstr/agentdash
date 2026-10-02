@@ -24,6 +24,11 @@ export interface ToolCallSummary {
   label: string;
   /** True for shell-style tools whose target is a command line. */
   isCommand: boolean;
+  /**
+   * The whole script, when `target` names it by one line rather than quoting
+   * it (a multi-statement script). Absent when `target` already is the command.
+   */
+  script?: string;
 }
 
 const TARGET_MAX = 96;
@@ -57,7 +62,12 @@ function normalizeToolKey(name: string): string {
 
 /** Strip `bash -lc '...'`, `/bin/zsh -c "..."` and `cmd /c ...` wrappers. */
 export function stripShellWrapper(command: string): string {
-  let current = compactWhitespace(command);
+  return compactWhitespace(unwrapShell(command));
+}
+
+/** `stripShellWrapper` without collapsing whitespace, so a script keeps its lines. */
+function unwrapShell(command: string): string {
+  let current = command.trim();
   for (let i = 0; i < 2; i += 1) {
     const wrapped = current.match(
       /^(?:(?:\/usr)?\/bin\/)?(?:zsh|bash|sh)\s+-l?c\s+([\s\S]+)$/i,
@@ -68,21 +78,114 @@ export function stripShellWrapper(command: string): string {
     const quoted = current.match(/^(['"])([\s\S]*)\1$/);
     if (quoted) current = quoted[2].trim();
   }
-  return compactWhitespace(current);
+  return current;
 }
 
-function commandFromValue(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) return stripShellWrapper(value);
+/** The command text with shell wrappers removed and line breaks kept. */
+function rawCommandFromValue(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return unwrapShell(value);
   if (Array.isArray(value)) {
     const parts = value.filter((part): part is string => typeof part === "string");
     if (parts.length === 0) return null;
     // Codex shell tool: ["bash", "-lc", "<script>"]
     if (parts.length >= 3 && SHELL_NAMES.has(parts[0]) && /^-l?c$/.test(parts[1])) {
-      return stripShellWrapper(parts.slice(2).join(" "));
+      return unwrapShell(parts.slice(2).join(" "));
     }
-    return stripShellWrapper(parts.join(" "));
+    return unwrapShell(parts.join(" "));
   }
   return null;
+}
+
+/**
+ * Split a script into its statements: one per line, and lines further split on
+ * `&&`, `||` and `;` outside quotes. Deliberately simple: it only has to find
+ * a good label, never to run anything.
+ */
+function scriptStatements(script: string): string[] {
+  const statements: string[] = [];
+  for (const line of script.split(/\r?\n/)) {
+    let current = "";
+    let quote: string | null = null;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      if (quote) {
+        if (char === quote && line[i - 1] !== "\\") quote = null;
+        current += char;
+        continue;
+      }
+      if (char === "'" || char === '"' || char === "`") {
+        quote = char;
+        current += char;
+        continue;
+      }
+      // A comment runs to the end of the line.
+      if (char === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
+      const pair = line.slice(i, i + 2);
+      if (pair === "&&" || pair === "||") {
+        statements.push(current);
+        current = "";
+        i += 1;
+        continue;
+      }
+      if (char === ";") {
+        statements.push(current);
+        current = "";
+        continue;
+      }
+      current += char;
+    }
+    statements.push(current);
+  }
+  return statements.map((statement) => statement.trim()).filter(Boolean);
+}
+
+/** Set-up statements that say nothing about what a script is for. */
+function isScriptPreamble(statement: string): boolean {
+  // set -e, set -euo pipefail, set -o pipefail, set +x
+  if (/^set\s+[-+]/.test(statement)) return true;
+  if (/^(?:cd|pushd|popd)(?:\s|$)/.test(statement)) return true;
+  if (/^(?:export|readonly|local|declare)(?:\s|$)/.test(statement)) return true;
+  // A bare assignment (`BASE=…`, several at once) with no command after it.
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(statement)) {
+    const rest = statement.replace(
+      /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\$\([^)]*\)|\S*)\s*)+/,
+      "",
+    );
+    return rest.trim() === "";
+  }
+  return false;
+}
+
+const HEADING_RULE = String.raw`(?:={2,}|-{3,}|#{2,}|\*{3,})`;
+const HEADING_PATTERN = new RegExp(String.raw`^\s*${HEADING_RULE}\s*(.+?)\s*${HEADING_RULE}?\s*$`);
+
+/** `echo "=== Checking migrations ==="` gives "Checking migrations". */
+function echoHeading(statement: string): string | null {
+  const echo = statement.match(/^(?:echo|printf)\s+(?:-[a-zA-Z]+\s+)*(['"]?)([\s\S]*)\1$/);
+  if (!echo) return null;
+  const body = echo[2].replace(/\\n/g, " ");
+  const heading = body.match(HEADING_PATTERN);
+  if (!heading) return null;
+  const text = heading[1].trim();
+  return /[A-Za-z0-9]/.test(text) ? text : null;
+}
+
+/**
+ * A one-line name for a shell command. A single statement is its own name. A
+ * multi-statement script is named by an `echo "=== X ==="` heading when it
+ * has one, otherwise by its first statement that does real work, skipping
+ * `set -e`, variable assignments, `cd`, and comments (rows used to read
+ * "Ran set -e BASE=…").
+ */
+export function commandLabel(command: string): string {
+  const statements = scriptStatements(command);
+  if (statements.length <= 1) return compactWhitespace(command);
+  for (const statement of statements) {
+    const heading = echoHeading(statement);
+    if (heading) return compactWhitespace(heading);
+  }
+  const meaningful = statements.find((statement) => !isScriptPreamble(statement));
+  return compactWhitespace(meaningful ?? statements[0]);
 }
 
 function unwrapInput(input: unknown): unknown {
@@ -190,8 +293,16 @@ type VerbRule = {
 const pathTarget: VerbRule["target"] = (input, record) =>
   typeof input === "string" ? compactWhitespace(input) : firstString(record, PATH_KEYS);
 
-const commandTarget: VerbRule["target"] = (input, record) =>
-  commandFromValue(input) ?? commandFromValue(record?.command) ?? commandFromValue(record?.cmd) ?? commandFromValue(record?.script);
+const rawCommandTarget = (input: unknown, record: Record<string, unknown> | null): string | null =>
+  rawCommandFromValue(input) ??
+  rawCommandFromValue(record?.command) ??
+  rawCommandFromValue(record?.cmd) ??
+  rawCommandFromValue(record?.script);
+
+const commandTarget: VerbRule["target"] = (input, record) => {
+  const raw = rawCommandTarget(input, record);
+  return raw === null ? null : compactWhitespace(raw);
+};
 
 const VERB_RULES: VerbRule[] = [
   { keys: ["read", "readfile", "view", "viewfile", "cat", "openfile"], verb: "Read", target: pathTarget },
@@ -265,6 +376,14 @@ function finalize(verb: string, target: string | null, isCommand: boolean): Tool
   };
 }
 
+/** A shell command's summary: named by `commandLabel`, keeping the script when the name abbreviates it. */
+function finalizeCommand(verb: string, rawCommand: string | null): ToolCallSummary {
+  if (rawCommand === null) return finalize(verb, null, true);
+  const label = commandLabel(rawCommand);
+  const summary = finalize(verb, label, true);
+  return label === compactWhitespace(rawCommand) ? summary : { ...summary, script: rawCommand.trim() };
+}
+
 /**
  * One-line summary of a tool call: a verb plus the key argument, derived from
  * the tool name and input. Covers Claude Code tools (Read, Edit, Write, Bash,
@@ -284,12 +403,13 @@ export function summarizeToolCall(name: string, rawInput: unknown): ToolCallSumm
 
   const rule = VERB_BY_KEY.get(normalizeToolKey(toolName));
   if (rule) {
-    return finalize(rule.verb, rule.target(input, record), rule.isCommand === true);
+    if (rule.isCommand) return finalizeCommand(rule.verb, rawCommandTarget(input, record));
+    return finalize(rule.verb, rule.target(input, record), false);
   }
 
   // Unknown tool that still carries a shell command.
-  const command = commandFromValue(record?.command) ?? commandFromValue(record?.cmd);
-  if (command) return finalize("Ran", command, true);
+  const command = rawCommandFromValue(record?.command) ?? rawCommandFromValue(record?.cmd);
+  if (command) return finalizeCommand("Ran", command);
 
   const target = typeof input === "string" ? compactWhitespace(input) : firstString(record, GENERIC_KEYS);
   return finalize(humanizeLabel(toolName), target || null, false);

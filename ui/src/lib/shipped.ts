@@ -1,6 +1,9 @@
 // AgentDash: UX-2 (#783) — shared formatting for work products ("what shipped").
 import type { IssueWorkProduct, ShippedIssueUsage } from "@paperclipai/shared";
-import { formatCents, formatTokens } from "./utils";
+import { formatCents } from "./utils";
+import { countedTokens, formatCountedTokens } from "./token-figures";
+
+export { TOKENS_COUNTED_NOTE } from "./token-figures";
 
 export const NOT_METERED_LABEL = "not metered yet";
 
@@ -10,8 +13,8 @@ export const NOT_METERED_LABEL = "not metered yet";
  */
 export function formatShippedUsage(usage: ShippedIssueUsage | null | undefined): string {
   if (!usage || !usage.metered) return NOT_METERED_LABEL;
-  const tokens = usage.inputTokens + usage.outputTokens;
-  const parts = [`${formatTokens(tokens)} tokens`];
+  // One definition with Home and the run page: input + output, no cache reads.
+  const parts = [formatCountedTokens(countedTokens(usage))];
   if (usage.costCents > 0) parts.push(formatCents(usage.costCents));
   return parts.join(" · ");
 }

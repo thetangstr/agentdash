@@ -11,7 +11,7 @@ import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
-import { formatShippedUsage } from "../lib/shipped";
+import { TOKENS_COUNTED_NOTE, formatShippedUsage } from "../lib/shipped";
 import { Link } from "@/lib/router";
 import { Button } from "@/components/ui/button";
 import {
@@ -91,7 +91,7 @@ export function Shipped() {
               {monthLabel(month.since)}: {month.count} shipped
               {month.pullRequests > 0 ? ` (${month.pullRequests} pull ${month.pullRequests === 1 ? "request" : "requests"})` : ""}
               {" · "}
-              {formatShippedUsage(month.usage)}
+              <span title={TOKENS_COUNTED_NOTE}>{formatShippedUsage(month.usage)}</span>
             </p>
           ) : null}
         </div>

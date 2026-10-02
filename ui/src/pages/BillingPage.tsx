@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@/lib/router";
 import { billingApi, type BillingStatus } from "../api/billing";
+import { fetchFreshBillingStatus, isRateLimited, useBillingStatus } from "../hooks/useBillingStatus";
 import { useToastActions } from "../context/ToastContext";
 import { planLabel, seatsPhrase } from "../lib/billing-copy";
 import { UpgradeCheckoutButton } from "../components/UpgradeCheckoutButton";
@@ -18,25 +20,19 @@ export default function BillingPage({ companyId }: { companyId: string }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { pushToast } = useToastActions();
-  const [status, setStatus] = useState<BillingStatus | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  // AgentDash (scan 3 lane L): the shared billing-status query, the same
+  // cache entry the trial banner reads.
+  const statusQuery = useBillingStatus(companyId);
+  const status: BillingStatus | null = statusQuery.data ?? null;
+  const loadError = statusQuery.error
+    ? isRateLimited(statusQuery.error)
+      ? "Too many plan checks in a short time. Your plan details will load again in a few minutes."
+      : statusQuery.error instanceof Error
+        ? statusQuery.error.message
+        : "Couldn't load plan details"
+    : null;
   const handledSession = useRef(false);
-
-  // Initial status fetch + manual refetch helper.
-  function loadStatus() {
-    return billingApi
-      .status(companyId)
-      .then((s) => {
-        setLoadError(null);
-        setStatus(s);
-      })
-      .catch((err) => setLoadError(err instanceof Error ? err.message : "Couldn't load plan details"));
-  }
-
-  useEffect(() => {
-    void loadStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId]);
 
   // Closes #251: handle ?session=success / ?session=cancel callback from Stripe.
   useEffect(() => {
@@ -77,8 +73,8 @@ export default function BillingPage({ companyId }: { companyId: string }) {
         if (cancelled) return;
         attempt += 1;
         try {
-          const fresh = await billingApi.status(companyId);
-          setStatus(fresh);
+          // Updates the shared cache, so the banner and this page both move.
+          const fresh = await fetchFreshBillingStatus(queryClient, companyId);
           if (PRO_TIERS.includes(fresh.tier)) {
             pushToast({
               title: "Pro trial active",
@@ -106,7 +102,7 @@ export default function BillingPage({ companyId }: { companyId: string }) {
         cancelled = true;
       };
     }
-  }, [companyId, location.pathname, location.search, navigate, pushToast]);
+  }, [companyId, location.pathname, location.search, navigate, pushToast, queryClient]);
 
   if (!status) {
     if (loadError) {

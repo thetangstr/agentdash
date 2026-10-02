@@ -265,10 +265,13 @@ export function dashboardService(db: Db) {
       const runActivityStart = new Date(`${runActivityDays[0]}T00:00:00.000Z`);
       // AgentDash: BYOK boxes record tokens with zero cost, so Home needs the
       // month's tokens to say something true when no dollars are metered.
+      // AgentDash (scan 3 lane L): input + output only, the one definition the
+      // Shipped page and the run page use. Counting cached input made Home
+      // read 1.9M where Shipped read 221.2k for the same work.
       const [{ monthSpend, monthTokens }] = await db
         .select({
           monthSpend: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::double precision`,
-          monthTokens: sql<number>`coalesce(sum(${costEvents.inputTokens} + ${costEvents.cachedInputTokens} + ${costEvents.outputTokens}), 0)::double precision`,
+          monthTokens: sql<number>`coalesce(sum(${costEvents.inputTokens} + ${costEvents.outputTokens}), 0)::double precision`,
         })
         .from(costEvents)
         .where(

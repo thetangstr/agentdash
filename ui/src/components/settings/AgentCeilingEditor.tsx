@@ -12,6 +12,7 @@ import { agentGovernanceApi } from "@/api/agent-governance";
 import { AgentGovernancePanel } from "@/components/agent/AgentGovernancePanel";
 import { DefaultDestructiveActionsNotice } from "@/components/settings/DefaultDestructiveActionsNotice";
 import { AvailableOnRequest, isCapabilityNotFound } from "@/components/AvailableOnRequest";
+import { useStewardshipFeature } from "@/hooks/useStewardshipCapability";
 import { queryKeys } from "@/lib/queryKeys";
 
 interface Props {
@@ -63,10 +64,17 @@ export function AgentCeilingEditor({ companyId }: Props) {
   });
   const agents: Agent[] = agentsQuery.data ?? [];
 
+  // AgentDash (scan 3 lane L): ceilings are part of the stewardship feature.
+  // `/me/capabilities` answers that with a 200; the governance route is only
+  // probed when the server could not say, so a workspace without it no longer
+  // logs a 404 for its first agent on every visit.
+  const stewardshipFeature = useStewardshipFeature(companyId);
+  const governanceAllowed = stewardshipFeature === "on" || stewardshipFeature === "unknown";
+
   const governance = useQuery({
     queryKey: queryKeys.myAgent.governance(companyId, selectedAgentId),
     queryFn: () => agentGovernanceApi.get(companyId, selectedAgentId),
-    enabled: !!companyId && !!selectedAgentId,
+    enabled: !!companyId && !!selectedAgentId && governanceAllowed,
   });
 
   const policy = governance.data?.policy ?? null;
@@ -80,10 +88,13 @@ export function AgentCeilingEditor({ companyId }: Props) {
   const capabilityProbe = useQuery({
     queryKey: queryKeys.myAgent.governance(companyId, probeAgentId),
     queryFn: () => agentGovernanceApi.get(companyId, probeAgentId),
-    enabled: !!companyId && !!probeAgentId && !selectedAgentId,
+    enabled: !!companyId && !!probeAgentId && !selectedAgentId && stewardshipFeature === "unknown",
+    retry: false,
   });
   const capabilityOff =
-    isCapabilityNotFound(capabilityProbe.error) || isCapabilityNotFound(governance.error);
+    stewardshipFeature === "off" ||
+    isCapabilityNotFound(capabilityProbe.error) ||
+    isCapabilityNotFound(governance.error);
 
   useEffect(() => {
     if (policy) setDraft(policy.ownerCeiling);

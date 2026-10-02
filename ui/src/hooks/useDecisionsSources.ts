@@ -8,6 +8,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { inboxDismissalsApi } from "../api/inboxDismissals";
 import { isCapabilityOff } from "../components/AvailableOnRequest";
 import { buildInboxDismissedAtByKey, getLatestFailedRunsByAgent, isInboxEntityDismissed } from "../lib/inbox";
+import { useStewardshipFeature } from "./useStewardshipCapability";
 
 /**
  * AgentDash: one UX (doc/plans/2026-09-30-one-ux.md) — the item sources the
@@ -48,6 +49,15 @@ export const FAILED_RUN_SCAN_LIMIT = 200;
 const failureStreaks = new Map<string, number>();
 
 /**
+ * Sources the server said are absent for this person (a gate's 404 or 403),
+ * keyed like `failureStreaks`. AgentDash (scan 3 lane L): remembered for the
+ * session, not just the mount, so navigating back to a page that shows the
+ * Decisions count does not ask again; a workspace without a capability used
+ * to log about 77 404s per gated route per session. A reload asks afresh.
+ */
+const absentForSession = new Set<string>();
+
+/**
  * Load one source. The capability gate's 404 and the authority gate's 403
  * resolve to `null` — the source is absent for this person. Anything else is
  * rethrown: it is transient, not an answer.
@@ -60,6 +70,7 @@ export async function loadSource<T>(streakKey: string, load: () => Promise<T>): 
   } catch (error) {
     if (isCapabilityOff(error)) {
       failureStreaks.delete(streakKey);
+      absentForSession.add(streakKey);
       return null;
     }
     failureStreaks.set(streakKey, (failureStreaks.get(streakKey) ?? 0) + 1);
@@ -83,9 +94,10 @@ export function sourceRefetchInterval(
   return SOURCE_POLL_MS;
 }
 
-/** Test seam: forget every failure streak. */
+/** Test seam: forget every failure streak and every remembered absence. */
 export function resetSourceFailureStreaks() {
   failureStreaks.clear();
+  absentForSession.clear();
 }
 
 /** Query keys owned by Decisions. The sources resolve to null when absent,
@@ -120,37 +132,45 @@ export function useDecisionsOtherSources(
 ) {
   const id = companyId ?? "";
   const queryClient = useQueryClient();
+  // AgentDash (scan 3 lane L): the stewardship-gated sources are asked only
+  // once the server has said stewardship is on (or could not say). A
+  // workspace without it no longer probes four routes to read their 404s.
+  const stewardship = useStewardshipFeature(companyId);
+  const stewardshipMaybeOn = stewardship === "on" || stewardship === "unknown";
   // A source that answered null (gated off, or not this person's to see) is
-  // not polled again on this mount — a company without the capability should
-  // not pay five 404s every 30 seconds. A source that failed for any other
-  // reason keeps polling, backing off while it keeps failing.
-  const source = <T>(queryKey: readonly unknown[], load: () => Promise<T>) => {
+  // not asked again this session — a company without the capability should
+  // not pay a 404 per source every 30 seconds or on every mount. A source
+  // that failed for any other reason keeps polling, backing off while it
+  // keeps failing.
+  const source = <T>(queryKey: readonly unknown[], load: () => Promise<T>, gated = false) => {
     const streakKey = JSON.stringify(queryKey);
     return {
       queryKey,
       queryFn: () => loadSource(streakKey, load),
-      enabled: !!companyId && enabled,
+      enabled: !!companyId && enabled && !absentForSession.has(streakKey) && (!gated || stewardshipMaybeOn),
       retry: false,
+      // An absent source never goes stale, so a remount does not refetch it.
+      staleTime: (query: { state: { data: unknown } }) => (query.state.data === null ? Infinity : SOURCE_POLL_MS),
       refetchInterval: (query: { state: { data: unknown; status: "pending" | "error" | "success" } }) =>
         sourceRefetchInterval(query.state, failureStreaks.get(streakKey) ?? 0),
     };
   };
   // The approvals this person's own agent is stopped on (steward inbox, open only).
   const { data: stewardInbox } = useQuery(
-    source(decisionsSourceKeys.stewardInbox(id), () => stewardshipsApi.getMyInbox(id)),
+    source(decisionsSourceKeys.stewardInbox(id), () => stewardshipsApi.getMyInbox(id), true),
   );
   // The owner/admin override view. The server answers only for people with
   // that authority, so a successful answer is the entry point's permission.
   const { data: overrideInbox } = useQuery(
-    source(decisionsSourceKeys.overrideInbox(id), () => stewardshipsApi.getOverrideInbox(id)),
+    source(decisionsSourceKeys.overrideInbox(id), () => stewardshipsApi.getOverrideInbox(id), true),
   );
   // Questions the person's agent could not answer without them.
   const { data: factRequests } = useQuery(
-    source(decisionsSourceKeys.factRequests(id), () => stewardshipsApi.myFactRequests(id)),
+    source(decisionsSourceKeys.factRequests(id), () => stewardshipsApi.myFactRequests(id), true),
   );
   // Outside writes whose outcome is unknown and need a human verdict.
   const { data: connectorSends } = useQuery(
-    source(decisionsSourceKeys.connectorSends(id), () => connectorSendExecutionsApi.listUnresolved(id)),
+    source(decisionsSourceKeys.connectorSends(id), () => connectorSendExecutionsApi.listUnresolved(id), true),
   );
   // People waiting to join the company.
   const { data: joinRequests } = useQuery(
