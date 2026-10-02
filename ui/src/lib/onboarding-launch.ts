@@ -32,6 +32,20 @@ export function buildOnboardingProjectPayload(goalId: string | null) {
   };
 }
 
+/**
+ * AgentDash (scan 2, E2): the wizard's tasks are created parked, in `backlog`.
+ *
+ * The launch screen promises that nothing runs until the owner says so. `todo`
+ * cannot keep that promise: the worker contract (default AGENTS.md) defines
+ * `todo` as "start now", creating a `todo` issue wakes its assignee at once,
+ * the heartbeat timer counts an assigned `todo` as work, and any other run of
+ * the same agent finds it in its inbox. `backlog` means "parked until someone
+ * moves it": no wake on create, not in the agent's inbox, not wakeworthy. The
+ * issue page's Start button moves it to `todo`, and that transition wakes the
+ * assignee.
+ */
+export const ONBOARDING_TASK_STATUS = "backlog" as const;
+
 export function buildOnboardingIssuePayload(input: {
   title: string;
   description: string;
@@ -48,6 +62,6 @@ export function buildOnboardingIssuePayload(input: {
     assigneeAgentId: input.assigneeAgentId,
     projectId: input.projectId,
     ...(input.goalId ? { goalId: input.goalId } : {}),
-    status: "todo" as const,
+    status: ONBOARDING_TASK_STATUS,
   };
 }

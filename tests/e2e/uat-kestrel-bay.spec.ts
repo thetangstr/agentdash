@@ -55,7 +55,13 @@ test.describe("Kestrel Bay — first week, in a browser", () => {
 
     await step(page, `Sign up as ${OWNER.name} (${OWNER.title})`, async () => {
       await page.goto("/auth");
-      await page.getByRole("button", { name: "Create one" }).click();
+      // A brand-new instance opens on Create account already (scan 2, E5).
+      const signUpHeading = page.getByRole("heading", { name: "Create your workspace" });
+      const signInHeading = page.getByRole("heading", { name: "Welcome back" });
+      await expect(signInHeading.or(signUpHeading)).toBeVisible();
+      if (await signInHeading.isVisible()) {
+        await page.getByRole("button", { name: "Create one" }).click();
+      }
       await page.getByLabel("Name").fill(OWNER.name);
       await page.getByLabel("Email").fill(OWNER_EMAIL);
       await page.getByLabel("Password").fill(OWNER.password);

@@ -15,6 +15,8 @@
  * agent picks up, rather than something it has to invent.
  */
 
+import { ONBOARDING_TASK_STATUS } from "./onboarding-launch";
+
 export interface FirstGoalDraft {
   title: string;
   description: string;
@@ -111,7 +113,9 @@ export function buildFirstGoalTaskPayloads(input: {
       title,
       goalId: input.goalId,
       assigneeAgentId: input.assigneeAgentId,
-      status: "todo" as const,
+      // AgentDash (scan 2, E2): parked like the first task, so launch starts
+      // no runs. See ONBOARDING_TASK_STATUS.
+      status: ONBOARDING_TASK_STATUS,
     }));
 }
 

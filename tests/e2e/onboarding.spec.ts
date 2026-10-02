@@ -52,7 +52,7 @@ test.describe("Onboarding wizard", () => {
       page.locator("button", { hasText: "Claude Code" }).locator("..")
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "More Agent Adapter Types" }).click();
+    await page.getByRole("button", { name: "More ways to run it" }).click();
     await expect(page.getByRole("button", { name: "Process" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Next" }).click();
@@ -193,7 +193,14 @@ test.describe("Onboarding wizard", () => {
     );
     expect(task.description).not.toContain("github.com/paperclipai/companies");
 
+    // The launch screen says nothing runs until the owner says so: the task
+    // is parked in backlog and the opened issue offers a Start button.
+    expect(task.status).toBe("backlog");
+    const startBanner = page.getByTestId("issue-start-banner");
+    await expect(startBanner).toBeVisible({ timeout: 30_000 });
+
     if (!SKIP_LLM) {
+      await startBanner.getByRole("button", { name: "Start" }).click();
       await expect(async () => {
         const res = await page.request.get(
           `${baseUrl}/api/issues/${task.id}`

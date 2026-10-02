@@ -99,7 +99,7 @@ describe("buildFirstGoalTaskPayloads", () => {
     for (const payload of payloads) {
       expect(payload.goalId).toBe("goal-1");
       expect(payload.assigneeAgentId).toBe("cos-1");
-      expect(payload.status).toBe("todo");
+      expect(payload.status).toBe("backlog");
     }
   });
 
@@ -118,11 +118,12 @@ describe("buildFirstGoalTaskPayloads", () => {
 
   it("creates the first task idle, like every other onboarding task", () => {
     // Same promise the task step makes: nothing runs until the owner says so.
+    // Parked in backlog: a todo task wakes its assignee the moment it exists.
     const [payload] = buildFirstGoalTaskPayloads({
       goalId: "goal-1",
       assigneeAgentId: "cos-1",
       tasks: ["Assemble the pack"],
     });
-    expect(payload.status).toBe("todo");
+    expect(payload.status).toBe("backlog");
   });
 });

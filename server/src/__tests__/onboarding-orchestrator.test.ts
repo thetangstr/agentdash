@@ -75,6 +75,67 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.addParticipant).toHaveBeenCalledWith("conv-1", "user-1", "owner");
   });
 
+  // AgentDash (scan 2, E3): the founder stewards the CoS made for them.
+  it("pairs the founder with the Chief of Staff after the bootstrap, when stewardships are wired", async () => {
+    const stewardships = {
+      isCompanyOwner: vi.fn(async () => true),
+      activeByAgent: vi.fn(async () => null),
+      activeByUser: vi.fn(async () => null),
+      assign: vi.fn(async () => ({})),
+    };
+    const result = await onboardingOrchestrator({
+      ...(deps as any),
+      tierCapacity: tierCapacityDeps(),
+      stewardships,
+    }).bootstrap("user-1");
+    expect(result.cosAgentId).toBe("agent-cos-1");
+    expect(stewardships.assign).toHaveBeenCalledWith("company-1", {
+      agentId: "agent-cos-1",
+      userId: "user-1",
+      assignedByUserId: "user-1",
+    });
+  });
+
+  // PR #955 review: with #956 an admin may bootstrap /cos too; only the
+  // company's owner is paired with the CoS.
+  it("does not pair a bootstrapping user who is not the company's owner", async () => {
+    const stewardships = {
+      isCompanyOwner: vi.fn(async () => false),
+      activeByAgent: vi.fn(async () => null),
+      activeByUser: vi.fn(async () => null),
+      assign: vi.fn(async () => ({})),
+    };
+    const result = await onboardingOrchestrator({ ...(deps as any), stewardships }).bootstrap("user-1");
+    expect(result.cosAgentId).toBe("agent-cos-1");
+    expect(stewardships.isCompanyOwner).toHaveBeenCalledWith("company-1", "user-1");
+    expect(stewardships.assign).not.toHaveBeenCalled();
+  });
+
+  it("does not pair a user who bootstraps into a workspace whose CoS already exists", async () => {
+    mockAgents.list.mockResolvedValue([{ id: "agent-cos-1", role: "chief_of_staff" }]);
+    const stewardships = {
+      isCompanyOwner: vi.fn(async () => true),
+      activeByAgent: vi.fn(async () => null),
+      activeByUser: vi.fn(async () => null),
+      assign: vi.fn(async () => ({})),
+    };
+    await onboardingOrchestrator({ ...(deps as any), stewardships }).bootstrap("user-1");
+    expect(stewardships.assign).not.toHaveBeenCalled();
+  });
+
+  it("still completes the bootstrap when the founder pairing fails", async () => {
+    const stewardships = {
+      isCompanyOwner: vi.fn(async () => true),
+      activeByAgent: vi.fn(async () => null),
+      activeByUser: vi.fn(async () => null),
+      assign: vi.fn(async () => {
+        throw new Error("membership not active");
+      }),
+    };
+    const result = await onboardingOrchestrator({ ...(deps as any), stewardships }).bootstrap("user-1");
+    expect(result).toEqual({ companyId: "company-1", cosAgentId: "agent-cos-1", conversationId: "conv-1" });
+  });
+
   it("posts ONE Phase 0 greeting (greeting + role + first goal question) when the conversation is fresh", async () => {
     // Phase 0 of the spec at
     // docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.

@@ -93,9 +93,15 @@ function createBootstrapInvite() {
 
 async function signUp(page: Page, user: HumanUser) {
   await page.goto(`${BASE}/auth`);
-  await expect(page.getByRole("heading", { name: AUTH_SIGN_IN_HEADING })).toBeVisible();
-  await page.getByRole("button", { name: "Create one" }).click();
-  await expect(page.getByRole("heading", { name: AUTH_SIGN_UP_HEADING })).toBeVisible();
+  // An instance with no users yet opens on Create account (scan 2, E5);
+  // otherwise it opens on Sign in and "Create one" switches.
+  const signInHeading = page.getByRole("heading", { name: AUTH_SIGN_IN_HEADING });
+  const signUpHeading = page.getByRole("heading", { name: AUTH_SIGN_UP_HEADING });
+  await expect(signInHeading.or(signUpHeading)).toBeVisible();
+  if (await signInHeading.isVisible()) {
+    await page.getByRole("button", { name: "Create one" }).click();
+  }
+  await expect(signUpHeading).toBeVisible();
   await page.getByLabel("Name").fill(user.name);
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);

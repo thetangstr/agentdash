@@ -103,17 +103,17 @@ describe("onboarding launch payloads", () => {
       assigneeAgentId: "agent-1",
       projectId: "project-1",
       goalId: "goal-1",
-      status: "todo",
+      status: "backlog",
     });
   });
 
   /**
    * The task step promises the owner, in as many words, that "nothing runs
-   * until you say so". That promise is only kept because the first issue is
-   * created as `todo` with no run attached — so shipping it `in_progress`, or
-   * adding a trigger here, would turn onboarding copy into a false statement
-   * about consent rather than a stale label. If this fails, fix the promise or
-   * fix the payload; do not just update the expectation.
+   * until you say so". `todo` did not keep that promise (scan 2, E2): creating
+   * a `todo` issue wakes its assignee, so launch started a run per task. The
+   * wizard parks its tasks in `backlog`, which nothing wakes, until the owner
+   * presses Start on the issue. If this fails, fix the promise or fix the
+   * payload; do not just update the expectation.
    */
   it("creates the first task idle, which is what the wizard promises", () => {
     const payload = buildOnboardingIssuePayload({
@@ -124,7 +124,7 @@ describe("onboarding launch payloads", () => {
       goalId: "goal-1",
     });
 
-    expect(payload.status).toBe("todo");
+    expect(payload.status).toBe("backlog");
     expect(payload).not.toHaveProperty("runId");
     expect(payload).not.toHaveProperty("startRun");
   });
@@ -147,7 +147,7 @@ describe("onboarding launch payloads", () => {
       title: "Task",
       assigneeAgentId: "agent-1",
       projectId: "project-1",
-      status: "todo",
+      status: "backlog",
     });
   });
 });

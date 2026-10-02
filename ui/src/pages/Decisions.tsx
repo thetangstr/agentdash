@@ -38,7 +38,7 @@ import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
  */
 
 const EMPTY_TEXT =
-  "Nothing needs you. Agents ask here before hiring, spending over your limit, or doing anything outside your repo.";
+  "Nothing needs you. Agents ask here before hiring, spending over your limit, or doing anything that cannot be undone, like sending something outside the company.";
 
 // The badge math the sidebar and this page share lives in
 // hooks/useDecisionsBadge — re-exported here so the page stays its most

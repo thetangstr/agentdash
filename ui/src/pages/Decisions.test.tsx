@@ -70,7 +70,7 @@ const {
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const EMPTY_TEXT =
-  "Nothing needs you. Agents ask here before hiring, spending over your limit, or doing anything outside your repo.";
+  "Nothing needs you. Agents ask here before hiring, spending over your limit, or doing anything that cannot be undone, like sending something outside the company.";
 
 function waitingWith(overrides: Partial<WaitingOnYou> = {}): WaitingOnYou {
   return {

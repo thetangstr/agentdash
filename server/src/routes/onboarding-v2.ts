@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { publishActivity, type ActivityPublication } from "../services/activity-log.js";
 import { acceptedHireNeedsRepair, completeManagedHire, onboardingMaterializationPause } from "../services/agent-creator-from-proposal.js";
 import { workforceService } from "../services/workforce.js";
+import { founderStewardshipDeps } from "../services/founder-stewardship.js";
 import { type ActivityAcceptance } from "../services/activity-log.js";
 import { loadDefaultAgentInstructionsBundle } from "../services/default-agent-instructions.js";
 import { Router } from "express";
@@ -285,6 +286,8 @@ export function onboardingV2Routes(db: Db) {
 
   const orch = onboardingOrchestrator({
     ...onboardingOrchestratorServices(db),
+    // AgentDash (scan 2, E3): the owner stewards the CoS made for them.
+    stewardships: founderStewardshipDeps(db),
     tierCapacity: {
       withCompanyLock: (companyId, work) =>
         withCompanyTierCapacityLock(db, companyId, (tx) =>

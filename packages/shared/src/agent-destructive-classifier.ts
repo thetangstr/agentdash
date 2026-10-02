@@ -69,51 +69,53 @@ export const DEFAULT_DESTRUCTIVE_ACTION_CLASSES: readonly DestructiveActionClass
   Object.freeze([
     {
       key: "external_record_delete",
-      label: "Delete or archive a record in an external system of record",
-      rationale: "Not recoverable by a compensating write.",
+      // AgentDash (scan 2, E6): labels and rationales are the onboarding
+      // mandate's fine print, so they are written for the owner, not for us.
+      label: "Delete or archive a record in another system, like your CRM",
+      rationale: "Once it is gone, it cannot be brought back.",
       example: "HubSpot: delete a contact, deal, or company.",
     },
     {
       key: "external_record_merge",
       label: "Merge or dedupe records",
-      rationale: "Lossy; the pre-merge state cannot be reconstructed.",
+      rationale: "Merged records cannot be split apart again.",
       example: "HubSpot: merge two companies.",
     },
     {
       key: "external_bulk_mutation",
       label: "One action that writes many external records at once",
-      rationale: "Blast radius; a mistake multiplies.",
+      rationale: "One mistake is repeated across every record it touches.",
       example: "Bulk-update a HubSpot list.",
     },
     {
       key: "outbound_external_message",
       label: "Send a message or email to a recipient outside the company",
-      rationale: "Cannot be unsent; reaches a real external person.",
+      rationale: "It cannot be unsent, and a real person outside the company reads it.",
       example: "WhatsApp or email to a lead or customer.",
     },
     {
       key: "financial_action",
       label: "Move money or commit spend",
-      rationale: "Real-world irreversible effect.",
+      rationale: "Money that has moved cannot simply be moved back.",
       example: "Send an invoice, issue a refund, change a plan.",
     },
     {
       key: "access_grant_or_revoke",
       label: "Change who can access external data or systems",
-      rationale: "Widens or narrows a trust boundary silently.",
+      rationale: "Changes who can see or change things, often without anyone noticing.",
       example: "Add a SharePoint share; add a portal user.",
     },
     {
       key: "external_publish",
       label: "Make content externally or publicly visible",
-      rationale: "Cannot be reliably un-published.",
+      rationale: "Once something is public, it cannot reliably be taken back.",
       example: "Publish a doc; create a public share link.",
     },
     {
       key: "local_machine_mutation",
-      label: "A bridge task that changes state on a human's machine",
-      rationale: "The ceiling cannot bound what the machine does — asking is the only control.",
-      example: "Bridge task that writes/deletes files or runs a state-changing command.",
+      label: "Change files or run commands on someone's computer",
+      rationale: "AgentDash cannot limit what happens on that computer, so asking first is the only safeguard.",
+      example: "Write or delete files, or run a command that changes something.",
     },
     {
       key: "credential_or_connection_change",

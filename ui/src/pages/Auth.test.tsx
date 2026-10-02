@@ -4,8 +4,10 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthPage } from "./Auth";
+import { AuthPage, defaultAuthMode } from "./Auth";
 
+const mockSearch = vi.hoisted(() => ({ value: "?mode=sign_up" }));
+const mockHealth = vi.hoisted(() => vi.fn());
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSignUp = vi.hoisted(() => vi.fn());
 const mockSignIn = vi.hoisted(() => vi.fn());
@@ -15,7 +17,7 @@ const mockGetSession = vi.hoisted(() =>
 
 vi.mock("@/lib/router", () => ({
   useNavigate: () => mockNavigate,
-  useSearchParams: () => [new URLSearchParams("?mode=sign_up"), vi.fn()],
+  useSearchParams: () => [new URLSearchParams(mockSearch.value), vi.fn()],
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
     <a href={to}>{children}</a>
   ),
@@ -27,6 +29,10 @@ vi.mock("@/api/auth", () => ({
     signUpEmail: (...args: unknown[]) => mockSignUp(...args),
     signInEmail: (...args: unknown[]) => mockSignIn(...args),
   },
+}));
+
+vi.mock("@/api/health", () => ({
+  healthApi: { get: () => mockHealth() },
 }));
 
 vi.mock("@/marketing/sections/LiveBriefing", () => ({
@@ -119,5 +125,71 @@ describe("AuthPage post-signup redirect (Phase E)", () => {
       password: "supersecret",
     });
     expect(mockNavigate).toHaveBeenCalledWith("/company-create", { replace: true });
+  });
+});
+
+// AgentDash (scan 2, E5): with no ?mode=, the instance's health picks the form.
+describe("AuthPage default form (scan 2, E5)", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    mockSearch.value = "";
+  });
+
+  afterEach(() => {
+    document.body.removeChild(container);
+    mockSearch.value = "?mode=sign_up";
+    mockHealth.mockReset();
+  });
+
+  async function renderWithHealth(health: unknown) {
+    mockHealth.mockResolvedValue(health);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <AuthPage />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+    return root;
+  }
+
+  it("opens on Create account on an instance with no users that allows self-serve sign-up", async () => {
+    const root = await renderWithHealth({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "bootstrap_pending",
+      selfServeBootstrap: true,
+    });
+    expect(container.querySelector("h1")?.textContent).toBe("Create your workspace");
+    expect(container.querySelector("input#name")).not.toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("opens on Sign in once the instance has users", async () => {
+    const root = await renderWithHealth({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "ready",
+      selfServeBootstrap: true,
+    });
+    expect(container.querySelector("h1")?.textContent).toBe("Welcome back");
+    act(() => root.unmount());
+  });
+
+  it("defaultAuthMode needs both a pending bootstrap and self-serve", () => {
+    expect(defaultAuthMode({ bootstrapStatus: "bootstrap_pending", selfServeBootstrap: true })).toBe("sign_up");
+    expect(defaultAuthMode({ bootstrapStatus: "bootstrap_pending", selfServeBootstrap: false })).toBe("sign_in");
+    expect(defaultAuthMode({ bootstrapStatus: "ready", selfServeBootstrap: true })).toBe("sign_in");
+    expect(defaultAuthMode(undefined)).toBe("sign_in");
   });
 });

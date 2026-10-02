@@ -2,6 +2,7 @@ import { logger } from "../middleware/logger.js";
 import { deriveCompanyEmailDomain } from "@paperclipai/shared";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 import { SingleCompanyInstallationError } from "./companies.js";
+import { pairFounderWithAgent, type FounderStewardshipDeps } from "./founder-stewardship.js";
 import { isHostedBox } from "./license.js";
 import {
   exceededFreeTierCapacityAction,
@@ -79,6 +80,8 @@ interface BootstrapServices {
 }
 
 interface Deps extends BootstrapServices {
+  /** AgentDash (scan 2, E3): pairs the owner with the CoS; omitted in older wiring and tests. */
+  stewardships?: FounderStewardshipDeps;
   tierCapacity?: {
     withCompanyLock<T>(
       companyId: string,
@@ -139,6 +142,9 @@ export function onboardingOrchestrator(deps: Deps) {
     services: BootstrapServices,
     company: { id: string; name?: string; emailDomain?: string | null },
     user: { id: string; email: string | null; name?: string | null },
+    // AgentDash (scan 2, E3): set when this call created the CoS, so only the
+    // user it was created for is paired with it.
+    outcome: { createdCos: boolean } = { createdCos: false },
   ): Promise<BootstrapResult> {
     const currentMemberships = await services.access.listUserCompanyAccess(user.id);
     const hasActiveMembership = currentMemberships.some(
@@ -170,6 +176,7 @@ export function onboardingOrchestrator(deps: Deps) {
 
     // Step 3: ensure a Chief of Staff agent exists.
     if (!cos) {
+      outcome.createdCos = true;
       const created = await services.agents.create(company.id, {
         name: "Chief of Staff",
         role: "chief_of_staff",
@@ -315,10 +322,27 @@ export function onboardingOrchestrator(deps: Deps) {
         }
       }
 
-      if (!deps.tierCapacity) return finalizeBootstrap(deps, company, user);
-      return deps.tierCapacity.withCompanyLock(company.id, (services) =>
-        finalizeBootstrap(services, company, user),
-      );
+      const outcome = { createdCos: false };
+      const result = deps.tierCapacity
+        ? await deps.tierCapacity.withCompanyLock(company.id, (services) =>
+            finalizeBootstrap(services, company, user, outcome),
+          )
+        : await finalizeBootstrap(deps, company, user, outcome);
+      // AgentDash (scan 2, E3): the company's owner stewards the Chief of
+      // Staff made for them, on every workspace. Paired only when this call
+      // created the CoS AND the bootstrapping user holds the company's `owner`
+      // membership (pairFounderWithAgent checks; an admin who bootstraps /cos
+      // is not paired). It only writes a stewardship row, never a membership
+      // or role. After the capacity transaction, so a refused pairing can
+      // never abort the bootstrap; best-effort inside.
+      if (deps.stewardships && outcome.createdCos) {
+        await pairFounderWithAgent(deps.stewardships, {
+          companyId: result.companyId,
+          agentId: result.cosAgentId,
+          userId: user.id,
+        });
+      }
+      return result;
     },
   };
 }

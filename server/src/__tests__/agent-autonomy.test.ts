@@ -431,10 +431,29 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
       expect(pairing).toHaveLength(1);
     });
 
-    it("pairs nobody on a workspace without stewardship, and the agent can still go autonomous", async () => {
+    // AgentDash (scan 2, E3): on a workspace without stewardship, only the
+    // company's FIRST agent is paired with its creator (the founder's own
+    // agent); later agents pair nobody, and can still go autonomous.
+    it("pairs only the owner's first agent on a workspace without stewardship; later agents can still go autonomous", async () => {
       const company = await createCompany(db, "default");
-      const userId = await createMember(db, company.id);
+      const userId = await createMember(db, company.id, { role: "owner" });
       const app = await createApp(db, makeBoardActor(company.id, userId));
+
+      const first = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
+          name: "Founder's CoS",
+          role: "engineer",
+          adapterType: "hermes_local",
+          adapterConfig: {},
+        }),
+      );
+      expect(first.status).toBe(201);
+      const firstPairings = await db
+        .select()
+        .from(agentStewardships)
+        .where(eq(agentStewardships.companyId, company.id));
+      expect(firstPairings).toHaveLength(1);
+      expect(firstPairings[0]).toMatchObject({ agentId: first.body.id, userId });
 
       const response = await requestApp(app, (baseUrl) =>
         request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
@@ -450,13 +469,38 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
         .select()
         .from(agentStewardships)
         .where(eq(agentStewardships.companyId, company.id));
-      expect(pairings).toHaveLength(0);
+      expect(pairings).toHaveLength(1);
 
       // No live pairing, so nothing blocks the autonomy change.
       const patched = await requestApp(app, (baseUrl) =>
         request(baseUrl).patch(`/api/agents/${response.body.id}`).send({ autonomy: "autonomous" }),
       );
       expect(patched.status).toBe(200);
+    });
+
+    // PR #955 review: an admin (or any member with agents:create) who creates
+    // a company's first agent, for example after deleting all the others,
+    // does not become its steward on a workspace without stewardship.
+    it("does not pair a non-owner who creates the company's first agent on a workspace without stewardship", async () => {
+      const company = await createCompany(db, "default");
+      await createMember(db, company.id, { role: "owner" });
+      const adminId = await createMember(db, company.id, { role: "admin" });
+      const app = await createApp(db, makeBoardActor(company.id, adminId));
+
+      const response = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
+          name: "Not mine to steward",
+          role: "engineer",
+          adapterType: "hermes_local",
+          adapterConfig: {},
+        }),
+      );
+      expect(response.status).toBe(201);
+      const pairings = await db
+        .select()
+        .from(agentStewardships)
+        .where(eq(agentStewardships.companyId, company.id));
+      expect(pairings).toHaveLength(0);
     });
 
     it("makes the creator accountable for an autonomous agent, and pairs nobody with it", async () => {
