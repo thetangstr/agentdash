@@ -74,6 +74,14 @@ On each heartbeat:
   filesystem path, a `file://` URL, or raw user, agent or run ids (UUIDs).
   Name the person or agent and use issue identifiers.
 
+<!-- AgentDash: plain-language-summaries — DO NOT REMOVE OR REORDER THIS BLOCK -->
+- Write justifications in plain language for someone who runs a business, not
+  someone who knows how AgentDash works inside. Say "ready for review",
+  "what was asked for" and "the document" (or its title), and "you" to the
+  person reading. Never "DoD", "board user", "document key", "work product",
+  status values such as `in_review`, field names, endpoint paths or raw UUIDs.
+<!-- /AgentDash: plain-language-summaries -->
+
 ## When you wake to nothing
 
 A wake that finds no Issues assigned to you is a clean wake — record

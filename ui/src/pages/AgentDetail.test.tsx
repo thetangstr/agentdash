@@ -19,7 +19,7 @@ vi.mock("../components/MarkdownEditor", () => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TokenCeilingStatusLine } = await import("./AgentDetail");
+const { TokenCeilingStatusLine, agentBilledByProvider } = await import("./AgentDetail");
 
 function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentTokenCeilingStatus {
   return {
@@ -66,7 +66,9 @@ describe("TokenCeilingStatusLine", () => {
     const text = container!.textContent ?? "";
     expect(text).toContain("Daily token ceiling");
     expect(text).toContain("(default)");
-    expect(text).toContain("used today");
+    // Scan 4 lane O1: the ceiling count includes cached reads; it says so.
+    expect(text).toContain("counted toward it today (counts cached reads)");
+    expect(text).not.toContain("used today");
     expect(text).not.toContain("paused");
   });
 
@@ -143,5 +145,35 @@ describe("TokenCeilingStatusLine", () => {
     act(() => editButton.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     const save = [...container!.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
     expect(save.disabled).toBe(true);
+  });
+});
+
+// Scan 4 lane O1: on BYOK the agent page said "Spend this month $0.00" next to
+// real usage; it now says the model provider bills it.
+describe("agentBilledByProvider", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const run = (inputTokens: number, outputTokens: number, createdAt = "2026-10-02T09:00:00.000Z", extra = {}) =>
+    ({ usageJson: { inputTokens, outputTokens, ...extra }, resultJson: null, createdAt }) as never;
+
+  it("is true when this month's runs used tokens but no dollars were metered", () => {
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900)], now)).toBe(true);
+  });
+
+  it("is false when dollars were metered, or nothing ran", () => {
+    expect(agentBilledByProvider({ spentMonthlyCents: 120 }, [run(32_000, 2_900)], now)).toBe(false);
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [], now)).toBe(false);
+    expect(
+      agentBilledByProvider({ spentMonthlyCents: 0 }, [{ usageJson: null, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" } as never], now),
+    ).toBe(false);
+  });
+
+  it("counts only this month's runs", () => {
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900, "2026-09-28T09:00:00.000Z")], now)).toBe(false);
+  });
+
+  it("is false when a run this month shows a dollar cost", () => {
+    expect(
+      agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900), run(1_000, 100, "2026-10-03T09:00:00.000Z", { costUsd: 0.12 })], now),
+    ).toBe(false);
   });
 });

@@ -114,6 +114,7 @@ import {
 } from "./transcript/ReadableTranscript";
 import type { TranscriptEntry } from "../adapters";
 import { summarizeToolCall } from "../lib/readableTranscript";
+import { CREDENTIALS_HIDDEN_NOTE, redactSecrets, redactSecretsInValue } from "../lib/redactSecrets";
 import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -952,6 +953,9 @@ function IssueChatChainOfThought({
       </div>
       {expanded && hasContent ? (
         <div className="space-y-1 py-1" data-transcript-mode="raw">
+          <p className="px-1 text-xs text-muted-foreground" data-testid="raw-credentials-note">
+            {CREDENTIALS_HIDDEN_NOTE}
+          </p>
           {isActive ? (
             <>
               {allReasoningText ? <IssueChatReasoningPart text={allReasoningText} /> : null}
@@ -979,7 +983,7 @@ function IssueChatChainOfThought({
 }
 
 function IssueChatReasoningPart({ text }: { text: string }) {
-  const lines = text.split("\n").filter((l) => l.trim());
+  const lines = redactSecrets(text).split("\n").filter((l) => l.trim());
   const lastLine = lines[lines.length - 1] ?? text.slice(-200);
   const prevRef = useRef(lastLine);
   const [ticker, setTicker] = useState<{
@@ -1029,7 +1033,7 @@ function IssueChatRollingToolPart({ toolParts }: { toolParts: ToolCallMessagePar
   const latest = toolParts[toolParts.length - 1];
   if (!latest) return null;
 
-  const fullText = cleanToolDisplayText(latest);
+  const fullText = redactSecrets(cleanToolDisplayText(latest));
 
   const prevRef = useRef(fullText);
   const [ticker, setTicker] = useState<{
@@ -1130,14 +1134,17 @@ function IssueChatToolPart({
   isError?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const rawArgsText = argsText ?? "";
-  const parsedArgs = args ?? parseToolPayload(rawArgsText);
-  const resultText =
+  // AgentDash (scan 4 lane O1): the Raw tool view shows input and result
+  // text, so both are redacted first.
+  const rawArgsText = redactSecrets(argsText ?? "");
+  const parsedArgs = redactSecretsInValue(args ?? parseToolPayload(argsText ?? ""));
+  const resultText = redactSecrets(
     typeof result === "string"
       ? result
       : result === undefined
         ? ""
-        : formatToolPayload(result);
+        : formatToolPayload(redactSecretsInValue(result)),
+  );
   const inputDetails = describeToolInput(toolName, parsedArgs);
   const displayName = displayToolName(toolName, parsedArgs);
   const isCommand = isCommandTool(toolName, parsedArgs);

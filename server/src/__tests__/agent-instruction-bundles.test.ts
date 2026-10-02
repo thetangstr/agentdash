@@ -119,6 +119,19 @@ describe("AgentDash-MK prompt surface synchronization", () => {
     }
   });
 
+  // AgentDash (scan 4 lane O1): run summaries read "no DoD", "board user",
+  // "in_review", "document key", "work product" to a non-technical owner.
+  it("tells every prompt surface to write summaries and comments in plain language", () => {
+    for (const surface of renderedPromptSurfaces) {
+      expect(surface.content, `${surface.name} is missing the plain-language block`).toContain(
+        "<!-- AgentDash: plain-language-summaries",
+      );
+      expect(surface.content).toContain("<!-- /AgentDash: plain-language-summaries -->");
+      expect(surface.content).toContain('Say "ready for your review"');
+      expect(surface.content).toContain('Never "the board user"');
+    }
+  });
+
   it("includes the AgentDash-MK workforce block in every prompt surface", () => {
     for (const surface of renderedPromptSurfaces) {
       expect(surface.content, `${surface.name} is missing the named block`).toContain(

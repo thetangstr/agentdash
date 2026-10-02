@@ -20,6 +20,8 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const { IssueResultBlock } = await import("./IssueResultBlock");
+const { isUsageCounting, usageCountingEndsAt, USAGE_COUNTING_WINDOW_MS } = await import("../lib/shipped");
+const { isIssueShippedQueryForRun } = await import("../context/LiveUpdatesProvider");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -158,10 +160,59 @@ describe("IssueResultBlock", () => {
     expect(block?.textContent).toContain("12.4k tokens");
   });
 
+  // Scan 4 lane O1: right after a run, "not metered yet" read as an error.
+  it("says 'counting…' while a just-saved deliverable's usage is still being recorded", async () => {
+    mockIssuesApi.listShipped.mockResolvedValueOnce({
+      items: [
+        shippedItem({
+          status: "ready_for_review",
+          createdByRunId: "run-1",
+          issue: { id: "issue-1", identifier: "ACME-1", title: "Add a health badge", status: "in_review", projectId: null },
+          usage: { metered: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, costCents: 0 },
+        }),
+      ],
+      total: 1,
+      nextCursor: null,
+      monthTotal: null,
+    });
+    await render();
+    const usage = () => container.querySelector('[data-testid="issue-result-usage"]')?.textContent;
+    expect(usage()).toBe("counting…");
+    expect(container.textContent).not.toContain("not metered yet");
+  });
+
+  it("never says 'counting…' for a deliverable no run created, or one created long ago and edited since", () => {
+    const unmetered = { metered: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, costCents: 0 };
+    const now = Date.now();
+    // Recorded by hand: no run will ever meter it.
+    expect(isUsageCounting(unmetered, [{ createdAt: new Date(now), createdByRunId: null }], now)).toBe(false);
+    // Created an hour ago by a run; a later edit does not reopen the window.
+    expect(
+      isUsageCounting(unmetered, [{ createdAt: new Date(now - 60 * 60 * 1000), createdByRunId: "run-1" }], now),
+    ).toBe(false);
+    // Fresh and run-created: counting, until the window closes.
+    const createdAt = new Date(now - 60_000);
+    expect(isUsageCounting(unmetered, [{ createdAt, createdByRunId: "run-1" }], now)).toBe(true);
+    expect(usageCountingEndsAt([{ createdAt, createdByRunId: "run-1" }], now)).toBe(createdAt.getTime() + USAGE_COUNTING_WINDOW_MS);
+    expect(isUsageCounting({ ...unmetered, metered: true }, [{ createdAt, createdByRunId: "run-1" }], now)).toBe(false);
+  });
+
+  it("refetches only the shipped query of the issue whose deliverable the finished run created", () => {
+    const data = { items: [{ createdByRunId: "run-1" }] };
+    expect(isIssueShippedQueryForRun(["shipped", "company-1", "", "", "issue-1", "", ""], data, "company-1", "run-1")).toBe(true);
+    expect(isIssueShippedQueryForRun(["shipped", "company-1", "", "", "issue-1", "", ""], data, "company-1", "run-2")).toBe(false);
+    // The company-wide Shipped feed is not issue-scoped.
+    expect(isIssueShippedQueryForRun(["shipped", "company-1", "", "", "", "", ""], data, "company-1", "run-1")).toBe(false);
+    expect(isIssueShippedQueryForRun(["shipped", "company-2", "", "", "issue-1", "", ""], data, "company-1", "run-1")).toBe(false);
+  });
+
   it("says 'not metered yet' rather than 0 when the issue has no metering", async () => {
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     mockIssuesApi.listShipped.mockResolvedValue({
       items: [
         shippedItem({
+          createdAt: anHourAgo,
+          updatedAt: anHourAgo,
           status: "ready_for_review",
           issue: { id: "issue-1", identifier: "ACME-1", title: "Add a health badge", status: "in_review", projectId: null },
           usage:{ metered: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, costCents: 0 },

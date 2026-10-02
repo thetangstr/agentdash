@@ -54,7 +54,7 @@ import { MandatesTab } from "../components/agent/MandatesTab";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
-import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, countedTokens } from "../lib/token-figures";
+import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import {
@@ -1610,6 +1610,28 @@ function VitalCard({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+/**
+ * AgentDash (scan 4 lane O1): true when this agent's usage is billed by the
+ * customer's model provider (BYOK): no dollars metered this month, yet its
+ * runs used tokens. Same rule as Home's month tile (`monthSpendTile`).
+ */
+export function agentBilledByProvider(
+  agent: Pick<AgentDetailRecord, "spentMonthlyCents">,
+  runs: Pick<HeartbeatRun, "usageJson" | "resultJson" | "createdAt">[],
+  now: Date = new Date(),
+): boolean {
+  if ((agent.spentMonthlyCents ?? 0) > 0) return false;
+  // This month (UTC, the month spentMonthlyCents covers) only.
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const thisMonth = runs.filter((run) => new Date(run.createdAt).getTime() >= monthStart);
+  // Any run with a visible dollar cost means usage is priced here, not BYOK.
+  if (thisMonth.some((run) => runMetrics(run as HeartbeatRun).cost > 0)) return false;
+  return thisMonth.some((run) => {
+    const metrics = runMetrics(run as HeartbeatRun);
+    return countedTokens({ inputTokens: metrics.input, outputTokens: metrics.output }) > 0;
+  });
+}
+
 export function AgentVitalsStrip({
   agent,
   runs,
@@ -1679,7 +1701,15 @@ export function AgentVitalsStrip({
         )}
       </VitalCard>
       <VitalCard label="Spend this month">
-        <span className="font-medium">{formatCents(agent.spentMonthlyCents ?? 0)}</span>
+        {/* AgentDash (scan 4 lane O1): on BYOK the model provider bills the
+            tokens, so "$0.00" next to real usage read as "free". */}
+        {agentBilledByProvider(agent, runs) ? (
+          <span className="text-muted-foreground" data-testid="agent-spend-byok">
+            {BILLED_BY_PROVIDER_NOTE}
+          </span>
+        ) : (
+          <span className="font-medium">{formatCents(agent.spentMonthlyCents ?? 0)}</span>
+        )}
       </VitalCard>
     </div>
   );
@@ -1953,8 +1983,13 @@ export function TokenCeilingStatusLine({
 
   const summary = (
     <>
-      <span>
-        Daily token ceiling: {ceilingLabel} — {formatTokens(status.tokensToday)} used today
+      {/* AgentDash (scan 4 lane O1): this is the ceiling's own count, which
+          includes cached reads, so it is labelled as such. It read "589.4k
+          used today" next to run totals of 60.7k / 36.9k that use the shared
+          display definition (input + output). */}
+      <span title={TOKEN_CEILING_COUNT_NOTE} data-testid="token-ceiling-usage">
+        Daily token ceiling: {ceilingLabel} — {formatTokens(status.tokensToday)} counted toward it today (counts
+        cached reads)
         {status.unmeteredRuns > 0
           ? ` (${status.unmeteredRuns} run${status.unmeteredRuns === 1 ? "" : "s"} unmetered)`
           : ""}
@@ -4302,6 +4337,13 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
 /* ---- Log Viewer ---- */
 
 function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: string }) {
+  // AgentDash (scan 4 lane O1): the footer reads the same metered figures as
+  // the Input / Output tiles above it, not the adapter's own result line.
+  const runUsage = useMemo(() => {
+    const metrics = runMetrics(run);
+    if (metrics.input <= 0 && metrics.output <= 0) return null;
+    return { inputTokens: metrics.input, outputTokens: metrics.output, costUsd: metrics.cost };
+  }, [run]);
   const [events, setEvents] = useState<HeartbeatRunEvent[]>([]);
   const [logLines, setLogLines] = useState<Array<{ ts: string; stream: "stdout" | "stderr" | "system"; chunk: string }>>([]);
   const [loading, setLoading] = useState(true);
@@ -4766,6 +4808,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           mode={transcriptMode}
           streaming={isLive}
           emptyMessage={run.logRef ? "Waiting for transcript..." : "No persisted transcript for this run."}
+          usage={runUsage}
         />
         {hasMoreLog && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">

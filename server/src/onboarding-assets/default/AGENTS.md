@@ -86,6 +86,19 @@ The runtime injects `PAPERCLIP_TASK_ID`, `PAPERCLIP_AGENT_ID`, and `PAPERCLIP_RU
 
 <!-- /AgentDash: agent-output-contract -->
 
+<!-- AgentDash: plain-language-summaries — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Write summaries and comments in plain language
+
+The people who read your work run a business; they do not know how AgentDash works inside. This applies to every comment, to the completion summary at the end of a run (your final message is shown to them as the run's summary), and to the notes you write while you work (they read those in the run transcript).
+
+- Say "ready for your review", not `in_review` or `ready_for_review`. Say "done" or "blocked", not a status value in code formatting.
+- Say "the document" or the deliverable's title ("the month-end checklist"), not "issue document", "document key" or "work product".
+- Say "you" to the person who asked. Never "the board user", "the board" or "a human".
+- Say "what you asked for" or "what done looks like", not "DoD" or "definition of done".
+- Never put internal field names, status values, endpoint paths, raw UUIDs, environment variables or tool names in a summary or comment: they belong in your API calls, not in what a person reads. Name the person or agent, and use issue keys such as `WHI-1`.
+- Lead with what you did, then what the person needs to do next, if anything. For example: "The month-end close checklist is ready for your review. It is one page, 13 steps, in the order the work is done."
+<!-- /AgentDash: plain-language-summaries -->
+
 <!-- AgentDash: goals-eval-hitl — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Definition of Done & verdict workflow
 

@@ -19,6 +19,47 @@ export function formatShippedUsage(usage: ShippedIssueUsage | null | undefined):
   return parts.join(" · ");
 }
 
+/** AgentDash (scan 4 lane O1): shown while a just-finished run's usage is still being recorded. */
+export const USAGE_COUNTING_LABEL = "counting…";
+
+/** How long after a deliverable is saved its missing usage reads "counting…" rather than "not metered yet". */
+export const USAGE_COUNTING_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * AgentDash (scan 4 lane O1): right after a run, the Result card read "not
+ * metered yet", which looks like an error. Usage is written as the run
+ * finishes, so for a deliverable saved in the last few minutes with no usage
+ * yet the honest word is "counting…". Older unmetered work keeps the
+ * NOT_METERED_LABEL.
+ */
+export function isUsageCounting(
+  usage: ShippedIssueUsage | null | undefined,
+  products: ReadonlyArray<CountingProduct>,
+  now: number = Date.now(),
+): boolean {
+  if (usage?.metered) return false;
+  return usageCountingEndsAt(products, now) !== null;
+}
+
+type CountingProduct = { createdAt?: Date | string | null; createdByRunId?: string | null };
+
+/**
+ * When the "counting…" window closes (ms epoch), or null when it is not open.
+ * Keyed on creation, not on later edits, and only for deliverables a run
+ * created: one recorded by hand has no run to meter, so it never counts.
+ */
+export function usageCountingEndsAt(products: ReadonlyArray<CountingProduct>, now: number = Date.now()): number | null {
+  let end: number | null = null;
+  for (const product of products) {
+    if (!product.createdByRunId) continue;
+    const at = new Date(product.createdAt ?? 0).getTime();
+    if (!Number.isFinite(at) || at <= 0) continue;
+    const closes = at + USAGE_COUNTING_WINDOW_MS;
+    if (closes > now && (end === null || closes > end)) end = closes;
+  }
+  return end;
+}
+
 export type WorkProductStateTone = "open" | "merged" | "closed" | "draft" | "neutral";
 
 /** Statuses that mean the work was withdrawn or sent back, so a done issue does not make them accepted. */

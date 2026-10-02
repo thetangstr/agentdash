@@ -2660,6 +2660,75 @@ describe("IssueChatThread", () => {
     });
   });
 
+  // AgentDash (scan 4 lane O1, PR #990 review): the issue chat's Raw view
+  // shows tool input and results; neither may carry a credential.
+  it("redacts credentials in the issue chat's Raw view and says so", () => {
+    const SECRET = "SUPERSECRETvalue123";
+    window.localStorage.setItem("agentdash.runTranscript.mode", "raw");
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[{
+              runId: "run-raw-secret",
+              status: "succeeded",
+              agentId: "agent-1",
+              agentName: "Agent 1",
+              adapterType: "claude_local",
+              createdAt: new Date("2026-04-06T12:00:00.000Z"),
+              startedAt: new Date("2026-04-06T12:00:00.000Z"),
+              finishedAt: new Date("2026-04-06T12:01:00.000Z"),
+              hasStoredOutput: true,
+            }]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            transcriptsByRunId={new Map([
+              [
+                "run-raw-secret",
+                [
+                  { kind: "thinking", ts: "2026-04-06T12:00:05.000Z", text: `export API_KEY=${SECRET}` },
+                  {
+                    kind: "tool_call",
+                    ts: "2026-04-06T12:00:10.000Z",
+                    name: "Bash",
+                    toolUseId: "t1",
+                    input: { command: `curl -H "Authorization: Bearer ${SECRET}" https://x.test` },
+                  },
+                  { kind: "tool_result", ts: "2026-04-06T12:00:11.000Z", toolUseId: "t1", content: `{"token":"${SECRET}"}`, isError: false },
+                ],
+              ],
+            ])}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    // Open every collapsed Raw section and tool part.
+    for (let pass = 0; pass < 3; pass += 1) {
+      const closed = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter(
+        (button) => button.querySelector(".lucide-chevron-down") && !button.querySelector(".rotate-180"),
+      );
+      if (closed.length === 0) break;
+      act(() => closed.forEach((button) => button.click()));
+    }
+
+    expect(container.querySelector('div[data-transcript-mode="raw"]')).not.toBeNull();
+    expect(container.textContent).toContain("Credentials in this log are hidden.");
+    // The tool's result is on screen, redacted.
+    expect(container.textContent).toContain('"token":"***REDACTED***"');
+    expect(container.innerHTML).not.toContain(SECRET);
+
+    act(() => {
+      root.unmount();
+    });
+    window.localStorage.removeItem("agentdash.runTranscript.mode");
+  });
+
   it("shows a tool without a result on a finished message as neutral 'No result', not a success", () => {
     const tool = { type: "tool-call" as const, toolCallId: "t1", toolName: "Read", args: { file_path: "a.ts" }, argsText: "" };
     expect(toReadableToolRowItem(tool, true).status).toBe("running");
