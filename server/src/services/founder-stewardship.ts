@@ -1,8 +1,12 @@
+import { and, eq } from "drizzle-orm";
+import type { Db } from "@paperclipai/db";
+import { companyMemberships } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
 
 /**
- * AgentDash (scan 2, E3): the person a company's first agent is created for
- * becomes that agent's steward, on every workspace and every path.
+ * AgentDash (scan 2, E3): the company's owner becomes the steward of the first
+ * agent created for them, on every workspace and every path.
  *
  * A founder's first agent (the wizard's hire, the Chief of Staff the /cos
  * bootstrap creates, a first POST /agents) used to be left with nobody paired
@@ -14,13 +18,19 @@ import { logger } from "../middleware/logger.js";
  * agents for joiners); it is the minimum for the agent to have an owner. So
  * this runs regardless of the company's product profile.
  *
+ * Only for the company's `owner` (PR #955 review): an admin or any member with
+ * agents:create could otherwise delete every agent, create a "first" one and
+ * become its steward on a workspace where the stewardship capability is off.
+ *
  * Only when neither side is already paired: stewardship is one agent per
  * person and one person per agent, and the service refuses a second pairing
- * anyway. Best-effort by construction: a failure here must never fail the
+ * anyway. Writes a stewardship row and nothing else: never a membership or a
+ * role. Best-effort by construction: a failure here must never fail the
  * company or agent creation it follows; the agent stays valid and can be
  * paired from its page.
  */
 export interface FounderStewardshipDeps {
+  isCompanyOwner(companyId: string, userId: string): Promise<boolean>;
   activeByUser(companyId: string, userId: string): Promise<unknown | null>;
   activeByAgent(companyId: string, agentId: string): Promise<unknown | null>;
   assign(
@@ -29,16 +39,53 @@ export interface FounderStewardshipDeps {
   ): Promise<unknown>;
 }
 
-export type FounderStewardshipOutcome = "paired" | "already_paired" | "user_has_agent" | "failed";
+export type FounderStewardshipOutcome =
+  | "paired"
+  | "not_owner"
+  | "already_paired"
+  | "user_has_agent"
+  | "failed";
+
+/** Whether `userId` holds an active `owner` membership in the company. */
+export function companyOwnerCheck(db: Pick<Db, "select">) {
+  return async (companyId: string, userId: string): Promise<boolean> => {
+    const row = await db
+      .select({ id: companyMemberships.id })
+      .from(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.companyId, companyId),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, userId),
+          eq(companyMemberships.status, "active"),
+          eq(companyMemberships.membershipRole, "owner"),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+    return Boolean(row);
+  };
+}
+
+/** The production wiring: the stewardship service plus the owner check. */
+export function founderStewardshipDeps(db: Db): FounderStewardshipDeps {
+  const stewardships = agentStewardshipService(db);
+  return {
+    isCompanyOwner: companyOwnerCheck(db),
+    activeByUser: (companyId, userId) => stewardships.activeByUser(companyId, userId),
+    activeByAgent: (companyId, agentId) => stewardships.activeByAgent(companyId, agentId),
+    assign: (companyId, input) => stewardships.assign(companyId, input),
+  };
+}
 
 export async function pairFounderWithAgent(
-  stewardships: FounderStewardshipDeps,
+  deps: FounderStewardshipDeps,
   input: { companyId: string; agentId: string; userId: string },
 ): Promise<FounderStewardshipOutcome> {
   try {
-    if (await stewardships.activeByAgent(input.companyId, input.agentId)) return "already_paired";
-    if (await stewardships.activeByUser(input.companyId, input.userId)) return "user_has_agent";
-    await stewardships.assign(input.companyId, {
+    if (!(await deps.isCompanyOwner(input.companyId, input.userId))) return "not_owner";
+    if (await deps.activeByAgent(input.companyId, input.agentId)) return "already_paired";
+    if (await deps.activeByUser(input.companyId, input.userId)) return "user_has_agent";
+    await deps.assign(input.companyId, {
       agentId: input.agentId,
       userId: input.userId,
       assignedByUserId: input.userId,
@@ -47,7 +94,7 @@ export async function pairFounderWithAgent(
   } catch (err) {
     logger.warn(
       { err, companyId: input.companyId, agentId: input.agentId, userId: input.userId },
-      "[stewardship] could not pair the founder with their first agent",
+      "[stewardship] could not pair the owner with their first agent",
     );
     return "failed";
   }

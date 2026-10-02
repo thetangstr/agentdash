@@ -80,7 +80,7 @@ interface BootstrapServices {
 }
 
 interface Deps extends BootstrapServices {
-  /** AgentDash (scan 2, E3): pairs the founder with the CoS; omitted in older wiring and tests. */
+  /** AgentDash (scan 2, E3): pairs the owner with the CoS; omitted in older wiring and tests. */
   stewardships?: FounderStewardshipDeps;
   tierCapacity?: {
     withCompanyLock<T>(
@@ -328,12 +328,13 @@ export function onboardingOrchestrator(deps: Deps) {
             finalizeBootstrap(services, company, user, outcome),
           )
         : await finalizeBootstrap(deps, company, user, outcome);
-      // AgentDash (scan 2, E3): the founder stewards the Chief of Staff made
-      // for them, on every workspace. Only the user this call created the CoS
-      // for — a teammate bootstrapping into an existing workspace is never
-      // paired with someone else's CoS — and it only writes a stewardship row,
-      // never a membership or role. After the capacity transaction, so a
-      // refused pairing can never abort the bootstrap; best-effort inside.
+      // AgentDash (scan 2, E3): the company's owner stewards the Chief of
+      // Staff made for them, on every workspace. Paired only when this call
+      // created the CoS AND the bootstrapping user holds the company's `owner`
+      // membership (pairFounderWithAgent checks; an admin who bootstraps /cos
+      // is not paired). It only writes a stewardship row, never a membership
+      // or role. After the capacity transaction, so a refused pairing can
+      // never abort the bootstrap; best-effort inside.
       if (deps.stewardships && outcome.createdCos) {
         await pairFounderWithAgent(deps.stewardships, {
           companyId: result.companyId,

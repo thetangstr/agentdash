@@ -21,7 +21,7 @@ import { errorHandler } from "../middleware/index.js";
 import { agentStewardshipRoutes } from "../routes/agent-stewardships.js";
 import { accessService } from "../services/access.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
-import { pairFounderWithAgent } from "../services/founder-stewardship.js";
+import { founderStewardshipDeps, pairFounderWithAgent } from "../services/founder-stewardship.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -457,7 +457,7 @@ describeEmbeddedPostgres("agent stewardships", () => {
       const owner = await createMember(db, company.id, { role: "owner" });
       const agent = await createAgent(db, company.id);
 
-      const outcome = await pairFounderWithAgent(agentStewardshipService(db), {
+      const outcome = await pairFounderWithAgent(founderStewardshipDeps(db), {
         companyId: company.id,
         agentId: agent.id,
         userId: owner.principalId,
@@ -467,7 +467,7 @@ describeEmbeddedPostgres("agent stewardships", () => {
 
       // A second run (bootstrap is idempotent) changes nothing.
       expect(
-        await pairFounderWithAgent(agentStewardshipService(db), {
+        await pairFounderWithAgent(founderStewardshipDeps(db), {
           companyId: company.id,
           agentId: agent.id,
           userId: owner.principalId,
@@ -475,19 +475,53 @@ describeEmbeddedPostgres("agent stewardships", () => {
       ).toBe("already_paired");
     });
 
+    // PR #955 review: owner only. An admin or member with agents:create must
+    // not become steward of a "first" agent on a workspace without stewardship.
+    it("does not pair a user who is not the company's owner", async () => {
+      const company = await createCompany(db, "Plain", "default");
+      await createMember(db, company.id, { role: "owner" });
+      const admin = await createMember(db, company.id, { role: "admin" });
+      const member = await createMember(db, company.id, { role: "operator" });
+      const agent = await createAgent(db, company.id);
+
+      for (const user of [admin, member]) {
+        expect(
+          await pairFounderWithAgent(founderStewardshipDeps(db), {
+            companyId: company.id,
+            agentId: agent.id,
+            userId: user.principalId,
+          }),
+        ).toBe("not_owner");
+      }
+      expect(await companyRows(company.id)).toEqual({ agents: 1, stewardships: 0 });
+    });
+
+    it("does not pair an owner whose membership is not active", async () => {
+      const company = await createCompany(db, "Plain", "default");
+      const former = await createMember(db, company.id, { role: "owner", status: "archived" });
+      const agent = await createAgent(db, company.id);
+      expect(
+        await pairFounderWithAgent(founderStewardshipDeps(db), {
+          companyId: company.id,
+          agentId: agent.id,
+          userId: former.principalId,
+        }),
+      ).toBe("not_owner");
+    });
+
     it("leaves a founder who already stewards an agent alone, and the route gate unchanged", async () => {
       const company = await createCompany(db, "Plain", "default");
       const owner = await createMember(db, company.id, { role: "owner" });
       const first = await createAgent(db, company.id);
       const second = await createAgent(db, company.id);
-      await pairFounderWithAgent(agentStewardshipService(db), {
+      await pairFounderWithAgent(founderStewardshipDeps(db), {
         companyId: company.id,
         agentId: first.id,
         userId: owner.principalId,
       });
 
       expect(
-        await pairFounderWithAgent(agentStewardshipService(db), {
+        await pairFounderWithAgent(founderStewardshipDeps(db), {
           companyId: company.id,
           agentId: second.id,
           userId: owner.principalId,

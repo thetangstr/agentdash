@@ -13,11 +13,15 @@
  * is an install: a hosted box (`<name>.agentdash.cloud`), a self-hosted server,
  * or dev.
  */
-const MARKETING_HOSTNAMES = new Set(["www.agentdash.cloud", "agentdash.cloud"]);
+/** Exact marketing hostnames. Pinned by marketing-host.test.ts: add one deliberately. */
+export const MARKETING_HOSTNAMES: readonly string[] = Object.freeze(["www.agentdash.cloud", "agentdash.cloud"]);
+
+/** Hostname suffixes served as marketing (this project's Vercel previews). Pinned too. */
+export const MARKETING_HOST_SUFFIXES: readonly string[] = Object.freeze([".vercel.app"]);
 
 export function isMarketingHostname(hostname: string): boolean {
   const host = hostname.trim().toLowerCase().replace(/\.$/, "");
-  return MARKETING_HOSTNAMES.has(host) || host.endsWith(".vercel.app");
+  return MARKETING_HOSTNAMES.includes(host) || MARKETING_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
 }
 
 /** The current page's answer; false outside a browser. */
