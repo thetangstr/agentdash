@@ -1422,7 +1422,7 @@ function IssueChatUserMessage({
             <TooltipTrigger asChild>
               <a
                 href={anchorId ? `#${anchorId}` : undefined}
-                className="text-[11px] text-muted-foreground hover:text-foreground hover:underline max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+                className="text-[11px] text-muted-foreground hover:text-foreground hover:underline max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-center"
               >
                 {message.createdAt ? commentDateLabel(message.createdAt) : ""}
               </a>
@@ -1655,7 +1655,7 @@ function IssueChatAssistantMessage({
                   <TooltipTrigger asChild>
                     <a
                       href={anchorId ? `#${anchorId}` : undefined}
-                      className="text-[11px] text-muted-foreground hover:text-foreground hover:underline max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+                      className="text-[11px] text-muted-foreground hover:text-foreground hover:underline max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-center"
                     >
                       {message.createdAt ? commentDateLabel(message.createdAt) : ""}
                     </a>
