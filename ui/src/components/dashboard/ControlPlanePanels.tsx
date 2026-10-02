@@ -274,7 +274,7 @@ function FleetPanel({ agents, isLoading, error }: { agents: Agent[] | undefined;
       testId="dashboard-fleet"
       action={
         live.length > 0 ? (
-          <Link to="/agents/all" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          <Link to="/agents/all" className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-end">
             View all {live.length}
           </Link>
         ) : undefined
@@ -362,7 +362,7 @@ function ActivityPanel({ companyId, agents }: { companyId: string; agents: Agent
       title="Recent activity"
       testId="dashboard-activity"
       action={
-        <Link to="/activity" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+        <Link to="/activity" className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-end">
           All activity
         </Link>
       }

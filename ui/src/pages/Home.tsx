@@ -368,7 +368,7 @@ export function Home() {
         action={
           <Link
             to="/dashboard/live"
-            className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-end"
           >
             All runs
           </Link>
@@ -405,7 +405,7 @@ export function Home() {
         action={
           <Link
             to="/shipped"
-            className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center max-sm:justify-end"
           >
             All shipped
           </Link>

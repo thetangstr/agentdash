@@ -224,7 +224,7 @@ describe("Shipped page", () => {
       const [row, documentRow] = [...container.querySelectorAll('[data-testid="shipped-row"]')];
       expect(row!.getAttribute("data-compact")).toBe("true");
       const title = row!.querySelector('[data-testid="shipped-title"]')!;
-      expect(title.className).toContain("line-clamp-2");
+      expect(title.querySelector(".line-clamp-2")?.textContent).toBe(title.textContent);
       expect(title.getAttribute("href")).toBe("https://github.com/acme/web/pull/5");
       expect(title.parentElement?.querySelector('[data-testid="work-product-state"]')?.className).toContain("text-xs");
       // Without a URL the title opens the issue.

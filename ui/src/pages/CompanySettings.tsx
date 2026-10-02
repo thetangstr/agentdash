@@ -362,7 +362,7 @@ export function CompanySettings() {
                     type="color"
                     value={brandColor || "#6366f1"}
                     onChange={(e) => setBrandColor(e.target.value)}
-                    className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent p-0"
+                    className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent p-0 max-sm:h-11 max-sm:w-11"
                   />
                   <input
                     type="text"

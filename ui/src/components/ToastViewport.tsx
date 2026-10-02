@@ -60,7 +60,7 @@ function AnimatedToast({
             <Link
               to={toast.action.href}
               onClick={() => onDismiss(toast.id)}
-              className="mt-2 inline-flex text-xs font-medium underline underline-offset-4 hover:opacity-90"
+              className="mt-2 inline-flex text-xs font-medium underline underline-offset-4 hover:opacity-90 max-sm:mt-0 max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center"
             >
               {toast.action.label}
             </Link>
@@ -70,7 +70,7 @@ function AnimatedToast({
           type="button"
           aria-label="Dismiss notification"
           onClick={() => onDismiss(toast.id)}
-          className="mt-0.5 shrink-0 rounded p-1 opacity-50 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+          className="mt-0.5 shrink-0 rounded p-1 opacity-50 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10 max-sm:-my-2.5 max-sm:-mr-2.5 max-sm:inline-flex max-sm:size-11 max-sm:items-center max-sm:justify-center"
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -89,7 +89,9 @@ export function ToastViewport() {
     <aside
       aria-live="polite"
       aria-atomic="false"
-      className="pointer-events-none fixed bottom-3 left-3 z-[120] w-full max-w-sm px-1"
+      // AgentDash: on phones the stack spans the width between 12px gutters and
+      // sits above the bottom nav instead of over it.
+      className="pointer-events-none fixed bottom-3 left-3 z-[120] w-full max-w-sm px-1 max-sm:right-3 max-sm:bottom-[calc(var(--mobile-bottom-nav-offset)+0.75rem)] max-sm:w-auto max-sm:max-w-none"
     >
       <ol className="flex w-full flex-col-reverse gap-2">
         {toasts.map((toast) => (

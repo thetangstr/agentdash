@@ -1484,7 +1484,7 @@ export function LatestRunCard({
         </h3>
         <Link
           to={`/agents/${agentId}/runs/${run.id}`}
-          className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors no-underline"
+          className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors no-underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
         >
           View details &rarr;
         </Link>
@@ -1621,21 +1621,21 @@ export function AgentVitalsStrip({
         {liveIssue ? (
           <Link
             to={`/issues/${liveIssue.identifier ?? liveIssue.id}`}
-            className="font-medium hover:underline"
+            className="font-medium hover:underline max-sm:py-3"
           >
             {liveIssue.title}
           </Link>
         ) : liveRun ? (
           <Link
             to={`/agents/${agentRouteRef(agent)}/runs/${liveRun.id}`}
-            className="font-medium hover:underline"
+            className="font-medium hover:underline max-sm:py-3"
           >
             Running now
           </Link>
         ) : inProgressIssue ? (
           <Link
             to={`/issues/${inProgressIssue.identifier ?? inProgressIssue.id}`}
-            className="font-medium hover:underline"
+            className="font-medium hover:underline max-sm:py-3"
           >
             {inProgressIssue.title}
           </Link>
@@ -1647,7 +1647,7 @@ export function AgentVitalsStrip({
         {shipped ? (
           <span className="space-x-2">
             {shipped.issue.identifier ? (
-              <Link to={`/issues/${shipped.issue.identifier}`} className="font-medium hover:underline">
+              <Link to={`/issues/${shipped.issue.identifier}`} className="font-medium hover:underline max-sm:py-3">
                 {shipped.title}
               </Link>
             ) : (
@@ -1724,7 +1724,7 @@ function AgentOverview({
       <AgentRunHealthNote runs={runs} />
       <AgentVitalsStrip agent={agent} runs={runs} assignedIssues={assignedIssues} />
 
-      <details className="rounded-xl border p-3"><summary className="cursor-pointer text-sm font-medium">Workforce role and first-job readiness</summary><WorkforceAgentPanel key={`${agent.companyId}:${agent.id}`} companyId={agent.companyId} agent={agent}/></details>
+      <details className="rounded-xl border p-3"><summary className="cursor-pointer text-sm font-medium max-sm:-my-3 max-sm:py-3">Workforce role and first-job readiness</summary><WorkforceAgentPanel key={`${agent.companyId}:${agent.id}`} companyId={agent.companyId} agent={agent}/></details>
 
       {/* Latest Run */}
       <LatestRunCard runs={runs} agentId={agentRouteId} showEmptySummary />
@@ -1751,7 +1751,7 @@ function AgentOverview({
           <h3 className="text-sm font-medium">Recent Issues</h3>
           <Link
             to={`/issues?participantAgentId=${agentId}`}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
           >
             See All &rarr;
           </Link>

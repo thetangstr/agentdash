@@ -206,6 +206,15 @@
     min-height: 44px;
   }
 
+  /* Every <Button>, matched by the attributes only Button sets on a button or
+   * link (data-size and data-variant survive asChild and Radix triggers, which
+   * replace data-slot). Covers icon-only "sm" buttons that hide their label on
+   * phones and links rendered as buttons, which the pointer:coarse rule misses. */
+  :is(button, a)[data-variant][data-size] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   /* Room for two 12px initials in the extra-small avatar. */
   [data-slot="avatar"][data-size="xs"] {
     width: 1.5rem;

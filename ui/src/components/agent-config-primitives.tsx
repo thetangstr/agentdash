@@ -71,7 +71,12 @@ export function HintIcon({ text }: { text: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+        {/* AgentDash: on phones a 44px hit area around the 12px icon; the negative
+            margin keeps it taking 12px of the line, so the layout does not move. */}
+        <button
+          type="button"
+          className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors max-sm:relative max-sm:-m-4 max-sm:size-11 max-sm:items-center max-sm:justify-center"
+        >
           <HelpCircle className="h-3 w-3" />
         </button>
       </TooltipTrigger>
@@ -117,18 +122,27 @@ export function ToggleField({
         data-slot="toggle"
         data-testid={toggleTestId}
         type="button"
-        className={cn(
-          "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
-          checked ? "bg-green-600" : "bg-muted"
-        )}
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        // AgentDash: the button is the hit area (44px on phones, the negative
+        // margin keeps the row height); the track inside is the visible switch.
+        className="relative inline-flex items-center justify-end max-sm:-my-3 max-sm:min-w-11 max-sm:py-3"
         onClick={() => onChange(!checked)}
       >
         <span
           className={cn(
-            "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
-            checked ? "translate-x-4.5" : "translate-x-0.5"
+            "inline-flex h-5 w-9 items-center rounded-full transition-colors",
+            checked ? "bg-green-600" : "bg-muted"
           )}
-        />
+        >
+          <span
+            className={cn(
+              "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
+              checked ? "translate-x-4.5" : "translate-x-0.5"
+            )}
+          />
+        </span>
       </button>
     </div>
   );
