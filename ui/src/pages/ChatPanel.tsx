@@ -1,5 +1,5 @@
 // AgentDash: chat substrate page
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMessages } from "../realtime/useMessages";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
@@ -7,6 +7,25 @@ import { ChatHeader, type ChatHeaderProps } from "../components/ChatHeader";
 import { conversationsApi } from "../api/conversations";
 import type { CardContext } from "../components/cards";
 import { cn } from "../lib/utils";
+import type { Message } from "../api/conversations";
+
+/**
+ * AgentDash: how long the chat shows "CoS is thinking…" after the person's
+ * message before it offers a Retry. The server kills a local adapter after
+ * 120s (AGENTDASH_ADAPTER_TIMEOUT_MS) and then posts an error card, so a reply
+ * that has not arrived well after that is not coming.
+ */
+export const REPLY_PENDING_TIMEOUT_MS = 150_000;
+
+function authorOf(m: Message): string | undefined {
+  return m.role ?? m.authorKind;
+}
+
+/** The person's message still waiting for a reply, if the conversation ends on one. */
+export function pendingUserMessage(messages: Message[]): Message | null {
+  const last = messages[messages.length - 1];
+  return last && authorOf(last) === "user" ? last : null;
+}
 
 export default function ChatPanel({
   conversationId,
@@ -61,17 +80,61 @@ export default function ChatPanel({
     }
   }, [messages.length, lastMessageId]);
 
+  // AgentDash (P0, v2026.1002.0): the chat is never silent while a reply is
+  // owed. A conversation that ends on the person's message shows "CoS is
+  // thinking…"; the reply, or the server's "CoS couldn't reply" card, ends it
+  // (both arrive live as message.created). A Retry is waiting on a newer
+  // message than the ones on screen when it was pressed.
+  const [retryFromCount, setRetryFromCount] = useState<number | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const pending = pendingUserMessage(messages);
+  const retrying = retryFromCount !== null && messages.length <= retryFromCount;
+  const pendingSince = pending ? new Date(pending.createdAt).getTime() : NaN;
+  const pendingAge = Number.isFinite(pendingSince) ? now - pendingSince : 0;
+  const stalled = Boolean(pending) && !retrying && pendingAge >= REPLY_PENDING_TIMEOUT_MS;
+  const thinking = retrying || (Boolean(pending) && !stalled);
+
+  useEffect(() => {
+    if (retryFromCount !== null && messages.length > retryFromCount) setRetryFromCount(null);
+  }, [messages.length, retryFromCount]);
+
+  // Re-render once the pending message crosses the timeout so the indicator
+  // turns into a Retry without waiting for some other update.
+  useEffect(() => {
+    if (!pending || stalled || retrying) return;
+    const wait = Math.max(0, REPLY_PENDING_TIMEOUT_MS - pendingAge) + 50;
+    const t = setTimeout(() => setNow(Date.now()), wait);
+    return () => clearTimeout(t);
+  }, [pending, stalled, retrying, pendingAge]);
+
   function send(body: string) {
+    setSendError(null);
     conversationsApi.post(conversationId, body, companyId).catch(() => {
-      // non-fatal
+      setSendError("Your message was not sent. Check your connection and try again.");
     });
   }
 
-  const resolvedCardContext: CardContext = cardContext ?? {
+  async function retryReply(messageId: string) {
+    setSendError(null);
+    setRetryFromCount(messages.length);
+    try {
+      await conversationsApi.retry(conversationId, messageId);
+    } catch (err) {
+      setRetryFromCount(null);
+      throw err;
+    }
+  }
+
+  const baseCardContext: CardContext = cardContext ?? {
     onProposalConfirm: () => {},
     onProposalReject: () => {},
     onInviteSend: async () => {},
     onInviteSkip: () => {},
+  };
+  const resolvedCardContext: CardContext = {
+    ...baseCardContext,
+    onDispatchRetry: baseCardContext.onDispatchRetry ?? retryReply,
   };
 
   return (
@@ -91,6 +154,31 @@ export default function ChatPanel({
               cardContext={resolvedCardContext}
             />
           )}
+          {thinking ? (
+            <div data-testid="cos-thinking" role="status" aria-live="polite" className="mt-5 flex items-center gap-2 text-sm text-text-secondary">
+              <span className="inline-flex gap-1" aria-hidden="true">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary" />
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary [animation-delay:150ms]" />
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary [animation-delay:300ms]" />
+              </span>
+              CoS is thinking…
+            </div>
+          ) : null}
+          {stalled && pending ? (
+            <div data-testid="cos-reply-stalled" role="alert" className="mt-5 flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+              <span>CoS hasn't replied.</span>
+              <button
+                type="button"
+                className="rounded-md border border-border-soft px-3 py-1 text-xs font-medium text-text-primary hover:bg-surface-sunken"
+                onClick={() => void retryReply(pending.id).catch(() => setSendError("Retry failed to start. Try again."))}
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
+          {sendError ? (
+            <p data-testid="chat-send-error" role="alert" className="mt-3 text-xs text-danger-500">{sendError}</p>
+          ) : null}
           <div ref={bottomRef} aria-hidden="true" />
         </div>
       </div>

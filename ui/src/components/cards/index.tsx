@@ -7,12 +7,15 @@ import { AgentPlanProposal } from "./AgentPlanProposal";
 // AgentDash: goals-eval-hitl card stubs (full components ship in Phase F/H)
 import { VerdictReviewCard } from "./VerdictReviewCard";
 import { HumanTasteGateCard } from "./HumanTasteGateCard";
+import { DispatchErrorCard } from "./DispatchErrorCard";
 
 export interface CardContext {
   onProposalConfirm?: () => void;
   onProposalReject?: (reason?: string) => void;
   onInviteSend?: (emails: string[]) => Promise<InviteSendResult | void>;
   onInviteSkip?: () => void;
+  /** AgentDash: re-dispatch a message whose reply failed (dispatch error card). */
+  onDispatchRetry?: (messageId: string) => Promise<void> | void;
 }
 
 export function CardRenderer({
@@ -59,6 +62,8 @@ export function CardRenderer({
       return <VerdictReviewCard payload={payload as any} />;
     case "human_taste_gate":
       return <HumanTasteGateCard payload={payload as any} />;
+    case "cos_dispatch_error_v1":
+      return <DispatchErrorCard payload={payload as any} onRetry={context.onDispatchRetry} />;
     default:
       return null;
   }
@@ -73,4 +78,5 @@ export {
   // AgentDash: goals-eval-hitl
   VerdictReviewCard,
   HumanTasteGateCard,
+  DispatchErrorCard,
 };
