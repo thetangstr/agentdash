@@ -3,6 +3,7 @@ import type { Config } from "../config.js";
 import { deriveAuthTrustedOrigins, resolveAuthTrustedOrigins } from "../auth/better-auth.js";
 import {
   lintCanonicalOrigin,
+  mintingOriginsForBoot,
   originBootReport,
   registerMintingOrigins,
   resolveOriginSettings,
@@ -417,5 +418,102 @@ describe("minting per audience", () => {
     expect(inBandBaseUrl(req)).toBe("https://paperclip.example");
     expect(outOfBandBaseUrl(req)).toBe("https://paperclip.example");
     expect(inBandBaseUrl(fakeRequest({}))).toBe("");
+  });
+});
+
+// AgentDash (launch lane D): a hosted box behind the edge router. The box
+// env is what cloud/src/railway/provisioner.ts writes: the public name in
+// PAPERCLIP_PUBLIC_URL and the auth base URL, and the Railway host beside it
+// in PAPERCLIP_ALLOWED_HOSTNAMES. The edge sends Host = the Railway host, and
+// Railway's own edge rewrites X-Forwarded-Host to the Railway host as well.
+describe("hosted box behind the edge", () => {
+  const PUBLIC = "https://acme.agentdash.cloud";
+  const RAILWAY = "web-production-1234.up.railway.app";
+  const BOX_ENV: OriginEnv = {
+    PAPERCLIP_PUBLIC_URL: PUBLIC,
+    PAPERCLIP_AUTH_PUBLIC_BASE_URL: PUBLIC,
+    PAPERCLIP_ALLOWED_HOSTNAMES: `acme.agentdash.cloud,${RAILWAY}`,
+  };
+  const KEYS = [
+    "PAPERCLIP_CANONICAL_ORIGIN",
+    "PAPERCLIP_ORIGINS",
+    "PAPERCLIP_PUBLIC_URL",
+    "PAPERCLIP_AUTH_PUBLIC_BASE_URL",
+    "PAPERCLIP_ALLOWED_HOSTNAMES",
+    "BETTER_AUTH_URL",
+    "BETTER_AUTH_BASE_URL",
+    "BETTER_AUTH_TRUSTED_ORIGINS",
+  ] as const;
+  const saved = new Map<string, string | undefined>();
+
+  beforeEach(() => {
+    for (const key of KEYS) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    Object.assign(process.env, BOX_ENV);
+    registerMintingOrigins(null);
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      const value = saved.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    registerMintingOrigins(null);
+  });
+
+  function edgeRequest(headers: Record<string, string> = {}) {
+    const lower: Record<string, string> = {
+      host: RAILWAY,
+      "x-forwarded-host": RAILWAY,
+      "x-agentdash-forwarded-host": "acme.agentdash.cloud",
+      "x-forwarded-proto": "https",
+      ...Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value])),
+    };
+    return { protocol: "http", header: (name: string) => lower[name.toLowerCase()], socket: { remoteAddress: "10.250.0.7" } };
+  }
+
+  function bootAs(env: OriginEnv) {
+    const config = configFrom(env);
+    const trusted = resolveAuthTrustedOrigins(config, { listenPort: 3100, env });
+    registerMintingOrigins(mintingOriginsForBoot(trusted, config.authPublicBaseUrl, env));
+    return trusted;
+  }
+
+  it("still trusts the Railway host for sign-in, but never mints links on it", () => {
+    const trusted = bootAs(BOX_ENV);
+    expect(trusted.mode).toBe("legacy");
+    expect(trusted.origins).toContain(`https://${RAILWAY}`);
+
+    const req = edgeRequest();
+    expect(inBandBaseUrl(req)).toBe(PUBLIC);
+    expect(outOfBandBaseUrl(req)).toBe(PUBLIC);
+  });
+
+  it("answers a request on the public name with the public name", () => {
+    bootAs(BOX_ENV);
+    expect(inBandBaseUrl(edgeRequest({ host: "acme.agentdash.cloud", "x-forwarded-host": "acme.agentdash.cloud" })))
+      .toBe(PUBLIC);
+  });
+
+  it("before boot registers anything, the env-derived set excludes allowed hostnames too", () => {
+    expect(inBandBaseUrl(edgeRequest())).toBe(PUBLIC);
+  });
+
+  it("still echoes a door the operator declared as a full origin in legacy mode", () => {
+    const env: OriginEnv = { ...BOX_ENV, BETTER_AUTH_TRUSTED_ORIGINS: "https://acme-alt.example.test" };
+    process.env.BETTER_AUTH_TRUSTED_ORIGINS = env.BETTER_AUTH_TRUSTED_ORIGINS;
+    bootAs(env);
+    expect(inBandBaseUrl(edgeRequest({ host: "acme-alt.example.test", "x-forwarded-host": "acme-alt.example.test" })))
+      .toBe("https://acme-alt.example.test");
+  });
+
+  it("falls back to the request host when no public URL is configured (local dev)", () => {
+    for (const key of KEYS) delete process.env[key];
+    const env: OriginEnv = { PAPERCLIP_ALLOWED_HOSTNAMES: RAILWAY };
+    bootAs(env);
+    expect(inBandBaseUrl(edgeRequest())).toBe(`https://${RAILWAY}`);
   });
 });

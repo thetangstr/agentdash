@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { approvalUrl, configuredPublicBaseUrl } from "./public-base-url.js";
+import { approvalUrl, configuredPublicBaseUrl, publicBaseUrlOr } from "./public-base-url.js";
 
 const ENV_KEYS = [
   "PAPERCLIP_PUBLIC_URL",
@@ -102,5 +102,35 @@ describe("approvalUrl", () => {
   it("encodes the approval id", () => {
     process.env.PAPERCLIP_PUBLIC_URL = "https://board.example";
     expect(approvalUrl("a/b?c")).toBe("https://board.example/approvals/a%2Fb%3Fc");
+  });
+});
+
+// AgentDash (launch lane D): links read outside any request.
+describe("publicBaseUrlOr", () => {
+  const saved = new Map<string, string | undefined>();
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  });
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const value = saved.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("prefers the feature's own override, trimmed of trailing slashes", () => {
+    process.env.PAPERCLIP_PUBLIC_URL = "https://acme.agentdash.cloud";
+    expect(publicBaseUrlOr("https://billing.example.test/")).toBe("https://billing.example.test");
+  });
+
+  it("falls back to the configured public URL, then to the given default", () => {
+    expect(publicBaseUrlOr(undefined, "http://localhost:3100")).toBe("http://localhost:3100");
+    expect(publicBaseUrlOr("  ")).toBe("");
+    process.env.PAPERCLIP_PUBLIC_URL = "https://acme.agentdash.cloud";
+    expect(publicBaseUrlOr(undefined, "http://localhost:3100")).toBe("https://acme.agentdash.cloud");
   });
 });

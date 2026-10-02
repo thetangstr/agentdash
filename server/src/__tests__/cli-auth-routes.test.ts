@@ -134,6 +134,42 @@ describe.sequential("cli auth routes", () => {
     expect(res.body.approvalUrl).toContain("/cli-auth/challenge-1?token=pcp_cli_auth_secret");
   });
 
+  // AgentDash (launch lane D): on a hosted box behind the edge router the
+  // request arrives with Host and X-Forwarded-Host set to the Railway host.
+  it.sequential("mints the CLI approvalUrl on the public URL, not the edge's Railway host", async () => {
+    const keys = ["PAPERCLIP_PUBLIC_URL", "PAPERCLIP_AUTH_PUBLIC_BASE_URL", "PAPERCLIP_ALLOWED_HOSTNAMES", "PAPERCLIP_CANONICAL_ORIGIN", "PAPERCLIP_ORIGINS"];
+    const saved = new Map(keys.map((key) => [key, process.env[key]]));
+    for (const key of keys) delete process.env[key];
+    process.env.PAPERCLIP_PUBLIC_URL = "https://acme.agentdash.cloud";
+    process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL = "https://acme.agentdash.cloud";
+    process.env.PAPERCLIP_ALLOWED_HOSTNAMES = "acme.agentdash.cloud,web-production-1234.up.railway.app";
+    try {
+      mockBoardAuthService.createCliAuthChallenge.mockResolvedValue({
+        challenge: { id: "challenge-1", expiresAt: new Date("2026-03-23T13:00:00.000Z") },
+        challengeSecret: "pcp_cli_auth_secret",
+        pendingBoardToken: "pcp_board_token",
+      });
+      const app = await createApp({ type: "none", source: "none" });
+      const res = await request(app)
+        .post("/api/cli-auth/challenges")
+        .set("host", "web-production-1234.up.railway.app")
+        .set("x-forwarded-host", "web-production-1234.up.railway.app")
+        .set("x-forwarded-proto", "https")
+        .send({ command: "agentdash company import", clientName: "agentdash cli", requestedAccess: "board" });
+
+      expect(res.status, res.text || JSON.stringify(res.body)).toBe(201);
+      expect(res.body.approvalUrl).toBe(
+        "https://acme.agentdash.cloud/cli-auth/challenge-1?token=pcp_cli_auth_secret",
+      );
+    } finally {
+      for (const key of keys) {
+        const value = saved.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it.sequential("rejects anonymous access to generic skill documents", async () => {
     const indexApp = await createApp({ type: "none", source: "none" });
     const skillApp = await createApp({ type: "none", source: "none" });

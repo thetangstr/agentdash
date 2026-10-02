@@ -6,6 +6,7 @@ import {
   companyMemberships,
 } from "@paperclipai/db";
 import { billingService } from "../services/billing.js";
+import { publicBaseUrlOr } from "../lib/public-base-url.js";
 import { usageBillingService } from "../services/usage-billing.js";
 import { entitlementSync } from "../services/entitlement-sync.js";
 import { stripeWebhookLedger } from "../services/stripe-webhook-ledger.js";
@@ -168,8 +169,11 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
           ),
         );
       const subject = `Your AgentDash Pro trial ends in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
-      const text = `${chatBody}\n\nManage subscription: ${process.env.BILLING_PUBLIC_BASE_URL ?? ""}/billing`;
-      const html = `<p>${chatBody.replace(/\n/g, "<br/>")}</p><p><a href="${process.env.BILLING_PUBLIC_BASE_URL ?? ""}/billing">Manage subscription</a></p>`;
+      // AgentDash (launch lane D): an email is read away from any request, so
+      // its link names the public URL (BILLING_PUBLIC_BASE_URL when set).
+      const billingBase = publicBaseUrlOr(process.env.BILLING_PUBLIC_BASE_URL);
+      const text = `${chatBody}\n\nManage subscription: ${billingBase}/billing`;
+      const html = `<p>${chatBody.replace(/\n/g, "<br/>")}</p><p><a href="${billingBase}/billing">Manage subscription</a></p>`;
       for (const member of memberRows) {
         if (!member.email) continue;
         await sendEmail({ to: member.email, subject, text, html });

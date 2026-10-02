@@ -61,7 +61,7 @@ import type {
 import { CLAIM_ATTEMPT_HEADER } from "./lib/claim-code.js";
 import { createBackupExportService } from "./routes/agentdash-backup-export-service.js";
 import { configuredPublicBaseUrl } from "./lib/public-base-url.js";
-import { originBootReport, registerMintingOrigins } from "./lib/declared-origins.js";
+import { mintingOriginsForBoot, originBootReport, registerMintingOrigins } from "./lib/declared-origins.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -549,7 +549,9 @@ export async function startServer(): Promise<StartedServer> {
     // PAPERCLIP_ORIGINS are set, the previous hostname derivation otherwise.
     const trusted = resolveAuthTrustedOrigins(config, { listenPort });
     const effectiveTrustedOrigins = trusted.origins;
-    registerMintingOrigins(effectiveTrustedOrigins);
+    // AgentDash (launch lane D): legacy mode no longer mints from the
+    // allowed-hostnames cross-product. See `mintingOriginsForBoot`.
+    registerMintingOrigins(mintingOriginsForBoot(trusted, config.authPublicBaseUrl));
     logger.info(
       {
         authBaseUrlMode: config.authBaseUrlMode,

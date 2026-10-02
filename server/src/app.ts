@@ -146,6 +146,7 @@ import { pluginRegistryService } from "./services/plugin-registry.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 import { createCachedViteHtmlRenderer } from "./vite-html-renderer.js";
+import { publicBaseUrlOr } from "./lib/public-base-url.js";
 
 type UiMode = "none" | "static" | "vite-dev";
 const FEEDBACK_EXPORT_FLUSH_INTERVAL_MS = 5_000;
@@ -607,7 +608,8 @@ export async function createApp(
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
     proPriceId: process.env.STRIPE_PRO_PRICE_ID ?? "",
     trialDays: parseInt(process.env.STRIPE_TRIAL_DAYS ?? "14", 10),
-    publicBaseUrl: process.env.BILLING_PUBLIC_BASE_URL ?? "",
+    // AgentDash (launch lane D): fall back to the configured public URL, never "".
+    publicBaseUrl: publicBaseUrlOr(process.env.BILLING_PUBLIC_BASE_URL),
   }));
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
