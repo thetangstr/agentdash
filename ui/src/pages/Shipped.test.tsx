@@ -136,6 +136,18 @@ describe("Shipped page", () => {
     expect(month).toContain("5.0k tokens");
   });
 
+  it("labels an accepted deliverable as accepted, and one still waiting as ready for review", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue(
+      feed([
+        item("3", { type: "document", url: null, status: "approved", reviewState: "approved", summary: "Accepted brief" }),
+        item("4", { type: "document", url: null, status: "ready_for_review", reviewState: "needs_board_review", summary: "Waiting brief" }),
+      ]),
+    );
+    await render();
+    const badges = [...container.querySelectorAll('[data-testid="work-product-state"]')].map((node) => node.textContent);
+    expect(badges).toEqual(["accepted", "ready for review"]);
+  });
+
   it("shows the plan's empty state with one action when nothing has shipped", async () => {
     mockIssuesApi.listShipped.mockResolvedValue(feed([]));
     await render();

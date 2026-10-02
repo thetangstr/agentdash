@@ -794,6 +794,18 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         tasksAssignedToYouTotal?: number;
         pendingQuestions?: WaitingOnYouQuestion[];
         pendingQuestionsTotal?: number;
+        /** AgentDash (MVP launch lane B): deliverables waiting for the person's review. */
+        reviewsWaiting?: Array<{
+          issueId: string;
+          identifier: string | null;
+          title: string;
+          summary: string;
+          waitingSince: string;
+          submittedBy: string | null;
+          readyForReviewCount: number;
+          requestedByYou: boolean;
+        }>;
+        reviewsWaitingTotal?: number;
         /** Machine-filed open issues (routines, evaluations, escalations) — "other activity", not decisions. */
         otherTasksAssignedToYou?: Array<{
           issueId: string;
@@ -838,12 +850,18 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
         ...question, questionSummary: clip(question.questionSummary, FREE_TEXT_LIMIT),
         link: question.identifier ? await ctx.issueLink(question.identifier) : await ctx.homeLink(),
       })));
+      const reviews = await Promise.all((response.reviewsWaiting ?? []).slice(0, cap).map(async review => ({
+        ...review, title: clip(review.title, 120), summary: clip(review.summary, 140),
+        link: review.identifier ? await ctx.issueLink(review.identifier) : await ctx.homeLink(),
+      })));
+      const reviewTotal = response.reviewsWaitingTotal ?? reviews.length;
+      const reviewMore = reviewTotal - reviews.length;
       const questionTotal = response.pendingQuestionsTotal ?? questions.length;
       const questionMore = questionTotal - questions.length;
       const taskMore = (response.tasksAssignedToYouTotal ?? tasks.length) - tasks.length;
       const otherTasksTotal = response.otherTasksAssignedToYouTotal ?? otherTasks.length;
       const undecidable = items.filter((d) => !d.canDecide).length;
-      const primary = items[0]?.link ?? tasks[0]?.link ?? (await ctx.homeLink());
+      const primary = items[0]?.link ?? tasks[0]?.link ?? reviews[0]?.link ?? (await ctx.homeLink());
       const names = items.slice(0, 3).map((d) => d.summary.replace(/\.$/, ""));
       const more = (response.total ?? items.length) - items.length;
       const decisionTotal = response.total ?? items.length;
@@ -856,6 +874,11 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
       if (tasks.length > 0) {
         summaryParts.push(
           `${response.tasksAssignedToYouTotal ?? tasks.length} task${(response.tasksAssignedToYouTotal ?? tasks.length) === 1 ? "" : "s"} assigned to you${taskMore > 0 ? ` (showing ${tasks.length})` : ""}`,
+        );
+      }
+      if (reviewTotal > 0) {
+        summaryParts.push(
+          `${reviewTotal} deliverable${reviewTotal === 1 ? "" : "s"} waiting for your review: ${reviews.slice(0, 3).map((r) => r.title).join("; ")}${reviewMore > 0 ? `; and ${reviewMore} more` : ""}`,
         );
       }
       if (questionTotal > 0) summaryParts.push(`${questionTotal} question${questionTotal === 1 ? '' : 's'} waiting for your answer`);
@@ -874,14 +897,16 @@ export function assistantTools(client: PaperclipApiClient, ctx: AssistantContext
           total: decisionTotal,
           pendingQuestions: questions,
           pendingQuestionsTotal: questionTotal,
+          reviewsWaiting: reviews,
+          reviewsWaitingTotal: reviewTotal,
           tasksAssignedToYou: tasks,
           tasksAssignedToYouTotal: response.tasksAssignedToYouTotal ?? tasks.length,
           otherTasksAssignedToYou: otherTasks,
           otherTasksAssignedToYouTotal: otherTasksTotal,
-          truncated: more > 0 || taskMore > 0 || questionMore > 0,
+          truncated: more > 0 || taskMore > 0 || questionMore > 0 || reviewMore > 0,
         }),
         links: { primary },
-        truncated: more > 0 || taskMore > 0 || questionMore > 0,
+        truncated: more > 0 || taskMore > 0 || questionMore > 0 || reviewMore > 0,
       });
     },
   );

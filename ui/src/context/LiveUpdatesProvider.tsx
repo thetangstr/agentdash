@@ -667,6 +667,11 @@ function invalidateActivityQueries(
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.listMineByMe(companyId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.listTouchedByMe(companyId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.listUnreadTouchedByMe(companyId) });
+    // AgentDash (MVP launch lane B): an issue moving into or out of in_review,
+    // or a deliverable marked ready/accepted, changes what waits on the person.
+    if (action === "issue.updated" || action?.startsWith("issue.work_product_")) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(companyId) });
+    }
     if (entityId) {
       const details = readRecord(payload.details);
       const selfCommentActivity =

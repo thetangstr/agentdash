@@ -151,9 +151,33 @@ export interface WaitingOnYouQuestion {
   answerOwnerName: string;
 }
 
+/**
+ * AgentDash (MVP launch lane B): a deliverable waiting for the person's
+ * review — an `in_review` issue they asked for, or one carrying a
+ * `ready_for_review` work product. Accepting it is moving the issue to done.
+ */
+export interface WaitingOnYouReview {
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  /** "Review: <title>" */
+  summary: string;
+  waitingSince: string;
+  /** The agent the issue is assigned to, when there is one. */
+  submittedBy: string | null;
+  /** Work products on the issue still marked `ready_for_review`. */
+  readyForReviewCount: number;
+  /** The person created the issue. */
+  requestedByYou: boolean;
+}
+
 export interface WaitingOnYou {
   pendingQuestions: WaitingOnYouQuestion[];
   pendingQuestionsTotal: number;
+  /** Deliverables waiting for the person's review (in_review issues). */
+  reviewsWaiting?: WaitingOnYouReview[];
+  /** Every review waiting, not only those listed. */
+  reviewsWaitingTotal?: number;
   decisions: WaitingOnYouDecision[];
   /** Every waiting approval, not only those in `decisions`. */
   total: number;

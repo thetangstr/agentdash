@@ -13,7 +13,7 @@ import { assistantGatedActionsService } from "../services/assistant-gated-action
 import { validate } from "../middleware/validate.js";
 import { forbidden, notFound } from "../errors.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess } from "./authz.js";
-import { listVisibleIssueIds, projectVisibilityCondition } from "./visibility.js";
+import { listVisibleIssueIds, projectVisibilityCondition, resolveAgentVisibility } from "./visibility.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 /**
@@ -100,7 +100,10 @@ export function assistantRoutes(
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const result = await waitingOnYou.list(companyId, req.actor as never);
+    // The review list applies the composed issue rule (restricted projects
+    // and owner-only agents), so the agent scope is resolved for this request.
+    await resolveAgentVisibility(db, req, companyId);
+    const result = await waitingOnYou.list(companyId, req.actor as never, {}, req);
     // AgentDash (GH #830 follow-up): an approval's linked issue is named by
     // identifier and title; one in a restricted project the caller is off
     // the list for is dropped from the row, as on GET /approvals/:id/issues.

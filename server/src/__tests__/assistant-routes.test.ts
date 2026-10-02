@@ -43,6 +43,11 @@ vi.mock("../services/approval-risk.js", () => ({
 vi.mock("../routes/visibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../routes/visibility.js")>()),
   listVisibleIssueIds: vi.fn(async (_db: unknown, _req: unknown, _companyId: unknown, ids: Iterable<string>) => new Set(ids)),
+  // The review list's composed issue rule (owner-only agents) runs against a
+  // real database in waiting-on-you-reviews.test.ts; here every agent is visible.
+  resolveAgentVisibility: vi.fn(async () => ({ mode: "all" })),
+  issueVisibilityCondition: vi.fn(() => undefined),
+  agentVisibilityCondition: vi.fn(() => undefined),
 }));
 
 vi.mock("../services/index.js", () => ({
@@ -72,18 +77,19 @@ async function createApp(
   });
   // These approval/task fixtures contain no pending questions. Keep the real
   // waiting-on-you composition and its authority/visibility predicates; adapt
-  // only its added SELECT-only question reader to that explicit empty dataset.
-  const emptyQuestions = {
+  // only its added SELECT-only question and review readers to that explicit
+  // empty dataset (the review reader ends at `limit`, the question reader at
+  // `offset`).
+  const emptyQuestions: Record<string, unknown> = {
     from(table: Parameters<typeof getTableName>[0]) {
-      if (getTableName(table) !== "issue_thread_interactions") throw new Error("Unexpected fixture query");
+      if (!["issue_thread_interactions", "issues"].includes(getTableName(table))) throw new Error("Unexpected fixture query");
       return emptyQuestions;
     },
     innerJoin: () => emptyQuestions,
     leftJoin: () => emptyQuestions,
     where: () => emptyQuestions,
     orderBy: () => emptyQuestions,
-    limit: () => emptyQuestions,
-    offset: async () => [],
+    limit: () => Object.assign(Promise.resolve([]), { offset: async () => [] }),
   };
   app.use(assistantRoutes({ select: () => emptyQuestions } as never));
   app.use(errorHandler);

@@ -24,6 +24,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
+import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
 import { decisionsListLength, useDecisionsCount } from "../hooks/useDecisionsBadge";
 import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
 import { ControlPlanePanels } from "../components/dashboard/ControlPlanePanels";
@@ -60,7 +61,8 @@ export function formatElapsed(fromIso: string, now: number = Date.now()): string
   return `${Math.floor(hours / 24)}d`;
 }
 
-/** Waiting on you = waiting approvals plus manual issues assigned to you —
+/** Waiting on you = waiting approvals, manual issues assigned to you,
+ *  questions and reviews waiting —
  *  the one definition in useDecisionsBadge that the badge also reads. */
 export function waitingCount(data: WaitingOnYou | undefined): number {
   return decisionsListLength(data);
@@ -186,6 +188,18 @@ function WaitingOnYouBlock({
           </li>
         ))}
       </ul>
+      {(data?.reviewsWaiting?.length ?? 0) > 0 ? (
+        <ul className="divide-y divide-border border-t border-border">
+          {data!.reviewsWaiting!.slice(0, HOME_LIST_LIMIT).map((review) => (
+            <ReviewWaitingRow key={review.issueId} review={review} testId="home-waiting-row" />
+          ))}
+        </ul>
+      ) : null}
+      <MoreLine
+        count={(data?.reviewsWaitingTotal ?? 0) - Math.min(data?.reviewsWaiting?.length ?? 0, HOME_LIST_LIMIT)}
+        to="/decisions"
+        noun="reviews"
+      />
       {selectedCompanyId && <ul className="divide-y border-t">{data?.pendingQuestions?.slice(0, HOME_LIST_LIMIT).map(question => <PendingQuestionRow key={`${selectedCompanyId}:${question.interactionId}`} companyId={selectedCompanyId} question={question}/>)}</ul>}
       <MoreLine count={(data?.pendingQuestionsTotal ?? 0) - Math.min(data?.pendingQuestions?.length ?? 0, HOME_LIST_LIMIT)} to="/decisions" noun="questions"/>
       {/* UX-7 (#788): the rest of this list lives on the Decisions page now. */}

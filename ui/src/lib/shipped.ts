@@ -28,6 +28,10 @@ export function workProductState(product: Pick<IssueWorkProduct, "type" | "statu
   if (status === "closed" || status === "archived") return { label: "closed", tone: "closed" };
   if (status === "failed") return { label: "failed", tone: "closed" };
   if (status === "draft") return { label: "draft", tone: "draft" };
+  // AgentDash (MVP launch lane B): a board user accepting the issue records
+  // its reviewed work products as approved; the person-facing word is
+  // "accepted".
+  if (status === "approved") return { label: "accepted", tone: "open" };
   if (product.type === "pull_request") return { label: "open", tone: "open" };
   return { label: status.replace(/_/g, " ") || "active", tone: "neutral" };
 }

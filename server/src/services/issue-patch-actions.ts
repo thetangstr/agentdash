@@ -1,7 +1,7 @@
 // AgentDash: canonical PATCH acceptance. Plans are private and confer no authority.
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
-import { companies, issues, issueExecutionDecisions, issueThreadInteractions, type Db } from "@paperclipai/db";
+import { and, eq, sql } from "drizzle-orm";
+import { companies, issues, issueExecutionDecisions, issueThreadInteractions, issueWorkProducts, type Db } from "@paperclipai/db";
 import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueRouteSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
@@ -44,6 +44,10 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   // set, but an off-list actor never sees blockers in a restricted project.
   // Returns the current blocker ids the actor cannot see; they are kept.
   retainHiddenBlockerIds?(executor: IssueCommentExecutor, companyId: string, blockerIds: string[]): Promise<string[]>;
+  // AgentDash (MVP launch lane B): the request actor's source. An
+  // `assistant_grant` board actor is a client acting for the person, so its
+  // move to done does not accept deliverables on the person's behalf.
+  actorSource?: string;
 }
 export class IssuePatchAcceptanceUncertain extends IssueCommentPolicyRefusal {
   constructor(readonly recovery: { mutationId: string; companyId: string; issueId: string; commentId: string | null; decisionId: string | null }) {
@@ -667,6 +671,98 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             ),
           },
         });
+
+        // AgentDash (MVP launch lane B, item 6): a human board user moving
+        // the issue to done is the acceptance of what the agent shipped. Its
+        // work products still waiting for review are recorded as accepted in
+        // the same transaction, so Shipped and Home stop saying "ready for
+        // review". Agent-driven transitions and assistant-grant writes (a
+        // client acting for the person) are not an acceptance. The marker in
+        // metadata.acceptance lets a reopen undo exactly this.
+        const humanBoardActor = context.actorKind === "board" && context.actorSource !== "assistant_grant" && actor.actorType === "user";
+        if (humanBoardActor && existing.status !== "done" && issue.status === "done") {
+          const acceptance = {
+            reason: "issue_accepted",
+            acceptedAt: new Date().toISOString(),
+            acceptedByUserId: actor.actorId,
+          };
+          const acceptedProducts = await tx.update(issueWorkProducts)
+            .set({
+              status: "approved",
+              reviewState: "approved",
+              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('acceptance',
+                ${JSON.stringify(acceptance)}::jsonb || jsonb_build_object('previousReviewState', ${issueWorkProducts.reviewState}))`,
+              updatedAt: new Date(),
+            })
+            .where(and(
+              eq(issueWorkProducts.companyId, issue.companyId),
+              eq(issueWorkProducts.issueId, issue.id),
+              eq(issueWorkProducts.status, "ready_for_review"),
+            ))
+            .returning({ id: issueWorkProducts.id });
+          for (const product of acceptedProducts) {
+            await audit({
+              companyId: issue.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.work_product_updated",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                identifier: issue.identifier,
+                workProductId: product.id,
+                changedKeys: ["metadata", "reviewState", "status"],
+                status: "approved",
+                reviewState: "approved",
+                reason: "issue_accepted",
+                ...context.attribution,
+              },
+            });
+          }
+        }
+        // Reopening an accepted issue (done to an open status) withdraws that
+        // acceptance: work products approved by it go back to waiting for
+        // review. Products approved any other way are left alone.
+        if (existing.status === "done" && !["done", "cancelled"].includes(issue.status)) {
+          const withoutAcceptance = sql`(${issueWorkProducts.metadata} - 'acceptance')`;
+          const reopenedProducts = await tx.update(issueWorkProducts)
+            .set({
+              status: "ready_for_review",
+              reviewState: sql`coalesce(${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousReviewState', 'needs_board_review')`,
+              metadata: sql`case when ${withoutAcceptance} = '{}'::jsonb then null else ${withoutAcceptance} end`,
+              updatedAt: new Date(),
+            })
+            .where(and(
+              eq(issueWorkProducts.companyId, issue.companyId),
+              eq(issueWorkProducts.issueId, issue.id),
+              eq(issueWorkProducts.status, "approved"),
+              sql`${issueWorkProducts.metadata} -> 'acceptance' ->> 'reason' = 'issue_accepted'`,
+            ))
+            .returning({ id: issueWorkProducts.id, reviewState: issueWorkProducts.reviewState });
+          for (const product of reopenedProducts) {
+            await audit({
+              companyId: issue.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.work_product_updated",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                identifier: issue.identifier,
+                workProductId: product.id,
+                changedKeys: ["metadata", "reviewState", "status"],
+                status: "ready_for_review",
+                reviewState: product.reviewState,
+                reason: "issue_reopened",
+                ...context.attribution,
+              },
+            });
+          }
+        }
 
         if (Array.isArray(intent.blockedByIssueIds)) {
           const previousBlockedByIds = new Set((existingRelations?.blockedBy ?? []).map((relation) => relation.id));

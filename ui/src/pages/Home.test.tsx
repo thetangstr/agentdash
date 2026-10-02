@@ -251,6 +251,33 @@ describe("Home", () => {
     expect(more?.textContent).toBe("and 2 more waiting in Decisions");
   });
 
+  it("shows a deliverable waiting for review as a Review row, and counts it", async () => {
+    // MVP launch lane B: an agent moved the CEO's issue to in_review with a
+    // document ready; Home must say so.
+    mockDashboardApi.waitingOnYou.mockResolvedValue({
+      ...waiting,
+      reviewsWaiting: [{
+          issueId: "issue-review-1",
+          identifier: "ACM-1",
+          title: "Write the launch brief",
+          summary: "Review: Write the launch brief",
+          waitingSince: new Date().toISOString(),
+          submittedBy: "Maya",
+          readyForReviewCount: 1,
+          requestedByYou: true,
+        }],
+      reviewsWaitingTotal: 1,
+    });
+    await render();
+    const block = q("home-waiting")!;
+    const link = block.querySelector('a[href="/issues/ACM-1"]');
+    expect(link?.textContent).toBe("Review: Write the launch brief");
+    expect(block.textContent).toContain("from Maya");
+    expect(block.textContent).toContain("1 deliverable ready");
+    expect(q("home-waiting-count")?.textContent).toBe("4");
+    expect(rows("home-waiting-row")).toHaveLength(4);
+  });
+
   it("says how many more when the list is capped, so the count still adds up", async () => {
     mockDashboardApi.waitingOnYou.mockResolvedValue({ ...waiting, tasksAssignedToYouTotal: 9 });
     await render();

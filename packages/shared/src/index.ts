@@ -499,6 +499,7 @@ export type {
   DashboardSummary,
   WaitingOnYou,
   WaitingOnYouQuestion,
+  WaitingOnYouReview,
   WaitingOnYouDecision,
   WaitingOnYouTask,
   WorkingNow,

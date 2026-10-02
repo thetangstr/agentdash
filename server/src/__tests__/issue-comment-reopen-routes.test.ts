@@ -61,6 +61,13 @@ const mockTxInsertValues = vi.hoisted(() => vi.fn(async () => undefined));
 const mockTxInsert = vi.hoisted(() => vi.fn(() => ({ values: mockTxInsertValues })));
 const mockTx = vi.hoisted(() => ({
   insert: mockTxInsert,
+  // AgentDash (MVP launch lane B): moving to or from done updates the issue's
+  // work products in the same transaction; this fixture holds none.
+  update: vi.fn(() => {
+    const chain: Record<string, unknown> = {};
+    Object.assign(chain, { set: () => chain, where: () => chain, returning: async () => [] });
+    return chain;
+  }),
 }));
 const mockDb = vi.hoisted(() => ({
   transaction: vi.fn(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)),

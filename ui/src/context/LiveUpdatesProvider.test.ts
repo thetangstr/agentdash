@@ -697,6 +697,27 @@ describe('workforce question attention invalidation', () => {
   });
 });
 
+describe('review waiting invalidation', () => {
+  it.each(['issue.updated', 'issue.work_product_created', 'issue.work_product_updated'])('invalidates only the affected company Waiting on you on %s', (action) => {
+    const client = new QueryClient();
+    for (const company of ['company-1', 'company-2']) {
+      client.setQueryData(queryKeys.home.waitingOnYou(company), { reviewsWaitingTotal: 1 });
+    }
+    __liveUpdatesTestUtils.invalidateActivityQueries(client, 'company-1', { entityType: 'issue', entityId: 'issue-1', action, details: null }, { userId: null, agentId: null });
+    expect(client.getQueryState(queryKeys.home.waitingOnYou('company-1'))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(queryKeys.home.waitingOnYou('company-2'))?.isInvalidated).toBe(false);
+    client.clear();
+  });
+
+  it('leaves Waiting on you alone for a plain comment', () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.home.waitingOnYou('company-1'), { reviewsWaitingTotal: 1 });
+    __liveUpdatesTestUtils.invalidateActivityQueries(client, 'company-1', { entityType: 'issue', entityId: 'issue-1', action: 'issue.comment_added', details: null }, { userId: null, agentId: null });
+    expect(client.getQueryState(queryKeys.home.waitingOnYou('company-1'))?.isInvalidated).toBe(false);
+    client.clear();
+  });
+});
+
 
 describe('workforce readiness activity invalidation', () => {
   it.each([

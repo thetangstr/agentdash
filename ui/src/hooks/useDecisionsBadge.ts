@@ -15,7 +15,13 @@ import { useDecisionsOtherSources } from "./useDecisionsSources";
  */
 export function decisionsListLength(data: WaitingOnYou | undefined): number {
   if (!data) return 0;
-  return (data.total ?? 0) + (data.tasksAssignedToYouTotal ?? 0) + (data.pendingQuestionsTotal ?? 0);
+  return (
+    (data.total ?? 0) +
+    (data.tasksAssignedToYouTotal ?? 0) +
+    (data.pendingQuestionsTotal ?? 0) +
+    // AgentDash (MVP launch lane B): deliverables waiting for the person's review.
+    (data.reviewsWaitingTotal ?? 0)
+  );
 }
 
 /**
