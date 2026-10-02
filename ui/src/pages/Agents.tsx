@@ -12,6 +12,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { EntityRow } from "../components/EntityRow";
 import { AgentKindBadge } from "@/components/AgentKindBadge";
+import { useStewardshipFeature } from "@/hooks/useStewardshipCapability";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
@@ -106,6 +107,10 @@ function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean
 
 export function Agents() {
   const { selectedCompanyId } = useCompany();
+  // AgentDash (canary1): when the workspace cannot assign stewards, "Needs a
+  // steward" is not something anyone here can act on; hide that badge. Only a
+  // definite "off" hides it; loading or unknown keeps today's rendering.
+  const hideUnpaired = useStewardshipFeature(selectedCompanyId) === "off";
   // AgentDash: UX-11 — the Team page explains who hires agents and points at
   // Ask. Same for every company (one UX).
   const { openNewAgent } = useDialogActions();
@@ -293,6 +298,7 @@ export function Agents() {
                 agent={agent}
                 liveRun={liveRunByAgent.get(agent.id)}
                 dimmed={!!agent.pausedAt && tab !== "paused"}
+                hideUnpaired={hideUnpaired}
               />
             </li>
           ))}
@@ -307,7 +313,7 @@ export function Agents() {
                 key={agent.id}
                 title={agent.name}
                 titleBadge={
-                  agent.status === "terminated" ? null : <AgentKindBadge agent={agent} />
+                  agent.status === "terminated" ? null : <AgentKindBadge agent={agent} hideUnpaired={hideUnpaired} />
                 }
                 subtitle={agentIdentityLine(agent)}
                 to={agentUrl(agent)}
@@ -381,7 +387,7 @@ export function Agents() {
       {effectiveView === "org" && filteredOrg.length > 0 && (
         <div className="border border-border py-1">
           {filteredOrg.map((node) => (
-            <OrgTreeNode key={node.id} node={node} depth={0} agentMap={agentMap} liveRunByAgent={liveRunByAgent} tab={tab} />
+            <OrgTreeNode key={node.id} node={node} depth={0} agentMap={agentMap} liveRunByAgent={liveRunByAgent} tab={tab} hideUnpaired={hideUnpaired} />
           ))}
         </div>
       )}
@@ -487,10 +493,12 @@ function PhoneAgentCard({
   agent,
   liveRun,
   dimmed,
+  hideUnpaired,
 }: {
   agent: Agent;
   liveRun: { runId: string; liveCount: number } | undefined;
   dimmed: boolean;
+  hideUnpaired: boolean;
 }) {
   const role = agentIdentityLine(agent);
   return (
@@ -522,7 +530,7 @@ function PhoneAgentCard({
           <span className="break-words text-xs text-muted-foreground">{role}</span>
         </span>
         <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          {agent.status === "terminated" ? null : <AgentKindBadge agent={agent} className="text-xs" />}
+          {agent.status === "terminated" ? null : <AgentKindBadge agent={agent} className="text-xs" hideUnpaired={hideUnpaired} />}
           {liveRun ? (
             // A chip, not LiveRunIndicator's link: the whole card is already a link.
             <span className="flex items-center gap-1.5 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
@@ -545,12 +553,14 @@ function OrgTreeNode({
   agentMap,
   liveRunByAgent,
   tab,
+  hideUnpaired,
 }: {
   node: OrgNode;
   depth: number;
   agentMap: Map<string, Agent>;
   liveRunByAgent: Map<string, { runId: string; liveCount: number }>;
   tab: FilterTab;
+  hideUnpaired: boolean;
 }) {
   const agent = agentMap.get(node.id);
 
@@ -568,7 +578,7 @@ function OrgTreeNode({
         <div className="flex-1 min-w-0">
           <span className="text-sm font-medium">{node.name}</span>
           {agent && node.status !== "terminated" ? (
-            <AgentKindBadge agent={agent} className="ml-2 align-middle" />
+            <AgentKindBadge agent={agent} className="ml-2 align-middle" hideUnpaired={hideUnpaired} />
           ) : null}
           <span className="text-xs text-muted-foreground ml-2">
             {roleLabels[node.role] ?? node.role}
@@ -625,7 +635,7 @@ function OrgTreeNode({
       {node.reports && node.reports.length > 0 && (
         <div className="border-l border-border/50 ml-4">
           {node.reports.map((child) => (
-            <OrgTreeNode key={child.id} node={child} depth={depth + 1} agentMap={agentMap} liveRunByAgent={liveRunByAgent} tab={tab} />
+            <OrgTreeNode key={child.id} node={child} depth={depth + 1} agentMap={agentMap} liveRunByAgent={liveRunByAgent} tab={tab} hideUnpaired={hideUnpaired} />
           ))}
         </div>
       )}

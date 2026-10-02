@@ -14,7 +14,8 @@ import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { agentProfileName, ensureAgentProfileCommand } from "../services/hermes-profile.js";
+import { agentProfileName, ensureAgentProfileCommand, HERMES_PROFILE_PROVISION_ERROR_CODE } from "../services/hermes-profile.js";
+import { requireServerAdapter } from "../adapters/registry.js";
 
 const ENV_KEYS = [
   "AGENTDASH_HERMES_MANAGED_PROFILES",
@@ -24,6 +25,7 @@ const ENV_KEYS = [
   "HERMES_FAKE_CALL_LOG",
   "AGENTDASH_GATEWAY_BASE_URL",
   "AGENTDASH_GATEWAY_API_KEY",
+  "AGENTDASH_DEPLOYMENT_KIND",
 ];
 
 describe("managed-Hermes agent lifecycle (integration, fake hermes)", () => {
@@ -107,4 +109,31 @@ describe("managed-Hermes agent lifecycle (integration, fake hermes)", () => {
     const secondCalls = (await fs.readFile(callLog, "utf8")).trim().split("\n").length;
     expect(secondCalls).toBe(firstCalls);
   });
+  // canary1 (v2026.1002.1): on a hosted box (fail-closed profiles) every Hermes
+  // agent's setup check failed with "the run has no agent id", because the
+  // harness-preflight caller did not pass the agent. With the agent passed, the
+  // check provisions/uses that agent's managed profile instead.
+  it("hosted fail-closed: the environment check uses the agent's managed profile when the agent is passed", async () => {
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    const adapter = requireServerAdapter("hermes_local");
+    const agentId = "b7a1c2d3-0000-4000-8000-000000000001";
+
+    const withAgent = await adapter.testEnvironment({
+      companyId: "company-1",
+      adapterType: "hermes_local",
+      config: {},
+      agent: { id: agentId, companyId: "company-1", adapterConfig: {} },
+    });
+    expect(withAgent.checks.map((c) => c.code)).not.toContain(HERMES_PROFILE_PROVISION_ERROR_CODE);
+    expect(existsSync(path.join(binDir, agentProfileName(agentId)))).toBe(true);
+
+    // Without the agent there is no profile to check, and fail-closed still says so.
+    const withoutAgent = await adapter.testEnvironment({
+      companyId: "company-1",
+      adapterType: "hermes_local",
+      config: {},
+    });
+    expect(withoutAgent.status).toBe("fail");
+    expect(withoutAgent.checks.map((c) => c.code)).toContain(HERMES_PROFILE_PROVISION_ERROR_CODE);
+  }, 30_000);
 });

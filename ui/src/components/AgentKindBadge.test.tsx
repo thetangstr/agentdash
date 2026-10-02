@@ -117,4 +117,18 @@ describe("AgentKindBadge", () => {
       agentKindExplanation(autonomous),
     );
   });
+  it("renders nothing for an unpaired agent where stewards cannot be assigned, and the other kinds as usual", () => {
+    act(() => {
+      createRoot(container).render(<AgentKindBadge agent={unpaired} hideUnpaired />);
+    });
+    expect(container.textContent).toBe("");
+
+    container.remove();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    act(() => {
+      createRoot(container).render(<AgentKindBadge agent={stewarded} hideUnpaired />);
+    });
+    expect(container.textContent).toContain("Stewarded");
+  });
 });

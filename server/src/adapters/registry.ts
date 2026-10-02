@@ -1060,7 +1060,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
   // against that profile's wrapper command.
   testEnvironment: async (ctx) => {
     if (hermesManagedProfilesEnabled()) {
-      const agentId = (ctx as { agent?: { id?: string | null } }).agent?.id;
+      const agentId = ctx.agent?.id;
       let profileCmd: string | undefined;
       try {
         profileCmd = await ensureAgentProfileCommand(agentId, {}, { failClosed: hermesProfilesFailClosed() });

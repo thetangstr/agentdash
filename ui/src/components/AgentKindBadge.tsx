@@ -84,11 +84,20 @@ const STYLES: Record<AgentKind, string> = {
 export function AgentKindBadge({
   agent,
   className,
+  hideUnpaired = false,
 }: {
   agent: Pick<Agent, "autonomy" | "accountable">;
   className?: string;
+  /**
+   * AgentDash (canary1, v2026.1002.1): render nothing for an unpaired agent.
+   * Set where the workspace cannot assign stewards (the stewardship capability
+   * is off): "Needs a steward" asked for something Members & access calls
+   * "available on request", so it was a call to action nobody could follow.
+   */
+  hideUnpaired?: boolean;
 }) {
   const kind = agentKind(agent);
+  if (hideUnpaired && kind === "unpaired") return null;
   return (
     // Its own provider so the badge can be dropped into any list or panel
     // without that screen having to know it contains a tooltip. Radix throws

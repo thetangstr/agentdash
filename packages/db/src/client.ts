@@ -10,8 +10,18 @@ const MIGRATIONS_FOLDER = fileURLToPath(new URL("./migrations", import.meta.url)
 const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
 const MIGRATIONS_JOURNAL_JSON = fileURLToPath(new URL("./migrations/meta/_journal.json", import.meta.url));
 
+// AgentDash: notices are dropped, except the ones a migration raises on
+// purpose to tell an operator something (prefixed "agentdash:"), e.g. 0144
+// naming the companies its backfill left alone.
+function logAgentDashMigrationNotice(notice: { message?: unknown }) {
+  const message = notice?.message;
+  if (typeof message === "string" && message.startsWith("agentdash:")) {
+    console.log(`[migrations] ${message}`);
+  }
+}
+
 function createUtilitySql(url: string) {
-  return postgres(url, { max: 1, onnotice: () => {} });
+  return postgres(url, { max: 1, onnotice: logAgentDashMigrationNotice });
 }
 
 function isSafeIdentifier(value: string): boolean {

@@ -15,6 +15,20 @@ const mockHumanChannelsApi = vi.hoisted(() => ({
 
 vi.mock("@/api/human-channels", () => ({ humanChannelsApi: mockHumanChannelsApi }));
 
+const mockCapabilitiesApi = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("@/api/capabilities", () => ({ capabilitiesApi: mockCapabilitiesApi }));
+
+function capabilities(stewardship: boolean | null) {
+  return {
+    companyId: "company-1",
+    actorType: "board",
+    membershipRole: "admin",
+    isInstanceAdmin: false,
+    capabilities: {},
+    features: { stewardship },
+  };
+}
+
 const { ChannelBindingsTable } = await import("./ChannelBindingsTable");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,6 +90,7 @@ describe("ChannelBindingsTable", () => {
     root = createRoot(container);
     vi.clearAllMocks();
     mockHumanChannelsApi.listAll.mockResolvedValue({ bindings: [binding()] });
+    mockCapabilitiesApi.get.mockResolvedValue(capabilities(true));
     mockHumanChannelsApi.revoke.mockResolvedValue({ binding: binding({ revokedAt: "2026-08-04T00:00:00.000Z" }) });
   });
 
@@ -114,5 +129,26 @@ describe("ChannelBindingsTable", () => {
     // No binding data and no revoke affordance leaked to a non-admin.
     expect(container.textContent).not.toContain("555");
     expect(button(/revoke/i)).toBeFalsy();
+  });
+  // canary1 (v2026.1002.1): GET /channel-bindings answered 404 on every visit
+  // to Members & access in a workspace without chat channels.
+  it("does not ask the gated route when the server says the capability is off", async () => {
+    mockCapabilitiesApi.get.mockResolvedValue(capabilities(false));
+
+    await render();
+
+    expect(mockHumanChannelsApi.listAll).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Available on request");
+    expect(container.textContent).toContain("chat channels");
+  });
+
+  it("still asks the gated route when the server cannot say, and reads its 404", async () => {
+    mockCapabilitiesApi.get.mockResolvedValue(capabilities(null));
+    mockHumanChannelsApi.listAll.mockRejectedValue(new ApiError("Company not found", 404, null));
+
+    await render();
+
+    expect(mockHumanChannelsApi.listAll).toHaveBeenCalledWith("company-1");
+    expect(container.textContent).toContain("Available on request");
   });
 });

@@ -7,7 +7,7 @@ type FailureKind = "admin" | "unconfigured" | "generic";
 
 const FAILURE_TEXT: Record<FailureKind, string> = {
   admin: "Only a company owner or admin can upgrade — ask them to start the trial.",
-  unconfigured: "Billing isn't configured on this instance.",
+  unconfigured: "Billing isn't set up yet for your workspace.",
   generic: "Could not open checkout — try again.",
 };
 

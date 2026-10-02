@@ -160,7 +160,7 @@ export default function BillingPage({ companyId }: { companyId: string }) {
         <div className="mt-6">
           {!billingConfigured ? (
             <p className="text-sm text-text-secondary">
-              Billing isn't configured on this instance.
+              Billing isn't set up yet for your workspace.
             </p>
           ) : !isPro && !isPastDue ? (
             <UpgradeCheckoutButton companyId={companyId} />

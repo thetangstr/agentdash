@@ -240,6 +240,17 @@ export interface AdapterEnvironmentTestContext {
    * Surfaced in check messages so users see which environment the probe ran in.
    */
   environmentName?: string | null;
+  /**
+   * AgentDash: the saved agent being checked, when the test is for one (the
+   * harness-preflight of an existing agent). Adapters that keep per-agent state,
+   * such as Hermes' managed profiles, need its id to check the environment the
+   * agent's runs actually use. Absent when testing a config before the agent exists.
+   */
+  agent?: {
+    id: string;
+    companyId: string;
+    adapterConfig: Record<string, unknown>;
+  } | null;
   deployment?: {
     mode?: "local_trusted" | "authenticated";
     exposure?: "private" | "public";
