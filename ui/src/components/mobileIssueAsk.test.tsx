@@ -90,11 +90,16 @@ describe("mobile issue + Ask (390px viewport)", () => {
     // Hidden from 640px up (desktop keeps its inline buttons); a 44px tap target on phones.
     expect(classesOf(trigger)).toEqual(expect.arrayContaining(["sm:hidden", "size-11"]));
 
+    const menuItems = () => Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'));
     const open = async () => {
+      // A loaded CI box can still be closing the previous menu (Radix presence)
+      // when the next open starts; wait for it to go, then for all three items.
+      await vi.waitFor(() => expect(menuItems()).toHaveLength(0), { timeout: 5_000 });
       await act(async () => {
         trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       });
-      return Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+      await vi.waitFor(() => expect(menuItems()).toHaveLength(3), { timeout: 5_000 });
+      return menuItems();
     };
 
     let items = await open();
