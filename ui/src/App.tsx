@@ -112,6 +112,7 @@ import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 import { legacyDecisionsRoutes } from "./lib/legacy-decisions-routes";
 import { docsShadowRoutePaths } from "./lib/docs-nav";
+import { legacySettingsRedirectTarget } from "./lib/settings-hub";
 
 // Public docs (/docs) load on demand: the nav, the search index and every page
 // body stay out of the initial bundle.
@@ -232,9 +233,12 @@ function boardRoutes() {
 // Every board path, mirrored under docs/ — see docs-nav.ts for why.
 const DOCS_SHADOW_ROUTE_PATHS = docsShadowRoutePaths(boardRoutes());
 
+// AgentDash (Lane F2): legacy /settings URLs open the workspace's settings,
+// not the instance-admin page — see legacySettingsRedirectTarget.
 function LegacySettingsRedirect() {
   const location = useLocation();
-  return <Navigate to={`/instance/settings/general${location.search}${location.hash}`} replace />;
+  const target = legacySettingsRedirectTarget(location.pathname);
+  return <Navigate to={`${target}${location.search}${location.hash}`} replace />;
 }
 
 function OnboardingRoutePage() {

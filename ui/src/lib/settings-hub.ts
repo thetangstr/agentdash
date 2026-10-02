@@ -24,3 +24,50 @@ export function isSettingsHubPath(pathname: string): boolean {
   const rest = segments.slice(1).join("/");
   return COMPANY_SETTINGS_HUB_ROOTS.some((root) => rest === root || rest.startsWith(`${root}/`));
 }
+
+// AgentDash (Lane F2): where a legacy `/settings…` URL goes. It used to send
+// every one of them to /instance/settings/general, the instance-admin page
+// (deployment and auth, bootstrap invite, log censoring), so a company founder
+// following `/settings`, the billing upgrade link (`/settings/billing`) or the
+// Slack OAuth return (`/settings/connections`) landed on a page about the
+// deployment. Settings means the workspace's settings; only pages that exist
+// solely as instance settings keep their instance target.
+const LEGACY_COMPANY_SETTINGS_PAGES = new Set([
+  "connections",
+  "model-key",
+  "environments",
+  "access",
+  "invites",
+  "health",
+]);
+const LEGACY_INSTANCE_SETTINGS_PAGES = new Set([
+  "general",
+  "heartbeats",
+  "experimental",
+  "plugins",
+  "adapters",
+  "updates",
+  "profile",
+  "about",
+  "changelog",
+]);
+
+export const WORKSPACE_SETTINGS_PATH = "/company/settings";
+
+export function legacySettingsRedirectTarget(pathname: string): string {
+  const segments = pathname.split("/").filter(Boolean);
+  const settingsIndex = segments.findIndex((segment) => segment.toLowerCase() === "settings");
+  const page = settingsIndex >= 0 ? segments[settingsIndex + 1]?.toLowerCase() : undefined;
+  // `/BRI/settings` stays on BRI: a prefixed legacy URL names its company, so
+  // the target keeps that prefix rather than falling back to whichever
+  // company happens to be selected.
+  const companyPrefix = settingsIndex === 1 ? `/${segments[0]}` : "";
+  if (page && LEGACY_INSTANCE_SETTINGS_PAGES.has(page)) {
+    return `/instance/settings/${segments.slice(settingsIndex + 1).join("/")}`;
+  }
+  if (page === "billing") return `${companyPrefix}/billing`;
+  if (page && LEGACY_COMPANY_SETTINGS_PAGES.has(page)) {
+    return `${companyPrefix}${WORKSPACE_SETTINGS_PATH}/${page}`;
+  }
+  return `${companyPrefix}${WORKSPACE_SETTINGS_PATH}`;
+}

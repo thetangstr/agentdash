@@ -172,7 +172,7 @@ import {
   readContinuationAttempt,
 } from "./recovery/index.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-guard.js";
-import { recoveryService } from "./recovery/service.js";
+import { isInsideStrandedEscalationGrace, recoveryService } from "./recovery/service.js";
 import { productivityReviewService } from "./productivity-review.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
 import { latestRecoveryBudgetClearAt, reblockExhaustedIssue } from "./issue-recovery-budget.js";
@@ -5930,8 +5930,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
   }
 
-  async function reconcileStrandedAssignedIssues() {
-    return recovery.reconcileStrandedAssignedIssues();
+  async function reconcileStrandedAssignedIssues(opts?: { now?: Date }) {
+    return recovery.reconcileStrandedAssignedIssues(opts);
   }
 
   function issueIdFromRunContext(contextSnapshot: unknown) {
@@ -8039,11 +8039,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         return { kind: "released" as const };
       }
 
+      const automaticRecoveryFailed =
+        didAutomaticRecoveryFail(run, issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed");
       const shouldBlockImmediately =
         issue.originKind === RECOVERY_ORIGIN_KINDS.strandedIssueRecovery ||
         !recoveryAgentInvokable ||
         !recoveryAgent ||
-        didAutomaticRecoveryFail(run, issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed");
+        automaticRecoveryFailed;
+      // AgentDash (Lane F1): a young issue whose one automatic retry failed is
+      // not escalated into a "Recover stalled issue" task yet. Release it; the
+      // periodic stranded-work reconciler escalates it once it is older than
+      // STRANDED_ISSUE_ESCALATION_MIN_AGE_MS and still has no live path.
+      if (
+        shouldBlockImmediately &&
+        automaticRecoveryFailed &&
+        recoveryAgentInvokable &&
+        recoveryAgent &&
+        issue.originKind !== RECOVERY_ORIGIN_KINDS.strandedIssueRecovery &&
+        isInsideStrandedEscalationGrace(issue)
+      ) {
+        return { kind: "released" as const };
+      }
       if (shouldBlockImmediately) {
         const comment = buildImmediateExecutionPathRecoveryComment({
           status: issue.status as "todo" | "in_progress",

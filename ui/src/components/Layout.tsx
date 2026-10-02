@@ -362,6 +362,7 @@ export function Layout() {
               {isSettingsHubRoute ? <SettingsSidebar /> : <Sidebar />}
             </div>
             <SidebarAccountMenu
+              companyId={selectedCompanyId}
               deploymentMode={health?.deploymentMode}
               instanceSettingsTarget={instanceSettingsTarget}
               version={health?.version}
@@ -381,6 +382,7 @@ export function Layout() {
               </div>
             </div>
             <SidebarAccountMenu
+              companyId={selectedCompanyId}
               deploymentMode={health?.deploymentMode}
               instanceSettingsTarget={instanceSettingsTarget}
               version={health?.version}

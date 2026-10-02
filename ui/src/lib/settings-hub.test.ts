@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { isSettingsHubPath } from "./settings-hub";
+import { isSettingsHubPath, legacySettingsRedirectTarget } from "./settings-hub";
+
+// AgentDash (Lane F2): a founder following a legacy /settings link lands on the
+// workspace's settings, never on the instance-admin General page.
+describe("legacySettingsRedirectTarget", () => {
+  it.each([
+    ["/settings", "/company/settings"],
+    ["/BRI/settings", "/BRI/company/settings"],
+    ["/settings/", "/company/settings"],
+    ["/settings/billing", "/billing"],
+    ["/BRI/settings/billing", "/BRI/billing"],
+    ["/BRI/settings/connections", "/BRI/company/settings/connections"],
+    ["/BRI/settings/general", "/instance/settings/general"],
+    ["/settings/connections", "/company/settings/connections"],
+    ["/settings/invites", "/company/settings/invites"],
+    ["/settings/access", "/company/settings/access"],
+    ["/settings/something-old", "/company/settings"],
+    ["/settings/general", "/instance/settings/general"],
+    ["/settings/plugins/abc", "/instance/settings/plugins/abc"],
+    ["/settings/profile", "/instance/settings/profile"],
+  ])("%s -> %s", (pathname, target) => {
+    expect(legacySettingsRedirectTarget(pathname)).toBe(target);
+  });
+});
 
 describe("isSettingsHubPath", () => {
   it.each([
