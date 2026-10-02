@@ -21,6 +21,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { cn } from "../lib/utils";
 import { DecisionsOtherSources } from "./DecisionsOtherSources";
+import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
 
 /**
  * AgentDash: UX-7 (GH #788) — one Decisions page instead of Inbox +
@@ -201,6 +202,25 @@ export function Decisions() {
 
       {(waiting?.pendingQuestions.length ?? 0) > 0 && <section className="rounded-xl border bg-card" aria-label="Questions waiting for you"><h2 className="px-4 pt-3 text-sm font-semibold">Questions waiting for you</h2><ul className="divide-y">{waiting?.pendingQuestions.map(question => <PendingQuestionRow key={`${selectedCompanyId}:${question.interactionId}`} companyId={selectedCompanyId} question={question}/>)}</ul></section>}
       {(waiting?.pendingQuestionsTotal ?? 0) > (waiting?.pendingQuestions.length ?? 0) && <p className="text-sm">More questions are waiting; answer these to load the next questions.</p>}
+      {(waiting?.reviewsWaiting?.length ?? 0) > 0 ? (
+        <section className="rounded-xl border border-border bg-card" aria-label="Waiting for your review">
+          <header className="border-b border-border px-4 py-2.5">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Waiting for your review
+            </h2>
+          </header>
+          <ul className="divide-y divide-border">
+            {waiting!.reviewsWaiting!.map((review) => (
+              <ReviewWaitingRow key={review.issueId} review={review} testId="decisions-review-row" />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {(waiting?.reviewsWaitingTotal ?? 0) > (waiting?.reviewsWaiting?.length ?? 0) ? (
+        <p className="px-1 text-xs text-muted-foreground">
+          and {(waiting?.reviewsWaitingTotal ?? 0) - (waiting?.reviewsWaiting?.length ?? 0)} more waiting for review
+        </p>
+      ) : null}
       {manualTasks.length > 0 ? (
         <section className="rounded-xl border border-border bg-card" aria-label="Assigned to you">
           <header className="border-b border-border px-4 py-2.5">

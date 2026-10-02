@@ -100,7 +100,7 @@ export function assistantRoutes(
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const result = await waitingOnYou.list(companyId, req.actor as never);
+    const result = await waitingOnYou.list(companyId, req.actor as never, {}, req);
     // AgentDash (GH #830 follow-up): an approval's linked issue is named by
     // identifier and title; one in a restricted project the caller is off
     // the list for is dropped from the row, as on GET /approvals/:id/issues.

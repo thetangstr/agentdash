@@ -1,7 +1,7 @@
 import type { Request } from 'express';
-import { and, asc, eq, isNull, notInArray, sql } from 'drizzle-orm';
-import { authUsers, companyMemberships, issues, issueThreadInteractions } from '@paperclipai/db';
-import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion } from '@paperclipai/shared';
+import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
+import { agents, authUsers, companyMemberships, issues, issueThreadInteractions, issueWorkProducts } from '@paperclipai/db';
+import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion, type WaitingOnYouReview } from '@paperclipai/shared';
 import { projectScopedVisibilityCondition } from '../routes/visibility.js';
 import type { Db } from "@paperclipai/db";
 import { assistantDigestService } from "./assistant-digest.js";
@@ -33,7 +33,11 @@ import {
  *      wait; and
  *   2. open issues (not done, not cancelled, not hidden) assigned to the
  *      person (`assistantDigestService.tasksAssignedTo`); and
- *   3. pending questions pinned to that active human, within issue visibility.
+ *   3. pending questions pinned to that active human, within issue visibility; and
+ *   4. deliverables waiting for review (MVP launch lane B): visible issues in
+ *      `in_review` that the person created, or that carry a
+ *      `ready_for_review` work product and are not assigned to another human.
+ *      Issues already assigned to the person are in (2), not here.
  *
  * A user-less board actor (the local bootstrap operator) answers for the whole
  * company for approvals and assigned issues. Named questions require a user identity.
@@ -87,6 +91,53 @@ export function waitingOnYouService(db: Db) {
     };
   }
 
+  /**
+   * AgentDash (MVP launch lane B, item 5): an agent that ships a deliverable
+   * and moves the issue to `in_review` is waiting on a person. Company- and
+   * visibility-scoped like the questions above: a restricted project the
+   * person is off the list for never shows up here.
+   */
+  async function reviewsWaiting(companyId: string, actor: WaitingOnYouActor, actualRequest?: Request, limit = 25): Promise<{ items: WaitingOnYouReview[]; total: number }> {
+    const userId = actor.userId ?? null;
+    const visibility = projectScopedVisibilityCondition(actualRequest ?? { actor: { ...actor, type: 'board' } } as Request, companyId, issues.projectId);
+    const readyForReview = sql<number>`(select count(*)::int from ${issueWorkProducts} wp
+      where wp.issue_id = ${issues.id} and wp.company_id = ${companyId} and wp.status = 'ready_for_review')`;
+    const hasReadyForReview = sql`exists (select 1 from ${issueWorkProducts} wp
+      where wp.issue_id = ${issues.id} and wp.company_id = ${companyId} and wp.status = 'ready_for_review')`;
+    // A user-less board actor (the local bootstrap operator) answers for the
+    // whole company, as it does for approvals and assigned issues.
+    const createdByViewer = userId === null ? isNotNull(issues.createdByUserId) : eq(issues.createdByUserId, userId);
+    const whose = or(
+      // The person asked for it; whoever it is assigned to, apart from the person themself.
+      userId === null
+        ? createdByViewer
+        : and(createdByViewer, or(isNull(issues.assigneeUserId), ne(issues.assigneeUserId, userId))),
+      // A deliverable waits for review and no particular human was named.
+      and(hasReadyForReview, isNull(issues.assigneeUserId)),
+    );
+    const rows = await db.select({
+      issueId: issues.id, identifier: issues.identifier, title: issues.title, updatedAt: issues.updatedAt,
+      createdByUserId: issues.createdByUserId, agentName: agents.name, readyForReview,
+      total: sql<number>`count(*) over()`,
+    }).from(issues)
+      .leftJoin(agents, and(eq(agents.id, issues.assigneeAgentId), eq(agents.companyId, companyId)))
+      .where(and(eq(issues.companyId, companyId), eq(issues.status, 'in_review'), isNull(issues.hiddenAt), whose, visibility))
+      .orderBy(desc(issues.updatedAt), asc(issues.id)).limit(limit);
+    return {
+      total: rows[0] ? Number(rows[0].total) : 0,
+      items: rows.map(row => ({
+        issueId: row.issueId,
+        identifier: row.identifier,
+        title: row.title,
+        summary: `Review: ${row.title}`,
+        waitingSince: row.updatedAt.toISOString(),
+        submittedBy: row.agentName ?? null,
+        readyForReviewCount: Number(row.readyForReview ?? 0),
+        requestedByYou: userId !== null && row.createdByUserId === userId,
+      })),
+    };
+  }
+
   return {
     pendingQuestions,
     /**
@@ -95,7 +146,8 @@ export function waitingOnYouService(db: Db) {
      * issues. A `canDecide:false` row is still listed: "Priya's request is
      * waiting but you cannot decide it" is an answer a person needs.
      */
-    list: async (companyId: string, actor: WaitingOnYouActor, opts: { decisionLimit?: number } = {}) => {
+    reviewsWaiting,
+    list: async (companyId: string, actor: WaitingOnYouActor, opts: { decisionLimit?: number } = {}, actualRequest?: Request) => {
       const userId = actor.userId ?? null;
       const rows = await approvals.list(companyId, undefined);
       const audience = await digest.audienceAgents(companyId, userId);
@@ -142,11 +194,14 @@ export function waitingOnYouService(db: Db) {
       );
 
       const tasks = await digest.tasksAssignedTo(companyId, userId);
-      const questions = await pendingQuestions(companyId, actor);
+      const questions = await pendingQuestions(companyId, actor, {}, actualRequest);
+      const reviews = await reviewsWaiting(companyId, actor, actualRequest);
       return {
         decisions,
         pendingQuestions: questions.items,
         pendingQuestionsTotal: questions.total,
+        reviewsWaiting: reviews.items,
+        reviewsWaitingTotal: reviews.total,
         total: ranked.length,
         shown: decisions.length,
         // UX-7 (#788): the manual/machine split is decided here, not in any

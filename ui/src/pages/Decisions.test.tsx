@@ -199,6 +199,27 @@ describe("Decisions", () => {
     expect(task.querySelector('a[href="/issues/ACM-1"]')).toBeTruthy();
   });
 
+  it("lists deliverables waiting for review in the main list and counts them", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue(
+      waitingWith({ reviewsWaiting: [{
+        issueId: "issue-review-1",
+        identifier: "ACM-1",
+        title: "Write the launch brief",
+        summary: "Review: Write the launch brief",
+        waitingSince: new Date().toISOString(),
+        submittedBy: "Maya",
+        readyForReviewCount: 1,
+        requestedByYou: true,
+      }], reviewsWaitingTotal: 1 }),
+    );
+    await render();
+    const row = q("decisions-review-row")!;
+    expect(row.querySelector('a[href="/issues/ACM-1"]')?.textContent).toBe("Review: Write the launch brief");
+    expect(row.textContent).toContain("from Maya");
+    expect(decisionsListLength(waitingWith({ reviewsWaitingTotal: 1 }))).toBe(3);
+    expect(q("decisions-count")?.textContent).toBe("3");
+  });
+
   it("puts machine-generated items under a collapsed Other activity, not the main list", async () => {
     await render();
     // Exactly one task row in the main list: the manual one.

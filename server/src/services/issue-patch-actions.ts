@@ -1,7 +1,7 @@
 // AgentDash: canonical PATCH acceptance. Plans are private and confer no authority.
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { companies, issues, issueExecutionDecisions, issueThreadInteractions, type Db } from "@paperclipai/db";
+import { companies, issues, issueExecutionDecisions, issueThreadInteractions, issueWorkProducts, type Db } from "@paperclipai/db";
 import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueRouteSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
@@ -667,6 +667,43 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             ),
           },
         });
+
+        // AgentDash (MVP launch lane B, item 6): a board user moving the issue
+        // to done is the acceptance of what the agent shipped. Its work
+        // products still waiting for review are recorded as accepted in the
+        // same transaction, so Shipped and Home stop saying "ready for
+        // review". Agent-driven transitions to done are not an acceptance and
+        // leave work products untouched.
+        if (context.actorKind === "board" && existing.status !== "done" && issue.status === "done") {
+          const acceptedProducts = await tx.update(issueWorkProducts)
+            .set({ status: "approved", reviewState: "approved", updatedAt: new Date() })
+            .where(and(
+              eq(issueWorkProducts.companyId, issue.companyId),
+              eq(issueWorkProducts.issueId, issue.id),
+              eq(issueWorkProducts.status, "ready_for_review"),
+            ))
+            .returning({ id: issueWorkProducts.id });
+          for (const product of acceptedProducts) {
+            await audit({
+              companyId: issue.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.work_product_updated",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                identifier: issue.identifier,
+                workProductId: product.id,
+                changedKeys: ["reviewState", "status"],
+                status: "approved",
+                reviewState: "approved",
+                reason: "issue_accepted",
+              },
+            });
+          }
+        }
 
         if (Array.isArray(intent.blockedByIssueIds)) {
           const previousBlockedByIds = new Set((existingRelations?.blockedBy ?? []).map((relation) => relation.id));
