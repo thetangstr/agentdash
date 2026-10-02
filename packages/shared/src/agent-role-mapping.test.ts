@@ -20,6 +20,21 @@ describe("mapProposedAgentRole", () => {
     expect(mapProposedAgentRole("Bookkeeper")).toBe("cfo");
   });
 
+  // Scan 4 (accounting-firm persona): domain words beat generic job words.
+  it("maps an accounting firm's plan hires to the closest specific role", () => {
+    expect(mapProposedAgentRole("Month End Close Coordinator")).toBe("cfo");
+    expect(mapProposedAgentRole("Close Checklist Manager")).toBe("cfo");
+    expect(mapProposedAgentRole("Accounts Payable Clerk")).toBe("cfo");
+    expect(mapProposedAgentRole("Bank Reconciliation Specialist")).toBe("cfo");
+    expect(mapProposedAgentRole("Outreach Drafter")).toBe("cmo");
+    expect(mapProposedAgentRole("Compliance Auditor")).toBe("security");
+    // "close" only as a whole word.
+    expect(mapProposedAgentRole("Sales Closer")).toBe("general");
+    // Nothing specific fits: the generic buckets stay.
+    expect(mapProposedAgentRole("Client Email Coordinator")).toBe("pm");
+    expect(mapProposedAgentRole("Client Onboarding Lead")).toBe("general");
+  });
+
   it("never hands out a second chief of staff and falls back to general", () => {
     expect(mapProposedAgentRole("chief_of_staff")).toBe("general");
     expect(mapProposedAgentRole("")).toBe("general");

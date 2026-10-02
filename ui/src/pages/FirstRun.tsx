@@ -220,7 +220,7 @@ export function FirstRunPage() {
       <StepIndicator
         current={showRuntime ? "model" : status.nextStep}
         showModel={status.model.required || showRuntime}
-        modelLabel={showRuntime ? "Your runtime" : undefined}
+        modelLabel={showRuntime ? "Your AI assistant" : undefined}
       />
       {optionalStep ? (
         // px-6 matches the step bodies, so the notice keeps a gutter on a phone.

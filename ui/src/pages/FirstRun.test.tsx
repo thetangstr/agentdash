@@ -230,9 +230,9 @@ describe("FirstRunPage", () => {
     expect(runtime?.textContent).toContain("Codex");
     expect(runtime?.textContent).toContain("Hermes");
     expect(container.querySelector('[data-testid="first-run-runtime-current"]')?.textContent).toContain(
-      "This instance runs on Claude Code. It is ready.",
+      "Your workspace uses Claude Code. It is ready.",
     );
-    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Your runtime");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Your AI assistant");
     expect(container.textContent).not.toContain("Connect a model provider");
 
     const next = Array.from(container.querySelectorAll("button")).find((b) =>
@@ -275,7 +275,7 @@ describe("FirstRunPage", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
     }
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Ask your instance admin to change the runtime.");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Ask the person who set up AgentDash to change the assistant.");
   });
 
   it("self-hosted: does not switch to a runtime whose check fails", async () => {

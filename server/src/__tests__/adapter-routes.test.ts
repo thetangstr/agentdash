@@ -230,6 +230,24 @@ describe("adapter routes", () => {
     });
   });
 
+  // Scan 4 (lane O2): /agents/new logged a 404 for hermes_local every time.
+  it("answers an empty schema for a registered adapter that has none", async () => {
+    const app = createApp();
+
+    const res = await request(app).get("/api/adapters/hermes_local/config-schema");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toEqual({ fields: [] });
+  });
+
+  it("still 404s an adapter type that is not registered", async () => {
+    const app = createApp();
+
+    const res = await request(app).get("/api/adapters/no_such_adapter/config-schema");
+
+    expect(res.status).toBe(404);
+  });
+
   it("serves the built-in acpx_local config schema", async () => {
     const app = createApp();
 

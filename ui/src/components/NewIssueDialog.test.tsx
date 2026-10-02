@@ -193,6 +193,7 @@ vi.mock("@/components/ui/dialog", () => ({
     onEscapeKeyDown?: (event: unknown) => void;
     onPointerDownOutside?: (event: unknown) => void;
   }) => <div {...props}>{children}</div>,
+  DialogTitle: ({ children, ...props }: ComponentProps<"h2">) => <h2 {...props}>{children}</h2>,
 }));
 
 vi.mock("@/components/ui/button", () => ({

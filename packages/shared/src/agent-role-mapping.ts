@@ -9,9 +9,20 @@ import { AGENT_ROLES, type AgentRole } from "./constants.js";
 // specific words come before broad ones ("security engineer" -> security).
 const ROLE_KEYWORD_RULES: ReadonlyArray<{ role: AgentRole; keywords: readonly string[] }> = [
   { role: "cto", keywords: ["cto", "technical_director", "tech_lead", "architect"] },
-  { role: "cmo", keywords: ["cmo", "marketing", "content", "growth", "brand", "seo", "social", "copywrit", "communications", "pr_lead"] },
-  { role: "cfo", keywords: ["cfo", "finance", "financial", "accounting", "accountant", "bookkeep", "controller", "treasury"] },
+  { role: "cmo", keywords: ["cmo", "marketing", "content", "growth", "brand", "seo", "social", "copywrit", "communications", "pr_lead", "outreach", "campaign", "newsletter"] },
   { role: "security", keywords: ["security", "secops", "compliance", "privacy"] },
+  // AgentDash (scan 4, lane O2): an accounting firm's plan proposed "Month End
+  // Close Coordinator" and "Close Checklist Manager". Domain words come before
+  // the generic job words in the pm rule ("coordinator"), so these land in
+  // finance instead of pm / general.
+  {
+    role: "cfo",
+    keywords: [
+      "cfo", "finance", "financial", "accounting", "accountant", "bookkeep", "controller", "treasury",
+      "month_end", "year_end", "close", "books", "reconcil", "ledger", "payable", "receivable", "invoic",
+      "billing", "payroll", "tax", "audit", "expense", "budget",
+    ],
+  },
   { role: "qa", keywords: ["qa", "quality", "tester", "testing", "test"] },
   { role: "devops", keywords: ["devops", "deploy", "deployment", "infrastructure", "infra", "sre", "reliability", "platform", "release", "cloud"] },
   { role: "designer", keywords: ["design", "ux", "ui", "creative", "illustrat"] },
@@ -46,10 +57,14 @@ function normalizeRoleText(role: string): string {
   return role.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
+// Longer keywords that are still only meaningful as a whole word: "close" is
+// the month-end close, not "closer" or "disclosure"; "books" is not "ebooks".
+const WHOLE_WORD_KEYWORDS: ReadonlySet<string> = new Set(["close", "books"]);
+
 function hasKeyword(normalized: string, keyword: string): boolean {
   // Short keywords ("ui", "qa", "pm", "dev") must be a whole word, so "guide"
   // is not design and "development" is not "dev"; longer ones match anywhere.
-  if (keyword.length <= 3) return normalized.split("_").includes(keyword);
+  if (keyword.length <= 3 || WHOLE_WORD_KEYWORDS.has(keyword)) return normalized.split("_").includes(keyword);
   return normalized.includes(keyword);
 }
 

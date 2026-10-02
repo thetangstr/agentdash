@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/popover";
 import { User } from "lucide-react";
 import { cn } from "../lib/utils";
-import { roleLabels } from "./agent-config-primitives";
+import { agentPickerSubtitle } from "../lib/agent-identity";
 import { AgentIcon } from "./AgentIconPicker";
 
 export function ReportsToPicker({
@@ -117,7 +117,7 @@ export function ReportsToPicker({
           >
             <AgentIcon icon={a.icon} className="shrink-0 h-3 w-3 text-muted-foreground" />
             <span className="min-w-0 truncate">{a.name}</span>
-            <span className="text-muted-foreground ml-auto shrink-0">{roleLabels[a.role] ?? a.role}</span>
+            <span className="text-muted-foreground ml-auto shrink-0">{agentPickerSubtitle(a)}</span>
           </button>
         ))}
       </PopoverContent>

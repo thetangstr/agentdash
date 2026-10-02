@@ -1,5 +1,6 @@
 import type { Agent } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "./company-members";
+import { issueStatusLabel } from "./issue-status-label";
 
 type ActivityDetails = Record<string, unknown> | null | undefined;
 
@@ -117,6 +118,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+/** "in_progress" -> "In progress": the board's own status words, not the stored value. */
+function statusWords(value: unknown): string {
+  return typeof value === "string" ? issueStatusLabel(value) : humanizeValue(value);
+}
+
 function humanizeValue(value: unknown): string {
   if (typeof value !== "string") return String(value ?? "none");
   return value.replace(/_/g, " ");
@@ -183,8 +189,8 @@ function formatIssueUpdatedVerb(details: ActivityDetails): string | null {
   if (details.status !== undefined) {
     const from = previous.status;
     return from
-      ? `changed status from ${humanizeValue(from)} to ${humanizeValue(details.status)} on`
-      : `changed status to ${humanizeValue(details.status)} on`;
+      ? `changed status from ${statusWords(from)} to ${statusWords(details.status)} on`
+      : `changed status to ${statusWords(details.status)} on`;
   }
   if (details.priority !== undefined) {
     const from = previous.priority;
@@ -217,8 +223,8 @@ function formatIssueUpdatedAction(details: ActivityDetails, options: ActivityFor
     const from = previous.status;
     parts.push(
       from
-        ? `changed the status from ${humanizeValue(from)} to ${humanizeValue(details.status)}`
-        : `changed the status to ${humanizeValue(details.status)}`,
+        ? `changed the status from ${statusWords(from)} to ${statusWords(details.status)}`
+        : `changed the status to ${statusWords(details.status)}`,
     );
   }
   if (details.priority !== undefined) {

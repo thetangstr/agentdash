@@ -1494,13 +1494,23 @@ export function LatestRunCard({
         </Link>
       </div>
 
-      <Link
-        to={`/agents/${agentId}/runs/${run.id}`}
+      {/* AgentDash (scan 4, lane O2): the card is a div with a stretched link,
+          not one <a>. The run summary is markdown with its own issue links,
+          and an <a> inside an <a> is invalid HTML (React logged it on every
+          agent page). The summary sits above the overlay with only its links
+          clickable, so a click anywhere else still opens the run. */}
+      <div
+        data-testid="latest-run-card"
         className={cn(
-          "block border rounded-lg p-4 space-y-2 w-full no-underline transition-colors hover:bg-muted/50 cursor-pointer",
+          "relative block border rounded-lg p-4 space-y-2 w-full transition-colors hover:bg-muted/50 cursor-pointer",
           isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
         )}
       >
+        <Link
+          to={`/agents/${agentId}/runs/${run.id}`}
+          aria-label="Open this run"
+          className="absolute inset-0 rounded-lg"
+        />
         <div className="flex items-center gap-2">
           <StatusIcon className={cn("h-3.5 w-3.5", statusInfo.color, run.status === "running" && "animate-spin")} />
           <StatusBadge status={run.status} />
@@ -1518,7 +1528,7 @@ export function LatestRunCard({
         </div>
 
         {summary ? (
-          <div className="overflow-hidden max-h-16">
+          <div className="pointer-events-none relative overflow-hidden max-h-16 [&_a]:pointer-events-auto">
             <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{summary}</MarkdownBody>
           </div>
         ) : showEmptySummary && !isLive && !run.error ? (
@@ -1526,7 +1536,7 @@ export function LatestRunCard({
             No summary.
           </p>
         ) : null}
-      </Link>
+      </div>
     </div>
   );
 }
