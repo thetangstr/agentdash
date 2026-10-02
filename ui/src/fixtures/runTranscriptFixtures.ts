@@ -228,8 +228,9 @@ export const runTranscriptFixtureEntries: TranscriptEntry[] = [
 // covers the common tool names (Read, Grep, Glob, Edit, Write, Bash, WebFetch,
 // Task, mcp__*), a failed tool call, an error-looking stderr line, thinking and
 // system noise (hidden behind Details), streaming assistant deltas, and the
-// result footer.
-export const claudeCodeTranscriptFixtureEntries: TranscriptEntry[] = [
+// result footer. Built on demand so nothing runs at import time.
+export function buildClaudeCodeTranscriptFixtureEntries(): TranscriptEntry[] {
+  return [
   { kind: "init", ts: "2026-09-30T18:02:00.000Z", model: "claude-sonnet-4-6", sessionId: "sess_fixture_cc" },
   { kind: "system", ts: "2026-09-30T18:02:00.400Z", text: "hook PreToolUse: allowed" },
   {
@@ -246,7 +247,7 @@ export const claudeCodeTranscriptFixtureEntries: TranscriptEntry[] = [
     kind: "tool_result",
     ts: "2026-09-30T18:02:04.200Z",
     toolUseId: "cc_2",
-    content: Array.from({ length: 40 }, (_, i) => `${String(i + 1).padStart(4)}  // webhooks.ts line ${i + 1}`).join("\n"),
+    content: buildReadOutputFixture(),
     isError: false,
   },
   { kind: "tool_call", ts: "2026-09-30T18:02:05.000Z", name: "Glob", toolUseId: "cc_3", input: { pattern: "server/src/__tests__/webhook*.test.ts" } },
@@ -323,4 +324,8 @@ export const claudeCodeTranscriptFixtureEntries: TranscriptEntry[] = [
     errors: [],
   },
 ];
+}
 
+function buildReadOutputFixture(): string {
+  return Array.from({ length: 40 }, (_, i) => `${String(i + 1).padStart(4)}  // webhooks.ts line ${i + 1}`).join("\n");
+}

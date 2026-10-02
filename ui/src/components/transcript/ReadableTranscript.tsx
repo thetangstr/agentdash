@@ -2,23 +2,39 @@
 // whole runs with them; the issue chat (and the LiveRunWidget /
 // ActiveAgentsPanel surfaces built on it) reuses the tool row, details and
 // mode toggle so a run looks the same everywhere.
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { TranscriptEntry } from "../../adapters";
 import { MarkdownBody } from "../MarkdownBody";
 import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
 import {
-  buildReadableTranscript,
   formatRunDuration,
   summarizeToolOutcome,
   toolGroupLabel,
+  updateReadableTranscript,
   type ReadableBlock,
   type ReadableDetailLine,
   type ReadableResultFooter,
   type ReadableToolItem,
+  type ReadableTranscript,
+  type ReadableTranscriptCache,
 } from "../../lib/readableTranscript";
 import type { TranscriptViewMode } from "../../lib/transcriptModePreference";
-import { Check, ChevronDown, ChevronRight, CircleAlert, GitCompare, Loader2, User, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleAlert, CircleDashed, GitCompare, Loader2, User, X } from "lucide-react";
+
+/**
+ * Readable model for a run, built incrementally: while a run streams, only the
+ * entries added since the last render are processed (see
+ * updateReadableTranscript).
+ */
+export function useReadableTranscript(entries: readonly TranscriptEntry[], streaming: boolean): ReadableTranscript {
+  const cacheRef = useRef<ReadableTranscriptCache | null>(null);
+  return useMemo(() => {
+    const next = updateReadableTranscript(cacheRef.current, entries, streaming);
+    cacheRef.current = next.cache;
+    return next.transcript;
+  }, [entries, streaming]);
+}
 
 export type ReadableDensity = "comfortable" | "compact";
 
@@ -126,6 +142,10 @@ function ToolStatusIcon({ status }: { status: ReadableToolItem["status"] }) {
   if (status === "error") {
     return <X aria-label="Failed" className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />;
   }
+  if (status === "no_result") {
+    // Neutral: the call never reported back, so it is neither a success nor a failure.
+    return <CircleDashed aria-label="No result" className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />;
+  }
   return <Check aria-label="Succeeded" className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />;
 }
 
@@ -139,17 +159,23 @@ function hasUsefulInput(item: ReadableToolRowItem): boolean {
 export function ReadableToolRow({
   item,
   density = "comfortable",
+  open: controlledOpen,
+  onOpenChange,
 }: {
   item: ReadableToolRowItem;
   density?: ReadableDensity;
+  /** Controlled expanded state (used by ReadableToolGroup so it survives regrouping). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = (next: boolean) => {
+    if (onOpenChange) onOpenChange(next);
+    else setLocalOpen(next);
+  };
   const compact = density === "compact";
   const outcome = summarizeToolOutcome(item.result, item.status);
-  const toggle = () => {
-    if (hasSelectedText()) return;
-    setOpen((value) => !value);
-  };
 
   return (
     <div data-readable-tool={item.status} className="min-w-0">
@@ -159,11 +185,14 @@ export function ReadableToolRow({
         aria-expanded={open}
         title={item.summary.label}
         className="group flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30"
-        onClick={toggle}
+        onClick={() => {
+          if (hasSelectedText()) return;
+          setOpen(!open);
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            setOpen((value) => !value);
+            setOpen(!open);
           }
         }}
       >
@@ -178,7 +207,11 @@ export function ReadableToolRow({
           <span
             className={cn(
               "min-w-0 flex-1 truncate",
-              item.status === "error" ? "text-red-700 dark:text-red-300" : "text-muted-foreground/80",
+              item.status === "error"
+                ? "text-red-700 dark:text-red-300"
+                : item.status === "no_result"
+                  ? "italic text-muted-foreground/60"
+                  : "text-muted-foreground/80",
             )}
           >
             {outcome}
@@ -207,7 +240,7 @@ export function ReadableToolRow({
             </div>
           ) : (
             <div className="text-[11px] italic text-muted-foreground">
-              {item.status === "running" ? "Waiting for output…" : "No output."}
+              {item.status === "running" ? "Waiting for output…" : item.status === "no_result" ? "No result was reported." : "No output."}
             </div>
           )}
         </div>
@@ -220,67 +253,100 @@ export function ReadableToolRow({
 // Consecutive tool calls fold into "Ran N tools"
 // ---------------------------------------------------------------------------
 
+export interface ReadableToolGroupItem extends ReadableToolRowItem {
+  key: string;
+}
+
+/**
+ * Renders one or more consecutive calls. A single call uses the same container
+ * and row key as a group, and row expansion lives here, so a row the viewer
+ * opened stays open (and visible) when a second call joins the group.
+ */
 export function ReadableToolGroup({
   items,
   density = "comfortable",
 }: {
-  items: ReadableToolItem[];
+  items: readonly ReadableToolGroupItem[];
   density?: ReadableDensity;
 }) {
   const [open, setOpen] = useState(false);
-  if (items.length === 1) return <ReadableToolRow item={items[0]} density={density} />;
+  const [openRows, setOpenRows] = useState<ReadonlySet<string>>(() => new Set());
+  const grouped = items.length > 1;
 
   const failed = items.filter((item) => item.status === "error").length;
   const running = items.some((item) => item.status === "running");
-  // Collapsed groups keep errors and the live call visible.
-  const pinned = open
+  const allSucceeded = items.every((item) => item.status === "completed");
+  // Folded groups keep failed calls, the live call and any row the viewer opened visible.
+  const visible = !grouped || open
     ? items
-    : items.filter((item, index) => item.status === "error" || (item.status === "running" && index === items.length - 1));
+    : items.filter(
+        (item, index) =>
+          item.status === "error"
+          || (item.status === "running" && index === items.length - 1)
+          || openRows.has(item.key),
+      );
+
+  const setRowOpen = (key: string, next: boolean) => {
+    setOpenRows((current) => {
+      const copy = new Set(current);
+      if (next) copy.add(key);
+      else copy.delete(key);
+      return copy;
+    });
+  };
 
   return (
     <div data-readable-tool-group={items.length}>
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30"
-        onClick={() => {
-          if (hasSelectedText()) return;
-          setOpen((value) => !value);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
+      {grouped && (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={open}
+          className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30"
+          onClick={() => {
+            if (hasSelectedText()) return;
             setOpen((value) => !value);
-          }
-        }}
-      >
-        {running ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-cyan-600 dark:text-cyan-300" />
-        ) : failed > 0 ? (
-          <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
-        ) : (
-          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-        )}
-        <span className={cn("font-medium text-foreground/80", density === "compact" ? "text-xs" : "text-[13px]")}>
-          {toolGroupLabel(items)}
-        </span>
-        {failed > 0 && (
-          <span className="text-[11px] text-red-700 dark:text-red-300">· {failed} failed</span>
-        )}
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-        )}
-      </div>
-      {pinned.length > 0 && (
-        <div className="ml-1.5 mt-0.5 space-y-0.5 border-l border-border/50 pl-3">
-          {pinned.map((item) => (
-            <ReadableToolRow key={item.key} item={item} density={density} />
-          ))}
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setOpen((value) => !value);
+            }
+          }}
+        >
+          {running ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-cyan-600 dark:text-cyan-300" />
+          ) : failed > 0 ? (
+            <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
+          ) : allSucceeded ? (
+            <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <CircleDashed className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+          )}
+          <span className={cn("font-medium text-foreground/80", density === "compact" ? "text-xs" : "text-[13px]")}>
+            {toolGroupLabel(items)}
+          </span>
+          {failed > 0 && (
+            <span className="text-[11px] text-red-700 dark:text-red-300">· {failed} failed</span>
+          )}
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+          )}
         </div>
       )}
+      <div className={cn(grouped && visible.length > 0 && "ml-1.5 mt-0.5 space-y-0.5 border-l border-border/50 pl-3")}>
+        {visible.map((item) => (
+          <ReadableToolRow
+            key={item.key}
+            item={item}
+            density={density}
+            open={openRows.has(item.key)}
+            onOpenChange={(next) => setRowOpen(item.key, next)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -510,7 +576,7 @@ export function ReadableTranscriptView({
   className?: string;
   thinkingClassName?: string;
 }) {
-  const transcript = useMemo(() => buildReadableTranscript(entries, streaming), [entries, streaming]);
+  const transcript = useReadableTranscript(entries, streaming);
   const blocks = limit ? transcript.blocks.slice(-limit) : transcript.blocks;
 
   return (
@@ -527,6 +593,34 @@ export function ReadableTranscriptView({
         </div>
       ))}
       <ReadableDetails lines={transcript.details} density={density} thinkingClassName={thinkingClassName} />
+      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} />}
+    </div>
+  );
+}
+
+/**
+ * Run-level Details disclosure plus result footer, built from the run's
+ * transcript entries. The issue chat renders this once per run message so its
+ * thinking/system/stderr live in the same Details as on the run page.
+ */
+export function ReadableRunSummary({
+  entries,
+  streaming = false,
+  density = "compact",
+}: {
+  entries: readonly TranscriptEntry[];
+  streaming?: boolean;
+  density?: ReadableDensity;
+}) {
+  const transcript = useReadableTranscript(entries, streaming);
+  // The chat shows assistant text and tool calls from its own message parts;
+  // error-looking stderr only exists in the entries, so surface it here.
+  const errorLines = transcript.blocks.flatMap((block) => (block.type === "error" ? block.lines : []));
+  if (transcript.details.length === 0 && !transcript.footer && errorLines.length === 0) return null;
+  return (
+    <div className="space-y-2" data-readable-run-summary>
+      {errorLines.length > 0 && <ReadableErrorLines lines={errorLines} />}
+      <ReadableDetails lines={transcript.details} density={density} />
       {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} />}
     </div>
   );

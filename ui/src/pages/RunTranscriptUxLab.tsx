@@ -9,7 +9,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { RunTranscriptView, type TranscriptDensity, type TranscriptMode } from "../components/transcript/RunTranscriptView";
 import type { TranscriptEntry } from "../adapters";
 import {
-  claudeCodeTranscriptFixtureEntries,
+  buildClaudeCodeTranscriptFixtureEntries,
   runTranscriptFixtureEntries,
   runTranscriptFixtureMeta,
 } from "../fixtures/runTranscriptFixtures";
@@ -18,6 +18,8 @@ import { TranscriptModeToggle } from "../components/transcript/ReadableTranscrip
 import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 
 type FixtureId = "claude" | "codex";
+
+const claudeCodeTranscriptFixtureEntries = buildClaudeCodeTranscriptFixtureEntries();
 
 const fixtureOptions: Array<{ id: FixtureId; label: string; entries: TranscriptEntry[] }> = [
   { id: "claude", label: "Claude Code run", entries: claudeCodeTranscriptFixtureEntries },

@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "../adapters";
 import {
+  ReadableTranscriptBuilder,
   buildReadableTranscript,
+  updateReadableTranscript,
   formatRunDuration,
   isErrorLikeText,
   stripShellWrapper,
@@ -126,7 +128,7 @@ describe("buildReadableTranscript", () => {
       { kind: "assistant", ts: T(8), text: "Found it." },
       { kind: "tool_call", ts: T(9), name: "Edit", toolUseId: "d", input: { file_path: "x.ts" } },
     ];
-    const { blocks } = buildReadableTranscript(entries);
+    const { blocks } = buildReadableTranscript(entries, true);
     expect(blocks.map((block) => block.type)).toEqual(["message", "tools", "message", "tools"]);
     const firstGroup = blocks[1];
     expect(firstGroup.type === "tools" && firstGroup.items.map((item) => item.summary.label)).toEqual([
@@ -181,7 +183,7 @@ describe("buildReadableTranscript", () => {
     const { blocks, details } = buildReadableTranscript([
       { kind: "tool_call", ts: T(0), name: "command_execution", toolUseId: "c1", input: { command: "ls -la" } },
       { kind: "stdout", ts: T(1), text: "file-a\nfile-b" },
-    ]);
+    ], true);
     expect(details).toHaveLength(0);
     expect(blocks[0]).toMatchObject({ type: "tools", items: [{ status: "running", result: "file-a\nfile-b" }] });
   });
@@ -209,5 +211,122 @@ describe("buildReadableTranscript", () => {
     expect(formatRunDuration(134000)).toBe("2m 14s");
     expect(formatRunDuration(5000)).toBe("5s");
     expect(formatRunDuration(3_720_000)).toBe("1h 2m");
+  });
+});
+
+describe("closing and matching tool calls", () => {
+  const call = (id: string | undefined, name = "Read", s = 1): TranscriptEntry => ({
+    kind: "tool_call",
+    ts: T(s),
+    name,
+    toolUseId: id,
+    input: { file_path: `${id ?? "anon"}.ts`, command: "ls" },
+  });
+  const result = (id: string, content: string, s = 2): TranscriptEntry => ({
+    kind: "tool_result",
+    ts: T(s),
+    toolUseId: id,
+    content,
+    isError: false,
+  });
+  const resultEntry: TranscriptEntry = {
+    kind: "result",
+    ts: T(30),
+    text: "",
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    costUsd: 0,
+    subtype: "success",
+    isError: false,
+    errors: [],
+  };
+  const toolItems = (entries: TranscriptEntry[], streaming = true) => {
+    const block = buildReadableTranscript(entries, streaming).blocks[0];
+    return block?.type === "tools" ? block.items : [];
+  };
+
+  it("closes still-running calls as no_result once the run has a result entry", () => {
+    const items = toolItems([call("a"), call("b"), result("a", "ok"), resultEntry]);
+    expect(items.map((item) => item.status)).toEqual(["completed", "no_result"]);
+    expect(toolGroupLabel(items)).toBe("Ran 2 tools");
+    expect(summarizeToolOutcome(undefined, "no_result")).toBe("No result");
+  });
+
+  it("closes still-running calls when the run is no longer streaming, keeps them running while it is", () => {
+    expect(toolItems([call("a")], true)[0].status).toBe("running");
+    expect(toolItems([call("a")], false)[0].status).toBe("no_result");
+  });
+
+  it("matches results by exact toolUseId even when they arrive out of order", () => {
+    const items = toolItems([call("a"), call("b"), result("b", "B out"), result("a", "A out")]);
+    expect(items.map((item) => item.result)).toEqual(["A out", "B out"]);
+  });
+
+  it("falls back only to the most recent call without a result and without its own id", () => {
+    const items = toolItems([
+      call(undefined, "Read", 1),
+      call("b", "Read", 2),
+      // An id-less result must not take b's slot; it goes to the id-less call.
+      { kind: "tool_result", ts: T(3), toolUseId: "", content: "anon out", isError: false },
+      result("b", "B out", 4),
+    ]);
+    expect(items.map((item) => [item.summary.target, item.result])).toEqual([
+      ["anon.ts", "anon out"],
+      ["b.ts", "B out"],
+    ]);
+  });
+
+  it("does not attach later stdout to an earlier command once another call has started", () => {
+    const { blocks, details } = buildReadableTranscript(
+      [call("cmd", "Bash", 1), call("r", "Read", 2), { kind: "stdout", ts: T(3), text: "late output" }],
+      true,
+    );
+    const items = blocks[0].type === "tools" ? blocks[0].items : [];
+    expect(items[0].result).toBeUndefined();
+    expect(details).toEqual([expect.objectContaining({ kind: "stdout", text: "late output" })]);
+  });
+
+  it("does not attach stdout to a command whose result already arrived", () => {
+    const { blocks, details } = buildReadableTranscript(
+      [call("cmd", "Bash", 1), result("cmd", "done"), { kind: "stdout", ts: T(3), text: "after" }],
+      true,
+    );
+    expect(blocks[0]).toMatchObject({ items: [{ result: "done" }] });
+    expect(details.map((line) => line.text)).toEqual(["after"]);
+  });
+});
+
+describe("incremental building", () => {
+  const entries: TranscriptEntry[] = [
+    { kind: "assistant", ts: T(0), text: "Start" },
+    { kind: "tool_call", ts: T(1), name: "Grep", toolUseId: "g", input: { pattern: "x" } },
+    { kind: "tool_result", ts: T(2), toolUseId: "g", content: "hit", isError: false },
+    { kind: "assistant", ts: T(3), text: "Done" },
+  ];
+
+  it("extends the cached builder with only the new entries", () => {
+    const first = updateReadableTranscript(null, entries.slice(0, 2), true);
+    const pushSpy = vi.spyOn(ReadableTranscriptBuilder.prototype, "push");
+    // Fresh objects with the same content, as the live hooks produce on each poll.
+    const next = updateReadableTranscript(first.cache, entries.map((entry) => ({ ...entry })), true);
+    expect(pushSpy).toHaveBeenCalledTimes(2);
+    pushSpy.mockRestore();
+    expect(next.cache.builder).toBe(first.cache.builder);
+    expect(next.transcript).toEqual(buildReadableTranscript(entries, true));
+  });
+
+  it("rebuilds when an earlier entry changed (for example a grown delta)", () => {
+    const first = updateReadableTranscript(null, entries.slice(0, 1), true);
+    const changed: TranscriptEntry[] = [{ kind: "assistant", ts: T(0), text: "Start, then more" }, ...entries.slice(1)];
+    const next = updateReadableTranscript(first.cache, changed, true);
+    expect(next.cache.builder).not.toBe(first.cache.builder);
+    expect(next.transcript).toEqual(buildReadableTranscript(changed, true));
+  });
+
+  it("rebuilds when streaming flips", () => {
+    const first = updateReadableTranscript(null, entries, true);
+    const next = updateReadableTranscript(first.cache, entries, false);
+    expect(next.cache.builder).not.toBe(first.cache.builder);
   });
 });

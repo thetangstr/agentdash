@@ -106,11 +106,13 @@ import { cn, formatDateTime, formatShortDate } from "../lib/utils";
 // AgentDash: Readable run blocks share the RunTranscriptView presentation.
 import {
   ReadableDetails,
-  ReadableToolRow,
+  ReadableRunSummary,
+  ReadableToolGroup,
   TranscriptModeToggle,
-  type ReadableToolRowItem,
+  type ReadableToolGroupItem,
 } from "./transcript/ReadableTranscript";
-import { summarizeToolCall, toolGroupLabel } from "../lib/readableTranscript";
+import type { TranscriptEntry } from "../adapters";
+import { summarizeToolCall } from "../lib/readableTranscript";
 import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -727,7 +729,9 @@ function cleanToolDisplayText(tool: ToolCallMessagePart): string {
 type IssueChatCoTPart = ReasoningMessagePart | ToolCallMessagePart;
 
 // AgentDash: map an assistant-ui tool part onto the shared Readable tool row.
-function toReadableToolRowItem(tool: ToolCallMessagePart, messageRunning: boolean): ReadableToolRowItem {
+// A call without a result on a finished message is "no_result" (neutral),
+// never a green success.
+export function toReadableToolRowItem(tool: ToolCallMessagePart, messageRunning: boolean): ReadableToolGroupItem {
   const input = tool.args ?? parseToolPayload(tool.argsText ?? "");
   const result =
     tool.result === undefined
@@ -735,11 +739,12 @@ function toReadableToolRowItem(tool: ToolCallMessagePart, messageRunning: boolea
       : typeof tool.result === "string"
         ? tool.result
         : formatToolPayload(tool.result);
-  const status: ReadableToolRowItem["status"] =
+  const status: ReadableToolGroupItem["status"] =
     tool.result === undefined
-      ? messageRunning ? "running" : "completed"
+      ? messageRunning ? "running" : "no_result"
       : tool.isError ? "error" : "completed";
   return {
+    key: tool.toolCallId,
     name: tool.toolName,
     input,
     summary: summarizeToolCall(tool.toolName, input),
@@ -750,12 +755,46 @@ function toReadableToolRowItem(tool: ToolCallMessagePart, messageRunning: boolea
 
 const RUN_ERROR_PREFIX = "Run error:";
 
+// AgentDash: run transcripts by run id, for the run-level Readable Details and
+// footer. A separate context so transcript updates don't re-render every
+// consumer of IssueChatCtx.
+const IssueChatTranscriptsCtx = createContext<ReadonlyMap<string, readonly IssueChatTranscriptEntry[]> | undefined>(undefined);
+
+function useIssueChatRunTranscript(message: ThreadMessage): readonly IssueChatTranscriptEntry[] | null {
+  const transcripts = useContext(IssueChatTranscriptsCtx);
+  const custom = message.metadata.custom as Record<string, unknown>;
+  const runId = typeof custom.runId === "string" ? custom.runId : null;
+  const entries = runId ? transcripts?.get(runId) : undefined;
+  return entries && entries.length > 0 ? entries : null;
+}
+
 function IssueChatReadableErrors({ lines }: { lines: string[] }) {
   if (lines.length === 0) return null;
   return (
     <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-2.5 py-1.5 text-xs text-red-700 dark:text-red-300">
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">{lines.join("\n")}</div>
+    </div>
+  );
+}
+
+/**
+ * AgentDash: run-level Readable summary for a run message (Details with the
+ * run's thinking/init/system/stderr, the result footer, and the Readable/Raw
+ * toggle) — the same model AgentDetail renders.
+ */
+function IssueChatRunReadableSummary({ message, streaming }: { message: ThreadMessage; streaming: boolean }) {
+  const entries = useIssueChatRunTranscript(message);
+  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
+  if (!entries) return null;
+  return (
+    <div className="flex items-start gap-2">
+      <div className="min-w-0 flex-1">
+        {transcriptMode === "readable" ? (
+          <ReadableRunSummary entries={entries as readonly TranscriptEntry[]} streaming={streaming} />
+        ) : null}
+      </div>
+      <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
     </div>
   );
 }
@@ -801,6 +840,14 @@ function IssueChatChainOfThought({
     if (isActive) setExpanded(true);
   }, [isActive]);
 
+  // AgentDash: Readable mode (default) shares AgentDetail's presentation.
+  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
+  const runEntries = useIssueChatRunTranscript(message);
+  const readableTools = useMemo(
+    () => toolParts.map((tool) => toReadableToolRowItem(tool, isMessageRunning)),
+    [toolParts, isMessageRunning],
+  );
+
   let headerVerb: string;
   let headerSuffix: string | null = null;
   if (isActive) {
@@ -815,26 +862,50 @@ function IssueChatChainOfThought({
     headerVerb = "Worked";
   }
 
-  // AgentDash: Readable mode (default) renders one line per tool call, keeps
-  // errors visible even when folded, and tucks reasoning behind Details.
-  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
-  const readable = transcriptMode === "readable";
-  const readableTools = useMemo(
-    () => toolParts.map((tool) => ({ key: tool.toolCallId, item: toReadableToolRowItem(tool, isMessageRunning) })),
-    [toolParts, isMessageRunning],
-  );
-  const reasoningTexts = cotParts
-    .filter((p): p is ReasoningMessagePart => p.type === "reasoning" && !!p.text)
-    .map((p) => p.text);
-  const runErrorLines = reasoningTexts.filter((text) => text.startsWith(RUN_ERROR_PREFIX));
-  const detailLines = reasoningTexts
-    .filter((text) => !text.startsWith(RUN_ERROR_PREFIX))
-    .map((text) => ({ ts: "", kind: "thinking" as const, text }));
-  const failedTools = readableTools.filter(({ item }) => item.status === "error");
+  if (transcriptMode === "readable") {
+    // With the run's transcript available, reasoning, run errors and the
+    // result live in the run-level Details and footer (IssueChatRunReadableSummary).
+    // Without it (comment-only messages), keep them on the segment.
+    const reasoningTexts = runEntries
+      ? []
+      : cotParts
+          .filter((p): p is ReasoningMessagePart => p.type === "reasoning" && !!p.text)
+          .map((p) => p.text);
+    const runErrorLines = reasoningTexts.filter((text) => text.startsWith(RUN_ERROR_PREFIX));
+    const detailLines = reasoningTexts
+      .filter((text) => !text.startsWith(RUN_ERROR_PREFIX))
+      .map((text) => ({ ts: "", kind: "thinking" as const, text }));
+    if (!isActive && readableTools.length === 0 && runErrorLines.length === 0 && detailLines.length === 0) {
+      return null;
+    }
+    return (
+      <div className="space-y-1 px-1 py-1" data-transcript-mode="readable">
+        {isActive ? (
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground/80">
+            {agentIcon ? (
+              <AgentIcon icon={agentIcon} className="h-4 w-4 shrink-0" />
+            ) : (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+            )}
+            <span className="shimmer-text">{headerVerb}</span>
+            {headerSuffix ? <span className="text-xs font-normal text-muted-foreground/60">{headerSuffix}</span> : null}
+          </div>
+        ) : null}
+        {readableTools.length > 0 ? <ReadableToolGroup items={readableTools} density="compact" /> : null}
+        <IssueChatReadableErrors lines={runErrorLines} />
+        {!runEntries ? (
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              {detailLines.length > 0 ? <ReadableDetails lines={detailLines} density="compact" /> : null}
+            </div>
+            <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
-  const toolSummary = readable
-    ? (toolParts.length > 0 ? toolGroupLabel(readableTools.map(({ item }) => item)) : null)
-    : toolCountSummary(toolParts);
+  const toolSummary = toolCountSummary(toolParts);
   const hasContent = allReasoningText.trim().length > 0 || toolParts.length > 0;
 
   return (
@@ -871,32 +942,11 @@ function IssueChatChainOfThought({
           <ChevronDown className={cn("ml-auto h-4 w-4 shrink-0 text-muted-foreground/50 transition-transform", expanded && "rotate-180")} />
         ) : null}
       </button>
-      {expanded && hasContent ? (
+      {expanded && hasContent && !runEntries ? (
         <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
       ) : null}
       </div>
-      {readable && !(expanded && hasContent) && (failedTools.length > 0 || runErrorLines.length > 0) ? (
-        <div className="space-y-1 px-1 pb-1">
-          {failedTools.map(({ key, item }) => (
-            <ReadableToolRow key={key} item={item} density="compact" />
-          ))}
-          <IssueChatReadableErrors lines={runErrorLines} />
-        </div>
-      ) : null}
-      {expanded && hasContent && readable ? (
-        <div className="space-y-0.5 px-1 py-1" data-transcript-mode="readable">
-          {readableTools.map(({ key, item }) => (
-            <ReadableToolRow key={key} item={item} density="compact" />
-          ))}
-          <IssueChatReadableErrors lines={runErrorLines} />
-          {detailLines.length > 0 ? (
-            <div className="pt-1">
-              <ReadableDetails lines={detailLines} density="compact" />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      {expanded && hasContent && !readable ? (
+      {expanded && hasContent ? (
         <div className="space-y-1 py-1" data-transcript-mode="raw">
           {isActive ? (
             <>
@@ -1571,6 +1621,8 @@ function IssueChatAssistantMessage({
                     ))}
                   </div>
                 ) : null}
+                {/* AgentDash: run-level Readable Details + result footer + Readable/Raw toggle. */}
+                {runId ? <IssueChatRunReadableSummary message={message} streaming={isRunning} /> : null}
               </div>
 
               <div className="mt-2 flex items-center gap-1">
@@ -3726,6 +3778,7 @@ export function IssueChatThread({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <IssueChatCtx.Provider value={chatCtx}>
+      <IssueChatTranscriptsCtx.Provider value={resolvedTranscriptByRun}>
       <div className={cn(variant === "embedded" ? "space-y-3" : "space-y-4")}>
         {resolvedShowJumpToLatest ? (
           <div className="flex justify-end">
@@ -3830,6 +3883,7 @@ export function IssueChatThread({
           </div>
         ) : null}
       </div>
+      </IssueChatTranscriptsCtx.Provider>
       </IssueChatCtx.Provider>
     </AssistantRuntimeProvider>
   );

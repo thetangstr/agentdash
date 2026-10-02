@@ -299,11 +299,16 @@ export function summarizeToolCall(name: string, rawInput: unknown): ToolCallSumm
 // Tool outcome
 // ---------------------------------------------------------------------------
 
-export type ReadableToolStatus = "running" | "completed" | "error";
+/**
+ * "no_result" is a call whose run finished (or stopped streaming) without a
+ * tool_result: shown neutral, never as a success.
+ */
+export type ReadableToolStatus = "running" | "completed" | "error" | "no_result";
 
 /** Status-line text for a tool result: first meaningful line or a short summary. */
 export function summarizeToolOutcome(result: string | undefined, status: ReadableToolStatus): string {
   if (status === "running") return result ? summarizeToolResult(result, false, "compact") : "Running…";
+  if (status === "no_result") return "No result";
   if (!result || !result.trim()) return status === "error" ? "Failed" : "Done";
   return summarizeToolResult(result, status === "error", "compact");
 }
@@ -401,89 +406,145 @@ function toolCallId(input: unknown): string | undefined {
   return undefined;
 }
 
-export function buildReadableTranscript(entries: readonly TranscriptEntry[], streaming = false): ReadableTranscript {
-  const blocks: ReadableBlock[] = [];
-  const details: ReadableDetailLine[] = [];
-  let footer: ReadableResultFooter | null = null;
-  const toolsById = new Map<string, ReadableToolItem>();
-  let lastAssistantText = "";
-  let blockSeq = 0;
-  const nextKey = (prefix: string) => `${prefix}-${blockSeq++}`;
+interface BuilderToolItem extends ReadableToolItem {
+  /** toolUseId when the adapter supplied one. */
+  id?: string;
+  /** True once a tool_result has been matched to this call. */
+  resolved: boolean;
+}
 
-  const lastBlock = () => blocks[blocks.length - 1];
-  const latestRunning = (predicate: (item: ReadableToolItem) => boolean = () => true) => {
-    for (let b = blocks.length - 1; b >= 0; b -= 1) {
-      const block = blocks[b];
-      if (block.type !== "tools") continue;
-      for (let i = block.items.length - 1; i >= 0; i -= 1) {
-        const item = block.items[i];
-        if (item.status === "running" && predicate(item)) return item;
+/**
+ * Incremental readable-transcript builder. Entries are pushed one at a time
+ * (each push is O(1) apart from merging text), so a streaming run only pays
+ * for its new entries; `snapshot()` returns a fresh view of the model.
+ *
+ * Tool results attach by exact toolUseId first. Only when that fails (an
+ * id-less result, or an id no call carries) do they fall back to the most
+ * recent call that has no result yet and no id of its own; stdout attaches
+ * only to the most recent call, and only while it is an unresolved shell
+ * command. Nothing scans backwards through the transcript.
+ */
+export class ReadableTranscriptBuilder {
+  private readonly blocks: ReadableBlock[] = [];
+  private readonly details: ReadableDetailLine[] = [];
+  private footer: ReadableResultFooter | null = null;
+  private readonly toolsById = new Map<string, BuilderToolItem>();
+  /** Calls without a tool_result, oldest first. */
+  private readonly pending: BuilderToolItem[] = [];
+  private lastTool: BuilderToolItem | null = null;
+  private lastAssistantText = "";
+  private blockSeq = 0;
+  private firstTs: number | null = null;
+  private count = 0;
+
+  constructor(private readonly streaming: boolean) {}
+
+  get entryCount(): number {
+    return this.count;
+  }
+
+  get isStreaming(): boolean {
+    return this.streaming;
+  }
+
+  private nextKey(prefix: string) {
+    return `${prefix}-${this.blockSeq++}`;
+  }
+
+  private lastBlock() {
+    return this.blocks[this.blocks.length - 1];
+  }
+
+  private pushTool(item: BuilderToolItem) {
+    const previous = this.lastBlock();
+    if (previous?.type === "tools") previous.items.push(item);
+    else this.blocks.push({ type: "tools", key: this.nextKey("tools"), ts: item.ts, items: [item] });
+    this.lastTool = item;
+  }
+
+  private takePending(item: BuilderToolItem) {
+    for (let i = this.pending.length - 1; i >= 0; i -= 1) {
+      if (this.pending[i] === item) {
+        this.pending.splice(i, 1);
+        return;
       }
     }
+  }
+
+  private fallbackPending(): BuilderToolItem | undefined {
+    // Most recent unresolved call that has no id of its own; calls with an id
+    // wait for their exact match.
+    for (let i = this.pending.length - 1; i >= 0; i -= 1) {
+      if (!this.pending[i].id) return this.pending[i];
+    }
     return undefined;
-  };
-  const pushTool = (item: ReadableToolItem) => {
-    const previous = lastBlock();
-    if (previous?.type === "tools") previous.items.push(item);
-    else blocks.push({ type: "tools", key: nextKey("tools"), ts: item.ts, items: [item] });
-  };
+  }
 
-  const firstTs = entries.length > 0 ? parseTime(entries[0].ts) : null;
+  push(entry: TranscriptEntry): void {
+    const index = this.count;
+    this.count += 1;
+    if (this.firstTs === null) this.firstTs = parseTime(entry.ts);
 
-  for (const [index, entry] of entries.entries()) {
     switch (entry.kind) {
       case "assistant":
       case "user": {
-        const previous = lastBlock();
-        const isStreaming = streaming && entry.kind === "assistant" && entry.delta === true;
+        const previous = this.lastBlock();
+        const delta = entry.kind === "assistant" && entry.delta === true;
+        const isStreaming = this.streaming && delta;
         if (previous?.type === "message" && previous.role === entry.kind) {
-          previous.text = appendMessage(previous.text, entry.text, entry.kind === "assistant" && entry.delta === true);
+          previous.text = appendMessage(previous.text, entry.text, delta);
           previous.ts = entry.ts;
           previous.streaming = previous.streaming || isStreaming;
         } else {
-          blocks.push({ type: "message", key: nextKey("msg"), role: entry.kind, ts: entry.ts, text: entry.text, streaming: isStreaming });
+          this.blocks.push({ type: "message", key: this.nextKey("msg"), role: entry.kind, ts: entry.ts, text: entry.text, streaming: isStreaming });
         }
         if (entry.kind === "assistant") {
-          const current = lastBlock();
-          if (current?.type === "message") lastAssistantText = current.text;
+          const current = this.lastBlock();
+          if (current?.type === "message") this.lastAssistantText = current.text;
         }
-        break;
+        return;
       }
       case "thinking": {
-        const previous = details[details.length - 1];
+        const previous = this.details[this.details.length - 1];
         if (previous?.kind === "thinking" && entry.delta === true) {
           previous.text += entry.text;
           previous.ts = entry.ts;
         } else {
-          details.push({ ts: entry.ts, kind: "thinking", text: entry.text });
+          this.details.push({ ts: entry.ts, kind: "thinking", text: entry.text });
         }
-        break;
+        return;
       }
       case "tool_call": {
         const id = entry.toolUseId ?? toolCallId(entry.input);
-        const item: ReadableToolItem = {
+        const item: BuilderToolItem = {
           key: id ? `tool-${id}` : `tool-idx-${index}`,
+          id,
+          resolved: false,
           ts: entry.ts,
           name: entry.name,
           input: entry.input,
           summary: summarizeToolCall(entry.name, entry.input),
           status: "running",
         };
-        if (id) toolsById.set(id, item);
-        pushTool(item);
-        break;
+        if (id) this.toolsById.set(id, item);
+        this.pending.push(item);
+        this.pushTool(item);
+        return;
       }
       case "tool_result": {
-        const matched = (entry.toolUseId ? toolsById.get(entry.toolUseId) : undefined) ?? latestRunning();
+        const exact = entry.toolUseId ? this.toolsById.get(entry.toolUseId) : undefined;
+        const matched = exact ?? this.fallbackPending();
         if (matched) {
           matched.result = entry.content;
           matched.status = entry.isError ? "error" : "completed";
           matched.endTs = entry.ts;
-          if (entry.toolUseId) toolsById.delete(entry.toolUseId);
+          matched.resolved = true;
+          this.takePending(matched);
         } else {
           const name = entry.toolName ?? "tool";
-          pushTool({
-            key: `tool-result-${entry.toolUseId || index}`,
+          this.pushTool({
+            key: `tool-result-${entry.toolUseId || "idx"}-${index}`,
+            resolved: true,
             ts: entry.ts,
             endTs: entry.ts,
             name,
@@ -493,70 +554,72 @@ export function buildReadableTranscript(entries: readonly TranscriptEntry[], str
             status: entry.isError ? "error" : "completed",
           });
         }
-        break;
+        return;
       }
       case "diff": {
-        const previous = lastBlock();
+        const previous = this.lastBlock();
         if (previous?.type === "diff") {
           if (entry.changeType === "file_header") previous.filePath = entry.text;
           previous.hunks.push({ changeType: entry.changeType, text: entry.text });
         } else {
-          blocks.push({
+          this.blocks.push({
             type: "diff",
-            key: nextKey("diff"),
+            key: this.nextKey("diff"),
             ts: entry.ts,
             filePath: entry.changeType === "file_header" ? entry.text : undefined,
             hunks: [{ changeType: entry.changeType, text: entry.text }],
           });
         }
-        break;
+        return;
       }
       case "init":
-        details.push({
+        this.details.push({
           ts: entry.ts,
           kind: "init",
           text: `model ${entry.model}${entry.sessionId ? ` • session ${entry.sessionId}` : ""}`,
         });
-        break;
+        return;
       case "system":
-        if (compactWhitespace(entry.text).toLowerCase() === "turn started") break;
-        details.push({ ts: entry.ts, kind: "system", text: entry.text });
-        break;
+        if (compactWhitespace(entry.text).toLowerCase() === "turn started") return;
+        this.details.push({ ts: entry.ts, kind: "system", text: entry.text });
+        return;
       case "stderr": {
-        if (shouldHideNiceModeStderr(entry.text)) break;
+        if (shouldHideNiceModeStderr(entry.text)) return;
         if (isErrorLikeText(entry.text)) {
-          const previous = lastBlock();
+          const previous = this.lastBlock();
           if (previous?.type === "error") previous.lines.push(entry.text);
-          else blocks.push({ type: "error", key: nextKey("err"), ts: entry.ts, lines: [entry.text] });
+          else this.blocks.push({ type: "error", key: this.nextKey("err"), ts: entry.ts, lines: [entry.text] });
         } else {
-          details.push({ ts: entry.ts, kind: "stderr", text: entry.text });
+          this.details.push({ ts: entry.ts, kind: "stderr", text: entry.text });
         }
-        break;
+        return;
       }
       case "stdout": {
-        // Output streamed while a shell command runs belongs to that command.
-        const running = latestRunning((item) => item.summary.isCommand);
-        if (running) {
-          running.result = running.result ? joinText(running.result, entry.text) : entry.text;
-          break;
+        // Output streamed while the latest call is an unresolved shell command
+        // belongs to that command.
+        const last = this.lastTool;
+        if (last && !last.resolved && last.summary.isCommand) {
+          last.result = last.result ? joinText(last.result, entry.text) : entry.text;
+          return;
         }
-        const previous = details[details.length - 1];
+        const previous = this.details[this.details.length - 1];
         if (previous?.kind === "stdout") {
           previous.text = joinText(previous.text, entry.text);
           previous.ts = entry.ts;
         } else {
-          details.push({ ts: entry.ts, kind: "stdout", text: entry.text });
+          this.details.push({ ts: entry.ts, kind: "stdout", text: entry.text });
         }
-        break;
+        return;
       }
       case "result": {
         const endTs = parseTime(entry.ts);
         const text = entry.text.trim();
-        footer = {
+        const firstTs = this.firstTs;
+        this.footer = {
           ts: entry.ts,
           isError: entry.isError,
           outcome: entry.isError ? "Failed" : "Completed",
-          text: text && compactWhitespace(text) !== compactWhitespace(lastAssistantText) ? text : null,
+          text: text && compactWhitespace(text) !== compactWhitespace(this.lastAssistantText) ? text : null,
           errors: entry.errors ?? [],
           durationMs: firstTs !== null && endTs !== null && endTs >= firstTs ? endTs - firstTs : null,
           inputTokens: entry.inputTokens,
@@ -564,14 +627,95 @@ export function buildReadableTranscript(entries: readonly TranscriptEntry[], str
           cachedTokens: entry.cachedTokens,
           costUsd: entry.costUsd,
         };
-        break;
+        return;
       }
       default:
-        break;
+        return;
     }
   }
 
-  return { blocks, details, footer };
+  /**
+   * A fresh view of the model. Once the run has a result entry, or is no
+   * longer streaming, calls still waiting for a result are closed as
+   * "no_result" so groups never read "Running N tools" forever.
+   */
+  snapshot(): ReadableTranscript {
+    const closeRunning = this.footer !== null || !this.streaming;
+    const toView = (item: ReadableToolItem): ReadableToolItem => {
+      const { key, ts, endTs, name, input, summary, result } = item;
+      const status = closeRunning && item.status === "running" ? "no_result" : item.status;
+      return { key, ts, endTs, name, input, summary, result, status };
+    };
+    const blocks = this.blocks.map((block): ReadableBlock => {
+      if (block.type === "tools") return { ...block, items: block.items.map(toView) };
+      if (block.type === "error") return { ...block, lines: [...block.lines] };
+      if (block.type === "diff") return { ...block, hunks: [...block.hunks] };
+      return { ...block, streaming: block.streaming && !closeRunning };
+    });
+    return {
+      blocks,
+      details: this.details.map((line) => ({ ...line })),
+      footer: this.footer ? { ...this.footer, errors: [...this.footer.errors] } : null,
+    };
+  }
+}
+
+export function buildReadableTranscript(entries: readonly TranscriptEntry[], streaming = false): ReadableTranscript {
+  const builder = new ReadableTranscriptBuilder(streaming);
+  for (const entry of entries) builder.push(entry);
+  return builder.snapshot();
+}
+
+function entryFingerprint(entry: TranscriptEntry | undefined): string {
+  if (!entry) return "";
+  const body =
+    entry.kind === "tool_call"
+      ? `${entry.name}:${entry.toolUseId ?? ""}`
+      : entry.kind === "tool_result"
+        ? `${entry.toolUseId}:${entry.isError}:${entry.content.length}`
+        : entry.kind === "init"
+          ? `${entry.model}:${entry.sessionId}`
+          : entry.kind === "result"
+            ? `${entry.isError}:${entry.text.length}`
+            : `${entry.text.length}:${entry.text.slice(-32)}`;
+  return `${entry.kind}|${entry.ts}|${body}`;
+}
+
+export interface ReadableTranscriptCache {
+  builder: ReadableTranscriptBuilder;
+  first: string;
+  last: string;
+}
+
+/**
+ * Feed only the entries added since the cached build when the new list
+ * extends the old one (same first entry, same entry at the old end); otherwise
+ * rebuild. The live transcript hooks re-parse chunks into fresh objects on each
+ * poll, so the check compares entry fingerprints, not identity, and costs O(1).
+ */
+export function updateReadableTranscript(
+  cache: ReadableTranscriptCache | null,
+  entries: readonly TranscriptEntry[],
+  streaming: boolean,
+): { cache: ReadableTranscriptCache; transcript: ReadableTranscript } {
+  const previousCount = cache?.builder.entryCount ?? 0;
+  const canExtend =
+    cache !== null
+    && cache.builder.isStreaming === streaming
+    && previousCount > 0
+    && entries.length >= previousCount
+    && entryFingerprint(entries[0]) === cache.first
+    && entryFingerprint(entries[previousCount - 1]) === cache.last;
+  const builder = canExtend ? cache.builder : new ReadableTranscriptBuilder(streaming);
+  for (let i = canExtend ? previousCount : 0; i < entries.length; i += 1) builder.push(entries[i]);
+  return {
+    cache: {
+      builder,
+      first: entryFingerprint(entries[0]),
+      last: entryFingerprint(entries[entries.length - 1]),
+    },
+    transcript: builder.snapshot(),
+  };
 }
 
 export function formatRunDuration(ms: number | null): string | null {

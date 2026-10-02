@@ -24,7 +24,6 @@ import { Workspaces } from "./pages/Workspaces";
 import { Issues } from "./pages/Issues";
 import { IssueDetail } from "./pages/IssueDetail";
 import { IssueChatLongThreadPerf } from "./pages/IssueChatLongThreadPerf";
-import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { Routines } from "./pages/Routines";
 import { RoutineDetail } from "./pages/RoutineDetail";
 import { UserProfile } from "./pages/UserProfile";
@@ -117,6 +116,10 @@ import { legacySettingsRedirectTarget } from "./lib/settings-hub";
 
 // Public docs (/docs) load on demand: the nav, the search index and every page
 // body stay out of the initial bundle.
+// AgentDash: dev-only UX lab, lazy so its fixtures never reach the production bundle.
+const RunTranscriptUxLab = import.meta.env.DEV
+  ? lazy(() => import("./pages/RunTranscriptUxLab").then((module) => ({ default: module.RunTranscriptUxLab })))
+  : null;
 const Docs = lazy(() => import("./pages/Docs").then((module) => ({ default: module.Docs })));
 
 // AgentDash: billing page wrapper — pulls companyId from context.
@@ -363,8 +366,8 @@ export function App() {
         <Route path="share/:shareToken" element={<SharedArtifactPage />} />
         <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
         {/* AgentDash: dev-only run transcript UX lab (fixtures only, no API). */}
-        {import.meta.env.DEV ? (
-          <Route path="tests/ux/run-transcripts" element={<div className="min-h-screen bg-background p-6"><RunTranscriptUxLab /></div>} />
+        {RunTranscriptUxLab ? (
+          <Route path="tests/ux/run-transcripts" element={<Suspense fallback={null}><div className="min-h-screen bg-background p-6"><RunTranscriptUxLab /></div></Suspense>} />
         ) : null}
         {/* AgentDash: marketing routes — render outside CloudAccessGate so the
             cream/light surface isn't fighting the dashboard's html.dark theme.
