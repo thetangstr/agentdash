@@ -4,7 +4,7 @@ import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions
 import { SingleCompanyInstallationError } from "./companies.js";
 import { pairFounderWithAgent, type FounderStewardshipDeps } from "./founder-stewardship.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
-import { conflict, forbidden } from "../errors.js";
+import { HttpError, badRequest, conflict, forbidden } from "../errors.js";
 import { isHostedBox } from "./license.js";
 import {
   exceededFreeTierCapacityAction,
@@ -244,7 +244,7 @@ export function onboardingOrchestrator(deps: Deps) {
   return {
     bootstrap: async (
       userId: string,
-      options: { companyId?: string | null; actorIsInstanceAdmin?: boolean } = {},
+      options: { companyId?: string | null; actorIsInstanceAdmin?: boolean; strictCompanyId?: boolean } = {},
     ): Promise<BootstrapResult> => {
       // Try the real auth_users lookup first; fall back to local-trusted sentinel.
       const user = (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
@@ -286,6 +286,12 @@ export function onboardingOrchestrator(deps: Deps) {
             (m: any) => m.status === "active" && m.companyId === options.companyId,
           )
         : undefined;
+      // AgentDash (PR #956 re-review): a caller that names a specific
+      // workspace and must not fall back (the assessment route) is refused
+      // with 400 before anything is written.
+      if (options.strictCompanyId && options.companyId && !requestedMembership) {
+        throw badRequest("You are not an active member of that workspace.");
+      }
       const activeMembership = requestedMembership ?? existingMemberships.find(
         (m: any) => m.status === "active",
       );
@@ -311,9 +317,9 @@ export function onboardingOrchestrator(deps: Deps) {
         }
         company = found;
       } else {
-        // First sign-up for this user. Decide whether to attach to an
-        // existing same-domain company (corp pattern) or create a fresh
-        // workspace (free-mail pattern).
+        // First sign-up for this user. Create a fresh workspace, unless a
+        // same-domain workspace already exists (corp pattern), which is
+        // refused below: coworkers join by invite, not by email domain.
         //
         // The discriminator is the shape of `emailDomain` after
         // `deriveCompanyEmailDomain`:
@@ -321,9 +327,9 @@ export function onboardingOrchestrator(deps: Deps) {
         //     unique per user, so even if a same-provider user already
         //     exists their key won't collide. We always create fresh.
         //   - corp (acme.com / yourstartup.io / …): "<domain>" —
-        //     shared across all users at that domain, so we attach to
-        //     the existing workspace if any. Coworkers join their team
-        //     by signing up with their work email.
+        //     shared across all users at that domain; an existing workspace
+        //     for it means "contact your administrator", as POST /companies
+        //     answers.
         //
         // The free-mail key contains "@", corp keys don't — that's the
         // detection. Falls back to fresh workspace if `emailDomain` is
@@ -334,10 +340,18 @@ export function onboardingOrchestrator(deps: Deps) {
           ? await deps.companies.findByEmailDomain(emailDomain)
           : null;
         if (corpExisting) {
-          if ((corpExisting as { status?: string }).status === "archived") {
-            throw conflict("This workspace is archived.");
-          }
-          company = corpExisting;
+          // AgentDash (security, PR #956 re-review): no auto-join. This path
+          // used to make a same-domain stranger owner of the existing
+          // workspace, grant agents:create and set up a CoS. Joining an
+          // existing workspace is by invite, which is what POST /companies
+          // already tells the same person (domain_already_claimed, "Contact
+          // your administrator to join it"). Nothing is written here.
+          throw new HttpError(
+            409,
+            "A workspace for this email domain already exists. Contact your administrator to join it.",
+            { existingCompanyId: corpExisting.id },
+            "domain_already_claimed",
+          );
         } else {
           // AgentDash (#102): single-workspace-per-self-hosted-installation guard.
           // Self-hosted operators should only have one workspace — the installation IS the

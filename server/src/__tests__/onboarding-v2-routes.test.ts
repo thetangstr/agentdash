@@ -349,7 +349,7 @@ describe("POST /api/onboarding/complete-initial-assessment", () => {
       conversationId: "conv1",
       redirectUrl: "/cos",
     });
-    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", { companyId: "c1" });
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", { companyId: "c1", strictCompanyId: true });
     expect(mockCosState.getOrCreate).toHaveBeenCalledWith("conv1");
     expect(mockCosState.setGoals).toHaveBeenCalledWith(
       "conv1",
@@ -366,6 +366,34 @@ describe("POST /api/onboarding/complete-initial-assessment", () => {
       }),
     );
     expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
+  });
+
+  // PR #956 re-review: a companyId that is not one of the caller's
+  // memberships is a 400 from the orchestrator (strictCompanyId) before any
+  // write, not a bootstrap of some other workspace followed by a 400.
+  it("returns 400 and touches no CoS state when the companyId is not the caller's workspace", async () => {
+    mockOrchestrator.bootstrap.mockRejectedValue(
+      new HttpError(400, "You are not an active member of that workspace."),
+    );
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      isInstanceAdmin: true,
+      // c9 passes the route's company-access check (e.g. a suspended membership);
+      // the orchestrator still finds no ACTIVE membership for it.
+      companyIds: ["c1", "c9"],
+    });
+    const res = await request(app)
+      .post("/api/onboarding/complete-initial-assessment")
+      .send({ companyId: "c9", assessmentMarkdown: "## Start" });
+    expect(res.status).toBe(400);
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ companyId: "c9", strictCompanyId: true }),
+    );
+    expect(mockCosState.getOrCreate).not.toHaveBeenCalled();
+    expect(mockCosState.setGoals).not.toHaveBeenCalled();
   });
 });
 

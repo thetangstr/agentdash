@@ -481,7 +481,11 @@ export function onboardingV2Routes(db: Db) {
       throw badRequest("assessmentInput or assessmentMarkdown required");
     }
 
-    const result = await orch.bootstrap(req.actor.userId, bootstrapOptions(req, companyId));
+    const result = await orch.bootstrap(req.actor.userId, {
+      ...bootstrapOptions(req, companyId),
+      // PR #956 re-review: never fall back to another workspace; 400 before any write.
+      strictCompanyId: true,
+    });
     if (result.companyId !== companyId) {
       throw badRequest("Bootstrapped company does not match completed assessment");
     }
