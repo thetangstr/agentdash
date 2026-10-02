@@ -538,6 +538,35 @@ describe.sequential("conversation routes", () => {
       expect(mockDispatchOnMessage).not.toHaveBeenCalled();
     });
 
+    // The "CoS hasn't replied" Retry: a dispatch that hung or died leaves no error card.
+    it("accepts a Retry for a message nothing replied to once it is overdue, and refuses it while recent or answered", async () => {
+      const app = await createApp(boardActor);
+      const retry = () =>
+        requestApp(app, (base) =>
+          request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+        );
+      const old = { ...baseMessage, createdAt: new Date(Date.now() - 200_000) };
+      mockConversationService.getMessage.mockResolvedValue(old);
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) => (role === "agent" ? null : old));
+      expect((await retry()).status).toBe(202);
+      await vi.waitFor(() => expect(mockDispatchOnMessage).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Too recent: the reply may still be on its way.
+      const recent = { ...baseMessage, createdAt: new Date(Date.now() - 5_000) };
+      mockConversationService.getMessage.mockResolvedValue(recent);
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) => (role === "agent" ? null : recent));
+      expect((await retry()).status).toBe(409);
+
+      // Answered: an agent message came after it.
+      mockConversationService.getMessage.mockResolvedValue(old);
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) =>
+        role === "agent" ? { ...failedReplyCard, cardKind: null, cardPayload: null, createdAt: new Date() } : old,
+      );
+      expect((await retry()).status).toBe(409);
+      expect(mockDispatchOnMessage).toHaveBeenCalledTimes(1);
+    });
+
     it("lets only one retry per conversation run at a time (two tabs)", async () => {
       mockConversationService.getMessage.mockResolvedValue(baseMessage);
       conversationEndsOnFailedReply(mockConversationService);

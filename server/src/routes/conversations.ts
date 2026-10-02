@@ -17,7 +17,7 @@ import {
 import { llmSummonAdapter } from "../services/agent-summoner.js";
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
-import { DISPATCH_ERROR_CARD_KIND, isNoBalanceFailure, postDispatchFailure } from "../services/cos-dispatch-failure.js";
+import { DISPATCH_ERROR_CARD_KIND, STALLED_REPLY_RETRY_AFTER_MS, isNoBalanceFailure, postDispatchFailure } from "../services/cos-dispatch-failure.js";
 import { buildPhase0Greeting } from "../services/onboarding-orchestrator.js";
 
 const COMPANY_INBOX_TITLE = "Company Inbox";
@@ -168,7 +168,7 @@ export function conversationRoutes(db: Db) {
     if (isNoBalanceFailure(failure instanceof Error ? failure.message : String(failure))) {
       try {
         const { hermesProviderReconciler } = await import("../services/hermes-provider-reconcile.js");
-        const repin = await hermesProviderReconciler(db).repinEndpoint();
+        const repin = await hermesProviderReconciler(db).repinEndpoint(input.companyId);
         if (repin.repinned) {
           logger.warn({ conversationId: input.conversationId }, "[hermes-provider] re-pinned the Z.AI endpoint after a no-balance failure; retrying once");
           try {
@@ -230,23 +230,26 @@ export function conversationRoutes(db: Db) {
     if (!message.authorUserId || message.authorUserId !== req.actor.userId) {
       throw forbidden("Only the person who sent this message can retry it");
     }
-    // Only a failed reply can be retried: the newest agent message must be the
-    // dispatch error card for exactly this message, and this must still be the
-    // person's newest message. Under that guard the conversation tail is
-    // [..., this message, the error card]; the replier skips error cards, so it
-    // answers this message exactly as the original dispatch would have.
+    // Only a reply that failed or never came can be retried. Either the newest
+    // agent message is the dispatch error card for exactly this message, or
+    // nothing at all followed this message and it is older than the point the
+    // chat calls a reply overdue (a dispatch that hung or died leaves no card).
+    // Either way this must still be the person's newest message. Under that
+    // guard the conversation tail is [..., this message, (the error card)]; the
+    // replier skips error cards, so it answers this message exactly as the
+    // original dispatch would have.
     const [lastAgent, lastUser] = await Promise.all([
       svc.latestByRole(conversation.id, "agent"),
       svc.latestByRole(conversation.id, "user"),
     ]);
     const card = lastAgent?.cardPayload as { retryMessageId?: unknown } | null | undefined;
-    if (
-      !lastAgent ||
-      lastAgent.cardKind !== DISPATCH_ERROR_CARD_KIND ||
-      card?.retryMessageId !== message.id ||
-      lastUser?.id !== message.id
-    ) {
-      throw conflict("This message has no failed reply to retry");
+    const failedReply =
+      Boolean(lastAgent) && lastAgent!.cardKind === DISPATCH_ERROR_CARD_KIND && card?.retryMessageId === message.id;
+    const sentAt = new Date(message.createdAt).getTime();
+    const nothingAfter = !lastAgent || new Date(lastAgent.createdAt).getTime() <= sentAt;
+    const overdue = Number.isFinite(sentAt) && Date.now() - sentAt >= STALLED_REPLY_RETRY_AFTER_MS;
+    if (lastUser?.id !== message.id || !(failedReply || (nothingAfter && overdue))) {
+      throw conflict("This message has no failed or missing reply to retry");
     }
     if (retriesInFlight.has(conversation.id)) {
       throw conflict("A retry for this conversation is already running");

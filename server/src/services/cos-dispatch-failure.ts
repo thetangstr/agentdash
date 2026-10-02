@@ -4,9 +4,18 @@
 // conversation as a card the UI renders as "CoS couldn't reply: <reason>.
 // Retry", and posting it publishes `message.created` like any other message.
 
-import { knownKeysFromEnv, redactSecrets } from "./redact-secrets.js";
+import { redactForDisplay } from "./redact-for-display.js";
 
 export const DISPATCH_ERROR_CARD_KIND = "cos_dispatch_error_v1";
+
+/**
+ * A reply that has not arrived this long after the person's message is not
+ * coming (the adapter timeout is 120s). The chat then offers "CoS hasn't
+ * replied. Retry", which the Retry route accepts even though no error card
+ * exists (the dispatch hung or the server restarted). Keep in step with
+ * REPLY_PENDING_TIMEOUT_MS in ui/src/pages/ChatPanel.tsx.
+ */
+export const STALLED_REPLY_RETRY_AFTER_MS = 150_000;
 
 export interface DispatchErrorCardPayload {
   /** Short, human-readable reason. Never contains secrets (adapter stderr is trimmed). */
@@ -34,7 +43,7 @@ export function shortDispatchReason(err: unknown): string {
   const wrapped = /^Adapter "([^"]+)" failed \(([\s\S]*)\) and the adapter\/model invariant/.exec(message);
   if (wrapped) message = `${wrapped[1]}: ${wrapped[2]}`;
 
-  message = redactSecrets(message, knownKeysFromEnv())
+  message = redactForDisplay(message)
     .replace(/\[dispatch-llm\]\s*/g, "")
     // The path of the adapter binary says nothing useful to a founder.
     .replace(/(^|\s)\/\S*\/([^\s/]+)/g, "$1$2")

@@ -60,10 +60,15 @@ export function hermesProviderReconciler(db: Db, deps: HermesProviderReconcileDe
      * instance so a persistently empty account does not probe on every message.
      * Returns whether the pinned endpoint changed (a Retry can then succeed).
      */
-    async repinEndpoint(now: number = Date.now()): Promise<{ repinned: boolean; skipped?: "rate_limited" | "not_configured" }> {
-      if (lastRepinAt !== null && now - lastRepinAt < REPIN_INTERVAL_MS) return { repinned: false, skipped: "rate_limited" };
+    async repinEndpoint(
+      forCompanyId: string,
+      now: number = Date.now(),
+    ): Promise<{ repinned: boolean; skipped?: "rate_limited" | "not_configured" }> {
+      // Only the company that owns the template's key can have a lapsed pin on
+      // it; a failure in any other company must not probe or spend the budget.
       const companyId = await hermesProviderOwner(setup);
-      if (!companyId) return { repinned: false, skipped: "not_configured" };
+      if (!companyId || companyId !== forCompanyId) return { repinned: false, skipped: "not_configured" };
+      if (lastRepinAt !== null && now - lastRepinAt < REPIN_INTERVAL_MS) return { repinned: false, skipped: "rate_limited" };
       lastRepinAt = now;
       const result = await reconcileHermesProviderFromSecret(
         companyId,

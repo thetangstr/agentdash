@@ -543,6 +543,29 @@ export function hermesProviderConfiguredSync(env: NodeJS.ProcessEnv = process.en
   }
 }
 
+/**
+ * The provider keys the managed template profile holds, for scrubbing adapter
+ * output. Read from the profile's `.env` each call (cheap, and follows a
+ * rotation); never logged or returned to a caller that could log it.
+ */
+export function configuredProviderKeysSync(env: NodeJS.ProcessEnv = process.env): string[] {
+  const r = resolveDeps({ env });
+  const names = new Set(Object.values(HERMES_PROVIDER_SPECS).map((spec) => spec.envVar));
+  try {
+    const keys: string[] = [];
+    for (const line of readFileSync(join(r.profilesDir, r.template, ".env"), "utf8").split(/\r?\n/)) {
+      const eq = line.indexOf("=");
+      if (eq > 0 && names.has(line.slice(0, eq).trim())) {
+        const value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+        if (value.length >= 6) keys.push(value);
+      }
+    }
+    return keys;
+  } catch {
+    return [];
+  }
+}
+
 async function writeMarker(r: ReturnType<typeof resolveDeps>, marker: ProviderMarker): Promise<void> {
   const { baseUrl, ...rest } = marker;
   await writeFile(
