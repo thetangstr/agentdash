@@ -218,6 +218,13 @@ function activityCounts(path: string): boolean {
   return !(p === "/api/health" || p.startsWith("/api/health/") || p === "/api/mcp/assistant" || p.startsWith("/api/mcp/assistant/"));
 }
 
+/** The provisioner's health probe: GET or HEAD of exactly /api/health (query ignored). */
+export function isProvisioningHealthProbe(req: Pick<IncomingMessage, "method" | "url">): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+  const path = (req.url ?? "").split("?")[0];
+  return path === "/api/health";
+}
+
 type Decision =
   | { kind: "proxy"; route: EdgeRoute & { upstreamHost: string }; secret: string; slug: string; publicHost: string }
   | { kind: "page"; status: number; html: string; headers?: Record<string, string>; resume?: string; fault?: boolean }
@@ -282,6 +289,14 @@ export function createEdgeServer(opts: EdgeServerOptions): http.Server {
     }
     if (route.state === "deleted" || route.state === "pending_delete") return { kind: "page", status: 410, html: deletedPage(slug, findUrl) };
     if (PROXY_STATES.has(route.state) && route.upstreamHost && route.edgeSecret) {
+      return { kind: "proxy", route: route as EdgeRoute & { upstreamHost: string }, secret: route.edgeSecret.reveal(), slug, publicHost };
+    }
+    // AgentDash (MVP launch): the provisioner's last check (step 8, CLOUD_EDGE_LIVE)
+    // reads GET /api/health through this router while the box is still
+    // `provisioning`, before the publish step moves it to `awaiting_claim`.
+    // Forward exactly that request (health is public) so a new box is not
+    // held at the not-ready page forever; everything else waits for publish.
+    if (route.state === "provisioning" && route.upstreamHost && route.edgeSecret && isProvisioningHealthProbe(req)) {
       return { kind: "proxy", route: route as EdgeRoute & { upstreamHost: string }, secret: route.edgeSecret.reveal(), slug, publicHost };
     }
     if (route.state === "failed" || route.state === "cleanup") return { kind: "page", status: 404, html: notFoundPage(publicHost, findUrl) };

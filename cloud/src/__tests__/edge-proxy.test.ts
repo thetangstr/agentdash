@@ -252,6 +252,22 @@ describe("pages", () => {
     expect(young.body).toContain("not ready yet");
   });
 
+  it("a box still being set up answers the provisioner's health probe through the router, and nothing else", async () => {
+    route("fresh", "provisioning");
+    const health = await get("fresh.agentdash.cloud", "/api/health");
+    expect(health.status).not.toBe(503);
+    expect(health.body).not.toContain("not ready yet");
+    const withQuery = await get("fresh.agentdash.cloud", "/api/health?x=1");
+    expect(withQuery.body).not.toContain("not ready yet");
+    for (const path of ["/", "/claim", "/api/health/details", "/api/healthz", "/api/companies"]) {
+      const res = await get("fresh.agentdash.cloud", path);
+      expect(res.status, path).toBe(503);
+      expect(res.body, path).toContain("not ready yet");
+    }
+    const post = await get("fresh.agentdash.cloud", "/api/health", { method: "POST", body: "{}" });
+    expect(post.status).toBe(503);
+  });
+
   it("serves its own health on its Railway domain", async () => {
     const res = await get("edge-production.up.railway.app", "/health");
     expect(res.status).toBe(200);
