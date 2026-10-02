@@ -6,7 +6,7 @@ import express from "express";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { agentApiKeys, agents, companies, companyMemberships, createDb, instanceUserRoles } from "@paperclipai/db";
+import { agentApiKeys, agents, authSessions, companies, companyMemberships, createDb, instanceUserRoles, projects } from "@paperclipai/db";
 import type { LiveEvent } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
@@ -149,6 +149,18 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     return marker;
+  }
+
+  /** Wait until the counting proxy stops seeing selects — i.e. every heartbeat re-check from the just-fired interval has settled. */
+  async function heartbeatSettled() {
+    let last = -1;
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (faultySelects === last) return;
+      last = faultySelects;
+    }
+    throw new Error("heartbeat re-checks did not settle");
   }
 
   /** Resolve with the close code, or null if the socket is still open after `ms` of real time. */
@@ -525,19 +537,6 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     // cached for the rest of this test (real time stays well under the TTLs).
     await settle([client], companyId);
 
-    // Wait until the counting proxy stops seeing selects — i.e. every
-    // heartbeat re-check from the just-fired interval has settled.
-    const heartbeatSettled = async () => {
-      let last = -1;
-      const deadline = Date.now() + 3000;
-      while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        if (faultySelects === last) return;
-        last = faultySelects;
-      }
-      throw new Error("heartbeat re-checks did not settle");
-    };
-
     // An unchanged heartbeat: the re-check still hits the database (it is
     // what detects out-of-band change), but the next event must reuse the
     // cached actor — zero selects on delivery.
@@ -551,8 +550,30 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     expect(client.isOpen()).toBe(true);
 
     // A heartbeat that observes a real authorization change (member → admin,
-    // written out of band so no access-change signal) invalidates the actor:
-    // the next event re-reads it.
+    // written out of band so no access-change signal) bumps the actor epoch —
+    // and still costs the event path nothing, because the re-check hands the
+    // actor it just loaded to the filter. Proven end to end: a restricted
+    // project event the member could not see is delivered once promoted.
+    const projectId = randomUUID();
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Restricted",
+      visibility: "restricted",
+      createdByUserId: `user-${randomUUID()}`,
+    });
+    const restrictedEvent = () =>
+      publishLiveEvent({
+        companyId,
+        type: "activity.logged",
+        payload: { action: "project.updated", entityType: "project", entityId: projectId },
+      });
+    const sawProject = () => client.events.some((e) => e.payload.entityId === projectId);
+
+    restrictedEvent(); // dropped: member is not on the project's access list
+    await settle([client], companyId);
+    expect(sawProject()).toBe(false);
+
     await db
       .update(companyMemberships)
       .set({ membershipRole: "admin" })
@@ -561,9 +582,53 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     vi.advanceTimersByTime(HEARTBEAT_MS);
     await heartbeatSettled();
     faultySelects = 0;
+    restrictedEvent();
     await settle([client], companyId);
-    expect(faultySelects).toBeGreaterThan(0);
+    expect(sawProject()).toBe(true);
+    expect(faultySelects).toBe(0);
     expect(client.isOpen()).toBe(true);
+  });
+
+  // AgentDash (GH #937): the actor cache TTL and the heartbeat interval are
+  // both 30s in production, so without a refresh the TTL still expires a beat
+  // later and the next event re-reads the actor — the fingerprint alone saved
+  // nothing. Date.now is mocked so the REAL TTL elapses between beats while
+  // the faked heartbeat interval advances; a passing re-check must renew the
+  // cache with the actor it already loaded.
+  it("re-reads nothing on the event path across heartbeats even after the actor TTL elapses", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Warm Cache Co",
+      issuePrefix: `WM${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+    });
+    const userId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships)
+      .values({ companyId, principalType: "user", principalId: userId, status: "active", membershipRole: "member" });
+    const client = await connect({ "x-test-user": userId }, faultyUrl, companyId);
+    // First event loads the actor and the agent-visibility scope.
+    await settle([client], companyId);
+
+    let fakeNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+    try {
+      // Three beats, each a full heartbeat interval of fake wall time — so the
+      // actor TTL elapses repeatedly. Without the refresh the cache expires
+      // and the settle below costs a re-read every beat.
+      for (let beat = 0; beat < 3; beat++) {
+        faultySelects = 0;
+        fakeNow += HEARTBEAT_MS;
+        vi.advanceTimersByTime(HEARTBEAT_MS);
+        await heartbeatSettled();
+        expect(faultySelects).toBeGreaterThan(0); // the re-check still queries
+        faultySelects = 0;
+        await settle([client], companyId);
+        expect(faultySelects).toBe(0); // but delivering the marker re-reads nothing
+        expect(client.isOpen()).toBe(true);
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   // AgentDash (GH #938): revocation only bites if better-auth's session and
@@ -693,12 +758,23 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
       const client = await connectAuthed(user.userId, user.cookie);
       expect(client.isOpen()).toBe(true);
 
-      const context = (await auth.$context) as unknown as {
-        internalAdapter: { deleteUser: (id: string) => Promise<unknown> };
-      };
-      await context.internalAdapter.deleteUser(user.userId);
+      const seen: LiveEventAccessChange[] = [];
+      const unsubscribe = subscribeLiveEventAccessChanges((change) => seen.push(change));
+      try {
+        // Delete the sessions straight through drizzle first — no hooks — so
+        // the socket cannot be closed by a session.delete publish. Only the
+        // user.delete hook can still close it.
+        await db.delete(authSessions).where(eq(authSessions.userId, user.userId));
+        const context = (await auth.$context) as unknown as {
+          internalAdapter: { deleteUser: (id: string) => Promise<unknown> };
+        };
+        await context.internalAdapter.deleteUser(user.userId);
 
-      expect(await closeCodeWithin(client, 5000)).toBe(1008);
+        expect(seen).toContainEqual({ kind: "user", userId: user.userId, reason: "user deleted" });
+        expect(await closeCodeWithin(client, 5000)).toBe(1008);
+      } finally {
+        unsubscribe();
+      }
     });
   });
 });

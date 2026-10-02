@@ -484,8 +484,10 @@ export function createBetterAuthInstance(
         },
       },
       // AgentDash (GH #708): sign-out / single-session revocation closes the
-      // sockets opened with that session. Bulk revocations that bypass this
-      // hook are caught by the live-events heartbeat re-authorization.
+      // sockets opened with that session. Bulk revocations reach this hook
+      // too — better-auth routes them through deleteManyWithHooks, which
+      // fires `after` per row; the live-events heartbeat re-authorization is
+      // the backstop only for writes that bypass the adapter entirely.
       session: {
         delete: {
           after: async (session: { userId: string }) => {

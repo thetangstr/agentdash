@@ -311,8 +311,9 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     const { companyId } = input;
     let actorReq: { value: Promise<Request>; expiresAt: number } | null = null;
     const decisions = new Map<string, { visible: boolean; generation: number; expiresAt: number }>();
-    // AgentDash (GH #708): bumped by invalidateActor so a decision computed from
-    // an actor loaded before the invalidation is not cached after it.
+    // AgentDash (GH #708): bumped by invalidateActor — and by refreshActor
+    // when the re-check's fingerprint moved — so a decision computed from an
+    // actor loaded before the change is not cached after it.
     let actorEpoch = 0;
 
     function currentReq(): Promise<Request> {
@@ -379,7 +380,33 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       decisions.clear();
     }
 
-    return Object.assign(shouldDeliver, { redactForSubscriber, invalidateActor });
+    /**
+     * AgentDash (GH #937): a passing authorization re-check already loaded
+     * the actor — hand it here instead of letting the TTL expire and paying a
+     * database re-read on the next event. `changed` means the re-check's
+     * fingerprint moved: the epoch bumps and cached decisions drop so they are
+     * recomputed against the new actor. Unchanged means the stored request
+     * names the same state, so only its expiry extends — keeping the same
+     * request object preserves the caches keyed on it (the agent-visibility
+     * scope), which is where the saving actually comes from.
+     */
+    function refreshActor(actor: LiveEventActor, changed: boolean) {
+      if (changed) {
+        actorEpoch += 1;
+        decisions.clear();
+        actorReq = null;
+      }
+      if (actorReq) {
+        actorReq.expiresAt = now() + ACTOR_TTL_MS;
+        return;
+      }
+      actorReq = {
+        value: Promise.resolve({ actor } as unknown as Request),
+        expiresAt: now() + ACTOR_TTL_MS,
+      };
+    }
+
+    return Object.assign(shouldDeliver, { redactForSubscriber, invalidateActor, refreshActor });
 
     async function shouldDeliver(event: LiveEvent): Promise<boolean> {
       // AgentDash (GH #708): the epoch is read before any actor is loaded, so an
@@ -416,9 +443,12 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
 
 /**
  * The board actor for a websocket subscriber, loaded like the REST auth
- * middleware loads it (instance-admin flag plus active memberships).
+ * middleware loads it (instance-admin flag plus active memberships). With
+ * `companyId` the memberships query is scoped to that company — enough for a
+ * socket whose every event belongs to it, and the cheaper shape the
+ * heartbeat re-check uses (AgentDash GH #937).
  */
-export async function loadBoardUserActor(db: Db, userId: string): Promise<LiveEventActor> {
+export async function loadBoardUserActor(db: Db, userId: string, companyId?: string): Promise<LiveEventActor> {
   const [roleRow, memberships] = await Promise.all([
     db
       .select({ id: instanceUserRoles.id })
@@ -437,6 +467,7 @@ export async function loadBoardUserActor(db: Db, userId: string): Promise<LiveEv
           eq(companyMemberships.principalType, "user"),
           eq(companyMemberships.principalId, userId),
           eq(companyMemberships.status, "active"),
+          ...(companyId ? [eq(companyMemberships.companyId, companyId)] : []),
         ),
       ),
   ]);
