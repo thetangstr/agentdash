@@ -28,7 +28,7 @@ export const SHIPPED_PAGE_SIZE = 50;
 // AgentDash: UX-11 — the empty Shipped page also sets the expectation for a
 // first result. Same wording for every company (one UX).
 export const SHIPPED_EMPTY_TEXT =
-  "Pull requests and results land here with what they cost. Your first one usually takes 20 to 30 minutes.";
+  "Work you've accepted shows up here, with what it cost. Your team's first piece of work usually takes 20 to 30 minutes.";
 const ALL = "__all__";
 
 function monthLabel(iso: string) {
@@ -48,6 +48,8 @@ export function Shipped() {
   const filters = {
     projectId: projectId === ALL ? undefined : projectId,
     agentId: agentId === ALL ? undefined : agentId,
+    // AgentDash (Scan 3 lane I): shipped means accepted.
+    accepted: true,
   };
 
   const feed = useInfiniteQuery({

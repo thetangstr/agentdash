@@ -64,6 +64,21 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
     status: "ready_for_review",
     isPrimary: true,
   });
+  // Shipped means accepted (Scan 3 lane I): a second deliverable, accepted by
+  // the board moving its issue to done, so Shipped and Home have a row.
+  const accepted = await post<{ id: string }>(request, `/api/companies/${company.id}/issues`, {
+    title: "Pricing sheet: gripper launch",
+    status: "in_review",
+  });
+  await post(request, `/api/issues/${accepted.id}/work-products`, {
+    type: "document",
+    provider: "agentdash",
+    title: "Pricing sheet for the gripper launch (accepted by the whole team)",
+    status: "ready_for_review",
+    isPrimary: true,
+  });
+  const acceptRes = await request.patch(`${BASE_URL}/api/issues/${accepted.id}`, { data: { status: "done" } });
+  expect(acceptRes.ok(), await acceptRes.text()).toBe(true);
 
   const agents = (await (await request.get(`${BASE_URL}/api/companies/${company.id}/agents`)).json()) as Array<{
     name: string;

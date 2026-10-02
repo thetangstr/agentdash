@@ -265,9 +265,12 @@ export const issuesApi = {
       since?: string;
       limit?: number;
       before?: string;
+      /** AgentDash (Scan 3 lane I): only accepted work, the Shipped view. */
+      accepted?: boolean;
     },
   ) => {
     const params = new URLSearchParams();
+    if (filters?.accepted) params.set("accepted", "true");
     if (filters?.projectId) params.set("projectId", filters.projectId);
     if (filters?.agentId) params.set("agentId", filters.agentId);
     if (filters?.issueId) params.set("issueId", filters.issueId);
@@ -277,6 +280,13 @@ export const issuesApi = {
     const qs = params.toString();
     return api.get<ShippedFeed>(`/companies/${companyId}/work-products${qs ? `?${qs}` : ""}`);
   },
+  // AgentDash (Scan 3 lane I): send a deliverable back with a note, in one server action.
+  requestChanges: (id: string, note: string) =>
+    api.post<{
+      issue: { id: string; identifier: string | null; status: string; companyId: string };
+      comment: IssueComment | null;
+      workProducts: IssueWorkProduct[];
+    }>(`/issues/${id}/request-changes`, { note }),
   createWorkProduct: (id: string, data: Record<string, unknown>) =>
     api.post<IssueWorkProduct>(`/issues/${id}/work-products`, data),
   updateWorkProduct: (id: string, data: Record<string, unknown>) =>

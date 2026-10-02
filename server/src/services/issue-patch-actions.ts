@@ -48,6 +48,10 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   // `assistant_grant` board actor is a client acting for the person, so its
   // move to done does not accept deliverables on the person's behalf.
   actorSource?: string;
+  // AgentDash (Scan 3 lane I): POST /issues/:id/request-changes. In the same
+  // transaction as the comment and status change, the work products that were
+  // waiting for review are recorded as sent back.
+  requestChanges?: boolean;
 }
 export class IssuePatchAcceptanceUncertain extends IssueCommentPolicyRefusal {
   constructor(readonly recovery: { mutationId: string; companyId: string; issueId: string; commentId: string | null; decisionId: string | null }) {
@@ -758,6 +762,41 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
                 status: "ready_for_review",
                 reviewState: product.reviewState,
                 reason: "issue_reopened",
+                ...context.attribution,
+              },
+            });
+          }
+        }
+
+        // AgentDash (Scan 3 lane I): request changes. Only products that were
+        // waiting for review when the request was made are sent back; the
+        // update and its audit rows commit with the comment and status.
+        if (context.requestChanges && humanBoardActor) {
+          const sentBack = await tx.update(issueWorkProducts)
+            .set({ status: "changes_requested", reviewState: "changes_requested", updatedAt: new Date() })
+            .where(and(
+              eq(issueWorkProducts.companyId, issue.companyId),
+              eq(issueWorkProducts.issueId, issue.id),
+              eq(issueWorkProducts.status, "ready_for_review"),
+            ))
+            .returning({ id: issueWorkProducts.id });
+          for (const product of sentBack) {
+            await audit({
+              companyId: issue.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.work_product_updated",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                identifier: issue.identifier,
+                workProductId: product.id,
+                changedKeys: ["reviewState", "status"],
+                status: "changes_requested",
+                reviewState: "changes_requested",
+                reason: "changes_requested",
                 ...context.attribution,
               },
             });

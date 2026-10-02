@@ -9,6 +9,10 @@ import { timeAgo } from "../lib/timeAgo";
 import {
   TOKENS_COUNTED_NOTE,
   formatShippedUsage,
+  LOCAL_FILE_NOTE,
+  isLocalFileWorkProduct,
+  workProductDisplayTitle,
+  workProductHref,
   workProductState,
   workProductTypeLabel,
   type WorkProductStateTone,
@@ -26,7 +30,7 @@ export function WorkProductStateBadge({
   product,
   className,
 }: {
-  product: Pick<ShippedWorkProduct, "type" | "status">;
+  product: Pick<ShippedWorkProduct, "type" | "status"> & { createdAt?: Date | string | null; issue?: { status?: string | null } | null };
   className?: string;
 }) {
   const state = workProductState(product);
@@ -60,7 +64,9 @@ function ProductIcon({ product }: { product: ShippedWorkProduct }) {
  */
 function CompactShippedWorkProductRow({ product, showUsage }: { product: ShippedWorkProduct; showUsage: boolean }) {
   const [usageOpen, setUsageOpen] = useState(false);
-  const titleHref = product.url ?? null;
+  const target = workProductHref(product, issueUrl(product.issue));
+  const titleHref = target?.external ? target.href : null;
+  const internalHref = target && !target.external ? target.href : issueUrl(product.issue);
   const meta = [
     product.issue.identifier ?? product.issue.title,
     product.agent?.name ?? null,
@@ -81,15 +87,15 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
               className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
               data-testid="shipped-title"
             >
-              {product.title}
+              {workProductDisplayTitle(product.title)}
             </a>
           ) : (
             <Link
-              to={issueUrl(product.issue)}
+              to={internalHref}
               className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
               data-testid="shipped-title"
             >
-              {product.title}
+              {workProductDisplayTitle(product.title)}
             </Link>
           )}
           <WorkProductStateBadge product={product} className="text-xs" />
@@ -97,6 +103,9 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
         <p className="mt-0.5 truncate text-xs text-muted-foreground" data-testid="shipped-meta">
           {meta.join(" · ")}
         </p>
+        {!target && isLocalFileWorkProduct(product) ? (
+          <p className="mt-0.5 text-xs text-muted-foreground" data-testid="work-product-local-note">{LOCAL_FILE_NOTE}</p>
+        ) : null}
         {showUsage && usageOpen ? (
           <p className="mt-0.5 text-xs text-muted-foreground" data-testid="shipped-usage" title={TOKENS_COUNTED_NOTE}>
             {formatShippedUsage(product.usage)}
@@ -138,28 +147,43 @@ export function ShippedWorkProductRow({
   if (compactOnPhone && isPhone) {
     return <CompactShippedWorkProductRow product={product} showUsage={showUsage} />;
   }
+  // AgentDash (Scan 3 lane I): http(s) opens in a new tab; a local file the
+  // server read in opens its issue document; a file: URL opens nothing.
+  const target = workProductHref(product, issueUrl(product.issue));
   return (
     <div className="flex items-start gap-3 px-3 py-2.5 max-sm:gap-2 max-sm:py-2" data-testid="shipped-row">
       <ProductIcon product={product} />
       <div className="min-w-0 flex-1 space-y-0.5">
         {/* AgentDash: phones keep title + state on one line (title truncates). */}
         <div className="flex flex-wrap items-center gap-2 max-sm:flex-nowrap">
-          {product.url ? (
+          {target?.external ? (
             <a
-              href={product.url}
+              href={target.href}
               target="_blank"
               rel="noreferrer"
               className="inline-flex min-w-0 items-center gap-1 text-sm font-medium hover:underline"
+              data-testid="shipped-title"
             >
-              <span className="truncate">{product.title}</span>
+              <span className="truncate">{workProductDisplayTitle(product.title)}</span>
               <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
             </a>
+          ) : target ? (
+            <Link
+              to={target.href}
+              className="inline-flex min-w-0 items-center gap-1 text-sm font-medium hover:underline"
+              data-testid="shipped-title"
+            >
+              <span className="truncate">{workProductDisplayTitle(product.title)}</span>
+            </Link>
           ) : (
-            <span className="truncate text-sm font-medium">{product.title}</span>
+            <span className="truncate text-sm font-medium" data-testid="shipped-title">{workProductDisplayTitle(product.title)}</span>
           )}
           <WorkProductStateBadge product={product} />
         </div>
-        {product.summary && !product.url ? (
+        {!target && isLocalFileWorkProduct(product) ? (
+          <p className="text-xs text-muted-foreground" data-testid="work-product-local-note">{LOCAL_FILE_NOTE}</p>
+        ) : null}
+        {product.summary && !target?.external ? (
           <p className="line-clamp-2 text-xs text-muted-foreground">{product.summary}</p>
         ) : null}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">

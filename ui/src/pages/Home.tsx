@@ -33,7 +33,7 @@ import { useIsPhone } from "../hooks/useIsPhone";
 export const HOME_LIST_LIMIT = 6;
 export const WAITING_EMPTY_TEXT = "Nothing needs you right now. Decisions and issues assigned to you show up here.";
 export const WORKING_EMPTY_TEXT = "No agent is working right now.";
-export const SHIPPED_WEEK_EMPTY_TEXT = "Nothing shipped this week yet. Pull requests and results land here, with what they cost.";
+export const SHIPPED_WEEK_EMPTY_TEXT = "Nothing shipped this week yet. Work you accept shows up here, with what it cost.";
 // AgentDash: mobile lists — the one-line phone versions of the empty states.
 export const WAITING_EMPTY_SHORT_TEXT = "Nothing needs you right now.";
 export const SHIPPED_WEEK_EMPTY_SHORT_TEXT = "Nothing shipped this week yet.";
@@ -317,8 +317,8 @@ export function Home() {
   // "This week" rounded down to the hour, so the query key is stable across renders.
   const weekAgo = new Date(Math.floor((Date.now() - WEEK_MS) / 3_600_000) * 3_600_000).toISOString();
   const { data: shipped, isError: shippedFailed } = useQuery({
-    queryKey: queryKeys.shipped(selectedCompanyId ?? "", { since: weekAgo }),
-    queryFn: () => issuesApi.listShipped(selectedCompanyId!, { since: weekAgo, limit: HOME_LIST_LIMIT }),
+    queryKey: queryKeys.shipped(selectedCompanyId ?? "", { since: weekAgo, accepted: true }),
+    queryFn: () => issuesApi.listShipped(selectedCompanyId!, { since: weekAgo, limit: HOME_LIST_LIMIT, accepted: true }),
     enabled,
     refetchInterval: 60_000,
   });

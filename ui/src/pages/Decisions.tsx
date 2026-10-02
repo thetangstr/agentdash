@@ -286,7 +286,9 @@ export function Decisions() {
 
       {waiting && mainCount > 0 ? (
         <p className="px-1 text-xs text-muted-foreground">
-          Approving or rejecting on the approval page takes it off this list.
+          {(waiting?.reviewsWaiting?.length ?? 0) > 0
+            ? "Open a review and choose Accept or Request changes. Approve or reject an approval on its page. Either one takes it off this list."
+            : "Approving or rejecting on the approval page takes it off this list."}
         </p>
       ) : null}
     </div>

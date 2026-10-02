@@ -112,6 +112,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // complete current/historical authority, atomic tree DB acceptance, truthful
 // postcommit runtime readback, final pause admission and private deletion refusal.
 // No hire-specific replay, repair, transport or capability grant is introduced.
+// AgentDash: readable-comments (scan 3 lane I) is inherited from the canonical
+// worker: no absolute filesystem paths, file:// URLs or raw user/agent/run ids
+// in comments; deliverables go in issue documents. Proposal-created hires add
+// nothing to that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.

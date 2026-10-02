@@ -48,6 +48,11 @@ export interface ListShippedOptions {
   issueId?: string;
   /** Only work products created at or after this instant (e.g. "this week" on Home). */
   since?: Date;
+  /**
+   * AgentDash (Scan 3 lane I): only accepted work, which is what Shipped and
+   * Home count. See `acceptedWorkProductCondition`.
+   */
+  acceptedOnly?: boolean;
   limit?: number;
   /** Opaque cursor from a previous page's `nextCursor`. */
   before?: string | null;
@@ -78,6 +83,41 @@ export function decodeShippedCursor(cursor: string): { createdAt: Date; id: stri
   }
 }
 
+/**
+ * AgentDash (Scan 3 lane I): work products created before this instant were
+ * recorded before a board user's acceptance was written onto them, so for
+ * those alone "the issue is done" stands in for "accepted". Anything newer is
+ * accepted only when a person approved it (or a pull request merged): an
+ * agent closing its own issue does not ship its work.
+ */
+export const ACCEPTANCE_RECORDED_SINCE = new Date("2026-10-02T00:00:00.000Z");
+
+/**
+ * AgentDash (Scan 3 lane I): "shipped" means accepted. A work product is
+ * accepted when a board user approved it (status approved, set when they move
+ * the issue to done), when it merged, or, for work recorded before
+ * ACCEPTANCE_RECORDED_SINCE, when its issue is done and it was not withdrawn
+ * (closed, archived, failed, draft, changes requested). Derived on read, no
+ * backfill.
+ */
+export function acceptedWorkProductCondition(): SQL {
+  return sql`(${issueWorkProducts.status} in ('approved', 'merged') or (${issues.status} = 'done' and ${issueWorkProducts.createdAt} < ${ACCEPTANCE_RECORDED_SINCE.toISOString()}::timestamptz and ${issueWorkProducts.status} not in ('closed', 'archived', 'failed', 'draft', 'changes_requested')))`;
+}
+
+/** AgentDash (Scan 3 lane I): a title that is an absolute path or a file: URL shows as its file name. */
+export function sanitizeWorkProductTitle(title: string): string {
+  const trimmed = title.trim();
+  const looksLikePath = /^file:/i.test(trimmed) || (/^(\/|~\/|[A-Za-z]:[\\/])/.test(trimmed) && !/\s/.test(trimmed));
+  if (!looksLikePath) return title;
+  const withoutQuery = trimmed.replace(/[?#].*$/, "");
+  const base = withoutQuery.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  try {
+    return decodeURIComponent(base) || "Deliverable";
+  } catch {
+    return base || "Deliverable";
+  }
+}
+
 export function startOfUtcMonth(now: Date) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
@@ -101,6 +141,7 @@ export function workProductService(db: Db) {
     if (opts.issueId) filters.push(eq(issueWorkProducts.issueId, opts.issueId));
     if (opts.agentId) filters.push(sql`${producingAgentId} = ${opts.agentId}`);
     if (opts.since) filters.push(gte(issueWorkProducts.createdAt, opts.since));
+    if (opts.acceptedOnly) filters.push(acceptedWorkProductCondition());
     return filters;
   }
 

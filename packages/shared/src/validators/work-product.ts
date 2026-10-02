@@ -52,3 +52,11 @@ export type CreateIssueWorkProduct = z.infer<typeof createIssueWorkProductSchema
 export const updateIssueWorkProductSchema = createIssueWorkProductSchema.partial();
 
 export type UpdateIssueWorkProduct = z.infer<typeof updateIssueWorkProductSchema>;
+
+// AgentDash (Scan 3 lane I): POST /issues/:id/request-changes — a board user
+// sends a deliverable back with a short note.
+export const requestIssueChangesSchema = z.object({
+  note: z.string().trim().min(1).max(2000),
+});
+
+export type RequestIssueChanges = z.infer<typeof requestIssueChangesSchema>;
