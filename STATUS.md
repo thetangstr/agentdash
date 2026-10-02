@@ -1,6 +1,6 @@
 # Devin lane: urls (#954 + #938 + #937)
 
-Phase: REVIEW FIXES for PR #964 (in progress on `devin/urls-20261002`; not merged)
+Phase: REVIEW FIXES for PR #964 DONE (pushed to `devin/urls-20261002`; not merged)
 
 - Lane A (#954): PR https://github.com/thetangstr/agentdash/pull/964 — review round from `.omc/briefs/devin-20261002/review-964.md` applied:
   - MEDIUM (declared-mode precedence): boot now registers `config.canonicalOrigin` when origins are declared and `config.authPublicBaseUrl` otherwise, via the new `registerBootOriginState` helper; the `fileAuthPublicBaseUrl` term was removed from the `canonicalOrigin` chain so `PAPERCLIP_ORIGINS` keeps priority over the config-file URL. New tests assert `configuredPublicBaseUrl() === canonicalOrigin` for `PAPERCLIP_ORIGINS` + `BETTER_AUTH_URL` and `PAPERCLIP_ORIGINS` + config-file URL.
@@ -15,5 +15,6 @@ Blockers: none.
 Verification this round:
 - `vitest run src/__tests__/declared-origins.test.ts src/lib/public-base-url.test.ts` — 49/49 pass
 - `vitest run src/__tests__/assistant-oauth.test.ts` — 67/67 pass
-- `pnpm -r typecheck` — in progress
-- `node scripts/ci/check-pr-process.mjs --body-file` — pending
+- `pnpm -r typecheck` — clean across all workspace projects
+- `node scripts/ci/check-pr-process.mjs --body-file /tmp/devin-pr-964-review-body.md` — pass
+- Pushed `aef3cd625` to `origin/devin/urls-20261002`; PR body updated via `gh pr edit 964`.
