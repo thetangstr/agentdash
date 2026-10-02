@@ -69,7 +69,7 @@ export const queryKeys = {
   // AgentDash: UX-2 (#783)
   shipped: (
     companyId: string,
-    filters?: { projectId?: string; agentId?: string; issueId?: string; since?: string },
+    filters?: { projectId?: string; agentId?: string; issueId?: string; since?: string; accepted?: boolean },
   ) =>
     [
       "shipped",
@@ -78,6 +78,7 @@ export const queryKeys = {
       filters?.agentId ?? "",
       filters?.issueId ?? "",
       filters?.since ?? "",
+      filters?.accepted ? "accepted" : "",
     ] as const,
   routines: {
     list: (companyId: string, filters?: { projectId?: string | null }) =>

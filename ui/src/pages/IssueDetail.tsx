@@ -63,7 +63,7 @@ import { useProjectOrder } from "../hooks/useProjectOrder";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { InlineEditor } from "../components/InlineEditor";
-import { IssueResultBlock } from "../components/IssueResultBlock";
+import { IssueResultBlock, type IssueResultReviewActions } from "../components/IssueResultBlock";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueDocumentsSection, type IssueDocumentsSectionHandle } from "../components/IssueDocumentsSection";
@@ -1621,6 +1621,15 @@ export function IssueDetail() {
       if (nextIssue.identifier) issueRefs.add(nextIssue.identifier);
       mergeIssueResponseIntoCaches(issueRefs, nextIssue);
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issueId!) });
+      // AgentDash (Scan 3 lane I): a status change can accept (or reopen) the
+      // issue's deliverables on the server, so the "ready for review" chip and
+      // the Shipped lists must refetch now, not on the next reload.
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(issueId!) });
+      if (nextIssue.id !== issueId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(nextIssue.id) });
+      }
+      queryClient.invalidateQueries({ queryKey: ["shipped", nextIssue.companyId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(nextIssue.companyId) });
       invalidateIssueCollections();
     },
     onError: (err, _variables, context) => {
@@ -1643,6 +1652,31 @@ export function IssueDetail() {
       }
     },
   });
+  // AgentDash (Scan 3 lane I): Accept / Request changes on the Result block.
+  // Accept is the existing move to done, which records the deliverables as
+  // accepted. Request changes posts the note as a comment (which wakes the
+  // assignee), moves the issue back to work, and marks the deliverables that
+  // were waiting as sent back so they leave Decisions and never count as shipped.
+  const resultReviewActions = useMemo<IssueResultReviewActions>(() => ({
+    onAccept: () => updateIssue.mutateAsync({ status: "done" }),
+    onRequestChanges: async (note: string) => {
+      const current = queryClient.getQueryData<Issue>(queryKeys.issues.detail(issueId!));
+      const hasAssignee = Boolean(current?.assigneeAgentId || current?.assigneeUserId);
+      const updated = await updateIssue.mutateAsync({ status: hasAssignee ? "in_progress" : "todo", comment: note });
+      const waiting = (await issuesApi.listWorkProducts(updated.id)).filter(
+        (product) => product.status === "ready_for_review",
+      );
+      await Promise.all(
+        waiting.map((product) =>
+          issuesApi.updateWorkProduct(product.id, { status: "changes_requested", reviewState: "changes_requested" }),
+        ),
+      );
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(issueId!) });
+      queryClient.invalidateQueries({ queryKey: ["shipped", updated.companyId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(updated.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(updated.companyId) });
+    },
+  }), [issueId, queryClient, updateIssue.mutateAsync]);
   // AgentDash (recovery budget remediation): "Clear recovery block & retry".
   const clearRecoveryBudget = useMutation({
     mutationFn: () => issuesApi.clearRecoveryBudget(issueId!),
@@ -3445,7 +3479,12 @@ export function IssueDetail() {
         />
 
         {/* AgentDash: UX-2 (#783) — what this issue produced, above the fold. */}
-        <IssueResultBlock companyId={issue.companyId} issueId={issue.id} />
+        <IssueResultBlock
+          companyId={issue.companyId}
+          issueId={issue.id}
+          issueStatus={issue.status}
+          review={canManageTreeControl ? resultReviewActions : null}
+        />
 
         <InlineEditor
           value={issue.description ?? ""}

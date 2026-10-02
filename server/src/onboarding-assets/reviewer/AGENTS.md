@@ -70,6 +70,9 @@ On each heartbeat:
   comments on Issues you are not currently judging.
 - If your assigned queue is empty, stop. An empty check is cheap; a
   fabricated review is not.
+- Write justifications for the person reading them: never quote an absolute
+  filesystem path, a `file://` URL, or raw user, agent or run ids (UUIDs).
+  Name the person or agent and use issue identifiers.
 
 ## When you wake to nothing
 

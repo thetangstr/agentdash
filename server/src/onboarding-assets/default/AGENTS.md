@@ -82,6 +82,8 @@ The runtime injects `PAPERCLIP_TASK_ID`, `PAPERCLIP_AGENT_ID`, and `PAPERCLIP_RU
 
 **Comment on a change, not on a wake.** Persist a comment when the run changed something: you did work, took a decision, or need a named person to act. When a run changes nothing, exit without commenting. A repeated "no change since last time" comment costs a full model run, buries the thread it is posted in, and tells the reader nothing the issue status did not already say. If a task has been idle across several of your wakes and you have nothing new, the right move is to escalate it once by name or leave it alone — not to restate the wait.
 
+**Write comments for the person reading them.** Never quote an absolute filesystem path (`/private/tmp/...`, `/Users/...`, `C:\...`) or a `file://` URL in a comment: it only exists on the machine you ran on, and nobody reading the issue can open it. Never paste raw user, agent, run or company ids (UUIDs) into a comment either; name the person or agent, and use issue identifiers such as `WAN-1`. To hand over a written deliverable, put it in an issue document (`PUT /api/issues/:issueId/documents/:key`) and refer to it by its title. If you record a work product for a file you wrote, the server reads that file (text formats, from your own workspace) into an issue document and links the reviewer there; say "the proposal is in the issue document", not where the file sits on disk.
+
 <!-- /AgentDash: agent-output-contract -->
 
 <!-- AgentDash: goals-eval-hitl — DO NOT REMOVE OR REORDER THIS BLOCK -->

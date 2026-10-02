@@ -77,17 +77,73 @@ describe("IssueResultBlock", () => {
     vi.clearAllMocks();
   });
 
-  async function render() {
+  async function render(props: Partial<Parameters<typeof IssueResultBlock>[0]> = {}) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
-          <IssueResultBlock companyId="company-1" issueId="issue-1" />
+          <IssueResultBlock companyId="company-1" issueId="issue-1" {...props} />
         </QueryClientProvider>,
       );
     });
     await flush();
   }
+
+  const waitingItem = () =>
+    shippedItem({
+      type: "document",
+      url: null,
+      status: "ready_for_review",
+      reviewState: "needs_board_review",
+      issue: { id: "issue-1", identifier: "ACME-1", title: "Add a health badge", status: "in_review", projectId: null },
+    });
+
+  function setTextarea(el: HTMLTextAreaElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  it("offers Accept and Request changes to a board user when a deliverable waits for review", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue({ items: [waitingItem()], total: 1, nextCursor: null, monthTotal: null });
+    const onAccept = vi.fn().mockResolvedValue(undefined);
+    const onRequestChanges = vi.fn().mockResolvedValue(undefined);
+    await render({ issueStatus: "in_review", review: { onAccept, onRequestChanges } });
+
+    const accept = container.querySelector<HTMLButtonElement>('[data-testid="issue-review-accept"]');
+    expect(accept?.textContent).toBe("Accept");
+    await act(async () => accept!.click());
+    await flush();
+    expect(onAccept).toHaveBeenCalledTimes(1);
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="issue-review-request-changes"]')!.click());
+    const send = container.querySelector<HTMLButtonElement>('[data-testid="issue-review-send-changes"]')!;
+    expect(send.disabled).toBe(true);
+    await act(async () => setTextarea(container.querySelector<HTMLTextAreaElement>('[data-testid="issue-review-note"]')!, "  Add Kyoto prices  "));
+    expect(send.disabled).toBe(false);
+    await act(async () => send.click());
+    await flush();
+    expect(onRequestChanges).toHaveBeenCalledWith("Add Kyoto prices");
+  });
+
+  it("shows no review actions without board access, or once the issue is done", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue({ items: [waitingItem()], total: 1, nextCursor: null, monthTotal: null });
+    await render({ issueStatus: "in_review", review: null });
+    expect(container.querySelector('[data-testid="issue-review-actions"]')).toBeNull();
+
+    await render({ issueStatus: "done", review: { onAccept: vi.fn(), onRequestChanges: vi.fn() } });
+    expect(container.querySelector('[data-testid="issue-review-actions"]')).toBeNull();
+  });
+
+  it("shows the error and keeps the actions when accepting fails", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue({ items: [waitingItem()], total: 1, nextCursor: null, monthTotal: null });
+    const onAccept = vi.fn().mockRejectedValue(new Error("Issue update failed"));
+    await render({ issueStatus: "in_review", review: { onAccept, onRequestChanges: vi.fn() } });
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="issue-review-accept"]')!.click());
+    await flush();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Issue update failed");
+    expect(container.querySelector('[data-testid="issue-review-accept"]')).not.toBeNull();
+  });
 
   it("shows the PR link, its state, the agent and the issue's usage", async () => {
     mockIssuesApi.listShipped.mockResolvedValue({ items: [shippedItem()], total: 1, nextCursor: null, monthTotal: null });
@@ -107,7 +163,8 @@ describe("IssueResultBlock", () => {
       items: [
         shippedItem({
           status: "ready_for_review",
-          usage: { metered: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, costCents: 0 },
+          issue: { id: "issue-1", identifier: "ACME-1", title: "Add a health badge", status: "in_review", projectId: null },
+          usage:{ metered: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, costCents: 0 },
         }),
       ],
       nextCursor: null,

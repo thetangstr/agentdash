@@ -48,6 +48,11 @@ export interface ListShippedOptions {
   issueId?: string;
   /** Only work products created at or after this instant (e.g. "this week" on Home). */
   since?: Date;
+  /**
+   * AgentDash (Scan 3 lane I): only accepted work, which is what Shipped and
+   * Home count. See `acceptedWorkProductCondition`.
+   */
+  acceptedOnly?: boolean;
   limit?: number;
   /** Opaque cursor from a previous page's `nextCursor`. */
   before?: string | null;
@@ -78,6 +83,18 @@ export function decodeShippedCursor(cursor: string): { createdAt: Date; id: stri
   }
 }
 
+/**
+ * AgentDash (Scan 3 lane I): "shipped" means accepted. A work product is
+ * accepted when a board user approved it (status approved, set when they move
+ * the issue to done), when it merged, or when its issue is done and it was not
+ * withdrawn (closed, archived, failed, draft, changes requested). The last
+ * clause covers work accepted before acceptance was recorded on the work
+ * product: derived on read, no backfill.
+ */
+export function acceptedWorkProductCondition(): SQL {
+  return sql`(${issueWorkProducts.status} in ('approved', 'merged') or (${issues.status} = 'done' and ${issueWorkProducts.status} not in ('closed', 'archived', 'failed', 'draft', 'changes_requested')))`;
+}
+
 export function startOfUtcMonth(now: Date) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
@@ -101,6 +118,7 @@ export function workProductService(db: Db) {
     if (opts.issueId) filters.push(eq(issueWorkProducts.issueId, opts.issueId));
     if (opts.agentId) filters.push(sql`${producingAgentId} = ${opts.agentId}`);
     if (opts.since) filters.push(gte(issueWorkProducts.createdAt, opts.since));
+    if (opts.acceptedOnly) filters.push(acceptedWorkProductCondition());
     return filters;
   }
 

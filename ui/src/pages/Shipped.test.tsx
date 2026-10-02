@@ -141,12 +141,37 @@ describe("Shipped page", () => {
     mockIssuesApi.listShipped.mockResolvedValue(
       feed([
         item("3", { type: "document", url: null, status: "approved", reviewState: "approved", summary: "Accepted brief" }),
-        item("4", { type: "document", url: null, status: "ready_for_review", reviewState: "needs_board_review", summary: "Waiting brief" }),
+        item("4", {
+          type: "document", url: null, status: "ready_for_review", reviewState: "needs_board_review", summary: "Waiting brief",
+          issue: { id: "issue-4", identifier: "ACME-4", title: "Issue 4", status: "in_review", projectId: null },
+        }),
+        // Scan 3 lane I: accepted before acceptance was recorded on the product.
+        item("5", { type: "document", url: null, status: "ready_for_review", reviewState: "needs_board_review", summary: "Done brief" }),
       ]),
     );
     await render();
     const badges = [...container.querySelectorAll('[data-testid="work-product-state"]')].map((node) => node.textContent);
-    expect(badges).toEqual(["accepted", "ready for review"]);
+    expect(badges).toEqual(["accepted", "ready for review", "accepted"]);
+  });
+
+  it("asks the server for accepted work only", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue(feed([]));
+    await render();
+    expect(mockIssuesApi.listShipped).toHaveBeenCalledWith("company-1", expect.objectContaining({ accepted: true }));
+  });
+
+  it("never links a file: URL; a deliverable read into a document opens that document", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue(
+      feed([
+        item("7", { type: "document", url: "file:///private/tmp/run/plan.md", title: "Plan" }),
+        item("8", { type: "document", url: null, title: "Proposal", metadata: { documentKey: "deliverable-proposal" } }),
+      ]),
+    );
+    await render();
+    expect(container.innerHTML).not.toContain("file:");
+    expect(container.innerHTML).not.toContain("/private/tmp");
+    const docLink = [...container.querySelectorAll("a")].find((a) => a.textContent?.includes("Proposal"));
+    expect(docLink?.getAttribute("href")).toBe("/issues/ACME-8#document-deliverable-proposal");
   });
 
   it("shows the plan's empty state with one action when nothing has shipped", async () => {

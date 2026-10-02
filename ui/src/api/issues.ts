@@ -265,9 +265,12 @@ export const issuesApi = {
       since?: string;
       limit?: number;
       before?: string;
+      /** AgentDash (Scan 3 lane I): only accepted work, the Shipped view. */
+      accepted?: boolean;
     },
   ) => {
     const params = new URLSearchParams();
+    if (filters?.accepted) params.set("accepted", "true");
     if (filters?.projectId) params.set("projectId", filters.projectId);
     if (filters?.agentId) params.set("agentId", filters.agentId);
     if (filters?.issueId) params.set("issueId", filters.issueId);

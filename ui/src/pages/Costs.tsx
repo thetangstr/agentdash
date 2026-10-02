@@ -332,8 +332,8 @@ export function Costs() {
   // shipped feed's monthTotal carries this month's shipped items/PRs and the
   // metered spend on the issues behind them — no new endpoint required.
   const { data: shippedData } = useQuery({
-    queryKey: [...queryKeys.shipped(companyId, {}), "costs-overview"],
-    queryFn: () => issuesApi.listShipped(companyId, { limit: 1 }),
+    queryKey: [...queryKeys.shipped(companyId, { accepted: true }), "costs-overview"],
+    queryFn: () => issuesApi.listShipped(companyId, { limit: 1, accepted: true }),
     enabled: !!selectedCompanyId,
     staleTime: 60_000,
   });

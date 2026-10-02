@@ -1607,8 +1607,8 @@ export function AgentVitalsStrip({
   const inProgressIssue = assignedIssues.find((issue) => issue.status === "in_progress");
 
   const { data: lastShipped } = useQuery({
-    queryKey: [...queryKeys.shipped(agent.companyId, { agentId: agent.id }), "agent-vitals"],
-    queryFn: () => issuesApi.listShipped(agent.companyId, { agentId: agent.id, limit: 1 }),
+    queryKey: [...queryKeys.shipped(agent.companyId, { agentId: agent.id, accepted: true }), "agent-vitals"],
+    queryFn: () => issuesApi.listShipped(agent.companyId, { agentId: agent.id, limit: 1, accepted: true }),
     enabled: Boolean(agent.companyId),
     staleTime: 30_000,
   });

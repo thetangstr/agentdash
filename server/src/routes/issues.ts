@@ -15,8 +15,8 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { agents, issueExecutionDecisions, issues } from "@paperclipai/db";
-import { eq } from "drizzle-orm";
+import { agents, heartbeatRuns, issueExecutionDecisions, issues } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
 import {
   assertFeedbackTraceVisible,
   assertIssueIdVisible,
@@ -38,6 +38,15 @@ import {
   visibleAgentIdsFor,
 } from "./visibility.js";
 import { decodeShippedCursor } from "../services/work-products.js";
+import {
+  deliverableDocumentBody,
+  deliverableDocumentKey,
+  isLocalWorkProduct,
+  localWorkProductPath,
+  readLocalDeliverable,
+  resolveAgentDeliverableRoots,
+  sanitizeDeliverableTitle,
+} from "../services/work-product-local-ingest.js";
 import {
   addIssueCommentSchema,
   acceptIssueThreadInteractionSchema,
@@ -1248,6 +1257,104 @@ export function issueRoutes(
     res.json(await svc.listChildContributions(issue.companyId, issue.id));
   });
 
+  // AgentDash (Scan 3 lane I): the run a work product came from. The caller's
+  // own run wins; a run id in the body is kept only when it is a run in this
+  // company (it is a foreign key, and it decides which agent Shipped names).
+  async function resolveWorkProductRunId(
+    companyId: string,
+    actorRunId: string | null | undefined,
+    bodyRunId: unknown,
+  ): Promise<string | null> {
+    if (actorRunId) return actorRunId;
+    if (typeof bodyRunId !== "string" || !isCanonicalUuid(bodyRunId)) return null;
+    const run = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.id, bodyRunId), eq(heartbeatRuns.companyId, companyId)))
+      .then((rows) => rows[0] ?? null);
+    return run?.id ?? null;
+  }
+
+  // AgentDash (Scan 3 lane I): a work product pointing at a local file (a
+  // file: URL, or provider "local") is read into an issue document the
+  // reviewer can open. Only an agent's own workspace is readable, text only,
+  // size-capped. The file: URL and the absolute path are never stored.
+  async function prepareWorkProductWrite(
+    issue: { id: string; companyId: string },
+    actor: ReturnType<typeof getActorInfo>,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const next: Record<string, unknown> = { ...body };
+    if (typeof next.title === "string") next.title = sanitizeDeliverableTitle(next.title);
+    const input = {
+      provider: typeof body.provider === "string" ? body.provider : null,
+      url: typeof body.url === "string" ? body.url : null,
+      externalId: typeof body.externalId === "string" ? body.externalId : null,
+      metadata: (body.metadata as Record<string, unknown> | null | undefined) ?? null,
+    };
+    if (!isLocalWorkProduct(input)) return next;
+
+    const metadata: Record<string, unknown> = { ...(input.metadata ?? {}) };
+    delete metadata.path;
+    next.url = null;
+    if (input.provider?.trim().toLowerCase() === "local" && typeof next.externalId === "string") next.externalId = null;
+
+    const requestedPath = localWorkProductPath(input);
+    const read = actor.actorType !== "agent" || !actor.agentId
+      ? ({ ok: false, reason: "not_agent" } as const)
+      : !requestedPath
+        ? ({ ok: false, reason: "invalid_path" } as const)
+        : await readLocalDeliverable(
+          requestedPath,
+          await resolveAgentDeliverableRoots(db, { companyId: issue.companyId, agentId: actor.agentId, runId: actor.runId }),
+        );
+    if (!read.ok) {
+      next.metadata = { ...metadata, localFile: { ingested: false, reason: read.reason } };
+      return next;
+    }
+
+    const key = deliverableDocumentKey(read.filename);
+    const existingDoc = await documentsSvc.getIssueDocumentByKey(issue.id, key);
+    const title = typeof next.title === "string" && next.title.trim() ? next.title.trim().slice(0, 200) : read.filename;
+    const result = await documentsSvc.upsertIssueDocument({
+      issueId: issue.id,
+      key,
+      title,
+      format: "markdown",
+      body: deliverableDocumentBody(read),
+      changeSummary: existingDoc ? "Updated from the agent's deliverable file" : null,
+      baseRevisionId: existingDoc?.latestRevisionId ?? null,
+      createdByAgentId: actor.agentId ?? null,
+      createdByUserId: null,
+      createdByRunId: actor.runId ?? null,
+    });
+    await logActivity(db, {
+      companyId: issue.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: result.created ? "issue.document_created" : "issue.document_updated",
+      entityType: "issue",
+      entityId: issue.id,
+      details: {
+        key,
+        documentId: result.document.id,
+        title,
+        format: "markdown",
+        revisionNumber: result.document.latestRevisionNumber,
+        source: "work_product_local_file",
+        filename: read.filename,
+      },
+    });
+    next.metadata = {
+      ...metadata,
+      documentKey: key,
+      localFile: { ingested: true, filename: read.filename, byteSize: read.byteSize },
+    };
+    return next;
+  }
+
   // AgentDash: UX-2 (#783) — the company-wide Shipped feed. Company-scoped,
   // and restricted-project visibility applies exactly as on the issue list.
   router.get("/companies/:companyId/work-products", async (req, res) => {
@@ -1283,8 +1390,17 @@ export function issueRoutes(
       res.status(400).json({ error: "before is not a valid cursor" });
       return;
     }
+    // AgentDash (Scan 3 lane I): `accepted=true` is the Shipped view: only
+    // work a board user accepted (or that merged). Without it every work
+    // product is listed (an issue's Result block shows what awaits review).
+    const rawAccepted = req.query.accepted;
+    if (rawAccepted !== undefined && rawAccepted !== "true" && rawAccepted !== "false") {
+      res.status(400).json({ error: "accepted must be true or false" });
+      return;
+    }
     res.json(
       await workProductsSvc.listForCompany(companyId, {
+        acceptedOnly: rawAccepted === "true",
         visibleWhere: projectScopedVisibilityCondition(req, companyId, issues.projectId),
         projectId,
         agentId,
@@ -1601,15 +1717,19 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    const actor = getActorInfo(req);
+    const prepared = await prepareWorkProductWrite(issue, actor, req.body);
     const product = await workProductsSvc.createForIssue(issue.id, issue.companyId, {
-      ...req.body,
+      ...(prepared as typeof req.body),
       projectId: req.body.projectId ?? issue.projectId ?? null,
+      // AgentDash (Scan 3 lane I): the run that recorded it, so Shipped can
+      // name the agent that made it.
+      createdByRunId: await resolveWorkProductRunId(issue.companyId, actor.runId, req.body.createdByRunId),
     });
     if (!product) {
       res.status(422).json({ error: "Invalid work product payload" });
       return;
     }
-    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: issue.companyId,
       actorType: actor.actorType,
@@ -1639,12 +1759,25 @@ export function issueRoutes(
       return;
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
-    const product = await workProductsSvc.update(id, req.body);
+    const actor = getActorInfo(req);
+    const patch: Record<string, unknown> = { ...req.body };
+    if ("url" in patch || "provider" in patch) {
+      Object.assign(patch, await prepareWorkProductWrite(issue, actor, {
+        ...patch,
+        provider: patch.provider ?? existing.provider,
+        metadata: "metadata" in patch ? patch.metadata : existing.metadata,
+      }));
+    } else if (typeof patch.title === "string") {
+      patch.title = sanitizeDeliverableTitle(patch.title);
+    }
+    if ("createdByRunId" in patch) {
+      patch.createdByRunId = await resolveWorkProductRunId(existing.companyId, actor.runId, patch.createdByRunId);
+    }
+    const product = await workProductsSvc.update(id, patch);
     if (!product) {
       res.status(404).json({ error: "Work product not found" });
       return;
     }
-    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,

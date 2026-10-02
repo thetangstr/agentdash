@@ -60,10 +60,23 @@ test.describe("Shipped (UX-2)", () => {
     const viewport = page.viewportSize();
     expect(box && viewport ? box.y + 40 < viewport.height : false).toBe(true);
 
+    // Scan 3 lane I: shipped means accepted. Waiting for review, it is not on
+    // /shipped yet; Accept on the Result block ships it, and the chip turns to
+    // "accepted" without a reload.
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/shipped`);
+    await expect(page.getByRole("heading", { name: "Shipped" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("shipped-row").filter({ hasText: PR_TITLE })).toHaveCount(0);
+
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/issues/${issue.identifier ?? issue.id}`);
+    await expect(result).toBeVisible({ timeout: 20_000 });
+    await result.getByTestId("issue-review-accept").click();
+    await expect(result.getByTestId("work-product-state")).toHaveText("accepted", { timeout: 15_000 });
+    await expect(result.getByTestId("issue-review-actions")).toHaveCount(0);
+
     await page.goto(`${BASE_URL}/${company.issuePrefix}/shipped`);
     await expect(page.getByRole("heading", { name: "Shipped" })).toBeVisible({ timeout: 20_000 });
     const row = page.getByTestId("shipped-row").filter({ hasText: PR_TITLE }).first();
-    await expect(row.locator(`a[href="${PR_URL}"]`)).toBeVisible();
+    await expect(row.locator(`a[href="${PR_URL}"]`)).toBeVisible({ timeout: 20_000 });
     await expect(row).toContainText("Ship the health badge");
     await expect(row.getByTestId("shipped-usage")).toHaveText("not metered yet");
     await expect(page.getByTestId("shipped-month-total")).toContainText("shipped");
