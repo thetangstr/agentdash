@@ -76,7 +76,7 @@ export function CoSConversation() {
 
       // First-time onboarding path: bootstrap creates company + CoS + conversation
       try {
-        const r = await onboardingApi.bootstrap();
+        const r = await onboardingApi.bootstrap(selectedCompanyId);
         if (cancelled) return;
         // AgentDash: bootstrap may have created the first company; refetch
         // the access queries so the gate does not judge on the old cache.

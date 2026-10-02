@@ -417,8 +417,13 @@ export function onboardingV2Routes(db: Db) {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
+    // Optional: the workspace the CoS page has selected. The orchestrator uses
+    // it only when this user is an active member of it.
+    const companyId = typeof req.body?.companyId === "string" ? req.body.companyId.trim() : "";
     try {
-      const result = await orch.bootstrap(req.actor.userId);
+      const result = companyId
+        ? await orch.bootstrap(req.actor.userId, { companyId })
+        : await orch.bootstrap(req.actor.userId);
       res.json(result);
     } catch (err) {
       if (err instanceof SingleCompanyInstallationError) {

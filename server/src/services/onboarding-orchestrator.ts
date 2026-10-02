@@ -229,7 +229,7 @@ export function onboardingOrchestrator(deps: Deps) {
   }
 
   return {
-    bootstrap: async (userId: string): Promise<BootstrapResult> => {
+    bootstrap: async (userId: string, options: { companyId?: string | null } = {}): Promise<BootstrapResult> => {
       // Try the real auth_users lookup first; fall back to local-trusted sentinel.
       const user = (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
       if (!user) throw new Error(`User ${userId} not found`);
@@ -260,7 +260,17 @@ export function onboardingOrchestrator(deps: Deps) {
         }
       }
       const existingMemberships = await deps.access.listUserCompanyAccess(userId);
-      const activeMembership = existingMemberships.find(
+      // AgentDash (one onboarding path): "New Company" on a self-hosted
+      // instance names a second workspace at /company-create and then opens
+      // /cos for it. The caller names that workspace; it is used only when
+      // this user is an active member of it, otherwise the first active
+      // membership is reused as before.
+      const requestedMembership = options.companyId
+        ? existingMemberships.find(
+            (m: any) => m.status === "active" && m.companyId === options.companyId,
+          )
+        : undefined;
+      const activeMembership = requestedMembership ?? existingMemberships.find(
         (m: any) => m.status === "active",
       );
       let company: { id: string; name?: string; emailDomain?: string | null };

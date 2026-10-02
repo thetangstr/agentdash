@@ -18,6 +18,8 @@ const mockAccessApi = vi.hoisted(() => ({
   getCurrentBoardAccess: vi.fn(),
 }));
 
+const mockLocation = vi.hoisted(() => ({ pathname: "/instance/settings/general" }));
+
 const mockOnboardingApi = vi.hoisted(() => ({
   listMemberSessions: vi.fn(),
 }));
@@ -43,7 +45,7 @@ vi.mock("@/lib/router", () => ({
   Outlet: () => <div>Outlet content</div>,
   Route: ({ children }: { children?: ReactNode }) => <>{children}</>,
   Routes: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  useLocation: () => ({ pathname: "/instance/settings/general", search: "", hash: "" }),
+  useLocation: () => ({ pathname: mockLocation.pathname, search: "", hash: "" }),
   useParams: () => ({}),
 }));
 
@@ -93,6 +95,7 @@ describe("CloudAccessGate", () => {
   afterEach(() => {
     restoreClock?.();
     restoreClock = null;
+    mockLocation.pathname = "/instance/settings/general";
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
@@ -137,9 +140,11 @@ describe("CloudAccessGate", () => {
   });
 
   // AgentDash: self-serve-bootstrap — when the env flag is on, a fresh
-  // instance routes the first signed-in user to the onboarding wizard instead
-  // of the CLI bootstrap page or a dead-end "No company access".
-  it("routes the first user to onboarding when selfServeBootstrap is on and no company exists", async () => {
+  // instance routes the first signed-in user to name the workspace instead of
+  // the CLI bootstrap page or a dead-end "No company access". One onboarding
+  // path: a self-hosted instance goes to /company-create like a hosted box,
+  // not to the six-step wizard at /onboarding.
+  it("routes the self-hosted first user to /company-create, not /onboarding, when no company exists", async () => {
     mockHealthApi.get.mockResolvedValue({
       status: "ok",
       deploymentMode: "authenticated",
@@ -176,12 +181,109 @@ describe("CloudAccessGate", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("Navigate:/onboarding");
+    expect(container.textContent).toContain("Navigate:/company-create");
+    expect(container.textContent).not.toContain("Navigate:/onboarding");
     expect(container.textContent).not.toContain("No company access");
 
     await act(async () => {
       root.unmount();
     });
+  });
+
+  async function renderGate() {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CloudAccessGate />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+    return root;
+  }
+
+  function signedInWithoutCompany() {
+    mockAuthApi.getSession.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+      userId: "user-1",
+      isInstanceAdmin: false,
+      companyIds: [],
+      source: "session",
+      keyId: null,
+    });
+  }
+
+  it("sends the self-hosted founder of a fresh instance (bootstrap pending) to /company-create", async () => {
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "bootstrap_pending",
+      selfServeBootstrap: true,
+      instanceHasCompany: false,
+      hostedBox: false,
+    });
+    signedInWithoutCompany();
+    const root = await renderGate();
+    expect(container.textContent).toContain("Navigate:/company-create");
+    expect(container.textContent).not.toContain("Navigate:/onboarding");
+    await act(async () => root.unmount());
+  });
+
+  it("still lets a self-hosted deep link to /onboarding through (the wizard is kept, not routed to)", async () => {
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "bootstrap_pending",
+      selfServeBootstrap: true,
+      instanceHasCompany: false,
+      hostedBox: false,
+    });
+    signedInWithoutCompany();
+    mockLocation.pathname = "/onboarding";
+    const root = await renderGate();
+    expect(container.textContent).toContain("Outlet content");
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the hosted box behaviour: /onboarding is sent to /company-create", async () => {
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "bootstrap_pending",
+      selfServeBootstrap: true,
+      instanceHasCompany: false,
+      hostedBox: true,
+    });
+    signedInWithoutCompany();
+    mockLocation.pathname = "/onboarding";
+    const root = await renderGate();
+    expect(container.textContent).toContain("Navigate:/company-create");
+    expect(container.textContent).not.toContain("Outlet content");
+    await act(async () => root.unmount());
+  });
+
+  it("lets the self-hosted first user stay on /company-create", async () => {
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "ready",
+      selfServeBootstrap: true,
+      instanceHasCompany: false,
+      hostedBox: false,
+    });
+    signedInWithoutCompany();
+    mockLocation.pathname = "/company-create";
+    const root = await renderGate();
+    expect(container.textContent).toContain("Outlet content");
+    await act(async () => root.unmount());
   });
 
   it("shows No company access when selfServeBootstrap is on but a company already exists", async () => {

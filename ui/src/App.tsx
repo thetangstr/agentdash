@@ -109,7 +109,7 @@ import MyAgent from "./pages/MyAgent";
 import { OAuthConsent } from "./pages/OAuthConsent";
 import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
-import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
+import { FIRST_COMPANY_PATH, shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 import { legacyDecisionsRoutes } from "./lib/legacy-decisions-routes";
 import { docsShadowRoutePaths } from "./lib/docs-nav";
 
@@ -300,7 +300,7 @@ function CompanyRootRedirect() {
         hasCompanies: false,
       })
     ) {
-      return <Navigate to="/onboarding" replace />;
+      return <Navigate to={FIRST_COMPANY_PATH} replace />;
     }
     return <NoCompaniesStartPage />;
   }

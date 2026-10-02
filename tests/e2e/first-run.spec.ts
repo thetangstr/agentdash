@@ -4,7 +4,7 @@ import { E2E_GITHUB_TOKEN } from "./github-stub.global-setup";
 /**
  * E2E (GH #786, UX-5): the first run.
  *
- *   /company-create → /setup: connect GitHub → first issue → Home
+ *   /company-create → /setup: runtime → /cos; /setup: connect GitHub → first issue → Home
  *
  * GitHub's REST API is stubbed by github-stub.global-setup.ts (the server
  * points at it through AGENTDASH_GITHUB_API_URL, playwright.config.ts). The
@@ -45,6 +45,20 @@ test("a new workspace goes through the first run to Home with its first issue as
   await page.getByLabel("Workspace name").fill(name);
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page).toHaveURL(/\/setup\?companyId=/);
+
+  // One onboarding path: on a self-hosted install the first step after naming
+  // the workspace is the runtime (Claude Code, Codex or Hermes), then the CoS.
+  await expect(page.getByTestId("first-run-progress")).toContainText("Your runtime");
+  const runtime = page.getByTestId("first-run-runtime");
+  await expect(runtime).toContainText("Claude Code");
+  await expect(runtime).toContainText("Codex");
+  await expect(runtime).toContainText("Hermes");
+  await expect(page.getByTestId("first-run-runtime-current")).toContainText("This instance runs on");
+  await page.getByRole("button", { name: "Continue to your Chief of Staff" }).click();
+  await expect(page).toHaveURL(/\/cos$/);
+
+  // GitHub and the first issue stay at /setup.
+  await page.goto(`${BASE_URL}/setup`);
 
   // Step: Your repo.
   await expect(page.getByTestId("first-run-progress")).toContainText("Your repo");

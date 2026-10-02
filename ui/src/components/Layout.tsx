@@ -40,6 +40,7 @@ import {
   shouldResetScrollOnNavigation,
 } from "../lib/navigation-scroll";
 import { queryKeys } from "../lib/queryKeys";
+import { FIRST_COMPANY_PATH } from "../lib/onboarding-route";
 import { isSettingsHubPath } from "../lib/settings-hub";
 import { scheduleMainContentFocus } from "../lib/main-content-focus";
 import { cn } from "../lib/utils";
@@ -73,7 +74,7 @@ function readRememberedInstanceSettingsPath(): string {
 
 export function Layout() {
   const { sidebarOpen, setSidebarOpen, toggleSidebar, isMobile } = useSidebar();
-  const { openNewIssue, openOnboarding } = useDialogActions();
+  const { openNewIssue } = useDialogActions();
   const { togglePanelVisible } = usePanel();
   const {
     companies,
@@ -121,14 +122,17 @@ export function Layout() {
     queryFn: () => instanceSettingsApi.getGeneral(),
   }).data?.keyboardShortcuts === true;
 
+  // AgentDash (one onboarding path): a local install with no workspace yet
+  // goes to name one at /company-create (then /setup and the Chief of Staff),
+  // the same path as every other install, instead of opening the wizard.
   useEffect(() => {
     if (companiesLoading || onboardingTriggered.current) return;
     if (health?.deploymentMode === "authenticated") return;
     if (companies.length === 0) {
       onboardingTriggered.current = true;
-      openOnboarding();
+      navigate(FIRST_COMPANY_PATH, { replace: true });
     }
-  }, [companies, companiesLoading, openOnboarding, health?.deploymentMode]);
+  }, [companies, companiesLoading, navigate, health?.deploymentMode]);
 
   useEffect(() => {
     if (!companyPrefix || companiesLoading || companies.length === 0) return;

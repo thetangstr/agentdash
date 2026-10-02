@@ -12,6 +12,8 @@ const mockCreate = vi.hoisted(() => vi.fn());
 const mockAdapterStatus = vi.hoisted(() => vi.fn());
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSetupHermesProvider = vi.hoisted(() => vi.fn());
+const mockSetupAdapter = vi.hoisted(() => vi.fn());
+const mockTestEnvironment = vi.hoisted(() => vi.fn());
 const mockCompany = vi.hoisted(() => ({
   selectedCompany: { id: "company-1", issuePrefix: "ACM" } as null | Record<string, string>,
   selectedCompanyId: "company-1" as string | null,
@@ -27,6 +29,7 @@ vi.mock("@/api/onboarding", () => ({
   onboardingApi: {
     adapterStatus: mockAdapterStatus,
     setupHermesProvider: mockSetupHermesProvider,
+    setupAdapter: mockSetupAdapter,
     modelKeyAdmins: mockModelKeyAdmins,
     requestModelKey: mockRequestModelKey,
   },
@@ -35,6 +38,7 @@ vi.mock("@/api/githubConnections", () => ({
   GITHUB_FINE_GRAINED_TOKEN_URL: "https://github.com/settings/personal-access-tokens/new",
   githubConnectionsApi: { connect: vi.fn() },
 }));
+vi.mock("@/api/agents", () => ({ agentsApi: { testEnvironment: mockTestEnvironment } }));
 vi.mock("@/context/CompanyContext", () => ({ useCompany: () => mockCompany }));
 vi.mock("@/lib/router", () => ({
   useNavigate: () => mockNavigate,
@@ -69,7 +73,7 @@ describe("FirstRunPage", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
-    for (const mock of [mockStatus, mockCreate, mockAdapterStatus, mockNavigate, mockModelKeyAdmins, mockRequestModelKey, mockSetupHermesProvider]) mock.mockReset();
+    for (const mock of [mockStatus, mockCreate, mockAdapterStatus, mockNavigate, mockModelKeyAdmins, mockRequestModelKey, mockSetupHermesProvider, mockSetupAdapter, mockTestEnvironment]) mock.mockReset();
     mockModelKeyAdmins.mockResolvedValue({ admins: [] });
     mockCompany.selectedCompany = { id: "company-1", issuePrefix: "ACM" };
     mockCompany.selectedCompanyId = "company-1";
@@ -185,6 +189,85 @@ describe("FirstRunPage", () => {
     expect(container.querySelector('a[href$="/workforce"]')?.getAttribute("href")).toBe("/NEW/workforce");
     expect(mockStatus).toHaveBeenCalledWith("company-2");
     expect(mockCompany.setSelectedCompanyId).toHaveBeenCalledWith("company-2");
+  });
+
+  // One onboarding path: a self-hosted founder who just named the workspace
+  // gets the runtime step (not the hosted model key), then the Chief of Staff.
+  function selfHostedAdapterStatus(adapter = "claude_local", ready = true) {
+    mockAdapterStatus.mockResolvedValue({
+      status: { adapter, ready, preset: "claude_code", reason: ready ? null : "claude binary not found on PATH" },
+      hermesProvider: {
+        required: false,
+        configured: false,
+        provider: null,
+        model: null,
+        configuredAt: null,
+        canConfigure: true,
+        options: [],
+      },
+    });
+  }
+
+  it("self-hosted: right after /company-create, shows the runtime step and continues to /cos", async () => {
+    selfHostedAdapterStatus();
+    mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: false, done: true } }));
+    await render("/setup?companyId=company-2");
+    const runtime = container.querySelector('[data-testid="first-run-runtime"]');
+    expect(runtime).not.toBeNull();
+    expect(runtime?.textContent).toContain("Claude Code");
+    expect(runtime?.textContent).toContain("Codex");
+    expect(runtime?.textContent).toContain("Hermes");
+    expect(container.querySelector('[data-testid="first-run-runtime-current"]')?.textContent).toContain(
+      "This instance runs on Claude Code. It is ready.",
+    );
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Your runtime");
+    expect(container.textContent).not.toContain("Connect a model provider");
+
+    const next = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Continue to your Chief of Staff"),
+    )!;
+    await act(async () => next.click());
+    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
+  });
+
+  it("self-hosted: checks a runtime with the adapter environment test and switches the instance to it", async () => {
+    selfHostedAdapterStatus("hermes_local");
+    mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: false, done: true } }));
+    mockTestEnvironment.mockResolvedValue({ adapterType: "codex_local", status: "pass", checks: [], testedAt: "now" });
+    mockSetupAdapter.mockResolvedValue({ status: { adapter: "codex_local", ready: true, preset: "codex", reason: null } });
+    await render("/setup?companyId=company-2");
+    const codex = container.querySelector('[data-testid="first-run-runtime-codex_local"]')!;
+    const use = Array.from(codex.querySelectorAll("button")).find((b) => b.textContent === "Use Codex")!;
+    await act(async () => use.click());
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(mockTestEnvironment).toHaveBeenCalledWith("company-2", "codex_local", { adapterConfig: {} });
+    expect(mockSetupAdapter).toHaveBeenCalledWith("codex");
+  });
+
+  it("self-hosted: does not switch to a runtime whose check fails", async () => {
+    selfHostedAdapterStatus("hermes_local");
+    mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: false, done: true } }));
+    mockTestEnvironment.mockResolvedValue({
+      adapterType: "claude_local",
+      status: "fail",
+      checks: [{ code: "missing", level: "error", message: "claude not found" }],
+      testedAt: "now",
+    });
+    await render("/setup?companyId=company-2");
+    const claude = container.querySelector('[data-testid="first-run-runtime-claude_local"]')!;
+    const use = Array.from(claude.querySelectorAll("button")).find((b) => b.textContent === "Use Claude Code")!;
+    await act(async () => use.click());
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(mockSetupAdapter).not.toHaveBeenCalled();
+    expect(claude.textContent).toContain("Not ready: claude not found");
   });
 
   it("goes Home when setup is already done", async () => {

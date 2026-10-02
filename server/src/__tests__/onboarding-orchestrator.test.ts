@@ -199,6 +199,22 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.postMessage).not.toHaveBeenCalled();
   });
 
+  it("uses the requested workspace when the user is an active member of it, and ignores one they are not", async () => {
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "user-1" },
+      { companyId: "company-2", status: "active", principalId: "user-1" },
+    ]);
+    mockCompanies.getById.mockImplementation(async (id: string) => ({ id, name: id === "company-2" ? "Beta" : "Acme", emailDomain: null }));
+    mockConversations.create.mockImplementation(async ({ companyId }: { companyId: string }) => ({ id: `conv-${companyId}`, companyId }));
+
+    const second = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-2" });
+    expect(second.companyId).toBe("company-2");
+
+    const stranger = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-9" });
+    expect(stranger.companyId).toBe("company-1");
+    expect(mockCompanies.create).not.toHaveBeenCalled();
+  });
+
   it("creates a fresh isolated workspace for a free-mail user even when another same-domain user exists", async () => {
     // gmail.com user-2 signs up; user-1 (also gmail.com) already has a company.
     // For free-mail providers, deriveCompanyEmailDomain returns "<local>@<domain>"

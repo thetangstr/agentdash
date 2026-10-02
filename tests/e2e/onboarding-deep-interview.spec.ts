@@ -77,8 +77,8 @@ async function bootstrapUser(
   const submitBtn = page.getByRole("button", { name: /sign up|create account|register/i }).first();
   await submitBtn.click();
 
-  // 2. Wait for company-create redirect
-  await expect(page).toHaveURL(/\/(company-create|onboarding)/, { timeout: 30_000 });
+  // 2. Wait for company-create redirect (every install, hosted or self-hosted)
+  await expect(page).toHaveURL(/\/company-create/, { timeout: 30_000 });
 
   // 3. Fill company name and submit
   const companyNameInput = page.locator('input').first();
@@ -87,8 +87,8 @@ async function bootstrapUser(
   const createBtn = page.getByRole("button", { name: /create|next|continue/i }).first();
   await createBtn.click();
 
-  // 4. Wait for assess or cos redirect
-  await expect(page).toHaveURL(/\/(assess|cos)/, { timeout: 30_000 });
+  // 4. Wait for the first run (/setup) or the CoS
+  await expect(page).toHaveURL(/\/(setup|cos)/, { timeout: 30_000 });
 
   // 5. Get the company ID from the API
   const companiesRes = await page.request.get(`${baseUrl}/api/companies`);

@@ -17,6 +17,7 @@ const mockAuthApi = vi.hoisted(() => ({
 const mockHealthApi = vi.hoisted(() => ({
   get: vi.fn(),
 }));
+const mockNavigate = vi.hoisted(() => vi.fn());
 const mockDialog = vi.hoisted(() => ({
   openOnboarding: vi.fn(),
 }));
@@ -45,6 +46,7 @@ vi.mock("../context/DialogContext", () => ({
 }));
 
 vi.mock("@/lib/router", () => ({
+  useNavigate: () => mockNavigate,
   Link: ({ children, to, ...props }: { children: React.ReactNode; to: string }) => (
     <a href={to} {...props}>{children}</a>
   ),
@@ -178,7 +180,7 @@ describe("SidebarCompanyMenu", () => {
     return root;
   }
 
-  it("offers New company to a single-company self-hosted user and calls openOnboarding", async () => {
+  it("offers New company to a single-company self-hosted user and sends it to /company-create, not the wizard", async () => {
     const root = await openMenu();
     const item = Array.from(document.body.querySelectorAll('[data-slot="dropdown-menu-item"]'))
       .find((element) => element.textContent?.includes("New company"));
@@ -188,7 +190,8 @@ describe("SidebarCompanyMenu", () => {
       item?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flushReact();
-    expect(mockDialog.openOnboarding).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith("/company-create?another=1");
+    expect(mockDialog.openOnboarding).not.toHaveBeenCalled();
 
     await act(async () => {
       root.unmount();

@@ -269,6 +269,18 @@ describe("POST /api/onboarding/bootstrap", () => {
     expect(mockConversations.postMessage).not.toHaveBeenCalled();
   });
 
+  it("passes the selected workspace to the orchestrator when the CoS page names one", async () => {
+    mockOrchestrator.bootstrap.mockResolvedValue({
+      companyId: "c2",
+      cosAgentId: "a2",
+      conversationId: "conv2",
+    });
+    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+    const res = await request(app).post("/api/onboarding/bootstrap").send({ companyId: "c2" });
+    expect(res.status).toBe(200);
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", { companyId: "c2" });
+  });
+
   it("returns 401 for unauthenticated callers", async () => {
     const app = buildApp({ type: "none", source: "none" });
     const res = await request(app).post("/api/onboarding/bootstrap").send({});
@@ -1260,7 +1272,7 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
     // unconfigured install described a provider it would never use.
     expect(res.body.status).toMatchObject({ adapter: "minimax", ready: false });
     expect(res.body.options.map((o: { preset: string }) => o.preset).sort()).toEqual(
-      ["claude", "gemini", "hermes", "minimax", "openai", "stub"],
+      ["claude", "claude_code", "codex", "gemini", "hermes", "minimax", "openai", "stub"],
     );
   });
 
