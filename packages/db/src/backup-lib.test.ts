@@ -1055,6 +1055,7 @@ CREATE TABLE injected_by_table (z int);
   it(
     "round-trips temporal, interval, bit and numeric typmods exactly",
     async () => {
+      useLosAngelesTimezone();
       forceJavaScriptBackupAndRestore();
       const sourceConnectionString = await createTempDatabase();
       const restoreConnectionString = await createSiblingDatabase(
@@ -1064,6 +1065,16 @@ CREATE TABLE injected_by_table (z int);
       const backupDir = createTempDir("paperclip-db-typmods-");
       const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
       const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+
+      // ::text renders in the SERVER session's TimeZone/DateStyle/IntervalStyle,
+      // not this process's TZ — pin all three so the value assertions are the
+      // same on a UTC CI runner as on an America/Los_Angeles dev box.
+      const pinSessionGucs = async (db: ReturnType<typeof postgres>) =>
+        db.unsafe(
+          `SET TIME ZONE 'America/Los_Angeles'; SET datestyle = 'ISO, MDY'; SET intervalstyle = 'postgres';`,
+        );
+      await pinSessionGucs(sourceSql);
+      await pinSessionGucs(restoreSql);
 
       const columnTypes = async (db: ReturnType<typeof postgres>) =>
         (await db.unsafe<{ e: string }[]>(`
@@ -1118,11 +1129,17 @@ CREATE TABLE injected_by_table (z int);
 
         expect(await columnTypes(restoreSql)).toEqual(source);
 
-        const rows = await restoreSql.unsafe<Record<string, string>[]>(`
-          SELECT ts::text AS ts, tstz::text AS tstz, tm::text AS tm, iv::text AS iv,
-                 ivs::text AS ivs, b::text AS b, vb::text AS vb, vc, nn::text AS nn
-          FROM public.typmod_rows
-        `);
+        const valueRows = async (db: ReturnType<typeof postgres>) =>
+          db.unsafe<Record<string, string>[]>(`
+            SELECT ts::text AS ts, tstz::text AS tstz, tm::text AS tm, iv::text AS iv,
+                   ivs::text AS ivs, b::text AS b, vb::text AS vb, vc, nn::text AS nn
+            FROM public.typmod_rows
+          `);
+        const expected = await valueRows(sourceSql);
+        const rows = await valueRows(restoreSql);
+        // Both sides render under the pinned GUCs, so this equality is a pure
+        // schema/data fidelity check; on failure vitest prints the diff.
+        expect(rows).toEqual(expected);
         expect(rows).toEqual([{
           ts: "2026-01-02 03:04:05.678",
           tstz: "2026-01-01 19:04:05-08",
