@@ -216,6 +216,30 @@ import { insertActivity, publishActivity, type ActivityPublication } from '../se
 import type { QuestionWriteGuards } from '../services/issue-thread-interactions.js';
 import type { ActivityAcceptance } from '../services/activity-log.js';
 
+/**
+ * AgentDash (Scan 3 lane I): why a work-product write is refused as
+ * self-acceptance, or null. An agent, or a client acting for a person through
+ * an assistant grant (not an acceptance on done either), cannot record a work
+ * product as approved or merged: nothing verifies a merge with GitHub today,
+ * and the caller picks the type. An agent cannot change a work product's type.
+ */
+export function workProductSelfAcceptanceRefusal(
+  actor: { type?: string | null; source?: string | null },
+  body: { status?: unknown; reviewState?: unknown; type?: unknown },
+  existingType?: string,
+): string | null {
+  const notAPerson = actor.type === "agent" || actor.source === "assistant_grant";
+  if (!notAPerson) return null;
+  if (actor.type === "agent" && existingType !== undefined && body.type !== undefined && body.type !== existingType) {
+    return "Agents cannot change a work product's type.";
+  }
+  const status = typeof body.status === "string" ? body.status : null;
+  if (status === "approved" || status === "merged" || body.reviewState === "approved") {
+    return "Only a person can accept work. A board user accepts it from the issue.";
+  }
+  return null;
+}
+
 export function issueRoutes(
   db: Db,
   storage: StorageService,
@@ -1273,27 +1297,23 @@ export function issueRoutes(
     return null;
   }
 
-  // AgentDash (Scan 3 lane I): accepting work is a person's call. An agent
-  // cannot record its own work product as approved, and can record "merged"
-  // only on a pull request (the PR flow reports what GitHub merged).
-  function refuseAgentSelfAcceptance(
+  // AgentDash (Scan 3 lane I): see workProductSelfAcceptanceRefusal.
+  function refuseSelfAcceptance(
     req: Request,
     res: Response,
-    body: { status?: unknown; reviewState?: unknown },
-    type: string,
+    body: { status?: unknown; reviewState?: unknown; type?: unknown },
+    existingType?: string,
   ): boolean {
-    if (req.actor.type !== "agent") return false;
-    const status = typeof body.status === "string" ? body.status : null;
-    const refused =
-      status === "approved"
-      || body.reviewState === "approved"
-      || (status === "merged" && type !== "pull_request");
-    if (!refused) return false;
-    res.status(403).json({
-      error: "Agents cannot accept their own work. A board user accepts it from the issue.",
-      code: "work_product_self_acceptance",
-    });
+    const error = workProductSelfAcceptanceRefusal({ type: req.actor.type, source: req.actor.source }, body, existingType);
+    if (!error) return false;
+    res.status(403).json({ error, code: "work_product_self_acceptance" });
     return true;
+  }
+
+  // AgentDash (Scan 3 lane I): a file: URL names a path on the agent's
+  // machine. It opens nothing for anyone else, so it is not stored.
+  function withoutLocalFileUrl<T extends { url?: unknown }>(body: T): T {
+    return typeof body.url === "string" && /^\s*file:/i.test(body.url) ? { ...body, url: null } : body;
   }
 
   // AgentDash: UX-2 (#783) — the company-wide Shipped feed. Company-scoped,
@@ -1658,10 +1678,10 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
-    if (refuseAgentSelfAcceptance(req, res, req.body, req.body.type)) return;
+    if (refuseSelfAcceptance(req, res, req.body)) return;
     const actor = getActorInfo(req);
     const product = await workProductsSvc.createForIssue(issue.id, issue.companyId, {
-      ...req.body,
+      ...withoutLocalFileUrl(req.body),
       // AgentDash (Scan 3 lane I): a path-like title shows as its file name.
       title: sanitizeWorkProductTitle(req.body.title),
       projectId: req.body.projectId ?? issue.projectId ?? null,
@@ -1702,9 +1722,9 @@ export function issueRoutes(
       return;
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
-    if (refuseAgentSelfAcceptance(req, res, req.body, req.body.type ?? existing.type)) return;
+    if (refuseSelfAcceptance(req, res, req.body, existing.type)) return;
     const actor = getActorInfo(req);
-    const patch: Record<string, unknown> = { ...req.body };
+    const patch: Record<string, unknown> = { ...withoutLocalFileUrl(req.body as { url?: unknown }) };
     if (typeof patch.title === "string") patch.title = sanitizeWorkProductTitle(patch.title);
     if ("createdByRunId" in patch) {
       patch.createdByRunId = await resolveWorkProductRunId(req, issue, patch.createdByRunId);

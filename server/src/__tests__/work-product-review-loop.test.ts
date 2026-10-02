@@ -9,7 +9,7 @@ import {
 } from '@paperclipai/db';
 import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/error-handler.js';
-import { issueRoutes } from '../routes/issues.js';
+import { issueRoutes, workProductSelfAcceptanceRefusal } from '../routes/issues.js';
 import { hashBearerToken } from '../services/board-auth.js';
 import { ACCEPTANCE_RECORDED_SINCE, workProductService } from '../services/work-products.js';
 import type { StorageService } from '../storage/types.js';
@@ -127,7 +127,7 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect((await (await post(f.agentToken, f.run.id)).json()).createdByRunId).toBe(f.run.id);
   });
 
-  it('an agent cannot accept its own work: approved and non-PR merged are refused on create and update', async () => {
+  it('an agent cannot accept its own work: approved and merged are refused on create and update, and so is a type change', async () => {
     const f = await fixture();
     const create = (body: Record<string, unknown>) => call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
       type: 'document', provider: 'paperclip', title: 'Self-approved', ...body,
@@ -135,12 +135,18 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect((await create({ status: 'approved' })).status).toBe(403);
     expect((await create({ status: 'ready_for_review', reviewState: 'approved' })).status).toBe(403);
     expect((await create({ status: 'merged' })).status).toBe(403);
-    const pr = await create({ type: 'pull_request', provider: 'github', url: 'https://github.com/acme/site/pull/8', status: 'merged' });
-    expect(pr.status).toBe(201);
+    // Re-review repro 1: the agent picks the type, so a "pull request" it says merged is still refused.
+    expect((await create({ type: 'pull_request', provider: 'github', url: 'https://example.com/not-a-pr', status: 'merged' })).status).toBe(403);
 
     const waiting = await (await create({ status: 'ready_for_review' })).json();
     const patched = await call('PATCH', `/work-products/${waiting.id}`, f.agentToken, { status: 'approved' }, f.run.id);
     expect(patched.status).toBe(403);
+    // Re-review repro 2: retyping a document as a merged pull request.
+    expect((await call('PATCH', `/work-products/${waiting.id}`, f.agentToken, { type: 'pull_request', status: 'merged' }, f.run.id)).status).toBe(403);
+    expect((await call('PATCH', `/work-products/${waiting.id}`, f.agentToken, { type: 'pull_request' }, f.run.id)).status).toBe(403);
+    expect((await call('PATCH', `/work-products/${waiting.id}`, f.agentToken, { type: 'document', summary: 'Same type' }, f.run.id)).status).toBe(200);
+    const [unchanged] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, waiting.id));
+    expect(unchanged).toMatchObject({ type: 'document', status: 'ready_for_review' });
     const [row] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, waiting.id));
     expect(row!.status).toBe('ready_for_review');
     expect(await shippedIds(f.company.id, f.boardToken)).not.toContain(waiting.id);
@@ -160,13 +166,32 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect(await shippedIds(f.company.id, f.boardToken)).not.toContain(product!.id);
   });
 
-  it('a path-like title is stored as its file name', async () => {
+  it('a file: URL is not stored and a path-like title is stored as its file name', async () => {
     const f = await fixture();
     const response = await call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
-      type: 'document', provider: 'local', title: '/private/tmp/run/tanaka-japan-proposal.md', status: 'ready_for_review',
+      type: 'document', provider: 'local', title: '/private/tmp/run/tanaka-japan-proposal.md',
+      url: 'file:///private/tmp/run/tanaka-japan-proposal.md', status: 'ready_for_review',
     }, f.run.id);
     expect(response.status).toBe(201);
-    expect((await response.json()).title).toBe('tanaka-japan-proposal.md');
+    const text = await response.text();
+    expect(text).not.toContain('/private/tmp');
+    const created = JSON.parse(text);
+    expect(created).toMatchObject({ title: 'tanaka-japan-proposal.md', url: null });
+
+    const patched = await call('PATCH', `/work-products/${created.id}`, f.agentToken, { url: 'file:///Users/me/plan.md' }, f.run.id);
+    expect(patched.status).toBe(200);
+    expect((await patched.json()).url).toBeNull();
+  });
+
+  it('the self-acceptance rule covers agents and assistant-grant clients, not board users', () => {
+    const merged = { status: 'merged' };
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, merged)).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'assistant_grant' }, merged)).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'assistant_grant' }, { status: 'approved' })).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'session' }, merged)).toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'session' }, { type: 'pull_request' }, 'document')).toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { type: 'pull_request' }, 'document')).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'ready_for_review' })).toBeNull();
   });
 
   it('request changes: one server action posts the note, sends the issue back, marks waiting work, wakes the assignee', async () => {
