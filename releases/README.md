@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1001.2](v2026.1001.2.md) | 2026-10-01 | Launch-day security release: live events stop when access ends, import SSRF guard, routine-write guard, restricted projects hidden in budgets, member emails private; backups keep the whole schema and round-trip every value | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1001.2) |
 | [v2026.1001.1](v2026.1001.1.md) | 2026-10-01 | Patch: the Agent visibility setting reads back (company reads omitted the column) | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1001.1) |
 | [v2026.1001.0](v2026.1001.0.md) | 2026-10-01 | One navigation for every company (Inbox → Decisions, Settings hub); agent visibility administrators can narrow to "the agents you answer for"; workforce role templates; named-human control plane; migrations `0140`–`0142` | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1001.0) |
 | [v2026.930.1](v2026.930.1.md) | 2026-09-30 | Patch: restricted projects stay restricted in live updates, related issues, blocker ids and feedback traces; review queue can't stall; released creators can't mint connect codes; single-use OTA approvals and a served-release check | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.930.1) |
