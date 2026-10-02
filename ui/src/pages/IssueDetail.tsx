@@ -66,7 +66,8 @@ import { InlineEditor } from "../components/InlineEditor";
 import { IssueResultBlock } from "../components/IssueResultBlock";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
-import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
+import { IssueDocumentsSection, type IssueDocumentsSectionHandle } from "../components/IssueDocumentsSection";
+import { IssuePhoneActionsMenu } from "../components/IssuePhoneActionsMenu";
 import { IssuesList } from "../components/IssuesList";
 import { AgentIcon } from "../components/AgentIconPicker";
 import { IssueReferenceActivitySummary } from "../components/IssueReferenceActivitySummary";
@@ -168,6 +169,11 @@ const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "h
 const ISSUE_COMMENT_PAGE_SIZE = 50;
 const ISSUE_COMMENT_AUTOLOAD_LIMIT = ISSUE_COMMENT_PAGE_SIZE * 3;
 const JUMP_TO_LATEST_MAX_COMMENT_PAGES = 10;
+// AgentDash: phone (< 640px) issue tab bar — a sideways-scrolling segmented control
+// with 44px tap targets. The bottom padding keeps the active underline visible.
+const PHONE_TAB_LIST_CLASSES =
+  "max-sm:h-auto! max-sm:overflow-x-auto max-sm:overflow-y-hidden max-sm:overscroll-x-contain max-sm:pb-1.5 max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden";
+const PHONE_TAB_TRIGGER_CLASSES = "max-sm:min-h-11 max-sm:flex-none max-sm:px-3";
 const TREE_CONTROL_MODE_LABEL: Record<IssueTreeControlMode, string> = {
   pause: "Pause subtree",
   resume: "Resume subtree",
@@ -1121,6 +1127,20 @@ export function IssueDetail() {
   const [copied, setCopied] = useState(false);
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
   const [detailTab, setDetailTab] = useState("chat");
+  const detailTabListRef = useRef<HTMLDivElement | null>(null);
+  // AgentDash: on phones the tab bar scrolls sideways; bring the chosen tab fully into view.
+  const handleDetailTabChange = useCallback((value: string) => {
+    setDetailTab(value);
+    const list = detailTabListRef.current;
+    if (!list || list.scrollWidth <= list.clientWidth) return;
+    const trigger = Array.from(list.querySelectorAll<HTMLElement>("[role='tab']"))
+      .find((node) => node.id.endsWith(`-trigger-${value}`));
+    if (!trigger) return;
+    const listRect = list.getBoundingClientRect();
+    const tabRect = trigger.getBoundingClientRect();
+    if (tabRect.left < listRect.left) list.scrollLeft -= listRect.left - tabRect.left;
+    else if (tabRect.right > listRect.right) list.scrollLeft += tabRect.right - listRect.right;
+  }, []);
   const [handoffFocusSignal, setHandoffFocusSignal] = useState(0);
   const [pendingApprovalAction, setPendingApprovalAction] = useState<{
     approvalId: string;
@@ -1140,6 +1160,7 @@ export function IssueDetail() {
   const [locallyQueuedCommentRunIds, setLocallyQueuedCommentRunIds] = useState<Map<string, string>>(() => new Map());
   const [pendingCommentComposerFocusKey, setPendingCommentComposerFocusKey] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const documentsSectionRef = useRef<IssueDocumentsSectionHandle | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
   const commentComposerRef = useRef<IssueChatComposerHandle | null>(null);
   const cancelledQueuedOptimisticCommentIdsRef = useRef(new Set<string>());
@@ -2985,7 +3006,8 @@ export function IssueDetail() {
         onClick={() => fileInputRef.current?.click()}
         disabled={uploadAttachment.isPending || importMarkdownDocument.isPending}
         className={cn(
-          "shadow-none",
+          // AgentDash: on phones Upload lives in the header ⋯ menu.
+          "shadow-none max-sm:hidden",
           attachmentDragActive && "border-primary bg-primary/5",
         )}
       >
@@ -3001,7 +3023,7 @@ export function IssueDetail() {
   );
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl space-y-6 max-sm:space-y-4">
       {/* Parent chain breadcrumb */}
       {ancestors.length > 0 && (
         <nav className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
@@ -3220,26 +3242,39 @@ export function IssueDetail() {
             </div>
           )}
 
-          {!(isMobile && isFromInbox) && (
-            <div className="ml-auto flex items-center gap-0.5 md:hidden shrink-0">
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={copyIssueToClipboard}
-                title="Copy issue as markdown"
-              >
-                {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => setMobilePropsOpen(true)}
-                title="Properties"
-              >
-                <SlidersHorizontal className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
+          <div className="ml-auto flex items-center gap-0.5 md:hidden shrink-0">
+            {!(isMobile && isFromInbox) && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="max-sm:size-11"
+                  onClick={copyIssueToClipboard}
+                  title="Copy issue as markdown"
+                  aria-label="Copy issue as markdown"
+                >
+                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="max-sm:size-11"
+                  onClick={() => setMobilePropsOpen(true)}
+                  title="Properties"
+                  aria-label="Properties"
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            {/* AgentDash: phones get one ⋯ menu for New sub-issue / Upload / New document. */}
+            <IssuePhoneActionsMenu
+              onNewSubIssue={openNewSubIssue}
+              onUploadAttachment={() => fileInputRef.current?.click()}
+              onNewDocument={() => documentsSectionRef.current?.beginNewDocument()}
+              uploadPending={uploadAttachment.isPending || importMarkdownDocument.isPending}
+            />
+          </div>
 
           <div className="hidden md:flex items-center md:ml-auto shrink-0">
             {canArchiveFromInbox && (
@@ -3403,7 +3438,7 @@ export function IssueDetail() {
           value={issue.title}
           onSave={(title) => updateIssue.mutateAsync({ title })}
           as="h2"
-          className="text-xl font-bold"
+          className="text-xl font-bold max-sm:text-lg max-sm:leading-snug"
         />
 
         {/* AgentDash: UX-2 (#783) — what this issue produced, above the fold. */}
@@ -3413,7 +3448,7 @@ export function IssueDetail() {
           value={issue.description ?? ""}
           onSave={(description) => updateIssue.mutateAsync({ description })}
           as="p"
-          className="text-[15px] leading-7 text-foreground"
+          className="text-[15px] leading-7 text-foreground max-sm:text-sm max-sm:leading-6"
           placeholder="Add a description..."
           multiline
           foldable
@@ -3495,7 +3530,8 @@ export function IssueDetail() {
           />
         </div>
       ) : (
-        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
+        // AgentDash: on phones New Sub-issue lives in the header ⋯ menu.
+        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0 max-sm:hidden">
           <Button variant="outline" size="sm" onClick={openNewSubIssue} className="shrink-0 shadow-none">
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             New Sub-issue
@@ -3525,6 +3561,8 @@ export function IssueDetail() {
           });
         }}
         extraActions={!hasAttachments ? attachmentUploadButton : null}
+        actionsRef={documentsSectionRef}
+        phoneActionsInMenu
       />
 
       {attachmentsInitialLoading ? (
@@ -3674,28 +3712,35 @@ export function IssueDetail() {
 
       <Separator />
 
-      <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
-        <TabsList variant="line" className="w-full justify-start gap-1">
-          <TabsTrigger value="chat" className="gap-1.5">
+      <Tabs value={detailTab} onValueChange={handleDetailTabChange} className="space-y-3">
+        {/* AgentDash: on phones the tab bar is a horizontally scrollable segmented
+            control, so every tab stays reachable instead of clipping off-screen. */}
+        <TabsList
+          ref={detailTabListRef}
+          variant="line"
+          data-testid="issue-detail-tabs"
+          className={cn("w-full justify-start gap-1", PHONE_TAB_LIST_CLASSES)}
+        >
+          <TabsTrigger value="chat" className={cn("gap-1.5", PHONE_TAB_TRIGGER_CLASSES)}>
             <MessageSquare className="h-3.5 w-3.5" />
             Chat
           </TabsTrigger>
-          <TabsTrigger value="activity" className="gap-1.5">
+          <TabsTrigger value="activity" className={cn("gap-1.5", PHONE_TAB_TRIGGER_CLASSES)}>
             <ActivityIcon className="h-3.5 w-3.5" />
             Activity
           </TabsTrigger>
-          <TabsTrigger value="related-work" className="gap-1.5">
+          <TabsTrigger value="related-work" className={cn("gap-1.5", PHONE_TAB_TRIGGER_CLASSES)}>
             <ListTree className="h-3.5 w-3.5" />
             Related work
           </TabsTrigger>
           {/* AgentDash: goals-eval-hitl */}
-          <TabsTrigger value="reviews" className="gap-1.5">
+          <TabsTrigger value="reviews" className={cn("gap-1.5", PHONE_TAB_TRIGGER_CLASSES)}>
             <GavelIcon className="h-3.5 w-3.5" />
             Reviews
           </TabsTrigger>
           {/* /AgentDash: goals-eval-hitl */}
           {issuePluginTabItems.map((item) => (
-            <TabsTrigger key={item.value} value={item.value}>
+            <TabsTrigger key={item.value} value={item.value} className={PHONE_TAB_TRIGGER_CLASSES}>
               {item.label}
             </TabsTrigger>
           ))}
@@ -3987,7 +4032,9 @@ export function IssueDetail() {
           </ScrollArea>
         </SheetContent>
       </Sheet>
-      <ScrollToBottom />
+      {/* AgentDash: on phones the chat composer is docked above the bottom nav; the floating
+          scroll button would sit on top of it, so the chat tab relies on "Jump to latest". */}
+      {isMobile && detailTab === "chat" ? null : <ScrollToBottom />}
     </div>
   );
 }

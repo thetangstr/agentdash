@@ -3785,7 +3785,8 @@ export function IssueChatThread({
             <button
               type="button"
               onClick={handleJumpToLatest}
-              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              data-testid="issue-chat-jump-to-latest"
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground max-sm:min-h-11 max-sm:px-2"
             >
               Jump to latest
             </button>
@@ -3863,7 +3864,9 @@ export function IssueChatThread({
           <div
             ref={composerViewportAnchorRef}
             data-testid="issue-chat-composer-dock"
-            className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-gradient-to-t from-background via-background/95 to-background/0 pt-6"
+            // AgentDash: below md the layout shows a 4rem bottom nav (plus the
+            // safe-area inset); dock the composer just above it so nothing hides.
+            className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-gradient-to-t from-background via-background/95 to-background/0 pt-6 max-md:bottom-[calc(4rem+env(safe-area-inset-bottom))] max-md:pb-2"
           >
             <IssueChatComposer
               ref={composerRef}
