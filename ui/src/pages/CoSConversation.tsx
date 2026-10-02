@@ -275,13 +275,11 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
       // (The legacy proposal_card_v1 path is also fired via this callback; the
       // server already created that agent at card-emit time, so confirm-plan
       // is the only path that materializes here.)
-      try {
-        await onboardingApi.confirmPlan({
-          conversationId: bootstrapped.conversationId,
-        });
-      } catch {
-        // Non-blocking — the closing message + agents land via WS regardless.
-      }
+      // AgentDash (scan 4, lane N): errors reach the plan card, which shows a
+      // 409 ("already hired") as "Team hired" and anything else as a message.
+      await onboardingApi.confirmPlan({
+        conversationId: bootstrapped.conversationId,
+      });
     },
     onProposalReject: async (reason) => {
       // Phase F revision-loop is deferred — server stub returns 501 — but we

@@ -14,6 +14,12 @@
 // separate ask (chat substrate spec §11) and not in #209's scope.
 import { useMemo, useRef, useState } from "react";
 import { SendHorizontal } from "lucide-react";
+import { useIsPhone } from "../hooks/useIsPhone";
+
+// AgentDash (scan 4, lane N): a phone-width input cut the long placeholder off
+// mid-tip ("Tip:"), so phones get the short one.
+export const COMPOSER_PLACEHOLDER = "Message your Chief of Staff…  Tip: @ to mention an agent";
+export const COMPOSER_PLACEHOLDER_PHONE = "Message your Chief of Staff…";
 
 interface AgentDirEntry {
   id: string;
@@ -29,6 +35,7 @@ export function Composer({
   agentDirectory: AgentDirEntry[];
 }) {
   const [value, setValue] = useState("");
+  const isPhone = useIsPhone();
   const [activeIndex, setActiveIndex] = useState(0);
   // Closes #239 (part B): track caret position so the mention menu can
   // open from mid-input "@" insertions, not just trailing-edit. The ref
@@ -166,7 +173,7 @@ export function Composer({
               send();
             }
           }}
-          placeholder="Message your Chief of Staff…  Tip: @ to mention an agent"
+          placeholder={isPhone ? COMPOSER_PLACEHOLDER_PHONE : COMPOSER_PLACEHOLDER}
           aria-label="Message input"
           aria-autocomplete="list"
           aria-expanded={showMentionMenu}

@@ -205,4 +205,26 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     if(kind === 'plan') { await plan(f); expect((await send()).status).toBe(201); expect(await hires(f)).toHaveLength(4); }
   });
 
+  // AgentDash (scan 4, lane N): the plan card records that its team was hired
+  // and every open chat hears it, so "Set it up" stops being offered; the
+  // CoS-written title is kept verbatim.
+  it('marks the plan card hired, pushes message.updated, and keeps the written title', async () => {
+    const f = await fixture(); boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+    const [card] = await db.insert(assistantMessages).values({ conversationId: f.conversation.id, role: 'assistant', content: '', cardKind: 'agent_plan_proposal_v1', cardPayload: {
+      rationale: 'Close faster', alignmentToShortTerm: 'This quarter', alignmentToLongTerm: 'Next year',
+      agents: [{ name: 'Marcus', role: 'close_coordinator', title: '  Month-End Close & Review Coordinator ', adapterType: 'codex_local', responsibilities: ['Run the close'], kpis: ['On time'] }],
+    } }).returning();
+    const updates: any[] = []; const stop = subscribeCompanyLiveEvents(f.company.id, e => { if (e.type === 'message.updated') updates.push(e.payload); });
+    try {
+      const response = await confirmPlan(f); expect(response.status).toBe(201);
+      const [hire] = await hires(f); expect(hire).toMatchObject({ name: 'Marcus', title: 'Month-End Close & Review Coordinator' });
+      const [stored] = await db.select().from(assistantMessages).where(eq(assistantMessages.id, card.id));
+      expect(stored.cardPayload).toMatchObject({ confirmedAgentIds: [hire.id], agents: [{ name: 'Marcus' }] });
+      expect(typeof (stored.cardPayload as any).confirmedAt).toBe('string');
+      expect(updates).toEqual([{ message: expect.objectContaining({ id: card.id, conversationId: f.conversation.id, cardKind: 'agent_plan_proposal_v1', cardPayload: expect.objectContaining({ confirmedAgentIds: [hire.id] }) }) }]);
+      // A second click is still refused (409), and the card stays hired.
+      expect((await confirmPlan(f)).status).toBe(409); expect(await hires(f)).toHaveLength(1);
+    } finally { stop(); }
+  });
+
 });

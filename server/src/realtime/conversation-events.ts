@@ -13,6 +13,24 @@ export function emitMessageCreated(message: {
   });
 }
 
+/**
+ * AgentDash (scan 4, lane N): a card message changed state in place (a plan
+ * was hired, a task suggestion was created or declined). Open chats replace
+ * the message by id, so every viewer sees the new state without a reload.
+ */
+export function emitMessageUpdated(message: {
+  id: string;
+  conversationId: string;
+  companyId: string;
+  [key: string]: unknown;
+}): void {
+  publishLiveEvent({
+    companyId: message.companyId,
+    type: "message.updated",
+    payload: { message },
+  });
+}
+
 export function emitMessageRead(input: {
   conversationId: string;
   userId: string;

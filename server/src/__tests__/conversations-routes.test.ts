@@ -273,8 +273,27 @@ describe.sequential("conversation routes", () => {
         companyId,
         conversationId,
         cardMessageId: cardId,
+        start: false,
         actor: { userId, source: "session", isInstanceAdmin: false, visibleAgentIds: new Set(["agent-visible"]) },
       });
+    });
+
+    // Scan 4, lane N: "Create and start" asks for the work to start now.
+    it("passes start only when the body says start: true", async () => {
+      mockCosIssueAction.confirmProposal.mockResolvedValue({
+        ok: true,
+        payload: { status: "created" },
+        created: { issueId: "i1", identifier: "ACM-1", title: "T", assigneeName: "Ellie", status: "todo" },
+      });
+      const app = await createApp(boardActor);
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/confirm`).send({ start: true }),
+      );
+      expect(mockCosIssueAction.confirmProposal).toHaveBeenLastCalledWith(expect.objectContaining({ start: true }));
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/confirm`).send({ start: "yes" }),
+      );
+      expect(mockCosIssueAction.confirmProposal).toHaveBeenLastCalledWith(expect.objectContaining({ start: false }));
     });
 
     // B -> A: founder A tries to confirm a card that answered member B.
@@ -309,6 +328,7 @@ describe.sequential("conversation routes", () => {
       );
       expect(res.status).toBe(200);
       expect(mockCosIssueAction.dismissProposal).toHaveBeenCalledWith({
+        companyId,
         conversationId,
         cardMessageId: cardId,
         actor: { userId },

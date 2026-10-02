@@ -13,7 +13,8 @@ import { IssueCreatedCard } from "./IssueCreatedCard";
 import { IssueProposalCard } from "./IssueProposalCard";
 
 export interface CardContext {
-  onProposalConfirm?: () => void;
+  /** May reject; the plan card shows the outcome (409 = already hired). */
+  onProposalConfirm?: () => Promise<void> | void;
   onProposalReject?: (reason?: string) => void;
   onInviteSend?: (emails: string[]) => Promise<InviteSendResult | void>;
   onInviteSkip?: () => void;
@@ -42,7 +43,8 @@ export function CardRenderer({
       return (
         <ProposalCard
           payload={payload as any}
-          onConfirm={context.onProposalConfirm ?? (() => {})}
+          // The legacy card has no outcome to show; a failure stays quiet as before.
+          onConfirm={() => void Promise.resolve(context.onProposalConfirm?.()).catch(() => {})}
           onReject={context.onProposalReject ?? (() => {})}
         />
       );
@@ -63,7 +65,9 @@ export function CardRenderer({
       return (
         <AgentPlanProposal
           payload={payload as any}
-          onConfirm={context.onProposalConfirm ?? (() => {})}
+          onConfirm={async () => {
+            await context.onProposalConfirm?.();
+          }}
           onRevise={(text) => context.onProposalReject?.(text)}
         />
       );

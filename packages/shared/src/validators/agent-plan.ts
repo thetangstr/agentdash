@@ -31,6 +31,7 @@ function isValidAgent(value: unknown): boolean {
     a.role.length > 0 &&
     typeof a.name === "string" &&
     a.name.length > 0 &&
+    (a.title === undefined || typeof a.title === "string") &&
     typeof a.adapterType === "string" &&
     (a.workforceTemplateId === undefined ? ALLOWED_ADAPTER_TYPES.has(a.adapterType) : supportsWorkforcePrompt(a.adapterType)) &&
     Array.isArray(a.responsibilities) &&

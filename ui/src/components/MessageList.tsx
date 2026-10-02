@@ -2,6 +2,7 @@
 import { Sparkles } from "lucide-react";
 import type { Message } from "../api/conversations";
 import { CardRenderer, type CardContext } from "./cards";
+import { ChatMarkdown } from "./ChatMarkdown";
 
 export function MessageList({
   messages,
@@ -10,9 +11,23 @@ export function MessageList({
   messages: Message[];
   cardContext: CardContext;
 }) {
+  // AgentDash (scan 4, lane N): older conversations hold a separate "Task
+  // created" message next to the proposal card that already turned into one.
+  // Show the task once.
+  const createdFromProposals = new Set<string>();
+  for (const m of messages) {
+    const payload = m.cardKind === "issue_proposal_v1" ? (m.cardPayload as { issueId?: unknown } | null) : null;
+    if (payload && typeof payload.issueId === "string") createdFromProposals.add(payload.issueId);
+  }
+  const visible = messages.filter((m) => {
+    if (m.cardKind !== "issue_created_v1") return true;
+    const issueId = (m.cardPayload as { issueId?: unknown } | null)?.issueId;
+    return !(typeof issueId === "string" && createdFromProposals.has(issueId));
+  });
+
   return (
     <div className="message-list flex flex-col gap-5">
-      {messages.map((m) => {
+      {visible.map((m) => {
         const author = m.role ?? m.authorKind;
         const isAgent = author === "agent";
         const text = m.content ?? m.body ?? "";
@@ -69,8 +84,9 @@ export function MessageList({
                   {(m.cardPayload as any)?.question ?? text}
                 </div>
               ) : isAgent ? (
-                <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
-                  {text}
+                // AgentDash (scan 4, lane N): agent replies are markdown.
+                <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
+                  <ChatMarkdown>{text}</ChatMarkdown>
                 </div>
               ) : (
                 <div className="bg-accent-500 text-text-inverse px-4 py-3 rounded-2xl rounded-br-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">

@@ -818,13 +818,16 @@ function handleLiveEvent(
     return;
   }
 
-  if (event.type === "message.created") {
+  if (event.type === "message.created" || event.type === "message.updated") {
     const rawMessage = readRecord(payload.message);
     if (!rawMessage) return;
     const conversationId = readString(rawMessage.conversationId);
     const id = readString(rawMessage.id);
     if (!conversationId || !id) return;
-    publishConversationMessage(rawMessage as unknown as Message);
+    publishConversationMessage(
+      rawMessage as unknown as Message,
+      event.type === "message.updated" ? "updated" : "created",
+    );
     return;
   }
 

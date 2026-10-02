@@ -417,6 +417,27 @@ describe("cosReplier.reply (plan arrives in the same turn)", () => {
     expect(world.phase).toBe("plan");
   });
 
+  // AgentDash (scan 4, lane N): the CoS named an agent after the founder.
+  it("tells the plan turn who works here and renames an agent that still takes a member's name", async () => {
+    const { posted, conversations, cosState } = makeWorld();
+    const llm = vi.fn().mockResolvedValueOnce(advancingGoalsReply).mockResolvedValueOnce(planReply);
+    const memberNames = vi.fn().mockResolvedValue(["Rae Lindqvist"]);
+
+    await cosReplier({ conversations, llm, cosState, memberNames } as any).reply({
+      conversationId: "conv1",
+      cosAgentId: "cos1",
+      companyId: "co1",
+    });
+
+    expect(memberNames).toHaveBeenCalledWith("co1");
+    const planSystem = llm.mock.calls[1][0].system as string;
+    expect(planSystem).toContain('"Rae Lindqvist"');
+    expect(planSystem).toContain("do not list the agents");
+    expect(planSystem).toContain('"title"');
+    const card = posted.find((m) => m.cardKind === "agent_plan_proposal_v1");
+    expect(card.cardPayload.agents.map((a: any) => a.name)).toEqual(["Avery", "Cole"]);
+  });
+
   it("treats a plan announcement as an advance once the goals are complete, even without the decision flag", async () => {
     const { posted, conversations, cosState } = makeWorld({ shortTerm: "launch", longTerm: "grow" });
     const goalsReply = [

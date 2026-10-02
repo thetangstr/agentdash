@@ -18,6 +18,8 @@ export interface IssueProposalCardPayload {
   issueId?: string | null;
   identifier?: string | null;
   issueStatus?: string | null;
+  /** AgentDash (scan 4, lane N): the company's status for a new issue when the card was posted. */
+  defaultStatus?: "backlog" | "todo" | null;
 }
 
 type View =
@@ -42,6 +44,25 @@ function initialView(payload: IssueProposalCardPayload): View {
   return { kind: "pending" };
 }
 
+/**
+ * AgentDash (scan 4, lane N): the confirm buttons. One primary action that
+ * matches the company's default: with a backlog default, "Create" parks the
+ * task and "Create and start" starts it now; otherwise "Create task" starts it.
+ */
+export function issueProposalActions(defaultStatus: string | null | undefined): Array<{
+  kind: "create" | "start";
+  label: string;
+  primary: boolean;
+}> {
+  if (defaultStatus === "backlog") {
+    return [
+      { kind: "create", label: "Create", primary: true },
+      { kind: "start", label: "Create and start", primary: false },
+    ];
+  }
+  return [{ kind: "create", label: "Create task", primary: true }];
+}
+
 export function IssueProposalCard({
   payload,
   conversationId,
@@ -51,8 +72,8 @@ export function IssueProposalCard({
   conversationId?: string;
   messageId?: string;
 }) {
-  const [view, setView] = useState<View>(() => (payload ? initialView(payload) : { kind: "pending" }));
-  const [busy, setBusy] = useState(false);
+  const [localView, setView] = useState<View>(() => (payload ? initialView(payload) : { kind: "pending" }));
+  const [busy, setBusy] = useState<null | "create" | "start" | "dismiss">(null);
   const [error, setError] = useState<string | null>(null);
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -60,6 +81,10 @@ export function IssueProposalCard({
     retry: false,
   });
   if (!payload || typeof payload.title !== "string") return null;
+  // A state the server pushed (message.updated: created or declined, possibly
+  // by another tab) wins over this tab's own pending view.
+  const pushed = initialView(payload);
+  const view = pushed.kind !== "pending" ? pushed : localView;
   if (view.kind === "created") return <IssueCreatedCard payload={view.issue} />;
 
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
@@ -67,13 +92,13 @@ export function IssueProposalCard({
   const isRequester = !currentUserId || !payload.requesterUserId || currentUserId === payload.requesterUserId;
   const canAct = view.kind === "pending" && payload.status === "pending" && Boolean(conversationId && messageId);
 
-  async function act(kind: "confirm" | "dismiss") {
+  async function act(kind: "create" | "start" | "dismiss") {
     if (!conversationId || !messageId || busy) return;
-    setBusy(true);
+    setBusy(kind);
     setError(null);
     try {
-      if (kind === "confirm") {
-        const result = await conversationsApi.confirmTaskProposal(conversationId, messageId);
+      if (kind !== "dismiss") {
+        const result = await conversationsApi.confirmTaskProposal(conversationId, messageId, { start: kind === "start" });
         setView({ kind: "created", issue: result.issue });
       } else {
         await conversationsApi.dismissTaskProposal(conversationId, messageId);
@@ -82,9 +107,10 @@ export function IssueProposalCard({
     } catch (err) {
       setError(err instanceof ApiError || err instanceof Error ? err.message : "Something went wrong. Try again.");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
+  const actions = issueProposalActions(payload.defaultStatus);
 
   return (
     <div
@@ -99,19 +125,27 @@ export function IssueProposalCard({
       {payload.assigneeName ? <p className="mt-1 text-text-secondary">For {payload.assigneeName}</p> : null}
       {canAct && isRequester ? (
         <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="min-h-11 rounded-md bg-accent-500 px-4 py-2 text-sm font-medium text-text-inverse hover:bg-accent-600 disabled:opacity-50 sm:min-h-0"
-            onClick={() => void act("confirm")}
-            disabled={busy}
-          >
-            {busy ? "Creating…" : "Create task"}
-          </button>
+          {actions.map((action) => (
+            <button
+              key={action.kind}
+              type="button"
+              data-testid={`issue-proposal-${action.kind}`}
+              className={
+                action.primary
+                  ? "min-h-11 rounded-md bg-accent-500 px-4 py-2 text-sm font-medium text-text-inverse hover:bg-accent-600 disabled:opacity-50 sm:min-h-0"
+                  : "min-h-11 rounded-md border border-border-soft px-4 py-2 text-sm font-medium text-text-primary hover:bg-surface-sunken disabled:opacity-50 sm:min-h-0"
+              }
+              onClick={() => void act(action.kind)}
+              disabled={busy !== null}
+            >
+              {busy === action.kind ? "Creating…" : action.label}
+            </button>
+          ))}
           <button
             type="button"
             className="min-h-11 rounded-md border border-border-soft px-4 py-2 text-sm font-medium text-text-primary hover:bg-surface-sunken disabled:opacity-50 sm:min-h-0"
             onClick={() => void act("dismiss")}
-            disabled={busy}
+            disabled={busy !== null}
           >
             Not now
           </button>
