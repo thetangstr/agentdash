@@ -7,13 +7,17 @@
 set -eu
 
 # 1. Egress allow-list first — nothing else gets to speak until it is up.
+#    set -e + the script's own fail-closed apply mean a bad spec aborts boot.
 /opt/sandbox/egress-apply.sh /etc/sandbox/egress.spec.json
 
 # 2. Signer socket dir: signer owns it; setgid makes the socket inherit group
 #    signsock so agent+svc (group members) can CONNECT (0660) while the key at
 #    /etc/sandbox-signer (signer:signer 0700) stays unreadable to them.
+#    /run/sandbox is group-writable + setgid + STICKY (3750): runshare members
+#    can create files (agent writes run.log, ctl writes state) but cannot
+#    unlink or rename each other's files.
 install -d -o signer -g signsock -m 2750 /run/sandbox-signer
-install -d -o root   -g runshare -m 2750 /run/sandbox
+install -d -o root   -g runshare -m 3750 /run/sandbox
 
 # 3. Signer daemon as the `signer` identity. --generate mints the prototype
 #    file key on first boot; Phase 1 replaces it with the KMS adapter.

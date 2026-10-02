@@ -37,6 +37,12 @@ export interface GuestEvidence {
   logSha256: string;
   foreignEvents: Array<{ at: string; kind: string; runId: string | null; op: string }>;
   eventLogSha256: string;
+  /**
+   * sha256 of `nft list table inet sandbox_egress` as read in the guest at
+   * evidence time — proof of the ruleset actually in force (R3->R8). null
+   * when the driver runs somewhere nftables cannot (dev mode).
+   */
+  egressRulesetSha256: string | null;
 }
 
 export interface SandboxEnvironment {

@@ -4,6 +4,7 @@
 // instance, and nothing else AWS-shaped happens.
 import { describe, expect, it } from "vitest";
 import { Ec2Driver, type SsmLike } from "../sandbox/lifecycle/ec2-driver.js";
+import { createSandboxLifecycleService } from "../sandbox/lifecycle/service.js";
 
 interface Recorded {
   op: string;
@@ -12,15 +13,18 @@ interface Recorded {
 
 function fakeSsm(stdoutFor: (commands: string[]) => string): { ssm: SsmLike; calls: Recorded[] } {
   const calls: Recorded[] = [];
+  const cmdsById = new Map<string, string[]>();
+  let n = 0;
   const ssm: SsmLike = {
     sendCommand: async (input) => {
       calls.push({ op: "SendCommand", input });
-      return { Command: { CommandId: `cmd-${calls.length}` } };
+      const id = `cmd-${++n}`;
+      cmdsById.set(id, input.Parameters.commands);
+      return { Command: { CommandId: id } };
     },
     getCommandInvocation: async (input) => {
       calls.push({ op: "GetCommandInvocation", input });
-      const sent = calls.find((c) => c.op === "SendCommand");
-      const cmds = (sent?.input as { Parameters: { commands: string[] } }).Parameters.commands;
+      const cmds = cmdsById.get(input.CommandId) ?? [];
       return { Status: "Success", StandardOutputContent: stdoutFor(cmds) + "\n" };
     },
   };
@@ -107,5 +111,58 @@ describe("Ec2Driver", () => {
     const res = await d.listHandshakes();
     expect(res.sessions).toEqual([]);
     expect(polls).toBe(3);
+  });
+
+  it("clear reports cleared when the instance is stopped or gone (R4)", async () => {
+    // SendCommand on a stopped/terminated instance throws InvalidInstanceId.
+    const ssm: SsmLike = {
+      sendCommand: async () => {
+        const err = new Error("Instances not in a valid state") as Error & { name: string };
+        err.name = "InvalidInstanceId";
+        throw err;
+      },
+      getCommandInvocation: async () => ({ Status: "Failed" }),
+    };
+    const d = new Ec2Driver({
+      instanceId: "i-gone", ssm, ec2: { describeInstances: async () => ({}) },
+      environmentId: "ec2:i-gone/us-east-1", imageDigest: "sha256:x", sleep: async () => {},
+    });
+    const res = await d.clear({});
+    expect(res.cleared).toBe(true);
+    expect(res.clearedAt).toBeTruthy();
+  });
+
+  it("works end-to-end through the lifecycle service (guest `ok` envelope stripped)", async () => {
+    // Regression: raw guest JSON carries ok:true — strict response schemas
+    // must never see it. Driver picks fields; the service parses cleanly.
+    const guestOut: Record<string, string> = {
+      "open-handshake": JSON.stringify({ ok: true, sessionId: "s-9", side: "buyer", state: "open", openedAt: "t0" }),
+      "apply-run-config": JSON.stringify({
+        ok: true, runId: "r1", sessionId: "s-9",
+        signerPublicKeyPem: "PUB", adapterPublicKeyPem: "ADP",
+        forwarderSealingPublicKeyB64: "FWD",
+      }),
+    };
+    const { ssm, calls } = fakeSsm((cmds) => {
+      const cmd = cmds[0]!.match(/\s([a-z]+(?:-[a-z]+)*)\s+'/)?.[1] ?? "";
+      return guestOut[cmd] ?? "{}";
+    });
+    const d = new Ec2Driver({
+      instanceId: "i-svc", ssm, ec2: { describeInstances: async () => ({}) },
+      environmentId: "ec2:i-svc/us-east-1", imageDigest: "sha256:x", sleep: async () => {},
+    });
+    const svc = createSandboxLifecycleService({
+      resolveDriver: (c) => (c === "co-ec2" ? d : null),
+    });
+    const hs = await svc.openHandshake({ companyId: "co-ec2", idempotencyKey: "idem-svc-test-1", side: "buyer" });
+    expect(hs).toEqual({ sessionId: "s-9", side: "buyer", state: "open", openedAt: "t0" });
+    const cfg = await svc.applyRunConfig({
+      companyId: "co-ec2", idempotencyKey: "idem-svc-test-2", runId: "r1", sessionId: "s-9",
+    });
+    expect(cfg).toEqual({
+      runId: "r1", sessionId: "s-9",
+      signerPublicKeyPem: "PUB", adapterPublicKeyPem: "ADP", forwarderSealingPublicKeyB64: "FWD",
+    });
+    expect(calls.filter((c) => c.op === "SendCommand")).toHaveLength(2);
   });
 });

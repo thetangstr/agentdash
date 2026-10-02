@@ -67,6 +67,37 @@ function loadState() {
   if (!existsSync(STATE_FILE)) return { sessions: {}, runs: {}, clearedAt: null };
   return JSON.parse(readFileSync(STATE_FILE, "utf8"));
 }
+
+// clear must survive a corrupt state.json — a half-torn-down sandbox is
+// exactly when clear gets called. Unreadable state means "unknown", not "stop".
+function loadStateLenient() {
+  try {
+    return loadState();
+  } catch {
+    return { sessions: {}, runs: {}, clearedAt: null };
+  }
+}
+
+// The run-scoped services a VM image manages per run (in the real image:
+// systemd units like sandbox-agent-runtime.service, clockchain-adapter.service).
+// The spike's ctl records them on the run row at apply time and stops them
+// best-effort here — a dead unit is not a failure, missing is success.
+function stopRunScopedServices(state) {
+  const names = new Set();
+  for (const r of Object.values(state.runs ?? {})) {
+    for (const n of r.services ?? []) names.add(n);
+  }
+  for (const name of names) {
+    if (DEV) continue; // dev mode has no service manager; names still recorded
+    try {
+      execFileSync("systemctl", ["stop", name], { stdio: "ignore" });
+    } catch {
+      try {
+        execFileSync("pkill", ["-f", name], { stdio: "ignore" });
+      } catch { /* already gone */ }
+    }
+  }
+}
 function saveState(s) {
   writeFileSync(STATE_FILE, JSON.stringify(s, null, 2), { mode: 0o600 });
 }
@@ -177,6 +208,10 @@ async function main() {
         signerPublicKeyPem: init.publicKeyPem,
         adapterPublicKeyPem: adapter.publicKey.export({ type: "spki", format: "pem" }).toString(),
         forwarderSealingPublicKeyB64: fwdPubRaw.toString("base64"),
+        // Run-scoped services `clear` must stop (R4). In the VM image these
+        // are systemd units; in the spike no real units exist, but the names
+        // are recorded so the wipe path and evidence agree on the contract.
+        services: ["sandbox-agent-runtime.service", "clockchain-adapter.service"],
         cleared: false,
       };
       event("run", { runId, op: "apply-run-config" });
@@ -210,10 +245,13 @@ async function main() {
   }
 
   if (cmd === "clear") {
-    // Always callable, always idempotent: stop run-scoped services and wipe
-    // every byte of run state. In the image this is also the systemd stop
-    // ordering; run state lives on tmpfs so a stopped instance is clean anyway.
-    const state = loadState();
+    // Always callable, always idempotent, and survivable when half of the
+    // state is already gone: stop run-scoped services, forget signer session
+    // keys, wipe every byte of run state. A corrupt state.json must NOT stop
+    // the wipe — that is exactly the case clear exists for. In the image run
+    // state also lives on tmpfs, so a stopped instance is clean anyway.
+    const state = loadStateLenient();
+    stopRunScopedServices(state);
     for (const s of Object.values(state.sessions)) {
       if (s.state === "open") {
         s.state = "closed";
@@ -222,7 +260,9 @@ async function main() {
     }
     for (const r of Object.values(state.runs)) r.cleared = true;
     state.clearedAt = new Date().toISOString();
-    saveState(state);
+    try {
+      saveState(state);
+    } catch { /* a read-only state dir still wipes below */ }
     for (const f of [ADAPTER_KEY, SINK_TOKEN, RUN_LOG]) rmSync(f, { force: true });
     event("wake", { op: "clear", runId: input.runId ?? null });
     out({ ok: true, clearedAt: state.clearedAt });
@@ -244,6 +284,16 @@ async function main() {
     const foreign = events.filter(
       (e) => e.at >= startedAt && e.at <= endedAt && !runEvents.includes(e),
     );
+    // Pin the ruleset actually in force — the egress spec digest alone only
+    // says what SHOULD have been applied (R3 -> R8).
+    let egressRulesetSha256 = null;
+    if (!DEV) {
+      try {
+        egressRulesetSha256 = sha256(
+          execFileSync("nft", ["list", "table", "inet", "sandbox_egress"], { encoding: "utf8" }),
+        );
+      } catch { /* no nftables here — null is the honest answer */ }
+    }
     out({
       ok: true,
       runId,
@@ -254,6 +304,7 @@ async function main() {
       logSha256: sha256(logBytes),
       foreignEvents: foreign.map((e) => ({ at: e.at, kind: e.kind, runId: e.runId ?? null, op: e.op })),
       eventLogSha256: sha256(existsSync(EVENTS) ? readFileSync(EVENTS, "utf8") : Buffer.alloc(0)),
+      egressRulesetSha256,
     });
     return;
   }

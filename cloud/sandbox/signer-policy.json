@@ -1,9 +1,9 @@
 {
   "maxPayloadBytes": 65536,
   "artifactTypes": {
-    "handshake_proposal": { "key": "session" },
-    "handshake_acceptance": { "key": "session" },
-    "checkpoint": { "key": "session" },
-    "daily_report": { "key": "company" }
+    "handshake_proposal": { "key": "session", "payloadFormat": "json-object" },
+    "handshake_acceptance": { "key": "session", "payloadFormat": "json-object" },
+    "checkpoint": { "key": "session", "payloadFormat": "json-object" },
+    "daily_report": { "key": "company", "payloadFormat": "utf8" }
   }
 }

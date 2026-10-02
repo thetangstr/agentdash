@@ -4,20 +4,30 @@
 // code the image ships.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createSandboxLifecycleService, LifecycleError } from "../sandbox/lifecycle/service.js";
 import { SandboxOpError } from "../sandbox/lifecycle/driver.js";
 import { LocalVmDriver } from "../sandbox/lifecycle/local-vm-driver.js";
 
 const CO = "company-test";
-let driver: LocalVmDriver;
+const drivers = new Map<string, LocalVmDriver>();
 let svc: ReturnType<typeof createSandboxLifecycleService>;
 
 beforeEach(async () => {
-  driver = await LocalVmDriver.boot();
-  svc = createSandboxLifecycleService({ driver });
+  drivers.clear();
+  svc = createSandboxLifecycleService({ resolveDriver: (c) => drivers.get(c) ?? null });
 });
+
+async function driverFor(companyId = CO): Promise<LocalVmDriver> {
+  const d = await LocalVmDriver.boot();
+  drivers.set(companyId, d);
+  return d;
+}
+
 afterEach(async () => {
-  await driver.dispose();
+  for (const d of drivers.values()) await d.dispose();
+  drivers.clear();
 });
 
 const k = () => `idem-${randomUUID()}`;
@@ -36,6 +46,7 @@ async function openRun() {
 
 describe("lifecycle happy path", () => {
   it("open -> list -> apply -> install -> clear", async () => {
+    await driverFor();
     const { hs, cfg } = await openRun();
     expect(hs.state).toBe("open");
     expect(cfg.signerPublicKeyPem).toContain("BEGIN PUBLIC KEY");
@@ -58,6 +69,7 @@ describe("lifecycle happy path", () => {
   });
 
   it("reports a passing per-sandbox health check (R9)", async () => {
+    const driver = await driverFor();
     const health = await driver.health();
     expect(health.ok).toBe(true);
     expect(health.checks.find((c) => c.name === "signerd-answers")?.ok).toBe(true);
@@ -65,8 +77,34 @@ describe("lifecycle happy path", () => {
   });
 });
 
+describe("company scoping (R1)", () => {
+  it("refuses a company with no registered sandbox, audited, no guest call", async () => {
+    await driverFor();
+    await expect(
+      svc.openHandshake({ companyId: "company-unknown", idempotencyKey: k(), side: "buyer" }),
+    ).rejects.toMatchObject({ name: "LifecycleError", code: "unknown_company", status: 404 });
+    const rec = svc.auditLog().at(-1);
+    expect(rec).toMatchObject({ companyId: "company-unknown", outcome: "error", errorCode: "unknown_company" });
+    // and the real company's own VM saw nothing
+    expect(await svc.listHandshakeSessions({ companyId: CO })).toEqual({ sessions: [] });
+  });
+
+  it("two companies get isolated sandboxes — sessions never cross", async () => {
+    await driverFor("co-a");
+    await driverFor("co-b");
+    const hs = await svc.openHandshake({ companyId: "co-a", idempotencyKey: k(), side: "seller" });
+    expect((await svc.listHandshakeSessions({ companyId: "co-a" })).sessions).toHaveLength(1);
+    expect((await svc.listHandshakeSessions({ companyId: "co-b" })).sessions).toHaveLength(0);
+    // co-b cannot apply config against co-a's session
+    await expect(
+      svc.applyRunConfig({ companyId: "co-b", idempotencyKey: k(), runId: "r", sessionId: hs.sessionId }),
+    ).rejects.toThrow(SandboxOpError);
+  });
+});
+
 describe("idempotency", () => {
   it("replays an identical retry without re-running the guest op", async () => {
+    await driverFor();
     const key = k();
     const a = await svc.openHandshake({ companyId: CO, idempotencyKey: key, side: "buyer" });
     const b = await svc.openHandshake({ companyId: CO, idempotencyKey: key, side: "buyer" });
@@ -79,7 +117,18 @@ describe("idempotency", () => {
     ]);
   });
 
+  it("joins a concurrent same-key call instead of running the guest op twice", async () => {
+    await driverFor();
+    const key = k();
+    const req = { companyId: CO, idempotencyKey: key, side: "buyer" as const };
+    const [a, b] = await Promise.all([svc.openHandshake(req), svc.openHandshake(req)]);
+    expect(b).toEqual(a);
+    const listed = await svc.listHandshakeSessions({ companyId: CO });
+    expect(listed.sessions).toHaveLength(1); // exactly ONE guest op ran
+  });
+
   it("conflicts when the same key carries a different body", async () => {
+    await driverFor();
     const key = k();
     await svc.openHandshake({ companyId: CO, idempotencyKey: key, side: "buyer" });
     await expect(
@@ -87,18 +136,34 @@ describe("idempotency", () => {
     ).rejects.toMatchObject({ name: "LifecycleError", code: "idempotency_conflict" });
   });
 
-  it("clear is idempotent and always callable", async () => {
+  it("clear is never cached — every call executes and audits", async () => {
+    await driverFor();
     const first = await svc.clear({ companyId: CO, idempotencyKey: k(), runId: "never-existed" });
     expect(first.cleared).toBe(true);
     const key = k();
     const a = await svc.clear({ companyId: CO, idempotencyKey: key });
     const b = await svc.clear({ companyId: CO, idempotencyKey: key });
-    expect(b).toEqual(a);
+    expect(a.cleared && b.cleared).toBe(true);
+    // same key twice -> two real executions, not a replay
+    expect(svc.auditLog().filter((r) => r.operation === "clear").map((r) => r.outcome)).toEqual([
+      "ok",
+      "ok",
+      "ok",
+    ]);
+  });
+
+  it("clear wipes even when state.json is corrupt", async () => {
+    const driver = await driverFor();
+    await openRun();
+    writeFileSync(join(driver.stateDir, "state.json"), "{not json!!");
+    const res = await svc.clear({ companyId: CO, idempotencyKey: k() });
+    expect(res.cleared).toBe(true);
   });
 });
 
 describe("ordering", () => {
   it("applyRunConfig on an unknown session fails", async () => {
+    await driverFor();
     await expect(
       svc.applyRunConfig({
         companyId: CO,
@@ -110,6 +175,7 @@ describe("ordering", () => {
   });
 
   it("installSinkToken before applyRunConfig fails", async () => {
+    await driverFor();
     await expect(
       svc.installSinkToken({
         companyId: CO,
@@ -121,6 +187,7 @@ describe("ordering", () => {
   });
 
   it("a cleared session rejects a new applyRunConfig", async () => {
+    await driverFor();
     const { hs } = await openRun();
     await svc.clear({ companyId: CO, idempotencyKey: k(), runId: "run-1" });
     await expect(
@@ -135,12 +202,21 @@ describe("ordering", () => {
 });
 
 describe("schema + audit", () => {
-  it("rejects a malformed request before any guest call", async () => {
+  it("rejects a malformed request before any guest call — and audits it", async () => {
+    await driverFor();
     await expect(svc.openHandshake({ companyId: CO, side: "middle" })).rejects.toThrow(LifecycleError);
-    expect(svc.auditLog()).toHaveLength(0);
+    const log = svc.auditLog();
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({
+      companyId: CO,
+      operation: "openHandshake",
+      outcome: "error",
+      errorCode: "invalid_request",
+    });
   });
 
   it("audits every call with a request hash, never the body", async () => {
+    await driverFor();
     const sealed = Buffer.from("SEALED-SECRET-CIPHERTEXT").toString("base64");
     await openRun();
     await svc.installSinkToken({ companyId: CO, idempotencyKey: k(), runId: "run-1", sealedTokenB64: sealed });
@@ -155,6 +231,7 @@ describe("schema + audit", () => {
   });
 
   it("audits errors too", async () => {
+    await driverFor();
     await expect(
       svc.applyRunConfig({ companyId: CO, idempotencyKey: k(), runId: "r", sessionId: "nope" }),
     ).rejects.toThrow();

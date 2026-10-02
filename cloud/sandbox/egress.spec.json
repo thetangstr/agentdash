@@ -5,7 +5,7 @@
   "identities": {
     "agent": {
       "user": "agent",
-      "dns": true,
+      "dns": false,
       "allow": [
         { "hosts": ["api.z.ai"], "ports": [443], "proto": "tcp" },
         { "hosts": ["mcp.clockchain.network"], "ports": [443], "proto": "tcp" }
@@ -23,6 +23,7 @@
       "user": "signer",
       "dns": true,
       "allow": [
+        { "cidrs": ["169.254.169.254/32"], "ports": [80], "proto": "tcp" },
         { "hosts": ["kms.us-east-1.amazonaws.com"], "ports": [443], "proto": "tcp" }
       ]
     }

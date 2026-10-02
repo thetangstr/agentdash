@@ -36,6 +36,9 @@ describe("run evidence (R8)", () => {
     expect(ev.imageDigest).toBe("sha256:testimage");
     expect(ev.environmentId).toBe("localvm:test");
     expect(ev.run.logSha256).toMatch(/^[0-9a-f]{64}$/);
+    // Dev mode has no nftables — the loaded-ruleset hash is honestly null
+    // (inside the image it is sha256 of `nft list table inet sandbox_egress`).
+    expect(ev.egressRulesetSha256).toBeNull();
     expect(ev.exclusivity.foreignRuns).toEqual([]);
     expect(ev.exclusivity.foreignWakes).toEqual([]);
     expect(evidenceDigest(ev)).toMatch(/^[0-9a-f]{64}$/);

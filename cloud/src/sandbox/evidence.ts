@@ -29,6 +29,12 @@ export const runEvidenceSchema = z
     renderedPromptSha256: z.string().regex(/^[0-9a-f]{64}$/),
     /** sha256 of the egress spec in force for the run (R3 -> R8). */
     egressSpecSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    /**
+     * sha256 of `nft list table` as read in the guest at evidence time — the
+     * ruleset ACTUALLY loaded, not just the spec that should have been.
+     * null when the driver runs somewhere nftables cannot (dev mode).
+     */
+    egressRulesetSha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
     signerPublicKeyPem: z.string(),
     run: z.object({
       startedAt: z.string(),
@@ -39,7 +45,11 @@ export const runEvidenceSchema = z
     /**
      * Proof that no other run or wake happened inside the window: the guest
      * event log hash plus the (expected-empty) list of foreign events. A
-     * verifier recomputes the hash over the disclosed log.
+     * verifier recomputes the hash over the disclosed log. Scope note: the
+     * guest event log records CONTROL operations (lifecycle calls reaching
+     * sandbox-ctl); the agent's own traffic and signerd socket requests are
+     * not in it — closing that gap is part of the verifier-schema open
+     * question in SPIKE.md.
      */
     exclusivity: z.object({
       windowStart: z.string(),
@@ -82,6 +92,7 @@ export async function generateRunEvidence(
     agentConfig: { revision: input.agentConfigRevision, sha256: input.agentConfigSha256 },
     renderedPromptSha256: input.renderedPromptSha256,
     egressSpecSha256: input.egressSpecSha256,
+    egressRulesetSha256: guest.egressRulesetSha256,
     signerPublicKeyPem: guest.signerPublicKeyPem,
     run: {
       startedAt: guest.window.start,

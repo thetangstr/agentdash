@@ -17,9 +17,13 @@ RUN apt-get update \
 
 # Identities (R2/R3). UIDs are fixed so the rendered nftables ruleset and the
 # image agree, and so evidence can record them. Groups:
-#   signsock — may CONNECT to the signer socket (agent, svc); cannot read the key
+#   signsock — may CONNECT to the signer socket (agent, svc). The agent asks
+#              for signatures directly; svc needs it because the Clockchain
+#              local adapter runs as svc and submits protocol artifacts for
+#              signing. Neither can read the key.
 #   runshare — shares /run/sandbox (agent writes run.log, svc forwards it);
-#              secret-bearing files inside stay root:svc 0640 regardless
+#              the dir is sticky (3750) so group members cannot unlink each
+#              other's files; secret-bearing files inside stay root:svc 0640.
 # Shells are nologin — entrypoint su's with -s /bin/sh.
 RUN groupadd -g 1100 signsock \
  && groupadd -g 1104 runshare \

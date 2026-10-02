@@ -11,9 +11,12 @@
 //                        here constructs a real AWS client, so this module can
 //                        never silently touch AWS from a test or dev box.
 //
-// Curve note: KMS does not support ed25519. If Clockchain needs secp256k1 the
-// KMS spec is ECC_SECG_P256K1 with MessageType=DIGEST over a caller-computed
-// keccak256 — an open question recorded in SPIKE.md.
+// Curve note: AWS KMS supports ed25519 as ECC_NIST_EDWARDS25519 (signing
+// algorithms ED25519_SHA_512 with MessageType=RAW, ED25519_PH_SHA_512 with
+// DIGEST), and secp256k1 as ECC_SECG_P256K1 (ECDSA_SHA_256 over a caller
+// digest — keccak256 if Clockchain wants Ethereum-style addressing). Which
+// curve the company key should use is an open Clockchain question in
+// SPIKE.md.
 import { createPrivateKey, createPublicKey, sign as cryptoSign } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 

@@ -71,8 +71,14 @@ describe("renderEgressRuleset", () => {
     );
     // svc (1103): telemetry + sepolia
     expect(ruleset).toContain("meta skuid 1103 ip daddr { 10.0.0.50 } tcp dport { 443 } accept");
-    // dns to the VPC resolver only
-    expect(ruleset).toContain("meta skuid 1101 ip daddr { 169.254.169.253 } udp dport 53 accept");
+    // signer (1102): IMDSv2 credentials endpoint + KMS only
+    expect(ruleset).toContain("meta skuid 1102 ip daddr { 169.254.169.254/32 } tcp dport { 80 } accept");
+    expect(ruleset).toContain("meta skuid 1102 ip daddr { 10.0.0.10 } tcp dport { 443 } accept");
+    // dns to the VPC resolver for identities with dns:true (svc, signer)…
+    expect(ruleset).toContain("meta skuid 1103 ip daddr { 169.254.169.253 } udp dport 53 accept");
+    expect(ruleset).toContain("meta skuid 1102 ip daddr { 169.254.169.253 } udp dport 53 accept");
+    // …but NOT the agent (dns:false — hosts are /etc/hosts-pinned instead)
+    expect(ruleset).not.toContain("meta skuid 1101 ip daddr { 169.254.169.253 }");
     // managed identities reject fast
     expect(ruleset).toContain(
       "meta skuid { 1101, 1102, 1103 } reject with icmpx type port-unreachable",
@@ -96,7 +102,7 @@ describe("egressSpecDigest", () => {
     expect(a).toMatch(/^[0-9a-f]{64}$/);
     expect(a).toBe(egressSpecDigest(resolvedSpec()));
     const b = { ...resolvedSpec() };
-    b.identities = { ...b.identities, agent: { ...b.identities.agent, dns: false } };
+    b.identities = { ...b.identities, agent: { ...b.identities.agent, dns: true } };
     expect(egressSpecDigest(b)).not.toBe(a);
   });
 });

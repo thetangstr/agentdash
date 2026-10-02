@@ -14,8 +14,8 @@ exact Phase-1 (one EC2 per company) plan for the founder to execute.
 | Image definition | `Dockerfile` | node24-bookworm-slim + nftables; users `agent`/`signer`/`svc`; groups `signsock`, `runshare` |
 | Egress spec (typed) | `egress.spec.json` + `cloud/src/sandbox/egress-spec.ts` | zod schema; per-identity allow-lists; `optional` hosts render as comments |
 | Egress renderer | `render-egress.mjs` | single implementation, used in-image AND by the TS wrapper |
-| Egress apply | `egress-apply.sh` | DNS+uid resolution, `nft -f`, idempotent (deletes the table first; bookworm nft 1.0.6 has no `destroy`) |
-| Signer daemon | `signerd.mjs` | unix socket, newline-JSON; session keys + company file key; policy-enforced |
+| Egress apply | `egress-apply.sh` | DNS+uid resolution, single `nft -f` transaction (declare→delete→recreate): a bad spec exits non-zero with the previous table still in force |
+| Signer daemon | `signerd.mjs` | unix socket, newline-JSON; session keys + company file key; policy-enforced; domain-separated signing (`agentdash-sandbox-sign/v1\n<artifactType>\n<payload>`); stale-socket reclaim |
 | Guest lifecycle agent | `sandbox-ctl.mjs` | the R4 ops in-guest; ordering enforced here too |
 | Forwarder stub | `forwarder.mjs` | proves the svc identity + sealed-token file contract |
 | Lifecycle API | `cloud/src/sandbox/lifecycle/` | zod schemas, idempotency map, audit records |
@@ -28,9 +28,10 @@ exact Phase-1 (one EC2 per company) plan for the founder to execute.
 
 ```
 EC2 instance (one per company)                <- real kernel, per-company
-├── uid agent (1101)   Hermes / glm-5.3-flash  egress: model + mcp.clockchain.network
-├── uid signer (1102)  signerd on unix sock    egress: none today; KMS endpoint in Phase 1
-├── uid svc   (1103)   adapter + forwarder     egress: telemetry sink + Sepolia RPC
+├── uid agent (1101)   Hermes / glm-5.3-flash  egress: model + mcp.clockchain.network; NO DNS
+│                                                (allow hosts pinned into /etc/hosts at apply)
+├── uid signer (1102)  signerd on unix sock    egress: IMDSv2 169.254.169.254:80 + KMS :443 only
+├── uid svc   (1103)   adapter + forwarder     egress: telemetry sink + Sepolia RPC + DNS
 │      sign.sock  signer:signsock 0660        (agent can ASK, never read)
 │      /etc/sandbox-signer/ signer:signer 0700 (key material lives here / KMS)
 └── root               sandbox-ctl via SSM SendCommand (replaces sudo-over-SSH)
@@ -40,6 +41,18 @@ Three OS identities, not two: the brief's "services" identity (R3) is `svc` —
 the Clockchain local adapter and telemetry forwarder run there, so a
 compromise of either cannot read the signer key even though they share the
 socket group.
+
+Two egress subtleties worth calling out:
+
+- **The agent has no DNS** (`dns: false` in the spec). Its allow-listed
+  hostnames are pinned into `/etc/hosts` by `egress-apply.sh` (managed
+  `# sandbox-pinned-*` block), so the agent resolves ONLY those names and a
+  resolver query can't tunnel data out. `svc`/`signer` keep `dns: true`
+  because DNS is their job (telemetry sink, KMS hostname).
+- **IMDSv2 is signer-only.** `169.254.169.254:80` is allowed for uid 1102
+  alone — the signer is the identity that legitimately touches instance
+  credentials (KMS key policy is scoped to the instance role). The agent and
+  svc uids are rejected on that address by the managed-uid reject rule.
 
 ## Measured local timings
 
@@ -53,12 +66,12 @@ docker-level numbers.
 | Image build (cold) | ~33.6 s | one-time per image release; irrelevant to run latency |
 | Container start → signer socket answering | ~4.3 s | includes egress apply + signerd boot |
 | egress apply (re-render + nft -f) | ~4.0 s | DNS-bound: dominated by `getent` lookups |
-| signer init roundtrip | ~1.9 s | unix socket JSON-RPC, key loaded/verified |
+| signer init roundtrip | ~1.9 s | mostly docker exec + node startup — the actual signerd work (key load + socket JSON-RPC reply) is a few ms |
 | apply-run-config roundtrip | ~0.8 s | mints session + adapter + forwarder keys |
 | `healthcheck.sh` (9 checks) | ~0.8 s | inside the container |
 
 Resulting image ID (this checkout):
-`sha256:0a9ef8a685ea983706f36c202ca624c457462a6b64ebe49742e30c70a45e7b41`
+`sha256:50058c27073143977163e766e45df7779f67d513874a893514ae0651f38fde21`
 — the kind of digest that lands in the R8 `imageDigest` field once an AMI
 pipeline exists (an AMI's evidence pin is the AMI id + source image digest).
 
@@ -66,10 +79,13 @@ Verified end-to-end in the running container: agent uid gets `Permission
 denied` on the signer key, `wire_transfer` signing is refused with
 `policy_denied`, an off-allow-list connect from the agent uid fails fast
 (reject, not timeout) while `api.z.ai:443` connects, `nft list table inet
-sandbox_egress` shows per-uid rules under `policy drop`, and
-`healthcheck.sh` passes all 9 checks. Repro: `pnpm vitest run
-src/__tests__/sandbox-container.test.ts` from `cloud/` (requires Docker;
-skips cleanly without it).
+sandbox_egress` shows per-uid rules under `policy drop`, a deliberately bad
+spec exits non-zero with the previous table still in force, and
+`healthcheck.sh` passes all 9 checks. Repro:
+`SANDBOX_DOCKER_TEST=1 pnpm vitest run src/__tests__/sandbox-container.test.ts`
+from `cloud/` — the suite is opt-in (it builds an image and runs a NET_ADMIN
+container); without the flag it skips, and unit tests still cover policy,
+permissions, and lifecycle logic.
 
 ## Projected EC2 numbers (Phase 1), with assumptions
 
@@ -142,20 +158,28 @@ except during demos. Spot is inappropriate here (interruption mid-handshake).
 
 ## Open questions for the Clockchain side
 
-1. **Signing curve.** KMS has no ed25519. The prototype uses ed25519 file
-   keys; Phase 1 KMS forces `ECC_SECG_P256K1` (good if Clockchain wants
-   Ethereum-style secp256k1 addresses) or `ECC_NIST_P256`. Clockchain's ERC-8004
-   flow suggests secp256k1; confirm which curve + digest (keccak256 vs sha256;
-   KMS `MessageType=DIGEST` wants the caller's digest).
+1. **Signing curve.** Corrected after checking AWS docs: KMS *does* support
+   ed25519 now — `KeySpec=ECC_NIST_EDWARDS25519` with
+   `SigningAlgorithm=ED25519_SHA_512` (RAW) or `ED25519_PH_SHA_512` (DIGEST).
+   So Phase 1 can keep the prototype's ed25519 (simplest, matches the file
+   key format) OR use `ECC_SECG_P256K1` if Clockchain wants Ethereum-style
+   secp256k1 addresses (its ERC-8004 flow suggests it). Decision needed: curve
+   + digest (keccak256 vs sha256; KMS `MessageType=DIGEST` wants the caller's
+   digest).
 2. **Exact egress hosts.** `api.z.ai` (GLM) and `mcp.clockchain.network` are
    assumed; the Sepolia RPC (Alchemy/Infura keyed? `publicnode`?) and the
    telemetry sink hostname need real values. KMS endpoint is per-region.
 3. **Mint-service timeline.** Ingest tokens are minted per run and sealed to
    the forwarder key — needs the sink operator's mint endpoint + the sealing
    scheme (X25519-HPKE assumed; forwarder pub is `forwarderSealingPublicKeyB64`).
-4. **Verifier evidence schema.** `runEvidenceSchema` is our proposal; the
-   verifier needs to agree on fields, and on how it gets the disclosed guest
-   event log the `eventLogSha256` pins.
+4. **Verifier evidence schema + signed-bytes format.** `runEvidenceSchema`
+   is our proposal; the verifier needs to agree on fields, and on how it gets
+   the disclosed guest event log the `eventLogSha256` pins. Same question for
+   signatures: signerd signs `agentdash-sandbox-sign/v1\n<artifactType>\n
+   <payload>` — domain-separated so a signature can never be re-interpreted
+   as raw payload or under a different artifact type. Clockchain's verifier
+   must reconstruct that exact byte string (or propose its own canonical
+   format before Phase 1).
 5. **Egress pinning vs DNS churn.** nftables pins IPs resolved at apply
    time. If `mcp.clockchain.network` rotates IPs mid-run, the rule is stale —
    options: short TTL re-apply, per-identity forward proxy, or CIDR allows.

@@ -32,8 +32,9 @@
 // ruleset still records the intent for evidence.
 //
 // Output on stdout: a complete nftables table block. Re-application is
-// idempotent because egress-apply.sh deletes the table first (the modern
-// `destroy` statement needs nftables >= 1.1; Debian bookworm ships 1.0.6).
+// atomic and idempotent: egress-apply.sh wraps this output in a single
+// `nft -f` transaction (declare-if-missing -> delete -> recreate), and a
+// render failure never reaches nft at all (fail-closed).
 //
 // Rule shape (output hook only; nothing inbound is ever opened):
 //   - loopback and uid 0 are accepted early (root owns nft anyway; SSM and

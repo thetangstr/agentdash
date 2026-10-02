@@ -60,6 +60,22 @@ const CTL = "node /opt/sandbox/sandbox-ctl.mjs --state /run/sandbox --socket /ru
 const POLL_MS = 200;
 const POLL_TIMEOUT_MS = 30_000;
 
+/**
+ * SendCommand/DescribeInstances errors meaning "there is no live guest":
+ * the AWS SDK throws `InvalidInstanceId` when the instance is stopped,
+ * terminated, or unknown. Anything matching means the sandbox's run state
+ * (tmpfs / terminated EBS) is already gone — clear can report success.
+ */
+function instanceGone(err: unknown): boolean {
+  const e = err as { name?: unknown; code?: unknown; message?: unknown };
+  const code = String(e?.name ?? e?.code ?? "");
+  const msg = String(e?.message ?? "");
+  return (
+    /InvalidInstanceId/i.test(code) ||
+    /instance .*(does not exist|is terminated|is stopped|not found)/i.test(msg)
+  );
+}
+
 export class Ec2Driver implements SandboxDriver {
   constructor(
     private readonly opts: {
@@ -118,7 +134,15 @@ export class Ec2Driver implements SandboxDriver {
   }
 
   async openHandshake(input: { side: "buyer" | "seller"; sessionId?: string }): Promise<OpenHandshakeResponse> {
-    return (await this.ctl("open-handshake", input)) as unknown as OpenHandshakeResponse;
+    const r = await this.ctl("open-handshake", input);
+    // Pick fields — the guest envelope carries `ok` which the strict
+    // response schemas reject.
+    return {
+      sessionId: String(r.sessionId),
+      side: r.side as "buyer" | "seller",
+      state: "open",
+      openedAt: String(r.openedAt),
+    };
   }
 
   async listHandshakes(): Promise<ListHandshakesResponse> {
@@ -131,7 +155,14 @@ export class Ec2Driver implements SandboxDriver {
     sessionId: string;
     agentConfigRevision?: string;
   }): Promise<ApplyRunConfigResponse> {
-    return (await this.ctl("apply-run-config", input)) as unknown as ApplyRunConfigResponse;
+    const r = await this.ctl("apply-run-config", input);
+    return {
+      runId: String(r.runId),
+      sessionId: String(r.sessionId),
+      signerPublicKeyPem: String(r.signerPublicKeyPem),
+      adapterPublicKeyPem: String(r.adapterPublicKeyPem),
+      forwarderSealingPublicKeyB64: String(r.forwarderSealingPublicKeyB64),
+    };
   }
 
   async installSinkToken(input: { runId: string; sealedTokenB64: string }): Promise<{ tokenDigest: string }> {
@@ -140,16 +171,41 @@ export class Ec2Driver implements SandboxDriver {
   }
 
   async clear(input: { runId?: string }): Promise<ClearResponse> {
-    const r = await this.ctl("clear", input);
-    return { cleared: true, clearedAt: String(r.clearedAt) };
+    try {
+      const r = await this.ctl("clear", input);
+      return { cleared: true, clearedAt: String(r.clearedAt) };
+    } catch (err) {
+      // clear is always callable (R4): a stopped/terminated/missing instance
+      // has no run state left to wipe — that IS cleared.
+      if (instanceGone(err)) {
+        return { cleared: true, clearedAt: new Date().toISOString() };
+      }
+      throw err;
+    }
   }
 
   async guestEvidence(input: { runId: string }): Promise<GuestEvidence> {
-    return (await this.ctl("gen-evidence", input)) as unknown as GuestEvidence;
+    const r = await this.ctl("gen-evidence", input);
+    return {
+      runId: String(r.runId),
+      sessionId: String(r.sessionId),
+      agentConfigRevision: (r.agentConfigRevision as string | null) ?? null,
+      signerPublicKeyPem: String(r.signerPublicKeyPem),
+      window: r.window as GuestEvidence["window"],
+      logSha256: String(r.logSha256),
+      foreignEvents: r.foreignEvents as GuestEvidence["foreignEvents"],
+      eventLogSha256: String(r.eventLogSha256),
+      egressRulesetSha256: (r.egressRulesetSha256 as string | null) ?? null,
+    };
   }
 
   async health(): Promise<SandboxHealth> {
-    return (await this.ctl("health", {})) as unknown as SandboxHealth;
+    const r = await this.ctl("health", {});
+    return {
+      ok: r.ok === true,
+      devMode: r.devMode === true,
+      checks: r.checks as SandboxHealth["checks"],
+    };
   }
 
   async dispose(): Promise<void> {

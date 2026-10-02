@@ -1,9 +1,11 @@
 // AgentDash: container-level proof for the spike — real uid separation and
 // real nftables enforcement inside the image (R2/R3), not a mock.
 //
-// Gated on a live Docker daemon: when none is available the suite skips and
-// the unit tests (policy checks, permission assertions) still cover the
-// logic. The documented manual check for a no-Docker box is in SPIKE.md.
+// Opt-in: `SANDBOX_DOCKER_TEST=1` is required — the suite builds an image and
+// runs a NET_ADMIN container, which is too heavy for a default test run.
+// With the flag set and no Docker daemon the suite FAILS loudly (an explicit
+// opt-in must not silently skip). The documented manual check for a
+// no-Docker box is in SPIKE.md.
 //
 // Docker calls run with a clean DOCKER_CONFIG so a broken credential helper
 // on the dev box can't hang the suite (public images pull anonymously).
@@ -47,15 +49,16 @@ function dockerOk(): boolean {
   }
 }
 
-const DOCKER = dockerOk();
+const ENABLED = process.env.SANDBOX_DOCKER_TEST === "1";
 let cid = "";
 
 function sh(script: string, opts: { allowFail?: boolean } = {}): string {
   return docker(["exec", cid, "sh", "-c", script], { ...opts, timeout: 30_000 });
 }
 
-describe.skipIf(!DOCKER)("sandbox container", () => {
+describe.skipIf(!ENABLED)("sandbox container", () => {
   beforeAll(() => {
+    if (!dockerOk()) throw new Error("SANDBOX_DOCKER_TEST=1 set but no Docker daemon is reachable");
     // Pull the base image first with a bounded wait — a hung registry call
     // here is detectable and skippable, unlike a hang inside docker build.
     docker(["pull", BASE], { timeout: 180_000 });
@@ -123,5 +126,56 @@ describe.skipIf(!DOCKER)("sandbox container", () => {
     const rules = sh("nft list table inet sandbox_egress");
     expect(rules).toContain("policy drop");
     expect(rules).toContain("skuid");
+  });
+
+  it("a bad spec fails the apply and keeps the old table (fail-closed)", () => {
+    // Required host that cannot resolve -> resolution throws BEFORE nft runs.
+    const out = sh(
+      `printf '%s' '{"version":1,"table":"sandbox_egress","dnsServers":[],"identities":{"agent":{"user":"agent","allow":[{"hosts":["definitely-unresolvable.invalid.example"],"ports":[443],"proto":"tcp"}]}}}' > /tmp/bad-spec.json && /opt/sandbox/egress-apply.sh /tmp/bad-spec.json; echo "exit=$?"`,
+      { allowFail: true },
+    );
+    expect(out).toContain("exit=1");
+    // The previous ruleset is still in force — not a torn-down half-apply.
+    const rules = sh("nft list table inet sandbox_egress");
+    expect(rules).toContain("policy drop");
+    expect(rules).toContain("skuid 1101");
+    // And the agent is still blocked afterwards.
+    const conn = sh(
+      `su -s /bin/sh agent -c 'timeout 5 node -e "const s=require(\\"net\\").connect(443,\\"192.0.2.9\\");s.on(\\"connect\\",()=>{console.log(\\"CONNECTED\\");process.exit(0)});s.on(\\"error\\",(e)=>{console.log(\\"ERR:\\"+e.code);process.exit(0)});setTimeout(()=>{console.log(\\"TIMEOUT\\");process.exit(0)},3000)"'`,
+      { allowFail: true },
+    );
+    expect(conn).toContain("ERR:");
+    expect(conn).not.toContain("CONNECTED");
+  });
+
+  it("agent has no DNS egress; allow-listed hosts are /etc/hosts-pinned (R3)", () => {
+    // dns:false identity -> pinned block written by egress-apply.
+    const hosts = sh("cat /etc/hosts");
+    expect(hosts).toContain("sandbox-pinned-begin");
+    expect(hosts).toMatch(/sandbox-pinned-begin[\s\S]*api\.z\.ai/);
+    // Agent UDP to the VPC resolver (169.254.169.253:53) is rejected. (In the
+    // container, /etc/resolv.conf points at Docker's embedded resolver on
+    // loopback, which the lo rule permits — on the VM the resolver is the
+    // link-local address this assertion exercises.)
+    const out = sh(
+      `su -s /bin/sh agent -c 'timeout 5 node -e "const d=require(\\"dgram\\").createSocket(\\"udp4\\");d.on(\\"error\\",(e)=>{console.log(\\"ERR:\\"+e.code);process.exit(0)});d.connect(53,\\"169.254.169.253\\",()=>{d.send(\\"x\\")});setTimeout(()=>{console.log(\\"TIMEOUT\\");process.exit(0)},3000)"'`,
+      { allowFail: true },
+    );
+    expect(out).toContain("ERR:");
+    expect(out).not.toContain("TIMEOUT");
+  });
+
+  it("IMDSv2 is reachable by the signer uid only (R2)", () => {
+    const rules = sh("nft list table inet sandbox_egress");
+    expect(rules).toMatch(/skuid 1102[^\n]*169\.254\.169\.254/);
+    expect(rules).not.toMatch(/skuid 1101[^\n]*169\.254\.169\.254/);
+    // and the agent is refused on a real connect to the link-local endpoint
+    const out = sh(
+      `su -s /bin/sh agent -c 'timeout 5 node -e "const s=require(\\"net\\").connect(80,\\"169.254.169.254\\");s.on(\\"connect\\",()=>{console.log(\\"CONNECTED\\");process.exit(0)});s.on(\\"error\\",(e)=>{console.log(\\"ERR:\\"+e.code);process.exit(0)});setTimeout(()=>{console.log(\\"TIMEOUT\\");process.exit(0)},3000)"'`,
+      { allowFail: true },
+    );
+    expect(out).toContain("ERR:");
+    expect(out).not.toContain("CONNECTED");
+    expect(out).not.toContain("TIMEOUT");
   });
 });
