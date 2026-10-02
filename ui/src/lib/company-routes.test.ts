@@ -231,6 +231,11 @@ describe("every top-level route in App.tsx is a global root or a board root", ()
     expect(isReservedCompanyPrefix("MCP")).toBe(true);
     expect(isReservedCompanyPrefix("ORG")).toBe(true);
     expect(isReservedCompanyPrefix("ACME")).toBe(false);
+    // Server-owned paths ahead of the UI (Express matches /API/... case-insensitively).
+    for (const serverPath of ["api", "llms", "downloads", "_plugins"]) {
+      expect(reserved.has(serverPath), `${serverPath} should be reserved`).toBe(true);
+    }
+    expect(isReservedCompanyPrefix("API")).toBe(true);
   });
 
   it("navigates from /setup to the selected company's CoS, not /SETUP/cos", () => {

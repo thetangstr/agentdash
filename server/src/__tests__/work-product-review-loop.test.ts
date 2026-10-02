@@ -327,6 +327,64 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect(await shippedIds(f.company.id, f.boardToken)).not.toContain(sentBack!.id);
   });
 
+  it('an agent cannot erase or forge the review metadata the server writes', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    const product = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto.' })).status).toBe(200);
+    await db.update(issues).set({ checkoutRunId: f.run.id, executionRunId: f.run.id }).where(eq(issues.id, f.issue.id));
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.agentToken, { status: 'in_review' }, f.run.id)).status).toBe(200);
+    const [before] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    const stamps = before!.metadata as Record<string, unknown>;
+    expect(stamps).toEqual(expect.objectContaining({ changesRequestedAt: expect.any(String), resubmittedAt: expect.any(String) }));
+
+    // metadata {} replaces the object; the server-owned keys survive it.
+    expect((await call('PATCH', `/work-products/${product!.id}`, f.agentToken, { metadata: {} }, f.run.id)).status).toBe(200);
+    const [kept] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(kept!.metadata).toEqual({ changesRequestedAt: stamps.changesRequestedAt, resubmittedAt: stamps.resubmittedAt });
+
+    // Client values for those keys are dropped; its own keys are kept.
+    const forged = { previousReviewState: 'approved', previousStatus: 'ready_for_review', reason: 'issue_accepted' };
+    expect((await call('PATCH', `/work-products/${product!.id}`, f.agentToken, {
+      metadata: { acceptance: forged, changesRequestedAt: null, documentKey: 'proposal' },
+    }, f.run.id)).status).toBe(200);
+    const [afterForge] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(afterForge!.metadata).toEqual({ documentKey: 'proposal', changesRequestedAt: stamps.changesRequestedAt, resubmittedAt: stamps.resubmittedAt });
+
+    // Nor on create.
+    const created = await call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
+      type: 'document', provider: 'paperclip', title: 'Second', status: 'ready_for_review',
+      metadata: { acceptance: forged, changesRequestedAt: 'x', documentKey: 'second' },
+    }, f.run.id);
+    expect(created.status).toBe(201);
+    expect((await created.json()).metadata).toEqual({ documentKey: 'second' });
+
+    // The board accepts; the agent cannot rewrite the acceptance it carries.
+    await db.update(issues).set({ checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done' })).status).toBe(200);
+    const [accepted] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    const acceptance = (accepted!.metadata as Record<string, unknown>).acceptance as Record<string, unknown>;
+    expect(acceptance).toMatchObject({ reason: 'issue_accepted', previousReviewState: 'needs_board_review', previousStatus: 'ready_for_review' });
+    await db.update(issues).set({ status: 'in_progress', checkoutRunId: f.run.id, executionRunId: f.run.id }).where(eq(issues.id, f.issue.id));
+    expect((await call('PATCH', `/work-products/${product!.id}`, f.agentToken, { metadata: { acceptance: forged } }, f.run.id)).status).toBe(200);
+    const [stillAccepted] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect((stillAccepted!.metadata as Record<string, unknown>).acceptance).toEqual(acceptance);
+  });
+
+  it('reopening never restores an approved review state, even if one was stored', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'done', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    const product = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'approved', reviewState: 'approved',
+      metadata: { acceptance: { reason: 'issue_accepted', previousReviewState: 'approved', previousStatus: 'ready_for_review' } },
+    });
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'todo' })).status).toBe(200);
+    const [reopened] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(reopened).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review', metadata: null });
+  });
+
   it('legacy work that went through Request changes ships only when accepted, not because the agent closed the issue', async () => {
     const f = await fixture();
     await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));

@@ -131,6 +131,8 @@ describeEmbeddedPostgres("companyService.create — atomic creator membership", 
     expect(org.issuePrefix).toBe("ORGA");
     const u = await svc.create({ name: "U" });
     expect(u.issuePrefix).toBe("UA");
+    const api = await svc.create({ name: "API Partners" });
+    expect(api.issuePrefix).toBe("APIA");
     const plain = await svc.create({ name: "Mcpherson Ltd" });
     // MCP and MCPA are taken or reserved, so the next free one.
     expect(plain.issuePrefix).toBe("MCPAA");

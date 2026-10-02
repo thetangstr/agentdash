@@ -739,7 +739,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               // AgentDash (Scan 4 lane M): a product accepted while it was
               // changes_requested goes back to changes_requested.
               status: sql`case when ${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousStatus' = 'changes_requested' then 'changes_requested' else 'ready_for_review' end`,
-              reviewState: sql`coalesce(${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousReviewState', 'needs_board_review')`,
+              // Only a review state a product can be waiting in is restored;
+              // anything else (e.g. "approved") falls back to needs_board_review.
+              reviewState: sql`case when ${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousReviewState' in ('none', 'needs_board_review', 'changes_requested') then ${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousReviewState' else 'needs_board_review' end`,
               metadata: sql`case when ${withoutAcceptance} = '{}'::jsonb then null else ${withoutAcceptance} end`,
               updatedAt: new Date(),
             })

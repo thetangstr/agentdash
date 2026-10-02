@@ -1310,6 +1310,30 @@ export function issueRoutes(
     return true;
   }
 
+  // AgentDash (Scan 4 lane M): review metadata is written by the server
+  // (acceptance on Accept, changesRequestedAt on Request changes,
+  // resubmittedAt on resubmit). An agent or assistant grant can neither set
+  // nor erase it: client values for these keys are dropped and the stored
+  // ones carried over, since a metadata PATCH replaces the whole object.
+  const SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS = ["acceptance", "changesRequestedAt", "resubmittedAt"] as const;
+  function protectServerOwnedMetadata<T extends object>(
+    req: Request,
+    body: T,
+    existingMetadata: Record<string, unknown> | null | undefined,
+  ): T {
+    if (req.actor.type !== "agent" && req.actor.source !== "assistant_grant") return body;
+    if (!("metadata" in body)) return body;
+    const supplied = (body as { metadata?: unknown }).metadata;
+    const incoming = supplied && typeof supplied === "object" ? { ...(supplied as Record<string, unknown>) } : null;
+    for (const key of SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS) delete incoming?.[key];
+    const kept: Record<string, unknown> = {};
+    for (const key of SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS) {
+      if (existingMetadata && key in existingMetadata) kept[key] = existingMetadata[key];
+    }
+    const merged = { ...(incoming ?? {}), ...kept };
+    return { ...body, metadata: Object.keys(merged).length > 0 ? merged : incoming } as T;
+  }
+
   // AgentDash (Scan 3 lane I): a file: URL names a path on the agent's
   // machine. It opens nothing for anyone else, so it is not stored.
   function withoutLocalFileUrl<T extends { url?: unknown }>(body: T): T {
@@ -1681,7 +1705,7 @@ export function issueRoutes(
     if (refuseSelfAcceptance(req, res, req.body)) return;
     const actor = getActorInfo(req);
     const product = await workProductsSvc.createForIssue(issue.id, issue.companyId, {
-      ...withoutLocalFileUrl(req.body),
+      ...protectServerOwnedMetadata(req, withoutLocalFileUrl(req.body), null),
       // AgentDash (Scan 3 lane I): a path-like title shows as its file name.
       title: sanitizeWorkProductTitle(req.body.title),
       projectId: req.body.projectId ?? issue.projectId ?? null,
@@ -1724,7 +1748,11 @@ export function issueRoutes(
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
     if (refuseSelfAcceptance(req, res, req.body, existing.type)) return;
     const actor = getActorInfo(req);
-    const patch: Record<string, unknown> = { ...withoutLocalFileUrl(req.body as { url?: unknown }) };
+    const patch: Record<string, unknown> = protectServerOwnedMetadata(
+      req,
+      { ...withoutLocalFileUrl(req.body as { url?: unknown }) },
+      existing.metadata,
+    );
     if (typeof patch.title === "string") patch.title = sanitizeWorkProductTitle(patch.title);
     if ("createdByRunId" in patch) {
       patch.createdByRunId = await resolveWorkProductRunId(req, issue, patch.createdByRunId);

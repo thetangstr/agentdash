@@ -11,6 +11,12 @@
  * that is missing here. Compare in lowercase.
  */
 export const RESERVED_COMPANY_PREFIXES = [
+  // Server-owned paths ahead of the UI. Express matches /API/... without
+  // regard to case, so a company called API would never load.
+  "api",
+  "llms",
+  "downloads",
+  "_plugins",
   // Top-level, company-agnostic pages.
   "about",
   "assess",
