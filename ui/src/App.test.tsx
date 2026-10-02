@@ -57,6 +57,25 @@ async function flushReact() {
   });
 }
 
+// An explicit clock for the stale-cache tests: react-query stamps
+// dataUpdatedAt with Date.now(), and the gate compares those stamps, so the
+// tests set them a full second apart instead of relying on millisecond luck.
+let restoreClock: (() => void) | null = null;
+function installExplicitClock(start = 1_700_000_000_000) {
+  let now = start;
+  const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+  restoreClock = () => spy.mockRestore();
+  return {
+    advance: (ms: number) => {
+      now += ms;
+    },
+    restore: () => {
+      restoreClock?.();
+      restoreClock = null;
+    },
+  };
+}
+
 describe("CloudAccessGate", () => {
   let container: HTMLDivElement;
 
@@ -72,6 +91,8 @@ describe("CloudAccessGate", () => {
   });
 
   afterEach(() => {
+    restoreClock?.();
+    restoreClock = null;
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
@@ -345,5 +366,159 @@ describe("CloudAccessGate", () => {
     expect(container.textContent).not.toContain("Outlet content");
 
     await act(async () => root.unmount());
+  });
+
+  // AgentDash: the first live canary claim of a hosted box. The founder signs
+  // up, names the workspace at /company-create, and the server makes them a
+  // member and instance admin. The gate stays mounted across those routes, so
+  // its board-access query still holds the pre-company "no companies" answer
+  // while health (which polls during bootstrap) already says a company
+  // exists. That used to dead-end on "No company access" until a reload.
+  it("refetches stale board access after the first company is created instead of showing No company access", async () => {
+    const clock = installExplicitClock();
+    const session = {
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "founder@example.com", name: "Founder", image: null },
+    };
+    mockAuthApi.getSession.mockResolvedValue(session);
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "bootstrap_pending",
+      selfServeBootstrap: true,
+      instanceHasCompany: false,
+      hostedBox: true,
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: session.user,
+      userId: "user-1",
+      isInstanceAdmin: false,
+      companyIds: [],
+      source: "session",
+      keyId: null,
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CloudAccessGate />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+    // Before the company exists, the founder is sent to name the workspace.
+    expect(container.textContent).toContain("Navigate:/company-create");
+
+    // POST /api/companies?fromSignup=1 succeeded: membership + instance admin.
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "ready",
+      selfServeBootstrap: true,
+      instanceHasCompany: true,
+      hostedBox: true,
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: session.user,
+      userId: "user-1",
+      isInstanceAdmin: true,
+      companyIds: ["company-1"],
+      source: "session",
+      keyId: null,
+    });
+    const boardAccessCallsBefore = mockAccessApi.getCurrentBoardAccess.mock.calls.length;
+
+    // Only health refreshes (the bootstrap poll), a second later; board access
+    // is still the cached pre-company answer, stamped strictly earlier.
+    clock.advance(1_000);
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["health"] });
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("Outlet content");
+      });
+    });
+    expect(container.textContent).not.toContain("No company access");
+    expect(mockAccessApi.getCurrentBoardAccess.mock.calls.length).toBe(boardAccessCallsBefore + 1);
+
+    await act(async () => root.unmount());
+    clock.restore();
+  });
+
+  it("still shows No company access when fresh board access confirms there is none", async () => {
+    const clock = installExplicitClock();
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "ready",
+      selfServeBootstrap: true,
+      instanceHasCompany: true,
+    });
+    mockAuthApi.getSession.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+      userId: "user-1",
+      isInstanceAdmin: false,
+      companyIds: [],
+      source: "session",
+      keyId: null,
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CloudAccessGate />
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("No company access");
+      });
+    });
+    // Same clock tick for everything so far: board access is not older than
+    // health or the session, so the gate did not refetch it.
+    expect(mockAccessApi.getCurrentBoardAccess).toHaveBeenCalledTimes(1);
+
+    // Health refreshes a second later (window focus); board access is
+    // refetched exactly once, still says no access, and the gate settles on
+    // the page without looping.
+    clock.advance(1_000);
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["health"] });
+    });
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(mockAccessApi.getCurrentBoardAccess).toHaveBeenCalledTimes(2);
+        expect(container.textContent).toContain("No company access");
+      });
+    });
+    const calls = mockAccessApi.getCurrentBoardAccess.mock.calls.length;
+    await flushReact();
+    await flushReact();
+    expect(mockAccessApi.getCurrentBoardAccess.mock.calls.length).toBe(calls);
+    expect(calls).toBe(2);
+
+    await act(async () => root.unmount());
+    clock.restore();
   });
 });

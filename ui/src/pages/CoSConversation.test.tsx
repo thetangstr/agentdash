@@ -55,8 +55,10 @@ vi.mock("../realtime/useMessages", () => ({
 // QueryClientProvider, and mock agentsApi.list to return an empty directory —
 // the smoke test only cares that the chat panel renders post-bootstrap, not
 // that mention resolution works.
+// One stable client, like the real hook (the bootstrap effect depends on it).
+const mockQueryClient = vi.hoisted(() => ({ invalidateQueries: vi.fn(async () => undefined) }));
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => mockQueryClient,
   useQuery: ({ queryFn, enabled }: { queryFn: () => unknown; enabled?: boolean }) => {
     if (enabled === false) {
       return { data: undefined, isLoading: false, error: null };
@@ -143,6 +145,8 @@ describe("CoSConversation", () => {
     await act(async () => {});
 
     expect(container.querySelector(".chat-panel")).toBeTruthy();
+    // AgentDash: bootstrap may create the first company; the access queries are refetched.
+    expect(mockQueryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["access", "current-board-access"], refetchType: "all" });
   });
 
   // AgentDash (#725): a hosted box asks for the Hermes provider key before the CoS chat.

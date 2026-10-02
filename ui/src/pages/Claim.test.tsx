@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthApiError } from "../api/auth";
-import { ClaimPage, claimErrorMessage, readClaimCodeFromHash, readClaimEmailFromHash } from "./Claim";
+import { CLAIM_SIGN_IN_PATH, ClaimPage, claimErrorMessage, readClaimCodeFromHash, readClaimEmailFromHash } from "./Claim";
 
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSignUp = vi.hoisted(() => vi.fn());
@@ -100,8 +100,7 @@ describe("ClaimPage", () => {
     container.remove();
   });
 
-  function render() {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  function render(qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })) {
     act(() => root.render(<QueryClientProvider client={qc}><ClaimPage /></QueryClientProvider>));
   }
 
@@ -192,5 +191,40 @@ describe("ClaimPage", () => {
     render();
     expect(container.textContent).toMatch(/incomplete/);
     expect(container.querySelector("form")).toBeNull();
+  });
+
+  // AgentDash: first live canary claim. The founder's board access and health
+  // were cached from before the claim; the gate must not judge on them.
+  it("refetches the cached board access and health before landing on /cos", async () => {
+    mockSignUp.mockResolvedValue(undefined);
+    mockGetSession.mockResolvedValue({ session: { id: "s" }, user: { id: "u" } });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const boardAccess = vi.fn()
+      .mockResolvedValueOnce({ companyIds: [], isInstanceAdmin: false })
+      .mockResolvedValue({ companyIds: ["c1"], isInstanceAdmin: true });
+    const health = vi.fn()
+      .mockResolvedValueOnce({ status: "ok", instanceHasCompany: false })
+      .mockResolvedValue({ status: "ok", instanceHasCompany: true });
+    await qc.prefetchQuery({ queryKey: ["access", "current-board-access"], queryFn: boardAccess });
+    await qc.prefetchQuery({ queryKey: ["health"], queryFn: health });
+    let fetchesAtNavigate = -1;
+    mockNavigate.mockImplementation(() => {
+      fetchesAtNavigate = boardAccess.mock.calls.length + health.mock.calls.length;
+    });
+    render(qc);
+    fill();
+    await submit();
+    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
+    // Both were refetched (inactive queries too) before navigating.
+    expect(fetchesAtNavigate).toBe(4);
+    expect(qc.getQueryData(["access", "current-board-access"])).toEqual({ companyIds: ["c1"], isInstanceAdmin: true });
+  });
+
+  it("sends Already claimed it? to the box's own sign-in, not www's /find", async () => {
+    render();
+    const link = Array.from(container.querySelectorAll("a")).find((a) => a.textContent === "Sign in");
+    expect(link?.getAttribute("href")).toBe(CLAIM_SIGN_IN_PATH);
+    expect(CLAIM_SIGN_IN_PATH).toBe("/auth?next=%2F");
+    expect(link?.getAttribute("href")).not.toContain("/find");
   });
 });

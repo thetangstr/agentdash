@@ -4,6 +4,7 @@ import { authApi } from "../../api/auth";
 import { queryKeys } from "../../lib/queryKeys";
 import { healthApi } from "../../api/health";
 import { MarketingShell } from "../MarketingShell";
+import { BOX_SIGN_IN_PATH } from "../WwwOnlyRoute";
 import { Hero } from "../sections/Hero";
 import { StoryBeats } from "../sections/StoryBeats";
 import { DemoSection } from "../sections/DemoSection";
@@ -33,8 +34,14 @@ export function Landing() {
   });
 
   if (!previewMode && (healthQuery.isLoading || (isAuthenticatedMode && sessionQuery.isLoading))) return null;
-  const loggedIn = !isAuthenticatedMode || Boolean(sessionQuery.data);
+  // AgentDash: unknown health (an error, a 410, non-JSON) means "not a box and
+  // not signed in" here, so www's / renders the landing instead of bouncing
+  // to /companies. Only a real health answer can make the visitor logged in.
+  const loggedIn = Boolean(healthQuery.data) && (!isAuthenticatedMode || Boolean(sessionQuery.data));
   if (!previewMode && loggedIn) return <Navigate to="/companies" replace />;
+  // AgentDash: a hosted box is not the marketing site. Its signed-out root goes
+  // to the box's own sign-in, not a landing page whose "Sign in" is www's /find.
+  if (!previewMode && healthQuery.data?.hostedBox === true) return <Navigate to={BOX_SIGN_IN_PATH} replace />;
 
   return <LandingContent />;
 }

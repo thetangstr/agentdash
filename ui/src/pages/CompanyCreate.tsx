@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/lib/router";
 import { companiesApi } from "../api/companies";
 import { ApiError } from "../api/client";
-import { queryKeys } from "../lib/queryKeys";
+import { refreshAccessQueries } from "../lib/access-refresh";
 import { Button } from "@/components/ui/button";
 import { useCompany } from "../context/CompanyContext";
 import { Sparkles, Building2 } from "lucide-react";
@@ -45,13 +45,17 @@ export function CompanyCreatePage() {
     },
     onSuccess: async (company) => {
       setSelectedCompanyId(company.id);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      // AgentDash: the server just made this user a member (and, on a fresh
+      // box, the instance admin). Refetch what CloudAccessGate decides on so
+      // it does not show "No company access" from the pre-company cache.
+      await refreshAccessQueries(queryClient);
       navigate(postCreateDestination(company), { replace: true });
     },
-    onError: (err) => {
+    onError: async (err) => {
       // 409 means the user already has a workspace (invite path or duplicate
       // submission). Route them to /cos rather than dead-ending on an error.
       if (err instanceof ApiError && err.status === 409) {
+        await refreshAccessQueries(queryClient);
         navigate("/cos", { replace: true });
         return;
       }

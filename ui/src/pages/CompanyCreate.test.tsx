@@ -112,6 +112,7 @@ describe("CompanyCreatePage", () => {
 
   it("submits to companiesApi.create with fromSignup and navigates to setup", async () => {
     mockCreate.mockResolvedValue({ id: "company-1", name: "Acme" });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
     render();
     const input = container.querySelector("input#company-name") as HTMLInputElement;
@@ -132,6 +133,12 @@ describe("CompanyCreatePage", () => {
     expect(mockCreate).toHaveBeenCalledWith({ name: "Acme" }, { fromSignup: true });
     expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
     expect(mockNavigate).toHaveBeenCalledWith("/setup?companyId=company-1", { replace: true });
+    // AgentDash: the gate's access queries are refetched before navigating, so
+    // the new member is not judged on the pre-company cache.
+    for (const queryKey of [["auth", "session"], ["access", "current-board-access"], ["health"]]) {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey, refetchType: "all" });
+    }
+    expect(invalidate.mock.invocationCallOrder[0]).toBeLessThan(mockNavigate.mock.invocationCallOrder[0]);
   });
 
   it("redirects to /cos when the server returns 409 already_member (invite-flow safety)", async () => {

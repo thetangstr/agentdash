@@ -14,6 +14,7 @@ import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
 import { queryKeys } from "../lib/queryKeys";
+import { refreshAccessQueries } from "../lib/access-refresh";
 import { Dialog, DialogPortal } from "@/components/ui/dialog";
 import {
   Popover,
@@ -758,7 +759,9 @@ export function OnboardingWizard() {
       setCreatedCompanyId(company.id);
       setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      // AgentDash: the first company may have just been created; refetch the
+      // access queries CloudAccessGate decides on.
+      await refreshAccessQueries(queryClient);
 
       if (companyGoal.trim()) {
         const parsedGoal = parseOnboardingGoalInput(companyGoal);

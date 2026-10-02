@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Navigate, Outlet, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { accessApi } from "@/api/access";
@@ -83,7 +84,33 @@ export function CloudAccessGate() {
     retry: false,
   });
 
+  // AgentDash: a founder who just claimed a box or created the first company
+  // can arrive here with board access cached from before the company existed
+  // while health (which polls during bootstrap) already says a company exists.
+  // That combination used to dead-end on "No company access" until a reload.
+  // When board access is older than the session or health data it is judged
+  // against, refetch it once before deciding the user has no access.
+  const noBoardAccessCandidate =
+    isAuthenticatedMode &&
+    !!sessionQuery.data &&
+    !!boardAccessQuery.data &&
+    !boardAccessQuery.data.isInstanceAdmin &&
+    boardAccessQuery.data.companyIds.length === 0 &&
+    healthQuery.data?.instanceHasCompany === true;
+  const accessJudgedAt = Math.max(sessionQuery.dataUpdatedAt, healthQuery.dataUpdatedAt);
+  const boardAccessIsStale = noBoardAccessCandidate && boardAccessQuery.dataUpdatedAt < accessJudgedAt;
+  const staleRefetchFor = useRef<number | null>(null);
+  const staleRefetchPending = boardAccessIsStale && staleRefetchFor.current !== accessJudgedAt;
+  const refetchBoardAccess = boardAccessQuery.refetch;
+  useEffect(() => {
+    if (!boardAccessIsStale || staleRefetchFor.current === accessJudgedAt) return;
+    staleRefetchFor.current = accessJudgedAt;
+    void refetchBoardAccess();
+  }, [boardAccessIsStale, accessJudgedAt, refetchBoardAccess]);
+
   if (
+    staleRefetchPending ||
+    (noBoardAccessCandidate && boardAccessQuery.isFetching) ||
     healthQuery.isLoading ||
     (isAuthenticatedMode && sessionQuery.isLoading) ||
     (isAuthenticatedMode && !!sessionQuery.data && boardAccessQuery.isLoading) ||

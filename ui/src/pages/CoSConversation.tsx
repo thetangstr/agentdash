@@ -9,6 +9,7 @@ import { conversationsApi } from "../api/conversations";
 import { useCompany } from "../context/CompanyContext";
 import type { CardContext } from "../components/cards";
 import { HermesProviderStep } from "../components/onboarding/HermesProviderStep";
+import { refreshAccessQueries } from "../lib/access-refresh";
 
 // AgentDash (GH #786): the CoS page header and suggested first messages.
 export const COS_HEADER_LINE = "Tell me what you want built. I'll staff it and ask you only when it's your call.";
@@ -28,6 +29,7 @@ export function CoSConversation() {
   const { selectedCompanyId, loading: companiesLoading } = useCompany();
   const [bootstrapped, setBootstrapped] = useState<BootstrapState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +70,10 @@ export function CoSConversation() {
       try {
         const r = await onboardingApi.bootstrap();
         if (cancelled) return;
+        // AgentDash: bootstrap may have created the first company; refetch
+        // the access queries so the gate does not judge on the old cache.
+        await refreshAccessQueries(queryClient);
+        if (cancelled) return;
         setBootstrapped({
           companyId: r.companyId,
           cosAgentId: r.cosAgentId,
@@ -84,7 +90,7 @@ export function CoSConversation() {
     return () => {
       cancelled = true;
     };
-  }, [selectedCompanyId, companiesLoading]);
+  }, [selectedCompanyId, companiesLoading, queryClient]);
 
   if (error) {
     return (

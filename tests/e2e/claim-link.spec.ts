@@ -25,7 +25,8 @@ test("the claim link creates the founder's account and lands on /cos; the link i
   await page.locator("#claim-password").fill(PASSWORD);
   await page.locator("#claim-repeat").fill(PASSWORD);
   await page.getByRole("button", { name: "Claim workspace" }).click();
-  await page.waitForURL(/\/cos(\b|\/|\?|$)/, { timeout: 60_000 });
+  // /cos, which the gate may already have moved on to naming the workspace.
+  await page.waitForURL(/\/(cos|company-create|onboarding)(\b|\/|\?|$)/, { timeout: 60_000 });
 
   const after = await (await request.get(`${BASE}/api/health`)).json();
   if (after.hostedBox) expect(after.claimed).toBe(true);
@@ -40,4 +41,41 @@ test("the claim link creates the founder's account and lands on /cos; the link i
   await page2.getByRole("button", { name: "Claim workspace" }).click();
   await expect(page2.getByRole("alert")).toContainText(/already been used/);
   await other.close();
+});
+
+// AgentDash: first live canary claim. After the claim, the founder names the
+// workspace; the server makes them a member and the instance admin. The UI
+// used to keep its pre-company access cache and show "No company access"
+// until a reload. Also: a box has no www front door (/find, /start).
+test("after the claim the founder names the workspace and lands in the app, not No company access", async ({ page, request }) => {
+  const health = await (await request.get(`${BASE}/api/health`)).json();
+  test.skip(!health.hostedBox, "the hosted first run (/company-create) applies to a hosted box");
+  test.skip(health.instanceHasCompany === true, "the box already has a workspace");
+
+  await page.goto(`${BASE}/auth`);
+  await page.locator("input[type=email]").fill(EMAIL);
+  await page.locator("input[type=password]").fill(PASSWORD);
+  await page.locator("form button[type=submit]").click();
+  await page.waitForURL(/\/company-create(\b|\/|\?|$)/, { timeout: 60_000 });
+
+  await page.locator("#company-name").fill("Claim E2E Workspace");
+  await page.locator("form button[type=submit]").click();
+  await page.waitForURL(/\/setup(\b|\/|\?|$)/, { timeout: 60_000 });
+  // Give the gate time to re-render on its refreshed data; it must not dead-end.
+  await page.waitForTimeout(3_000);
+  await expect(page.getByRole("heading", { name: "No company access" })).toHaveCount(0);
+  expect(new URL(page.url()).pathname).not.toBe("/auth");
+});
+
+test("on a box, the claim page's Sign in and the www-only pages go to the box's own sign-in", async ({ page, request }) => {
+  const health = await (await request.get(`${BASE}/api/health`)).json();
+  test.skip(!health.hostedBox, "www-only pages render on www");
+
+  await page.goto(`${BASE}/claim`);
+  await expect(page.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/auth?next=%2F");
+
+  for (const path of ["/find", "/start", "/start/verify", "/start/progress"]) {
+    await page.goto(`${BASE}${path}`);
+    await page.waitForURL((url) => url.pathname === "/auth", { timeout: 20_000 });
+  }
 });

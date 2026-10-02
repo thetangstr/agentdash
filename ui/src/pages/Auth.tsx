@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams, Link } from "@/lib/router";
 import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
+import { refreshAccessQueries } from "../lib/access-refresh";
 import { getRememberedInvitePath } from "../lib/invite-memory";
 import { Button } from "@/components/ui/button";
 import { LiveBriefing } from "../marketing/sections/LiveBriefing";
@@ -92,8 +93,8 @@ export function AuthPage() {
     },
     onSuccess: async () => {
       setError(null);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      // AgentDash: refetch session, board access and health, not only the session.
+      await refreshAccessQueries(queryClient);
       // AgentDash (Phase E): fresh sign-ups land on /company-create so the
       // user explicitly names their workspace before the assess + CoS flow.
       // Sign-ins go to wherever they were already heading (preserves
