@@ -21,6 +21,14 @@ vi.mock("@/api/auth", () => ({
   authApi: mockAuthApi,
 }));
 
+const mockCapabilitiesApi = vi.hoisted(() => ({
+  get: vi.fn(),
+}));
+
+vi.mock("@/api/capabilities", () => ({
+  capabilitiesApi: mockCapabilitiesApi,
+}));
+
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to, ...props }: { children: React.ReactNode; to: string }) => (
     <a href={to} {...props}>{children}</a>
@@ -110,6 +118,57 @@ describe("SidebarAccountMenu", () => {
     expect(document.body.textContent).toContain("AgentDash v1.2.3");
     expect(document.body.textContent).toContain("jane@example.com");
 
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // AgentDash (Lane F2): instance settings are an instance-admin page.
+  async function openMenuWithAdmin(isInstanceAdmin: boolean) {
+    mockCapabilitiesApi.get.mockResolvedValue({
+      companyId: "company-1",
+      actorType: "user",
+      membershipRole: "owner",
+      isInstanceAdmin,
+      capabilities: {},
+    });
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarAccountMenu
+            companyId="company-1"
+            deploymentMode="authenticated"
+            instanceSettingsTarget="/instance/settings/general"
+          />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    const trigger = container.querySelector('button[aria-label="Open account menu"]');
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    return root;
+  }
+
+  it("hides Instance settings from a company founder who is not an instance admin", async () => {
+    const root = await openMenuWithAdmin(false);
+    expect(document.body.textContent).toContain("Edit profile");
+    expect(document.body.textContent).not.toContain("Instance settings");
+    expect(document.querySelector('a[href="/instance/settings/general"]')).toBeNull();
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps Instance settings for an instance admin", async () => {
+    const root = await openMenuWithAdmin(true);
+    expect(document.body.textContent).toContain("Instance settings");
+    expect(document.querySelector('a[href="/instance/settings/general"]')).not.toBeNull();
     await act(async () => {
       root.unmount();
     });

@@ -86,10 +86,47 @@ test.describe("sidebar keeps work, Settings holds configuration", () => {
       ["Export", `/${company.issuePrefix}/company/export`],
       ["Evaluation", `/${company.issuePrefix}/evaluation`],
     ] as const) {
+      // Skills opens on /skills and, once its list loads, replaces the URL
+      // with /skills/<first skill id>. If the next click lands before that
+      // replace, the late redirect wins and the next URL assertion sees
+      // /skills/<id> (the CI flake on this spec). Wait for the list and for
+      // the URL to settle before moving on. (The list can come from the query
+      // cache, so ask the API whether there is a first skill to land on rather
+      // than waiting for the page's own request.)
       await page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: label, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${pathname}(/.*)?$`));
+      if (label === "Skills") {
+        const listed = await request.get(`${BASE_URL}/api/companies/${company.id}/skills`);
+        expect(listed.ok(), await listed.text()).toBe(true);
+        const skills = (await listed.json()) as unknown[];
+        if (Array.isArray(skills) && skills.length > 0) {
+          await expect(page).toHaveURL(new RegExp(`${pathname}/[^/]+$`));
+        }
+      }
       await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
     }
+  });
+
+  // Lane F2: Settings means the workspace's settings. The footer link and the
+  // legacy /settings URLs open the company's General page, not the
+  // instance-admin page (deployment and auth, bootstrap invite, log censoring).
+  test("footer Settings and legacy /settings open the workspace settings", async ({ page, request }) => {
+    const company = await createCompany(request);
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/dashboard`);
+    const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "More", exact: true }) });
+    await sidebar.getByRole("link", { name: "Settings", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/${company.issuePrefix}/company/settings$`));
+    const nav = page.getByRole("navigation", { name: "Settings" });
+    await expect(nav.getByRole("link", { name: "General", exact: true }).first()).toHaveAttribute("aria-current", "page");
+
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/settings`);
+    await expect(page).toHaveURL(new RegExp(`/${company.issuePrefix}/company/settings$`));
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/settings/billing`);
+    await expect(page).toHaveURL(new RegExp(`/${company.issuePrefix}/billing$`));
+
+    // Instance settings stay one click away for an instance admin (local_trusted).
+    await expect(nav.getByText("Instance", { exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "General", exact: true })).toHaveCount(2);
   });
 
   test("Team: List | Org chart tabs, /org still works", async ({ page, request }) => {

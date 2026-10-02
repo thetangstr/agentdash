@@ -643,6 +643,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         issueNumber: input.activePauseHold ? 2 : 1,
         identifier: `${issuePrefix}-${input.activePauseHold ? 2 : 1}`,
         startedAt: input.status === "in_progress" ? now : null,
+        // AgentDash (Lane F1): stranded work is old work; a just-created issue
+        // is inside the escalation minimum age and would only be deferred.
+        createdAt: now,
       },
     ]);
 

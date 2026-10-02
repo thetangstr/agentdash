@@ -50,6 +50,7 @@ import {
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
 // AgentDash (OBS-5, #698): liveness probe so quiet-but-alive Hermes runs are not flagged.
 import {
+  DEFAULT_FIRST_OUTPUT_DEADLINE_MS,
   effectiveActivityAt,
   probeRunLiveness,
   type RunLivenessEvidence,
@@ -57,6 +58,26 @@ import {
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
+
+/**
+ * AgentDash (Lane F1): minimum age before stranded-work recovery may file a
+ * "Recover stalled issue" task or block the source issue. A brand-new company
+ * starts several issues on one agent at once; for the first minutes most of
+ * them sit queued behind that agent or have not produced a first output yet,
+ * and a single early failed or cancelled retry is not evidence of a stall.
+ * Same window as the first-output deadline (OBS-5): before it elapses a run is
+ * not even allowed to be called silent. Automatic retries still happen inside
+ * the window; only the escalation waits.
+ */
+export const STRANDED_ISSUE_ESCALATION_MIN_AGE_MS = DEFAULT_FIRST_OUTPUT_DEADLINE_MS;
+
+export function isInsideStrandedEscalationGrace(
+  issue: { startedAt: Date | null; createdAt: Date },
+  now: Date = new Date(),
+) {
+  const anchor = issue.startedAt ?? issue.createdAt;
+  return now.getTime() - anchor.getTime() < STRANDED_ISSUE_ESCALATION_MIN_AGE_MS;
+}
 export const ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS = 60 * 60 * 1000;
 export const ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS = 4 * 60 * 60 * 1000;
 export const ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS = 30 * 60 * 1000;
@@ -424,6 +445,34 @@ export function recoveryService(
     ]);
 
     return Boolean(run || deferredWake);
+  }
+
+  /**
+   * AgentDash (Lane F1): the issue's own checkout/execution run is still live.
+   * An agent that checks out several issues from one run (the CoS on a fresh
+   * company does this) leaves each of them `in_progress` with a run whose
+   * context names a different issue. That run is the execution path, so the
+   * issue is busy, not stranded.
+   */
+  async function hasLiveLinkedRun(issue: typeof issues.$inferSelect) {
+    const linkedRunIds = [issue.executionRunId, issue.checkoutRunId].filter(
+      (id): id is string => Boolean(id),
+    );
+    if (linkedRunIds.length === 0 || !issue.assigneeAgentId) return false;
+    const row = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, issue.companyId),
+          eq(heartbeatRuns.agentId, issue.assigneeAgentId),
+          inArray(heartbeatRuns.id, linkedRunIds),
+          inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return Boolean(row);
   }
 
   async function hasQueuedIssueWake(companyId: string, issueId: string) {
@@ -1684,7 +1733,8 @@ export function recoveryService(
     return updated;
   }
 
-  async function reconcileStrandedAssignedIssues() {
+  async function reconcileStrandedAssignedIssues(opts?: { now?: Date }) {
+    const now = opts?.now ?? new Date();
     const candidates = await db
       .select()
       .from(issues)
@@ -1704,9 +1754,18 @@ export function recoveryService(
       successfulContinuationObserved: 0,
       orphanBlockersAssigned: 0,
       escalated: 0,
+      // AgentDash (Lane F1): escalations held back because the issue is younger
+      // than STRANDED_ISSUE_ESCALATION_MIN_AGE_MS. Also counted in `skipped`.
+      escalationDeferred: 0,
       recoveryBudgetReblocked: 0,
       skipped: 0,
       issueIds: [] as string[],
+    };
+    const deferEscalation = (issue: typeof issues.$inferSelect) => {
+      if (!isInsideStrandedEscalationGrace(issue, now)) return false;
+      result.escalationDeferred += 1;
+      result.skipped += 1;
+      return true;
     };
 
     for (const issue of candidates) {
@@ -1748,6 +1807,11 @@ export function recoveryService(
       }
 
       if (await hasActiveExecutionPath(issue.companyId, issue.id)) {
+        result.skipped += 1;
+        continue;
+      }
+
+      if (await hasLiveLinkedRun(issue)) {
         result.skipped += 1;
         continue;
       }
@@ -1801,6 +1865,7 @@ export function recoveryService(
         }
 
         if (didAutomaticRecoveryFail(latestRun, "assignment_recovery")) {
+          if (deferEscalation(issue)) continue;
           const failureSummary = summarizeRunFailureForIssueComment(latestRun);
           const budgetCause = describeRecoveryBudgetCause(issue, latestRun);
           const updated = await escalateStrandedAssignedIssue({
@@ -1860,6 +1925,7 @@ export function recoveryService(
         }
 
         if (isRepeatedProductiveContinuationRecovery(successfulRun)) {
+          if (deferEscalation(issue)) continue;
           const updated = await escalateStrandedAssignedIssue({
             issue,
             previousStatus: "in_progress",
@@ -1899,6 +1965,7 @@ export function recoveryService(
         continue;
       }
       if (didAutomaticRecoveryFail(latestRun, "issue_continuation_needed")) {
+        if (deferEscalation(issue)) continue;
         const failureSummary = summarizeRunFailureForIssueComment(latestRun);
         const budgetCause = describeRecoveryBudgetCause(issue, latestRun);
         const updated = await escalateStrandedAssignedIssue({

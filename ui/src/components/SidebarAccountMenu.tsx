@@ -16,6 +16,7 @@ import type { DeploymentMode } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { queryKeys } from "@/lib/queryKeys";
+import { useCapabilities } from "@/hooks/useCapability";
 import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -26,6 +27,8 @@ const PROFILE_SETTINGS_PATH = "/instance/settings/profile";
 const DOCS_URL = "https://docs.paperclip.ing/";
 
 interface SidebarAccountMenuProps {
+  /** AgentDash (Lane F2): the selected company, to ask whether the viewer is an instance admin. */
+  companyId?: string | null;
   deploymentMode?: DeploymentMode;
   instanceSettingsTarget: string;
   open?: boolean;
@@ -107,6 +110,7 @@ function MenuAction({ label, description, icon: Icon, onClick, href, external = 
 }
 
 export function SidebarAccountMenu({
+  companyId,
   deploymentMode,
   instanceSettingsTarget,
   open: controlledOpen,
@@ -119,6 +123,11 @@ export function SidebarAccountMenu({
   const { theme, toggleTheme } = useTheme();
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
+  // AgentDash (Lane F2): instance settings (deployment, auth, log censoring)
+  // are for instance admins; everyone else reaches the workspace's settings
+  // through the sidebar footer.
+  const { data: capabilities } = useCapabilities(companyId);
+  const isInstanceAdmin = capabilities?.isInstanceAdmin === true;
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -214,13 +223,15 @@ export function SidebarAccountMenu({
                 href="/my-agent"
                 onClick={closeNavigationChrome}
               />
-              <MenuAction
-                label="Instance settings"
-                description="Jump back to the last settings page you opened."
-                icon={Settings}
-                href={instanceSettingsTarget}
-                onClick={closeNavigationChrome}
-              />
+              {isInstanceAdmin ? (
+                <MenuAction
+                  label="Instance settings"
+                  description="Jump back to the last settings page you opened."
+                  icon={Settings}
+                  href={instanceSettingsTarget}
+                  onClick={closeNavigationChrome}
+                />
+              ) : null}
               <MenuAction
                 label="About AgentDash"
                 description="View version, deployment, and changelog."
