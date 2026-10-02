@@ -4,111 +4,76 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { TranscriptEntry } from "../../adapters";
 import { ThemeProvider } from "../../context/ThemeContext";
-import { RunTranscriptView, normalizeTranscript } from "./RunTranscriptView";
+import { RunTranscriptView } from "./RunTranscriptView";
+
+function render(node: React.ReactNode) {
+  return renderToStaticMarkup(<ThemeProvider>{node}</ThemeProvider>);
+}
+
+const toolRun: TranscriptEntry[] = [
+  { kind: "init", ts: "2026-03-12T00:00:00.000Z", model: "claude-sonnet", sessionId: "sess_1" },
+  { kind: "thinking", ts: "2026-03-12T00:00:00.500Z", text: "secret plan of attack" },
+  { kind: "assistant", ts: "2026-03-12T00:00:01.000Z", text: "Hello **world**" },
+  { kind: "tool_call", ts: "2026-03-12T00:00:02.000Z", name: "Read", toolUseId: "t1", input: { file_path: "ui/src/App.tsx" } },
+  { kind: "tool_result", ts: "2026-03-12T00:00:03.000Z", toolUseId: "t1", content: "import React", isError: false },
+  { kind: "tool_call", ts: "2026-03-12T00:00:04.000Z", name: "Bash", toolUseId: "t2", input: { command: "bash -lc 'pnpm test'" } },
+  { kind: "tool_result", ts: "2026-03-12T00:00:05.000Z", toolUseId: "t2", content: "FAIL app.test.ts\nmore detail", isError: true },
+  { kind: "stderr", ts: "2026-03-12T00:00:06.000Z", text: "npm warn something harmless" },
+  {
+    kind: "result",
+    ts: "2026-03-12T00:01:05.000Z",
+    text: "## Summary\n\n- fixed deploy config",
+    inputTokens: 1200,
+    outputTokens: 340,
+    cachedTokens: 0,
+    costUsd: 0.0123,
+    subtype: "success",
+    isError: false,
+    errors: [],
+  },
+];
 
 describe("RunTranscriptView", () => {
-  it("keeps running command stdout inside the command fold instead of a standalone stdout block", () => {
-    const entries: TranscriptEntry[] = [
-      {
-        kind: "tool_call",
-        ts: "2026-03-12T00:00:00.000Z",
-        name: "command_execution",
-        toolUseId: "cmd_1",
-        input: { command: "ls -la" },
-      },
-      {
-        kind: "stdout",
-        ts: "2026-03-12T00:00:01.000Z",
-        text: "file-a\nfile-b",
-      },
-    ];
-
-    const blocks = normalizeTranscript(entries, false);
-
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({
-      type: "command_group",
-      items: [{ result: "file-a\nfile-b", status: "running" }],
-    });
+  it("defaults to the readable mode", () => {
+    const html = render(<RunTranscriptView entries={toolRun} />);
+    expect(html).toContain('data-transcript-mode="readable"');
   });
 
-  it("renders assistant and thinking content as markdown in compact mode", () => {
-    const html = renderToStaticMarkup(
-      <ThemeProvider>
-        <RunTranscriptView
-          density="compact"
-          entries={[
-            {
-              kind: "assistant",
-              ts: "2026-03-12T00:00:00.000Z",
-              text: "Hello **world**",
-            },
-            {
-              kind: "thinking",
-              ts: "2026-03-12T00:00:01.000Z",
-              text: "- first\n- second",
-            },
-          ]}
-        />
-      </ThemeProvider>,
-    );
-
+  it("renders assistant text as markdown and tool calls as one-line summaries", () => {
+    const html = render(<RunTranscriptView entries={toolRun} />);
     expect(html).toContain("<strong>world</strong>");
-    expect(html).toMatch(/<li[^>]*>first<\/li>/);
-    expect(html).toMatch(/<li[^>]*>second<\/li>/);
+    expect(html).toContain("Ran 2 tools");
+    // The failed call stays visible inside the folded group, with its first line.
+    expect(html).toContain("pnpm test");
+    expect(html).toContain("FAIL app.test.ts");
+    expect(html).toContain('data-readable-tool="error"');
+    expect(html).not.toContain("more detail");
   });
 
-  it("hides saved-session resume skip stderr from nice mode normalization", () => {
-    const entries: TranscriptEntry[] = [
-      {
-        kind: "stderr",
-        ts: "2026-03-12T00:00:00.000Z",
-        text: "[paperclip] Skipping saved session resume for task \"PAP-485\" because wake reason is issue_assigned.",
-      },
-      {
-        kind: "assistant",
-        ts: "2026-03-12T00:00:01.000Z",
-        text: "Working on the task.",
-      },
-    ];
-
-    const blocks = normalizeTranscript(entries, false);
-
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({
-      type: "message",
-      role: "assistant",
-      text: "Working on the task.",
-    });
+  it("hides thinking, init and harmless stderr behind one Details disclosure", () => {
+    const html = render(<RunTranscriptView entries={toolRun} />);
+    expect(html).toContain("Details (3)");
+    expect(html).not.toContain("secret plan of attack");
+    expect(html).not.toContain("npm warn something harmless");
+    expect(html).not.toContain("sess_1");
   });
 
-  it("renders successful result summaries as markdown in nice mode", () => {
-    const html = renderToStaticMarkup(
-      <ThemeProvider>
-        <RunTranscriptView
-          density="compact"
-          entries={[
-            {
-              kind: "result",
-              ts: "2026-03-12T00:00:02.000Z",
-              text: "## Summary\n\n- fixed deploy config\n- posted issue update",
-              inputTokens: 10,
-              outputTokens: 20,
-              cachedTokens: 0,
-              costUsd: 0,
-              subtype: "success",
-              isError: false,
-              errors: [],
-            },
-          ]}
-        />
-      </ThemeProvider>,
-    );
-
+  it("renders the result entry as a compact footer", () => {
+    const html = render(<RunTranscriptView entries={toolRun} />);
+    expect(html).toContain("Completed · 1m 5s · 1.2k in / 340 out · $0.0123");
     expect(html).toContain("<h2>Summary</h2>");
-    expect(html).toMatch(/<li[^>]*>fixed deploy config<\/li>/);
-    expect(html).toMatch(/<li[^>]*>posted issue update<\/li>/);
-    expect(html).not.toContain("result");
+  });
+
+  it("treats the legacy nice mode as readable", () => {
+    const html = render(<RunTranscriptView mode="nice" entries={toolRun} />);
+    expect(html).toContain('data-transcript-mode="readable"');
+  });
+
+  it("keeps the raw view available", () => {
+    const html = render(<RunTranscriptView mode="raw" entries={toolRun} />);
+    expect(html).toContain('data-transcript-mode="raw"');
+    expect(html).toContain("secret plan of attack");
+    expect(html).toContain("tool_call");
   });
 
   it("windows large raw transcripts instead of rendering every entry at once", () => {
@@ -118,11 +83,7 @@ describe("RunTranscriptView", () => {
       text: `line-${index}`,
     }));
 
-    const html = renderToStaticMarkup(
-      <ThemeProvider>
-        <RunTranscriptView mode="raw" entries={entries} />
-      </ThemeProvider>,
-    );
+    const html = render(<RunTranscriptView mode="raw" entries={entries} />);
 
     expect(html).toContain("line-0");
     expect(html).toContain("line-179");

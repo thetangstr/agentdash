@@ -101,7 +101,10 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
-import { RunTranscriptView, type TranscriptMode } from "../components/transcript/RunTranscriptView";
+import { RunTranscriptView } from "../components/transcript/RunTranscriptView";
+// AgentDash: persisted Readable/Raw transcript preference shared with every run surface.
+import { TranscriptModeToggle } from "../components/transcript/ReadableTranscript";
+import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 import {
   isUuidLike,
   type Agent,
@@ -4269,7 +4272,8 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
   const [loadingMoreLog, setLoadingMoreLog] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
   const [isStreamingConnected, setIsStreamingConnected] = useState(false);
-  const [transcriptMode, setTranscriptMode] = useState<TranscriptMode>("nice");
+  // AgentDash: Readable is the default; the viewer's choice persists in localStorage.
+  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
   const logEndRef = useRef<HTMLDivElement>(null);
   const pendingLogLineRef = useRef("");
   const scrollContainerRef = useRef<ScrollContainer | null>(null);
@@ -4654,10 +4658,6 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     [adapter, censorUsernameInLogs, logLines, parserTick],
   );
 
-  useEffect(() => {
-    setTranscriptMode("nice");
-  }, [run.id]);
-
   if (loading && logLoading) {
     return <p className="text-xs text-muted-foreground">Loading run logs...</p>;
   }
@@ -4693,23 +4693,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           Transcript ({transcript.length})
         </span>
         <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-lg border border-border/70 bg-background/70 p-0.5">
-            {(["nice", "raw"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
-                  transcriptMode === mode
-                    ? "bg-accent text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-                onClick={() => setTranscriptMode(mode)}
-              >
-                {mode}
-              </button>
-            ))}
-          </div>
+          <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} />
           {isLive && !isFollowing && (
             <Button
               variant="ghost"

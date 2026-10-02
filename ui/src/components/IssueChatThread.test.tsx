@@ -13,8 +13,10 @@ import {
   findLatestCommentMessageIndex,
   resolveAssistantMessageFoldedState,
   resolveIssueChatHumanAuthor,
+  toReadableToolRowItem,
 } from "./IssueChatThread";
 import { ToastProvider } from "../context/ToastContext";
+import { ReadableToolGroup } from "./transcript/ReadableTranscript";
 import { ToastViewport } from "./ToastViewport";
 import type {
   AskUserQuestionsInteraction,
@@ -2483,6 +2485,125 @@ describe("IssueChatThread", () => {
     expect(container.textContent).toContain("Working");
     expect(container.textContent).not.toContain("Worked");
 
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("renders run blocks in the Readable presentation with a persisted Readable/Raw toggle", () => {
+    window.localStorage.removeItem("agentdash.runTranscript.mode");
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[{
+              id: "run-readable",
+              issueId: "issue-1",
+              status: "running",
+              invocationSource: "comment",
+              triggerDetail: null,
+              startedAt: "2026-04-06T12:00:00.000Z",
+              finishedAt: null,
+              createdAt: "2026-04-06T12:00:00.000Z",
+              agentId: "agent-1",
+              agentName: "Agent 1",
+              adapterType: "claude_local",
+            }]}
+            transcriptsByRunId={new Map([
+              [
+                "run-readable",
+                [
+                  { kind: "thinking", ts: "2026-04-06T12:00:05.000Z", text: "private reasoning text" },
+                  { kind: "tool_call", ts: "2026-04-06T12:00:10.000Z", name: "Read", toolUseId: "t1", input: { file_path: "ui/src/App.tsx" } },
+                  { kind: "tool_result", ts: "2026-04-06T12:00:11.000Z", toolUseId: "t1", content: "import React", isError: false },
+                  { kind: "tool_call", ts: "2026-04-06T12:00:12.000Z", name: "Bash", toolUseId: "t2", input: { command: "pnpm test" } },
+                  { kind: "tool_result", ts: "2026-04-06T12:00:20.000Z", toolUseId: "t2", content: "FAIL app.test.ts", isError: true },
+                  { kind: "system", ts: "2026-04-06T12:00:21.000Z", text: "hook PreToolUse allowed" },
+                  { kind: "stderr", ts: "2026-04-06T12:00:22.000Z", text: "npm warn deprecated glob" },
+                  { kind: "stderr", ts: "2026-04-06T12:00:23.000Z", text: "Error: ECONNREFUSED 127.0.0.1:6379" },
+                  {
+                    kind: "result",
+                    ts: "2026-04-06T12:01:05.000Z",
+                    text: "Wrapped up",
+                    inputTokens: 1200,
+                    outputTokens: 300,
+                    cachedTokens: 0,
+                    costUsd: 0,
+                    subtype: "success",
+                    isError: false,
+                    errors: [],
+                  },
+                ],
+              ],
+            ])}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const readableBody = container.querySelector('div[data-transcript-mode="readable"]');
+    expect(readableBody).not.toBeNull();
+    // Consecutive tool rows fold into the shared "Ran N tools" group; the failed call stays visible.
+    expect(container.textContent).toContain("Ran 2 tools");
+    expect(readableBody?.textContent).toContain("FAIL app.test.ts");
+    expect(readableBody?.textContent).not.toContain("ui/src/App.tsx");
+    act(() => {
+      container.querySelector<HTMLElement>("[data-readable-tool-group] > [role=button]")!.click();
+    });
+    expect(readableBody?.textContent).toContain("Read");
+    expect(readableBody?.textContent).toContain("ui/src/App.tsx");
+    expect(readableBody?.textContent).toContain("FAIL app.test.ts");
+    expect(container.querySelector('[data-readable-tool="error"]')).not.toBeNull();
+    // Reasoning sits behind Details.
+    // Thinking, system and stderr sit behind the run-level Details; the result is a footer.
+    expect(container.textContent).toContain("Details (3)");
+    expect(container.textContent).not.toContain("private reasoning text");
+    expect(container.textContent).not.toContain("hook PreToolUse allowed");
+    expect(container.textContent).not.toContain("npm warn deprecated glob");
+    // Error-looking stderr stays visible.
+    expect(container.querySelector("[data-readable-error]")?.textContent).toContain("ECONNREFUSED");
+    expect(container.querySelector("[data-readable-footer]")?.textContent).toContain("Completed · 1m · 1.2k in / 300 out");
+
+    const rawButton = container.querySelector<HTMLButtonElement>('button[data-transcript-mode="raw"]');
+    expect(rawButton).not.toBeNull();
+    act(() => rawButton!.click());
+
+    expect(window.localStorage.getItem("agentdash.runTranscript.mode")).toBe("raw");
+    expect(container.querySelector('div[data-transcript-mode="raw"]')).not.toBeNull();
+    expect(container.querySelector('div[data-transcript-mode="readable"]')).toBeNull();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('button[data-transcript-mode="readable"]')!.click();
+    });
+    expect(window.localStorage.getItem("agentdash.runTranscript.mode")).toBe("readable");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("shows a tool without a result on a finished message as neutral 'No result', not a success", () => {
+    const tool = { type: "tool-call" as const, toolCallId: "t1", toolName: "Read", args: { file_path: "a.ts" }, argsText: "" };
+    expect(toReadableToolRowItem(tool, true).status).toBe("running");
+    const finished = toReadableToolRowItem(tool, false);
+    expect(finished.status).toBe("no_result");
+    expect(toReadableToolRowItem({ ...tool, result: "body" }, false).status).toBe("completed");
+    expect(toReadableToolRowItem({ ...tool, result: "boom", isError: true }, false).status).toBe("error");
+
+    const root = createRoot(container);
+    act(() => {
+      root.render(<ReadableToolGroup items={[finished]} />);
+    });
+    expect(container.querySelector('[data-readable-tool="no_result"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Succeeded"]')).toBeNull();
+    expect(container.textContent).toContain("No result");
     act(() => {
       root.unmount();
     });
