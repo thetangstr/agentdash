@@ -803,6 +803,43 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           }
         }
 
+        // AgentDash (Scan 4 lane M): resubmission. When the issue comes back
+        // to in_review (the assignee resubmitting, or anyone else moving it),
+        // deliverables that were sent back are waiting for review again, so
+        // Accept and Request changes reappear instead of a dead end. This only
+        // returns them to ready_for_review; acceptance stays with a person.
+        if (existing.status !== "in_review" && issue.status === "in_review") {
+          const resubmitted = await tx.update(issueWorkProducts)
+            .set({ status: "ready_for_review", reviewState: "needs_board_review", updatedAt: new Date() })
+            .where(and(
+              eq(issueWorkProducts.companyId, issue.companyId),
+              eq(issueWorkProducts.issueId, issue.id),
+              eq(issueWorkProducts.status, "changes_requested"),
+            ))
+            .returning({ id: issueWorkProducts.id });
+          for (const product of resubmitted) {
+            await audit({
+              companyId: issue.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.work_product_updated",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                identifier: issue.identifier,
+                workProductId: product.id,
+                changedKeys: ["reviewState", "status"],
+                status: "ready_for_review",
+                reviewState: "needs_board_review",
+                reason: "resubmitted_for_review",
+                ...context.attribution,
+              },
+            });
+          }
+        }
+
         if (Array.isArray(intent.blockedByIssueIds)) {
           const previousBlockedByIds = new Set((existingRelations?.blockedBy ?? []).map((relation) => relation.id));
           const nextBlockedByIds = new Set(intent.blockedByIssueIds as string[]);

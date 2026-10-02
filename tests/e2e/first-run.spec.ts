@@ -54,8 +54,15 @@ test("a new workspace goes through the first run to Home with its first issue as
   await expect(runtime).toContainText("Codex");
   await expect(runtime).toContainText("Hermes");
   await expect(page.getByTestId("first-run-runtime-current")).toContainText("Your workspace uses");
+  // Scan 4 lane M: Continue lands on this workspace's CoS. It used to go to
+  // /SETUP/cos ("Company not found"), because /setup was read as a company code.
+  const companyId = new URL(page.url()).searchParams.get("companyId");
+  const companyRes = await request.get(`${BASE_URL}/api/companies/${companyId}`);
+  expect(companyRes.ok(), await companyRes.text()).toBe(true);
+  const { issuePrefix } = (await companyRes.json()) as { issuePrefix: string };
   await page.getByRole("button", { name: "Continue to your Chief of Staff" }).click();
-  await expect(page).toHaveURL(/\/cos$/);
+  await expect(page).toHaveURL(`${BASE_URL}/${issuePrefix}/cos`);
+  await expect(page.getByText(/Company not found|No company matches/i)).toHaveCount(0);
 
   // GitHub and the first issue stay at /setup.
   await page.goto(`${BASE_URL}/setup`);
