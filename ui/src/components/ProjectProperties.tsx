@@ -661,7 +661,7 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-border text-[10px] text-muted-foreground hover:text-foreground"
+                  className="inline-flex h-4 w-4 max-sm:h-auto max-sm:min-h-5 max-sm:w-auto max-sm:min-w-5 items-center justify-center rounded-full border border-border text-[10px] text-muted-foreground hover:text-foreground"
                   aria-label="Codebase help"
                 >
                   ?
@@ -920,7 +920,7 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-border text-[10px] text-muted-foreground hover:text-foreground"
+                      className="inline-flex h-4 w-4 max-sm:h-auto max-sm:min-h-5 max-sm:w-auto max-sm:min-w-5 items-center justify-center rounded-full border border-border text-[10px] text-muted-foreground hover:text-foreground"
                       aria-label="Execution workspaces help"
                     >
                       ?

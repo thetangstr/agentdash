@@ -104,9 +104,11 @@ export function ReportIssueButton() {
         onClick={() => setOpen(true)}
         title="Report a bug or request a feature"
         aria-label="Report an issue"
+        className="max-sm:size-11"
+        data-testid="report-issue-button"
       >
         <MessageSquarePlus className="size-3.5" />
-        <span className="hidden sm:inline">Report an issue</span>
+        <span className="hidden md:inline">Report an issue</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>

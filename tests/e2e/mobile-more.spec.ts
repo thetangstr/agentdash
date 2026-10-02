@@ -10,6 +10,11 @@
  *
  * Set MOBILE_SHOTS_DIR to also save a full-page screenshot of every page.
  *
+ * The spec has no port of its own: every request and navigation is relative to
+ * the config's baseURL, so run it on a free port with PAPERCLIP_E2E_PORT, e.g.
+ *   PAPERCLIP_E2E_PORT=3842 pnpm exec playwright test \
+ *     --config tests/e2e/playwright.config.ts mobile-more.spec.ts
+ *
  * Requires local_trusted deployment mode (playwright.config.ts webServer env).
  */
 
@@ -17,8 +22,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
-const BASE_URL = `http://127.0.0.1:${PORT}`;
 const SHOTS_DIR = process.env.MOBILE_SHOTS_DIR?.trim() || null;
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
@@ -26,23 +29,16 @@ test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true
 type Company = { id: string; issuePrefix: string };
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown): Promise<T> {
-  const res = await request.post(`${BASE_URL}${url}`, { data });
+  const res = await request.post(url, { data });
   expect(res.ok(), `${url}: ${res.status()} ${await res.text()}`).toBe(true);
   return (await res.json()) as T;
 }
 
 async function seedCompany(request: APIRequestContext): Promise<Company> {
-  const created = await request.post(`${BASE_URL}/api/companies`, {
-    data: { name: `E2E Mobile More ${Date.now()}` },
+  // Fail loudly: auditing someone else's company would test the wrong data.
+  const company = await post<Company>(request, "/api/companies", {
+    name: `E2E Mobile More ${Date.now()}`,
   });
-  let company: Company;
-  if (created.ok()) {
-    company = (await created.json()) as Company;
-  } else {
-    const list = await request.get(`${BASE_URL}/api/companies`);
-    expect(list.ok()).toBe(true);
-    company = ((await list.json()) as Company[])[0]!;
-  }
 
   const parent = await post<{ id: string }>(request, `/api/companies/${company.id}/goals`, {
     title: "Grow the customer base in the Pacific Northwest region this year",
@@ -71,7 +67,7 @@ async function seedCompany(request: APIRequestContext): Promise<Company> {
     },
   );
   if (hire.approval) {
-    await request.post(`${BASE_URL}/api/approvals/${hire.approval.id}/approve`, { data: {} });
+    await post(request, `/api/approvals/${hire.approval.id}/approve`, {});
   }
   await post(request, `/api/companies/${company.id}/routines`, {
     title: "Weekly pipeline review for every open opportunity",
@@ -125,14 +121,16 @@ async function shoot(page: Page, name: string) {
   await page.screenshot({ path: path.join(SHOTS_DIR, `${name}.png`), fullPage: true });
 }
 
+// `ready` is seeded or page-specific text that only renders once the page's
+// data has loaded, so the audit never runs against a skeleton.
 const PAGES = [
-  { name: "goals", path: "goals", ready: /Grow the customer base/ },
-  { name: "activity", path: "activity", ready: null },
+  { name: "goals", path: "goals", ready: /Launch a referral programme/ },
+  { name: "activity", path: "activity", ready: /Mobile Audit Worker/ },
   { name: "routines", path: "routines", ready: /Weekly pipeline review/ },
-  { name: "costs", path: "costs", ready: null },
+  { name: "costs", path: "costs", ready: /Website relaunch with a deliberately long project name/ },
   { name: "projects", path: "projects", ready: /Website relaunch/ },
-  { name: "company-settings", path: "company/settings", ready: null },
-  { name: "instance-settings", path: "instance/settings/general", ready: null },
+  { name: "company-settings", path: "company/settings", ready: /Danger zone/i },
+  { name: "instance-settings", path: "instance/settings/general", ready: /Backup retention/ },
 ] as const;
 
 test.describe("Mobile More pages at 390×844", () => {
@@ -145,26 +143,29 @@ test.describe("Mobile More pages at 390×844", () => {
   for (const target of PAGES) {
     test(`${target.name}: no horizontal scroll, no text under 12px`, async ({ page }) => {
       const url = target.path.startsWith("instance/")
-        ? `${BASE_URL}/${target.path}`
-        : `${BASE_URL}/${company.issuePrefix}/${target.path}`;
+        ? `/${target.path}`
+        : `/${company.issuePrefix}/${target.path}`;
       await page.goto(url);
-      await expect(page.locator("#main-content")).toBeVisible({ timeout: 20_000 });
-      if (target.ready) {
-        await expect(page.locator("#main-content").getByText(target.ready).first()).toBeVisible({ timeout: 20_000 });
-      }
-      // Let charts, skeletons and late queries settle.
-      await page.waitForLoadState("networkidle").catch(() => undefined);
-      await page.waitForTimeout(500);
-      await shoot(page, target.name);
+      await expect(page.locator("#main-content").getByText(target.ready).first()).toBeVisible({ timeout: 20_000 });
 
-      const result = await audit(page);
-      expect.soft(result.overflow, "horizontal page overflow in px").toBeLessThanOrEqual(1);
-      expect.soft(result.small, "visible text under 12px").toEqual([]);
+      // Polled, so content that renders after the ready marker is still audited.
+      await expect
+        .poll(async () => (await audit(page)).overflow, { message: "horizontal page overflow in px" })
+        .toBeLessThanOrEqual(1);
+      await expect
+        .poll(async () => (await audit(page)).small, { message: "visible text under 12px" })
+        .toEqual([]);
+      await shoot(page, target.name);
     });
   }
 
-  test("bottom nav and sidebar drawer tap targets are at least 44px", async ({ page }) => {
-    await page.goto(`${BASE_URL}/${company.issuePrefix}/goals`);
+  test("bottom nav, header and sidebar drawer tap targets are at least 44px", async ({ page }) => {
+    // The Report button only renders when the instance has a GitHub credential;
+    // stub its config so the header's tap target is always measured.
+    await page.route("**/api/issue-reports/config", (route) =>
+      route.fulfill({ json: { enabled: true, repo: "acme/web" } }),
+    );
+    await page.goto(`/${company.issuePrefix}/goals`);
     const nav = page.getByRole("navigation", { name: "Mobile navigation" });
     await expect(nav).toBeVisible({ timeout: 20_000 });
     const links = nav.locator("a, button");
@@ -177,16 +178,16 @@ test.describe("Mobile More pages at 390×844", () => {
       expect.soft(box!.width, `bottom nav item ${i} width`).toBeGreaterThanOrEqual(44);
     }
 
-    // The fixed status dot sits above the bottom nav, not on it.
-    const navBox = await nav.boundingBox();
-    const dot = page.getByTestId("connection-status");
-    if (await dot.count()) {
-      const dotBox = await dot.boundingBox();
-      if (dotBox && navBox) expect.soft(dotBox.y + dotBox.height).toBeLessThanOrEqual(navBox.y);
-    }
-
-    // The status cluster lives in the sticky header on phones.
-    await expect(page.getByTestId("mobile-status-cluster")).toBeVisible();
+    // The status dot and the Report button live in the sticky header on
+    // phones, not floating over content; the button is a 44px target.
+    const cluster = page.getByTestId("mobile-status-cluster");
+    await expect(cluster.getByTestId("connection-status")).toBeVisible();
+    expect((await cluster.boundingBox())!.y).toBeLessThan(100);
+    const report = cluster.getByTestId("report-issue-button");
+    await expect(report).toBeVisible();
+    const reportBox = await report.boundingBox();
+    expect.soft(reportBox!.height, "report button height").toBeGreaterThanOrEqual(44);
+    expect.soft(reportBox!.width, "report button width").toBeGreaterThanOrEqual(44);
 
     // Layout publishes the nav's live height for bottom-docked composers.
     const offset = await page.evaluate(() =>
@@ -198,8 +199,8 @@ test.describe("Mobile More pages at 390×844", () => {
     await page.getByRole("button", { name: "Open sidebar" }).click();
     const drawerLinks = page.locator("[data-sidebar-nav-item]");
     await expect(drawerLinks.first()).toBeVisible();
-    // Let the slide-in transition finish before measuring.
-    await page.waitForTimeout(400);
+    // Measure once the slide-in transition has brought the drawer fully on screen.
+    await expect.poll(async () => (await drawerLinks.first().boundingBox())?.x ?? -1).toBeGreaterThanOrEqual(0);
     await shoot(page, "drawer");
     const drawerCount = await drawerLinks.count();
     for (let i = 0; i < drawerCount; i += 1) {

@@ -96,6 +96,18 @@ describe("ReportIssueButton", () => {
     expect(container.textContent).toBe("");
   });
 
+  // AgentDash: mobile redesign, lane C.
+  it("is a 44px icon button on phones and keeps its label from md up", async () => {
+    await render();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-testid='report-issue-button']")!;
+    expect(trigger.getAttribute("aria-label")).toBe("Report an issue");
+    expect(trigger.className).toContain("max-sm:size-11");
+    // Icon-only below md (768px), where it sits in the mobile header, so the
+    // 640-767px band does not squeeze the breadcrumb.
+    const label = Array.from(trigger.querySelectorAll("span")).find((el) => el.textContent === "Report an issue")!;
+    expect(label.className).toContain("hidden md:inline");
+  });
+
   it("files a report and shows where it landed", async () => {
     await render();
 

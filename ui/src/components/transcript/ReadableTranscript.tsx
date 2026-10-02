@@ -104,7 +104,7 @@ export function CappedOutput({ text, tone = "default" }: { text: string; tone?: 
     <div>
       <pre
         className={cn(
-          "max-h-[28rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-[1.15rem]",
+          "max-h-[28rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] max-sm:text-xs leading-[1.15rem]",
           tone === "error" ? "text-red-700 dark:text-red-300" : "text-foreground/80",
         )}
       >
@@ -395,7 +395,7 @@ export function ReadableDetails({
                   {line.text}
                 </MarkdownBody>
               ) : (
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-foreground/70">
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] max-sm:text-xs text-foreground/70">
                   {line.text}
                 </pre>
               )}
@@ -508,7 +508,7 @@ function ReadableErrorLines({ lines }: { lines: string[] }) {
       className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-2.5 py-1.5 text-red-700 dark:text-red-300"
     >
       <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-[11px]">{lines.join("\n")}</pre>
+      <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-[11px] max-sm:text-xs">{lines.join("\n")}</pre>
     </div>
   );
 }
@@ -538,7 +538,7 @@ function ReadableDiff({ block }: { block: Extract<ReadableBlock, { type: "diff" 
         {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
       </button>
       {open && (
-        <pre className="ml-5 mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px]">
+        <pre className="ml-5 mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] max-sm:text-xs">
           {block.hunks.map((hunk, index) => (
             <span
               key={`${index}-${hunk.changeType}`}

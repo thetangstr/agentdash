@@ -181,6 +181,8 @@
  * 1. Readability: no text under 12px. The sub-12px arbitrary sizes used across
  *    the app map to the --text-xs token on phones. These rules sit outside the
  *    cascade layers on purpose, so they win over Tailwind's utilities layer.
+ *    Consequence: no utility class can override this floor on phones; to go
+ *    below 12px there, a component would need its own unlayered rule.
  * 2. Tap targets: menu items, listbox options and icon buttons get a 44px
  *    minimum, matching the pointer:coarse rule above for narrow viewports
  *    that report a fine pointer (desktop browsers narrowed to phone width). */
