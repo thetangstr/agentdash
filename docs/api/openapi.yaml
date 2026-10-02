@@ -4582,12 +4582,15 @@ components:
           properties:
             monthSpendCents:
               type: number
+            monthTokens:
+              type: number
             monthBudgetCents:
               type: number
             monthUtilizationPercent:
               type: number
           required:
             - monthSpendCents
+            - monthTokens
             - monthBudgetCents
             - monthUtilizationPercent
         pendingApprovals:
