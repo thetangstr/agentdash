@@ -95,6 +95,16 @@ export function conversationService(db: Db) {
       return true;
     },
 
+    // AgentDash: one message, only when it belongs to this conversation.
+    getMessage: async (conversationId: string, messageId: string) => {
+      const rows = await db
+        .select()
+        .from(assistantMessages)
+        .where(and(eq(assistantMessages.id, messageId), eq(assistantMessages.conversationId, conversationId)))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
     // AgentDash: whether any message of this card kind exists in the conversation.
     hasCard: async (conversationId: string, cardKind: string) => {
       const rows = await db
@@ -119,14 +129,33 @@ export function conversationService(db: Db) {
         .values({
           conversationId: input.conversationId,
           role: input.authorKind,
+          // AgentDash: remember who wrote a person's message (Retry is theirs only).
+          authorUserId: input.authorKind === "user" ? input.authorId : null,
           content: input.body,
           cardKind: input.cardKind ?? null,
           cardPayload: input.cardPayload ?? null,
         })
         .returning();
       const row = rows[0]!;
-      if (input.companyId) {
-        emitMessageCreated({ ...row, companyId: input.companyId });
+      // AgentDash: every message reaches open chats live. Callers that post on
+      // behalf of an agent (CoS replier, summoner, onboarding routes) often
+      // omit companyId; the event then used to be skipped, so agent replies
+      // only appeared after a reload. Resolve it from the conversation instead.
+      let companyId = input.companyId ?? null;
+      if (!companyId) {
+        try {
+          const conv = await db
+            .select({ companyId: assistantConversations.companyId })
+            .from(assistantConversations)
+            .where(eq(assistantConversations.id, input.conversationId))
+            .limit(1);
+          companyId = conv[0]?.companyId ?? null;
+        } catch {
+          // Best effort: the message is stored; a reload still shows it.
+        }
+      }
+      if (companyId) {
+        emitMessageCreated({ ...row, companyId });
       }
       return row;
     },

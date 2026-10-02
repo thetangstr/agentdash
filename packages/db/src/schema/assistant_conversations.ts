@@ -32,6 +32,10 @@ export const assistantMessages = pgTable(
     tokenCount: integer("token_count"),
     cardKind: varchar("card_kind", { length: 32 }),
     cardPayload: jsonb("card_payload"),
+    // AgentDash: the signed-in person who posted a user message (null for agent
+    // messages and rows from before this column). The Retry route only
+    // re-dispatches a message for the person who wrote it.
+    authorUserId: text("author_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

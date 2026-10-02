@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { eq } from "drizzle-orm";
 import { type Db, deepInterviewSpecs as deepInterviewSpecsTable } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
-import { unauthorized, badRequest, notFound } from "../errors.js";
+import { unauthorized, badRequest, notFound, forbidden } from "../errors.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
   companyService,
@@ -17,6 +17,7 @@ import {
 import { llmSummonAdapter } from "../services/agent-summoner.js";
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
+import { postDispatchFailure } from "../services/cos-dispatch-failure.js";
 import { buildPhase0Greeting } from "../services/onboarding-orchestrator.js";
 
 const COMPANY_INBOX_TITLE = "Company Inbox";
@@ -139,6 +140,68 @@ export function conversationRoutes(db: Db) {
     res.json(conversation);
   });
 
+  // AgentDash (P0, v2026.1002.0): a failed dispatch is never silent. The
+  // error is logged as before AND posted into the conversation as a
+  // `cos_dispatch_error_v1` card ("CoS couldn't reply: <reason>. Retry"),
+  // which publishes `message.created` so the open chat drops its "thinking"
+  // state and offers Retry.
+  function dispatchInBackground(input: {
+    messageId: string;
+    conversationId: string;
+    companyId: string;
+    authorUserId: string;
+    body: string;
+  }) {
+    void dispatcher.onMessage(input).catch(async (err: unknown) => {
+      logger.error({ err, conversationId: input.conversationId }, "conversation dispatch failed");
+      try {
+        const cos = await cosResolver.findByCompany(input.companyId);
+        await postDispatchFailure(svc, {
+          conversationId: input.conversationId,
+          companyId: input.companyId,
+          authorId: cos?.id ?? "system",
+          retryMessageId: input.messageId,
+          err,
+        });
+      } catch (postErr) {
+        logger.error(
+          { err: postErr, conversationId: input.conversationId },
+          "could not post the dispatch failure into the conversation",
+        );
+      }
+    });
+  }
+
+  // POST /api/conversations/:id/messages/:messageId/retry
+  // Re-runs the dispatch for one of the person's own earlier messages (the
+  // Retry on a dispatch error card) without posting the message again.
+  router.post("/:id/messages/:messageId/retry", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const conversation = await loadAuthorizedConversation(req);
+    const message = await svc.getMessage(conversation.id, req.params.messageId as string);
+    if (!message || message.role !== "user") {
+      throw notFound("Message not found");
+    }
+    // The CoS acts with the authority of the person who sent the words, so
+    // only that person may re-run them. company access (above) is not enough:
+    // a teammate must not retry someone else's message under their own
+    // identity. Messages from before the author was recorded are not retryable;
+    // the person sends them again.
+    if (!message.authorUserId || message.authorUserId !== req.actor.userId) {
+      throw forbidden("Only the person who sent this message can retry it");
+    }
+    dispatchInBackground({
+      messageId: message.id,
+      conversationId: conversation.id,
+      companyId: conversation.companyId,
+      authorUserId: req.actor.userId,
+      body: message.content,
+    });
+    res.status(202).json({ ok: true, messageId: message.id });
+  });
+
   // POST /api/conversations/:id/messages
   router.post("/:id/messages", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
@@ -157,17 +220,13 @@ export function conversationRoutes(db: Db) {
       body,
       companyId,
     });
-    void dispatcher
-      .onMessage({
-        messageId: msg.id,
-        conversationId: conversation.id,
-        companyId,
-        authorUserId: req.actor.userId,
-        body,
-      })
-      .catch((err: unknown) => {
-        logger.error({ err, conversationId: req.params.id }, "conversation dispatch failed");
-      });
+    dispatchInBackground({
+      messageId: msg.id,
+      conversationId: conversation.id,
+      companyId,
+      authorUserId: req.actor.userId,
+      body,
+    });
     res.status(201).json(msg);
   });
 

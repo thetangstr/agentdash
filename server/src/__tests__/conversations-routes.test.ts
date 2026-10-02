@@ -10,6 +10,7 @@ const baseMessage = {
   id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   conversationId,
   role: "user" as const,
+  authorUserId: userId,
   content: "Hello world",
   cardKind: null,
   cardPayload: null,
@@ -25,6 +26,7 @@ const mockConversationService = vi.hoisted(() => ({
   findByCompany: vi.fn(),
   create: vi.fn(),
   addParticipant: vi.fn(),
+  getMessage: vi.fn(),
 }));
 
 const mockAgentService = vi.hoisted(() => ({
@@ -378,6 +380,103 @@ describe.sequential("conversation routes", () => {
           .send({}),
       );
       expect(res.status).toBe(400);
+    });
+
+    // Regression (P0, v2026.1002.0): a failed CoS reply used to end in a log
+    // line only, and the chat sat silently on the person's message.
+    it("posts a 'CoS couldn't reply' card with a Retry target when dispatch fails", async () => {
+      mockAgentService.list.mockResolvedValue([{ id: "cos-agent", role: "chief_of_staff" }]);
+      mockDispatchOnMessage.mockRejectedValue(
+        new Error(
+          'Adapter "hermes_local" failed ([dispatch-llm] /usr/local/bin/hermes exited 1: session_id: 20261002_085216_21b463) ' +
+            "and the adapter/model invariant refuses to retry on a different adapter or model. Fix or reconfigure the adapter.",
+        ),
+      );
+      const app = await createApp(boardActor);
+      await requestApp(app, (base) =>
+        request(base)
+          .post(`/api/conversations/${conversationId}/messages`)
+          .send({ body: "Hello world" }),
+      );
+      await vi.waitFor(() => expect(mockConversationService.postMessage).toHaveBeenCalledTimes(2));
+      const failure = mockConversationService.postMessage.mock.calls[1]![0];
+      expect(failure).toMatchObject({
+        conversationId,
+        authorKind: "agent",
+        authorId: "cos-agent",
+        companyId,
+        cardKind: "cos_dispatch_error_v1",
+        cardPayload: { retryMessageId: baseMessage.id },
+      });
+      expect(failure.body).toBe(
+        "CoS couldn't reply: hermes_local: hermes exited 1: session_id: 20261002_085216_21b463. Retry",
+      );
+    });
+  });
+
+  describe("POST /:id/messages/:messageId/retry", () => {
+    it("re-dispatches the person's message without posting it again", async () => {
+      mockConversationService.getMessage.mockResolvedValue(baseMessage);
+      const app = await createApp(boardActor);
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(res.status).toBe(202);
+      await vi.waitFor(() =>
+        expect(mockDispatchOnMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ messageId: baseMessage.id, conversationId, companyId, body: "Hello world" }),
+        ),
+      );
+      expect(mockConversationService.getMessage).toHaveBeenCalledWith(conversationId, baseMessage.id);
+      expect(mockConversationService.postMessage).not.toHaveBeenCalled();
+    });
+
+    it("refuses to retry an agent message or one from another conversation", async () => {
+      const app = await createApp(boardActor);
+      mockConversationService.getMessage.mockResolvedValue({ ...baseMessage, role: "agent" });
+      const agentMsg = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(agentMsg.status).toBe(404);
+      mockConversationService.getMessage.mockResolvedValue(null);
+      const foreign = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(foreign.status).toBe(404);
+      expect(mockDispatchOnMessage).not.toHaveBeenCalled();
+    });
+
+    it("refuses a teammate retrying someone else's message, and a legacy message with no recorded author", async () => {
+      const app = await createApp(boardActor);
+      mockConversationService.getMessage.mockResolvedValue({ ...baseMessage, authorUserId: "someone-else" });
+      const other = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(other.status).toBe(403);
+      mockConversationService.getMessage.mockResolvedValue({ ...baseMessage, authorUserId: null });
+      const legacy = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(legacy.status).toBe(403);
+      expect(mockDispatchOnMessage).not.toHaveBeenCalled();
+    });
+
+    it("keeps the company-access check on retry", async () => {
+      mockConversationService.getMessage.mockResolvedValue(baseMessage);
+      const app = await createApp({ ...boardActor, companyIds: ["other-company"] });
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(res.status).toBe(403);
+      expect(mockDispatchOnMessage).not.toHaveBeenCalled();
+    });
+
+    it("rejects anonymous callers", async () => {
+      const app = await createApp(noActor);
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(res.status).toBe(401);
     });
   });
 

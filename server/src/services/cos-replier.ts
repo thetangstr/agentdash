@@ -14,6 +14,7 @@ import { logger } from "../middleware/logger.js";
 import { WORKFORCE_TEMPLATES, isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
 import type { DispatchMeter } from "./dispatch-llm.js";
+import { DISPATCH_ERROR_CARD_KIND } from "./cos-dispatch-failure.js";
 
 const AGENT_PLAN_ADAPTER_TYPE_LIST = [
   "claude_local",
@@ -293,6 +294,8 @@ export function cosReplier(deps: Deps) {
       const messages = recent
         .slice()
         .reverse()
+        // A "CoS couldn't reply" card is UI state, not something the CoS said.
+        .filter((m: any) => m.cardKind !== DISPATCH_ERROR_CARD_KIND)
         .map((m: any) => ({
           role: m.role === "agent" ? "assistant" : "user",
           content: m.content,
@@ -361,19 +364,39 @@ export function cosReplier(deps: Deps) {
       const { body, trailer } = parseTrailer(text);
       const visibleBody = body.length > 0 ? body : text.trimEnd();
 
+      // AgentDash (GH: CoS replies only after a reload): every post carries the
+      // companyId so the conversation service publishes `message.created` and
+      // the open chat shows the reply live.
       const post = (messageBody: string) =>
         deps.conversations.postMessage({
           conversationId: input.conversationId,
           authorKind: "agent",
           authorId: input.cosAgentId,
           body: messageBody,
+          companyId: input.companyId,
         });
 
-      // Posts the plan card, records it as the current proposal, then posts
-      // the visible body that introduces it. Throws only when the card itself
-      // could not be posted; once the card is up, a later failure is logged
-      // and the card stands (confirm-plan reads the latest card).
+      // Posts the visible body that introduces the plan, then the plan card,
+      // then records the card as the current proposal. The intro goes first so
+      // the chat reads "here is the plan" above the card rather than below it
+      // (they used to be created 2ms apart in the other order). Throws only
+      // when the card itself could not be posted; an intro or recording
+      // failure is logged and the card stands (confirm-plan reads the latest
+      // card).
+      // Set once a plan intro is up, so a failed card post that lands in the
+      // outer catch below does not post the same text a second time.
+      let planIntroPosted = false;
       const postPlan = async (plan: AgentPlanProposalV1Payload, planBody: string) => {
+        let introMsg: unknown = null;
+        try {
+          introMsg = await post(planBody);
+          planIntroPosted = true;
+        } catch (err) {
+          logger.warn(
+            { err, conversationId: input.conversationId },
+            "cos-replier: could not post the plan intro; posting the card anyway",
+          );
+        }
         const cardMsg = await deps.conversations.postMessage({
           conversationId: input.conversationId,
           authorKind: "agent",
@@ -381,19 +404,19 @@ export function cosReplier(deps: Deps) {
           body: "",
           cardKind: PLAN_CARD_KIND,
           cardPayload: plan as unknown as Record<string, unknown>,
+          companyId: input.companyId,
         });
         try {
           await cosState?.advancePhase(input.conversationId, "plan", {
             proposalMessageId: cardMsg?.id ?? null,
           });
-          return await post(planBody);
         } catch (err) {
           logger.warn(
             { err, conversationId: input.conversationId },
-            "cos-replier: plan card posted but recording it or its intro failed",
+            "cos-replier: plan card posted but recording it as the proposal failed",
           );
-          return cardMsg;
         }
+        return introMsg ?? cardMsg;
       };
 
       const planCardExists = async (): Promise<boolean> => {
@@ -500,8 +523,11 @@ export function cosReplier(deps: Deps) {
         } catch (err) {
           logger.warn(
             { err, conversationId: input.conversationId },
-            "cos-replier: failed to apply phase transition; posting body anyway",
+            planIntroPosted
+              ? "cos-replier: plan card could not be posted after its intro; the next message retries"
+              : "cos-replier: failed to apply phase transition; posting body anyway",
           );
+          if (planIntroPosted) return null;
         }
       } else if (!trailer && state) {
         logger.warn(
@@ -510,12 +536,7 @@ export function cosReplier(deps: Deps) {
         );
       }
 
-      return deps.conversations.postMessage({
-        conversationId: input.conversationId,
-        authorKind: "agent",
-        authorId: input.cosAgentId,
-        body: visibleBody,
-      });
+      return post(visibleBody);
     },
   };
 }
