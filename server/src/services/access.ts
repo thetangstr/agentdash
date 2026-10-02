@@ -755,72 +755,6 @@ export function accessService(db: Db) {
     return inserted ?? (await getMembership(companyId, principalType, principalId));
   }
 
-  /**
-   * AgentDash (scan 3, lane H): repair for workspaces whose founder was
-   * demoted by the old setPrincipalPermission (owner -> member on the first
-   * /cos bootstrap). Restores `owner` only when ALL of these hold, in one
-   * conditional UPDATE so a concurrent change cannot slip between the checks:
-   *   - the user's active membership is `member`;
-   *   - the company has no active human owner or admin at all (the
-   *     at-least-one-admin invariant is already broken, which only that bug
-   *     produced);
-   *   - the user is the only active human member;
-   *   - the user granted themselves agents:create, which only the company
-   *     create route and the /cos bootstrap do, for the workspace's creator.
-   * Idempotent: once restored, the first condition no longer matches. Returns
-   * true only when this call restored the role.
-   */
-  async function restoreDemotedFounderOwner(companyId: string, userId: string): Promise<boolean> {
-    const restored = await db
-      .update(companyMemberships)
-      .set({ membershipRole: "owner", updatedAt: new Date() })
-      .where(
-        and(
-          eq(companyMemberships.companyId, companyId),
-          eq(companyMemberships.principalType, "user"),
-          eq(companyMemberships.principalId, userId),
-          eq(companyMemberships.status, "active"),
-          eq(companyMemberships.membershipRole, "member"),
-          sql`not exists (
-            select 1 from company_memberships as admins
-            where admins.company_id = ${companyId}
-              and admins.principal_type = 'user'
-              and admins.status = 'active'
-              and admins.membership_role in ('owner', 'admin')
-          )`,
-          sql`not exists (
-            select 1 from company_memberships as others
-            where others.company_id = ${companyId}
-              and others.principal_type = 'user'
-              and others.status = 'active'
-              and others.principal_id <> ${userId}
-          )`,
-          sql`exists (
-            select 1 from principal_permission_grants as grants
-            where grants.company_id = ${companyId}
-              and grants.principal_type = 'user'
-              and grants.principal_id = ${userId}
-              and grants.permission_key = 'agents:create'
-              and grants.granted_by_user_id = ${userId}
-          )`,
-        ),
-      )
-      .returning()
-      .then((rows) => rows[0] ?? null);
-    if (!restored) return false;
-    publishMembershipAccessChange(restored, "membership updated"); // AgentDash (GH #708)
-    await logActivity(db, {
-      companyId,
-      actorType: "system",
-      actorId: "onboarding-bootstrap",
-      action: "company.owner_restored",
-      entityType: "company_membership",
-      entityId: restored.id,
-      details: { userId, from: "member", to: "owner", reason: "founder demoted by a permission grant" },
-    });
-    return true;
-  }
-
   async function setPrincipalGrants(
     companyId: string,
     principalType: PrincipalType,
@@ -1032,7 +966,6 @@ export function accessService(db: Db) {
     getMemberById,
     ensureMembership,
     ensureMembershipExists,
-    restoreDemotedFounderOwner,
     listMembers,
     listActiveUserMemberships,
     copyActiveUserMemberships,

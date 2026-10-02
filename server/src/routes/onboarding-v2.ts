@@ -626,7 +626,7 @@ export function onboardingV2Routes(db: Db) {
     const accepted = await acceptOnboardingHires(companyId, conversationId, 'interview', 1, res,
       async acceptance => agentCreatorFromProposal({
         agents: agentService(acceptance.executor), instructions: agentInstructionsService(),
-      }).accept({ companyId, reportsToAgentId, proposal, transcript }, acceptance));
+      }).accept({ companyId, reportsToAgentId, proposal, transcript, accountableUserId: req.actor.userId }, acceptance));
     if (!accepted) return;
     let result: Awaited<ReturnType<ReturnType<typeof agentCreatorFromProposal>['complete']>>;
     try {
@@ -734,14 +734,15 @@ export function onboardingV2Routes(db: Db) {
     const previousHire = await readHireReceipt(companyId, conversationId, receiptKey);
     if (previousHire) throw consumedHire(previousHire);
     if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
-    // AgentDash (scan 3, lane H): plan hires answer to the human who confirmed
-    // the plan (autonomous, accountable = them) instead of "Needs a steward".
-    const hireAccountability = await onboardingHireAccountability(db, companyId, req.actor.userId);
     const accepted = await acceptOnboardingHires(companyId, conversationId, receiptKey, payload.agents.length, res, async (acceptance, index) => {
       const txAgents = agentService(acceptance.executor);
       if (index === 0) await cosOnboardingStateService(acceptance.executor).advancePhase(conversationId, 'materializing');
       const cos = (await txAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
       const planAgent = payload.agents[index];
+      // AgentDash (scan 3, lane H): plan hires answer to the human who confirmed
+      // the plan (autonomous, accountable = them) instead of "Needs a steward".
+      // The membership is read inside the hire transaction.
+      const hireAccountability = await onboardingHireAccountability(acceptance.executor, companyId, req.actor.userId);
       const created = await txAgents.create(companyId, {
         // AgentDash: keep the proposed role. It maps onto the AGENT_ROLES enum
         // (nearest fit, "general" only when nothing fits) and the card's own

@@ -29,6 +29,7 @@ import {
   companyMemberships,
   cosOnboardingStates,
   createDb,
+  instanceUserRoles,
   principalPermissionGrants,
   type Db,
 } from "@paperclipai/db";
@@ -240,73 +241,75 @@ describeEmbeddedPostgres("onboarding: founder identity, hired roles and stewards
     expect(accountability.get(cosAgentId)?.via).toBe("steward");
   });
 
-  describe("repair for founders the old grant demoted", () => {
-    it("restores owner for the sole human creator and pairs them with the existing CoS", async () => {
+  // Review of PR #975: a runtime "restore the sole self-granted member to owner"
+  // rule promoted the wrong person in both of these shapes. There is no runtime
+  // repair; a demoted founder is restored by an operator
+  // (`agentdash doctor repair-founder-owner`, cli/src/commands/repair-founder-owner.ts).
+  describe("no runtime owner repair", () => {
+    async function archiveOwner(companyId: string, userId: string) {
+      await db
+        .update(companyMemberships)
+        .set({ status: "archived" })
+        .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, userId)));
+    }
+
+    it("PoC 1: an invited admin, demoted to member after the founder is archived, is not promoted by /cos", async () => {
+      stubEnv();
+      const founder = await signedInUser();
+      const companyId = await createCompany(founder.token, "Invite PoC Co");
+      const invited = await signedInUser("invited");
+      // What invite auto-approval writes: an admin whose grants name the joiner as grantor.
+      await db.insert(companyMemberships).values({
+        companyId, principalType: "user", principalId: invited.userId, membershipRole: "member", status: "active",
+      });
+      await db.insert(principalPermissionGrants).values({
+        companyId, principalType: "user", principalId: invited.userId, permissionKey: "agents:create",
+        grantedByUserId: invited.userId,
+      });
+      await archiveOwner(companyId, founder.userId);
+
+      for (let visit = 0; visit < 2; visit++) {
+        const res = await bootstrap(invited.token, companyId);
+        expect(res.status).toBe(403);
+      }
+      expect(await membershipRole(companyId, invited.userId)).toEqual({ role: "member", status: "active" });
+      const restored = await db
+        .select({ id: activityLog.id })
+        .from(activityLog)
+        .where(and(eq(activityLog.companyId, companyId), eq(activityLog.action, "company.owner_restored")));
+      expect(restored).toHaveLength(0);
+    });
+
+    it("PoC 2: an instance admin added as a plain member is not promoted by repeated /cos calls", async () => {
+      stubEnv();
+      const founder = await signedInUser();
+      const companyId = await createCompany(founder.token, "Instance Admin PoC Co");
+      const admin = await signedInUser("instance-admin");
+      await db.insert(instanceUserRoles).values({ userId: admin.userId, role: "instance_admin" });
+      await db.insert(companyMemberships).values({
+        companyId, principalType: "user", principalId: admin.userId, membershipRole: "member", status: "active",
+      });
+      await archiveOwner(companyId, founder.userId);
+
+      const first = await bootstrap(admin.token, companyId);
+      expect(first.status).toBe(200);
+      const second = await bootstrap(admin.token, companyId);
+      expect(second.status).toBe(200);
+      expect(await membershipRole(companyId, admin.userId)).toEqual({ role: "member", status: "active" });
+    });
+
+    it("a founder demoted by the old code stays member at /cos until an operator repairs it", async () => {
       stubEnv();
       const { userId, token } = await signedInUser();
       const companyId = await createCompany(token, "Demoted Co");
-      const boot = await bootstrap(token, companyId);
-      expect(boot.status).toBe(200);
-      // What the old code left behind: member, and no CoS pairing.
+      expect((await bootstrap(token, companyId)).status).toBe(200);
       await db
         .update(companyMemberships)
         .set({ membershipRole: "member" })
         .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, userId)));
-      await db.delete(agentStewardships).where(eq(agentStewardships.companyId, companyId));
 
-      const repaired = await bootstrap(token, companyId);
-      expect(repaired.status).toBe(200);
-      expect(await membershipRole(companyId, userId)).toEqual({ role: "owner", status: "active" });
-      expect(await activeSteward(companyId, boot.body.cosAgentId)).toBe(userId);
-      const audit = await db
-        .select({ action: activityLog.action })
-        .from(activityLog)
-        .where(and(eq(activityLog.companyId, companyId), eq(activityLog.action, "company.owner_restored")));
-      expect(audit).toHaveLength(1);
-
-      // Idempotent: nothing more to repair on the next visit.
-      expect((await bootstrap(token, companyId)).status).toBe(200);
-      const auditAfter = await db
-        .select({ action: activityLog.action })
-        .from(activityLog)
-        .where(and(eq(activityLog.companyId, companyId), eq(activityLog.action, "company.owner_restored")));
-      expect(auditAfter).toHaveLength(1);
-    });
-
-    it("does not promote a member when another human is in the company", async () => {
-      stubEnv();
-      const founder = await signedInUser();
-      const companyId = await createCompany(founder.token, "Two Humans Co");
-      const other = await signedInUser("teammate");
-      await db.insert(companyMemberships).values({
-        companyId, principalType: "user", principalId: other.userId, membershipRole: "member", status: "active",
-      });
-      await db
-        .update(companyMemberships)
-        .set({ membershipRole: "member" })
-        .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, founder.userId)));
-
-      const res = await bootstrap(founder.token, companyId);
-      expect(res.status).toBe(403);
-      expect(await membershipRole(companyId, founder.userId)).toEqual({ role: "member", status: "active" });
-    });
-
-    it("does not promote a member who never granted themselves agents:create", async () => {
-      stubEnv();
-      const founder = await signedInUser();
-      const companyId = await createCompany(founder.token, "Invited Co");
-      await db
-        .update(companyMemberships)
-        .set({ membershipRole: "member" })
-        .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, founder.userId)));
-      await db
-        .update(principalPermissionGrants)
-        .set({ grantedByUserId: "someone-else" })
-        .where(eq(principalPermissionGrants.companyId, companyId));
-
-      const res = await bootstrap(founder.token, companyId);
-      expect(res.status).toBe(403);
-      expect(await membershipRole(companyId, founder.userId)).toEqual({ role: "member", status: "active" });
+      expect((await bootstrap(token, companyId)).status).toBe(403);
+      expect(await membershipRole(companyId, userId)).toEqual({ role: "member", status: "active" });
     });
   });
 

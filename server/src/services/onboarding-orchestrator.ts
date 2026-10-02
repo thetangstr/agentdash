@@ -305,23 +305,6 @@ export function onboardingOrchestrator(deps: Deps) {
         (m: any) => m.status === "active",
       );
       let company: { id: string; name?: string; emailDomain?: string | null };
-      // AgentDash (scan 3, lane H): set when this call repaired a founder the
-      // old permission grant had demoted to member; their CoS is paired below.
-      let restoredFounder = false;
-      if (
-        activeMembership &&
-        activeMembership.membershipRole === "member" &&
-        typeof deps.access.restoreDemotedFounderOwner === "function"
-      ) {
-        restoredFounder = await deps.access.restoreDemotedFounderOwner(activeMembership.companyId, userId);
-        if (restoredFounder) {
-          logger.warn(
-            { userId, companyId: activeMembership.companyId },
-            "onboarding bootstrap restored the founder's owner role",
-          );
-          activeMembership.membershipRole = "owner";
-        }
-      }
       if (activeMembership) {
         // Returning user — reuse the workspace they already belong to.
         // AgentDash (security, PR #956 review): setting up a workspace's CoS
@@ -419,9 +402,7 @@ export function onboardingOrchestrator(deps: Deps) {
       // is not paired). It only writes a stewardship row, never a membership
       // or role. After the capacity transaction, so a refused pairing can
       // never abort the bootstrap; best-effort inside.
-      // A founder repaired above never got their CoS paired (the pairing saw
-      // `member`), so it is paired now under the same owner/1:1 checks.
-      if (deps.stewardships && (outcome.createdCos || restoredFounder)) {
+      if (deps.stewardships && outcome.createdCos) {
         await pairFounderWithAgent(deps.stewardships, {
           companyId: result.companyId,
           agentId: result.cosAgentId,
