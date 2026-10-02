@@ -1511,6 +1511,30 @@ export function deriveNormalizedUsageDelta(current: UsageTotals | null, previous
   };
 }
 
+/**
+ * AgentDash: usage an adapter reported for THIS RUN ONLY (resultJson.usageBasis
+ * === "per_run"), e.g. Hermes' stream-json token counts used as a fallback when
+ * its cumulative session ledger could not be read. It is billed as-is, never
+ * diffed against the session baseline, and the row's raw totals are written as
+ * baseline + this run, so the next cumulative ledger reading still diffs
+ * against a running total and the fallback run is not billed a second time.
+ */
+export function resolvePerRunUsage(perRun: UsageTotals, previousRaw: UsageTotals | null): {
+  normalizedUsage: UsageTotals;
+  storedRawUsage: UsageTotals;
+} {
+  return {
+    normalizedUsage: { ...perRun },
+    storedRawUsage: previousRaw
+      ? {
+          inputTokens: previousRaw.inputTokens + perRun.inputTokens,
+          cachedInputTokens: previousRaw.cachedInputTokens + perRun.cachedInputTokens,
+          outputTokens: previousRaw.outputTokens + perRun.outputTokens,
+        }
+      : { ...perRun },
+  };
+}
+
 function formatCount(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0";
   return value.toLocaleString("en-US");
@@ -2615,11 +2639,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     runId: string;
     sessionId: string | null;
     rawUsage: UsageTotals | null;
+    /** AgentDash: the adapter reported this run's own usage, not a session total. */
+    perRun?: boolean;
   }) {
     const { agentId, runId, sessionId, rawUsage } = input;
     if (!sessionId || !rawUsage) {
       return {
         normalizedUsage: rawUsage,
+        storedRawUsage: rawUsage,
         previousRawUsage: null as UsageTotals | null,
         derivedFromSessionTotals: false,
         baselineNumTurns: null as number | null,
@@ -2631,8 +2658,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       excludeRunId: runId,
     });
     const previousRawUsage = baseline?.totals ?? null;
+    if (input.perRun) {
+      const perRun = resolvePerRunUsage(rawUsage, previousRawUsage);
+      return {
+        normalizedUsage: perRun.normalizedUsage as UsageTotals | null,
+        storedRawUsage: perRun.storedRawUsage as UsageTotals | null,
+        previousRawUsage,
+        derivedFromSessionTotals: false,
+        baselineNumTurns: null as number | null,
+        baselineNumToolCalls: null as number | null,
+      };
+    }
     return {
       normalizedUsage: deriveNormalizedUsageDelta(rawUsage, previousRawUsage),
+      storedRawUsage: rawUsage,
       previousRawUsage,
       derivedFromSessionTotals: previousRawUsage !== null,
       baselineNumTurns: baseline?.numTurns ?? null,
@@ -7198,17 +7237,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         previousDisplayId: runtimeForAdapter.sessionDisplayId,
         previousLegacySessionId: runtimeForAdapter.sessionId,
       });
-      const rawUsage = normalizeUsageTotals(adapterResult.usage);
+      // OBS-1: the metering status is written for every run, so an unmetered
+      // run is distinguishable from a run that genuinely used zero tokens.
+      const adapterResultJson = parseObject(adapterResult.resultJson);
+      // AgentDash: per-run usage (see resolvePerRunUsage) is never diffed.
+      const usageIsPerRun = adapterResultJson.usageBasis === "per_run";
       const sessionUsageResolution = await resolveNormalizedUsageForSession({
         agentId: agent.id,
         runId: run.id,
         sessionId: nextSessionState.displayId ?? nextSessionState.legacySessionId,
-        rawUsage,
+        rawUsage: normalizeUsageTotals(adapterResult.usage),
+        perRun: usageIsPerRun,
       });
+      const rawUsage = sessionUsageResolution.storedRawUsage;
       const normalizedUsage = sessionUsageResolution.normalizedUsage;
-      // OBS-1: the metering status is written for every run, so an unmetered
-      // run is distinguishable from a run that genuinely used zero tokens.
-      const adapterResultJson = parseObject(adapterResult.resultJson);
       const meteringStatus = resolveMeteringStatus({
         adapterMeteringStatus: readNonEmptyString(adapterResultJson.meteringStatus),
         normalizedUsage,
@@ -7318,6 +7360,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 rawOutputTokens: rawUsage.outputTokens,
               } : {}),
               ...(sessionUsageResolution.derivedFromSessionTotals ? { usageSource: "session_delta" } : {}),
+              ...(usageIsPerRun ? { usageSource: "per_run" } : {}),
               ...((nextSessionState.displayId ?? nextSessionState.legacySessionId)
                 ? { persistedSessionId: nextSessionState.displayId ?? nextSessionState.legacySessionId }
                 : {}),

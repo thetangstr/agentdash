@@ -51,6 +51,11 @@ if (argv[0] === "profile" && argv[1] === "create") {
   fs.mkdirSync(path.join(profilesDir, argv[2]), { recursive: true });
   process.exit(0);
 }
+// The adapter probes "chat --help" for stream-json support; help is not a run.
+if (argv.includes("--help")) {
+  process.stdout.write("usage: hermes chat [-h] [-q QUERY] [-Q]\n");
+  process.exit(0);
+}
 const pIndex = argv.indexOf("-p");
 const profile = pIndex >= 0 ? argv[pIndex + 1] : null;
 const sessionId = "hosted-session-1";
