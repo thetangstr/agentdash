@@ -1019,10 +1019,10 @@ export function OnboardingWizard() {
        * in a cold end-to-end run — the owner already had an account, but no
        * stewardship, so nothing tied him to his own Chief of Staff.
        *
-       * AgentDash (scan 2, E3): on every workspace, not only those with the
-       * stewardship capability — the agent showed "Needs a steward" otherwise.
-       * The server allows a person to pair themselves with an agent they
-       * created; see pairOwnerWithNewAgent for what counts as expected.
+       * AgentDash (scan 2, E3): the server now pairs the creator with a
+       * company's first agent at creation, on every workspace, so this usually
+       * finds the agent already paired. Kept as a harmless fallback; see
+       * pairOwnerWithNewAgent for what counts as expected.
        */
       if (session?.session.userId) {
         const outcome = await pairOwnerWithNewAgent(stewardshipsApi, {

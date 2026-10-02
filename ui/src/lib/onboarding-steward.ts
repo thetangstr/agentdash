@@ -6,10 +6,11 @@ import { ApiError } from "../api/client";
  *
  * Without a stewardship the owner is the one person who cannot reach their
  * own agent — no My Agent page, no connect command, escalations to nobody —
- * and the agent list shows it as "Needs a steward". This used to run only on
- * workspaces with the stewardship capability; the server now accepts a person
- * pairing themselves with an agent they created on every workspace, so the
- * wizard always asks.
+ * and the agent list shows it as "Needs a steward". The server now pairs the
+ * creator with a company's first agent itself, on every workspace and every
+ * path (services/founder-stewardship.ts), so for the wizard's first agent this
+ * finds it already paired. It stays as a harmless fallback for stewardship
+ * workspaces where the wizard adds an agent that is not the company's first.
  *
  * Checked rather than attempted-and-swallowed where it can be: the agent's own
  * stewardship is read first (an open read), so a second launch does not even

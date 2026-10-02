@@ -431,10 +431,29 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
       expect(pairing).toHaveLength(1);
     });
 
-    it("pairs nobody on a workspace without stewardship, and the agent can still go autonomous", async () => {
+    // AgentDash (scan 2, E3): on a workspace without stewardship, only the
+    // company's FIRST agent is paired with its creator (the founder's own
+    // agent); later agents pair nobody, and can still go autonomous.
+    it("pairs only the founder's first agent on a workspace without stewardship; later agents can still go autonomous", async () => {
       const company = await createCompany(db, "default");
       const userId = await createMember(db, company.id);
       const app = await createApp(db, makeBoardActor(company.id, userId));
+
+      const first = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
+          name: "Founder's CoS",
+          role: "engineer",
+          adapterType: "hermes_local",
+          adapterConfig: {},
+        }),
+      );
+      expect(first.status).toBe(201);
+      const firstPairings = await db
+        .select()
+        .from(agentStewardships)
+        .where(eq(agentStewardships.companyId, company.id));
+      expect(firstPairings).toHaveLength(1);
+      expect(firstPairings[0]).toMatchObject({ agentId: first.body.id, userId });
 
       const response = await requestApp(app, (baseUrl) =>
         request(baseUrl).post(`/api/companies/${company.id}/agents`).send({
@@ -450,7 +469,7 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
         .select()
         .from(agentStewardships)
         .where(eq(agentStewardships.companyId, company.id));
-      expect(pairings).toHaveLength(0);
+      expect(pairings).toHaveLength(1);
 
       // No live pairing, so nothing blocks the autonomy change.
       const patched = await requestApp(app, (baseUrl) =>

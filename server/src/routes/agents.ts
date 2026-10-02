@@ -96,6 +96,7 @@ import {
 } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { pairFounderWithAgent } from "../services/founder-stewardship.js";
 import { approvalDecisionEffectsService } from "../services/approval-decision-effects.js";
 import {
   approvalAuthorityService,
@@ -878,6 +879,26 @@ export function agentRoutes(
       );
     }
     return actorAgent;
+  }
+
+  /**
+   * AgentDash (scan 2, E3): when a person creates a company's first agent,
+   * they become its steward, whatever the company's profile. See
+   * services/founder-stewardship.ts. Best-effort; never fails the creation.
+   */
+  async function pairCreatorWithCompanysFirstAgent(req: Request, companyId: string, agentId: string) {
+    if (req.actor.type !== "board" || !req.actor.userId) return;
+    try {
+      const others = await db
+        .select({ id: agentsTable.id })
+        .from(agentsTable)
+        .where(and(eq(agentsTable.companyId, companyId), not(eq(agentsTable.id, agentId))))
+        .limit(1);
+      if (others.length > 0) return;
+      await pairFounderWithAgent(stewardships, { companyId, agentId, userId: req.actor.userId });
+    } catch (err) {
+      logger.warn({ err, companyId, agentId }, "[agents] could not pair the creator with the company's first agent");
+    }
   }
 
   async function assertBoardCanManageAgentsForCompany(req: Request, companyId: string) {
@@ -2747,6 +2768,10 @@ export function agentRoutes(
     if (req.body.workforceTemplateId !== undefined) {
       await workforceService(db).ensureSkillsInstalled(companyId, agent.id, { userId: req.actor.userId ?? "board" });
     }
+    // AgentDash (scan 2, E3): the onboarding wizard hires here; a company's
+    // first agent is its creator's, on every workspace. Hires are always
+    // stewarded (see normalizedHireInput).
+    await pairCreatorWithCompanysFirstAgent(req, companyId, agent.id);
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
     const actor = getActorInfo(req);
@@ -3077,6 +3102,12 @@ export function agentRoutes(
           "[agents] could not auto-assign stewardship to the creator",
         );
       }
+    }
+
+    // AgentDash (scan 2, E3): a company's first agent is its creator's, on
+    // every workspace (the block above pairs only where stewardship is on).
+    if (requestedAutonomy === "stewarded") {
+      await pairCreatorWithCompanysFirstAgent(req, companyId, agent.id);
     }
 
     if (agent.budgetMonthlyCents > 0) {

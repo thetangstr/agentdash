@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Request } from "express";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, authUsers, companies, companyMemberships } from "@paperclipai/db";
+import { authUsers, companies, companyMemberships } from "@paperclipai/db";
 import {
   assignAgentStewardshipSchema,
   transferAgentStewardshipSchema,
@@ -197,39 +197,12 @@ export function agentStewardshipRoutes(db: Db) {
     res.json({ stewardships: await stewardships.historyForAgent(companyId, agentId) });
   });
 
-  /**
-   * AgentDash (scan 2, E3): a person pairing themselves with an agent they
-   * created themselves.
-   *
-   * The onboarding wizard creates the owner's first agent and then names the
-   * owner as its steward. On a workspace without the stewardship capability
-   * that pairing was refused, so the owner's own Chief of Staff showed "Needs
-   * a steward" with nobody able to fix it, and its escalations reached no one.
-   * Being accountable for an agent you just made is not the workforce feature
-   * the gate protects (pairing other people, personal agents for joiners); it
-   * is the minimum for the agent to have an owner at all. So this one case is
-   * exempt from the capability gate. Everything else still applies: board
-   * actor, company access, agent-management permission, and the service's
-   * one-agent-per-person rule.
-   */
-  async function isCreatorSelfPairing(req: Request, companyId: string, agentId: unknown, userId: unknown) {
-    if (req.actor.type !== "board" || !req.actor.userId) return false;
-    if (typeof agentId !== "string" || userId !== req.actor.userId) return false;
-    const agent = await db
-      .select({ createdByUserId: agents.createdByUserId })
-      .from(agents)
-      .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)))
-      .then((rows) => rows[0] ?? null);
-    return agent?.createdByUserId === req.actor.userId;
-  }
-
   router.post(
     "/companies/:companyId/agent-stewardships",
     validate(assignAgentStewardshipSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      const selfPairing = await isCreatorSelfPairing(req, companyId, req.body.agentId, req.body.userId);
-      await assertCanMutateStewardships(req, companyId, !selfPairing);
+      await assertCanMutateStewardships(req, companyId, true);
       const stewardship = await stewardships.assign(companyId, {
         agentId: req.body.agentId,
         userId: req.body.userId,
