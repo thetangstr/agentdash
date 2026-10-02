@@ -57,6 +57,25 @@ async function flushReact() {
   });
 }
 
+// An explicit clock for the stale-cache tests: react-query stamps
+// dataUpdatedAt with Date.now(), and the gate compares those stamps, so the
+// tests set them a full second apart instead of relying on millisecond luck.
+let restoreClock: (() => void) | null = null;
+function installExplicitClock(start = 1_700_000_000_000) {
+  let now = start;
+  const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+  restoreClock = () => spy.mockRestore();
+  return {
+    advance: (ms: number) => {
+      now += ms;
+    },
+    restore: () => {
+      restoreClock?.();
+      restoreClock = null;
+    },
+  };
+}
+
 describe("CloudAccessGate", () => {
   let container: HTMLDivElement;
 
@@ -72,6 +91,8 @@ describe("CloudAccessGate", () => {
   });
 
   afterEach(() => {
+    restoreClock?.();
+    restoreClock = null;
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
@@ -354,6 +375,7 @@ describe("CloudAccessGate", () => {
   // while health (which polls during bootstrap) already says a company
   // exists. That used to dead-end on "No company access" until a reload.
   it("refetches stale board access after the first company is created instead of showing No company access", async () => {
+    const clock = installExplicitClock();
     const session = {
       session: { id: "session-1", userId: "user-1" },
       user: { id: "user-1", email: "founder@example.com", name: "Founder", image: null },
@@ -413,8 +435,9 @@ describe("CloudAccessGate", () => {
     });
     const boardAccessCallsBefore = mockAccessApi.getCurrentBoardAccess.mock.calls.length;
 
-    // Only health refreshes (the bootstrap poll); board access is still the
-    // cached pre-company answer.
+    // Only health refreshes (the bootstrap poll), a second later; board access
+    // is still the cached pre-company answer, stamped strictly earlier.
+    clock.advance(1_000);
     await act(async () => {
       await queryClient.refetchQueries({ queryKey: ["health"] });
     });
@@ -431,9 +454,11 @@ describe("CloudAccessGate", () => {
     expect(mockAccessApi.getCurrentBoardAccess.mock.calls.length).toBe(boardAccessCallsBefore + 1);
 
     await act(async () => root.unmount());
+    clock.restore();
   });
 
   it("still shows No company access when fresh board access confirms there is none", async () => {
+    const clock = installExplicitClock();
     mockHealthApi.get.mockResolvedValue({
       status: "ok",
       deploymentMode: "authenticated",
@@ -465,24 +490,35 @@ describe("CloudAccessGate", () => {
         </QueryClientProvider>,
       );
     });
-    await flushReact();
-    await flushReact();
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("No company access");
+      });
+    });
+    // Same clock tick for everything so far: board access is not older than
+    // health or the session, so the gate did not refetch it.
+    expect(mockAccessApi.getCurrentBoardAccess).toHaveBeenCalledTimes(1);
 
-    // Health refreshes later (window focus); board access is refetched once,
-    // still says no access, and the gate settles on the page without looping.
+    // Health refreshes a second later (window focus); board access is
+    // refetched exactly once, still says no access, and the gate settles on
+    // the page without looping.
+    clock.advance(1_000);
     await act(async () => {
       await queryClient.refetchQueries({ queryKey: ["health"] });
     });
-    await flushReact();
-    await flushReact();
-    await flushReact();
-    expect(container.textContent).toContain("No company access");
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(mockAccessApi.getCurrentBoardAccess).toHaveBeenCalledTimes(2);
+        expect(container.textContent).toContain("No company access");
+      });
+    });
     const calls = mockAccessApi.getCurrentBoardAccess.mock.calls.length;
     await flushReact();
     await flushReact();
     expect(mockAccessApi.getCurrentBoardAccess.mock.calls.length).toBe(calls);
-    expect(calls).toBeLessThanOrEqual(2);
+    expect(calls).toBe(2);
 
     await act(async () => root.unmount());
+    clock.restore();
   });
 });

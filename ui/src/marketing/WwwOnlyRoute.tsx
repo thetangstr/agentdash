@@ -4,8 +4,13 @@
  * only on www's control plane, so on a hosted box they fail with "API route
  * not found". The SPA bundle is the same on both, so a box (health.hostedBox)
  * sends these paths to its own sign-in instead; once signed in, /auth carries
- * the user on to the app. www, and any instance whose health does not say
- * hostedBox (or cannot be read), renders the page as before.
+ * the user on to the app.
+ *
+ * www's signup funnel must never wait on /api/health (on www it is proxied to
+ * another service and can be slow, gone or not JSON). So the page renders
+ * immediately, and only a health answer that positively says hostedBox
+ * redirects. Loading, an error, a 410, non-JSON or a hung request all leave
+ * the www page in place.
  */
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -22,7 +27,6 @@ export function WwwOnlyRoute({ children }: { children: ReactNode }) {
     queryFn: () => healthApi.get(),
     retry: false,
   });
-  if (healthQuery.isLoading) return null;
   if (healthQuery.data?.hostedBox === true) return <Navigate to={BOX_SIGN_IN_PATH} replace />;
   return <>{children}</>;
 }
