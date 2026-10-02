@@ -37,7 +37,7 @@ vi.mock("../services/costs.js", () => ({
   costService,
 }));
 
-import { dispatchLLM, stripHermesChatter } from "../services/dispatch-llm.js";
+import { describeAdapterFailure, dispatchLLM, stripHermesChatter } from "../services/dispatch-llm.js";
 
 const originalAdapter = process.env.AGENTDASH_DEFAULT_ADAPTER;
 const originalHermesCommand = process.env.AGENTDASH_HERMES_COMMAND;
@@ -602,6 +602,74 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
  * on the mkboard instance: a correct answer wearing a security-scanner warning,
  * because the adapter treats all of stdout as the agent's words.
  */
+// Regression (P0, v2026.1002.0, canary1): `hermes chat -Q` exits 1 on a failed
+// turn with the reason on STDOUT and only `session_id: …` on stderr. The error
+// used to carry stderr alone, so the log and the UI said nothing useful while
+// the cause was Z.AI HTTP 429 "Insufficient balance or no resource package".
+describe("dispatchLLM names the reason Hermes printed for a failed turn", () => {
+  const originalAdapterEnv = process.env.AGENTDASH_DEFAULT_ADAPTER;
+  // Exactly what Hermes v2026.9.24 printed for the canary1 template profile.
+  const HERMES_STDOUT =
+    "Billing or credits exhausted: HTTP 429: Insufficient balance or no resource package. Please recharge.\n\n" +
+    "Zai reported that billing, credits, or account entitlement is exhausted for glm-5.3-flash.\n" +
+    "Add credits or update billing with that provider, then retry.\n";
+  const HERMES_STDERR = "\nsession_id: 20261002_085216_21b463\n";
+
+  function hermesExits(code: number, stdout: string, stderr: string) {
+    spawnMock.mockImplementation(() => {
+      const child: any = {
+        kill: vi.fn(),
+        stdin: { end: vi.fn() },
+        stdout: {
+          on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+            if (event === "data") setTimeout(() => cb(Buffer.from(stdout)), 0);
+            return child.stdout;
+          }),
+        },
+        stderr: {
+          on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+            if (event === "data") setTimeout(() => cb(Buffer.from(stderr)), 0);
+            return child.stderr;
+          }),
+        },
+        on: vi.fn((event: string, cb: (code?: number) => void) => {
+          if (event === "close") setTimeout(() => cb(code), 5);
+          return child;
+        }),
+      };
+      return child;
+    });
+  }
+
+  beforeEach(() => {
+    spawnMock.mockReset();
+    delete process.env.AGENTDASH_FALLBACK_ADAPTER;
+  });
+  afterEach(() => {
+    if (originalAdapterEnv === undefined) delete process.env.AGENTDASH_DEFAULT_ADAPTER;
+    else process.env.AGENTDASH_DEFAULT_ADAPTER = originalAdapterEnv;
+  });
+
+  it("puts Hermes' stdout explanation in the error, not just its session id", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    hermesExits(1, HERMES_STDOUT, HERMES_STDERR);
+    const error = (await dispatchLLM({ system: "s", messages: [{ role: "user", content: "Quick check" }] }).catch(
+      (e: Error) => e,
+    )) as Error;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain("hermes exited 1");
+    expect(error.message).toContain("HTTP 429: Insufficient balance or no resource package");
+    expect(error.message).not.toContain("session_id:");
+  });
+
+  it("describeAdapterFailure keeps real stderr, drops the session line, and caps the length", () => {
+    expect(describeAdapterFailure(HERMES_STDOUT, HERMES_STDERR)).toMatch(/^Billing or credits exhausted: HTTP 429/);
+    expect(describeAdapterFailure("", "Traceback: boom\nsession_id: x\n")).toBe("Traceback: boom");
+    expect(describeAdapterFailure("", "\nsession_id: 20261002_1\n")).toBe("no output (session 20261002_1)");
+    expect(describeAdapterFailure("x".repeat(2000), "").length).toBeLessThanOrEqual(600);
+  });
+});
+
 describe("stripHermesChatter", () => {
   it("drops the warning Hermes printed into a real agent reply", () => {
     const observed =

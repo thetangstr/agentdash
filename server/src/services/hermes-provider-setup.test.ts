@@ -24,6 +24,17 @@ import {
 } from "./hermes-provider-setup.js";
 
 const KEY = "zai-test-key-0123456789abcdef.ABCDEFGH";
+const ZAI_CODING = "https://api.z.ai/api/coding/paas/v4";
+const ZAI_GENERAL = "https://api.z.ai/api/paas/v4";
+
+/** Answers per Z.AI base URL; anything unlisted gets `fallback`. */
+function endpointFetch(byBase: Record<string, number>, fallback = 429) {
+  return vi.fn(async (url: string) => {
+    const base = Object.keys(byBase).find((b) => url === `${b}/chat/completions`);
+    const status = base ? byBase[base]! : fallback;
+    return new Response(status === 200 ? '{"choices":[]}' : '{"error":{"code":"1113"}}', { status });
+  });
+}
 
 function okFetch() {
   return vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 }));
@@ -59,7 +70,11 @@ describe("parseHermesProviderInput", () => {
 describe("buildProviderProbe", () => {
   it("makes one small model call per provider with the key in the auth header only", () => {
     const zai = buildProviderProbe({ provider: "zai", apiKey: KEY, model: "glm-5.3-flash" });
-    expect(zai.url).toBe("https://api.z.ai/api/paas/v4/chat/completions");
+    // Coding Plan first (see ZAI_BASE_URLS); a given base URL is used as-is.
+    expect(zai.url).toBe("https://api.z.ai/api/coding/paas/v4/chat/completions");
+    expect(
+      buildProviderProbe({ provider: "zai", apiKey: KEY, model: "glm-5.3-flash" }, "https://api.z.ai/api/paas/v4").url,
+    ).toBe("https://api.z.ai/api/paas/v4/chat/completions");
     expect(zai.headers.authorization).toBe(`Bearer ${KEY}`);
     expect(zai.body).toMatchObject({ model: "glm-5.3-flash", max_tokens: 8 });
 
@@ -196,7 +211,7 @@ describe("configureHermesProvider", () => {
     ]);
     // The key reached no Hermes command line.
     expect(JSON.stringify(calls)).not.toContain(KEY);
-    expect(await envOf("agentdash")).toBe(`GLM_API_KEY=${KEY}\n`);
+    expect(await envOf("agentdash")).toBe(`GLM_API_KEY=${KEY}\nGLM_BASE_URL=${ZAI_CODING}\n`);
     expect(statSync(join(profilesDir, "agentdash", ".env")).mode & 0o777).toBe(0o600);
 
     const marker = await readFile(join(profilesDir, "agentdash", HERMES_PROVIDER_MARKER), "utf8");
@@ -205,6 +220,7 @@ describe("configureHermesProvider", () => {
       provider: "zai",
       model: "glm-5.3-flash",
       configuredAt: "2026-09-25T00:00:00.000Z",
+      baseUrl: ZAI_CODING,
     });
     expect(marker).not.toContain(KEY);
     expect(JSON.stringify(result)).not.toContain(KEY);
@@ -356,7 +372,7 @@ describe("configureHermesProvider", () => {
 
       const result = await reconcileHermesProviderFromSecret("company-1", { agentIds: [AGENT_A] }, deps());
       expect(result).toEqual({ status: "ok", updated: [profileOf(AGENT_A)], failed: [] });
-      expect(await envOf(profileOf(AGENT_A))).toBe(`GLM_API_KEY=${KEY}\n`);
+      expect(await envOf(profileOf(AGENT_A))).toBe(`GLM_API_KEY=${KEY}\nGLM_BASE_URL=${ZAI_CODING}\n`);
       expect(statSync(join(profilesDir, profileOf(AGENT_A), ".env")).mode & 0o777).toBe(0o600);
       expect(existsSync(join(profilesDir, profileOf(OTHER_COMPANY_AGENT), ".env"))).toBe(false);
       expect(JSON.stringify(calls)).not.toContain(KEY);
@@ -365,7 +381,53 @@ describe("configureHermesProvider", () => {
       secretState.set("company-1", "zai-rotated-key-9876543210");
       const again = await reconcileHermesProviderFromSecret("company-1", { agentIds: [AGENT_A] }, deps());
       expect(again.updated).toEqual(["agentdash", profileOf(AGENT_A)]);
-      expect(await envOf("agentdash")).toBe("GLM_API_KEY=zai-rotated-key-9876543210\n");
+      expect(await envOf("agentdash")).toBe(`GLM_API_KEY=zai-rotated-key-9876543210\nGLM_BASE_URL=${ZAI_CODING}\n`);
+    });
+
+    // Regression (P0, v2026.1002.0, canary1): a box set up before endpoints
+    // were pinned left the template on the endpoint Hermes cached (general
+    // pay-as-you-go, out of balance: every CoS reply 429'd) while agent
+    // profiles sat on the Coding Plan. The boot reconcile picks the endpoint
+    // the key works on and pins it in every profile.
+    it("pins a working Z.AI endpoint into every profile of a box configured before pinning", async () => {
+      const templateDir = join(profilesDir, "agentdash");
+      await mkdir(templateDir, { recursive: true });
+      await mkdir(join(profilesDir, profileOf(AGENT_A)), { recursive: true });
+      for (const dir of [templateDir, join(profilesDir, profileOf(AGENT_A))]) {
+        await writeFile(join(dir, ".env"), `GLM_API_KEY=${KEY}\n`);
+      }
+      await writeFile(
+        join(templateDir, HERMES_PROVIDER_MARKER),
+        JSON.stringify({ companyId: "company-1", provider: "zai", model: "glm-5.3-flash", configuredAt: "2026-10-02T02:20:00Z" }),
+      );
+      secretState.set("company-1", KEY);
+      const fetchImpl = endpointFetch({ [ZAI_CODING]: 200, [ZAI_GENERAL]: 429 });
+
+      const result = await reconcileHermesProviderFromSecret("company-1", { agentIds: [AGENT_A] }, deps(fetchImpl as never));
+      expect(result).toEqual({ status: "ok", updated: ["agentdash", profileOf(AGENT_A)], failed: [] });
+      for (const profile of ["agentdash", profileOf(AGENT_A)]) {
+        expect(await envOf(profile)).toBe(`GLM_API_KEY=${KEY}\nGLM_BASE_URL=${ZAI_CODING}\n`);
+      }
+      const marker = JSON.parse(await readFile(join(templateDir, HERMES_PROVIDER_MARKER), "utf8"));
+      expect(marker).toMatchObject({ companyId: "company-1", baseUrl: ZAI_CODING });
+
+      // Pinned now: the next boot neither probes nor rewrites anything.
+      fetchImpl.mockClear();
+      const again = await reconcileHermesProviderFromSecret("company-1", { agentIds: [AGENT_A] }, deps(fetchImpl as never));
+      expect(again).toEqual({ status: "ok", updated: [], failed: [] });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("still reconciles the key when no Z.AI endpoint answers, and pins nothing", async () => {
+      await mkdir(join(profilesDir, "agentdash"), { recursive: true });
+      await writeFile(
+        join(profilesDir, "agentdash", HERMES_PROVIDER_MARKER),
+        JSON.stringify({ companyId: "company-1", provider: "zai", model: "glm-5.3-flash" }),
+      );
+      secretState.set("company-1", KEY);
+      const result = await reconcileHermesProviderFromSecret("company-1", { agentIds: [] }, deps(endpointFetch({}, 429) as never));
+      expect(result).toEqual({ status: "ok", updated: ["agentdash"], failed: [] });
+      expect(await envOf("agentdash")).toBe(`GLM_API_KEY=${KEY}\n`);
     });
 
     it("does nothing for a company that does not own the template, or without a secret", async () => {
@@ -377,5 +439,32 @@ describe("configureHermesProvider", () => {
       secretState.delete("company-1");
       expect((await reconcileHermesProviderFromSecret("company-1", { agentIds: [] }, deps())).status).toBe("no_secret");
     });
+  });
+
+  describe("Z.AI endpoint selection", () => {
+    it("prefers the Coding Plan endpoint and pins it", async () => {
+      const fetchImpl = endpointFetch({ [ZAI_CODING]: 200, [ZAI_GENERAL]: 200 });
+      const input = parseHermesProviderInput({ provider: "zai", apiKey: KEY });
+      await configureHermesProvider("company-1", input, null, { agentIds: [] }, deps(fetchImpl as never));
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(await envOf("agentdash")).toContain(`GLM_BASE_URL=${ZAI_CODING}\n`);
+    });
+
+    it("falls back to the general endpoint when the key has no Coding Plan", async () => {
+      const fetchImpl = endpointFetch({ [ZAI_CODING]: 429, [ZAI_GENERAL]: 200 });
+      const input = parseHermesProviderInput({ provider: "zai", apiKey: KEY });
+      await configureHermesProvider("company-1", input, null, { agentIds: [] }, deps(fetchImpl as never));
+      expect(await envOf("agentdash")).toContain(`GLM_BASE_URL=${ZAI_GENERAL}\n`);
+    });
+
+    it("says the key has no balance when every endpoint answers 429, and changes nothing", async () => {
+      const input = parseHermesProviderInput({ provider: "zai", apiKey: KEY });
+      const attempt = configureHermesProvider("company-1", input, null, { agentIds: [] }, deps(endpointFetch({}, 429) as never));
+      await expect(attempt).rejects.toMatchObject({ status: 422, code: "provider_no_balance" });
+      await expect(attempt).rejects.toThrow(/no balance or resource package/);
+      expect(calls).toEqual([]);
+      expect(secrets.put).not.toHaveBeenCalled();
+    });
+
   });
 });

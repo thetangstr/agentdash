@@ -195,6 +195,31 @@ function adapterChildEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * The reason a local adapter gave for a non-zero exit, for logs and the
+ * chat's "CoS couldn't reply" card.
+ *
+ * AgentDash (P0, v2026.1002.0): `hermes chat -Q` writes a failed turn's
+ * explanation to STDOUT and only `session_id: …` to stderr, so an error built
+ * from stderr alone read "hermes exited 1: session_id: 20261002_085216_21b463"
+ * and hid the cause (on canary1: Z.AI HTTP 429 "Insufficient balance or no
+ * resource package"). Hermes' own session line is dropped and its stdout is
+ * included, trimmed and capped.
+ */
+export function describeAdapterFailure(stdout: string, stderr: string): string {
+  const err = stderr
+    .split("\n")
+    .filter((line) => !/^\s*session_id:\s*\S+\s*$/.test(line))
+    .join("\n")
+    .trim();
+  const out = stripHermesChatter(stdout).replace(/\s+/g, " ").trim();
+  const parts = [err.replace(/\s+/g, " "), out].filter((part) => part.length > 0);
+  const sessionId = /session_id:\s*(\S+)/.exec(stderr)?.[1];
+  if (parts.length === 0) return sessionId ? `no output (session ${sessionId})` : "no output";
+  const detail = parts.join(" | ");
+  return detail.length > 600 ? `${detail.slice(0, 599)}…` : detail;
+}
+
 function spawnWithTimeout(
   command: string,
   args: string[],
@@ -236,7 +261,7 @@ function spawnWithTimeout(
         settled = true;
         clearTimeout(timer);
         if (code !== 0) {
-          reject(new Error(`[dispatch-llm] ${command} exited ${code}: ${stderr.trim()}`));
+          reject(new Error(`[dispatch-llm] ${command} exited ${code}: ${describeAdapterFailure(stdout, stderr)}`));
         } else {
           resolve(stdout.trim());
         }

@@ -125,6 +125,7 @@ export type HermesProviderErrorCode =
   | "provider_key_rejected"
   | "provider_model_unavailable"
   | "provider_unreachable"
+  | "provider_no_balance"
   | "provider_error"
   | "provider_owned_by_other_company"
   | "hermes_config_failed";
@@ -255,12 +256,38 @@ interface ProbeRequest {
   body: Record<string, unknown>;
 }
 
-export function buildProviderProbe(input: HermesProviderInput): ProbeRequest {
+/**
+ * AgentDash (P0, v2026.1002.0 CoS chat silence): Z.AI bills its general
+ * pay-as-you-go API and its GLM Coding Plan separately, on different base
+ * URLs, and a key can hold credit on one and not the other. Left to itself,
+ * Hermes probes the endpoints once per profile and caches the first that
+ * answered (general first) in that profile's auth.json, forever. On canary1
+ * the template profile (CoS chat) cached the general endpoint while it still
+ * had a few cents; once they ran out every CoS reply failed with HTTP 429
+ * "Insufficient balance or no resource package" (code 1113), while agent
+ * profiles probed later had cached the Coding Plan endpoint and kept working.
+ *
+ * So AgentDash picks the endpoint once, when it checks the key, preferring the
+ * flat-rate Coding Plan, and writes it to every profile as GLM_BASE_URL, which
+ * Hermes always honours over its own probe cache. Order matters: first that
+ * answers wins.
+ */
+export const ZAI_BASE_URLS = [
+  "https://api.z.ai/api/coding/paas/v4",
+  "https://api.z.ai/api/paas/v4",
+  "https://open.bigmodel.cn/api/coding/paas/v4",
+  "https://open.bigmodel.cn/api/paas/v4",
+] as const;
+
+/** The `.env` variable Hermes reads a provider's base URL from, when AgentDash pins one. */
+const BASE_URL_ENV_VAR: Partial<Record<HermesProviderId, string>> = { zai: "GLM_BASE_URL" };
+
+export function buildProviderProbe(input: HermesProviderInput, baseUrl?: string): ProbeRequest {
   const messages = [{ role: "user", content: "Reply with OK." }];
   switch (input.provider) {
     case "zai":
       return {
-        url: "https://api.z.ai/api/paas/v4/chat/completions",
+        url: `${baseUrl ?? ZAI_BASE_URLS[0]}/chat/completions`,
         headers: { authorization: `Bearer ${input.apiKey}` },
         body: { model: input.model, messages, max_tokens: 8 },
       };
@@ -286,17 +313,14 @@ export function buildProviderProbe(input: HermesProviderInput): ProbeRequest {
   }
 }
 
-/**
- * Prove the key and model work before anything is written. The provider's
- * response body is never echoed (some providers quote part of the key back).
- */
-export async function verifyProviderKey(
-  input: HermesProviderInput,
-  deps: HermesProviderSetupDeps = {},
-): Promise<void> {
-  const r = resolveDeps(deps);
-  const probe = buildProviderProbe(input);
-  const label = HERMES_PROVIDER_SPECS[input.provider].label;
+export interface VerifiedProvider {
+  /** The base URL the key works on, for providers AgentDash pins one for (Z.AI); else null. */
+  baseUrl: string | null;
+}
+
+type ProbeOutcome = { ok: true } | { ok: false; status: number | null };
+
+async function runProbe(r: ReturnType<typeof resolveDeps>, probe: ProbeRequest): Promise<ProbeOutcome> {
   let response: Response;
   try {
     response = await r.fetch(probe.url, {
@@ -306,30 +330,63 @@ export async function verifyProviderKey(
       signal: AbortSignal.timeout(30_000),
     });
   } catch {
+    return { ok: false, status: null };
+  }
+  // Drain without reading into anything that could be logged.
+  await response.arrayBuffer().catch(() => undefined);
+  return response.ok ? { ok: true } : { ok: false, status: response.status };
+}
+
+/**
+ * Prove the key and model work before anything is written. The provider's
+ * response body is never echoed (some providers quote part of the key back).
+ * For Z.AI, every endpoint is tried in ZAI_BASE_URLS order and the first that
+ * answers is returned, to be pinned into the profiles.
+ */
+export async function verifyProviderKey(
+  input: HermesProviderInput,
+  deps: HermesProviderSetupDeps = {},
+): Promise<VerifiedProvider> {
+  const r = resolveDeps(deps);
+  const label = HERMES_PROVIDER_SPECS[input.provider].label;
+  const candidates: Array<string | undefined> = input.provider === "zai" ? [...ZAI_BASE_URLS] : [undefined];
+  const statuses: number[] = [];
+  for (const baseUrl of candidates) {
+    const outcome = await runProbe(r, buildProviderProbe(input, baseUrl));
+    if (outcome.ok) return { baseUrl: baseUrl ?? null };
+    if (outcome.status !== null) statuses.push(outcome.status);
+  }
+  if (statuses.length === 0) {
     throw new HermesProviderSetupError(
       502,
       "provider_unreachable",
       `Could not reach ${label} to check the key. Check the box's network and try again.`,
     );
   }
-  if (response.ok) return;
-  const status = response.status;
-  // Drain without reading into anything that could be logged.
-  await response.arrayBuffer().catch(() => undefined);
-  if (status === 401 || status === 403) {
+  if (statuses.includes(429) && input.provider === "zai") {
     throw new HermesProviderSetupError(
       422,
-      "provider_key_rejected",
-      `${label} rejected this API key (HTTP ${status}). Check the key and try again.`,
+      "provider_no_balance",
+      `${label} accepted this key but it has no balance or resource package on any endpoint (HTTP 429). ` +
+        "Top up the Z.AI account or use a key with a GLM Coding Plan, then try again.",
     );
   }
-  if (status === 400 || status === 404) {
+  if (statuses.some((status) => status === 400 || status === 404)) {
+    const status = statuses.find((s) => s === 400 || s === 404)!;
     throw new HermesProviderSetupError(
       422,
       "provider_model_unavailable",
       `${label} did not accept the model "${input.model}" with this key (HTTP ${status}). Check the model id, or leave it blank for the default.`,
     );
   }
+  if (statuses.every((status) => status === 401 || status === 403)) {
+    throw new HermesProviderSetupError(
+      422,
+      "provider_key_rejected",
+      `${label} rejected this API key (HTTP ${statuses[0]}). Check the key and try again.`,
+    );
+  }
+  const status = statuses.find((s) => s !== 401 && s !== 403) ?? statuses[0];
   throw new HermesProviderSetupError(
     502,
     "provider_error",
@@ -384,9 +441,13 @@ async function applyToProfile(
   r: ReturnType<typeof resolveDeps>,
   profile: string,
   input: HermesProviderInput,
+  baseUrl: string | null = null,
 ): Promise<void> {
   const spec = HERMES_PROVIDER_SPECS[input.provider];
   await writeProfileEnvValue(join(r.profilesDir, profile), spec.envVar, input.apiKey);
+  // AgentDash: pin the endpoint the key was verified on (see ZAI_BASE_URLS).
+  const baseUrlVar = BASE_URL_ENV_VAR[input.provider];
+  if (baseUrlVar && baseUrl) await writeProfileEnvValue(join(r.profilesDir, profile), baseUrlVar, baseUrl);
   await runChecked(r.runHermes, ["-p", profile, "config", "set", "model.provider", spec.hermesProvider], input.apiKey);
   await runChecked(r.runHermes, ["-p", profile, "config", "set", "model.default", input.model], input.apiKey);
   await runChecked(r.runHermes, ["-p", profile, "auth", "list"], input.apiKey);
@@ -403,6 +464,8 @@ interface ProviderMarker {
   provider: HermesProviderId | null;
   model: string | null;
   configuredAt: string | null;
+  /** The pinned base URL (Z.AI); null on markers written before it existed. */
+  baseUrl: string | null;
 }
 
 async function readMarker(r: ReturnType<typeof resolveDeps>): Promise<ProviderMarker | null> {
@@ -413,6 +476,7 @@ async function readMarker(r: ReturnType<typeof resolveDeps>): Promise<ProviderMa
       provider: (HERMES_PROVIDERS as readonly string[]).includes(raw?.provider) ? raw.provider : null,
       model: typeof raw?.model === "string" ? raw.model : null,
       configuredAt: typeof raw?.configuredAt === "string" ? raw.configuredAt : null,
+      baseUrl: typeof raw?.baseUrl === "string" && raw.baseUrl ? raw.baseUrl : null,
     };
   } catch {
     return null;
@@ -445,6 +509,15 @@ export function hermesProviderConfiguredSync(env: NodeJS.ProcessEnv = process.en
   } catch {
     return false;
   }
+}
+
+async function writeMarker(r: ReturnType<typeof resolveDeps>, marker: ProviderMarker): Promise<void> {
+  const { baseUrl, ...rest } = marker;
+  await writeFile(
+    join(r.profilesDir, r.template, HERMES_PROVIDER_MARKER),
+    JSON.stringify(baseUrl ? { ...rest, baseUrl } : rest, null, 2) + "\n",
+    { mode: 0o600 },
+  );
 }
 
 /** The company whose key the template holds, or null. */
@@ -482,7 +555,7 @@ export async function configureHermesProvider(
   if (!r.secrets) throw new Error("configureHermesProvider needs a secret store");
   const secrets = r.secrets;
 
-  await verifyProviderKey(input, deps);
+  const { baseUrl } = await verifyProviderKey(input, deps);
 
   return r.lock(hermesProviderLockKey(r.template), async () => {
     const owner = (await readMarker(r))?.companyId ?? null;
@@ -536,13 +609,13 @@ export async function configureHermesProvider(
       } else {
         await backup(r.template);
       }
-      await applyToProfile(r, r.template, input);
+      await applyToProfile(r, r.template, input, baseUrl);
 
       const profiles = companyAgentProfiles(r, opts.agentIds);
       for (const profile of profiles) {
         await backup(profile);
         try {
-          await applyToProfile(r, profile, input);
+          await applyToProfile(r, profile, input, baseUrl);
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           throw new Error(`agent profile ${profile}: ${reason}`);
@@ -550,15 +623,13 @@ export async function configureHermesProvider(
       }
 
       // 6. Key-free marker.
-      await writeFile(
-        join(templateDir, HERMES_PROVIDER_MARKER),
-        JSON.stringify(
-          { companyId, provider: input.provider, model: input.model, configuredAt: r.now().toISOString() },
-          null,
-          2,
-        ) + "\n",
-        { mode: 0o600 },
-      );
+      await writeMarker(r, {
+        companyId,
+        provider: input.provider,
+        model: input.model,
+        configuredAt: r.now().toISOString(),
+        baseUrl,
+      });
 
       return { provider: input.provider, model: input.model, template: r.template, profilesUpdated: profiles.length };
     } catch (error) {
@@ -630,19 +701,40 @@ export async function reconcileHermesProviderFromSecret(
   if (!apiKey) return { status: "no_secret", updated: [], failed: [] };
   const input: HermesProviderInput = { provider: marker.provider, apiKey, model: marker.model };
   const envVar = HERMES_PROVIDER_SPECS[marker.provider].envVar;
+  const baseUrlVar = BASE_URL_ENV_VAR[marker.provider] ?? null;
+
+  // AgentDash (P0, v2026.1002.0): a box configured before endpoints were
+  // pinned has no baseUrl in its marker, and its profiles may each sit on a
+  // different endpoint Hermes cached (canary1's CoS on an empty pay-as-you-go
+  // balance). Pick the endpoint once, the same way setup does, and pin it
+  // everywhere. If the check fails (offline, no balance anywhere) nothing is
+  // pinned and the key is still reconciled as before.
+  let baseUrl = marker.baseUrl;
+  if (baseUrlVar && !baseUrl) {
+    try {
+      baseUrl = (await verifyProviderKey(input, deps)).baseUrl;
+    } catch {
+      baseUrl = null;
+    }
+  }
 
   return r.lock(hermesProviderLockKey(r.template), async () => {
     const updated: string[] = [];
     const failed: string[] = [];
     for (const profile of [r.template, ...companyAgentProfiles(r, opts.agentIds)]) {
       if (!existsSync(join(r.profilesDir, profile))) continue;
-      if (await profileHasKey(r, profile, envVar, apiKey)) continue;
+      const hasKey = await profileHasKey(r, profile, envVar, apiKey);
+      const hasBaseUrl = !baseUrlVar || !baseUrl || (await profileHasKey(r, profile, baseUrlVar, baseUrl));
+      if (hasKey && hasBaseUrl) continue;
       try {
-        await applyToProfile(r, profile, input);
+        await applyToProfile(r, profile, input, baseUrl);
         updated.push(profile);
       } catch {
         failed.push(profile);
       }
+    }
+    if (baseUrl && baseUrl !== marker.baseUrl) {
+      await writeMarker(r, { ...marker, baseUrl }).catch(() => undefined);
     }
     return { status: "ok", updated, failed };
   });
