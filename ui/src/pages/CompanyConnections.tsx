@@ -12,13 +12,19 @@ import { GitHubConnectStep } from "@/components/onboarding/GitHubConnectStep";
 import { Button } from "@/components/ui/button";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
-import { Link } from "@/lib/router";
+import { Link, useLocation } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
 
 export function CompanyConnections() {
   const { selectedCompany, selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
+  // AgentDash (Lane F2): the Slack OAuth callback returns here with
+  // `?slack=connected&team=...` or `?slack=error`; say what happened.
+  const location = useLocation();
+  const slackParams = new URLSearchParams(location.search);
+  const slackResult = slackParams.get("slack");
+  const slackTeam = slackParams.get("team");
 
   useEffect(() => {
     setBreadcrumbs([
@@ -59,6 +65,15 @@ export function CompanyConnections() {
           <Link2 className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">Connections</h1>
         </div>
+        {slackResult === "connected" ? (
+          <p role="status" className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+            Slack connected{slackTeam ? ` to ${slackTeam}` : ""}.
+          </p>
+        ) : slackResult === "error" ? (
+          <p role="alert" className="rounded-md border border-destructive/40 px-3 py-2 text-sm text-destructive">
+            Slack could not be connected. Try again from your agent's Slack setup.
+          </p>
+        ) : null}
         <p className="max-w-3xl text-sm text-muted-foreground">
           What reaches into this workspace from outside — the repository your agents work in and the
           assistants you approved.

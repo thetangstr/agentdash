@@ -255,6 +255,51 @@ describeEmbeddedPostgres("stranded-work recovery on a brand-new company (Lane F1
       );
   }
 
+  // A linked run stuck in `running` stops vouching for the issues it checked
+  // out once it is silent past the suspicion threshold or older than the
+  // critical threshold; a fresh one keeps vouching.
+  it.each([
+    { label: "fresh", startedMinutesAgo: 3, lastOutputMinutesAgo: 1, live: true },
+    { label: "silent past the suspicion threshold", startedMinutesAgo: 90, lastOutputMinutesAgo: 70, live: false },
+    { label: "older than the critical threshold", startedMinutesAgo: 5 * 60, lastOutputMinutesAgo: 1, live: false },
+  ])("a $label linked run counts as live for a checked-out sibling: $live", async ({ startedMinutesAgo, lastOutputMinutesAgo, live }) => {
+    const { companyId, agentId, ids } = await seedNewCompany();
+    // Drop the other fixtures out of the sweep so only the sibling is judged.
+    await db
+      .update(issues)
+      .set({ status: "done" })
+      .where(inArray(issues.id, [ids.cancelledRetry, ids.failedDispatch, ids.queued]));
+    const busyRun = await db
+      .select()
+      .from(issues)
+      .where(eq(issues.id, ids.busy))
+      .then((rows) => rows[0]!.executionRunId!);
+    await db
+      .update(heartbeatRuns)
+      .set({
+        startedAt: new Date(Date.now() - startedMinutesAgo * 60_000),
+        processStartedAt: new Date(Date.now() - startedMinutesAgo * 60_000),
+        lastOutputAt: new Date(Date.now() - lastOutputMinutesAgo * 60_000),
+      })
+      .where(eq(heartbeatRuns.id, busyRun));
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    const siblingTouched = result.issueIds.includes(ids.checkedOutBySibling);
+    expect(siblingTouched).toBe(!live);
+    if (!live) {
+      // No longer hidden: the sweep queues a continuation for it.
+      const siblingRuns = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId)));
+      expect(
+        siblingRuns.some((run) =>
+          (run.contextSnapshot as Record<string, unknown> | null)?.issueId === ids.checkedOutBySibling),
+      ).toBe(true);
+    }
+  });
+
   it("files no recovery issue while one agent works through several new issues, and escalates only after the minimum age", async () => {
     const { companyId, ids } = await seedNewCompany();
     const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });

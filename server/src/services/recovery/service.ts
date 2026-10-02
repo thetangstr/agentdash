@@ -454,13 +454,27 @@ export function recoveryService(
    * context names a different issue. That run is the execution path, so the
    * issue is busy, not stranded.
    */
-  async function hasLiveLinkedRun(issue: typeof issues.$inferSelect) {
+  //
+  // Upper bound: a linked run that is `running` but has gone silent for the
+  // active-run suspicion threshold (1h), or has run past the critical
+  // threshold (4h), no longer vouches for its sibling issues. Without the cap
+  // a run stuck in `running` with a live process would hide every issue it
+  // checked out for as long as it stayed stuck. The run itself is still the
+  // silent-run watchdog's business (scanSilentActiveRuns).
+  async function hasLiveLinkedRun(issue: typeof issues.$inferSelect, now: Date = new Date()) {
     const linkedRunIds = [issue.executionRunId, issue.checkoutRunId].filter(
       (id): id is string => Boolean(id),
     );
     if (linkedRunIds.length === 0 || !issue.assigneeAgentId) return false;
-    const row = await db
-      .select({ id: heartbeatRuns.id })
+    const rows = await db
+      .select({
+        id: heartbeatRuns.id,
+        status: heartbeatRuns.status,
+        lastOutputAt: heartbeatRuns.lastOutputAt,
+        processStartedAt: heartbeatRuns.processStartedAt,
+        startedAt: heartbeatRuns.startedAt,
+        createdAt: heartbeatRuns.createdAt,
+      })
       .from(heartbeatRuns)
       .where(
         and(
@@ -469,10 +483,21 @@ export function recoveryService(
           inArray(heartbeatRuns.id, linkedRunIds),
           inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
         ),
-      )
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
-    return Boolean(row);
+      );
+    return rows.some((run) => isLinkedRunStillLive(run, now));
+  }
+
+  function isLinkedRunStillLive(
+    run: Pick<typeof heartbeatRuns.$inferSelect, "status" | "lastOutputAt" | "processStartedAt" | "startedAt" | "createdAt">,
+    now: Date,
+  ) {
+    if (run.status !== "running") return true;
+    const runStartedAt = run.processStartedAt ?? run.startedAt ?? run.createdAt ?? null;
+    if (runStartedAt && now.getTime() - runStartedAt.getTime() >= ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS) {
+      return false;
+    }
+    const silenceAgeMs = silenceAgeMsForRun(run, now);
+    return silenceAgeMs === null || silenceAgeMs < ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS;
   }
 
   async function hasQueuedIssueWake(companyId: string, issueId: string) {
@@ -1811,7 +1836,7 @@ export function recoveryService(
         continue;
       }
 
-      if (await hasLiveLinkedRun(issue)) {
+      if (await hasLiveLinkedRun(issue, now)) {
         result.skipped += 1;
         continue;
       }

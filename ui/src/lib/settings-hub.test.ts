@@ -6,10 +6,12 @@ import { isSettingsHubPath, legacySettingsRedirectTarget } from "./settings-hub"
 describe("legacySettingsRedirectTarget", () => {
   it.each([
     ["/settings", "/company/settings"],
-    ["/BRI/settings", "/company/settings"],
+    ["/BRI/settings", "/BRI/company/settings"],
     ["/settings/", "/company/settings"],
     ["/settings/billing", "/billing"],
-    ["/BRI/settings/billing", "/billing"],
+    ["/BRI/settings/billing", "/BRI/billing"],
+    ["/BRI/settings/connections", "/BRI/company/settings/connections"],
+    ["/BRI/settings/general", "/instance/settings/general"],
     ["/settings/connections", "/company/settings/connections"],
     ["/settings/invites", "/company/settings/invites"],
     ["/settings/access", "/company/settings/access"],

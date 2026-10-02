@@ -2186,6 +2186,96 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .toEqual(["recovery.reconcile_stranded_assigned_issue", "recovery.reconcile_stranded_assigned_issue"]);
   });
 
+  // AgentDash (Lane F1): the immediate terminal-run path holds a young issue
+  // back from escalation; the periodic sweep escalates it after the window.
+  it("releases a young issue whose continuation retry was lost, then escalates it after the minimum age", async () => {
+    const { companyId, runId, issueId } = await seedRunFixture({
+      agentStatus: "idle",
+      processPid: 999_999_999,
+      processLossRetryCount: 1,
+    });
+    await db
+      .update(heartbeatRuns)
+      .set({
+        contextSnapshot: {
+          issueId,
+          taskId: issueId,
+          wakeReason: "issue_continuation_needed",
+          retryReason: "issue_continuation_needed",
+          source: "issue.continuation_recovery",
+        },
+      })
+      .where(eq(heartbeatRuns.id, runId));
+    // Started two minutes ago: inside STRANDED_ISSUE_ESCALATION_MIN_AGE_MS.
+    const startedAt = new Date(Date.now() - 2 * 60_000);
+    await db.update(issues).set({ startedAt, createdAt: startedAt }).where(eq(issues.id, issueId));
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const reaped = await heartbeat.reapOrphanedRuns();
+    expect(reaped.runIds).toEqual([runId]);
+    // Let the post-reap release settle, then check nothing escalated.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const released = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0]);
+    expect(released?.status).toBe("in_progress");
+    expect(released?.executionRunId).toBeNull();
+    const earlyRecoveries = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stranded_issue_recovery")));
+    expect(earlyRecoveries).toHaveLength(0);
+
+    const early = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(early.escalated).toBe(0);
+    expect(early.escalationDeferred).toBe(1);
+
+    const late = await heartbeat.reconcileStrandedAssignedIssues({
+      now: new Date(Date.now() + 11 * 60_000),
+    });
+    expect(late.escalated).toBe(1);
+    expect(late.issueIds).toEqual([issueId]);
+    const blocked = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0]);
+    expect(blocked?.status).toBe("blocked");
+    const recoveries = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stranded_issue_recovery")));
+    expect(recoveries.map((issue) => issue.originId)).toEqual([issueId]);
+  });
+
+  // AgentDash (Lane F1): the minimum age only delays escalation. An issue whose
+  // recovery budget is exhausted is re-blocked at once, however young.
+  it("re-blocks a young issue with an exhausted recovery budget without waiting for the minimum age", async () => {
+    const { issueId } = await seedStrandedIssueFixture({
+      status: "todo",
+      runStatus: "cancelled",
+      retryReason: "assignment_recovery",
+      runErrorCode: "task_recovery_budget_exhausted",
+      runError: "Automatic recovery remains blocked after task recovery budget exhaustion.",
+    });
+    const startedAt = new Date(Date.now() - 60_000);
+    await db
+      .update(issues)
+      .set({
+        createdAt: startedAt,
+        executionState: {
+          recoveryBudget: {
+            status: "exhausted",
+            exhaustedBy: ["attempts"],
+            usage: { automaticRetries: 1, providerTurns: 1, providerTokens: 1, providerCostUsd: 0, runtimeMs: 1 },
+          },
+        },
+      })
+      .where(eq(issues.id, issueId));
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.recoveryBudgetReblocked).toBe(1);
+    expect(result.escalationDeferred).toBe(0);
+    expect(result.escalated).toBe(0);
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0]);
+    expect(issue?.status).toBe("blocked");
+  });
+
   it("names the recovery budget, with usage, when a budget-refused retry is escalated", async () => {
     const { companyId, issueId } = await seedStrandedIssueFixture({
       status: "todo",

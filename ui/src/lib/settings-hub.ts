@@ -58,11 +58,16 @@ export function legacySettingsRedirectTarget(pathname: string): string {
   const segments = pathname.split("/").filter(Boolean);
   const settingsIndex = segments.findIndex((segment) => segment.toLowerCase() === "settings");
   const page = settingsIndex >= 0 ? segments[settingsIndex + 1]?.toLowerCase() : undefined;
-  if (!page) return WORKSPACE_SETTINGS_PATH;
-  if (page === "billing") return "/billing";
-  if (LEGACY_COMPANY_SETTINGS_PAGES.has(page)) return `${WORKSPACE_SETTINGS_PATH}/${page}`;
-  if (LEGACY_INSTANCE_SETTINGS_PAGES.has(page)) {
+  // `/BRI/settings` stays on BRI: a prefixed legacy URL names its company, so
+  // the target keeps that prefix rather than falling back to whichever
+  // company happens to be selected.
+  const companyPrefix = settingsIndex === 1 ? `/${segments[0]}` : "";
+  if (page && LEGACY_INSTANCE_SETTINGS_PAGES.has(page)) {
     return `/instance/settings/${segments.slice(settingsIndex + 1).join("/")}`;
   }
-  return WORKSPACE_SETTINGS_PATH;
+  if (page === "billing") return `${companyPrefix}/billing`;
+  if (page && LEGACY_COMPANY_SETTINGS_PAGES.has(page)) {
+    return `${companyPrefix}${WORKSPACE_SETTINGS_PATH}/${page}`;
+  }
+  return `${companyPrefix}${WORKSPACE_SETTINGS_PATH}`;
 }

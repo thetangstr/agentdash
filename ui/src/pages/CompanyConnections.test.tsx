@@ -98,13 +98,13 @@ describe("CompanyConnections", () => {
     vi.clearAllMocks();
   });
 
-  async function render() {
+  async function render(initialEntry = "/company/settings/connections") {
     root = createRoot(container);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => {
       root!.render(
         <QueryClientProvider client={client}>
-          <MemoryRouter>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <CompanyConnections />
           </MemoryRouter>
         </QueryClientProvider>,
@@ -114,6 +114,22 @@ describe("CompanyConnections", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+
+  it("confirms a Slack connection when the OAuth callback returns here", async () => {
+    await render("/company/settings/connections?slack=connected&team=Brightline");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Slack connected to Brightline.");
+  });
+
+  it("says when the Slack connection failed", async () => {
+    await render("/company/settings/connections?slack=error");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Slack could not be connected");
+  });
+
+  it("shows no Slack message without the callback parameter", async () => {
+    await render();
+    expect(container.textContent).not.toContain("Slack connected");
+    expect(container.textContent).not.toContain("Slack could not be connected");
+  });
 
   it("shows the connected repo and lets an admin rotate or remove the token", async () => {
     await render();
