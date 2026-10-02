@@ -116,6 +116,29 @@ describe("mobile issue + Ask (390px viewport)", () => {
     // Three Radix menu open/close cycles; give a loaded CI box headroom past the 5s default.
   }, 15_000);
 
+  it("disables New document while the documents section is not mounted", async () => {
+    const onNewDocument = vi.fn();
+    act(() =>
+      root.render(
+        <IssuePhoneActionsMenu
+          onNewSubIssue={vi.fn()}
+          onUploadAttachment={vi.fn()}
+          onNewDocument={onNewDocument}
+          newDocumentDisabled
+        />,
+      ),
+    );
+    const trigger = container.querySelector<HTMLButtonElement>('[data-testid="issue-phone-actions-trigger"]');
+    await act(async () => {
+      trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    const newDocument = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find((item) => item.textContent?.trim() === "New document");
+    expect(newDocument?.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => newDocument!.click());
+    expect(onNewDocument).not.toHaveBeenCalled();
+  }, 15_000);
+
   it("shows the Ask starters as one sideways-scrolling row of 44px chips on phones", () => {
     mockUseMessages.mockReturnValue([{ id: "m1", authorKind: "agent", body: "Hi", createdAt: new Date().toISOString() }]);
     act(() =>

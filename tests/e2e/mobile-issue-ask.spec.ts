@@ -82,6 +82,22 @@ async function expectUnobscured(page: Page, target: Locator) {
   }
 }
 
+function overlapsVertically(a: { y: number; height: number }, b: { y: number; height: number }) {
+  return a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+/** The bottom nav slides in and out with a transform; wait until it rests on the bottom edge. */
+async function expectNavSettled(page: Page) {
+  const nav = page.getByRole("navigation", { name: "Mobile navigation" });
+  await expect(nav).toBeInViewport();
+  await expect
+    .poll(async () => {
+      const box = await nav.boundingBox();
+      return box ? Math.round(box.y + box.height) : null;
+    })
+    .toBe(PHONE.height);
+}
+
 async function shot(page: Page, name: string) {
   if (!SHOTS_DIR) return;
   fs.mkdirSync(SHOTS_DIR, { recursive: true });
@@ -174,18 +190,67 @@ test.describe("Mobile issue detail and Ask (390×844)", () => {
     await expect(composer).toBeVisible();
     // The bottom nav slides away while scrolling down; scrolling up a little brings it back.
     await page.mouse.wheel(0, -40);
-    await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeInViewport();
-    await page.waitForTimeout(300);
+    await expectNavSettled(page);
     await expectUnobscured(page, composer);
+    // The in-thread "Jump to latest" link never covers the composer.
     const jump = page.getByTestId("issue-chat-jump-to-latest");
-    if (await jump.isVisible()) {
-      const jumpBox = await boxOf(jump);
-      const composerBox = await boxOf(composer);
-      const overlaps = jumpBox.y < composerBox.y + composerBox.height && jumpBox.y + jumpBox.height > composerBox.y;
-      expect(overlaps, "Jump to latest does not cover the composer").toBe(false);
-    }
+    await expect(jump).toBeVisible();
+    expect(overlapsVertically(await boxOf(jump), await boxOf(composer)), "Jump to latest does not cover the composer").toBe(false);
+    // At the bottom of a short thread the floating "Latest" control stays out of the way.
+    await expect(page.getByTestId("issue-chat-jump-to-latest-floating")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Scroll to bottom" })).toHaveCount(0);
     await shot(page, "issue-chat.png");
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("issue detail: a floating Latest control above the docked composer gets a long thread home", async ({ page, request }) => {
+    const company = await ensureCompany(request);
+    const issueRes = await request.post(`${BASE_URL}/api/companies/${company.id}/issues`, {
+      data: { title: "Long thread on a phone", status: "in_review" },
+    });
+    expect(issueRes.ok(), await issueRes.text()).toBe(true);
+    const issue = (await issueRes.json()) as { id: string; identifier: string | null };
+    const total = 30;
+    for (let i = 1; i <= total; i += 1) {
+      const body = `Update ${i} of ${total}: notes on the pick-and-place trial, with enough text to take a few lines on a phone screen.`;
+      const commentRes = await request.post(`${BASE_URL}/api/issues/${issue.id}/comments`, { data: { body } });
+      expect(commentRes.ok(), await commentRes.text()).toBe(true);
+    }
+
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/issues/${issue.identifier ?? issue.id}`);
+    const latest = page.getByText(`Update ${total} of ${total}:`);
+    await expect(page.getByText(`Update 1 of ${total}:`)).toBeVisible({ timeout: 20_000 });
+    const composer = page.getByTestId("issue-chat-composer");
+    await expect(composer).toBeVisible();
+
+    // Read from the top of the thread: the composer is docked, the newest update is far below it.
+    await page.getByTestId("issue-detail-tabs").evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await page.mouse.wheel(0, -40);
+    await expectNavSettled(page);
+    await expect(latest).not.toBeInViewport();
+
+    const floating = page.getByTestId("issue-chat-jump-to-latest-floating");
+    await expect(floating).toBeVisible();
+    await expect(floating).toHaveAccessibleName("Jump to latest");
+    const floatingBox = await boxOf(floating);
+    const composerBox = await boxOf(composer);
+    expect(floatingBox.height).toBeGreaterThanOrEqual(44);
+    expect(floatingBox.y + floatingBox.height, "Latest sits above the composer").toBeLessThanOrEqual(composerBox.y);
+    expect(floatingBox.x + floatingBox.width).toBeLessThanOrEqual(PHONE.width);
+    await expectUnobscured(page, composer);
+    await shot(page, "issue-long-thread.png");
+
+    await floating.click();
+    await expect(latest).toBeInViewport();
+    // The newest update lands above the docked composer, not behind it.
+    await expect
+      .poll(async () => {
+        const latestBox = await latest.boundingBox();
+        const composerTop = (await composer.boundingBox())?.y ?? 0;
+        return latestBox ? Math.round(latestBox.y + latestBox.height - composerTop) : null;
+      })
+      .toBeLessThanOrEqual(0);
+    await expect(floating).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   });
 
@@ -226,6 +291,7 @@ test.describe("Mobile issue detail and Ask (390×844)", () => {
     await expectNoHorizontalOverflow(page);
 
     // Composer pinned above the bottom nav and unobscured.
+    await expectNavSettled(page);
     await expectUnobscured(page, page.getByTestId("chat-composer-dock"));
     const send = page.getByRole("button", { name: "Send message" });
     const sendBox = await boxOf(send);

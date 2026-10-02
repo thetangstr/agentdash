@@ -16,11 +16,14 @@ export function IssuePhoneActionsMenu({
   onUploadAttachment,
   onNewDocument,
   uploadPending = false,
+  newDocumentDisabled = false,
 }: {
   onNewSubIssue: () => void;
   onUploadAttachment: () => void;
   onNewDocument: () => void;
   uploadPending?: boolean;
+  /** True while the documents section is not mounted, so the item can never silently do nothing. */
+  newDocumentDisabled?: boolean;
 }) {
   return (
     <DropdownMenu modal={false}>
@@ -45,7 +48,7 @@ export function IssuePhoneActionsMenu({
           <Paperclip />
           {uploadPending ? "Uploading…" : "Upload attachment"}
         </DropdownMenuItem>
-        <DropdownMenuItem className="min-h-11" onSelect={onNewDocument}>
+        <DropdownMenuItem className="min-h-11" disabled={newDocumentDisabled} onSelect={onNewDocument}>
           <FilePlus />
           New document
         </DropdownMenuItem>

@@ -345,7 +345,11 @@ export function IssueDocumentsSection({
     setError(null);
   };
 
-  useImperativeHandle(actionsRef, () => ({ beginNewDocument }));
+  // A stable handle (it always calls the latest beginNewDocument), so a callback
+  // ref in the parent sees one handle per mount instead of one per render.
+  const beginNewDocumentRef = useRef(beginNewDocument);
+  beginNewDocumentRef.current = beginNewDocument;
+  useImperativeHandle(actionsRef, () => ({ beginNewDocument: () => beginNewDocumentRef.current() }), []);
 
   const beginEdit = (key: string) => {
     const doc = sortedDocuments.find((entry) => entry.key === key);

@@ -1160,7 +1160,9 @@ export function IssueDetail() {
   const [locallyQueuedCommentRunIds, setLocallyQueuedCommentRunIds] = useState<Map<string, string>>(() => new Map());
   const [pendingCommentComposerFocusKey, setPendingCommentComposerFocusKey] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const documentsSectionRef = useRef<IssueDocumentsSectionHandle | null>(null);
+  // AgentDash: held in state (a callback ref) so the phone ⋯ menu disables
+  // "New document" whenever the documents section is not mounted.
+  const [documentsSection, setDocumentsSection] = useState<IssueDocumentsSectionHandle | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
   const commentComposerRef = useRef<IssueChatComposerHandle | null>(null);
   const cancelledQueuedOptimisticCommentIdsRef = useRef(new Set<string>());
@@ -3271,7 +3273,8 @@ export function IssueDetail() {
             <IssuePhoneActionsMenu
               onNewSubIssue={openNewSubIssue}
               onUploadAttachment={() => fileInputRef.current?.click()}
-              onNewDocument={() => documentsSectionRef.current?.beginNewDocument()}
+              onNewDocument={() => documentsSection?.beginNewDocument()}
+              newDocumentDisabled={!documentsSection}
               uploadPending={uploadAttachment.isPending || importMarkdownDocument.isPending}
             />
           </div>
@@ -3561,7 +3564,7 @@ export function IssueDetail() {
           });
         }}
         extraActions={!hasAttachments ? attachmentUploadButton : null}
-        actionsRef={documentsSectionRef}
+        actionsRef={setDocumentsSection}
         phoneActionsInMenu
       />
 
@@ -4032,8 +4035,9 @@ export function IssueDetail() {
           </ScrollArea>
         </SheetContent>
       </Sheet>
-      {/* AgentDash: on phones the chat composer is docked above the bottom nav; the floating
-          scroll button would sit on top of it, so the chat tab relies on "Jump to latest". */}
+      {/* AgentDash: below md (isMobile, where the bottom nav shows) the chat composer is docked
+          above the nav and the floating scroll button would sit on top of it. On the chat tab
+          IssueChatThread's floating "Latest" control (md:hidden, same breakpoint) replaces it. */}
       {isMobile && detailTab === "chat" ? null : <ScrollToBottom />}
     </div>
   );
