@@ -165,6 +165,24 @@ describe.skipIf(!ENABLED)("sandbox container", () => {
     expect(out).not.toContain("TIMEOUT");
   });
 
+  it("agent can write run.log in /run/sandbox but the sticky bit protects others' files", () => {
+    // 3770: group-writable so the agent can create its log; sticky so it
+    // cannot unlink/rename files owned by other runshare members or root.
+    const write = sh(
+      `su -s /bin/sh agent -c 'echo logline > /run/sandbox/run.log && cat /run/sandbox/run.log'`,
+    );
+    expect(write).toContain("logline");
+    const rootFile = sh("echo secret > /run/sandbox/root-owned.txt && chmod 0644 /run/sandbox/root-owned.txt && ls /run/sandbox");
+    expect(rootFile).toContain("root-owned.txt");
+    const rm = sh(
+      `su -s /bin/sh agent -c 'rm /run/sandbox/root-owned.txt' 2>&1; echo "exit=$?"`,
+      { allowFail: true },
+    );
+    expect(rm).toMatch(/Operation not permitted|Permission denied/);
+    const after = sh("cat /run/sandbox/root-owned.txt");
+    expect(after).toContain("secret");
+  });
+
   it("IMDSv2 is reachable by the signer uid only (R2)", () => {
     const rules = sh("nft list table inet sandbox_egress");
     expect(rules).toMatch(/skuid 1102[^\n]*169\.254\.169\.254/);

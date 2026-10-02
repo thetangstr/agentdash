@@ -61,12 +61,13 @@ const POLL_MS = 200;
 const POLL_TIMEOUT_MS = 30_000;
 
 /**
- * SendCommand/DescribeInstances errors meaning "there is no live guest":
- * the AWS SDK throws `InvalidInstanceId` when the instance is stopped,
- * terminated, or unknown. Anything matching means the sandbox's run state
- * (tmpfs / terminated EBS) is already gone — clear can report success.
+ * Errors that MIGHT mean "there is no live guest": the AWS SDK throws
+ * `InvalidInstanceId` when the instance is stopped, terminated, or unknown —
+ * but ALSO for a running instance whose SSM agent is offline (not yet
+ * registered, agent crashed). It is not proof of absence, so `clear` must
+ * confirm with DescribeInstances before reporting cleared.
  */
-function instanceGone(err: unknown): boolean {
+function maybeInstanceGone(err: unknown): boolean {
   const e = err as { name?: unknown; code?: unknown; message?: unknown };
   const code = String(e?.name ?? e?.code ?? "");
   const msg = String(e?.message ?? "");
@@ -170,14 +171,38 @@ export class Ec2Driver implements SandboxDriver {
     return { tokenDigest: String(r.tokenDigest) };
   }
 
+  /**
+   * DescribeInstances truth-check: is the instance in a state where run
+   * state is genuinely gone (stopped/terminated/never existed)? A running
+   * instance with an offline SSM agent still has state to wipe — clear must
+   * fail then, not pretend.
+   */
+  private async instanceIsGone(): Promise<boolean> {
+    try {
+      const res = await this.opts.ec2.describeInstances({ InstanceIds: [this.opts.instanceId] });
+      const instances = (res.Reservations ?? []).flatMap((r) => r.Instances ?? []);
+      const mine = instances.filter((i) => i.InstanceId === this.opts.instanceId);
+      if (mine.length === 0) return true;
+      return mine.every((i) =>
+        ["stopped", "stopping", "terminated", "shutting-down"].includes(i.State?.Name ?? ""),
+      );
+    } catch (err) {
+      // InvalidInstanceID.NotFound — terminated long enough to drop out of
+      // the API — is also "gone".
+      return maybeInstanceGone(err);
+    }
+  }
+
   async clear(input: { runId?: string }): Promise<ClearResponse> {
     try {
       const r = await this.ctl("clear", input);
       return { cleared: true, clearedAt: String(r.clearedAt) };
     } catch (err) {
       // clear is always callable (R4): a stopped/terminated/missing instance
-      // has no run state left to wipe — that IS cleared.
-      if (instanceGone(err)) {
+      // has no run state left to wipe — that IS cleared. But InvalidInstanceId
+      // from SSM is ambiguous (also = running + SSM agent offline), so only
+      // report cleared when DescribeInstances agrees the instance is gone.
+      if (maybeInstanceGone(err) && (await this.instanceIsGone())) {
         return { cleared: true, clearedAt: new Date().toISOString() };
       }
       throw err;

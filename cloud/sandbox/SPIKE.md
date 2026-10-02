@@ -71,7 +71,7 @@ docker-level numbers.
 | `healthcheck.sh` (9 checks) | ~0.8 s | inside the container |
 
 Resulting image ID (this checkout):
-`sha256:50058c27073143977163e766e45df7779f67d513874a893514ae0651f38fde21`
+`sha256:78df8abb89e8d6f19c9ddd22d7bee541e24f5298b767baaec45d395d4f054734`
 — the kind of digest that lands in the R8 `imageDigest` field once an AMI
 pipeline exists (an AMI's evidence pin is the AMI id + source image digest).
 

@@ -45,7 +45,7 @@ async function openRun() {
 }
 
 describe("lifecycle happy path", () => {
-  it("open -> list -> apply -> install -> clear", async () => {
+  it("open -> list -> apply -> install -> clear", { timeout: 240_000 }, async () => {
     await driverFor();
     const { hs, cfg } = await openRun();
     expect(hs.state).toBe("open");
@@ -68,7 +68,7 @@ describe("lifecycle happy path", () => {
     expect(cleared.cleared).toBe(true);
   });
 
-  it("reports a passing per-sandbox health check (R9)", async () => {
+  it("reports a passing per-sandbox health check (R9)", { timeout: 240_000 }, async () => {
     const driver = await driverFor();
     const health = await driver.health();
     expect(health.ok).toBe(true);
@@ -78,7 +78,7 @@ describe("lifecycle happy path", () => {
 });
 
 describe("company scoping (R1)", () => {
-  it("refuses a company with no registered sandbox, audited, no guest call", async () => {
+  it("refuses a company with no registered sandbox, audited, no guest call", { timeout: 240_000 }, async () => {
     await driverFor();
     await expect(
       svc.openHandshake({ companyId: "company-unknown", idempotencyKey: k(), side: "buyer" }),
@@ -89,7 +89,7 @@ describe("company scoping (R1)", () => {
     expect(await svc.listHandshakeSessions({ companyId: CO })).toEqual({ sessions: [] });
   });
 
-  it("two companies get isolated sandboxes — sessions never cross", async () => {
+  it("two companies get isolated sandboxes — sessions never cross", { timeout: 240_000 }, async () => {
     await driverFor("co-a");
     await driverFor("co-b");
     const hs = await svc.openHandshake({ companyId: "co-a", idempotencyKey: k(), side: "seller" });
@@ -103,7 +103,7 @@ describe("company scoping (R1)", () => {
 });
 
 describe("idempotency", () => {
-  it("replays an identical retry without re-running the guest op", async () => {
+  it("replays an identical retry without re-running the guest op", { timeout: 240_000 }, async () => {
     await driverFor();
     const key = k();
     const a = await svc.openHandshake({ companyId: CO, idempotencyKey: key, side: "buyer" });
@@ -117,7 +117,7 @@ describe("idempotency", () => {
     ]);
   });
 
-  it("joins a concurrent same-key call instead of running the guest op twice", async () => {
+  it("joins a concurrent same-key call instead of running the guest op twice", { timeout: 240_000 }, async () => {
     await driverFor();
     const key = k();
     const req = { companyId: CO, idempotencyKey: key, side: "buyer" as const };
@@ -127,7 +127,7 @@ describe("idempotency", () => {
     expect(listed.sessions).toHaveLength(1); // exactly ONE guest op ran
   });
 
-  it("conflicts when the same key carries a different body", async () => {
+  it("conflicts when the same key carries a different body", { timeout: 240_000 }, async () => {
     await driverFor();
     const key = k();
     await svc.openHandshake({ companyId: CO, idempotencyKey: key, side: "buyer" });
@@ -136,7 +136,7 @@ describe("idempotency", () => {
     ).rejects.toMatchObject({ name: "LifecycleError", code: "idempotency_conflict" });
   });
 
-  it("clear is never cached — every call executes and audits", async () => {
+  it("clear is never cached — every call executes and audits", { timeout: 240_000 }, async () => {
     await driverFor();
     const first = await svc.clear({ companyId: CO, idempotencyKey: k(), runId: "never-existed" });
     expect(first.cleared).toBe(true);
@@ -152,7 +152,7 @@ describe("idempotency", () => {
     ]);
   });
 
-  it("clear wipes even when state.json is corrupt", async () => {
+  it("clear wipes even when state.json is corrupt", { timeout: 240_000 }, async () => {
     const driver = await driverFor();
     await openRun();
     writeFileSync(join(driver.stateDir, "state.json"), "{not json!!");
@@ -162,7 +162,7 @@ describe("idempotency", () => {
 });
 
 describe("ordering", () => {
-  it("applyRunConfig on an unknown session fails", async () => {
+  it("applyRunConfig on an unknown session fails", { timeout: 240_000 }, async () => {
     await driverFor();
     await expect(
       svc.applyRunConfig({
@@ -174,7 +174,7 @@ describe("ordering", () => {
     ).rejects.toThrow(SandboxOpError);
   });
 
-  it("installSinkToken before applyRunConfig fails", async () => {
+  it("installSinkToken before applyRunConfig fails", { timeout: 240_000 }, async () => {
     await driverFor();
     await expect(
       svc.installSinkToken({
@@ -186,7 +186,7 @@ describe("ordering", () => {
     ).rejects.toThrow(/never configured|SandboxOpError/);
   });
 
-  it("a cleared session rejects a new applyRunConfig", async () => {
+  it("a cleared session rejects a new applyRunConfig", { timeout: 240_000 }, async () => {
     await driverFor();
     const { hs } = await openRun();
     await svc.clear({ companyId: CO, idempotencyKey: k(), runId: "run-1" });
@@ -202,7 +202,7 @@ describe("ordering", () => {
 });
 
 describe("schema + audit", () => {
-  it("rejects a malformed request before any guest call — and audits it", async () => {
+  it("rejects a malformed request before any guest call — and audits it", { timeout: 240_000 }, async () => {
     await driverFor();
     await expect(svc.openHandshake({ companyId: CO, side: "middle" })).rejects.toThrow(LifecycleError);
     const log = svc.auditLog();
@@ -215,7 +215,7 @@ describe("schema + audit", () => {
     });
   });
 
-  it("audits every call with a request hash, never the body", async () => {
+  it("audits every call with a request hash, never the body", { timeout: 240_000 }, async () => {
     await driverFor();
     const sealed = Buffer.from("SEALED-SECRET-CIPHERTEXT").toString("base64");
     await openRun();
@@ -230,7 +230,7 @@ describe("schema + audit", () => {
     expect(log.map((r) => r.operation)).toEqual(["openHandshake", "applyRunConfig", "installSinkToken"]);
   });
 
-  it("audits errors too", async () => {
+  it("audits errors too", { timeout: 240_000 }, async () => {
     await driverFor();
     await expect(
       svc.applyRunConfig({ companyId: CO, idempotencyKey: k(), runId: "r", sessionId: "nope" }),

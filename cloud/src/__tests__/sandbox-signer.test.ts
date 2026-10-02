@@ -63,7 +63,7 @@ beforeAll(async () => {
      "--key-file", join(dir, "key.pem"), "--generate"],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 60_000; // node spawn is slow on a loaded host
   while (!existsSync(sock)) {
     if (Date.now() > deadline) throw new Error("signerd never created its socket");
     await new Promise((r) => setTimeout(r, 25));
@@ -187,7 +187,7 @@ describe("signerd socket lifecycle", () => {
       SIGNERD, "--socket", stale, "--policy", join(SANDBOX_DIR, "signer-policy.json"),
       "--key-file", join(dir, "key2.pem"), "--generate",
     ]);
-    const deadline0 = Date.now() + 10_000;
+    const deadline0 = Date.now() + 60_000;
     while (!existsSync(stale)) {
       if (Date.now() > deadline0) throw new Error("first daemon never created its socket");
       await new Promise((r) => setTimeout(r, 25));
@@ -202,7 +202,7 @@ describe("signerd socket lifecycle", () => {
     ]);
     try {
       // claimSocket unlinks the stale file, then listen() is async — poll.
-      const deadline = Date.now() + 10_000;
+      const deadline = Date.now() + 60_000;
       for (;;) {
         try {
           const h = await signerRequest(stale, { op: "health" });

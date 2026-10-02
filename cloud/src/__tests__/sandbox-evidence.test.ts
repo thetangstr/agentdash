@@ -29,7 +29,7 @@ async function configure(runId: string) {
 }
 
 describe("run evidence (R8)", () => {
-  it("produces a schema-valid record with image digest and exclusivity proof", async () => {
+  it("produces a schema-valid record with image digest and exclusivity proof", { timeout: 240_000 }, async () => {
     await configure("run-a");
     const ev = await generateRunEvidence(driver, { ...INPUT, runId: "run-a" });
     expect(runEvidenceSchema.parse(ev)).toBeTruthy();
@@ -44,7 +44,7 @@ describe("run evidence (R8)", () => {
     expect(evidenceDigest(ev)).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("exclusivity proof lists a foreign run that overlaps the window", async () => {
+  it("exclusivity proof lists a foreign run that overlaps the window", { timeout: 240_000 }, async () => {
     await configure("run-a");
     // A second session + run lands INSIDE run-a's window.
     await configure("run-b");
@@ -53,7 +53,7 @@ describe("run evidence (R8)", () => {
     expect(ev.exclusivity.foreignWakes.length).toBeGreaterThan(0);
   });
 
-  it("clear stamps the end of the evidence window", async () => {
+  it("clear stamps the end of the evidence window", { timeout: 240_000 }, async () => {
     await configure("run-a");
     await driver.clear({ runId: "run-a" });
     const ev = await generateRunEvidence(driver, { ...INPUT, runId: "run-a" });

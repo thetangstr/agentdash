@@ -22,8 +22,9 @@ RUN apt-get update \
 #              local adapter runs as svc and submits protocol artifacts for
 #              signing. Neither can read the key.
 #   runshare — shares /run/sandbox (agent writes run.log, svc forwards it);
-#              the dir is sticky (3750) so group members cannot unlink each
-#              other's files; secret-bearing files inside stay root:svc 0640.
+#              the dir is sticky + group-writable (3770) so members can create
+#              files but cannot unlink each other's; secret-bearing files
+#              inside stay root:svc 0640.
 # Shells are nologin — entrypoint su's with -s /bin/sh.
 RUN groupadd -g 1100 signsock \
  && groupadd -g 1104 runshare \

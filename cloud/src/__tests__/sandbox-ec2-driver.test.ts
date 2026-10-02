@@ -113,8 +113,55 @@ describe("Ec2Driver", () => {
     expect(polls).toBe(3);
   });
 
-  it("clear reports cleared when the instance is stopped or gone (R4)", async () => {
-    // SendCommand on a stopped/terminated instance throws InvalidInstanceId.
+  it("clear reports cleared only when DescribeInstances confirms the instance is gone (R4)", async () => {
+    // SendCommand InvalidInstanceId is ambiguous: stopped/terminated/missing
+    // AND running-with-offline-SSM-agent. The driver must truth-check with
+    // the injected EC2 client.
+    const ssmFails: SsmLike = {
+      sendCommand: async () => {
+        const err = new Error("Instances not in a valid state") as Error & { name: string };
+        err.name = "InvalidInstanceId";
+        throw err;
+      },
+      getCommandInvocation: async () => ({ Status: "Failed" }),
+    };
+    const mk = (state?: string) =>
+      new Ec2Driver({
+        instanceId: "i-x", ssm: ssmFails,
+        ec2: {
+          describeInstances: async () => ({
+            Reservations: state === undefined
+              ? []
+              : [{ Instances: [{ InstanceId: "i-x", State: { Name: state } }] }],
+          }),
+        },
+        environmentId: "ec2:i-x/us-east-1", imageDigest: "sha256:x", sleep: async () => {},
+      });
+
+    // stopped / terminated / not-found -> run state is genuinely gone.
+    for (const state of ["stopped", "terminated", "shutting-down", undefined] as const) {
+      const res = await mk(state).clear({});
+      expect(res, `state=${state}`).toMatchObject({ cleared: true });
+      expect(res.clearedAt).toBeTruthy();
+    }
+    // DescribeInstances itself reporting NotFound is also "gone".
+    const notFound = new Ec2Driver({
+      instanceId: "i-x", ssm: ssmFails,
+      ec2: {
+        describeInstances: async () => {
+          const err = new Error("not found") as Error & { name: string };
+          err.name = "InvalidInstanceID.NotFound";
+          throw err;
+        },
+      },
+      environmentId: "ec2:i-x/us-east-1", imageDigest: "sha256:x", sleep: async () => {},
+    });
+    expect((await notFound.clear({})).cleared).toBe(true);
+  });
+
+  it("clear FAILS when the instance is running but its SSM agent is offline", async () => {
+    // InvalidInstanceId here does NOT mean state is wiped — the guest's
+    // /run/sandbox may still hold run state; pretending cleared would lie.
     const ssm: SsmLike = {
       sendCommand: async () => {
         const err = new Error("Instances not in a valid state") as Error & { name: string };
@@ -124,12 +171,26 @@ describe("Ec2Driver", () => {
       getCommandInvocation: async () => ({ Status: "Failed" }),
     };
     const d = new Ec2Driver({
-      instanceId: "i-gone", ssm, ec2: { describeInstances: async () => ({}) },
-      environmentId: "ec2:i-gone/us-east-1", imageDigest: "sha256:x", sleep: async () => {},
+      instanceId: "i-running", ssm,
+      ec2: {
+        describeInstances: async () => ({
+          Reservations: [{ Instances: [{ InstanceId: "i-running", State: { Name: "running" } }] }],
+        }),
+      },
+      environmentId: "ec2:i-running/us-east-1", imageDigest: "sha256:x", sleep: async () => {},
     });
-    const res = await d.clear({});
-    expect(res.cleared).toBe(true);
-    expect(res.clearedAt).toBeTruthy();
+    await expect(d.clear({})).rejects.toMatchObject({ name: "InvalidInstanceId" });
+    // pending/stopping likewise is not "gone"
+    const d2 = new Ec2Driver({
+      instanceId: "i-running", ssm,
+      ec2: {
+        describeInstances: async () => ({
+          Reservations: [{ Instances: [{ InstanceId: "i-running", State: { Name: "pending" } }] }],
+        }),
+      },
+      environmentId: "ec2:i-running/us-east-1", imageDigest: "sha256:x", sleep: async () => {},
+    });
+    await expect(d2.clear({})).rejects.toThrow();
   });
 
   it("works end-to-end through the lifecycle service (guest `ok` envelope stripped)", async () => {

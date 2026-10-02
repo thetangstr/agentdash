@@ -74,7 +74,8 @@ export class LocalVmDriver implements SandboxDriver {
 
   private waitForSocket(): Promise<void> {
     return new Promise((resolvePromise, reject) => {
-      const deadline = Date.now() + 10_000;
+      // Generous: spawning node on a loaded host can take tens of seconds.
+      const deadline = Date.now() + 60_000;
       this.signerd?.once("exit", (code) => reject(new Error(`signerd exited ${code}`)));
       const probe = () => {
         if (existsSync(this.socketPath)) resolvePromise();
@@ -92,7 +93,7 @@ export class LocalVmDriver implements SandboxDriver {
       ({ stdout } = await execFileP(
         process.execPath,
         [CTL, "--state", this.stateDir, "--socket", this.socketPath, cmd, JSON.stringify(input)],
-        { env: { ...process.env, SANDBOX_DEV: "1" }, timeout: 15_000 },
+        { env: { ...process.env, SANDBOX_DEV: "1" }, timeout: 60_000 },
       ));
     } catch (err) {
       // The guest writes {ok:false,error:{...}} on stdout then exits 1 — a
@@ -161,7 +162,7 @@ export class LocalVmDriver implements SandboxDriver {
       process.execPath,
       [CTL, "--state", this.stateDir, "--socket", this.socketPath,
        "--key-file", join(this.stateDir, "signer", "signing-key.pem"), "health"],
-      { env: { ...process.env, SANDBOX_DEV: "1" }, timeout: 15_000 },
+      { env: { ...process.env, SANDBOX_DEV: "1" }, timeout: 60_000 },
     ).catch((err: { stdout?: string }) => ({ stdout: err.stdout ?? "" }));
     return JSON.parse(stdout.trim().split("\n").pop() ?? "{}") as SandboxHealth;
   }
