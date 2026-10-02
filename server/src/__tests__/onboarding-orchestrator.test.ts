@@ -199,7 +199,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.postMessage).not.toHaveBeenCalled();
   });
 
-  it("uses the requested workspace when the user is an active member of it, and ignores one they are not", async () => {
+  it("uses the requested workspace when the user is an active member, and refuses (403, no fallback, no writes) one they are not", async () => {
     mockAccess.listUserCompanyAccess.mockResolvedValue([
       { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
       { companyId: "company-2", status: "active", principalId: "user-1", membershipRole: "owner" },
@@ -210,9 +210,74 @@ describe("onboardingOrchestrator.bootstrap", () => {
     const second = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-2" });
     expect(second.companyId).toBe("company-2");
 
-    const stranger = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-9" });
-    expect(stranger.companyId).toBe("company-1");
+    vi.clearAllMocks();
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
+      { companyId: "company-9", status: "suspended", principalId: "user-1", membershipRole: "owner" },
+    ]);
+    for (const companyId of ["company-9", "company-404"]) {
+      await expect(
+        onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId }),
+      ).rejects.toMatchObject({ status: 403, code: "not_a_member" });
+    }
+    // Not the first membership instead, and nothing written.
+    expect(mockCompanies.getById).not.toHaveBeenCalled();
     expect(mockCompanies.create).not.toHaveBeenCalled();
+    expect(mockAccess.setPrincipalPermission).not.toHaveBeenCalled();
+    expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockConversations.create).not.toHaveBeenCalled();
+  });
+
+  // PR #959 review: instance admins do NOT bypass the membership guard, so a
+  // CoS is never created in a workspace the caller does not belong to.
+  it("refuses an instance admin who is not an active member of the named workspace", async () => {
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
+    ]);
+    await expect(
+      onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-2", actorIsInstanceAdmin: true }),
+    ).rejects.toMatchObject({ status: 403, code: "not_a_member" });
+    expect(mockCompanies.getById).not.toHaveBeenCalled();
+    expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockConversations.create).not.toHaveBeenCalled();
+  });
+
+  // POST /companies inserts the creator's owner row with principalId
+  // `req.actor.userId ?? "local-board"` (routes/companies.ts), so in
+  // local_trusted the local-board actor IS an active owner of the workspace
+  // it created, and /cos for that workspace bootstraps it.
+  it("bootstraps the named workspace for the local_trusted local-board owner created by POST /companies", async () => {
+    mockUsers.getById.mockResolvedValue(null);
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "local-board", membershipRole: "owner" },
+      { companyId: "company-2", status: "active", principalId: "local-board", membershipRole: "owner" },
+    ]);
+    mockCompanies.getById.mockImplementation(async (id: string) => ({ id, name: "Beta", emailDomain: null }));
+    const result = await onboardingOrchestrator(deps as any).bootstrap("local-board", { companyId: "company-2" });
+    expect(result.companyId).toBe("company-2");
+    expect(mockAgents.create).toHaveBeenCalledWith("company-2", expect.objectContaining({ role: "chief_of_staff" }));
+    // Its existing owner row is left as it is.
+    expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+  });
+
+  it("still sends a founder with no membership and no companyId to company creation", async () => {
+    mockAccess.listUserCompanyAccess.mockResolvedValue([]);
+    const result = await onboardingOrchestrator(deps as any).bootstrap("user-1");
+    expect(result.companyId).toBe("company-1");
+    expect(mockCompanies.create).toHaveBeenCalledTimes(1);
+    expect(mockAccess.ensureMembership).toHaveBeenCalledWith("company-1", "user", "user-1", "owner", "active");
+    expect(mockAgents.create).toHaveBeenCalled();
+  });
+
+  it("keeps the legacy behaviour without a companyId: the first active membership", async () => {
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
+      { companyId: "company-2", status: "active", principalId: "user-1", membershipRole: "owner" },
+    ]);
+    const result = await onboardingOrchestrator(deps as any).bootstrap("user-1");
+    expect(result.companyId).toBe("company-1");
   });
 
   // PR #956 review (HIGH): bootstrap used to grant agents:create and rewrite

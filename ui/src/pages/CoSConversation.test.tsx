@@ -170,6 +170,44 @@ describe("CoSConversation", () => {
     expect(container.querySelector(".chat-panel")).toBeNull();
   });
 
+  it("says so when the caller is not a member of the selected workspace (no other company's chat)", async () => {
+    // The real error shape: the server's error handler answers
+    // { error, details } and the real api client parses it into ApiError.body.
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ error: "You are not an active member of that workspace.", details: { code: "not_a_member" } }),
+        { status: 403, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { api, ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
+    mockBootstrap.mockImplementation((companyId?: string | null) =>
+      api.post("/onboarding/bootstrap", companyId ? { companyId } : {}),
+    );
+    // The client really produces body.details.code, which the page reads.
+    const probe = await api.post("/onboarding/bootstrap", {}).catch((err: unknown) => err);
+    expect(probe).toBeInstanceOf(ApiError);
+    expect((probe as InstanceType<typeof ApiError>).body).toEqual({
+      error: "You are not an active member of that workspace.",
+      details: { code: "not_a_member" },
+    });
+
+    try {
+      await act(async () => {
+        const { CoSConversation } = await import("./CoSConversation");
+        root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
+      });
+      await act(async () => {});
+      await act(async () => {});
+
+      const notice = container.querySelector('[data-testid="cos-not-available"]');
+      expect(notice?.textContent).toContain("aren't an active member of this workspace");
+      expect(container.querySelector(".chat-panel")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // AgentDash (#725): a hosted box asks for the Hermes provider key before the CoS chat.
   it("asks for a Hermes provider key first on a hosted box that has none", async () => {
     mockBootstrap.mockResolvedValue({ companyId: "c1", cosAgentId: "a1", conversationId: "conv1" });
