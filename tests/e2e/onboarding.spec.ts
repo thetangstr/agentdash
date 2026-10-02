@@ -3,6 +3,11 @@ import { test, expect } from "@playwright/test";
 /**
  * E2E: Onboarding wizard flow (skip_llm mode).
  *
+ * One onboarding path: no new user is routed to this wizard any more. First
+ * runs and "New Company" go to /company-create → /setup → /cos (first-run.spec.ts
+ * and the last test here). The wizard stays reachable for a deep link to
+ * /onboarding, which is what this spec drives.
+ *
  * Walks through the 4-step OnboardingWizard:
  *   Step 1 — Name your company
  *   Step 2 — Create your first agent (adapter selection + config)
@@ -221,4 +226,20 @@ test.describe("Onboarding wizard", () => {
         .toBe(0);
     }
   });
+});
+
+// One onboarding path: "New Company" starts the same flow as a first run
+// (/company-create, then /setup and the CoS), not the six-step wizard.
+test("New Company goes to /company-create, not the onboarding wizard", async ({ page }) => {
+  const createRes = await page.request.post("/api/companies", {
+    data: { name: `E2E-NewCompany-${Date.now()}` },
+  });
+  expect(createRes.ok()).toBe(true);
+  const company = (await createRes.json()) as { issuePrefix: string };
+
+  await page.goto(`/${company.issuePrefix}/companies`);
+  await page.getByRole("button", { name: "New Company" }).click();
+  await expect(page).toHaveURL(/\/company-create\?another=1$/);
+  await expect(page.getByRole("heading", { name: "Name your workspace" })).toBeVisible();
+  await expect(page.locator("h3", { hasText: "Name your company" })).toHaveCount(0);
 });

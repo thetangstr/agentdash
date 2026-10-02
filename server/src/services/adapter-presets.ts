@@ -24,9 +24,9 @@ import { isHostedBox } from "./license.js";
 // Presets
 // ---------------------------------------------------------------------------
 
-export type AdapterPreset = "claude" | "minimax" | "hermes" | "openai" | "gemini" | "stub";
+export type AdapterPreset = "claude" | "minimax" | "hermes" | "claude_code" | "codex" | "openai" | "gemini" | "stub";
 
-export const ADAPTER_PRESETS: AdapterPreset[] = ["claude", "minimax", "hermes", "openai", "gemini", "stub"];
+export const ADAPTER_PRESETS: AdapterPreset[] = ["claude", "minimax", "hermes", "claude_code", "codex", "openai", "gemini", "stub"];
 
 /**
  * Each preset resolves to a set of env assignments. Values are literal except
@@ -62,6 +62,11 @@ const PRESET_ENV: Record<AdapterPreset, Array<{ key: string; value: string }>> =
   // box the key comes in through the provider step instead (#725,
   // routes/hermes-provider-setup.ts): same preset, plus `provider`.
   hermes: [{ key: "AGENTDASH_DEFAULT_ADAPTER", value: "hermes_local" }],
+  // AgentDash (one onboarding path): a self-hosted founder picks the local CLI
+  // runtime at /setup. Like Hermes, the CLI holds its own credentials, so there
+  // is no key here; readiness is whether the binary is on PATH.
+  claude_code: [{ key: "AGENTDASH_DEFAULT_ADAPTER", value: "claude_local" }],
+  codex: [{ key: "AGENTDASH_DEFAULT_ADAPTER", value: "codex_local" }],
   stub: [{ key: "PAPERCLIP_E2E_SKIP_LLM", value: "true" }],
 };
 
@@ -78,6 +83,8 @@ export function adapterPresetOptions(): AdapterPresetOption[] {
     { preset: "claude", label: "Claude (Anthropic)", requiresKey: true, description: "ANTHROPIC_API_KEY" },
     { preset: "minimax", label: "MiniMax (China)", requiresKey: true, description: "MINIMAX_API_KEY (api.minimaxi.com)" },
     { preset: "hermes", label: "Hermes (local harness)", requiresKey: false, description: "hermes CLI on PATH; it holds its own provider credentials" },
+    { preset: "claude_code", label: "Claude Code (local CLI)", requiresKey: false, description: "claude CLI on PATH; it holds its own sign-in" },
+    { preset: "codex", label: "Codex (local CLI)", requiresKey: false, description: "codex CLI on PATH; it holds its own sign-in" },
     { preset: "openai", label: "OpenAI", requiresKey: true, description: "OPENAI_COMPAT_API_KEY (api.openai.com)" },
     { preset: "gemini", label: "Gemini (Google)", requiresKey: true, description: "OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat)" },
     { preset: "stub", label: "Stub (no key — placeholder plans)", requiresKey: false, description: "Canned responses; wire a real model later" },
@@ -177,15 +184,15 @@ export function readAdapterStatus(): AdapterStatus {
       return { adapter, ready: true, preset: "hermes", reason: null };
     case "claude_local":
       return hasBinary("claude")
-        ? { adapter, ready: true, preset: "custom", reason: null }
-        : { adapter, ready: false, preset: "custom", reason: "claude binary not found on PATH" };
+        ? { adapter, ready: true, preset: "claude_code", reason: null }
+        : { adapter, ready: false, preset: "claude_code", reason: "claude binary not found on PATH" };
     case "codex_local":
       // Same shape as claude_local: a binary on PATH is what "ready" can
       // honestly mean for a CLI adapter — auth state is the CLI's own to
       // report. Respects AGENTDASH_CODEX_COMMAND like dispatch-llm does.
       return hasBinary((process.env.AGENTDASH_CODEX_COMMAND ?? "").trim() || "codex")
-        ? { adapter, ready: true, preset: "custom", reason: null }
-        : { adapter, ready: false, preset: "custom", reason: "codex binary not found on PATH" };
+        ? { adapter, ready: true, preset: "codex", reason: null }
+        : { adapter, ready: false, preset: "codex", reason: "codex binary not found on PATH" };
     default:
       return { adapter, ready: false, preset: "custom", reason: `adapter '${adapter}' has no readiness check` };
   }

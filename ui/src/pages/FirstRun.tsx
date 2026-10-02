@@ -1,6 +1,12 @@
-// AgentDash (GH #786, UX-5): the hosted first run at /setup.
+// AgentDash (GH #786, UX-5): the first run at /setup.
 //
-//   model key → connect GitHub → first issue → Home
+//   model key → connect GitHub → first issue → Home         (hosted box)
+//   runtime check → Chief of Staff; GitHub and first issue later (self-hosted)
+//
+// One path for every install (one UX): /company-create → /setup → /cos. On a
+// hosted box the first step is the model key; elsewhere the server reports no
+// model key is needed, and a workspace that was just named sees the runtime
+// step instead (Claude Code, Codex or Hermes, checked on this machine).
 //
 // The step shown is the first incomplete one according to the server
 // (GET /companies/:id/first-run), so leaving mid-flow and coming back resumes
@@ -20,6 +26,7 @@ import { FirstIssueStep } from "@/components/onboarding/FirstIssueStep";
 import { GitHubConnectStep } from "@/components/onboarding/GitHubConnectStep";
 import { HermesProviderStep } from "@/components/onboarding/HermesProviderStep";
 import { ProviderKeyBlocked } from "@/components/onboarding/ProviderKeyBlocked";
+import { RuntimeStep } from "@/components/onboarding/RuntimeStep";
 
 const STEP_LABELS: Array<{ step: Exclude<FirstRunStep, "done">; label: string }> = [
   { step: "model", label: "Your model" },
@@ -27,8 +34,18 @@ const STEP_LABELS: Array<{ step: Exclude<FirstRunStep, "done">; label: string }>
   { step: "first_issue", label: "First issue" },
 ];
 
-function StepIndicator({ current, showModel }: { current: FirstRunStep; showModel: boolean }) {
-  const steps = STEP_LABELS.filter((entry) => showModel || entry.step !== "model");
+function StepIndicator({
+  current,
+  showModel,
+  modelLabel,
+}: {
+  current: FirstRunStep;
+  showModel: boolean;
+  modelLabel?: string;
+}) {
+  const steps = STEP_LABELS.filter((entry) => showModel || entry.step !== "model").map((entry) =>
+    entry.step === "model" && modelLabel ? { ...entry, label: modelLabel } : entry,
+  );
   const currentIndex = steps.findIndex((entry) => entry.step === current);
   return (
     <ol className="mx-auto mt-10 flex max-w-lg gap-4 px-6 text-xs" aria-label="Setup progress" data-testid="first-run-progress">
@@ -126,8 +143,16 @@ export function FirstRunPage() {
     );
   }
 
+  // Self-hosted: the hop from /company-create (it passes ?companyId=) shows the
+  // runtime step before anything else. Whether a model key is required is the
+  // server's answer, so a hosted box never sees this.
+  const showRuntime =
+    !status.model.required && Boolean(requestedCompanyId) && !status.repo.done && !status.firstIssue.done;
+
   let body: ReactNode = null;
-  if (status.nextStep === "model") {
+  if (showRuntime) {
+    body = <RuntimeStep companyId={company.id} onContinue={() => navigate("/cos", { replace: true })} />;
+  } else if (status.nextStep === "model") {
     const provider = adapterQuery.data?.hermesProvider;
     body = !status.canConfigureModel ? (
       // #794: a company admin who is not the instance admin cannot set the key.
@@ -186,8 +211,12 @@ export function FirstRunPage() {
 
   return (
     <div className="min-h-screen bg-surface-page" data-testid="first-run">
-      <StepIndicator current={status.nextStep} showModel={status.model.required} />
-      {(status.nextStep === 'repo' || status.nextStep === 'first_issue') && <div className="mx-auto mt-6 max-w-lg rounded-lg border p-4 text-sm"><p>Marketing and sales roles can start without a repository.</p><Link className="underline" to={`/${company.issuePrefix}/workforce`}>Set up a marketing or sales role</Link></div>}
+      <StepIndicator
+        current={showRuntime ? "model" : status.nextStep}
+        showModel={status.model.required || showRuntime}
+        modelLabel={showRuntime ? "Your runtime" : undefined}
+      />
+      {!showRuntime && (status.nextStep === 'repo' || status.nextStep === 'first_issue') && <div className="mx-auto mt-6 max-w-lg rounded-lg border p-4 text-sm"><p>Marketing and sales roles can start without a repository.</p><Link className="underline" to={`/${company.issuePrefix}/workforce`}>Set up a marketing or sales role</Link></div>}
       {body}
     </div>
   );

@@ -168,7 +168,7 @@ export function AssessPage() {
             and the Chief of Staff will walk you back here.
           </p>
           <div style={{ marginTop: 32, display: "flex", gap: 16, flexWrap: "wrap" }}>
-            <Button href="/onboarding">Create your workspace</Button>
+            <Button href="/company-create">Create your workspace</Button>
           </div>
         </SectionContainer>
       </MarketingShell>

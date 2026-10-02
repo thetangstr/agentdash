@@ -26,7 +26,9 @@ test("the claim link creates the founder's account and lands on /cos; the link i
   await page.locator("#claim-repeat").fill(PASSWORD);
   await page.getByRole("button", { name: "Claim workspace" }).click();
   // /cos, which the gate may already have moved on to naming the workspace.
-  await page.waitForURL(/\/(cos|company-create|onboarding)(\b|\/|\?|$)/, { timeout: 60_000 });
+  // One onboarding path: never the six-step wizard at /onboarding, hosted or not.
+  await page.waitForURL(/\/(cos|company-create)(\b|\/|\?|$)/, { timeout: 60_000 });
+  expect(new URL(page.url()).pathname).not.toBe("/onboarding");
 
   const after = await (await request.get(`${BASE}/api/health`)).json();
   if (after.hostedBox) expect(after.claimed).toBe(true);
@@ -47,9 +49,10 @@ test("the claim link creates the founder's account and lands on /cos; the link i
 // workspace; the server makes them a member and the instance admin. The UI
 // used to keep its pre-company access cache and show "No company access"
 // until a reload. Also: a box has no www front door (/find, /start).
+// One onboarding path: a self-hosted instance (the local run of this config)
+// takes the same /company-create → /setup route as a hosted box.
 test("after the claim the founder names the workspace and lands in the app, not No company access", async ({ page, request }) => {
   const health = await (await request.get(`${BASE}/api/health`)).json();
-  test.skip(!health.hostedBox, "the hosted first run (/company-create) applies to a hosted box");
   test.skip(health.instanceHasCompany === true, "the box already has a workspace");
 
   await page.goto(`${BASE}/auth`);

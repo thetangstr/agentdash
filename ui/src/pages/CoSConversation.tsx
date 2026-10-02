@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
+import { ApiError } from "../api/client";
 import { agentsApi } from "../api/agents";
 import { conversationsApi } from "../api/conversations";
 import { useCompany } from "../context/CompanyContext";
@@ -37,6 +38,7 @@ export function CoSConversation() {
   const { selectedCompanyId, loading: companiesLoading } = useCompany();
   const [bootstrapped, setBootstrapped] = useState<BootstrapState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notAvailable, setNotAvailable] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -76,7 +78,7 @@ export function CoSConversation() {
 
       // First-time onboarding path: bootstrap creates company + CoS + conversation
       try {
-        const r = await onboardingApi.bootstrap();
+        const r = await onboardingApi.bootstrap(selectedCompanyId);
         if (cancelled) return;
         // AgentDash: bootstrap may have created the first company; refetch
         // the access queries so the gate does not judge on the old cache.
@@ -89,6 +91,18 @@ export function CoSConversation() {
         });
       } catch (err: unknown) {
         if (cancelled) return;
+        // AgentDash (PR #956 review): only a workspace owner or admin may set
+        // up the Chief of Staff (403), and an archived workspace is refused
+        // (409). A member who opens /cos first gets a plain explanation, not
+        // an error page.
+        if (err instanceof ApiError && (err.status === 403 || err.status === 409)) {
+          setNotAvailable(
+            err.status === 403
+              ? "Your workspace's Chief of Staff isn't set up yet. A workspace owner or admin sets it up the first time they open this page."
+              : err.message,
+          );
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Failed to bootstrap workspace";
         setError(msg);
       }
@@ -99,6 +113,18 @@ export function CoSConversation() {
       cancelled = true;
     };
   }, [selectedCompanyId, companiesLoading, queryClient]);
+
+  if (notAvailable) {
+    return (
+      <div className="mx-auto max-w-lg p-8 text-center text-sm" data-testid="cos-not-available">
+        <p className="font-medium">Chief of Staff not available</p>
+        <p className="mt-2 text-muted-foreground">{notAvailable}</p>
+        <Link className="mt-4 inline-block underline" to="/dashboard">
+          Go to Home
+        </Link>
+      </div>
+    );
+  }
 
   if (error) {
     return (

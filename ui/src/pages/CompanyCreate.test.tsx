@@ -11,8 +11,11 @@ const mockNavigate = vi.hoisted(() => vi.fn());
 const mockCreate = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 
+const mockSearch = vi.hoisted(() => ({ value: "" }));
+
 vi.mock("@/lib/router", () => ({
   useNavigate: () => mockNavigate,
+  useSearchParams: () => [new URLSearchParams(mockSearch.value)],
 }));
 
 vi.mock("@/api/companies", () => ({
@@ -49,6 +52,7 @@ describe("CompanyCreatePage", () => {
     });
     mockNavigate.mockReset();
     mockCreate.mockReset();
+    mockSearch.value = "";
     mockSetSelectedCompanyId.mockReset();
   });
 
@@ -108,6 +112,25 @@ describe("CompanyCreatePage", () => {
     expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
     expect(mockNavigate).toHaveBeenCalledWith("/setup?companyId=company-1", { replace: true });
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("/assess"), expect.anything());
+  });
+
+  it("New Company (?another=1) creates a second workspace without the post-signup guard, then goes to setup", async () => {
+    mockSearch.value = "another=1";
+    mockCreate.mockResolvedValue({ id: "company-2", name: "Beta" });
+    await submitName("Beta");
+    expect(mockCreate).toHaveBeenCalledWith({ name: "Beta" }, undefined);
+    expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-2");
+    expect(mockNavigate).toHaveBeenCalledWith("/setup?companyId=company-2", { replace: true });
+  });
+
+  it("New Company shows the server's refusal (e.g. one workspace on Free) instead of jumping to /cos", async () => {
+    mockSearch.value = "another=1";
+    mockCreate.mockRejectedValue(
+      new ApiError("Free workspaces are limited to 1 workspace.", 409, { code: "single_company_installation" }),
+    );
+    await submitName("Beta");
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Free workspaces are limited to 1 workspace.");
   });
 
   it("submits to companiesApi.create with fromSignup and navigates to setup", async () => {

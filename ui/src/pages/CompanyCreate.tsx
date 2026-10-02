@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@/lib/router";
+import { useNavigate, useSearchParams } from "@/lib/router";
 import { companiesApi } from "../api/companies";
 import { ApiError } from "../api/client";
 import { refreshAccessQueries } from "../lib/access-refresh";
@@ -30,6 +30,11 @@ export function CompanyCreatePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { setSelectedCompanyId } = useCompany();
+  const [searchParams] = useSearchParams();
+  // AgentDash (one onboarding path): "New Company" (NEW_COMPANY_PATH) comes
+  // here with ?another=1. That person already has a workspace on purpose, so
+  // the post-signup duplicate guard below must not send them to /cos.
+  const another = searchParams.get("another") === "1";
   const [companyName, setCompanyName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -40,7 +45,7 @@ export function CompanyCreatePage() {
       // accidentally creating a duplicate workspace.
       return companiesApi.create(
         { name: companyName.trim() },
-        { fromSignup: true },
+        another ? undefined : { fromSignup: true },
       );
     },
     onSuccess: async (company) => {
@@ -54,7 +59,7 @@ export function CompanyCreatePage() {
     onError: async (err) => {
       // 409 means the user already has a workspace (invite path or duplicate
       // submission). Route them to /cos rather than dead-ending on an error.
-      if (err instanceof ApiError && err.status === 409) {
+      if (!another && err instanceof ApiError && err.status === 409) {
         await refreshAccessQueries(queryClient);
         navigate("/cos", { replace: true });
         return;

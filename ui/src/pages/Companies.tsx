@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
-import { useDialogActions } from "../context/DialogContext";
 import { useCanCreateCompany } from "../hooks/useCanCreateCompany";
+import { NEW_COMPANY_PATH } from "../lib/onboarding-route";
+import { useNavigate } from "@/lib/router";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { companiesApi } from "../api/companies";
 import { queryKeys } from "../lib/queryKeys";
@@ -37,7 +38,7 @@ export function Companies() {
     loading,
     error,
   } = useCompany();
-  const { openOnboarding } = useDialogActions();
+  const navigate = useNavigate();
   // AgentDash (scan 2, E1): a hosted box holds one workspace; no New Company.
   const canCreateCompany = useCanCreateCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -94,7 +95,7 @@ export function Companies() {
     <div className="space-y-6">
       {canCreateCompany && (
         <div className="flex items-center justify-end">
-          <Button size="sm" onClick={() => openOnboarding()}>
+          <Button size="sm" onClick={() => navigate(NEW_COMPANY_PATH)}>
             <Plus className="h-3.5 w-3.5 mr-1.5" />
             New Company
           </Button>

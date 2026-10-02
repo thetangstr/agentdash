@@ -179,7 +179,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
     vi.clearAllMocks();
     mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com", name: "Alice Anderson" });
     // Second call: user already has an active membership — reuse that company.
-    mockAccess.listUserCompanyAccess.mockResolvedValue([{ companyId: "company-1", status: "active", principalId: "user-1" }]);
+    mockAccess.listUserCompanyAccess.mockResolvedValue([{ companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" }]);
     mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
     mockAgents.list.mockResolvedValue([{ id: "agent-cos-1", role: "chief_of_staff", adapterType: "claude_api", adapterConfig: {} }]);
     mockAgents.listKeys.mockResolvedValue([{ id: "key-1" }]);
@@ -197,6 +197,112 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.create).not.toHaveBeenCalled();
     // And — critically — it must NOT post the welcome sequence again.
     expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("uses the requested workspace when the user is an active member of it, and ignores one they are not", async () => {
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
+      { companyId: "company-2", status: "active", principalId: "user-1", membershipRole: "owner" },
+    ]);
+    mockCompanies.getById.mockImplementation(async (id: string) => ({ id, name: id === "company-2" ? "Beta" : "Acme", emailDomain: null }));
+    mockConversations.create.mockImplementation(async ({ companyId }: { companyId: string }) => ({ id: `conv-${companyId}`, companyId }));
+
+    const second = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-2" });
+    expect(second.companyId).toBe("company-2");
+
+    const stranger = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-9" });
+    expect(stranger.companyId).toBe("company-1");
+    expect(mockCompanies.create).not.toHaveBeenCalled();
+  });
+
+  // PR #956 review (HIGH): bootstrap used to grant agents:create and rewrite
+  // the caller's membership to owner, so any member could promote themselves.
+  describe("authorization on an existing workspace", () => {
+    function memberOf(role: string, userId = "user-1", status = "active") {
+      mockAccess.listUserCompanyAccess.mockResolvedValue([
+        { companyId: "company-1", status, principalId: userId, membershipRole: role },
+      ]);
+    }
+
+    it.each(["viewer", "member", "operator"])("refuses a %s with 403 and leaves their role alone", async (role) => {
+      memberOf(role);
+      await expect(
+        onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-1" }),
+      ).rejects.toMatchObject({ status: 403 });
+      // Also without a companyId (the first active membership).
+      await expect(onboardingOrchestrator(deps as any).bootstrap("user-1")).rejects.toMatchObject({ status: 403 });
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+      expect(mockAccess.setPrincipalPermission).not.toHaveBeenCalled();
+      expect(mockAgents.create).not.toHaveBeenCalled();
+      expect(mockConversations.create).not.toHaveBeenCalled();
+    });
+
+    it.each(["owner", "admin"])("lets an %s set up the CoS without rewriting their membership", async (role) => {
+      memberOf(role);
+      const result = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-1" });
+      expect(result.companyId).toBe("company-1");
+      expect(mockAgents.create).toHaveBeenCalled();
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
+
+    it("lets an instance admin set up a workspace where they are only a viewer, without promoting them", async () => {
+      memberOf("viewer");
+      const result = await onboardingOrchestrator(deps as any).bootstrap("user-1", {
+        companyId: "company-1",
+        actorIsInstanceAdmin: true,
+      });
+      expect(result.companyId).toBe("company-1");
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
+
+    it("lets the local_trusted local-board actor through", async () => {
+      mockUsers.getById.mockResolvedValue(null);
+      memberOf("member", "local-board");
+      const result = await onboardingOrchestrator(deps as any).bootstrap("local-board", { companyId: "company-1" });
+      expect(result.companyId).toBe("company-1");
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
+
+    it("refuses an archived workspace", async () => {
+      memberOf("owner");
+      mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", status: "archived" });
+      await expect(
+        onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-1" }),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(mockAgents.create).not.toHaveBeenCalled();
+    });
+
+    it("does not reactivate a suspended membership through the same-domain path", async () => {
+      mockAccess.listUserCompanyAccess.mockResolvedValue([
+        { companyId: "company-1", status: "suspended", principalId: "user-1", membershipRole: "viewer" },
+      ]);
+      mockCompanies.findByEmailDomain.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
+      await expect(onboardingOrchestrator(deps as any).bootstrap("user-1")).rejects.toMatchObject({ status: 409 });
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
+
+    it("refuses a strict companyId the caller is not a member of with 400, before any write (assessment route)", async () => {
+      memberOf("owner");
+      await expect(
+        onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-9", strictCompanyId: true }),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(mockCompanies.getById).not.toHaveBeenCalled();
+      expect(mockAccess.setPrincipalPermission).not.toHaveBeenCalled();
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+      expect(mockAgents.create).not.toHaveBeenCalled();
+      expect(mockConversations.create).not.toHaveBeenCalled();
+    });
+
+    it("leaves the legitimate founder alone: owner from POST /companies, same email domain, CoS set up", async () => {
+      // POST /companies created company-1 for alice@acme.com and made her owner;
+      // /cos then bootstraps it. The same-domain refusal must not catch her.
+      memberOf("owner");
+      mockCompanies.findByEmailDomain.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
+      const result = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-1" });
+      expect(result.companyId).toBe("company-1");
+      expect(mockAgents.create).toHaveBeenCalled();
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
   });
 
   it("creates a fresh isolated workspace for a free-mail user even when another same-domain user exists", async () => {
@@ -219,24 +325,32 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockCompanies.create).toHaveBeenCalledWith(expect.objectContaining({ emailDomain: "bob@gmail.com" }));
   });
 
-  it("attaches a corp-domain user to an existing same-domain company (team pattern)", async () => {
-    // alice@acme.com signs up; an "acme.com" workspace already exists from
-    // another teammate. We expect the orchestrator to attach alice to it
-    // (no fresh workspace created), since deriveCompanyEmailDomain returns
-    // bare "acme.com" for non-free-mail domains and findByEmailDomain wins.
+  // PR #956 re-review: a same-domain stranger used to be attached to the
+  // existing workspace as OWNER, with agents:create and a CoS. Joining is by
+  // invite — the answer POST /companies already gives ("Contact your
+  // administrator to join it") — so bootstrap refuses and writes nothing.
+  it("does not auto-join a corp-domain user to an existing same-domain workspace", async () => {
     mockUsers.getById.mockResolvedValue({ id: "user-3", email: "alice@acme.com" });
     mockAccess.listUserCompanyAccess.mockResolvedValue([]);
     mockCompanies.findByEmailDomain.mockResolvedValue({ id: "company-acme", name: "Acme", emailDomain: "acme.com" });
-    mockAgents.list.mockResolvedValue([{ id: "agent-cos-acme", role: "chief_of_staff" }]);
-    mockConversations.findByCompany.mockResolvedValue({ id: "conv-acme", companyId: "company-acme" });
+    mockAgents.list.mockResolvedValue([]);
 
-    const result = await onboardingOrchestrator(deps as any).bootstrap("user-3");
-    expect(result.companyId).toBe("company-acme");
+    await expect(onboardingOrchestrator(deps as any).bootstrap("user-3")).rejects.toMatchObject({
+      status: 409,
+      code: "domain_already_claimed",
+      message: expect.stringContaining("Contact your administrator"),
+    });
     expect(mockCompanies.findByEmailDomain).toHaveBeenCalledWith("acme.com");
     expect(mockCompanies.create).not.toHaveBeenCalled();
+    expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    expect(mockAccess.setPrincipalPermission).not.toHaveBeenCalled();
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockAgents.createApiKey).not.toHaveBeenCalled();
+    expect(mockConversations.create).not.toHaveBeenCalled();
+    expect(mockConversations.addParticipant).not.toHaveBeenCalled();
   });
 
-  it("blocks a second corp-domain human from joining a Free workspace through bootstrap", async () => {
+  it("refuses a second corp-domain human on a Free workspace before taking the capacity lock", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
     mockUsers.getById.mockResolvedValue({ id: "user-3", email: "alice@acme.com" });
     mockAccess.listUserCompanyAccess.mockResolvedValue([]);
@@ -261,9 +375,9 @@ describe("onboardingOrchestrator.bootstrap", () => {
     const tierCapacity = tierCapacityDeps();
     await expect(
       onboardingOrchestrator({ ...(deps as any), tierCapacity }).bootstrap("user-3"),
-    ).rejects.toBeInstanceOf(OnboardingTierCapacityExceededError);
+    ).rejects.toMatchObject({ status: 409, code: "domain_already_claimed" });
 
-    expect(tierCapacity.withCompanyLock).toHaveBeenCalledWith("company-acme", expect.any(Function));
+    expect(tierCapacity.withCompanyLock).not.toHaveBeenCalled();
     expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
     expect(mockAgents.create).not.toHaveBeenCalled();
     expect(mockConversations.addParticipant).not.toHaveBeenCalled();
@@ -272,7 +386,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
   it("blocks bootstrap CoS creation when a Free workspace already has an agent", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
     mockAccess.listUserCompanyAccess.mockResolvedValue([
-      { companyId: "company-1", status: "active", principalId: "user-1" },
+      { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
     ]);
     mockAccess.listActiveUserMemberships.mockResolvedValue([
       { companyId: "company-1", principalId: "user-1" },
@@ -296,7 +410,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.addParticipant).not.toHaveBeenCalled();
   });
 
-  it("dry-runs a new company with CEO + COO sharing one CoS and one onboarding conversation", async () => {
+  it("dry-runs a new company: the CEO founds it with a CoS; a same-domain COO is refused (joins by invite)", async () => {
     const orch = onboardingOrchestrator(deps as any);
 
     mockUsers.getById.mockResolvedValueOnce({
@@ -337,35 +451,24 @@ describe("onboardingOrchestrator.bootstrap", () => {
       name: "Mkthink",
       emailDomain: "mkthink.com",
     });
-    mockAgents.list.mockResolvedValueOnce([
-      {
-        id: "mkthink-cos",
-        companyId: "mkthink-company",
-        role: "chief_of_staff",
-        adapterType: "claude_api",
-        adapterConfig: {},
-      },
-    ]);
-    mockAgents.listKeys.mockResolvedValueOnce([{ id: "cos-key" }]);
-    mockConversations.findByCompany.mockResolvedValueOnce({ id: "mkthink-cos-conv", companyId: "mkthink-company" });
-
-    const coo = await orch.bootstrap("coo-user");
+    // PR #956 re-review: the COO joins by invite, not by email domain.
+    await expect(orch.bootstrap("coo-user")).rejects.toMatchObject({ status: 409, code: "domain_already_claimed" });
 
     expect(ceo).toEqual({
       companyId: "mkthink-company",
       cosAgentId: "mkthink-cos",
       conversationId: "mkthink-cos-conv",
     });
-    expect(coo).toEqual(ceo);
     expect(mockCompanies.create).toHaveBeenCalledTimes(1);
     expect(mockAgents.create).toHaveBeenCalledTimes(1);
     expect(mockAgents.createApiKey).toHaveBeenCalledTimes(1);
     expect(mockConversations.create).toHaveBeenCalledTimes(1);
     expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
     expect(mockConversations.addParticipant).toHaveBeenCalledWith("mkthink-cos-conv", "ceo-user", "owner");
-    expect(mockConversations.addParticipant).toHaveBeenCalledWith("mkthink-cos-conv", "coo-user", "owner");
+    expect(mockConversations.addParticipant).not.toHaveBeenCalledWith("mkthink-cos-conv", "coo-user", expect.anything());
     expect(mockAccess.ensureMembership).toHaveBeenCalledWith("mkthink-company", "user", "ceo-user", "owner", "active");
-    expect(mockAccess.ensureMembership).toHaveBeenCalledWith("mkthink-company", "user", "coo-user", "owner", "active");
+    expect(mockAccess.ensureMembership).not.toHaveBeenCalledWith("mkthink-company", "user", "coo-user", expect.anything(), expect.anything());
+    expect(mockAccess.setPrincipalPermission).not.toHaveBeenCalledWith("mkthink-company", "user", "coo-user", expect.anything(), expect.anything(), expect.anything());
   });
 
   it("throws SingleCompanyInstallationError when an active company exists and the override is not active", async () => {

@@ -1,7 +1,6 @@
-import { Navigate, useLocation } from "@/lib/router";
+import { Navigate, useLocation, useNavigate } from "@/lib/router";
 import { useCompany } from "@/context/CompanyContext";
-import { useDialogActions } from "@/context/DialogContext";
-import { shouldRedirectCompanylessRouteToOnboarding } from "@/lib/onboarding-route";
+import { FIRST_COMPANY_PATH, shouldRedirectCompanylessRouteToOnboarding } from "@/lib/onboarding-route";
 import { FirstRunStart } from "@/components/FirstRunStart";
 
 /**
@@ -28,7 +27,7 @@ export function UnprefixedBoardRedirect() {
         hasCompanies: false,
       })
     ) {
-      return <Navigate to="/onboarding" replace />;
+      return <Navigate to={FIRST_COMPANY_PATH} replace />;
     }
     return <NoCompaniesStartPage />;
   }
@@ -42,7 +41,10 @@ export function UnprefixedBoardRedirect() {
 }
 
 export function NoCompaniesStartPage() {
-  const { openOnboarding } = useDialogActions();
+  // AgentDash (one onboarding path): "New Company" names the workspace at
+  // /company-create, then /setup and the Chief of Staff, the same as a first
+  // run anywhere. The six-step wizard is not an entry point any more.
+  const navigate = useNavigate();
 
   // MKThink is the first customer, so their brief is the default prose. Any
   // other instance still gets a working prompt — just a generic description.
@@ -65,5 +67,5 @@ Set up three goals with tasks under them:
 No agent may contact a client or a candidate directly; they draft and a human
 sends. No agent reports a number it cannot source.`;
 
-  return <FirstRunStart onCreateManually={() => openOnboarding()} companyBrief={brief} />;
+  return <FirstRunStart onCreateManually={() => navigate(FIRST_COMPANY_PATH)} companyBrief={brief} />;
 }

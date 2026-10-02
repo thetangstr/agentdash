@@ -80,6 +80,18 @@ export interface AdapterStatusResponse {
   };
 }
 
+// AgentDash (one onboarding path): the keyless local runtimes a self-hosted
+// founder picks at /setup. The server's preset menu also has key-bearing
+// entries; the first run offers only the local runtimes.
+export type LocalRuntimePreset = "claude_code" | "codex" | "hermes";
+
+export interface SetupAdapterResponse {
+  status: AdapterStatusResponse["status"];
+  applied: string[];
+  persisted: boolean;
+  persistError: string | null;
+}
+
 export interface SetupHermesProviderResponse {
   hermesProvider: { configured: true; provider: HermesProviderId; label: string; model: string };
   profilesUpdated: number;
@@ -110,6 +122,8 @@ export const onboardingApi = {
     model?: string;
   }) =>
     api.post<SetupHermesProviderResponse>("/onboarding/setup-adapter", { preset: "hermes", ...input }),
+  setupAdapter: (preset: LocalRuntimePreset) =>
+    api.post<SetupAdapterResponse>("/onboarding/setup-adapter", { preset }),
   modelKeyAdmins: (companyId: string) =>
     api.get<{ admins: ModelKeyAdmin[] }>(
       `/onboarding/model-key-admins?companyId=${encodeURIComponent(companyId)}`,
@@ -131,7 +145,10 @@ export const onboardingApi = {
       `/onboarding/member-sessions/${companyId}/complete`,
       {},
     ),
-  bootstrap: () => api.post<BootstrapResponse>("/onboarding/bootstrap", {}),
+  // companyId: the selected workspace; the server uses it only when the user is
+  // an active member (a second workspace made by "New Company").
+  bootstrap: (companyId?: string | null) =>
+    api.post<BootstrapResponse>("/onboarding/bootstrap", companyId ? { companyId } : {}),
   interviewTurn: (input: {
     conversationId: string;
     userMessage: string;

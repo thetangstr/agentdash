@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, LogOut, Plus, Settings, UserPlus } from "lucide-react";
-import { Link } from "@/lib/router";
+import { Link, useNavigate } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { healthApi } from "@/api/health";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCompany } from "@/context/CompanyContext";
-import { useDialogActions } from "../context/DialogContext";
+import { NEW_COMPANY_PATH } from "../lib/onboarding-route";
 import { queryKeys } from "@/lib/queryKeys";
 import { useSidebar } from "../context/SidebarContext";
 
@@ -27,7 +27,7 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
   const [internalOpen, setInternalOpen] = useState(false);
   const queryClient = useQueryClient();
   const { selectedCompany, companies } = useCompany();
-  const { openOnboarding } = useDialogActions();
+  const navigate = useNavigate();
   const { isMobile, setSidebarOpen } = useSidebar();
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
@@ -111,7 +111,7 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
           <DropdownMenuItem
             onClick={() => {
               closeNavigationChrome();
-              openOnboarding();
+              navigate(NEW_COMPANY_PATH);
             }}
           >
             <Plus className="size-4" />

@@ -52,7 +52,7 @@ describe("adapter-presets", () => {
     // minimax and hermes were missing while both were the shipped configuration:
     // status reported them correctly as ready, but a user who opened the model
     // screen and picked anything was moved back onto Claude.
-    const expected = ["claude", "gemini", "hermes", "minimax", "openai", "stub"];
+    const expected = ["claude", "claude_code", "codex", "gemini", "hermes", "minimax", "openai", "stub"];
     expect(adapterPresetOptions().map((o) => o.preset).sort()).toEqual(expected);
     expect([...ADAPTER_PRESETS].sort()).toEqual(expected);
   });
@@ -67,6 +67,19 @@ describe("adapter-presets", () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
     process.env.AGENTDASH_HERMES_COMMAND = "/bin/sh";
     expect(readAdapterStatus()).toMatchObject({ ready: true, preset: "hermes" });
+  });
+
+  it("selects the local Claude Code and Codex runtimes without a key, and names them", () => {
+    useTempEnvFile();
+    const claude = applyAdapterPreset({ preset: "claude_code" });
+    expect(claude.status.adapter).toBe("claude_local");
+    expect(claude.status.preset).toBe("claude_code");
+    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBe("claude_local");
+
+    const codex = applyAdapterPreset({ preset: "codex" });
+    expect(codex.status.adapter).toBe("codex_local");
+    expect(codex.status.preset).toBe("codex");
+    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBe("codex_local");
   });
 
   it("pins the MiniMax preset to the China endpoint", () => {

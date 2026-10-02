@@ -171,6 +171,7 @@ vi.mock("drizzle-orm", () => ({
 import { assistantConversations, companies } from "@paperclipai/db";
 import { onboardingV2Routes } from "../routes/onboarding-v2.js";
 import { errorHandler } from "../middleware/error-handler.js";
+import { HttpError } from "../errors.js";
 
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const originalPublicUrl = process.env.PAPERCLIP_PUBLIC_URL;
@@ -264,9 +265,37 @@ describe("POST /api/onboarding/bootstrap", () => {
       cosAgentId: "a1",
       conversationId: "conv1",
     });
-    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1");
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", {});
     // The route must NOT post any messages itself anymore.
     expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("passes the selected workspace to the orchestrator when the CoS page names one", async () => {
+    mockOrchestrator.bootstrap.mockResolvedValue({
+      companyId: "c2",
+      cosAgentId: "a2",
+      conversationId: "conv2",
+    });
+    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+    const res = await request(app).post("/api/onboarding/bootstrap").send({ companyId: "c2" });
+    expect(res.status).toBe(200);
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", { companyId: "c2" });
+  });
+
+  it("tells the orchestrator when the caller is an instance admin", async () => {
+    mockOrchestrator.bootstrap.mockResolvedValue({ companyId: "c2", cosAgentId: "a2", conversationId: "conv2" });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", isInstanceAdmin: true });
+    await request(app).post("/api/onboarding/bootstrap").send({ companyId: "c2" });
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", { companyId: "c2", actorIsInstanceAdmin: true });
+  });
+
+  it("answers 403 (not 500) when the orchestrator refuses a non-admin member", async () => {
+    mockOrchestrator.bootstrap.mockRejectedValue(
+      new HttpError(403, "Only a workspace owner or admin can set up the Chief of Staff."),
+    );
+    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+    const res = await request(app).post("/api/onboarding/bootstrap").send({ companyId: "c2" });
+    expect(res.status).toBe(403);
   });
 
   it("returns 401 for unauthenticated callers", async () => {
@@ -320,7 +349,7 @@ describe("POST /api/onboarding/complete-initial-assessment", () => {
       conversationId: "conv1",
       redirectUrl: "/cos",
     });
-    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1");
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", { companyId: "c1", strictCompanyId: true });
     expect(mockCosState.getOrCreate).toHaveBeenCalledWith("conv1");
     expect(mockCosState.setGoals).toHaveBeenCalledWith(
       "conv1",
@@ -337,6 +366,34 @@ describe("POST /api/onboarding/complete-initial-assessment", () => {
       }),
     );
     expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
+  });
+
+  // PR #956 re-review: a companyId that is not one of the caller's
+  // memberships is a 400 from the orchestrator (strictCompanyId) before any
+  // write, not a bootstrap of some other workspace followed by a 400.
+  it("returns 400 and touches no CoS state when the companyId is not the caller's workspace", async () => {
+    mockOrchestrator.bootstrap.mockRejectedValue(
+      new HttpError(400, "You are not an active member of that workspace."),
+    );
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      isInstanceAdmin: true,
+      // c9 passes the route's company-access check (e.g. a suspended membership);
+      // the orchestrator still finds no ACTIVE membership for it.
+      companyIds: ["c1", "c9"],
+    });
+    const res = await request(app)
+      .post("/api/onboarding/complete-initial-assessment")
+      .send({ companyId: "c9", assessmentMarkdown: "## Start" });
+    expect(res.status).toBe(400);
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ companyId: "c9", strictCompanyId: true }),
+    );
+    expect(mockCosState.getOrCreate).not.toHaveBeenCalled();
+    expect(mockCosState.setGoals).not.toHaveBeenCalled();
   });
 });
 
@@ -1260,7 +1317,7 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
     // unconfigured install described a provider it would never use.
     expect(res.body.status).toMatchObject({ adapter: "minimax", ready: false });
     expect(res.body.options.map((o: { preset: string }) => o.preset).sort()).toEqual(
-      ["claude", "gemini", "hermes", "minimax", "openai", "stub"],
+      ["claude", "claude_code", "codex", "gemini", "hermes", "minimax", "openai", "stub"],
     );
   });
 
@@ -1289,6 +1346,35 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
     expect(res.status).toBe(201);
     expect(res.body.status.ready).toBe(true);
     expect(process.env.PAPERCLIP_E2E_SKIP_LLM).toBe("true");
+  });
+
+  // PR #956 review: the local-runtime presets rewrite the instance default
+  // adapter, so they stay instance-admin only — a company owner or member
+  // gets 403 and nothing changes.
+  it.each(["claude_code", "codex"])("refuses the %s preset to a non-admin (403, env untouched)", async (preset) => {
+    for (const actor of [
+      { type: "board", userId: "u2", source: "session", isInstanceAdmin: false },
+      {
+        type: "board",
+        userId: "u3",
+        source: "session",
+        isInstanceAdmin: false,
+        memberships: [{ companyId: "c1", status: "active", membershipRole: "owner" }],
+      },
+    ]) {
+      const app = buildApp(actor);
+      const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset });
+      expect(res.status).toBe(403);
+    }
+    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBeUndefined();
+  });
+
+  it("applies the claude_code preset for an instance admin", async () => {
+    const app = buildApp(INSTANCE_ADMIN);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "claude_code" });
+    expect(res.status).toBe(201);
+    expect(res.body.applied).toEqual(["AGENTDASH_DEFAULT_ADAPTER"]);
+    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBe("claude_local");
   });
 
   it("400s on a hosted preset with no key", async () => {
