@@ -26,6 +26,7 @@ import { sidebarBadgesApi } from "../api/sidebarBadges";
 import { heartbeatsApi } from "../api/heartbeats";
 import { authApi } from "../api/auth";
 import { useCompanyOrder } from "../hooks/useCompanyOrder";
+import { useCanCreateCompany } from "../hooks/useCanCreateCompany";
 import { useLocation, useNavigate } from "@/lib/router";
 import {
   Tooltip,
@@ -128,6 +129,8 @@ function SortableCompanyItem({
 export function CompanyRail() {
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { openOnboarding } = useDialogActions();
+  // AgentDash (scan 2, E1): a hosted box holds one workspace; no Add company.
+  const canCreateCompany = useCanCreateCompany();
   const navigate = useNavigate();
   const location = useLocation();
   const isInstanceRoute = location.pathname.startsWith("/instance/");
@@ -244,6 +247,8 @@ export function CompanyRail() {
         </DndContext>
       </div>
 
+      {canCreateCompany && (
+      <>
       {/* Separator before add button */}
       <div className="w-8 h-px bg-border mx-auto shrink-0" />
 
@@ -264,6 +269,8 @@ export function CompanyRail() {
           </TooltipContent>
         </Tooltip>
       </div>
+      </>
+      )}
     </div>
   );
 }

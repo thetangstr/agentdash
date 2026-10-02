@@ -112,6 +112,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // complete current/historical authority, atomic tree DB acceptance, truthful
 // postcommit runtime readback, final pause admission and private deletion refusal.
 // No hire-specific replay, repair, transport or capability grant is introduced.
+// AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
+// worker: the onboarding wizard's tasks arrive in `backlog` and start only when
+// a person moves them to `todo`. Proposal-created hires add nothing to that.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

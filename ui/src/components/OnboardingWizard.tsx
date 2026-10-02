@@ -9,7 +9,8 @@ import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
 import { stewardshipsApi } from "../api/stewardships";
-import { fetchStewardshipOn, useStewardshipCapability } from "../hooks/useStewardshipCapability";
+import { useStewardshipCapability } from "../hooks/useStewardshipCapability";
+import { pairOwnerWithNewAgent } from "../lib/onboarding-steward";
 import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -83,16 +84,16 @@ import {
   firstGoalExamples,
   type FirstGoalDraft
 } from "../lib/first-goal";
+import {
+  DEFAULT_TASK_DESCRIPTION,
+  DEFAULT_TASK_TITLE,
+  WIZARD_DEFAULT_ADAPTER_TYPE,
+  isRecommendedWizardAdapter
+} from "../lib/onboarding-defaults";
 
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
 type AdapterType = string;
-
-const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the operator route work, coordinate agents, and keep the company moving forward.
-
-- help the operator onboard and get oriented
-- coordinate and delegate tasks to other agents as they are hired
-- surface blockers and keep context across the operator's priorities`;
 
 /**
  * What the task step tells the owner about the machinery they are about to
@@ -108,8 +109,10 @@ const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the
  *
  * Every line here is deliberately checkable against behaviour rather than
  * aspiration:
- *  - the task is created with status `todo` and no run is triggered, so
- *    "nothing starts until you say so" is literally true;
+ *  - the task is created with status `backlog`, which wakes nobody and is not
+ *    in the agent's inbox, so "nothing starts until you say so" is literally
+ *    true (`todo` was not: creating a `todo` issue wakes its assignee). The
+ *    issue page's Start button moves it to `todo`, which starts the run;
  *  - escalation prefers an enrolled `bridge:read` endpoint and falls back to a
  *    notice when there is none, so the bridge line names both outcomes. Copy
  *    promising the laptop path unconditionally would be a lie for every owner
@@ -145,7 +148,7 @@ function WhatHappensNext({
     {
       icon: Play,
       title: "Nothing runs until you say so",
-      body: "The task is created as To do. It sits there until you start it on the next screen, so an agent never begins work you did not ask for.",
+      body: "The task is created parked, in Backlog. It waits there until you press Start on the issue, so an agent never begins work you did not ask for.",
     },
     {
       icon: ShieldCheck,
@@ -353,7 +356,7 @@ export function OnboardingWizard() {
    * content this system treats as untrusted everywhere else. Choosing Claude
    * Code is still supported; it is no longer what happens by not choosing.
    */
-  const [adapterType, setAdapterType] = useState<AdapterType>("hermes_local");
+  const [adapterType, setAdapterType] = useState<AdapterType>(WIZARD_DEFAULT_ADAPTER_TYPE);
   const [model, setModel] = useState("");
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
@@ -368,9 +371,7 @@ export function OnboardingWizard() {
   const [showMoreAdapters, setShowMoreAdapters] = useState(false);
 
   // Step 3
-  const [taskTitle, setTaskTitle] = useState(
-    "Get oriented and tell the operator how to use you"
-  );
+  const [taskTitle, setTaskTitle] = useState(DEFAULT_TASK_TITLE);
   const [taskDescription, setTaskDescription] = useState(
     DEFAULT_TASK_DESCRIPTION
   );
@@ -549,7 +550,7 @@ export function OnboardingWizard() {
     // Same default as the initial state above — a reset that quietly restored
     // `claude_local` would reintroduce the unrunnable agent for anyone who
     // started the wizard over.
-    setAdapterType("hermes_local");
+    setAdapterType(WIZARD_DEFAULT_ADAPTER_TYPE);
     setModel("");
     setCommand("");
     setArgs("");
@@ -559,7 +560,7 @@ export function OnboardingWizard() {
     setAdapterEnvLoading(false);
     setForceUnsetAnthropicApiKey(false);
     setUnsetAnthropicLoading(false);
-    setTaskTitle("Get oriented and tell the operator how to use you");
+    setTaskTitle(DEFAULT_TASK_TITLE);
     setTaskDescription(DEFAULT_TASK_DESCRIPTION);
     setCreatedCompanyId(null);
     setCreatedCompanyPrefix(null);
@@ -633,7 +634,7 @@ export function OnboardingWizard() {
       return result;
     } catch (err) {
       setAdapterEnvError(
-        err instanceof Error ? err.message : "Adapter environment test failed"
+        err instanceof Error ? err.message : "The check could not reach the agent"
       );
       return null;
     } finally {
@@ -1018,22 +1019,23 @@ export function OnboardingWizard() {
        * in a cold end-to-end run — the owner already had an account, but no
        * stewardship, so nothing tied him to his own Chief of Staff.
        *
-       * Checked rather than attempted-and-swallowed: pairing is refused with 409
-       * when either side already has an active stewardship, which is correct and
-       * expected on a second run. Asking first keeps a real failure visible
-       * instead of hiding it among the expected ones.
+       * AgentDash (scan 2, E3): on every workspace, not only those with the
+       * stewardship capability — the agent showed "Needs a steward" otherwise.
+       * The server allows a person to pair themselves with an agent they
+       * created; see pairOwnerWithNewAgent for what counts as expected.
        */
-      // Asked of the server at the moment of writing, strictly: only a
-      // workspace whose stewardship route answers is paired.
-      if (
-        session?.session.userId &&
-        (await fetchStewardshipOn(queryClient, createdCompanyId))
-      ) {
-        const mine = await stewardshipsApi.getMyAgent(createdCompanyId);
-        if (!mine.agent) {
-          await stewardshipsApi.pair(createdCompanyId, createdAgentId, session.session.userId);
+      if (session?.session.userId) {
+        const outcome = await pairOwnerWithNewAgent(stewardshipsApi, {
+          companyId: createdCompanyId,
+          agentId: createdAgentId,
+          userId: session.session.userId
+        });
+        if (outcome === "paired") {
           queryClient.invalidateQueries({
             queryKey: queryKeys.myAgent.detail(createdCompanyId)
+          });
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.agents.list(createdCompanyId)
           });
         }
       }
@@ -1275,7 +1277,7 @@ export function OnboardingWizard() {
                   {/* Adapter type radio cards */}
                   <div>
                     <label className="text-xs text-muted-foreground mb-2 block">
-                      Adapter type
+                      How it runs
                     </label>
                     <div className="grid grid-cols-2 gap-2">
                       {recommendedAdapters.map((opt) => (
@@ -1298,7 +1300,9 @@ export function OnboardingWizard() {
                             }
                           }}
                         >
-                          {opt.recommended && (
+                          {/* AgentDash (scan 2, E6): one recommendation — the
+                              instance default — not a badge on every card. */}
+                          {isRecommendedWizardAdapter(opt.type) && (
                             <span className="absolute -top-1.5 right-1.5 bg-green-500 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-full leading-none">
                               Recommended
                             </span>
@@ -1322,7 +1326,7 @@ export function OnboardingWizard() {
                           showMoreAdapters ? "rotate-0" : "-rotate-90"
                         )}
                       />
-                      More Agent Adapter Types
+                      More ways to run it
                     </button>
 
                     {showMoreAdapters && (
@@ -1481,11 +1485,11 @@ export function OnboardingWizard() {
                       <div className="flex items-center justify-between gap-2">
                         <div>
                           <p className="text-xs font-medium">
-                            Adapter environment check
+                            Check that it works
                           </p>
                           <p className="text-[11px] text-muted-foreground">
-                            Runs a live probe that asks the adapter CLI to
-                            respond with hello.
+                            Sends the agent a short hello to make sure it can
+                            run on this computer.
                           </p>
                         </div>
                         <Button
@@ -2006,8 +2010,8 @@ export function OnboardingWizard() {
                       <h3 className="font-medium">Give it something to do</h3>
                       <p className="text-xs text-muted-foreground">
                         Give {agentName.trim() || "your agent"} a small task to
-                        start with — a bug fix, a research question, writing a
-                        script.
+                        start with — for example, look something up, summarise
+                        a document, or draft an email.
                       </p>
                     </div>
                   </div>
@@ -2053,8 +2057,8 @@ export function OnboardingWizard() {
                       <p className="text-xs text-muted-foreground">
                         Everything is set up. This creates the task, assigns it
                         to {agentName.trim() || "your agent"}, and opens it — it
-                        does not start the work. You do that from the issue,
-                        when you are ready.
+                        does not start the work. Nothing runs until you press
+                        Start on the issue.
                       </p>
                     </div>
                   </div>

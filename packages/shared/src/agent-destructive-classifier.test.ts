@@ -7,6 +7,15 @@ import {
 } from "./agent-destructive-classifier.js";
 
 describe("DEFAULT_DESTRUCTIVE_ACTION_CLASSES", () => {
+  // AgentDash (scan 2, E6): this text is the onboarding mandate's fine print,
+  // read by a business owner on their first day.
+  it("is written in plain language, without engineering jargon", () => {
+    const text = DEFAULT_DESTRUCTIVE_ACTION_CLASSES.map((c) => `${c.label} ${c.rationale} ${c.example}`).join(" ");
+    for (const jargon of [/compensating write/i, /blast radius/i, /system of record/i, /trust boundary/i, /bridge task/i, /state-changing/i]) {
+      expect(text).not.toMatch(jargon);
+    }
+  });
+
   it("matches the design doc's table exactly, in order", () => {
     expect(DEFAULT_DESTRUCTIVE_ACTION_CLASSES.map((c) => c.key)).toEqual([
       "external_record_delete",

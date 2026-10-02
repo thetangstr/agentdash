@@ -120,6 +120,27 @@ describe("Landing", () => {
     expect(container.textContent).toBe("Navigate:/companies");
   });
 
+  // AgentDash (scan 2, E4): any install, not only a hosted box.
+  it("on a self-hosted install, sends a signed-out visitor to sign-in, not the marketing page", async () => {
+    fetchMock.mockResolvedValue(json({ status: "ok", deploymentMode: "authenticated", hostedBox: false }));
+    await render(<Landing />);
+    expect(container.textContent).toBe(`Navigate:${BOX_SIGN_IN_PATH}`);
+  });
+
+  it("on a self-hosted install, still sends a signed-in user to the app", async () => {
+    fetchMock.mockResolvedValue(json({ status: "ok", deploymentMode: "authenticated", hostedBox: false }));
+    mockGetSession.mockResolvedValue({ session: { id: "s" }, user: { id: "u" } });
+    await render(<Landing />);
+    expect(container.textContent).toBe("Navigate:/companies");
+  });
+
+  it("renders the www landing when health is JSON that is not an install's", async () => {
+    fetchMock.mockResolvedValue(json({ ok: true }));
+    await render(<Landing />);
+    expect(container.textContent).not.toContain("Navigate:");
+    expect(container.querySelector(".mkt-root")).not.toBeNull();
+  });
+
   it("renders the www landing when health answers 410, instead of redirecting to /companies", async () => {
     fetchMock.mockResolvedValue(json({ error: "gone" }, 410));
     await render(<Landing />);

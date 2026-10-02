@@ -448,6 +448,50 @@ describeEmbeddedPostgres("agent stewardships", () => {
       expect(await companyRows(company.id)).toEqual({ agents: 1, stewardships: 0 });
     });
 
+    // AgentDash (scan 2, E3): the onboarding wizard names the owner as the
+    // steward of the agent they just created, on every workspace.
+    it("lets a person become the steward of an agent they created, on a company without stewardship", async () => {
+      const company = await createCompany(db, "Plain", "default");
+      const owner = await createMember(db, company.id, { role: "owner" });
+      const agent = await createAgent(db, company.id);
+      await db.update(agents).set({ createdByUserId: owner.principalId }).where(eq(agents.id, agent.id));
+      const app = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
+
+      const assign = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .post(`/api/companies/${company.id}/agent-stewardships`)
+          .send({ agentId: agent.id, userId: owner.principalId }),
+      );
+      expect(assign.status).toBe(201);
+      expect(assign.body.stewardship.userId).toBe(owner.principalId);
+      expect((await agentStewardshipService(db).activeByAgent(company.id, agent.id))?.userId).toBe(owner.principalId);
+    });
+
+    it("still refuses, on a company without stewardship, pairing an agent the caller did not create or pairing someone else", async () => {
+      const company = await createCompany(db, "Plain", "default");
+      const owner = await createMember(db, company.id, { role: "owner" });
+      const other = await createMember(db, company.id);
+      const notMine = await createAgent(db, company.id);
+      const mine = await createAgent(db, company.id);
+      await db.update(agents).set({ createdByUserId: owner.principalId }).where(eq(agents.id, mine.id));
+      const app = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
+
+      const notCreator = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .post(`/api/companies/${company.id}/agent-stewardships`)
+          .send({ agentId: notMine.id, userId: owner.principalId }),
+      );
+      expect(notCreator.status).toBe(404);
+
+      const someoneElse = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .post(`/api/companies/${company.id}/agent-stewardships`)
+          .send({ agentId: mine.id, userId: other.principalId }),
+      );
+      expect(someoneElse.status).toBe(404);
+      expect(await companyRows(company.id)).toEqual({ agents: 2, stewardships: 0 });
+    });
+
     it("an existing pairing on a company without stewardship can still be transferred and released", async () => {
       // Pairings made before the gate (for example by agent creation) must be
       // unwindable, or the agent could never leave `stewarded`.

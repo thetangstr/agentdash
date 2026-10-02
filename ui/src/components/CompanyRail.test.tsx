@@ -16,6 +16,11 @@ const mockState = vi.hoisted(() => ({
     issuePrefix: "PAP",
     name: "Paperclip",
   } as Record<string, unknown>,
+  health: { status: "ok" } as Record<string, unknown>,
+}));
+
+vi.mock("../api/health", () => ({
+  healthApi: { get: vi.fn(async () => mockState.health) },
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -59,6 +64,7 @@ vi.mock("../api/sidebarBadges", () => ({
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 function resetState() {
+  mockState.health = { status: "ok" };
   mockState.companies = [
     { id: "company-1", issuePrefix: "PAP", name: "Paperclip", status: "active" },
   ];
@@ -120,6 +126,23 @@ describe("CompanyRail", () => {
     ];
     const { container, root } = await renderRail();
     expect(container.querySelector('button[aria-label="Add company"]')).not.toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  // AgentDash (scan 2, E1): a hosted box holds one workspace, so it offers no
+  // way to start a second one that the server would refuse at the end.
+  it("offers no Add company on a hosted box", async () => {
+    mockState.companies = [
+      { id: "company-1", issuePrefix: "PAP", name: "Paperclip", status: "active" },
+      { id: "company-2", issuePrefix: "TST", name: "Second", status: "active" },
+    ];
+    mockState.health = { status: "ok", hostedBox: true };
+    const { container, root } = await renderRail();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.querySelector('a, button')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Add company"]')).toBeNull();
     await act(async () => root.unmount());
   });
 });

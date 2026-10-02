@@ -43,12 +43,12 @@ export function LiveBriefing() {
   }, []);
 
   return (
-    <article className="mkt-brief" aria-label="Live AgentDash briefing">
+    // AgentDash (scan 2, E5): the card is an illustration with a fictional
+    // company and a fixed date, so it must not say "Live" — on the sign-in
+    // page of a real instance that reads as this instance's own activity.
+    <article className="mkt-brief" aria-label="Example AgentDash briefing">
       <header className="mkt-brief__header">
-        <span className="mkt-brief__live">
-          <span className="mkt-brief__live-dot" aria-hidden />
-          Live · Tue 29 Apr
-        </span>
+        <span className="mkt-brief__live">Example · Tue 29 Apr</span>
         <h2 className="mkt-brief__title">Morning briefing</h2>
         <p className="mkt-brief__subtitle">Five agents on shift. One needs your input.</p>
       </header>

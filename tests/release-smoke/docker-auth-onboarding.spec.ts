@@ -108,6 +108,10 @@ test.describe("Docker authenticated onboarding smoke", () => {
     expect(issue).toBeTruthy();
     expect(issue!.assigneeAgentId).toBe(ceoAgent!.id);
 
+    // The wizard parks the task; nothing runs until the owner presses Start
+    // on the opened issue, which moves it to todo and wakes the agent.
+    await page.getByTestId("issue-start-banner").getByRole("button", { name: "Start" }).click();
+
     await expect.poll(
       async () => {
         const runsRes = await page.request.get(
@@ -133,7 +137,7 @@ test.describe("Docker authenticated onboarding smoke", () => {
       }
     ).toEqual(
       expect.objectContaining({
-        invocationSource: "assignment",
+        invocationSource: expect.stringMatching(/^(assignment|automation)$/),
         status: expect.stringMatching(/^(queued|running|succeeded|failed)$/),
       })
     );

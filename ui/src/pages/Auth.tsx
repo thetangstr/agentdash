@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams, Link } from "@/lib/router";
 import { authApi } from "../api/auth";
+import { healthApi, type HealthStatus } from "../api/health";
 import { queryKeys } from "../lib/queryKeys";
 import { refreshAccessQueries } from "../lib/access-refresh";
 import { getRememberedInvitePath } from "../lib/invite-memory";
 import { Button } from "@/components/ui/button";
 import { LiveBriefing } from "../marketing/sections/LiveBriefing";
-// LiveBriefing's "Live · Tue 29 Apr" hero card is the same illustration
+// LiveBriefing's "Example · Tue 29 Apr" hero card is the same illustration
 // the marketing landing page uses. tokens.css / typography.css are
 // loaded globally from main.tsx; we just need the section's own styles
 // for the brief card itself.
@@ -18,16 +19,35 @@ import { GoogleGlyph, MicrosoftGlyph } from "../components/auth/social-glyphs";
 
 type AuthMode = "sign_in" | "sign_up";
 
+/**
+ * AgentDash (scan 2, E5): which form an instance opens on when the link does
+ * not say. An instance nobody has signed up to yet, and that lets its first
+ * user create the workspace themselves, opens on Create account: "Welcome
+ * back" there greets someone who has never been here, and there is no account
+ * to sign in to. Everything else opens on Sign in.
+ */
+export function defaultAuthMode(health: Pick<HealthStatus, "bootstrapStatus" | "selfServeBootstrap"> | null | undefined): AuthMode {
+  return health?.bootstrapStatus === "bootstrap_pending" && health.selfServeBootstrap === true ? "sign_up" : "sign_in";
+}
+
 export function AuthPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  // Default to sign-in, but honor `?mode=sign_up` so the CLI's first-run
-  // wizard can deep-link new users straight to the "Create your workspace"
-  // form. The toggle link still lets them switch back to sign-in if they
-  // already have an account.
-  const initialMode: AuthMode = searchParams.get("mode") === "sign_up" ? "sign_up" : "sign_in";
-  const [mode, setMode] = useState<AuthMode>(initialMode);
+  // Honor `?mode=sign_up` / `?mode=sign_in` so the CLI's first-run wizard can
+  // deep-link new users straight to the "Create your workspace" form. Without
+  // one, the instance's health decides (defaultAuthMode). The toggle link
+  // still switches either way.
+  const requestedMode = searchParams.get("mode");
+  const linkMode: AuthMode | null =
+    requestedMode === "sign_up" || requestedMode === "sign_in" ? requestedMode : null;
+  const [chosenMode, setMode] = useState<AuthMode | null>(linkMode);
+  const healthQuery = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+  });
+  const mode: AuthMode = chosenMode ?? defaultAuthMode(healthQuery.data);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -119,7 +139,9 @@ export function AuthPage() {
     password.trim().length > 0 &&
     (mode === "sign_in" || (name.trim().length > 0 && password.trim().length >= 8));
 
-  if (isSessionLoading) {
+  // Health decides the default form, so wait for it (it fails fast where it
+  // does not exist) rather than flip the form under someone already typing.
+  if (isSessionLoading || (chosenMode === null && healthQuery.isLoading)) {
     return (
       <div className="fixed inset-0 flex items-center justify-center">
         <p className="text-sm text-muted-foreground">Loading…</p>

@@ -4,7 +4,7 @@ import { authApi } from "../../api/auth";
 import { queryKeys } from "../../lib/queryKeys";
 import { healthApi } from "../../api/health";
 import { MarketingShell } from "../MarketingShell";
-import { BOX_SIGN_IN_PATH } from "../WwwOnlyRoute";
+import { BOX_SIGN_IN_PATH, isInstallHealth } from "../WwwOnlyRoute";
 import { Hero } from "../sections/Hero";
 import { StoryBeats } from "../sections/StoryBeats";
 import { DemoSection } from "../sections/DemoSection";
@@ -37,11 +37,15 @@ export function Landing() {
   // AgentDash: unknown health (an error, a 410, non-JSON) means "not a box and
   // not signed in" here, so www's / renders the landing instead of bouncing
   // to /companies. Only a real health answer can make the visitor logged in.
-  const loggedIn = Boolean(healthQuery.data) && (!isAuthenticatedMode || Boolean(sessionQuery.data));
+  const loggedIn = isInstallHealth(healthQuery.data) && (!isAuthenticatedMode || Boolean(sessionQuery.data));
   if (!previewMode && loggedIn) return <Navigate to="/companies" replace />;
-  // AgentDash: a hosted box is not the marketing site. Its signed-out root goes
-  // to the box's own sign-in, not a landing page whose "Sign in" is www's /find.
-  if (!previewMode && healthQuery.data?.hostedBox === true) return <Navigate to={BOX_SIGN_IN_PATH} replace />;
+  // AgentDash: an install is not the marketing site. A hosted box's signed-out
+  // root goes to the box's own sign-in, not a landing page whose "Sign in" is
+  // www's /find (#949). Scan 2 (E4) generalises that from "a hosted box" to
+  // "not www": a self-hosted install's root showed "Start free" and "Hosted
+  // workspaces are opening…" to its own users. www's /api/health answers 410
+  // (or fails), so www never gets here and keeps rendering the landing.
+  if (!previewMode && isInstallHealth(healthQuery.data)) return <Navigate to={BOX_SIGN_IN_PATH} replace />;
 
   return <LandingContent />;
 }

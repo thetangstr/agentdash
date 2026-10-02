@@ -74,6 +74,7 @@ import { IssueRelatedWorkPanel } from "../components/IssueRelatedWorkPanel";
 import { IssueProperties } from "../components/IssueProperties";
 import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueRecoveryBudgetBanner, recoveryBudgetClearedToastBody } from "../components/IssueRecoveryBudgetBanner";
+import { IssueStartBanner } from "../components/IssueStartBanner";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 // AgentDash: goals-eval-hitl
 import { VerdictTimeline } from "../components/VerdictTimeline";
@@ -3051,6 +3052,14 @@ export function IssueDetail() {
           invalidateIssueCollections();
           pushToast({ title: "One run authorized", body: "The assigned agent's run will start shortly.", tone: "success" });
         } : undefined}
+      />
+      {/* AgentDash (scan 2, E2): a parked issue with an agent on it gets a
+          clear Start, which moves it to todo and wakes the agent. */}
+      <IssueStartBanner
+        issue={issue}
+        agentName={issue.assigneeAgentId ? (agents?.find((a) => a.id === issue.assigneeAgentId)?.name ?? null) : null}
+        isStarting={updateIssue.isPending}
+        onStart={() => updateIssue.mutate({ status: "todo" })}
       />
       {activePauseHold && (
         <div className="rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
