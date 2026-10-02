@@ -252,6 +252,44 @@ describe("pages", () => {
     expect(young.body).toContain("not ready yet");
   });
 
+  it("a box still being set up answers the provisioner's health probe through the router, and nothing else", async () => {
+    route("fresh", "provisioning");
+    const health = await get("fresh.agentdash.cloud", "/api/health");
+    expect(health.status).not.toBe(503);
+    expect(health.body).not.toContain("not ready yet");
+    const withQuery = await get("fresh.agentdash.cloud", "/api/health?x=1");
+    expect(withQuery.body).not.toContain("not ready yet");
+    for (const path of ["/", "/claim", "/api/health/details", "/api/healthz", "/api/companies"]) {
+      const res = await get("fresh.agentdash.cloud", path);
+      expect(res.status, path).toBe(503);
+      expect(res.body, path).toContain("not ready yet");
+    }
+    const post = await get("fresh.agentdash.cloud", "/api/health", { method: "POST", body: "{}" });
+    expect(post.status).toBe(503);
+    // PR #948 review: no path variant, no WebSocket upgrade, nothing but the exact probe.
+    for (const path of ["//api/health", "/api/health/", "/api/%68ealth"]) {
+      const res = await get("fresh.agentdash.cloud", path);
+      expect(res.status, path).toBe(503);
+    }
+    const upgrade = await get("fresh.agentdash.cloud", "/api/health", { headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13" } });
+    expect(upgrade.status).toBe(503);
+    expect(seenUpgrades.filter((h) => h.url === "/api/health")).toHaveLength(0);
+  });
+
+  it("the proxied probe carries the box's edge secret, HEAD works, and it is not human activity", async () => {
+    route("fresh2", "provisioning");
+    activity.length = 0;
+    const health = await get("fresh2.agentdash.cloud", "/api/health");
+    const echoed = JSON.parse(health.body) as { url: string; headers: Record<string, string> };
+    expect(echoed.url).toBe("/api/health");
+    expect(echoed.headers["x-agentdash-edge"]).toBe(SECRET);
+    const head = await get("fresh2.agentdash.cloud", "/api/health", { method: "HEAD" });
+    expect(head.status).not.toBe(503);
+    expect(activity).toEqual([]);
+    route("nohost", "provisioning", null);
+    expect((await get("nohost.agentdash.cloud", "/api/health")).status).toBe(503);
+  });
+
   it("serves its own health on its Railway domain", async () => {
     const res = await get("edge-production.up.railway.app", "/health");
     expect(res.status).toBe(200);
