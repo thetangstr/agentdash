@@ -109,7 +109,7 @@ export function InstanceAccess() {
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <section className="space-y-4 rounded-xl border border-border bg-card p-4">
           <label className="block space-y-2 text-sm">
             <span className="font-medium">Search users</span>
@@ -185,7 +185,7 @@ export function InstanceAccess() {
                     Toggle company membership for this user. New access defaults to an active operator membership.
                   </p>
                 </div>
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {companies.map((company) => (
                     <label
                       key={company.id}
@@ -202,9 +202,9 @@ export function InstanceAccess() {
                           });
                         }}
                       />
-                      <span className="space-y-1">
-                        <span className="block text-sm font-medium">{company.name}</span>
-                        <span className="block text-xs text-muted-foreground">{company.issuePrefix}</span>
+                      <span className="min-w-0 space-y-1">
+                        <span className="block break-words text-sm font-medium">{company.name}</span>
+                        <span className="block break-all text-xs text-muted-foreground">{company.issuePrefix}</span>
                       </span>
                     </label>
                   ))}

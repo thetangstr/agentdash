@@ -311,7 +311,7 @@ export function CompanyInvites() {
               Review invite status, role, inviter, and any linked join request.
             </p>
           </div>
-          <Link to="/inbox/requests" className="text-sm underline underline-offset-4">
+          <Link to="/inbox/requests" className="text-sm underline underline-offset-4 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center">
             Open join request queue
           </Link>
         </div>

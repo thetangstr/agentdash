@@ -202,7 +202,7 @@ export function ReadableToolRow({
         <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", compact ? "text-xs" : "text-[13px]")}>
           <span className="shrink-0 font-medium text-foreground/90">{item.summary.verb}</span>
           {item.summary.target ? (
-            <code className="min-w-0 truncate rounded bg-muted/50 px-1 font-mono text-[0.92em] text-foreground/80">
+            <code className="min-w-0 truncate rounded bg-muted/50 px-1 font-mono text-[0.92em] max-sm:text-[12px] text-foreground/80">
               {item.summary.target}
             </code>
           ) : null}
@@ -530,7 +530,7 @@ function ReadableDiff({ block }: { block: Extract<ReadableBlock, { type: "diff" 
       >
         <GitCompare className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-300" />
         <span className="font-medium text-foreground/90">Changed</span>
-        <code className="truncate rounded bg-muted/50 px-1 font-mono text-[0.92em] text-foreground/80">{file}</code>
+        <code className="truncate rounded bg-muted/50 px-1 font-mono text-[0.92em] max-sm:text-[12px] text-foreground/80">{file}</code>
         {(adds > 0 || removes > 0) && (
           <span className="text-[11px] max-sm:text-xs tabular-nums">
             <span className="text-emerald-600 dark:text-emerald-400">+{adds}</span>{" "}

@@ -3685,7 +3685,7 @@ function RunsTab({
         <div className="space-y-3 min-w-0 overflow-x-hidden">
           <Link
             to={`/agents/${agentRouteId}/runs`}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors no-underline"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors no-underline max-sm:min-h-11 max-sm:w-fit"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Back to runs

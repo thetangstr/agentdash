@@ -48,8 +48,8 @@ function BriefEditor({ companyId, brief }: { companyId: string; brief: Workforce
         <Button variant="ghost" size="sm" onClick={() => setFacts(facts.filter((_, n) => n !== i))}>Remove fact {i + 1}</Button>
       </div>)}<Button variant="outline" disabled={facts.length >= 40} onClick={() => setFacts([...facts, { key: '', value: '', sourceReference: '' }])}>Add confirmed fact</Button>
     </div>
-    <label className="flex items-start gap-2 text-sm">
-      <input type="checkbox" className="mt-1" aria-label="Share this brief company-wide" checked={consent} onChange={e => setConsent(e.target.checked)} />I confirm these facts and explicitly share these sources company-wide.</label>
+    <label className="flex items-start gap-2 text-sm max-sm:min-h-11 max-sm:items-center">
+      <input type="checkbox" className="mt-1 max-sm:mt-0" aria-label="Share this brief company-wide" checked={consent} onChange={e => setConsent(e.target.checked)} />I confirm these facts and explicitly share these sources company-wide.</label>
     <WorkforceError error={save.error} />
     <div className="flex gap-2">
       <Button data-testid="save-brief" disabled={!consent || save.isPending} onClick={() => save.mutate()}>Publish company brief</Button>{save.isError && <Button variant="outline" onClick={() => { void client.invalidateQueries({ queryKey: workforceKeys.brief(companyId) }); }}>Reload current revision</Button>}</div>
@@ -166,7 +166,7 @@ export function WorkforceWorkspace({ companyId }: { companyId: string }) {
       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Workforce setup</p>
       <h1 className="text-2xl font-semibold">Give your team the context to do good work</h1>
       <p className="text-muted-foreground">Share what your team should know, give each team member a role, and review a real first deliverable.</p>
-      <Link to="/agents/new" className="text-sm underline">Hire a new agent</Link>
+      <Link to="/agents/new" className="text-sm underline max-sm:inline-flex max-sm:min-h-11 max-sm:items-center">Hire a new agent</Link>
     </header>
     <WorkforceError error={brief.error || agents.error} />{brief.isPending && <p>Loading company knowledge…</p>}{brief.data && <BriefEditor key={`${companyId}:${brief.data.revision}`} companyId={companyId} brief={brief.data} />}{brief.data && <ProposalReview companyId={companyId} revision={brief.data.revision} />}
     {agents.data?.length ? <>

@@ -286,7 +286,7 @@ export function InstanceGeneralSettings() {
                 href={FEEDBACK_TERMS_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                className="inline-flex text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground max-sm:min-h-11 max-sm:items-center"
               >
                 Read our terms of service
               </a>

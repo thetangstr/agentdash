@@ -233,7 +233,7 @@ export function InstanceSettings() {
                         </Badge>
                         <Link
                           to={buildAgentHref(agent)}
-                          className="font-medium truncate hover:underline"
+                          className="font-medium truncate hover:underline max-sm:min-w-11 max-sm:py-3"
                         >
                           {agent.agentName}
                         </Link>
@@ -254,8 +254,9 @@ export function InstanceSettings() {
                         <span className="ml-auto flex items-center gap-1.5 shrink-0">
                           <Link
                             to={buildAgentHref(agent)}
-                            className="text-muted-foreground hover:text-foreground"
+                            className="text-muted-foreground hover:text-foreground max-sm:inline-flex max-sm:h-11 max-sm:w-11 max-sm:items-center max-sm:justify-center"
                             title="Full agent config"
+                            aria-label={`Full agent config for ${agent.agentName}`}
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
                           </Link>

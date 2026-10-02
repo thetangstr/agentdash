@@ -18,7 +18,7 @@ export function ReviewWaitingRow({ review, testId = "review-waiting-row" }: { re
         >
           {review.summary}
         </Link>
-        <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+        <div className="flex min-w-0 flex-wrap gap-x-2 text-xs [overflow-wrap:anywhere] text-muted-foreground">
           <span>Review</span>
           {review.identifier ? (
             <>

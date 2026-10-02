@@ -2,8 +2,12 @@
  * E2E: phone floors — every main screen at 390×844 and 360×740.
  *
  * Seeds one company (five agents, one with a long name, a handful of issues, a
- * shipped document and a comment thread) through the public API, then opens
- * each main nav screen at both phone widths and audits the whole page:
+ * shipped document, a plan document, a comment thread and one finished run
+ * from a fake Claude CLI) through the public API, then opens each main nav
+ * screen, the hire form with Advanced open, the issue page, /workforce, the
+ * agent Configuration tab, a run transcript and every Settings page, at both
+ * phone widths with a fine pointer (plus 390 with touch), and audits the
+ * whole page:
  *   - no horizontal page scroll,
  *   - no visible text under 12px,
  *   - no interactive element (link, button, tab, input, …) with a hit area
@@ -34,6 +38,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
@@ -50,6 +55,18 @@ const LONG_AGENT = "Ivy Longname-Worthington";
 test.use({ viewport: WIDTHS[0], hasTouch: true, isMobile: true });
 
 /**
+ * The page sweep runs with a fine pointer at both widths: a desktop browser
+ * narrowed to phone width gets none of the `pointer: coarse` minimums, so it
+ * is the stricter case and only the under-640px rules apply. One touch pass at
+ * 390 checks that the coarse-pointer minimums do not create overlaps.
+ */
+const SWEEP_MODES = [
+  { ...WIDTHS[0], touch: false },
+  { ...WIDTHS[1], touch: false },
+  { ...WIDTHS[0], touch: true },
+] as const;
+
+/**
  * Justified exceptions. Each entry matches a finding by page name (e.g.
  * "issue-360", or "*") and a substring of the finding.
  */
@@ -60,7 +77,27 @@ const ALLOWLIST: Array<{ page: string; match: string; reason: string }> = [
 ];
 
 type Company = { id: string; issuePrefix: string; name: string };
-type Seeded = { company: Company; agentId: string; issueRef: string };
+type Seeded = { company: Company; agentId: string; issueRef: string; runAgentId: string; runId: string };
+
+/**
+ * A stand-in for the Claude CLI: prints a short stream-json session (a shell
+ * command, a file read, a reply) so the run page has a readable transcript
+ * with inline code, without a real model.
+ */
+const FAKE_CLAUDE = `#!/usr/bin/env node
+process.stdin.resume();
+process.stdin.on("data", () => undefined);
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+out({ type: "system", subtype: "init", model: "fake-model", session_id: "mobile-floors" });
+out({ type: "assistant", message: { content: [{ type: "text", text: "Pulling the open issues first." }, { type: "tool_use", id: "t1", name: "Bash", input: { command: "curl -s http://127.0.0.1:3100/api/issues?status=todo,in_progress | head -n 40" } }] } });
+out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "[]" }] } });
+out({ type: "assistant", message: { content: [{ type: "text", text: "No open issues. Checking the proposal notes." }] } });
+out({ type: "assistant", message: { content: [{ type: "tool_use", id: "t2", name: "Read", input: { file_path: "/tmp/workspace/notes/tanaka-family-proposal.md" } }] } });
+out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t2", content: "# Tanaka family" }] } });
+out({ type: "assistant", message: { content: [{ type: "text", text: "Nothing new is waiting. The proposal draft is up to date." }] } });
+out({ type: "result", subtype: "success", result: "Nothing new is waiting.", usage: { input_tokens: 1200, output_tokens: 80, cache_read_input_tokens: 0 }, total_cost_usd: 0 });
+setTimeout(() => process.exit(0), 50);
+`;
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown): Promise<T> {
   const res = await request.post(url, { data });
@@ -136,7 +173,45 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
     await post(request, `/api/companies/${company.id}/issues`, { title, status, assigneeAgentId: agentIds[2] });
   }
 
-  return { company, agentId: agentIds[1]!, issueRef: issue.identifier ?? issue.id };
+  // A plan document on the issue: the issue page shows the Documents section.
+  const docRes = await request.put(`/api/issues/${issue.id}/documents/plan`, {
+    data: {
+      title: "Plan",
+      format: "markdown",
+      body: "# Plan\n\n1. Shortlist ryokans in Kyoto and Hakone.\n2. Price the rail legs.\n3. Draft the day-by-day itinerary.",
+    },
+  });
+  expect(docRes.ok(), await docRes.text()).toBe(true);
+
+  // One finished run with a readable transcript, from a fake Claude CLI.
+  const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "mobile-floors-claude-"));
+  const script = path.join(scriptDir, "fake-claude.mjs");
+  fs.writeFileSync(script, FAKE_CLAUDE, { mode: 0o755 });
+  const runAgent = await post<{ id: string }>(request, `/api/companies/${company.id}/agents`, {
+    name: "Theo",
+    role: "general",
+    title: "Research assistant",
+    adapterType: "claude_local",
+    adapterConfig: { command: script, cwd: scriptDir },
+  });
+  const run = await post<{ id: string }>(request, `/api/agents/${runAgent.id}/heartbeat/invoke`, {});
+  await expect
+    .poll(
+      async () => {
+        const res = await request.get(`/api/heartbeat-runs/${run.id}`);
+        return res.ok() ? ((await res.json()) as { status: string }).status : `http ${res.status()}`;
+      },
+      { timeout: 60_000, intervals: [500, 1000, 2000] },
+    )
+    .toMatch(/^(succeeded|failed|timed_out|cancelled)$/);
+
+  return {
+    company,
+    agentId: agentIds[1]!,
+    issueRef: issue.identifier ?? issue.id,
+    runAgentId: runAgent.id,
+    runId: run.id,
+  };
 }
 
 type AuditResult = {
@@ -166,7 +241,12 @@ async function audit(page: Page): Promise<AuditResult> {
           const text = labelledBy.split(/\s+/).map((id) => textOf(document.getElementById(id))).join(" ").trim();
           if (text) return text;
         }
-        if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+        if (
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLSelectElement ||
+          el instanceof HTMLTextAreaElement ||
+          el instanceof HTMLButtonElement
+        ) {
           const labels = Array.from(el.labels ?? []).map((label) => textOf(label)).join(" ").trim();
           if (labels) return labels;
           if (el instanceof HTMLInputElement && ["button", "submit", "reset"].includes(el.type) && el.value) return el.value;
@@ -252,8 +332,10 @@ async function audit(page: Page): Promise<AuditResult> {
         // WCAG 2.5.8 inline exception: links that sit inside a line of running text.
         if (el.tagName === "A" && el.closest("p, li, blockquote, td, .prose") && getComputedStyle(el).display === "inline") continue;
         const rect = el.getBoundingClientRect();
-        // A label wrapping or pointing at a checkbox widens its hit area.
-        const label = el instanceof HTMLInputElement ? el.labels?.[0] : null;
+        // A label wrapping or pointing at a control (a checkbox, a Radix
+        // checkbox button) widens its hit area: tapping the label activates it.
+        const label =
+          el instanceof HTMLInputElement || el instanceof HTMLButtonElement ? el.labels?.[0] : null;
         const labelRect = label?.getBoundingClientRect();
         const w = Math.max(rect.width, labelRect?.width ?? 0);
         const h = Math.max(rect.height, labelRect?.height ?? 0);
@@ -270,12 +352,38 @@ async function audit(page: Page): Promise<AuditResult> {
         return document.body;
       };
       const layers = targets.map(layerOf);
+      // The part of a hit area that can actually be tapped: clipped by every
+      // scrolling or overflow-hidden ancestor (a scrolled-away row of an inner
+      // list is not under the content that follows the list).
+      const tappableRect = (el: Element) => {
+        const rect = el.getBoundingClientRect();
+        let left = rect.left;
+        let top = rect.top;
+        let right = rect.right;
+        let bottom = rect.bottom;
+        for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+          const style = getComputedStyle(p);
+          if (style.position === "fixed" || style.position === "sticky") break;
+          if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+          const clip = p.getBoundingClientRect();
+          if (style.overflowX !== "visible") {
+            left = Math.max(left, clip.left);
+            right = Math.min(right, clip.right);
+          }
+          if (style.overflowY !== "visible") {
+            top = Math.max(top, clip.top);
+            bottom = Math.min(bottom, clip.bottom);
+          }
+        }
+        return { left, top, right, bottom };
+      };
+      const tappable = targets.map(tappableRect);
       const overlaps: string[] = [];
       for (let i = 0; i < targets.length; i += 1) {
         for (let j = i + 1; j < targets.length; j += 1) {
           if (layers[i] !== layers[j]) continue;
-          const a = targets[i]!.getBoundingClientRect();
-          const b = targets[j]!.getBoundingClientRect();
+          const a = tappable[i]!;
+          const b = tappable[j]!;
           const ix = Math.min(a.right, b.right) - Math.max(a.left, b.left);
           const iy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
           if (ix > 3 && iy > 3) overlaps.push(`${Math.round(ix)}x${Math.round(iy)} ${describe(targets[i]!)} <> ${describe(targets[j]!)}`);
@@ -317,7 +425,14 @@ async function settle(page: Page) {
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
 }
 
-type Target = { name: string; path: (s: Seeded) => string; ready: (page: Page, s: Seeded) => Locator };
+type Target = {
+  name: string;
+  /** Under the company prefix, unless it starts with "/" (instance pages). */
+  path: (s: Seeded) => string;
+  ready: (page: Page, s: Seeded) => Locator;
+  /** Puts the page in the state to audit (opens a collapsed section, …). */
+  prepare?: (page: Page) => Promise<void>;
+};
 
 const main = (page: Page) => page.locator("#main-content");
 
@@ -336,36 +451,92 @@ const PAGES: Target[] = [
   { name: "shipped", path: () => "shipped", ready: (p) => main(p).getByText(/Tanaka Family — 10-Day Japan/) },
   { name: "settings", path: () => "company/settings", ready: (p, s) => main(p).locator(`input[value="${s.company.name}"]`) },
   { name: "activity", path: () => "activity", ready: (p) => main(p).getByText(/Japan proposal/) },
+  // The hire form with the collapsed Advanced section open.
+  {
+    name: "agent-new",
+    path: () => "agents/new",
+    ready: (p) => main(p).locator("summary", { hasText: "Advanced" }),
+    prepare: async (p) => {
+      const details = main(p).locator("details", { has: p.locator("summary", { hasText: "Advanced" }) }).first();
+      if (!(await details.evaluate((el) => (el as HTMLDetailsElement).open))) {
+        await details.locator("summary").first().click();
+      }
+      await expect(details).toHaveAttribute("open", "");
+    },
+  },
+  { name: "workforce", path: () => "workforce", ready: (p) => main(p).getByRole("heading", { level: 1 }) },
+  // A finished run: the readable transcript with inline code.
+  {
+    name: "run",
+    path: (s) => `agents/${s.runAgentId}/runs/${s.runId}`,
+    ready: (p) => main(p).getByText(/Nothing new is waiting/),
+  },
+  // Every other Settings page (General is "settings" above). Their content is
+  // provisioned by the server, so the first heading is the ready marker.
+  ...[
+    ["settings-access", "company/settings/access"],
+    ["settings-invites", "company/settings/invites"],
+    ["settings-billing", "billing"],
+    ["settings-model-key", "company/settings/model-key"],
+    ["settings-connections", "company/settings/connections"],
+    ["settings-skills", "skills"],
+    ["settings-environments", "company/settings/environments"],
+    ["settings-adapters", "/instance/settings/adapters"],
+    ["settings-schedules", "/instance/settings/heartbeats"],
+    ["settings-import", "company/import"],
+    ["settings-export", "company/export"],
+    ["settings-evaluation", "evaluation"],
+    ["settings-health", "company/settings/health"],
+    ["settings-profile", "/instance/settings/profile"],
+    ["settings-about", "/instance/settings/about"],
+    ["settings-changelog", "/instance/settings/changelog"],
+    ["settings-instance-general", "/instance/settings/general"],
+    ["settings-instance-access", "/instance/settings/access"],
+    ["settings-instance-plugins", "/instance/settings/plugins"],
+    ["settings-instance-experimental", "/instance/settings/experimental"],
+  ].map(([name, to]): Target => ({
+    name: name!,
+    path: () => to!,
+    ready: (p) => main(p).getByRole("heading").first(),
+  })),
 ];
 
 test.describe("Phone floors on every main screen", () => {
   let seeded: Seeded;
 
-  test.beforeAll(async ({ request }) => {
+  test.beforeAll(async ({ request }, testInfo) => {
+    // Seeding waits for one fake run to finish.
+    testInfo.setTimeout(180_000);
     seeded = await seed(request);
   });
 
-  for (const size of WIDTHS) {
-    for (const target of PAGES) {
-      const name = `${target.name}-${size.width}`;
-      test(`${name}: no sideways scroll, small text, small, unnamed or overlapping targets`, async ({ page }) => {
-        await page.setViewportSize(size);
-        await page.goto(`/${seeded.company.issuePrefix}/${target.path(seeded)}`);
-        await expect(target.ready(page, seeded).first()).toBeVisible({ timeout: 30_000 });
-        await settle(page);
+  for (const mode of SWEEP_MODES) {
+    test.describe(mode.touch ? "touch" : "fine pointer", () => {
+      test.use({ hasTouch: mode.touch, isMobile: mode.touch });
+      for (const target of PAGES) {
+        const size = { width: mode.width, height: mode.height };
+        const name = `${target.name}-${size.width}${mode.touch ? "-touch" : ""}`;
+        test(`${name}: no sideways scroll, small text, small, unnamed or overlapping targets`, async ({ page }) => {
+          await page.setViewportSize(size);
+          const to = target.path(seeded);
+          await page.goto(to.startsWith("/") ? to : `/${seeded.company.issuePrefix}/${to}`);
+          await expect(target.ready(page, seeded).first()).toBeVisible({ timeout: 30_000 });
+          await settle(page);
+          await target.prepare?.(page);
 
-        const result = await audit(page);
-        record(name, result);
-        await shoot(page, name);
+          const result = await audit(page);
+          record(name, result);
+          await shoot(page, name);
 
-        const keep = (findings: string[]) => findings.filter((f) => !allowed(name, f));
-        expect.soft(result.overflow, `horizontal overflow in px; widest: ${result.overflowers.join(" | ")}`).toBeLessThanOrEqual(1);
-        expect.soft(keep(result.small), "visible text under 12px").toEqual([]);
-        expect.soft(keep(result.taps), "tap targets under 44px").toEqual([]);
-        expect.soft(keep(result.unnamed), "interactive elements without an accessible name").toEqual([]);
-        expect.soft(keep(result.overlaps), "overlapping hit areas").toEqual([]);
-      });
-    }
+          const keep = (findings: string[]) => findings.filter((f) => !allowed(name, f));
+          expect.soft(result.overflow, `horizontal overflow in px; widest: ${result.overflowers.join(" | ")}`).toBeLessThanOrEqual(1);
+          expect.soft(keep(result.small), "visible text under 12px").toEqual([]);
+          expect.soft(keep(result.taps), "tap targets under 44px").toEqual([]);
+          expect.soft(keep(result.unnamed), "interactive elements without an accessible name").toEqual([]);
+          expect.soft(keep(result.overlaps), "overlapping hit areas").toEqual([]);
+        });
+      }
+    });
   }
 
   test("bottom nav at 360px: labels at least 12px, shown in full, items at least 44px", async ({ page }) => {
