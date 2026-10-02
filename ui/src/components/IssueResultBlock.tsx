@@ -20,7 +20,7 @@ export function IssueResultBlock({ companyId, issueId }: { companyId: string; is
       data-testid="issue-result-block"
       className="rounded-lg border border-border bg-card"
     >
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 max-sm:py-1.5">
         <h3 className="text-sm font-medium">Result</h3>
         <span className="text-xs text-muted-foreground">{formatShippedUsage(usage)}</span>
       </div>

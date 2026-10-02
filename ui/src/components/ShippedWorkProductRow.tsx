@@ -33,7 +33,7 @@ export function WorkProductStateBadge({
     <span
       data-testid="work-product-state"
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap shrink-0",
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap shrink-0 max-sm:text-xs",
         TONE_CLASSES[state.tone],
         className,
       )}
@@ -138,10 +138,11 @@ export function ShippedWorkProductRow({
     return <CompactShippedWorkProductRow product={product} showUsage={showUsage} />;
   }
   return (
-    <div className="flex items-start gap-3 px-3 py-2.5" data-testid="shipped-row">
+    <div className="flex items-start gap-3 px-3 py-2.5 max-sm:gap-2 max-sm:py-2" data-testid="shipped-row">
       <ProductIcon product={product} />
       <div className="min-w-0 flex-1 space-y-0.5">
-        <div className="flex flex-wrap items-center gap-2">
+        {/* AgentDash: phones keep title + state on one line (title truncates). */}
+        <div className="flex flex-wrap items-center gap-2 max-sm:flex-nowrap">
           {product.url ? (
             <a
               href={product.url}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   DocumentRevision,
@@ -133,6 +133,11 @@ function toDocumentSummary(document: IssueDocument) {
   };
 }
 
+/** AgentDash: lets the issue header's phone overflow menu start a new document. */
+export interface IssueDocumentsSectionHandle {
+  beginNewDocument: () => void;
+}
+
 export function IssueDocumentsSection({
   issue,
   canDeleteDocuments,
@@ -143,6 +148,8 @@ export function IssueDocumentsSection({
   imageUploadHandler,
   onVote,
   extraActions,
+  actionsRef,
+  phoneActionsInMenu = false,
 }: {
   issue: Issue;
   canDeleteDocuments: boolean;
@@ -157,6 +164,10 @@ export function IssueDocumentsSection({
     options?: { allowSharing?: boolean; reason?: string },
   ) => Promise<void>;
   extraActions?: ReactNode;
+  /** AgentDash: imperative handle for actions started outside the section (the phone overflow menu). */
+  actionsRef?: Ref<IssueDocumentsSectionHandle>;
+  /** AgentDash: on phones (< 640px) the New/Upload buttons live in the issue header menu instead. */
+  phoneActionsInMenu?: boolean;
 }) {
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -333,6 +344,12 @@ export function IssueDocumentsSection({
     });
     setError(null);
   };
+
+  // A stable handle (it always calls the latest beginNewDocument), so a callback
+  // ref in the parent sees one handle per mount instead of one per render.
+  const beginNewDocumentRef = useRef(beginNewDocument);
+  beginNewDocumentRef.current = beginNewDocument;
+  useImperativeHandle(actionsRef, () => ({ beginNewDocument: () => beginNewDocumentRef.current() }), []);
 
   const beginEdit = (key: string) => {
     const doc = sortedDocuments.find((entry) => entry.key === key);
@@ -698,7 +715,10 @@ export function IssueDocumentsSection({
   return (
     <div className="space-y-3">
       {isEmpty && !draft?.isNew ? (
-        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
+        <div
+          data-testid="issue-documents-actions"
+          className={cn("flex flex-wrap items-center justify-end gap-2 min-w-0", phoneActionsInMenu && "max-sm:hidden")}
+        >
           {extraActions}
           <Button variant="outline" size="sm" onClick={beginNewDocument} className="shrink-0">
             <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -709,7 +729,10 @@ export function IssueDocumentsSection({
       ) : (
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <h3 className="w-full text-sm font-medium text-muted-foreground shrink-0 sm:w-auto">Documents</h3>
-          <div className="flex flex-wrap items-center gap-2 min-w-0 sm:ml-auto">
+          <div
+            data-testid="issue-documents-actions"
+            className={cn("flex flex-wrap items-center gap-2 min-w-0 sm:ml-auto", phoneActionsInMenu && "max-sm:hidden")}
+          >
             {extraActions}
             <Button variant="outline" size="sm" onClick={beginNewDocument} className="shrink-0">
               <Plus className="mr-1.5 h-3.5 w-3.5" />

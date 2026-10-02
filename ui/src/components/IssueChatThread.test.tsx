@@ -348,6 +348,73 @@ describe("IssueChatThread", () => {
     });
   });
 
+  // AgentDash: mobile lane A — on phones the composer is docked and the page's
+  // floating scroll button is gone, so a "Latest" control floats above the composer
+  // while the newest content is below it (390px viewport mock).
+  it("floats a phone Latest control above the docked composer while the newest content is below it", async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    const originalRect = Element.prototype.getBoundingClientRect;
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn() as unknown as typeof Element.prototype.scrollIntoView;
+    let anchorTop = 2400;
+    Element.prototype.getBoundingClientRect = function getRect(this: Element) {
+      const testId = this.getAttribute("data-testid");
+      const top = testId === "issue-chat-composer-dock" ? 600 : testId === "issue-chat-bottom-anchor" ? anchorTop : 0;
+      return { top, bottom: top, left: 0, right: 390, width: 390, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    };
+    const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
+
+    const root = createRoot(container);
+    try {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <IssueChatThread
+              comments={issueChatLongThreadComments}
+              linkedRuns={[]}
+              timelineEvents={[]}
+              liveRuns={[]}
+              agentMap={issueChatLongThreadAgentMap}
+              currentUserId="user-board"
+              onAdd={async () => {}}
+              enableLiveTranscriptPolling={false}
+            />
+          </MemoryRouter>,
+        );
+      });
+
+      const floating = () => container.querySelector<HTMLButtonElement>('[data-testid="issue-chat-jump-to-latest-floating"]');
+      expect(floating()).not.toBeNull();
+      expect(floating()?.getAttribute("aria-label")).toBe("Jump to latest");
+      // Phone-only (same md breakpoint as the bottom nav), above the dock, 44px tall.
+      expect(floating()?.className).toEqual(expect.stringContaining("md:hidden"));
+      expect(floating()?.className).toEqual(expect.stringContaining("bottom-full"));
+      expect(floating()?.className).toEqual(expect.stringContaining("min-h-11"));
+      expect(floating()?.closest('[data-testid="issue-chat-composer-dock"]')).not.toBeNull();
+
+      const scrollCalls = (Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>).mock.calls.length
+        + (window.scrollTo as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+      act(() => floating()!.click());
+      const scrollCallsAfter = (Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>).mock.calls.length
+        + (window.scrollTo as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+      expect(scrollCallsAfter).toBeGreaterThan(scrollCalls);
+
+      // Once the newest content is back above the composer, the control goes away.
+      anchorTop = 560;
+      await act(async () => {
+        window.dispatchEvent(new Event("scroll"));
+        await nextFrame();
+      });
+      expect(floating()).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      Element.prototype.getBoundingClientRect = originalRect;
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+    }
+  });
+
   it("virtualizes long merged threads so only a windowed slice mounts", () => {
     const root = createRoot(container);
     const totalMergedRows =
@@ -1770,6 +1837,10 @@ describe("IssueChatThread", () => {
     expect(dock).not.toBeNull();
     expect(dock?.className).toContain("sticky");
     expect(dock?.className).toContain("bottom-[calc(env(safe-area-inset-bottom)+20px)]");
+    // Phones dock above the bottom nav via Layout's live offset variable, not a hard-coded height.
+    expect(dock?.className).toContain(
+      "max-md:bottom-[var(--mobile-bottom-nav-offset,calc(4rem+env(safe-area-inset-bottom)))]",
+    );
     expect(dock?.className).toContain("z-20");
 
     const composer = container.querySelector('[data-testid="issue-chat-composer"]') as HTMLDivElement | null;

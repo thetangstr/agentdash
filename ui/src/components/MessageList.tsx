@@ -28,41 +28,41 @@ export function MessageList({
           >
             {/* Agent avatar — left side only */}
             {isAgent && (
-              <div className="w-8 h-8 rounded-full bg-accent-500 flex items-center justify-center shrink-0 mb-5">
+              <div className="w-8 h-8 rounded-full bg-accent-500 flex items-center justify-center shrink-0 mb-5 max-sm:hidden">
                 <Sparkles className="w-3.5 h-3.5 text-text-inverse" aria-hidden="true" />
               </div>
             )}
 
             {/* Bubble + timestamp column */}
-            <div className={`flex flex-col gap-1 max-w-[80%] ${isAgent ? "items-start" : "items-end"}`}>
+            <div className={`flex min-w-0 flex-col gap-1 max-w-[80%] max-sm:max-w-full ${isAgent ? "items-start" : "items-end"}`}>
               {m.cardKind ? (
                 <>
                   {m.cardKind === "interview_question_v1" ? (
                     // Interview questions render as a normal agent text bubble —
                     // no "Step N" chip. The chip framed it as a survey, which
                     // didn't match the conversational tone the CoS is meant to set.
-                    <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap">
+                    <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
                       {(m.cardPayload as any)?.question ?? text}
                     </div>
                   ) : (
                     // All other card kinds — render through CardRenderer as before
-                    <div className="bg-surface-raised border border-border-soft rounded-2xl rounded-tl-sm px-4 py-3 w-full">
+                    <div className="bg-surface-raised border border-border-soft rounded-2xl rounded-tl-sm px-4 py-3 w-full max-sm:px-3.5">
                       <CardRenderer cardKind={m.cardKind} payload={m.cardPayload} context={cardContext} />
                     </div>
                   )}
                 </>
               ) : isAgent ? (
-                <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap">
+                <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
                   {text}
                 </div>
               ) : (
-                <div className="bg-accent-500 text-text-inverse px-4 py-3 rounded-2xl rounded-br-sm leading-relaxed text-sm whitespace-pre-wrap">
+                <div className="bg-accent-500 text-text-inverse px-4 py-3 rounded-2xl rounded-br-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
                   {text}
                 </div>
               )}
 
               {/* Timestamp below bubble */}
-              <span className="text-[11px] text-text-tertiary px-1">{timeStr}</span>
+              <span className="text-[11px] text-text-tertiary px-1 max-sm:text-xs">{timeStr}</span>
             </div>
           </div>
         );

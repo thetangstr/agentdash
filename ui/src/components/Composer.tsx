@@ -109,7 +109,7 @@ export function Composer({
         <input
           ref={inputRef}
           type="text"
-          className="w-full border border-border-soft rounded-xl px-4 py-2 bg-surface-raised text-text-primary placeholder:text-text-tertiary focus-visible:outline-none focus-visible:border-accent-500 focus-visible:ring-2 focus-visible:ring-accent-200 transition-[color,box-shadow] text-sm"
+          className="w-full border border-border-soft rounded-xl px-4 py-2 bg-surface-raised text-text-primary placeholder:text-text-tertiary focus-visible:outline-none focus-visible:border-accent-500 focus-visible:ring-2 focus-visible:ring-accent-200 transition-[color,box-shadow] text-sm max-sm:min-h-11 max-sm:text-base"
           value={value}
           onChange={(e) => {
             setValue(e.target.value);
@@ -177,7 +177,7 @@ export function Composer({
 
       {/* Send icon button */}
       <button
-        className="w-9 h-9 rounded-full bg-accent-500 flex items-center justify-center shrink-0 hover:bg-accent-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200 disabled:opacity-40 disabled:cursor-not-allowed"
+        className="w-9 h-9 max-sm:w-11 max-sm:h-11 rounded-full bg-accent-500 flex items-center justify-center shrink-0 hover:bg-accent-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200 disabled:opacity-40 disabled:cursor-not-allowed"
         onClick={send}
         disabled={isEmpty}
         aria-label="Send message"

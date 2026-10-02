@@ -117,7 +117,7 @@ import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
-import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, Copy, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square, ThumbsDown, ThumbsUp } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowRight, Brain, Check, ChevronDown, Copy, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square, ThumbsDown, ThumbsUp } from "lucide-react";
 import { IssueBlockedNotice } from "./IssueBlockedNotice";
 
 interface IssueChatMessageContext {
@@ -505,6 +505,8 @@ function IssueChatFallbackThread({
 
 const DRAFT_DEBOUNCE_MS = 800;
 const COMPOSER_FOCUS_SCROLL_PADDING_PX = 96;
+// AgentDash: the phone "Latest" control shows once the newest content is this far below the docked composer.
+const FLOATING_JUMP_THRESHOLD_PX = 160;
 const SUBMIT_SCROLL_RESERVE_VH = 0.4;
 
 type ComposerAttachmentItem = {
@@ -3541,6 +3543,16 @@ export function IssueChatThread({
     };
   }, [location.hash, messageAnchorIndex, messages, useVirtualizedThread]);
 
+  // AgentDash: how much of the scroll viewport's bottom the docked composer covers
+  // on phones (below md, where the bottom nav shows). 0 on desktop.
+  function phoneComposerDockClearance(viewportBottom: number) {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return 0;
+    if (!window.matchMedia("(max-width: 767.98px)").matches) return 0;
+    const dock = composerViewportAnchorRef.current;
+    if (!dock) return 0;
+    return Math.max(0, viewportBottom - dock.getBoundingClientRect().top);
+  }
+
   function jumpToLatestFallback() {
     if (useVirtualizedThread) {
       virtualizedThreadRef.current?.scrollToLatest({ behavior: "smooth" });
@@ -3591,8 +3603,13 @@ export function IssueChatThread({
     const TOLERANCE_PX = 4;
 
     clearLatestSettleTimeouts();
-    const resolveScrollContainer = (): HTMLElement | null =>
-      (document.getElementById("main-content") as HTMLElement | null);
+    const resolveScrollContainer = (): HTMLElement | null => {
+      const main = document.getElementById("main-content") as HTMLElement | null;
+      if (!main) return null;
+      // AgentDash: below md the Layout's <main> is overflow-visible and the
+      // window scrolls, so settle against the viewport there.
+      return window.getComputedStyle(main).overflowY === "visible" ? null : main;
+    };
     const cancelTarget = resolveScrollContainer() ?? window;
 
     let lastScrollTop = -1;
@@ -3659,10 +3676,17 @@ export function IssueChatThread({
         ? container.getBoundingClientRect().bottom
         : window.innerHeight;
       const elBottom = el.getBoundingClientRect().bottom;
-      const offBottom = elBottom - containerBottom;
+      // AgentDash: below md the composer is docked over the thread, so "latest"
+      // must land above the dock, not behind it. Desktop clearance is 0.
+      const dockClearance = phoneComposerDockClearance(containerBottom);
+      const offBottom = elBottom - (containerBottom - dockClearance);
 
       if (Math.abs(offBottom) > TOLERANCE_PX) {
-        el.scrollIntoView({ behavior: "smooth", block: "end" });
+        if (dockClearance > 0) {
+          (container ?? window).scrollBy({ top: offBottom, behavior: "smooth" });
+        } else {
+          el.scrollIntoView({ behavior: "smooth", block: "end" });
+        }
       }
 
       const currentScrollTop = container?.scrollTop ?? window.scrollY;
@@ -3763,6 +3787,42 @@ export function IssueChatThread({
   );
 
   const resolvedShowJumpToLatest = showJumpToLatest ?? variant === "full";
+
+  // AgentDash: below md the composer is docked over the thread and the page's
+  // floating scroll button is not shown, so a "Latest" control floats just above
+  // the composer whenever the newest content sits below it.
+  const [latestBelowComposer, setLatestBelowComposer] = useState(false);
+  const floatingJumpEnabled = showComposer && resolvedShowJumpToLatest && messages.length > 0;
+  useEffect(() => {
+    if (!floatingJumpEnabled || typeof window === "undefined") {
+      setLatestBelowComposer(false);
+      return;
+    }
+    let frame = 0;
+    const check = () => {
+      frame = 0;
+      const anchor = bottomAnchorRef.current;
+      const dock = composerViewportAnchorRef.current;
+      if (!anchor || !dock) return;
+      const below = anchor.getBoundingClientRect().top - dock.getBoundingClientRect().top;
+      setLatestBelowComposer(below > FLOATING_JUMP_THRESHOLD_PX);
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(check);
+    };
+    check();
+    const mainContent = document.getElementById("main-content");
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    mainContent?.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      mainContent?.removeEventListener("scroll", schedule);
+    };
+  }, [floatingJumpEnabled, messages.length]);
+
   const resolvedEmptyMessage = emptyMessage
     ?? (variant === "embedded"
       ? "No run output yet."
@@ -3785,7 +3845,8 @@ export function IssueChatThread({
             <button
               type="button"
               onClick={handleJumpToLatest}
-              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              data-testid="issue-chat-jump-to-latest"
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground max-sm:min-h-11 max-sm:px-2"
             >
               Jump to latest
             </button>
@@ -3847,7 +3908,7 @@ export function IssueChatThread({
                   <IssueAssigneePausedNotice agent={assignedAgent} />
                 </div>
               ) : null}
-              <div ref={bottomAnchorRef} />
+              <div ref={bottomAnchorRef} data-testid="issue-chat-bottom-anchor" />
               {showComposer ? (
                 <div
                   aria-hidden
@@ -3863,8 +3924,24 @@ export function IssueChatThread({
           <div
             ref={composerViewportAnchorRef}
             data-testid="issue-chat-composer-dock"
-            className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-gradient-to-t from-background via-background/95 to-background/0 pt-6"
+            // AgentDash: below md the composer docks just above the bottom nav,
+            // following Layout's live --mobile-bottom-nav-offset (see
+            // lib/mobile-bottom-nav.ts); the fallback is the nav's shown height.
+            // The phone "Latest" control is bottom-full inside this dock, so it follows too.
+            className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-gradient-to-t from-background via-background/95 to-background/0 pt-6 max-md:bottom-[var(--mobile-bottom-nav-offset,calc(4rem+env(safe-area-inset-bottom)))] max-md:pb-2"
           >
+            {latestBelowComposer ? (
+              <button
+                type="button"
+                onClick={handleJumpToLatest}
+                aria-label="Jump to latest"
+                data-testid="issue-chat-jump-to-latest-floating"
+                className="absolute bottom-full right-2 mb-1 inline-flex min-h-11 items-center gap-1.5 rounded-full border border-border bg-background px-4 text-xs font-medium text-muted-foreground shadow-md transition-colors hover:text-foreground md:hidden"
+              >
+                <ArrowDown className="h-4 w-4" aria-hidden="true" />
+                Latest
+              </button>
+            ) : null}
             <IssueChatComposer
               ref={composerRef}
               onImageUpload={imageUploadHandler}

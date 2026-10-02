@@ -625,4 +625,44 @@ describe("IssueDocumentsSection", () => {
     });
     queryClient.clear();
   });
+
+  // AgentDash: mobile lane A — the phone ⋯ menu starts a new document through actionsRef.
+  it("exposes one stable actions handle that opens the new-document draft, and clears it on unmount", async () => {
+    const issue = createIssue();
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    mockIssuesApi.listDocuments.mockResolvedValue([]);
+    const handles: Array<{ beginNewDocument: () => void } | null> = [];
+    const actionsRef = (handle: { beginNewDocument: () => void } | null) => {
+      handles.push(handle);
+    };
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDocumentsSection issue={issue} canDeleteDocuments={false} actionsRef={actionsRef} phoneActionsInMenu />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await flush();
+
+    // One handle per mount, not one per render (the parent keeps it in state).
+    expect(handles.filter(Boolean)).toHaveLength(1);
+    expect(container.querySelector('input[placeholder="Document key"]')).toBeNull();
+    // The inline New/Upload row hides on phones; the header menu replaces it.
+    expect(container.querySelector('[data-testid="issue-documents-actions"]')?.className).toContain("max-sm:hidden");
+
+    await act(async () => {
+      handles[0]!.beginNewDocument();
+    });
+    expect(container.querySelector('input[placeholder="Document key"]')).toBeTruthy();
+    expect(handles.filter(Boolean)).toHaveLength(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+    expect(handles[handles.length - 1]).toBeNull();
+    queryClient.clear();
+  });
 });

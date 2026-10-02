@@ -2,6 +2,7 @@ import { Link, Navigate, useLocation } from "@/lib/router";
 // AgentDash: CoSConversation — onboarding v2 entry point
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ClipboardList } from "lucide-react";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
 import { agentsApi } from "../api/agents";
@@ -26,6 +27,8 @@ export const COS_SUGGESTED_MESSAGES = [
 // arrives. A fresh company's inbox normally opens with a server-posted CoS
 // greeting; this covers a conversation that has none yet.
 export const COS_EMPTY_STATE_TITLE = "Your Chief of Staff is ready.";
+// AgentDash: the workforce review link (a bar on desktop, a header link on phones).
+export const COS_WORKFORCE_LINK_LABEL = "Review hired roles, company knowledge and first jobs";
 // AgentDash: shown instead of a conversation that belongs to another company.
 export const COS_WRONG_COMPANY_MESSAGE =
   "This company has no Chief of Staff conversation yet. Switch to a company that has one, or ask an owner or admin to open Ask here first.";
@@ -95,7 +98,8 @@ export function CoSAskPage() {
 }
 
 export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConversationLayout } = {}) {
-  const { selectedCompanyId, loading: companiesLoading } = useCompany();
+  const { companies, selectedCompanyId, loading: companiesLoading } = useCompany();
+  const hasCompanies = (companies?.length ?? 0) > 0;
   // The state below is tagged with the company it was resolved for, so a
   // company switch never renders the previous company's chat, even for the
   // one frame before the effect clears it.
@@ -116,6 +120,13 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
     // company query resolves. Without this guard, we'd fall through to
     // bootstrap and create/reuse the wrong company.
     if (companiesLoading) return;
+    // AgentDash: the company list has loaded but CompanyProvider has not picked
+    // a company yet (its auto-select effect runs after this child effect in the
+    // same commit). Wait for that pick: bootstrap without a companyId would set
+    // up a Chief of Staff in whichever company the server picks for this user,
+    // not the one this page is about. Only a user with no companies at all
+    // bootstraps with no company.
+    if (selectedCompanyId === null && hasCompanies) return;
 
     const forCompanyId = selectedCompanyId ?? null;
 
@@ -211,7 +222,7 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
     return () => {
       cancelled = true;
     };
-  }, [selectedCompanyId, companiesLoading, queryClient, attempt]);
+  }, [selectedCompanyId, companiesLoading, hasCompanies, queryClient, attempt]);
 
   // Resolved for a different company than the one selected now: treat it as
   // still loading until the effect answers for the current one.
@@ -375,14 +386,30 @@ function CoSConversationView({
           : "fixed inset-0 flex flex-col"
       }
     >
-      <div className="shrink-0 border-b px-4 py-2 text-sm"><Link to="/workforce" className="underline">Review hired roles, company knowledge and first jobs</Link></div>
+      {/* Phones show this as a compact link in the chat header instead (below). */}
+      <div className="shrink-0 border-b px-4 py-2 text-sm max-sm:hidden"><Link to="/workforce" className="underline">{COS_WORKFORCE_LINK_LABEL}</Link></div>
       <div className="min-h-0 flex-1">
         <ChatPanel
           conversationId={bootstrapped.conversationId}
           companyId={bootstrapped.companyId}
           cardContext={cardContext}
           agentDirectory={agentDirectory}
-          headerProps={{ agentRole: COS_HEADER_LINE }}
+          padComposerForSafeArea={layout === "fullscreen"}
+          headerProps={{
+            agentRole: COS_HEADER_LINE,
+            action: (
+              <Link
+                to="/workforce"
+                aria-label={COS_WORKFORCE_LINK_LABEL}
+                title={COS_WORKFORCE_LINK_LABEL}
+                data-testid="cos-workforce-header-link"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-secondary hover:bg-surface-sunken hover:text-text-primary sm:hidden"
+              >
+                <ClipboardList className="h-4 w-4" aria-hidden="true" />
+                Review
+              </Link>
+            ),
+          }}
           suggestions={COS_SUGGESTED_MESSAGES}
           emptyState={
             <div className="rounded-lg border border-border-soft bg-surface-raised p-4 text-sm">

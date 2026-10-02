@@ -72,7 +72,7 @@ export function TranscriptModeToggle({
           aria-pressed={mode === option}
           data-transcript-mode={option}
           className={cn(
-            "rounded-md px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+            "rounded-md px-2 py-0.5 text-[11px] max-sm:text-xs font-medium capitalize transition-colors max-sm:min-h-11 max-sm:px-3",
             mode === option ? "bg-accent text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
           )}
           onClick={(event) => {
@@ -113,7 +113,7 @@ export function CappedOutput({ text, tone = "default" }: { text: string; tone?: 
       {(overLines || overChars) && (
         <button
           type="button"
-          className="mt-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          className="mt-1 text-[11px] max-sm:text-xs font-medium text-muted-foreground hover:text-foreground max-sm:min-h-11"
           onClick={() => setShowAll((value) => !value)}
         >
           {showAll ? "Show less" : `Show more (${lines.length} lines)`}
@@ -184,7 +184,7 @@ export function ReadableToolRow({
         tabIndex={0}
         aria-expanded={open}
         title={item.summary.label}
-        className="group flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30"
+        className="group flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30 max-sm:min-h-11"
         onClick={() => {
           if (hasSelectedText()) return;
           setOpen(!open);
@@ -227,19 +227,19 @@ export function ReadableToolRow({
         <div className="ml-5 mt-1 space-y-2 pb-1">
           {hasUsefulInput(item) && (
             <div>
-              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Input</div>
+              <div className="mb-0.5 text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Input</div>
               <CappedOutput text={formatToolPayload(item.input)} />
             </div>
           )}
           {item.result ? (
             <div>
               {hasUsefulInput(item) && (
-                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Output</div>
+                <div className="mb-0.5 text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Output</div>
               )}
               <CappedOutput text={formatToolPayload(item.result)} tone={item.status === "error" ? "error" : "default"} />
             </div>
           ) : (
-            <div className="text-[11px] italic text-muted-foreground">
+            <div className="text-[11px] max-sm:text-xs italic text-muted-foreground">
               {item.status === "running" ? "Waiting for output…" : item.status === "no_result" ? "No result was reported." : "No output."}
             </div>
           )}
@@ -302,7 +302,7 @@ export function ReadableToolGroup({
           role="button"
           tabIndex={0}
           aria-expanded={open}
-          className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30"
+          className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30 max-sm:min-h-11"
           onClick={() => {
             if (hasSelectedText()) return;
             setOpen((value) => !value);
@@ -327,7 +327,7 @@ export function ReadableToolGroup({
             {toolGroupLabel(items)}
           </span>
           {failed > 0 && (
-            <span className="text-[11px] text-red-700 dark:text-red-300">· {failed} failed</span>
+            <span className="text-[11px] max-sm:text-xs text-red-700 dark:text-red-300">· {failed} failed</span>
           )}
           {open ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
@@ -371,7 +371,7 @@ export function ReadableDetails({
       <button
         type="button"
         aria-expanded={open}
-        className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        className="inline-flex items-center gap-1 text-[11px] max-sm:text-xs font-medium text-muted-foreground hover:text-foreground max-sm:min-h-11"
         onClick={() => setOpen((value) => !value)}
       >
         {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -381,14 +381,14 @@ export function ReadableDetails({
         <div className="mt-1.5 space-y-2 border-l border-border/50 pl-3">
           {lines.map((line, index) => (
             <div key={`${line.kind}-${line.ts}-${index}`}>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+              <div className="text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
                 {line.kind}
               </div>
               {line.kind === "thinking" ? (
                 <MarkdownBody
                   className={cn(
                     "italic text-foreground/70 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-                    density === "compact" ? "text-[11px] leading-5" : "text-xs leading-5",
+                    density === "compact" ? "text-[11px] max-sm:text-xs leading-5" : "text-xs leading-5",
                     thinkingClassName,
                   )}
                 >
@@ -431,7 +431,7 @@ export function ReadableFooter({ footer, density = "comfortable" }: { footer: Re
     >
       <div
         className={cn(
-          "flex items-center gap-1.5 text-[11px]",
+          "flex items-center gap-1.5 text-[11px] max-sm:text-xs",
           footer.isError ? "text-red-700 dark:text-red-300" : "text-muted-foreground",
         )}
       >
@@ -450,7 +450,7 @@ export function ReadableFooter({ footer, density = "comfortable" }: { footer: Re
           className={cn(
             "mt-1.5 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
             footer.isError ? "text-red-700 dark:text-red-300" : "text-foreground/80",
-            density === "compact" ? "text-[11px] leading-5" : "text-xs leading-5",
+            density === "compact" ? "text-[11px] max-sm:text-xs leading-5" : "text-xs leading-5",
           )}
         >
           {footer.text}
@@ -475,7 +475,7 @@ function ReadableMessage({
   return (
     <div>
       {block.role === "user" && (
-        <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+        <div className="mb-1 flex items-center gap-1.5 text-[11px] max-sm:text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
           <User className="h-3.5 w-3.5" />
           <span>User</span>
         </div>
@@ -489,7 +489,7 @@ function ReadableMessage({
         {block.text}
       </MarkdownBody>
       {block.streaming && (
-        <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium italic text-muted-foreground">
+        <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] max-sm:text-xs font-medium italic text-muted-foreground">
           <span className="relative flex h-1.5 w-1.5">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-70" />
             <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
@@ -530,7 +530,7 @@ function ReadableDiff({ block }: { block: Extract<ReadableBlock, { type: "diff" 
         <span className="font-medium text-foreground/90">Changed</span>
         <code className="truncate rounded bg-muted/50 px-1 font-mono text-[0.92em] text-foreground/80">{file}</code>
         {(adds > 0 || removes > 0) && (
-          <span className="text-[11px] tabular-nums">
+          <span className="text-[11px] max-sm:text-xs tabular-nums">
             <span className="text-emerald-600 dark:text-emerald-400">+{adds}</span>{" "}
             <span className="text-red-600 dark:text-red-400">-{removes}</span>
           </span>
