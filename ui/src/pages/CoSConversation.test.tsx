@@ -149,6 +149,27 @@ describe("CoSConversation", () => {
     expect(mockQueryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["access", "current-board-access"], refetchType: "all" });
   });
 
+  // PR #956 review: a member (not owner/admin) who opens /cos before the CoS
+  // exists gets 403 from bootstrap; the page explains instead of erroring.
+  it("explains, without an error page, when a non-admin member cannot set up the CoS", async () => {
+    const { ApiError } = await import("../api/client");
+    mockBootstrap.mockRejectedValue(
+      new ApiError("Only a workspace owner or admin can set up the Chief of Staff.", 403, {}),
+    );
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
+    });
+    await act(async () => {});
+
+    const notice = container.querySelector('[data-testid="cos-not-available"]');
+    expect(notice?.textContent).toContain("isn't set up yet");
+    expect(notice?.querySelector("a")).toBeTruthy();
+    expect(container.textContent).not.toContain("Couldn't set up your workspace");
+    expect(container.querySelector(".chat-panel")).toBeNull();
+  });
+
   // AgentDash (#725): a hosted box asks for the Hermes provider key before the CoS chat.
   it("asks for a Hermes provider key first on a hosted box that has none", async () => {
     mockBootstrap.mockResolvedValue({ companyId: "c1", cosAgentId: "a1", conversationId: "conv1" });

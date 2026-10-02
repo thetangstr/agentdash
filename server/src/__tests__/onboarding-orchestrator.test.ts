@@ -179,7 +179,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
     vi.clearAllMocks();
     mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com", name: "Alice Anderson" });
     // Second call: user already has an active membership — reuse that company.
-    mockAccess.listUserCompanyAccess.mockResolvedValue([{ companyId: "company-1", status: "active", principalId: "user-1" }]);
+    mockAccess.listUserCompanyAccess.mockResolvedValue([{ companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" }]);
     mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
     mockAgents.list.mockResolvedValue([{ id: "agent-cos-1", role: "chief_of_staff", adapterType: "claude_api", adapterConfig: {} }]);
     mockAgents.listKeys.mockResolvedValue([{ id: "key-1" }]);
@@ -201,8 +201,8 @@ describe("onboardingOrchestrator.bootstrap", () => {
 
   it("uses the requested workspace when the user is an active member of it, and ignores one they are not", async () => {
     mockAccess.listUserCompanyAccess.mockResolvedValue([
-      { companyId: "company-1", status: "active", principalId: "user-1" },
-      { companyId: "company-2", status: "active", principalId: "user-1" },
+      { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
+      { companyId: "company-2", status: "active", principalId: "user-1", membershipRole: "owner" },
     ]);
     mockCompanies.getById.mockImplementation(async (id: string) => ({ id, name: id === "company-2" ? "Beta" : "Acme", emailDomain: null }));
     mockConversations.create.mockImplementation(async ({ companyId }: { companyId: string }) => ({ id: `conv-${companyId}`, companyId }));
@@ -213,6 +213,73 @@ describe("onboardingOrchestrator.bootstrap", () => {
     const stranger = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-9" });
     expect(stranger.companyId).toBe("company-1");
     expect(mockCompanies.create).not.toHaveBeenCalled();
+  });
+
+  // PR #956 review (HIGH): bootstrap used to grant agents:create and rewrite
+  // the caller's membership to owner, so any member could promote themselves.
+  describe("authorization on an existing workspace", () => {
+    function memberOf(role: string, userId = "user-1", status = "active") {
+      mockAccess.listUserCompanyAccess.mockResolvedValue([
+        { companyId: "company-1", status, principalId: userId, membershipRole: role },
+      ]);
+    }
+
+    it.each(["viewer", "member", "operator"])("refuses a %s with 403 and leaves their role alone", async (role) => {
+      memberOf(role);
+      await expect(
+        onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-1" }),
+      ).rejects.toMatchObject({ status: 403 });
+      // Also without a companyId (the first active membership).
+      await expect(onboardingOrchestrator(deps as any).bootstrap("user-1")).rejects.toMatchObject({ status: 403 });
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+      expect(mockAccess.setPrincipalPermission).not.toHaveBeenCalled();
+      expect(mockAgents.create).not.toHaveBeenCalled();
+      expect(mockConversations.create).not.toHaveBeenCalled();
+    });
+
+    it.each(["owner", "admin"])("lets an %s set up the CoS without rewriting their membership", async (role) => {
+      memberOf(role);
+      const result = await onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-1" });
+      expect(result.companyId).toBe("company-1");
+      expect(mockAgents.create).toHaveBeenCalled();
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
+
+    it("lets an instance admin set up a workspace where they are only a viewer, without promoting them", async () => {
+      memberOf("viewer");
+      const result = await onboardingOrchestrator(deps as any).bootstrap("user-1", {
+        companyId: "company-1",
+        actorIsInstanceAdmin: true,
+      });
+      expect(result.companyId).toBe("company-1");
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
+
+    it("lets the local_trusted local-board actor through", async () => {
+      mockUsers.getById.mockResolvedValue(null);
+      memberOf("member", "local-board");
+      const result = await onboardingOrchestrator(deps as any).bootstrap("local-board", { companyId: "company-1" });
+      expect(result.companyId).toBe("company-1");
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
+
+    it("refuses an archived workspace", async () => {
+      memberOf("owner");
+      mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", status: "archived" });
+      await expect(
+        onboardingOrchestrator(deps as any).bootstrap("user-1", { companyId: "company-1" }),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(mockAgents.create).not.toHaveBeenCalled();
+    });
+
+    it("does not reactivate a suspended membership through the corp-domain path", async () => {
+      mockAccess.listUserCompanyAccess.mockResolvedValue([
+        { companyId: "company-1", status: "suspended", principalId: "user-1", membershipRole: "viewer" },
+      ]);
+      mockCompanies.findByEmailDomain.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
+      await expect(onboardingOrchestrator(deps as any).bootstrap("user-1")).rejects.toMatchObject({ status: 403 });
+      expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    });
   });
 
   it("creates a fresh isolated workspace for a free-mail user even when another same-domain user exists", async () => {
@@ -288,7 +355,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
   it("blocks bootstrap CoS creation when a Free workspace already has an agent", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
     mockAccess.listUserCompanyAccess.mockResolvedValue([
-      { companyId: "company-1", status: "active", principalId: "user-1" },
+      { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
     ]);
     mockAccess.listActiveUserMemberships.mockResolvedValue([
       { companyId: "company-1", principalId: "user-1" },

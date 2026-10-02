@@ -113,6 +113,18 @@ type OnboardingTierCapacityServices = {
 // obviously-malformed entries (no `@`, no domain, embedded whitespace,
 // length > 254). Resend rejects bad addresses anyway, but pre-filtering
 // avoids per-row Resend round-trips for typo'd input.
+// AgentDash (PR #956 review): what the orchestrator needs to decide whether
+// this caller may set up a workspace's Chief of Staff.
+function bootstrapOptions(
+  req: { actor: { isInstanceAdmin?: boolean } },
+  companyId: string,
+): { companyId?: string; actorIsInstanceAdmin?: boolean } {
+  return {
+    ...(companyId ? { companyId } : {}),
+    ...(req.actor.isInstanceAdmin === true ? { actorIsInstanceAdmin: true } : {}),
+  };
+}
+
 function isLikelyEmail(value: string): boolean {
   if (value.length === 0 || value.length > 254) return false;
   if (/\s/.test(value)) return false;
@@ -418,12 +430,12 @@ export function onboardingV2Routes(db: Db) {
       throw unauthorized("Sign-in required");
     }
     // Optional: the workspace the CoS page has selected. The orchestrator uses
-    // it only when this user is an active member of it.
+    // it only when this user is an active member of it, and sets up an
+    // existing workspace only for its owner/admin (or an instance admin);
+    // anyone else gets 403 (PR #956 review).
     const companyId = typeof req.body?.companyId === "string" ? req.body.companyId.trim() : "";
     try {
-      const result = companyId
-        ? await orch.bootstrap(req.actor.userId, { companyId })
-        : await orch.bootstrap(req.actor.userId);
+      const result = await orch.bootstrap(req.actor.userId, bootstrapOptions(req, companyId));
       res.json(result);
     } catch (err) {
       if (err instanceof SingleCompanyInstallationError) {
@@ -469,7 +481,7 @@ export function onboardingV2Routes(db: Db) {
       throw badRequest("assessmentInput or assessmentMarkdown required");
     }
 
-    const result = await orch.bootstrap(req.actor.userId);
+    const result = await orch.bootstrap(req.actor.userId, bootstrapOptions(req, companyId));
     if (result.companyId !== companyId) {
       throw badRequest("Bootstrapped company does not match completed assessment");
     }

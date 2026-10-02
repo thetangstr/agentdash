@@ -248,6 +248,24 @@ describe("FirstRunPage", () => {
     expect(mockSetupAdapter).toHaveBeenCalledWith("codex");
   });
 
+  it("self-hosted: a 403 from the switch asks for the instance admin", async () => {
+    selfHostedAdapterStatus("hermes_local");
+    mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: false, done: true } }));
+    mockTestEnvironment.mockResolvedValue({ adapterType: "codex_local", status: "pass", checks: [], testedAt: "now" });
+    const { ApiError } = await import("@/api/client");
+    mockSetupAdapter.mockRejectedValue(new ApiError("Instance admin access required", 403, {}));
+    await render("/setup?companyId=company-2");
+    const codex = container.querySelector('[data-testid="first-run-runtime-codex_local"]')!;
+    const use = Array.from(codex.querySelectorAll("button")).find((b) => b.textContent === "Use Codex")!;
+    await act(async () => use.click());
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Ask your instance admin to change the runtime.");
+  });
+
   it("self-hosted: does not switch to a runtime whose check fails", async () => {
     selfHostedAdapterStatus("hermes_local");
     mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: false, done: true } }));

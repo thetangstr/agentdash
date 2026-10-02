@@ -3,6 +3,8 @@ import { deriveCompanyEmailDomain } from "@paperclipai/shared";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 import { SingleCompanyInstallationError } from "./companies.js";
 import { pairFounderWithAgent, type FounderStewardshipDeps } from "./founder-stewardship.js";
+import { normalizeHumanRole } from "./company-member-roles.js";
+import { conflict, forbidden } from "../errors.js";
 import { isHostedBox } from "./license.js";
 import {
   exceededFreeTierCapacityAction,
@@ -147,9 +149,14 @@ export function onboardingOrchestrator(deps: Deps) {
     outcome: { createdCos: boolean } = { createdCos: false },
   ): Promise<BootstrapResult> {
     const currentMemberships = await services.access.listUserCompanyAccess(user.id);
-    const hasActiveMembership = currentMemberships.some(
-      (m: any) => m.companyId === company.id && m.status === "active",
-    );
+    const existingMembership = currentMemberships.find((m: any) => m.companyId === company.id);
+    const hasActiveMembership = existingMembership?.status === "active";
+    // AgentDash (security, PR #956 review): a suspended or pending membership
+    // is never reactivated here. Only a person with no membership row at all
+    // gets one (the new-workspace and corp-domain paths).
+    if (existingMembership && !hasActiveMembership) {
+      throw forbidden("Your access to this workspace is not active.");
+    }
 
     // Step 3 needs the current agent list under the same capacity lock. That
     // makes concurrent bootstrap calls observe any CoS created by the previous
@@ -172,7 +179,13 @@ export function onboardingOrchestrator(deps: Deps) {
       true,
       user.id,
     );
-    await services.access.ensureMembership(company.id, "user", user.id, "owner", "active");
+    // AgentDash (security, PR #956 review): owner only for a brand-new
+    // membership. ensureMembership REWRITES an existing row's role, which let a
+    // viewer or member who called bootstrap become owner; an existing
+    // membership is left exactly as it is (never upgraded or downgraded).
+    if (!existingMembership) {
+      await services.access.ensureMembership(company.id, "user", user.id, "owner", "active");
+    }
 
     // Step 3: ensure a Chief of Staff agent exists.
     if (!cos) {
@@ -229,7 +242,10 @@ export function onboardingOrchestrator(deps: Deps) {
   }
 
   return {
-    bootstrap: async (userId: string, options: { companyId?: string | null } = {}): Promise<BootstrapResult> => {
+    bootstrap: async (
+      userId: string,
+      options: { companyId?: string | null; actorIsInstanceAdmin?: boolean } = {},
+    ): Promise<BootstrapResult> => {
       // Try the real auth_users lookup first; fall back to local-trusted sentinel.
       const user = (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
       if (!user) throw new Error(`User ${userId} not found`);
@@ -276,8 +292,23 @@ export function onboardingOrchestrator(deps: Deps) {
       let company: { id: string; name?: string; emailDomain?: string | null };
       if (activeMembership) {
         // Returning user — reuse the workspace they already belong to.
+        // AgentDash (security, PR #956 review): setting up a workspace's CoS
+        // (agent, API key, conversation) is an owner/admin act. A viewer or
+        // member is refused here instead of being set up — and, before this
+        // fix, promoted to owner. The local-board actor (local_trusted) and
+        // instance admins qualify.
+        const mayBootstrap =
+          normalizeHumanRole(activeMembership.membershipRole) === "admin" ||
+          userId === LOCAL_BOARD_USER_ID ||
+          options.actorIsInstanceAdmin === true;
+        if (!mayBootstrap) {
+          throw forbidden("Only a workspace owner or admin can set up the Chief of Staff.");
+        }
         const found = await deps.companies.getById(activeMembership.companyId);
         if (!found) throw new Error(`Company ${activeMembership.companyId} not found for existing membership`);
+        if ((found as { status?: string }).status === "archived") {
+          throw conflict("This workspace is archived.");
+        }
         company = found;
       } else {
         // First sign-up for this user. Decide whether to attach to an
@@ -303,6 +334,9 @@ export function onboardingOrchestrator(deps: Deps) {
           ? await deps.companies.findByEmailDomain(emailDomain)
           : null;
         if (corpExisting) {
+          if ((corpExisting as { status?: string }).status === "archived") {
+            throw conflict("This workspace is archived.");
+          }
           company = corpExisting;
         } else {
           // AgentDash (#102): single-workspace-per-self-hosted-installation guard.

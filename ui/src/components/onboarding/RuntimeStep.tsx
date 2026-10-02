@@ -121,6 +121,11 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
       await onboardingApi.setupAdapter(runtime.preset);
       await queryClient.invalidateQueries({ queryKey: ADAPTER_STATUS_QUERY_KEY });
     } catch (err) {
+      // The server lets only the instance admin switch to these runtimes.
+      if (err instanceof ApiError && err.status === 403) {
+        setError("Ask your instance admin to change the runtime.");
+        return;
+      }
       setError(errorSentence(err));
     } finally {
       setApplying(null);
