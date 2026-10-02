@@ -274,6 +274,7 @@ export function CompanySettings() {
         <div className="space-y-3 rounded-md border border-border px-4 py-4">
           <Field label="Workspace name" hint="The display name for your workspace.">
             <input
+              aria-label="Workspace name"
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
               type="text"
               value={companyName}
@@ -360,6 +361,7 @@ export function CompanySettings() {
                 <div className="flex items-center gap-2">
                   <input
                     type="color"
+                    aria-label="Brand color"
                     value={brandColor || "#6366f1"}
                     onChange={(e) => setBrandColor(e.target.value)}
                     className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent p-0 max-sm:h-11 max-sm:w-11"
@@ -396,6 +398,7 @@ export function CompanySettings() {
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
+                      aria-label="Attachment size limit in MiB"
                       min={1}
                       max={MAX_COMPANY_ATTACHMENT_MAX_MIB}
                       step={1}

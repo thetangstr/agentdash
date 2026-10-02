@@ -90,8 +90,9 @@ export function ToastViewport() {
       aria-live="polite"
       aria-atomic="false"
       // AgentDash: on phones the stack spans the width between 12px gutters and
-      // sits above the bottom nav instead of over it.
-      className="pointer-events-none fixed bottom-3 left-3 z-[120] w-full max-w-sm px-1 max-sm:right-3 max-sm:bottom-[calc(var(--mobile-bottom-nav-offset)+0.75rem)] max-sm:w-auto max-sm:max-w-none"
+      // sits above the bottom nav and any docked composer (useDockedComposerOffset)
+      // instead of over them.
+      className="pointer-events-none fixed bottom-3 left-3 z-[120] w-full max-w-sm px-1 max-sm:right-3 max-sm:bottom-[calc(var(--mobile-bottom-nav-offset,0px)+var(--mobile-docked-composer-height,0px)+0.75rem)] max-sm:w-auto max-sm:max-w-none"
     >
       <ol className="flex w-full flex-col-reverse gap-2">
         {toasts.map((toast) => (

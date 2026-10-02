@@ -1671,7 +1671,7 @@ function CheapModelSection({
             Used when a run requests the cheap profile (e.g. routine summaries). The primary model stays unchanged.
           </p>
         </div>
-        <ToggleSwitch checked={enabled} onCheckedChange={onEnabledChange} />
+        <ToggleSwitch checked={enabled} onCheckedChange={onEnabledChange} aria-label="Cheap model" />
       </div>
       {enabled ? (
         <ModelDropdown

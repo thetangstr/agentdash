@@ -209,8 +209,11 @@
   /* Every <Button>, matched by the attributes only Button sets on a button or
    * link (data-size and data-variant survive asChild and Radix triggers, which
    * replace data-slot). Covers icon-only "sm" buttons that hide their label on
-   * phones and links rendered as buttons, which the pointer:coarse rule misses. */
-  :is(button, a)[data-variant][data-size] {
+   * phones and links rendered as buttons, which the pointer:coarse rule misses.
+   * Escape hatch: data-tap-exempt, for a button that sits inside another
+   * control (an input's show/hide toggle, a chip's remove ×) and sizes its own
+   * hit area, where this minimum would push it over its host. */
+  :is(button, a)[data-variant][data-size]:not([data-tap-exempt]) {
     min-width: 44px;
     min-height: 44px;
   }

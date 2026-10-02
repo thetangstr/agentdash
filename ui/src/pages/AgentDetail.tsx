@@ -1052,29 +1052,31 @@ export function AgentDetail() {
 
   return (
     <div className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}>
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-3 min-w-0">
+      {/* Header. AgentDash: on phones the actions wrap onto their own row so the
+          name and role keep the full width instead of shrinking to "Ivy …". */}
+      <div className="flex items-center justify-between gap-2 max-sm:flex-wrap">
+        <div className="flex items-center gap-3 min-w-0 max-sm:w-full">
           <AgentIconPicker
             value={agent.icon}
             onChange={(icon) => updateIcon.mutate(icon)}
           >
-            <button className="shrink-0 flex items-center justify-center h-12 w-12 rounded-lg bg-accent hover:bg-accent/80 transition-colors">
+            <button type="button" aria-label="Change icon" className="shrink-0 flex items-center justify-center h-12 w-12 rounded-lg bg-accent hover:bg-accent/80 transition-colors">
               <AgentIcon icon={agent.icon} className="h-6 w-6" />
             </button>
           </AgentIconPicker>
           <div className="min-w-0">
-            <h2 className="text-2xl font-bold truncate">{agent.name}</h2>
+            <h2 className="text-2xl font-bold truncate max-sm:whitespace-normal max-sm:break-words">{agent.name}</h2>
             <p className="text-sm text-muted-foreground truncate">
               {roleLabels[agent.role] ?? agent.role}
               {agent.title ? ` - ${agent.title}` : ""}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0 max-sm:w-full max-sm:gap-2">
           <Button
             variant="outline"
             size="sm"
+            aria-label="Assign Task"
             onClick={() => openNewIssue({ assigneeAgentId: agent.id })}
           >
             <Plus className="h-3.5 w-3.5 sm:mr-1" />
@@ -1108,7 +1110,7 @@ export function AgentDetail() {
           {/* Overflow menu */}
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon-xs">
+              <Button variant="ghost" size="icon-xs" aria-label="More agent actions" className="max-sm:ml-auto">
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
@@ -1751,7 +1753,7 @@ function AgentOverview({
           <h3 className="text-sm font-medium">Recent Issues</h3>
           <Link
             to={`/issues?participantAgentId=${agentId}`}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
           >
             See All &rarr;
           </Link>
@@ -2330,6 +2332,7 @@ function ConfigurationTab({
                 })
               }
               disabled={updatePermissions.isPending}
+              aria-label="Can create new agents"
             />
           </div>
           <div className="flex items-center justify-between gap-4 text-sm">
@@ -2348,6 +2351,7 @@ function ConfigurationTab({
                 })
               }
               disabled={updatePermissions.isPending || taskAssignLocked}
+              aria-label="Can assign tasks"
             />
           </div>
         </div>

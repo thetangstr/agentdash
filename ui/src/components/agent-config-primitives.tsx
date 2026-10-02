@@ -5,6 +5,8 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useIsPhone } from "../hooks/useIsPhone";
 import {
   Dialog,
   DialogContent,
@@ -68,14 +70,36 @@ export const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 /* ---- Primitive components ---- */
 
 export function HintIcon({ text }: { text: string }) {
+  const isPhone = useIsPhone();
+  if (isPhone) {
+    // AgentDash: tooltips never open on touch, so phones get a tap-to-open
+    // popover. The 44px hit area grows sideways only (the negative margin keeps
+    // the icon's place in the line) and makes its own row taller, so it never
+    // reaches into the input below the label.
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label="More information"
+            className="-mx-4 inline-flex size-11 shrink-0 items-center justify-center text-muted-foreground/50 transition-colors hover:text-muted-foreground"
+          >
+            <HelpCircle className="h-3 w-3" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent side="top" className="w-auto max-w-xs p-2 text-xs">
+          {text}
+        </PopoverContent>
+      </Popover>
+    );
+  }
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        {/* AgentDash: on phones a 44px hit area around the 12px icon; the negative
-            margin keeps it taking 12px of the line, so the layout does not move. */}
         <button
           type="button"
-          className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors max-sm:relative max-sm:-m-4 max-sm:size-11 max-sm:items-center max-sm:justify-center"
+          aria-label="More information"
+          className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors"
         >
           <HelpCircle className="h-3 w-3" />
         </button>
@@ -181,6 +205,7 @@ export function ToggleWithNumber({
         <ToggleSwitch
           checked={checked}
           onCheckedChange={onCheckedChange}
+          aria-label={label}
         />
       </div>
       {showNumber && (
