@@ -151,15 +151,29 @@ describe("TokenCeilingStatusLine", () => {
 // Scan 4 lane O1: on BYOK the agent page said "Spend this month $0.00" next to
 // real usage; it now says the model provider bills it.
 describe("agentBilledByProvider", () => {
-  const run = (inputTokens: number, outputTokens: number) => ({ usageJson: { inputTokens, outputTokens } }) as never;
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const run = (inputTokens: number, outputTokens: number, createdAt = "2026-10-02T09:00:00.000Z", extra = {}) =>
+    ({ usageJson: { inputTokens, outputTokens, ...extra }, resultJson: null, createdAt }) as never;
 
-  it("is true when runs used tokens but no dollars were metered", () => {
-    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900)])).toBe(true);
+  it("is true when this month's runs used tokens but no dollars were metered", () => {
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900)], now)).toBe(true);
   });
 
   it("is false when dollars were metered, or nothing ran", () => {
-    expect(agentBilledByProvider({ spentMonthlyCents: 120 }, [run(32_000, 2_900)])).toBe(false);
-    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [])).toBe(false);
-    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [{ usageJson: null } as never])).toBe(false);
+    expect(agentBilledByProvider({ spentMonthlyCents: 120 }, [run(32_000, 2_900)], now)).toBe(false);
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [], now)).toBe(false);
+    expect(
+      agentBilledByProvider({ spentMonthlyCents: 0 }, [{ usageJson: null, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" } as never], now),
+    ).toBe(false);
+  });
+
+  it("counts only this month's runs", () => {
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900, "2026-09-28T09:00:00.000Z")], now)).toBe(false);
+  });
+
+  it("is false when a run this month shows a dollar cost", () => {
+    expect(
+      agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900), run(1_000, 100, "2026-10-03T09:00:00.000Z", { costUsd: 0.12 })], now),
+    ).toBe(false);
   });
 });

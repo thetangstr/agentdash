@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { TranscriptEntry } from "../../adapters";
 import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
-import { redactSecrets } from "../../lib/readableTranscript";
+import { CREDENTIALS_HIDDEN_NOTE, redactSecrets, redactSecretsInValue } from "../../lib/redactSecrets";
 import { ReadableTranscriptView, type ReadableRunUsage } from "./ReadableTranscript";
 
 // AgentDash: "readable" is the Claude-Code-style default (see
@@ -43,12 +43,18 @@ function findScrollParent(element: HTMLElement): HTMLElement | Window {
   return window;
 }
 
+// AgentDash (scan 4 lane O1): every Raw entry (tool calls and results, stdout,
+// stderr, assistant text) is redacted before display.
 function rawEntryContent(entry: TranscriptEntry): string {
+  return redactSecrets(rawEntryText(entry));
+}
+
+function rawEntryText(entry: TranscriptEntry): string {
   if (entry.kind === "tool_call") {
-    return redactSecrets(`${entry.name}\n${formatToolPayload(entry.input)}`);
+    return `${entry.name}\n${formatToolPayload(redactSecretsInValue(entry.input))}`;
   }
   if (entry.kind === "tool_result") {
-    return redactSecrets(formatToolPayload(entry.content));
+    return formatToolPayload(redactSecretsInValue(entry.content));
   }
   if (entry.kind === "result") {
     return `${entry.text}\n${formatTokens(entry.inputTokens)} / ${formatTokens(entry.outputTokens)} / $${entry.costUsd.toFixed(6)}`;
@@ -165,6 +171,9 @@ export function RunTranscriptView({
     const visibleEntries = limit ? entries.slice(-limit) : entries;
     return (
       <div className={className} data-transcript-mode="raw">
+        <p className="mb-2 text-xs text-muted-foreground" data-testid="raw-credentials-note">
+          {CREDENTIALS_HIDDEN_NOTE}
+        </p>
         <RawTranscriptView entries={visibleEntries} density={density} />
       </div>
     );

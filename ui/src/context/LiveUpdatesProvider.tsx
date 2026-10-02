@@ -609,6 +609,23 @@ function buildRunStatusToast(
   };
 }
 
+/**
+ * AgentDash (scan 4 lane O1): an issue-scoped shipped query
+ * (`queryKeys.shipped(companyId, { issueId })`) whose deliverables include one
+ * the given run created.
+ */
+export function isIssueShippedQueryForRun(
+  queryKey: readonly unknown[],
+  data: unknown,
+  companyId: string,
+  runId: string,
+): boolean {
+  if (queryKey[0] !== "shipped" || queryKey[1] !== companyId) return false;
+  if (typeof queryKey[4] !== "string" || queryKey[4] === "") return false;
+  const items = (data as { items?: Array<{ createdByRunId?: string | null }> } | undefined)?.items ?? [];
+  return items.some((item) => item.createdByRunId === runId);
+}
+
 function invalidateHeartbeatQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   companyId: string,
@@ -621,11 +638,15 @@ function invalidateHeartbeatQueries(
   queryClient.invalidateQueries({ queryKey: queryKeys.costs(companyId) });
   queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(companyId) });
 
-  // AgentDash (scan 4 lane O1): a finished run's usage lands on the issue's
-  // Result card and Shipped; refetch them so they stop reading "counting…".
+  // AgentDash (scan 4 lane O1): a finished run's usage lands on the Result
+  // card of the issue whose deliverable that run created; refetch only that
+  // issue's shipped query, so it stops reading "counting…".
   const status = readString(payload.status);
-  if (status && TERMINAL_RUN_STATUSES.has(status)) {
-    queryClient.invalidateQueries({ queryKey: ["shipped", companyId] });
+  const finishedRunId = readString(payload.runId);
+  if (status && finishedRunId && TERMINAL_RUN_STATUSES.has(status)) {
+    queryClient.invalidateQueries({
+      predicate: (query) => isIssueShippedQueryForRun(query.queryKey, query.state.data, companyId, finishedRunId),
+    });
   }
 
   const agentId = readString(payload.agentId);

@@ -1602,17 +1602,18 @@ function VitalCard({ label, children }: { label: string; children: React.ReactNo
  */
 export function agentBilledByProvider(
   agent: Pick<AgentDetailRecord, "spentMonthlyCents">,
-  runs: Pick<HeartbeatRun, "usageJson">[],
+  runs: Pick<HeartbeatRun, "usageJson" | "resultJson" | "createdAt">[],
+  now: Date = new Date(),
 ): boolean {
   if ((agent.spentMonthlyCents ?? 0) > 0) return false;
-  return runs.some((run) => {
-    const usage = (run.usageJson ?? null) as Record<string, unknown> | null;
-    return (
-      countedTokens({
-        inputTokens: usageNumber(usage, "inputTokens", "input_tokens"),
-        outputTokens: usageNumber(usage, "outputTokens", "output_tokens"),
-      }) > 0
-    );
+  // This month (UTC, the month spentMonthlyCents covers) only.
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const thisMonth = runs.filter((run) => new Date(run.createdAt).getTime() >= monthStart);
+  // Any run with a visible dollar cost means usage is priced here, not BYOK.
+  if (thisMonth.some((run) => runMetrics(run as HeartbeatRun).cost > 0)) return false;
+  return thisMonth.some((run) => {
+    const metrics = runMetrics(run as HeartbeatRun);
+    return countedTokens({ inputTokens: metrics.input, outputTokens: metrics.output }) > 0;
   });
 }
 

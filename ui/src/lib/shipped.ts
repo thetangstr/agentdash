@@ -34,14 +34,30 @@ export const USAGE_COUNTING_WINDOW_MS = 10 * 60 * 1000;
  */
 export function isUsageCounting(
   usage: ShippedIssueUsage | null | undefined,
-  products: ReadonlyArray<{ createdAt?: Date | string | null; updatedAt?: Date | string | null }>,
+  products: ReadonlyArray<CountingProduct>,
   now: number = Date.now(),
 ): boolean {
   if (usage?.metered) return false;
-  return products.some((product) => {
-    const at = new Date(product.updatedAt ?? product.createdAt ?? 0).getTime();
-    return Number.isFinite(at) && at > 0 && now - at < USAGE_COUNTING_WINDOW_MS;
-  });
+  return usageCountingEndsAt(products, now) !== null;
+}
+
+type CountingProduct = { createdAt?: Date | string | null; createdByRunId?: string | null };
+
+/**
+ * When the "counting…" window closes (ms epoch), or null when it is not open.
+ * Keyed on creation, not on later edits, and only for deliverables a run
+ * created: one recorded by hand has no run to meter, so it never counts.
+ */
+export function usageCountingEndsAt(products: ReadonlyArray<CountingProduct>, now: number = Date.now()): number | null {
+  let end: number | null = null;
+  for (const product of products) {
+    if (!product.createdByRunId) continue;
+    const at = new Date(product.createdAt ?? 0).getTime();
+    if (!Number.isFinite(at) || at <= 0) continue;
+    const closes = at + USAGE_COUNTING_WINDOW_MS;
+    if (closes > now && (end === null || closes > end)) end = closes;
+  }
+  return end;
 }
 
 export type WorkProductStateTone = "open" | "merged" | "closed" | "draft" | "neutral";

@@ -91,3 +91,34 @@ describe("RunTranscriptView", () => {
     expect(html).not.toContain("line-499");
   });
 });
+
+// AgentDash (scan 4 lane O1, PR #990 review): Raw mode shows every entry, so
+// every entry is redacted, and it says credentials are hidden.
+describe("RunTranscriptView raw redaction", () => {
+  const SECRET = "SUPERSECRETvalue123";
+  const entries: TranscriptEntry[] = [
+    { kind: "assistant", ts: "2026-03-12T00:00:01.000Z", text: `Using token=${SECRET}` },
+    {
+      kind: "tool_call",
+      ts: "2026-03-12T00:00:02.000Z",
+      name: "Bash",
+      toolUseId: "t1",
+      input: { command: `curl -H "Authorization: Bearer ${SECRET}" https://x.test`, env: { API_KEY: SECRET } },
+    },
+    { kind: "tool_result", ts: "2026-03-12T00:00:03.000Z", toolUseId: "t1", content: `{"access_token":"${SECRET}"}`, isError: false },
+    { kind: "stdout", ts: "2026-03-12T00:00:04.000Z", text: `DATABASE_URL=postgres://app:${SECRET}@db/x` },
+    { kind: "stderr", ts: "2026-03-12T00:00:05.000Z", text: `Error: mysql -uroot -p${SECRET} failed` },
+  ];
+
+  it("redacts tool calls, results, stdout, stderr and assistant text, with a note", () => {
+    const html = render(<RunTranscriptView entries={entries} mode="raw" />);
+    expect(html).not.toContain(SECRET);
+    expect(html).toContain("***REDACTED***");
+    expect(html).toContain("Credentials in this log are hidden.");
+  });
+
+  it("redacts the readable view (messages, Details and error lines) too", () => {
+    const html = render(<RunTranscriptView entries={entries} mode="readable" />);
+    expect(html).not.toContain(SECRET);
+  });
+});

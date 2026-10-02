@@ -8,8 +8,10 @@
 //   - thinking / init / system / stderr / unparsed stdout sit behind one
 //     "Details" disclosure, except anything that looks like an error;
 //   - the result entry becomes a compact footer.
-import { redactCommandText } from "@paperclipai/adapter-utils";
 import type { TranscriptEntry } from "../adapters";
+import { containsSecrets, isSecretName, redactSecrets } from "./redactSecrets";
+
+export { redactSecrets };
 import { shouldHideNiceModeStderr, summarizeToolResult } from "./transcriptPresentation";
 
 // ---------------------------------------------------------------------------
@@ -102,9 +104,43 @@ function rawCommandFromValue(value: unknown): string | null {
  * `&&`, `||` and `;` outside quotes. Deliberately simple: it only has to find
  * a good label, never to run anything.
  */
+/**
+ * AgentDash (scan 4 lane O1): drop heredoc bodies (`cat > f << 'EOF' … EOF`)
+ * so the lines of a file being written are not read as statements.
+ */
+function stripHeredocBodies(script: string): string {
+  const lines = script.split(/\r?\n/);
+  const kept: string[] = [];
+  let delimiter: string | null = null;
+  let indented = false;
+  for (const line of lines) {
+    if (delimiter !== null) {
+      if ((indented ? line.trim() : line.trimEnd()) === delimiter) delimiter = null;
+      continue;
+    }
+    kept.push(line);
+    const heredoc = line.match(/<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
+    if (heredoc && !/<<</.test(line)) {
+      indented = heredoc[1] === "-";
+      delimiter = heredoc[3]!;
+    }
+  }
+  return kept.join("\n");
+}
+
+/** `cat > /tmp/doc.json << 'EOF'` or `tee -a notes.md <<EOF`: the file a heredoc writes, else null. */
+export function heredocWriteTarget(statement: string): string | null {
+  if (!/<<-?\s*['"]?[A-Za-z_]/.test(statement)) return null;
+  const cat = statement.match(/^cat\b[^>]*?>>?\s*(['"]?)([^\s'"<>]+)\1/);
+  if (cat) return cat[2]!;
+  const tee = statement.match(/^tee\s+(?:-a\s+)?(['"]?)([^\s'"<>-][^\s'"<>]*)\1/);
+  if (tee) return tee[2]!;
+  return null;
+}
+
 function scriptStatements(script: string): string[] {
   const statements: string[] = [];
-  for (const line of script.split(/\r?\n/)) {
+  for (const line of stripHeredocBodies(script).split(/\r?\n/)) {
     let current = "";
     let quote: string | null = null;
     for (let i = 0; i < line.length; i += 1) {
@@ -189,7 +225,10 @@ export function commandLabel(command: string): string {
     const heading = echoHeading(statement);
     if (heading) return `script: ${compactWhitespace(heading)}`;
   }
-  const meaningful = statements.find((statement) => !isScriptPreamble(statement));
+  // Writing a scratch file with a heredoc is set-up too, when real work follows.
+  const meaningful =
+    statements.find((statement) => !isScriptPreamble(statement) && !heredocWriteTarget(statement))
+    ?? statements.find((statement) => !isScriptPreamble(statement));
   return compactWhitespace(meaningful ?? statements[0]);
 }
 
@@ -372,7 +411,8 @@ for (const rule of VERB_RULES) {
 }
 
 function finalize(verb: string, target: string | null, isCommand: boolean): ToolCallSummary {
-  const shortTarget = target ? truncate(compactWhitespace(target), TARGET_MAX) : null;
+  // Redacted before truncation, so a cut can never leave half a credential.
+  const shortTarget = target ? truncate(compactWhitespace(redactSecrets(target)), TARGET_MAX) : null;
   return {
     verb,
     target: shortTarget,
@@ -384,19 +424,6 @@ function finalize(verb: string, target: string | null, isCommand: boolean): Tool
 // ---------------------------------------------------------------------------
 // AgentDash (scan 4 lane O1): readable single commands, never secrets
 // ---------------------------------------------------------------------------
-
-const SENSITIVE_HEADER_RE =
-  /(\b(?:Proxy-)?Authorization\s*:\s*|\bX-(?:Api-Key|Auth-Token|Paperclip-Token|Agentdash-Token)\s*:\s*|\bCookie\s*:\s*)[^"'\\\n]+/gi;
-
-/**
- * Hide credentials in command text shown to people: Authorization / API-key /
- * Cookie header values, `--token x` style options, `FOO_TOKEN=x` assignments,
- * and well-known key shapes. Applied to every command the readable transcript
- * shows, collapsed or expanded.
- */
-export function redactSecrets(text: string): string {
-  return redactCommandText(text.replace(SENSITIVE_HEADER_RE, "$1***REDACTED***"));
-}
 
 /**
  * Shell-style words of one statement, quotes removed. Stops at an unquoted
@@ -488,8 +515,27 @@ function readableCommand(statement: string): string {
     compact.length > READABLE_COMMAND_MAX
     || /\bhttps?:\/\//i.test(compact)
     || /\/api\//.test(compact)
-    || redactSecrets(compact) !== compact;
+    || /<</.test(compact)
+    || containsSecrets(compact)
+    || hasCredentialShape(compact);
   return noisy ? commandName(compact) : compact;
+}
+
+/**
+ * Defensive: credential-looking arguments collapse the label to the program
+ * name even if a redaction pattern missed the exact form. A secret-named
+ * variable given a value, `user:pass@`, `-p<x>` and `-u x:y`.
+ */
+function hasCredentialShape(statement: string): boolean {
+  if (/[A-Za-z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|AUTH)[A-Za-z0-9_]*=[^\s$]/i.test(statement)) {
+    const names = [...statement.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=[^\s$]/g)].map((match) => match[1]!);
+    if (names.some((name) => isSecretName(name))) return true;
+  }
+  if (/:\/\/[^\s/@:]+:[^\s/@]+@/.test(statement)) return true;
+  if (/\s-p(?!\s)\S/.test(statement)) return true;
+  if (/\s(?:-u|--user)(?:\s+|=)["']?[^\s"':]+:\S/.test(statement)) return true;
+  if (/\b(?:authorization|api[-_]?key|private-token|cookie)\s*:/i.test(statement)) return true;
+  return false;
 }
 
 export interface AgentDashApiCall {
@@ -548,14 +594,25 @@ const CURL_VALUE_FLAGS = new Set([
 ]);
 const CURL_DATA_FLAGS = new Set(["-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-F", "--form"]);
 
+/** The variables the runtime injects for the AgentDash API base. */
+const API_BASE_VARIABLES = new Set(["PAPERCLIP_API_URL", "AGENTDASH_API_URL"]);
+
+/**
+ * The configured API base: the agent's injected `$PAPERCLIP_API_URL`, or the
+ * origin this UI is served from (the API lives on it, under /api). A literal
+ * loopback URL counts only when it is that same host and port; any other
+ * localhost service is not AgentDash.
+ */
 function isAgentDashBase(base: string): boolean {
-  if (base.startsWith("$")) return /PAPERCLIP|AGENTDASH/i.test(base);
-  const host = base.replace(/^https?:\/\//i, "").replace(/:\d+$/, "").toLowerCase();
-  if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "[::1]") return true;
-  if (typeof window !== "undefined" && window.location?.hostname) {
-    return host === window.location.hostname.toLowerCase();
+  if (base.startsWith("$")) return API_BASE_VARIABLES.has(base.replace(/^\$\{?|\}$/g, ""));
+  if (typeof window === "undefined" || !window.location?.host) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    return false;
   }
-  return false;
+  return parsed.host.toLowerCase() === window.location.host.toLowerCase();
 }
 
 /**
@@ -568,10 +625,18 @@ export function parseAgentDashApiCall(statement: string): AgentDashApiCall | nul
   let method: string | null = null;
   let hasData = false;
   let head = false;
+  let forceGet = false;
+  let upload = false;
   let url: string | null = null;
   for (let i = 1; i < words.length; i += 1) {
     const word = words[i];
-    if (word === "-X" || word === "--request") {
+    if (word === "-G" || word === "--get") {
+      // -G sends the data as a query string: still a GET.
+      forceGet = true;
+    } else if (word === "-T" || word === "--upload-file") {
+      upload = true;
+      i += 1;
+    } else if (word === "-X" || word === "--request") {
       method = words[i + 1]?.toUpperCase() ?? null;
       i += 1;
     } else if (/^-X[A-Za-z]+$/.test(word)) {
@@ -608,7 +673,7 @@ export function parseAgentDashApiCall(statement: string): AgentDashApiCall | nul
     if (!dynamic) return segment;
     return PLACEHOLDER_AFTER[previous] ?? ":id";
   });
-  const finalMethod = method ?? (head ? "HEAD" : hasData ? "POST" : "GET");
+  const finalMethod = method ?? (head ? "HEAD" : forceGet ? "GET" : upload ? "PUT" : hasData ? "POST" : "GET");
   const route = `/${template.join("/")}`;
   return { method: finalMethod, route, issueRef, action: AGENTDASH_ACTIONS[`${finalMethod} ${route}`] ?? null };
 }
@@ -625,9 +690,31 @@ function finalizeCommand(verb: string, rawCommand: string | null): ToolCallSumma
   if (rawCommand === null) return finalize(verb, null, true);
   const label = commandLabel(rawCommand);
   const isHeading = label.startsWith("script: ");
-  if (!isHeading) {
-    const call = parseAgentDashApiCall(label);
-    if (call) return agentDashCallSummary(call, rawCommand);
+  // A plain-language phrase only for a command that does one thing. A script
+  // (`a && curl -X DELETE …`, several calls) is never named after one of its
+  // calls: that would let a GET stand for a DELETE that follows it.
+  const meaningful = scriptStatements(rawCommand).filter((statement) => !isScriptPreamble(statement));
+  // AgentDash (scan 4 lane O1): a heredoc that only writes files reads as
+  // "Wrote doc.json" (a file name, never the absolute path).
+  const writes = meaningful.map(heredocWriteTarget);
+  if (meaningful.length > 0 && writes.every((target): target is string => Boolean(target))) {
+    const names = [...new Set(writes.map((target) => basename(target)))];
+    const target = names.length === 1 ? names[0]! : `${names[0]} +${names.length - 1} more`;
+    return { ...finalize("Wrote", target, true), script: redactSecrets(rawCommand.trim()) };
+  }
+  // Scratch-file writes are set-up, not calls: they do not make a script.
+  const working = meaningful.filter((statement) => !heredocWriteTarget(statement));
+  if (working.length <= 1) {
+    if (!isHeading) {
+      const call = parseAgentDashApiCall(label);
+      if (call) return agentDashCallSummary(call, rawCommand);
+    }
+  } else {
+    const calls = working.filter((statement) => parseAgentDashApiCall(statement) !== null).length;
+    if (calls > 0) {
+      const summary = finalize(verb, `a script (${calls} AgentDash call${calls === 1 ? "" : "s"})`, true);
+      return { ...summary, script: redactSecrets(rawCommand.trim()) };
+    }
   }
   const readable = isHeading ? label : readableCommand(label);
   const summary = finalize(verb, readable, true);
@@ -678,11 +765,54 @@ export function summarizeToolCall(name: string, rawInput: unknown): ToolCallSumm
 export type ReadableToolStatus = "running" | "completed" | "error" | "no_result";
 
 /** Status-line text for a tool result: first meaningful line or a short summary. */
-export function summarizeToolOutcome(result: string | undefined, status: ReadableToolStatus): string {
+export function summarizeToolOutcome(rawResult: string | undefined, status: ReadableToolStatus): string {
+  // AgentDash (scan 4 lane O1): the collapsed row shows this line, so it is
+  // redacted (`cat .env` must not print OPENAI_API_KEY=sk-… on the row).
+  const result = rawResult ? redactSecrets(rawResult) : rawResult;
   if (status === "running") return result ? summarizeToolResult(result, false, "compact") : "Running…";
   if (status === "no_result") return "No result";
   if (!result || !result.trim()) return status === "error" ? "Failed" : "Done";
+  const json = summarizeJsonOutput(result);
+  if (json) return json;
   return summarizeToolResult(result, status === "error", "compact");
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * AgentDash (scan 4 lane O1): a JSON tool output (an API response) as a short
+ * phrase instead of its first raw line: "Got issue WHI-1", "Response: 12
+ * fields", "Response: 3 items", "Error: Issue not found". Null when the
+ * output is not one JSON value. The full output stays in the expanded view.
+ */
+export function summarizeJsonOutput(text: string): string | null {
+  const trimmed = text.trim();
+  if (!/^[[{]/.test(trimmed) || !/[\]}]$/.test(trimmed)) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(value)) return value.length === 0 ? "Response: no items" : `Response: ${plural(value.length, "item")}`;
+  const record = asRecord(value);
+  if (!record) return null;
+  const error = record.error;
+  if (typeof error === "string" && error.trim()) return truncate(`Error: ${compactWhitespace(error)}`, TARGET_MAX);
+  const errorMessage = asRecord(error)?.message;
+  if (typeof errorMessage === "string" && errorMessage.trim()) {
+    return truncate(`Error: ${compactWhitespace(errorMessage)}`, TARGET_MAX);
+  }
+  const identifier = typeof record.identifier === "string" ? record.identifier : null;
+  if (identifier && ISSUE_REF_RE.test(identifier)) return `Got issue ${identifier}`;
+  for (const key of ["items", "data", "results", "issues", "comments", "agents"]) {
+    const list = record[key];
+    if (Array.isArray(list)) return `Response: ${plural(list.length, "item")}`;
+  }
+  const fields = Object.keys(record).length;
+  return fields === 0 ? "Response: empty" : `Response: ${plural(fields, "field")}`;
 }
 
 // ---------------------------------------------------------------------------

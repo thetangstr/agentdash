@@ -1,9 +1,15 @@
 // AgentDash: UX-2 (#783) — "Result" on issue detail: what this issue produced.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
-import { TOKENS_COUNTED_NOTE, USAGE_COUNTING_LABEL, formatShippedUsage, isUsageCounting } from "../lib/shipped";
+import {
+  TOKENS_COUNTED_NOTE,
+  USAGE_COUNTING_LABEL,
+  formatShippedUsage,
+  isUsageCounting,
+  usageCountingEndsAt,
+} from "../lib/shipped";
 import { ShippedWorkProductRow } from "./ShippedWorkProductRow";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -49,6 +55,16 @@ export function IssueResultBlock({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<"accept" | "changes" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Re-render when the "counting…" window closes, so a run that never
+  // reported usage falls back to "not metered yet" without a refetch.
+  const [, setWindowClosedAt] = useState(0);
+  const countingEndsAt =
+    data && data.items.length > 0 && !data.items[0]!.usage?.metered ? usageCountingEndsAt(data.items) : null;
+  useEffect(() => {
+    if (countingEndsAt === null) return;
+    const timer = window.setTimeout(() => setWindowClosedAt(Date.now()), Math.max(0, countingEndsAt - Date.now()) + 50);
+    return () => window.clearTimeout(timer);
+  }, [countingEndsAt]);
 
   const items = data?.items ?? [];
   if (items.length === 0) return null;

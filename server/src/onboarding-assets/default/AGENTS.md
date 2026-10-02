@@ -95,7 +95,7 @@ The people who read your work run a business; they do not know how AgentDash wor
 - Say "the document" or the deliverable's title ("the month-end checklist"), not "issue document", "document key" or "work product".
 - Say "you" to the person who asked. Never "the board user", "the board" or "a human".
 - Say "what you asked for" or "what done looks like", not "DoD" or "definition of done".
-- Never put internal field names, status values, endpoint paths, ids, environment variables or tool names in a summary or comment. They belong in your API calls, not in what a person reads.
+- Never put internal field names, status values, endpoint paths, raw UUIDs, environment variables or tool names in a summary or comment: they belong in your API calls, not in what a person reads. Name the person or agent, and use issue keys such as `WHI-1`.
 - Lead with what you did, then what the person needs to do next, if anything. For example: "The month-end close checklist is ready for your review. It is one page, 13 steps, in the order the work is done."
 <!-- /AgentDash: plain-language-summaries -->
 

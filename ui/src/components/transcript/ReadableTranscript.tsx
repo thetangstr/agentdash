@@ -7,6 +7,7 @@ import type { TranscriptEntry } from "../../adapters";
 import { MarkdownBody } from "../MarkdownBody";
 import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
+import { redactSecretsInValue } from "../../lib/redactSecrets";
 import {
   formatRunDuration,
   redactSecrets,
@@ -231,7 +232,7 @@ export function ReadableToolRow({
           {hasUsefulInput(item) && (
             <div>
               <div className="mb-0.5 text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Input</div>
-              <CappedOutput text={redactSecrets(item.summary.script ?? formatToolPayload(item.input))} />
+              <CappedOutput text={redactSecrets(item.summary.script ?? formatToolPayload(redactSecretsInValue(item.input)))} />
             </div>
           )}
           {item.result ? (
@@ -239,7 +240,7 @@ export function ReadableToolRow({
               {hasUsefulInput(item) && (
                 <div className="mb-0.5 text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Output</div>
               )}
-              <CappedOutput text={redactSecrets(formatToolPayload(item.result))} tone={item.status === "error" ? "error" : "default"} />
+              <CappedOutput text={redactSecrets(formatToolPayload(redactSecretsInValue(item.result)))} tone={item.status === "error" ? "error" : "default"} />
             </div>
           ) : (
             <div className="text-[11px] max-sm:text-xs italic text-muted-foreground">
@@ -395,11 +396,11 @@ export function ReadableDetails({
                     thinkingClassName,
                   )}
                 >
-                  {line.text}
+                  {redactSecrets(line.text)}
                 </MarkdownBody>
               ) : (
                 <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] max-sm:text-xs text-foreground/70">
-                  {line.text}
+                  {redactSecrets(line.text)}
                 </pre>
               )}
             </div>
@@ -468,7 +469,7 @@ export function ReadableFooter({
       {footer.isError && footer.errors.length > 0 && (
         <ul className="mt-1 list-disc pl-5 text-xs text-red-700 dark:text-red-300">
           {footer.errors.map((error, index) => (
-            <li key={index} className="break-words">{error}</li>
+            <li key={index} className="break-words">{redactSecrets(error)}</li>
           ))}
         </ul>
       )}
@@ -480,7 +481,7 @@ export function ReadableFooter({
             density === "compact" ? "text-[11px] max-sm:text-xs leading-5" : "text-xs leading-5",
           )}
         >
-          {footer.text}
+          {redactSecrets(footer.text)}
         </MarkdownBody>
       )}
     </div>
@@ -513,7 +514,7 @@ function ReadableMessage({
           compact ? "text-xs leading-5 text-foreground/90" : "text-sm text-foreground",
         )}
       >
-        {block.text}
+        {redactSecrets(block.text)}
       </MarkdownBody>
       {block.streaming && (
         <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] max-sm:text-xs font-medium italic text-muted-foreground">
@@ -535,7 +536,7 @@ function ReadableErrorLines({ lines }: { lines: string[] }) {
       className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-2.5 py-1.5 text-red-700 dark:text-red-300"
     >
       <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-[11px] max-sm:text-xs">{lines.join("\n")}</pre>
+      <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-[11px] max-sm:text-xs">{redactSecrets(lines.join("\n"))}</pre>
     </div>
   );
 }

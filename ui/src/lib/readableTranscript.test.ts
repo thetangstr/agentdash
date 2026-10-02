@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "../adapters";
 import {
   ReadableTranscriptBuilder,
@@ -10,12 +10,15 @@ import {
   shellWords,
   updateReadableTranscript,
   formatRunDuration,
+  heredocWriteTarget,
+  summarizeJsonOutput,
   isErrorLikeText,
   stripShellWrapper,
   summarizeToolCall,
   summarizeToolOutcome,
   toolGroupLabel,
 } from "./readableTranscript";
+import { redactSecretsInValue } from "./redactSecrets";
 
 const T = (s: number) => `2026-09-30T18:00:${String(s).padStart(2, "0")}.000Z`;
 
@@ -168,9 +171,18 @@ describe("commandLabel (multi-line scripts)", () => {
 // AgentDash (scan 4 lane O1): the Readable transcript showed raw single
 // commands such as `curl -s "http://127.0.0.1:3489/api/issues/<uuid>" -H
 // "Authorizati…`. They now read as what they did, and never carry a credential.
+// Cases ported from the PR #990 review probes.
 describe("single commands (scan 4 lane O1)", () => {
   const ISSUE_UUID = "9eaca194-0091-4e45-a12a-e5bc9bc79a44";
   const AUTH = '-H "Authorization: Bearer $PAPERCLIP_API_KEY"';
+
+  beforeEach(() => {
+    // The UI is served from the instance; its origin is the API base.
+    vi.stubGlobal("window", { location: { host: "127.0.0.1:3489", hostname: "127.0.0.1" } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it("reads a curl to the AgentDash API as the action it took", () => {
     const read = summarizeToolCall("Bash", { command: `curl -s "http://127.0.0.1:3489/api/issues/${ISSUE_UUID}" ${AUTH}` });
@@ -187,7 +199,7 @@ describe("single commands (scan 4 lane O1)", () => {
     expect(comment.label).toBe("Commented on issue");
 
     const doc = summarizeToolCall("Bash", {
-      command: `curl -sS --request PUT "http://localhost:3100/api/issues/WHI-1/documents/checklist" ${AUTH} -d @body.json`,
+      command: `curl -s "\${PAPERCLIP_API_URL}/api/issues/WHI-1/documents/checklist" -X PUT ${AUTH} -d @b.json`,
     });
     expect(doc.label).toBe("Saved a document on issue WHI-1");
 
@@ -201,20 +213,65 @@ describe("single commands (scan 4 lane O1)", () => {
     });
     expect(summary.verb).toBe("Called AgentDash:");
     expect(summary.target).toBe("POST /api/issues/:id/feedback-votes");
+    expect(summarizeToolCall("Bash", { command: `curl -s -X DELETE "$PAPERCLIP_API_URL/api/issues/WHI-1" ${AUTH}` }).label)
+      .toBe("Called AgentDash: DELETE /api/issues/:id");
+    expect(summarizeToolCall("Bash", { command: `curl -s -X patch "$PAPERCLIP_API_URL/api/issues/WHI-1" -d '{}'` }).label)
+      .toBe("Updated issue WHI-1");
   });
 
   it("parses method, route template and issue key", () => {
-    expect(parseAgentDashApiCall(`curl "http://127.0.0.1:3100/api/companies/${ISSUE_UUID}/issues" -d '{}'`)).toEqual({
+    expect(parseAgentDashApiCall(`curl "$PAPERCLIP_API_URL/api/companies/${ISSUE_UUID}/issues" -d '{}'`)).toEqual({
       method: "POST",
       route: "/api/companies/:companyId/issues",
       issueRef: null,
       action: "Created an issue",
     });
     expect(parseAgentDashApiCall(`curl "$AGENTDASH_API_URL/api/issues/WHI-12"`)?.issueRef).toBe("WHI-12");
-    // Another host is not AgentDash.
+    expect(parseAgentDashApiCall(`curl -s "$PAPERCLIP_API_URL/api/issues/WHI-1/documents/checklist/revisions"`)?.route)
+      .toBe("/api/issues/:id/documents/:key/revisions");
+    expect(parseAgentDashApiCall(`curl -s "$PAPERCLIP_API_URL/api/issues/WHI-1/comments?after=x"`)?.action)
+      .toBe("Read the comments on issue");
+    expect(parseAgentDashApiCall("git status")).toBeNull();
+  });
+
+  it("-G / --get is a GET, -T is a PUT, -I is a HEAD", () => {
+    expect(parseAgentDashApiCall(`curl -s -G "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues" --data-urlencode "q=x"`)?.action)
+      .toBe("Listed issues");
+    expect(parseAgentDashApiCall(`curl -s --get "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues" -d "status=todo"`)?.method)
+      .toBe("GET");
+    expect(parseAgentDashApiCall(`curl -s -T file.json "$PAPERCLIP_API_URL/api/issues/WHI-1/documents/plan"`)?.action)
+      .toBe("Saved a document on issue");
+    expect(parseAgentDashApiCall(`curl -s -I "$PAPERCLIP_API_URL/api/issues/WHI-1"`)?.method).toBe("HEAD");
+  });
+
+  it("recognises AgentDash by the configured API base, not any localhost port or look-alike variable", () => {
+    expect(parseAgentDashApiCall('curl -s "http://127.0.0.1:9999/api/issues/WHI-1"')).toBeNull();
+    expect(parseAgentDashApiCall('curl -s "http://localhost:8080/api/v1/users"')).toBeNull();
+    expect(parseAgentDashApiCall('curl -s "$MY_PAPERCLIPISH_EVIL/api/issues/WHI-1"')).toBeNull();
+    expect(parseAgentDashApiCall('curl -s "$API/api/issues/WHI-1"')).toBeNull();
     expect(parseAgentDashApiCall('curl -s "https://api.github.com/repos/a/b"')).toBeNull();
     expect(parseAgentDashApiCall('curl -s "https://example.com/api/issues/1"')).toBeNull();
-    expect(parseAgentDashApiCall("git status")).toBeNull();
+    expect(parseAgentDashApiCall('curl -s "http://127.0.0.1:3489/api/issues/WHI-1"')?.action).toBe("Read issue");
+  });
+
+  it("never names a script after one of its calls", () => {
+    const multi = [
+      "set -e",
+      `curl -s "$PAPERCLIP_API_URL/api/issues/WHI-1" ${AUTH}`,
+      `curl -s -X DELETE "$PAPERCLIP_API_URL/api/issues/WHI-1/documents/plan"`,
+      `curl -s -X PATCH "$PAPERCLIP_API_URL/api/issues/WHI-1" -d '{"status":"cancelled"}'`,
+    ].join("\n");
+    expect(summarizeToolCall("Bash", { command: multi }).label).toBe("Ran a script (3 AgentDash calls)");
+    expect(
+      summarizeToolCall("Bash", {
+        command: `curl -s "$PAPERCLIP_API_URL/api/issues/WHI-1" && curl -s -X DELETE "$PAPERCLIP_API_URL/api/issues/WHI-1"`,
+      }).label,
+    ).toBe("Ran a script (2 AgentDash calls)");
+    const oneCall = summarizeToolCall("Bash", { command: `curl -s -X DELETE "$PAPERCLIP_API_URL/api/issues/WHI-1/documents/plan"; echo ok` });
+    expect(oneCall.label).toBe("Ran a script (1 AgentDash call)");
+    expect(oneCall.script).toBeDefined();
+    // A preamble alone does not make a script.
+    expect(summarizeToolCall("Bash", { command: `set -e\ncurl -s "$PAPERCLIP_API_URL/api/agents/me"` }).label).toBe("Checked its own profile");
   });
 
   it("names generic noisy commands by their program", () => {
@@ -226,34 +283,170 @@ describe("single commands (scan 4 lane O1)", () => {
     // Short, plain commands still read as themselves.
     expect(summarizeToolCall("Bash", { command: "git status" }).label).toBe("Ran git status");
     expect(summarizeToolCall("Bash", { command: "pnpm test:run" }).label).toBe("Ran pnpm test:run");
-  });
-
-  it("never shows an Authorization header or token, collapsed or expanded", () => {
-    const literal = `curl -s "http://127.0.0.1:3489/api/issues/${ISSUE_UUID}" -H "Authorization: Bearer pcp_live_abcdef123456" -H "X-Api-Key: k-998877"`;
-    const summary = summarizeToolCall("Bash", { command: literal });
-    expect(summary.label).not.toMatch(/Authorization|Bearer|pcp_live|k-998877/);
-    expect(summary.script).toBeDefined();
-    expect(summary.script).not.toContain("pcp_live_abcdef123456");
-    expect(summary.script).not.toContain("k-998877");
-    expect(summary.script).toContain("Authorization: ***REDACTED***");
-
-    const generic = summarizeToolCall("Bash", { command: 'curl -H "Authorization: token ghp_abcdefghijklmnopqrstuvwx" https://api.github.com/user' });
-    expect(generic.label).toBe("Ran curl");
-    expect(generic.script).not.toContain("ghp_abcdefghijklmnopqrstuvwx");
-  });
-
-  it("redactSecrets covers headers, options, assignments and JSON-escaped input", () => {
-    expect(redactSecrets('-H "Authorization: Bearer abc.def"')).toBe('-H "Authorization: ***REDACTED***"');
-    expect(redactSecrets("--token s3cr3t-value")).toBe("--token ***REDACTED***");
-    expect(redactSecrets("API_KEY=s3cr3t pnpm x")).toBe("API_KEY=***REDACTED*** pnpm x");
-    expect(redactSecrets('{"command":"curl -H \\"Authorization: Bearer xyz\\" u"}')).toBe(
-      '{"command":"curl -H \\"Authorization: ***REDACTED***\\" u"}',
-    );
-    expect(redactSecrets("plain text")).toBe("plain text");
+    expect(summarizeToolCall("Bash", { command: "KEYBOARD=us make" }).label).toBe("Ran KEYBOARD=us make");
   });
 
   it("splits shell words with quotes and stops at a pipe", () => {
     expect(shellWords(`curl -s "a b" 'c d' e\\ f | jq .x`)).toEqual(["curl", "-s", "a b", "c d", "e f"]);
+  });
+});
+
+describe("redaction (scan 4 lane O1, PR #990 review probes)", () => {
+  const SECRET = "SUPERSECRETvalue123";
+
+  // Each of these must leave no trace of SECRET in the redacted text, the
+  // collapsed label, or the expanded script.
+  const COMMANDS: Array<[string, string]> = [
+    ["lowercase authorization", `curl -H "authorization: bearer ${SECRET}" https://x.test`],
+    ["x-api-key single quotes", `curl -H 'x-api-key: ${SECRET}' https://x.test`],
+    ["--header", `curl --header "Authorization: Bearer ${SECRET}" https://x.test`],
+    ["--header= form", `curl --header="X-Api-Key: ${SECRET}" https://x.test`],
+    ["-u user:pass", `curl -u admin:${SECRET} https://x.test`],
+    ["--user user:pass", `curl --user admin:${SECRET} https://x.test`],
+    ["url userinfo", `curl https://admin:${SECRET}@x.test/a`],
+    ["?token=", `curl "https://x.test/a?token=${SECRET}"`],
+    ["?api_key=", `curl "https://x.test/a?api_key=${SECRET}&b=1"`],
+    ["?access_token=", `curl "https://x.test/a?access_token=${SECRET}"`],
+    ["?key=", `curl "https://maps.test/a?key=${SECRET}"`],
+    ["JSON body Bearer", `curl -d '{"auth":"Bearer ${SECRET}"}' https://x.test`],
+    ["JSON body api_key", `curl -d '{"api_key":"${SECRET}"}' https://x.test`],
+    ["JSON body password", `curl -d '{"password":"${SECRET}"}' https://x.test`],
+    ["TOKEN=x curl", `TOKEN=${SECRET} curl https://x.test`],
+    ["PAPERCLIP_API_KEY=", `PAPERCLIP_API_KEY=${SECRET} curl http://127.0.0.1:3100/api/agents/me`],
+    ["export", `export OPENAI_API_KEY=${SECRET}`],
+    ["quoted env", `API_KEY="${SECRET}" node x.js`],
+    ["single-quoted env", `API_KEY='${SECRET}' node x.js`],
+    ["Cookie header", `curl -H "Cookie: session=${SECRET}" https://x.test`],
+    ["-b cookie", `curl -b "session=${SECRET}" https://x.test`],
+    ["Basic auth header", `curl -H "Authorization: Basic ${SECRET}" https://x.test`],
+    ["Set-Cookie", `Set-Cookie: sid=${SECRET}; Path=/`],
+    ["X-Goog-Api-Key", `curl -H "X-Goog-Api-Key: ${SECRET}" https://x.test`],
+    ["api-key (Azure)", `curl -H "api-key: ${SECRET}" https://x.test`],
+    ["x-access-token", `curl -H "x-access-token: ${SECRET}" https://x.test`],
+    ["PRIVATE-TOKEN gitlab", `curl -H "PRIVATE-TOKEN: ${SECRET}" https://x.test`],
+    ["anthropic x-api-key", `curl -H "x-api-key: sk-ant-${SECRET}" https://api.anthropic.com`],
+    ["mysql -p", `mysql -uroot -p${SECRET} db`],
+    ["postgres url", `psql postgres://user:${SECRET}@db:5432/x`],
+    [
+      "multi-line script",
+      `set -e\nexport PAPERCLIP_API_KEY=${SECRET}\ncurl -s -H "Authorization: Bearer $PAPERCLIP_API_KEY" http://127.0.0.1:3100/api/agents/me`,
+    ],
+    ["multi-line echo heading + secret", `echo "== fetch =="\ncurl -H "X-Api-Key: ${SECRET}" https://x.test`],
+    ["header split across escaped newline", `curl \\\n  -H "Authorization: Bearer ${SECRET}" \\\n  https://x.test`],
+    ["authorization with escaped quote inside", `curl -H "Authorization: Bearer ab\\"${SECRET}" https://x.test`],
+    ["--password option", `deploy --password ${SECRET} --env prod`],
+  ];
+
+  it.each(COMMANDS)("%s", (_label, command) => {
+    expect(redactSecrets(command)).not.toContain(SECRET);
+    const summary = summarizeToolCall("Bash", { command });
+    expect(summary.label).not.toContain(SECRET);
+    expect(summary.script ?? "").not.toContain(SECRET);
+  });
+
+  it("redacts tool output: the collapsed outcome and the full text", () => {
+    const outputs = [
+      `{"id":"k1","apiKey":"${SECRET}","name":"default"}`,
+      `{"token":"${SECRET}"}`,
+      `{"key":"pcp_${SECRET}"}`,
+      `{"access_token":"${SECRET}","token_type":"bearer"}`,
+      `OPENAI_API_KEY=sk-${SECRET}`,
+      `Authorization: Bearer ${SECRET}`,
+    ];
+    for (const output of outputs) {
+      expect(redactSecrets(output)).not.toContain(SECRET);
+      expect(summarizeToolOutcome(output, "completed")).not.toContain(SECRET);
+      expect(summarizeToolOutcome(output, "running")).not.toContain(SECRET);
+    }
+  });
+
+  it("redacts non-command labels (fetched URLs, MCP arguments)", () => {
+    expect(summarizeToolCall("WebFetch", { url: `https://x.test/a?token=${SECRET}` }).label).not.toContain(SECRET);
+    expect(summarizeToolCall("mcp__foo__bar", { url: `https://x.test/a?api_key=${SECRET}` }).label).not.toContain(SECRET);
+  });
+
+  it("redacts nested values and credential-named keys before pretty-printing", () => {
+    const redacted = redactSecretsInValue({ command: `curl -H "Authorization: Bearer ${SECRET}" u`, apiKey: SECRET, env: { DB_PASSWORD: SECRET }, list: [`token=${SECRET}`], key: "plan" });
+    expect(JSON.stringify(redacted)).not.toContain(SECRET);
+    expect(redacted.key).toBe("plan");
+  });
+
+  it("leaves ordinary text alone", () => {
+    for (const benign of [
+      "git log --oneline",
+      "KEYBOARD=us make",
+      "echo MONKEY=banana",
+      "grep -r 'TOKEN=' src",
+      "cat docs/authorization.md",
+      "Authorization: required for this endpoint",
+      "ssh -p 22 host",
+      "git checkout -b feature/x",
+      'TOKEN=$(cat ~/.token) && echo ok',
+    ]) {
+      expect(redactSecrets(benign)).toBe(benign);
+    }
+  });
+
+  it("keeps the header name and auth scheme, and is idempotent", () => {
+    expect(redactSecrets('-H "Authorization: Bearer abc.def"')).toBe('-H "Authorization: Bearer ***REDACTED***"');
+    expect(redactSecrets("--token s3cr3t-value")).toBe("--token ***REDACTED***");
+    expect(redactSecrets("API_KEY=s3cr3t pnpm x")).toBe("API_KEY=***REDACTED*** pnpm x");
+    const once = redactSecrets(`curl -u a:${SECRET} -H "X-Api-Key: ${SECRET}" "https://x.test?token=${SECRET}"`);
+    expect(redactSecrets(once)).toBe(once);
+  });
+});
+
+// AgentDash (scan 4 lane O1, hosted canary): heredoc writes and JSON outputs
+// were shown raw in the Readable transcript.
+describe("heredoc writes and JSON outputs (scan 4 lane O1)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("summarises a heredoc write as Wrote <file name>, never the absolute path", () => {
+    const command = "cat > /tmp/agentdash-xyz/doc.json << 'EOF'\n{\n  \"title\": \"Checklist\",\n  \"body\": \"x\"\n}\nEOF";
+    const summary = summarizeToolCall("Bash", { command });
+    expect(summary.label).toBe("Wrote doc.json");
+    expect(summary.label).not.toContain("/tmp");
+    expect(summary.script).toBe(command);
+    expect(heredocWriteTarget("cat <<EOF > notes.md")).toBe("notes.md");
+    expect(summarizeToolCall("Bash", { command: "tee -a /var/log/run.log <<-EOF\n\tline\n\tEOF" }).label).toBe("Wrote run.log");
+    expect(
+      summarizeToolCall("Bash", { command: "cat > /tmp/a.json <<'EOF'\n{}\nEOF\ncat > /tmp/b.md <<'EOF'\nhi\nEOF" }).label,
+    ).toBe("Wrote a.json +1 more");
+  });
+
+  it("does not read heredoc body lines as statements", () => {
+    vi.stubGlobal("window", { location: { host: "127.0.0.1:3489", hostname: "127.0.0.1" } });
+    const command = [
+      "cat > /tmp/body.json << 'EOF'",
+      '{"body": "rm -rf / && curl -X DELETE http://127.0.0.1:3489/api/issues/WHI-1"}',
+      "EOF",
+      'curl -s -X PUT "$PAPERCLIP_API_URL/api/issues/WHI-1/documents/checklist" -H "Authorization: Bearer $PAPERCLIP_API_KEY" -d @/tmp/body.json',
+    ].join("\n");
+    // The scratch file is set-up; the one real call is named.
+    expect(summarizeToolCall("Bash", { command }).label).toBe("Saved a document on issue WHI-1");
+    // Another program reading a heredoc is named by its program.
+    expect(summarizeToolCall("Bash", { command: "python3 - <<'EOF'\nprint(1)\nEOF" }).label).toBe("Ran python3");
+  });
+
+  it("summarises JSON outputs as a short phrase", () => {
+    expect(summarizeJsonOutput('{"id":"9eaca194","identifier":"WHI-1","title":"Checklist","status":"in_review"}')).toBe("Got issue WHI-1");
+    expect(summarizeJsonOutput(JSON.stringify(Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`f${i}`, i]))))).toBe("Response: 12 fields");
+    expect(summarizeJsonOutput('[{"a":1},{"a":2},{"a":3}]')).toBe("Response: 3 items");
+    expect(summarizeJsonOutput("[]")).toBe("Response: no items");
+    expect(summarizeJsonOutput('{"items":[1,2],"nextCursor":null}')).toBe("Response: 2 items");
+    expect(summarizeJsonOutput('{"error":"Issue not found"}')).toBe("Error: Issue not found");
+    expect(summarizeJsonOutput('{"id":"c1"}')).toBe("Response: 1 field");
+    expect(summarizeJsonOutput("not json {")).toBeNull();
+    expect(summarizeJsonOutput("{broken")).toBeNull();
+  });
+
+  it("uses the JSON phrase for the collapsed outcome, redacted", () => {
+    const output = JSON.stringify({ identifier: "WHI-1", title: "x" }, null, 2);
+    expect(summarizeToolOutcome(output, "completed")).toBe("Got issue WHI-1");
+    expect(summarizeToolOutcome('{"error":"bad token sk-abcdefghijklmnopqrstu"}', "error")).toBe("Error: bad token ***REDACTED***");
+    expect(summarizeToolOutcome("plain line\nsecond", "completed")).toBe("plain line");
   });
 });
 

@@ -73,3 +73,44 @@ describe("ReadableToolGroup", () => {
     expect(rowLabels()).toEqual(["Read a.ts", "Searched x"]);
   });
 });
+
+// AgentDash (scan 4 lane O1, PR #990 review): neither the collapsed row nor
+// the expanded row may show a credential.
+describe("ReadableToolGroup redaction", () => {
+  const SECRET = "SUPERSECRETvalue123";
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("redacts the collapsed label and outcome, and the expanded input and output", () => {
+    const command = `curl -s -H "Authorization: Bearer ${SECRET}" "https://x.test/a?token=${SECRET}"`;
+    const output = `OPENAI_API_KEY=sk-${SECRET}\n{"apiKey":"${SECRET}"}`;
+    act(() => root.render(<ReadableToolGroup items={[item("a", "Bash", { command }, "completed", output)]} />));
+    // Collapsed: label and the first output line.
+    expect(container.querySelector("[data-readable-tool] [role=button]")?.getAttribute("title")).toBe("Ran curl");
+    expect(container.textContent).toContain("OPENAI_API_KEY=***REDACTED***");
+    expect(container.innerHTML).not.toContain(SECRET);
+
+    act(() => container.querySelector<HTMLElement>("[data-readable-tool] [role=button]")!.click());
+    expect(container.textContent).toContain("Authorization: Bearer ***REDACTED***");
+    expect(container.textContent).toContain('"apiKey":"***REDACTED***"');
+    expect(container.innerHTML).not.toContain(SECRET);
+  });
+
+  it("redacts an expanded input that has no script (a non-command tool)", () => {
+    const input = { url: `https://x.test/a?api_key=${SECRET}`, headers: { "X-Api-Key": SECRET } };
+    act(() => root.render(<ReadableToolGroup items={[item("a", "WebFetch", input, "completed", "ok")]} />));
+    act(() => container.querySelector<HTMLElement>("[data-readable-tool] [role=button]")!.click());
+    expect(container.innerHTML).not.toContain(SECRET);
+  });
+});
