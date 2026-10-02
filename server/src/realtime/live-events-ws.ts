@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, agents, authSessions, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { agentApiKeys, agents, authSessions } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "../middleware/logger.js";
@@ -59,6 +59,9 @@ interface UpgradeContext {
   // re-authorization checks that credential and not just the principal.
   keyId?: string;
   sessionId?: string | null;
+  // AgentDash (GH #937): what the authorization check observed at the upgrade —
+  // a passing re-check invalidates the cached actor only when this changed.
+  actorFingerprint: string;
 }
 
 // AgentDash (GH #708): policy-violation close code for a revoked subscriber.
@@ -174,6 +177,7 @@ async function authorizeUpgrade(
         actorType: "board",
         actorId: "board",
         source: "local_implicit",
+        actorFingerprint: "local_implicit",
       };
     }
 
@@ -185,7 +189,8 @@ async function authorizeUpgrade(
     const userId = session?.user?.id;
     if (!userId) return null;
 
-    if (!(await userCanReadCompany(db, userId, companyId))) return null;
+    const access = await boardUserAccess(db, userId, companyId);
+    if (!access.allowed) return null;
 
     return {
       companyId,
@@ -193,6 +198,7 @@ async function authorizeUpgrade(
       actorId: userId,
       source: "session",
       sessionId: session?.session?.id ?? null,
+      actorFingerprint: access.fingerprint,
     };
   }
 
@@ -207,7 +213,8 @@ async function authorizeUpgrade(
     return null;
   }
   // AgentDash (GH #708): parity with REST auth — a terminated or unapproved agent's key does not subscribe.
-  if (!(await agentIsActiveInCompany(db, key.agentId, companyId))) {
+  const agentAccess = await agentAccessInCompany(db, key.agentId, companyId);
+  if (!agentAccess.allowed) {
     return null;
   }
 
@@ -222,40 +229,44 @@ async function authorizeUpgrade(
     actorId: key.agentId,
     source: "agent_key",
     keyId: key.id,
+    actorFingerprint: agentAccess.fingerprint,
   };
 }
 
-// AgentDash (GH #708): the checks the upgrade made, repeatable for an open socket.
-async function userCanReadCompany(db: Db, userId: string, companyId: string): Promise<boolean> {
-  const [roleRow, membership] = await Promise.all([
-    db
-      .select({ id: instanceUserRoles.id })
-      .from(instanceUserRoles)
-      .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
-      .then((rows) => rows[0] ?? null),
-    db
-      .select({ id: companyMemberships.id })
-      .from(companyMemberships)
-      .where(
-        and(
-          eq(companyMemberships.companyId, companyId),
-          eq(companyMemberships.principalType, "user"),
-          eq(companyMemberships.principalId, userId),
-          eq(companyMemberships.status, "active"),
-        ),
-      )
-      .then((rows) => rows[0] ?? null),
-  ]);
-  return Boolean(roleRow || membership);
+/**
+ * AgentDash (GH #708 + #937): the checks the upgrade made, repeatable for an
+ * open socket. The fingerprint names the state the re-check actually observed
+ * (instance-admin flag plus every active membership for a user; the agent's
+ * status for a key), so a passing check can invalidate the cached actor only
+ * when that state changed instead of on every heartbeat.
+ */
+interface ActorAccess {
+  allowed: boolean;
+  fingerprint: string;
 }
 
-async function agentIsActiveInCompany(db: Db, agentId: string, companyId: string): Promise<boolean> {
+async function boardUserAccess(db: Db, userId: string, companyId: string): Promise<ActorAccess> {
+  const actor = await loadBoardUserActor(db, userId);
+  const memberships = actor.memberships ?? [];
+  const allowed = Boolean(actor.isInstanceAdmin)
+    || memberships.some((m) => m.companyId === companyId && m.status === "active");
+  const fingerprint = JSON.stringify({
+    admin: Boolean(actor.isInstanceAdmin),
+    memberships: memberships
+      .map((m) => `${m.companyId}:${m.membershipRole ?? ""}:${m.status ?? ""}`)
+      .sort(),
+  });
+  return { allowed, fingerprint };
+}
+
+async function agentAccessInCompany(db: Db, agentId: string, companyId: string): Promise<ActorAccess> {
   const agent = await db
     .select({ companyId: agents.companyId, status: agents.status })
     .from(agents)
     .where(eq(agents.id, agentId))
     .then((rows) => rows[0] ?? null);
-  return Boolean(agent && agent.companyId === companyId && !INACTIVE_AGENT_STATUSES.has(agent.status));
+  const allowed = Boolean(agent && agent.companyId === companyId && !INACTIVE_AGENT_STATUSES.has(agent.status));
+  return { allowed, fingerprint: `agent:${agent?.status ?? "missing"}` };
 }
 
 /**
@@ -263,8 +274,8 @@ async function agentIsActiveInCompany(db: Db, agentId: string, companyId: string
  * grant read access to its company? Run on the heartbeat and on access-change
  * signals, never per event.
  */
-async function reauthorize(db: Db, context: UpgradeContext): Promise<boolean> {
-  if (context.source === "local_implicit") return true;
+async function reauthorize(db: Db, context: UpgradeContext): Promise<ActorAccess> {
+  if (context.source === "local_implicit") return { allowed: true, fingerprint: "local_implicit" };
 
   if (context.source === "session") {
     if (context.sessionId) {
@@ -273,19 +284,23 @@ async function reauthorize(db: Db, context: UpgradeContext): Promise<boolean> {
         .from(authSessions)
         .where(eq(authSessions.id, context.sessionId))
         .then((rows) => rows[0] ?? null);
-      if (!session || session.expiresAt.getTime() <= Date.now()) return false;
+      if (!session || session.expiresAt.getTime() <= Date.now()) {
+        return { allowed: false, fingerprint: "session-expired" };
+      }
     }
-    return userCanReadCompany(db, context.actorId, context.companyId);
+    return boardUserAccess(db, context.actorId, context.companyId);
   }
 
-  if (!context.keyId) return false;
+  if (!context.keyId) return { allowed: false, fingerprint: "no-key" };
   const key = await db
     .select({ companyId: agentApiKeys.companyId, agentId: agentApiKeys.agentId })
     .from(agentApiKeys)
     .where(and(eq(agentApiKeys.id, context.keyId), isNull(agentApiKeys.revokedAt)))
     .then((rows) => rows[0] ?? null);
-  if (!key || key.companyId !== context.companyId || key.agentId !== context.actorId) return false;
-  return agentIsActiveInCompany(db, context.actorId, context.companyId);
+  if (!key || key.companyId !== context.companyId || key.agentId !== context.actorId) {
+    return { allowed: false, fingerprint: "key-revoked" };
+  }
+  return agentAccessInCompany(db, context.actorId, context.companyId);
 }
 
 /** One re-authorization per credential per heartbeat, however many sockets share it. */
@@ -336,6 +351,10 @@ export function setupLiveEventsWebSocketServer(
     context: UpgradeContext;
     revoked: boolean;
     invalidateActor: () => void;
+    // AgentDash (GH #937): the fingerprint the last authorization check saw;
+    // the cached actor is re-read only when a passing check reports a
+    // different one, not on every heartbeat.
+    actorFingerprint: string;
     // An access-change re-check in flight. Events published after the change
     // wait for it, so none slips out between the commit and the close.
     pendingCheck: Promise<void> | null;
@@ -365,6 +384,17 @@ export function setupLiveEventsWebSocketServer(
   }
 
   /**
+   * AgentDash (GH #937): a passing check carries the fingerprint it observed.
+   * Store it, and invalidate the cached actor only when it moved — a
+   * heartbeat that changes nothing costs zero actor re-reads.
+   */
+  function applyActorFingerprint(access: ClientAccess, fingerprint: string | undefined) {
+    if (fingerprint === undefined || fingerprint === access.actorFingerprint) return;
+    access.actorFingerprint = fingerprint;
+    access.invalidateActor();
+  }
+
+  /**
    * `failClosed`: a check that errors revokes the socket (access-change signals).
    * Heartbeat checks fail open for a transient error, but revoke after
    * MAX_HEARTBEAT_CHECK_ERRORS consecutive ones.
@@ -373,10 +403,10 @@ export function setupLiveEventsWebSocketServer(
     socket: WsSocket,
     access: ClientAccess,
     reason: string,
-    opts: { memo?: Map<string, Promise<boolean>>; failClosed?: boolean } = {},
-  ): Promise<boolean> {
-    if (access.revoked) return false;
-    let pending: Promise<boolean>;
+    opts: { memo?: Map<string, Promise<ActorAccess>>; failClosed?: boolean } = {},
+  ): Promise<{ allowed: boolean; fingerprint?: string }> {
+    if (access.revoked) return { allowed: false };
+    let pending: Promise<ActorAccess>;
     const key = credentialCacheKey(access.context);
     const shared = opts.memo?.get(key);
     if (shared) {
@@ -385,27 +415,27 @@ export function setupLiveEventsWebSocketServer(
       pending = reauthorize(db, access.context);
       opts.memo?.set(key, pending);
     }
-    let allowed: boolean;
+    let result: ActorAccess;
     try {
-      allowed = await withTimeout(pending, recheckTimeoutMs);
+      result = await withTimeout(pending, recheckTimeoutMs);
     } catch (err) {
       // A rejected or hung shared check must not poison later sockets this tick.
       if (opts.memo?.get(key) === pending) opts.memo.delete(key);
       logger.warn({ err, companyId: access.context.companyId }, "live websocket re-authorization failed");
       if (opts.failClosed) {
         revokeClient(socket, access, `${reason} (re-authorization failed)`);
-        return false;
+        return { allowed: false };
       }
       access.errorStreak += 1;
       if (access.errorStreak >= MAX_HEARTBEAT_CHECK_ERRORS) {
         revokeClient(socket, access, `${reason} (re-authorization failed ${access.errorStreak} times)`);
-        return false;
+        return { allowed: false };
       }
-      return true;
+      return { allowed: true };
     }
     access.errorStreak = 0;
-    if (!allowed) revokeClient(socket, access, reason);
-    return allowed;
+    if (!result.allowed) revokeClient(socket, access, reason);
+    return result;
   }
 
   const unsubscribeAccessChanges = subscribeLiveEventAccessChanges((change) => {
@@ -422,9 +452,10 @@ export function setupLiveEventsWebSocketServer(
           access.queuedCheck = false;
           return recheckClient(socket, access, change.reason, { failClosed: true });
         })
-        .then((allowed) => {
-          // Still allowed (e.g. admin demoted to member): apply the new role to the next event.
-          if (allowed) access.invalidateActor();
+        .then((result) => {
+          // Still allowed (e.g. admin demoted to member): apply the new role
+          // to the next event — and only when the role actually moved.
+          if (result.allowed) applyActorFingerprint(access, result.fingerprint);
           if (access.pendingCheck === check) access.pendingCheck = null;
         });
       access.pendingCheck = check;
@@ -433,7 +464,7 @@ export function setupLiveEventsWebSocketServer(
 
   const pingInterval = setInterval(() => {
     // AgentDash (GH #708): one re-authorization per credential per heartbeat.
-    const memo = new Map<string, Promise<boolean>>();
+    const memo = new Map<string, Promise<ActorAccess>>();
     for (const socket of wss.clients) {
       if (!aliveByClient.get(socket)) {
         socket.terminate();
@@ -441,9 +472,10 @@ export function setupLiveEventsWebSocketServer(
       }
       const access = accessByClient.get(socket);
       if (access) {
-        void recheckClient(socket, access, "heartbeat re-authorization", { memo }).then((allowed) => {
-          // Out-of-band role changes: the next event re-reads the actor.
-          if (allowed) access.invalidateActor();
+        void recheckClient(socket, access, "heartbeat re-authorization", { memo }).then((result) => {
+          // Out-of-band role changes: the next event re-reads the actor, but
+          // only when the check observed a change (GH #937).
+          if (result.allowed) applyActorFingerprint(access, result.fingerprint);
         });
       }
       aliveByClient.set(socket, false);
@@ -469,6 +501,7 @@ export function setupLiveEventsWebSocketServer(
       context,
       revoked: false,
       invalidateActor: shouldDeliver.invalidateActor,
+      actorFingerprint: context.actorFingerprint,
       pendingCheck: null,
       queuedCheck: false,
       errorStreak: 0,

@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createRequire } from "node:module";
+import express from "express";
+import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { agentApiKeys, agents, companies, companyMemberships, createDb, instanceUserRoles } from "@paperclipai/db";
@@ -23,6 +25,11 @@ import { agentService } from "../services/agents.js";
 import { companyService } from "../services/companies.js";
 import { claimBoardOwnership, getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "../board-claim.js";
 import { logger } from "../middleware/logger.js";
+import {
+  createBetterAuthHandler,
+  createBetterAuthInstance,
+  resolveBetterAuthSessionFromHeaders,
+} from "../auth/better-auth.js";
 
 const require = createRequire(import.meta.url);
 const WebSocket = require("ws") as new (url: string, opts?: { headers?: Record<string, string> }) => {
@@ -91,8 +98,8 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
 
   const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 
-  async function connect(headers: Record<string, string>, base = baseUrl): Promise<Client> {
-    const ws = new WebSocket(`${base}/api/companies/${COMPANY}/events/ws`, { headers });
+  async function connect(headers: Record<string, string>, base = baseUrl, companyId = COMPANY): Promise<Client> {
+    const ws = new WebSocket(`${base}/api/companies/${companyId}/events/ws`, { headers });
     let resolveClosed: (code: number) => void = () => undefined;
     const client: Client = {
       events: [],
@@ -133,9 +140,9 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   }
 
   /** Publish a marker and wait until every watched client has it: everything before it is decided. */
-  async function settle(watch: Client[]) {
+  async function settle(watch: Client[], companyId = COMPANY) {
     const marker = randomUUID();
-    publishLiveEvent({ companyId: COMPANY, type: "agent.status", payload: { agentId: marker } });
+    publishLiveEvent({ companyId, type: "agent.status", payload: { agentId: marker } });
     const deadline = Date.now() + 5000;
     while (!watch.every((c) => c.events.some((e) => e.payload.agentId === marker))) {
       if (Date.now() > deadline) throw new Error("marker not delivered");
@@ -491,5 +498,207 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     await db.insert(agents).values({ id: agentId, companyId: COMPANY, name: "Gone", role: "general", status: "terminated" });
     await db.insert(agentApiKeys).values({ agentId, companyId: COMPANY, name: "live", keyHash: hash(token) });
     await expect(connect({ authorization: `Bearer ${token}` })).rejects.toThrow(/403/);
+  });
+
+  // AgentDash (GH #937): a passing heartbeat re-check used to invalidate the
+  // cached actor unconditionally, so every socket re-read it from the
+  // database on the next event. The re-check now carries a fingerprint of
+  // the authorization state it observed; the actor is re-read only when that
+  // fingerprint moved. A dedicated company keeps the count deterministic —
+  // only this test's client sees these markers (ACTOR_TTL_MS expiry on the
+  // other tests' lingering sockets cannot leak selects into the window).
+  it("does not re-read the actor after an unchanged heartbeat, but does after a role change", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Fingerprint Co",
+      issuePrefix: `FP${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+    });
+    const userId = `user-${randomUUID()}`;
+    const [membership] = await db
+      .insert(companyMemberships)
+      .values({ companyId, principalType: "user", principalId: userId, status: "active", membershipRole: "member" })
+      .returning();
+    const client = await connect({ "x-test-user": userId }, faultyUrl, companyId);
+
+    // First event loads the actor and the agent-visibility scope; both are
+    // cached for the rest of this test (real time stays well under the TTLs).
+    await settle([client], companyId);
+
+    // Wait until the counting proxy stops seeing selects — i.e. every
+    // heartbeat re-check from the just-fired interval has settled.
+    const heartbeatSettled = async () => {
+      let last = -1;
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (faultySelects === last) return;
+        last = faultySelects;
+      }
+      throw new Error("heartbeat re-checks did not settle");
+    };
+
+    // An unchanged heartbeat: the re-check still hits the database (it is
+    // what detects out-of-band change), but the next event must reuse the
+    // cached actor — zero selects on delivery.
+    faultySelects = 0;
+    vi.advanceTimersByTime(HEARTBEAT_MS);
+    await heartbeatSettled();
+    expect(faultySelects).toBeGreaterThan(0);
+    faultySelects = 0;
+    await settle([client], companyId);
+    expect(faultySelects).toBe(0);
+    expect(client.isOpen()).toBe(true);
+
+    // A heartbeat that observes a real authorization change (member → admin,
+    // written out of band so no access-change signal) invalidates the actor:
+    // the next event re-reads it.
+    await db
+      .update(companyMemberships)
+      .set({ membershipRole: "admin" })
+      .where(eq(companyMemberships.id, membership!.id));
+    faultySelects = 0;
+    vi.advanceTimersByTime(HEARTBEAT_MS);
+    await heartbeatSettled();
+    faultySelects = 0;
+    await settle([client], companyId);
+    expect(faultySelects).toBeGreaterThan(0);
+    expect(client.isOpen()).toBe(true);
+  });
+
+  // AgentDash (GH #938): revocation only bites if better-auth's session and
+  // user deletion actually publish the access change. These tests drive a
+  // REAL better-auth instance and a socket resolved from the real session
+  // cookie, then revoke through better-auth and assert the socket closes —
+  // the heartbeat interval is faked and never advanced, so any close must
+  // have come from the hook, not the periodic re-check.
+  describe("better-auth session and user deletion revoke the socket", () => {
+    const ORIGIN = "http://127.0.0.1:3100";
+    let auth!: ReturnType<typeof createBetterAuthInstance>;
+    let authApp!: express.Express;
+    let authServer: Server | null = null;
+    let authUrl = "";
+    let savedSecret: string | undefined;
+
+    function sessionCookie(res: request.Response): string {
+      const setCookies = res.headers["set-cookie"] as unknown as string[] | string | undefined;
+      return [setCookies ?? []].flat()
+        .map((cookie) => cookie.split(";")[0] ?? "")
+        .filter((pair) => pair.includes("session_token"))
+        .join("; ");
+    }
+
+    async function signUp(email: string, password = "a-long-enough-password-1") {
+      const res = await request(authApp)
+        .post("/api/auth/sign-up/email")
+        .set("Origin", ORIGIN)
+        .send({ email, name: email, password });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const userId = (res.body as { user?: { id?: string } }).user?.id;
+      expect(userId).toBeTruthy();
+      return { userId: userId!, cookie: sessionCookie(res) };
+    }
+
+    async function signIn(email: string, password = "a-long-enough-password-1") {
+      const res = await request(authApp)
+        .post("/api/auth/sign-in/email")
+        .set("Origin", ORIGIN)
+        .send({ email, password });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      return sessionCookie(res);
+    }
+
+    async function connectAuthed(userId: string, cookie: string) {
+      await db
+        .insert(companyMemberships)
+        .values({ companyId: COMPANY, principalType: "user", principalId: userId, status: "active", membershipRole: "member" })
+        .onConflictDoNothing();
+      return connect({ cookie }, authUrl);
+    }
+
+    beforeAll(async () => {
+      savedSecret = process.env.BETTER_AUTH_SECRET;
+      process.env.BETTER_AUTH_SECRET = "live-events-revocation-test-secret-0123456789abcdef";
+      auth = createBetterAuthInstance(
+        db,
+        {
+          authBaseUrlMode: "explicit",
+          authPublicBaseUrl: ORIGIN,
+          deploymentMode: "authenticated",
+        } as Parameters<typeof createBetterAuthInstance>[1],
+        [ORIGIN],
+      );
+      authApp = express();
+      authApp.use(express.json());
+      authApp.all("/api/auth/{*authPath}", createBetterAuthHandler(auth));
+
+      authServer = createServer();
+      setupLiveEventsWebSocketServer(authServer, db, {
+        deploymentMode: "authenticated",
+        heartbeatIntervalMs: HEARTBEAT_MS,
+        resolveSessionFromHeaders: (headers) => resolveBetterAuthSessionFromHeaders(auth, headers),
+      });
+      await new Promise<void>((resolve) => authServer!.listen(0, "127.0.0.1", resolve));
+      authUrl = `ws://127.0.0.1:${(authServer.address() as AddressInfo).port}`;
+    }, 60_000);
+
+    afterAll(async () => {
+      if (savedSecret === undefined) delete process.env.BETTER_AUTH_SECRET;
+      else process.env.BETTER_AUTH_SECRET = savedSecret;
+      // Upgraded sockets keep the http server alive for close(); drop the
+      // clients first, then force-close anything still tracked.
+      for (const client of clients) client.close();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      (authServer as (Server & { closeAllConnections?: () => void }) | null)?.closeAllConnections?.();
+      if (authServer) await new Promise<void>((resolve) => authServer!.close(() => resolve()));
+    });
+
+    it("sign-out deletes the session, whose delete hook closes the socket without a heartbeat", async () => {
+      const user = await signUp(`signout-${randomUUID()}@example.com`);
+      const client = await connectAuthed(user.userId, user.cookie);
+      expect(client.isOpen()).toBe(true);
+
+      const res = await request(authApp)
+        .post("/api/auth/sign-out")
+        .set("Origin", ORIGIN)
+        .set("Cookie", user.cookie)
+        .send();
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+      // No heartbeat is advanced: the close must come from the session.delete
+      // database hook publishing the access change.
+      expect(await closeCodeWithin(client, 5000)).toBe(1008);
+    });
+
+    it("bulk session revocation (deleteMany path) closes every socket the user opened", async () => {
+      const email = `revokeall-${randomUUID()}@example.com`;
+      const user = await signUp(email);
+      const secondCookie = await signIn(email);
+      const first = await connectAuthed(user.userId, user.cookie);
+      const second = await connectAuthed(user.userId, secondCookie);
+
+      const res = await request(authApp)
+        .post("/api/auth/revoke-sessions")
+        .set("Origin", ORIGIN)
+        .set("Cookie", secondCookie)
+        .send();
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+      expect(await closeCodeWithin(first, 5000)).toBe(1008);
+      expect(await closeCodeWithin(second, 5000)).toBe(1008);
+    });
+
+    it("deleting the user through the internal adapter fires the user.delete hook and closes the socket", async () => {
+      const user = await signUp(`deleted-${randomUUID()}@example.com`);
+      const client = await connectAuthed(user.userId, user.cookie);
+      expect(client.isOpen()).toBe(true);
+
+      const context = (await auth.$context) as unknown as {
+        internalAdapter: { deleteUser: (id: string) => Promise<unknown> };
+      };
+      await context.internalAdapter.deleteUser(user.userId);
+
+      expect(await closeCodeWithin(client, 5000)).toBe(1008);
+    });
   });
 });
