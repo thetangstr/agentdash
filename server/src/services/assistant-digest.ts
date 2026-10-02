@@ -15,6 +15,7 @@ import {
   projects,
 } from "@paperclipai/db";
 import { agentAccountabilityService } from "./agent-accountability.js";
+import { approvalBudgetProjectId } from "../routes/visibility.js";
 import { WAITING_APPROVAL_STATUSES, scopeAndRankOpenApprovals } from "./waiting-on-you-rules.js";
 // AgentDash: consolidation PR-A — provenance, attention and the briefing.
 import {
@@ -266,9 +267,20 @@ export function assistantDigestService(db: Db) {
           inArray(approvals.status, [...WAITING_APPROVAL_STATUSES]),
         ),
       );
+    // AgentDash (GH #933): a budget_override_required approval's payload
+    // names the scope's id, name and spend — for a project scope it follows
+    // the project rule, the same check the approvals list applies as SQL,
+    // here against the caller's visible project ids.
+    const visibleProjects = input.visibleProjectIds;
+    const scopedApprovals = visibleProjects
+      ? openApprovals.filter((approval) => {
+          const approvalProjectId = approvalBudgetProjectId(approval);
+          return approvalProjectId === null || visibleProjects.has(approvalProjectId);
+        })
+      : openApprovals;
     // AgentDash: UX-3 (#784) — scope and rank exactly as the pending-decisions
     // list (and so the web Home) does; one definition of "waiting on you".
-    const ranked = scopeAndRankOpenApprovals(openApprovals, new Set(agentIds));
+    const ranked = scopeAndRankOpenApprovals(scopedApprovals, new Set(agentIds));
 
     // Work products ride along on shipped items — "what shipped" is the PR,
     // not the issue row. Projection only: type/provider/url/status/review
@@ -749,10 +761,19 @@ export function assistantDigestService(db: Db) {
     let briefingDecisions: { total: number; items: BriefingDecision[]; breakdown?: string };
     if (projectRow) {
       const linked = ranked.filter((entry) => {
+        // GH #933: a budget override scoped to this project is linked to it —
+        // it just has no issue_approvals row to show it through.
+        if (approvalBudgetProjectId(entry.approval) === projectRow.id) return true;
         const ids = linksByApproval.get(entry.approval.id) ?? [];
         return ids.some((id) => visibleIssue(id)?.projectId === projectRow.id);
       });
-      const companyLevel = ranked.filter((entry) => (linksByApproval.get(entry.approval.id) ?? []).length === 0);
+      const companyLevel = ranked.filter(
+        (entry) =>
+          (linksByApproval.get(entry.approval.id) ?? []).length === 0 &&
+          // GH #933: an approval scoped to another project is not
+          // company-level either — it is just not linked to THIS one.
+          approvalBudgetProjectId(entry.approval) === null,
+      );
       const levelLabel = `company-level, not tied to ${projectRow.name}`;
       const linkedItems = linked.slice(0, DIGEST_LIMITS.decisions).map((entry) => decisionItem(entry, "project", `linked to ${projectRow.name}`));
       const companyLevelItems = companyLevel.slice(0, DIGEST_LIMITS.decisions).map((entry) => decisionItem(entry, "company-level", levelLabel));

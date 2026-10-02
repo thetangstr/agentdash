@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, not } from "drizzle-orm";
+import { and, desc, eq, inArray, not, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, heartbeatRuns } from "@paperclipai/db";
 import type { SidebarBadges } from "@paperclipai/shared";
@@ -30,6 +30,12 @@ export function sidebarBadgeService(db: Db) {
         dismissals?: ReadonlyMap<string, number>;
         joinRequests?: Array<{ id: string; updatedAt: Date | string | null; createdAt: Date | string }>;
         unreadTouchedIssues?: number;
+        /**
+         * AgentDash (GH #933): the caller's approval visibility condition —
+         * a badge must not count an approval the viewer may not see (e.g. a
+         * budget override for a restricted project).
+         */
+        approvalVisibleWhere?: SQL;
       },
     ): Promise<SidebarBadges> => {
       const actionableApprovals = await db
@@ -39,6 +45,7 @@ export function sidebarBadgeService(db: Db) {
           and(
             eq(approvals.companyId, companyId),
             inArray(approvals.status, ACTIONABLE_APPROVAL_STATUSES),
+            extra?.approvalVisibleWhere,
           ),
         )
         .then((rows) =>

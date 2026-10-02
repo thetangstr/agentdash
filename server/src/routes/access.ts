@@ -2006,6 +2006,55 @@ function toUserProfile(
   };
 }
 
+// AgentDash (GH #946): apply the one member-email rule to a nested user
+// profile before it leaves a route — an agent holding a management grant
+// passes the gate but still receives `email: null`. The key stays on the
+// wire so response shapes do not change.
+function redactUserProfileEmail<P extends { id: string; email: string | null }>(
+  req: Request,
+  canViewEmails: boolean,
+  user: P | null,
+): P | null {
+  if (!user) return user;
+  return { ...user, email: visibleMemberEmail(req, canViewEmails, user.id, user.email) };
+}
+
+/** The same rule over a member record's `user` profile. */
+function redactMemberRecordEmail(
+  req: Request,
+  canViewEmails: boolean,
+  member: CompanyMemberRecord,
+): CompanyMemberRecord {
+  if (!member.user) return member;
+  return {
+    ...member,
+    user: { ...member.user, email: visibleMemberEmail(req, canViewEmails, member.principalId, member.user.email) },
+  };
+}
+
+/**
+ * A join-request row headed to an approver-facing response: the requester's
+ * email snapshot follows the same rule — a `joins:approve` agent gets null,
+ * not an address.
+ */
+async function joinRequestForResponse(
+  req: Request,
+  access: ReturnType<typeof accessService>,
+  companyId: string,
+  row: typeof joinRequests.$inferSelect,
+) {
+  const canViewEmails = await canViewMemberEmails(access, req, companyId);
+  return {
+    ...toJoinRequestResponse(row),
+    requestEmailSnapshot: visibleMemberEmail(
+      req,
+      canViewEmails,
+      row.requestingUserId,
+      row.requestEmailSnapshot,
+    ),
+  };
+}
+
 async function resolveActorEmail(db: Db, req: Request): Promise<string | null> {
   if (isLocalImplicit(req)) return "local@paperclip.local";
   const userId = req.actor.userId;
@@ -4037,22 +4086,58 @@ export function accessRoutes(
     const companyId = req.params.companyId as string;
     await assertCompanyPermission(req, companyId, "users:invite");
     const query = listCompanyInvitesQuerySchema.parse(req.query);
-    const invitesForCompany = await loadCompanyInviteRecords(db, companyId, query);
-    res.json(invitesForCompany);
+    const [invitesForCompany, canViewEmails] = await Promise.all([
+      loadCompanyInviteRecords(db, companyId, query),
+      canViewMemberEmails(access, req, companyId),
+    ]);
+    // AgentDash (GH #946): invitedByUser is a member profile — an agent
+    // granted users:invite reads the list but still gets email: null.
+    res.json({
+      ...invitesForCompany,
+      invites: invitesForCompany.invites.map((invite) => ({
+        ...invite,
+        invitedByUser: redactUserProfileEmail(req, canViewEmails, invite.invitedByUser),
+      })),
+    });
   });
 
   router.get("/companies/:companyId/join-requests", async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCompanyPermission(req, companyId, "joins:approve");
     const query = listJoinRequestsQuerySchema.parse(req.query);
-    const all = await loadJoinRequestRecords(db, companyId);
+    const [all, canViewEmails] = await Promise.all([
+      loadJoinRequestRecords(db, companyId),
+      canViewMemberEmails(access, req, companyId),
+    ]);
     const filtered = all.filter((row) => {
       if (query.status && row.status !== query.status) return false;
       if (query.requestType && row.requestType !== query.requestType)
         return false;
       return true;
     });
-    res.json(filtered);
+    // AgentDash (GH #946): the email snapshot and every nested user profile
+    // follow member-email-visibility.ts — a joins:approve agent sees names
+    // and ids, never addresses.
+    res.json(
+      filtered.map((row) => ({
+        ...row,
+        requestEmailSnapshot: visibleMemberEmail(
+          req,
+          canViewEmails,
+          row.requestingUserId,
+          row.requestEmailSnapshot,
+        ),
+        requesterUser: redactUserProfileEmail(req, canViewEmails, row.requesterUser),
+        approvedByUser: redactUserProfileEmail(req, canViewEmails, row.approvedByUser),
+        rejectedByUser: redactUserProfileEmail(req, canViewEmails, row.rejectedByUser),
+        invite: row.invite
+          ? {
+              ...row.invite,
+              invitedByUser: redactUserProfileEmail(req, canViewEmails, row.invite.invitedByUser),
+            }
+          : row.invite,
+      })),
+    );
   });
 
   router.post(
@@ -4281,7 +4366,7 @@ export function accessRoutes(
         }).catch(() => {});
       }
 
-      res.json(toJoinRequestResponse(approved));
+      res.json(await joinRequestForResponse(req, access, companyId, approved));
     }
   );
 
@@ -4329,7 +4414,7 @@ export function accessRoutes(
         details: { requestType: existing.requestType }
       });
 
-      res.json(toJoinRequestResponse(rejected));
+      res.json(await joinRequestForResponse(req, access, companyId, rejected));
     }
   );
 
@@ -4462,12 +4547,16 @@ export function accessRoutes(
   router.get("/companies/:companyId/members", async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCompanyPermission(req, companyId, "users:manage_permissions");
-    const [members, currentAccess] = await Promise.all([
+    const [members, currentAccess, canViewEmails] = await Promise.all([
       loadCompanyMemberRecords(db, companyId),
       loadCompanyAccessSummary(req, access, companyId),
+      canViewMemberEmails(access, req, companyId),
     ]);
+    const membersWithRemoval = await addCompanyMemberRemovalAccess(req, db, access, companyId, members);
     res.json({
-      members: await addCompanyMemberRemovalAccess(req, db, access, companyId, members),
+      // AgentDash (GH #946): the same email rule as /people — an agent with
+      // users:manage_permissions keeps the gate but not the addresses.
+      members: membersWithRemoval.map((member) => redactMemberRecordEmail(req, canViewEmails, member)),
       access: currentAccess,
     });
   });
@@ -4594,7 +4683,9 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
-      res.json(member);
+      // AgentDash (GH #946): the echoed record obeys the same email rule as
+      // the members list — a granted agent sees the change, not the address.
+      res.json(redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member));
     }
   );
 
@@ -4722,7 +4813,8 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
-      res.json(member);
+      // AgentDash (GH #946): same email rule as the members list.
+      res.json(redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member));
     }
   );
 
@@ -4767,8 +4859,9 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
+      // AgentDash (GH #946): same email rule as the members list.
       res.json({
-        member,
+        member: redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member),
         reassignedIssueCount: result.reassignedIssueCount,
       });
     }
@@ -4806,7 +4899,8 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
-      res.json(member);
+      // AgentDash (GH #946): same email rule as the members list.
+      res.json(redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member));
     }
   );
 

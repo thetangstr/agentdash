@@ -368,15 +368,24 @@ export async function assertWorkspaceIdsVisible(
 /**
  * SQL condition for the company activity feed (`activity_log` left-joined to
  * `issues` on issue rows): issue rows follow their issue's project, project
- * rows follow the project itself; every other row is untouched.
+ * rows follow the project itself, and budget rows follow the project their
+ * details' scope names; every other row is untouched.
  */
 export function activityVisibilityCondition(req: Request, companyId: string): SQL | undefined {
   if (seesEverything(req, companyId)) return undefined;
   const projectEntityId = sql`(case when ${activityLog.entityType} = 'project'
       and ${activityLog.entityId} ~* ${CANONICAL_UUID_PATTERN} then ${activityLog.entityId}::uuid end)`;
+  // AgentDash (GH #933): a project-scoped budget policy or incident carries
+  // the project's id, name and spend in details — the row follows the
+  // project rule, the same rule an approval's scope payload gets.
+  const budgetScopeProjectId = sql`(case when ${activityLog.entityType} in ('budget_policy', 'budget_incident')
+      and (${activityLog.details} ->> 'scopeType') = 'project'
+      and (${activityLog.details} ->> 'scopeId') ~* ${CANONICAL_UUID_PATTERN}
+      then (${activityLog.details} ->> 'scopeId')::uuid end)`;
   return and(
     projectScopedVisibilityCondition(req, companyId, issues.projectId),
     projectScopedVisibilityCondition(req, companyId, projectEntityId),
+    projectScopedVisibilityCondition(req, companyId, budgetScopeProjectId),
   );
 }
 

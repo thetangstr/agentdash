@@ -9,6 +9,7 @@ import { collapseDuplicatePendingHumanJoinRequests } from "../lib/join-request-d
 import { assertCompanyAccess } from "./authz.js";
 import {
   agentVisibilityCondition,
+  approvalVisibilityCondition,
   issueVisibilityCondition,
   resolveAgentVisibility,
 } from "./visibility.js";
@@ -73,6 +74,9 @@ export function sidebarBadgeRoutes(db: Db) {
     const badges = await svc.get(companyId, {
       dismissals: dismissedAtByKey,
       joinRequests: visibleJoinRequests,
+      // AgentDash (GH #933): the count is the viewer's count — an approval
+      // for a restricted project they cannot see is not actionable for them.
+      approvalVisibleWhere: approvalVisibilityCondition(req, companyId),
     });
     await resolveAgentVisibility(db, req, companyId);
     const summary = await dashboard.summary(companyId, {
