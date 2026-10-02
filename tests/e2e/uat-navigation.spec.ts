@@ -116,6 +116,11 @@ test.describe("every destination stays reachable", () => {
       for (const route of ROUTES) {
         await page.goto(route);
         await assertHealthy(page, `typed ${route}`);
+        if (route === "/cos") {
+          // Ask redirects to the company-prefixed route inside the sidebar Layout.
+          await expect(page).toHaveURL(/\/[^/]+\/cos$/);
+          await expect(page.getByTestId("cos-conversation")).toHaveAttribute("data-layout", "embedded");
+        }
         process.stdout.write(`  ✓ typed ${route}\n`);
       }
     });

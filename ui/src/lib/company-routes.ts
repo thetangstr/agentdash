@@ -40,6 +40,10 @@ const BOARD_ROUTE_ROOTS = new Set([
   // Anything added under boardRoutes() needs an entry here, or it silently
   // becomes a company code.
   "my-agent",
+  // AgentDash: Ask (the Chief of Staff conversation) lives under the company
+  // prefix so it renders inside the sidebar Layout. Bare /cos still answers
+  // and redirects to the selected company's /:prefix/cos.
+  "cos",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance", "claim"]);
