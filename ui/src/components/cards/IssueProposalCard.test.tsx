@@ -19,6 +19,8 @@ vi.mock("@/lib/router", () => ({
     </a>
   ),
 }));
+const mockCompany = vi.hoisted(() => ({ current: null as null | { selectedCompany: { newIssuesStartAsTodo: boolean } } }));
+vi.mock("../../context/CompanyContext", () => ({ useOptionalCompany: () => mockCompany.current }));
 vi.mock("../../api/conversations", () => ({
   conversationsApi: { confirmTaskProposal: mockConfirm, dismissTaskProposal: mockDismiss },
 }));
@@ -55,6 +57,7 @@ describe("IssueProposalCard", () => {
     root = createRoot(container);
     mockConfirm.mockReset();
     mockDismiss.mockReset();
+    mockCompany.current = null;
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   });
 
@@ -123,6 +126,14 @@ describe("IssueProposalCard", () => {
     await act(async () => button("Create and start")!.click());
     expect(mockConfirm).toHaveBeenCalledWith("conv1", "card1", { start: true });
     expect(container.textContent).toContain("They'll start on it now.");
+  });
+
+  // PR #989 review: the company's current setting picks the buttons.
+  it("follows the company's current setting over the value on the card", async () => {
+    mockCompany.current = { selectedCompany: { newIssuesStartAsTodo: true } };
+    await render("user-a", { ...payload, defaultStatus: "backlog" });
+    expect(button("Create task")).not.toBeNull();
+    expect(button("Create and start")).toBeNull();
   });
 
   it("keeps a single Create task when new work starts by default", () => {

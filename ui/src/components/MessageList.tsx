@@ -19,6 +19,9 @@ export function MessageList({
     const payload = m.cardKind === "issue_proposal_v1" ? (m.cardPayload as { issueId?: unknown } | null) : null;
     if (payload && typeof payload.issueId === "string") createdFromProposals.add(payload.issueId);
   }
+  // Only the newest plan card can still be set up or revised.
+  let latestPlanId: string | null = null;
+  for (const m of messages) if (m.cardKind === "agent_plan_proposal_v1") latestPlanId = m.id;
   const visible = messages.filter((m) => {
     if (m.cardKind !== "issue_created_v1") return true;
     const issueId = (m.cardPayload as { issueId?: unknown } | null)?.issueId;
@@ -55,6 +58,7 @@ export function MessageList({
                   context={cardContext}
                   messageId={m.id}
                   conversationId={m.conversationId}
+                  superseded={m.cardKind === "agent_plan_proposal_v1" && m.id !== latestPlanId}
                 />
               </div>
               <span className="text-[11px] text-text-tertiary px-1">{timeStr}</span>

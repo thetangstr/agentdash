@@ -235,6 +235,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** AgentDash (scan 4, lane N): the company context, or null outside a CompanyProvider. */
+export function useOptionalCompany(): CompanyContextValue | null {
+  return useContext(CompanyContext);
+}
+
 export function useCompany() {
   const ctx = useContext(CompanyContext);
   if (!ctx) {

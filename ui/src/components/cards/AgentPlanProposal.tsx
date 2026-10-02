@@ -7,6 +7,12 @@ import { ApiError } from "../../api/client";
 
 // AgentDash (scan 4, lane N): shown once the plan's team is hired.
 export const PLAN_HIRED_LABEL = "Team hired ✓";
+export const PLAN_SUPERSEDED_NOTE = "A newer plan below replaced this one.";
+
+function conflictCode(err: ApiError): string | null {
+  const details = (err.body as { details?: { code?: unknown } } | null)?.details;
+  return typeof details?.code === "string" ? details.code : null;
+}
 
 const ROLE_LABELS = AGENT_ROLE_LABELS as Record<string, string>;
 
@@ -43,8 +49,11 @@ export function AgentPlanProposal({
   payload,
   onConfirm,
   onRevise,
+  superseded = false,
 }: {
   payload: AgentPlanProposalV1Payload;
+  /** A newer plan card replaced this one: no actions, a short note instead. */
+  superseded?: boolean;
   /** May reject: a 409 means the team was already hired. */
   onConfirm: () => Promise<void> | void;
   // #210: accept a free-text delta so the server can produce a revised plan
@@ -57,6 +66,7 @@ export function AgentPlanProposal({
   const [submitting, setSubmitting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [hiredHere, setHiredHere] = useState(false);
+  const [supersededHere, setSupersededHere] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const trimmed = revisionText.trim();
   // Hired: the server marked the card (confirmedAt), or this click (or a 409
@@ -71,7 +81,9 @@ export function AgentPlanProposal({
       await onConfirm();
       setHiredHere(true);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (err instanceof ApiError && err.status === 409 && conflictCode(err) === "superseded_plan") {
+        setSupersededHere(true);
+      } else if (err instanceof ApiError && err.status === 409) {
         setHiredHere(true);
       } else {
         setConfirmError(err instanceof Error && err.message ? err.message : "Couldn't set up the team. Try again.");
@@ -148,7 +160,11 @@ export function AgentPlanProposal({
         </div>
       )}
 
-      {hired ? (
+      {!hired && (superseded || supersededHere) ? (
+        <p className="mt-5 text-sm text-text-tertiary" data-testid="plan-superseded">
+          {PLAN_SUPERSEDED_NOTE}
+        </p>
+      ) : hired ? (
         <div className="mt-5 flex flex-wrap gap-2" data-testid="plan-hired">
           <button
             type="button"

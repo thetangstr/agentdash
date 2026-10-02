@@ -12,7 +12,9 @@
  *     start"; the latter sends start: true and the card turns into one
  *     "Task created" card;
  *   - an old duplicate "Task created" message is not shown twice;
- *   - the composer placeholder is the short one on a phone.
+ *   - the composer placeholder is the short one on a phone;
+ *   - (PR #989 review) a replaced plan card offers no actions, a plan click
+ *     names its card, and links show or cannot fake their real host.
  *
  * Run on a free port, never 3199:
  *   PAPERCLIP_E2E_PORT=3847 pnpm exec playwright test \
@@ -70,6 +72,9 @@ function fixtureMessages(conversationId: string) {
   const rows = [
     row(1, { role: "user", content: "We need to stop drowning in email and close the month on time." }),
     row(2, { content: "Here's the team I'd start with:\n\n- **Priya** builds the onboarding checklist\n- **Marcus** runs the close" }),
+    { ...row(21, { content: "Pay at [https://app.agentdash.com/billing](https://evil.example/pay) or see [the guide](https://evil.example/guide)." }), createdAt: at(2.2) },
+    // An older plan a revision replaced: no actions.
+    { ...row(20, { cardKind: "agent_plan_proposal_v1", cardPayload: plan() }), createdAt: at(2.5) },
     row(3, { cardKind: "agent_plan_proposal_v1", cardPayload: plan("2026-10-02T08:05:00Z") }),
     row(4, { cardKind: "agent_plan_proposal_v1", cardPayload: plan() }),
     row(5, {
@@ -96,7 +101,8 @@ function fixtureMessages(conversationId: string) {
       },
     }),
   ];
-  return rows.reverse();
+  // The server returns newest first.
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 async function openAskWithFixture(page: Page, company: Company) {
@@ -121,12 +127,14 @@ test("CoS chat: hired plan state, verbatim titles, markdown, Create and start, o
 
   // The second plan card's team already exists: the server answers 409.
   await page.route("**/api/onboarding/confirm-plan", async (route) => {
+    planConfirmBody = route.request().postDataJSON();
     await route.fulfill({
       status: 409,
       contentType: "application/json",
       body: JSON.stringify({ error: "Hire already accepted; inspect the existing agents instead of hiring again" }),
     });
   });
+  let planConfirmBody: unknown = null;
   let confirmBody: unknown = null;
   await page.route("**/api/conversations/*/task-proposals/*/confirm", async (route) => {
     confirmBody = route.request().postDataJSON();
@@ -142,8 +150,13 @@ test("CoS chat: hired plan state, verbatim titles, markdown, Create and start, o
 
   await openAskWithFixture(page, company);
 
+  // 5 (review). A plan card a newer one replaced offers no actions.
+  const replacedCard = page.getByTestId("plan-proposal").nth(0);
+  await expect(replacedCard.getByTestId("plan-superseded")).toBeVisible();
+  await expect(replacedCard.getByRole("button")).toHaveCount(0);
+
   // 1. A hired plan card: "Team hired ✓", buttons disabled, no "Set it up".
-  const hiredCard = page.getByTestId("plan-proposal").nth(0);
+  const hiredCard = page.getByTestId("plan-proposal").nth(1);
   await expect(hiredCard.getByRole("button", { name: "Team hired ✓" })).toBeDisabled();
   await expect(hiredCard.getByRole("button", { name: "Let me revise" })).toBeDisabled();
   await expect(hiredCard.getByRole("button", { name: "Set it up" })).toHaveCount(0);
@@ -153,11 +166,17 @@ test("CoS chat: hired plan state, verbatim titles, markdown, Create and start, o
   await expect(hiredCard).toContainText("Marcus — Month-End Close Coordinator");
 
   // 1. A second "Set it up" answered by 409 shows the same hired state.
-  const openCard = page.getByTestId("plan-proposal").nth(1);
+  const openCard = page.getByTestId("plan-proposal").nth(2);
   await openCard.scrollIntoViewIfNeeded();
   await openCard.getByRole("button", { name: "Set it up" }).click();
   await expect(openCard.getByRole("button", { name: "Team hired ✓" })).toBeDisabled();
   await expect(openCard.getByRole("alert")).toHaveCount(0);
+  // The click names its own card, so a stale card can never hire a newer plan.
+  expect(planConfirmBody).toMatchObject({ messageId: id(4) });
+
+  // 1 (review). Links can't disguise where they go.
+  await expect(page.getByTestId("chat-link-disarmed")).toHaveText("https://app.agentdash.com/billing");
+  await expect(page.getByTestId("chat-link-host")).toHaveText(" (evil.example)");
 
   // 5. The CoS's markdown renders as a list.
   const intro = page.getByTestId("chat-markdown").filter({ hasText: "Here's the team" });

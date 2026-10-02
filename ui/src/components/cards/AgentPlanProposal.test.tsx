@@ -5,7 +5,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
-import { AgentPlanProposal, PLAN_HIRED_LABEL, formatPlanRole, isKnownPlanValue, planAgentTitle } from "./AgentPlanProposal";
+import { AgentPlanProposal, PLAN_HIRED_LABEL, PLAN_SUPERSEDED_NOTE, formatPlanRole, isKnownPlanValue, planAgentTitle } from "./AgentPlanProposal";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -143,6 +143,27 @@ describe("AgentPlanProposal", () => {
     await act(async () => byLabel("Set it up")!.click());
     expect(byLabel(PLAN_HIRED_LABEL)?.disabled).toBe(true);
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  // PR #989 review: only the newest plan card offers actions.
+  it("offers no actions on a plan card a newer one replaced", () => {
+    act(() => {
+      root.render(<AgentPlanProposal payload={plan as never} onConfirm={vi.fn()} onRevise={() => {}} superseded />);
+    });
+    expect(buttons()).toHaveLength(0);
+    expect(container.textContent).toContain(PLAN_SUPERSEDED_NOTE);
+  });
+
+  it("maps a superseded_plan 409 to the replaced note, not Team hired", async () => {
+    const onConfirm = vi.fn().mockRejectedValue(
+      new ApiError("A newer plan replaced this one.", 409, { error: "x", details: { code: "superseded_plan" } }),
+    );
+    act(() => {
+      root.render(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
+    });
+    await act(async () => byLabel("Set it up")!.click());
+    expect(byLabel(PLAN_HIRED_LABEL)).toBeNull();
+    expect(container.textContent).toContain(PLAN_SUPERSEDED_NOTE);
   });
 
   it("shows any other failure and lets the person try again", async () => {

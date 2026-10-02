@@ -11,7 +11,7 @@
 // transition; the next user turn re-runs the prompt.
 
 import { logger } from "../middleware/logger.js";
-import { WORKFORCE_TEMPLATES, isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import { WORKFORCE_TEMPLATES, isAgentPlanPayload, normalizeAgentPlanTitles, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
 import type { DispatchMeter } from "./dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-failure.js";
@@ -291,6 +291,11 @@ export function parseTrailer(raw: string): ParsedTrailer {
   const body = raw.slice(0, match.index).trimEnd();
   try {
     const parsed = JSON.parse(match[1]!.trim()) as Record<string, unknown>;
+    // AgentDash (scan 4, lane N): a plan's model-written titles are put on
+    // one line of at most 80 characters before anything validates them.
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && "plan" in parsed) {
+      parsed.plan = normalizeAgentPlanTitles(parsed.plan);
+    }
     return { body, trailer: parsed };
   } catch {
     return { body: raw.trimEnd(), trailer: null };

@@ -270,7 +270,7 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
   const bootstrapped = current.conversation;
 
   const cardContext: CardContext = {
-    onProposalConfirm: async () => {
+    onProposalConfirm: async (messageId?: string) => {
       // Phase D: confirm the agent_plan_proposal_v1 card -> materialize agents.
       // (The legacy proposal_card_v1 path is also fired via this callback; the
       // server already created that agent at card-emit time, so confirm-plan
@@ -279,6 +279,7 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
       // 409 ("already hired") as "Team hired" and anything else as a message.
       await onboardingApi.confirmPlan({
         conversationId: bootstrapped.conversationId,
+        ...(messageId ? { messageId } : {}),
       });
     },
     onProposalReject: async (reason) => {

@@ -224,7 +224,23 @@ describe('onboarding accepted hires and postcommit materialization', () => {
       expect(updates).toEqual([{ message: expect.objectContaining({ id: card.id, conversationId: f.conversation.id, cardKind: 'agent_plan_proposal_v1', cardPayload: expect.objectContaining({ confirmedAgentIds: [hire.id] }) }) }]);
       // A second click is still refused (409), and the card stays hired.
       expect((await confirmPlan(f)).status).toBe(409); expect(await hires(f)).toHaveLength(1);
+      // PR #989 review: a hired plan is not revised (409 before any model call).
+      const revise = await request(app).post('/api/onboarding/revise-plan').set('authorization', `Bearer ${f.token}`).send({ conversationId: f.conversation.id, revisionText: 'swap Marcus for a bookkeeper' });
+      expect(revise.status).toBe(409); expect(revise.body.details).toMatchObject({ code: 'plan_hired' });
     } finally { stop(); }
+  });
+
+  // PR #989 review: a click on an older plan card never hires the newer plan.
+  it('refuses a confirm for a plan card that a newer one replaced', async () => {
+    const f = await fixture(); boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+    const older = await plan(f);
+    await new Promise(r => setTimeout(r, 5));
+    const latest = await plan(f);
+    const send = (messageId: string) => request(app).post('/api/onboarding/confirm-plan').set('authorization', `Bearer ${f.token}`).send({ conversationId: f.conversation.id, messageId });
+    const stale = await send(older.id);
+    expect(stale.status).toBe(409); expect(stale.body.details).toMatchObject({ code: 'superseded_plan', latestMessageId: latest.id });
+    expect(await hires(f)).toHaveLength(0);
+    expect((await send(latest.id)).status).toBe(201); expect(await hires(f)).toHaveLength(2);
   });
 
 });

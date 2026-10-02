@@ -1319,7 +1319,7 @@ export {
 // CI's TS build (which doesn't see local symlinks the same way as local
 // `pnpm typecheck`) failed when this was only registered in
 // validators/index.ts — added here to keep both surfaces in sync.
-export { isAgentPlanPayload } from "./validators/agent-plan.js";
+export { isAgentPlanPayload, normalizeAgentPlanTitles, PLAN_AGENT_TITLE_MAX_LENGTH } from "./validators/agent-plan.js";
 // AgentDash: plan-card role -> AGENT_ROLES mapping used by /onboarding/confirm-plan.
 export { PRIVILEGED_PLAN_ROLES, mapProposedAgentRole, proposedRoleTitle } from "./agent-role-mapping.js";
 

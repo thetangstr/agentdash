@@ -7,6 +7,7 @@ import { authApi } from "../../api/auth";
 import { ApiError } from "../../api/client";
 import { conversationsApi, type IssueCreatedSummary } from "../../api/conversations";
 import { queryKeys } from "../../lib/queryKeys";
+import { useOptionalCompany } from "../../context/CompanyContext";
 import { IssueCreatedCard } from "./IssueCreatedCard";
 
 export interface IssueProposalCardPayload {
@@ -75,6 +76,16 @@ export function IssueProposalCard({
   const [localView, setView] = useState<View>(() => (payload ? initialView(payload) : { kind: "pending" }));
   const [busy, setBusy] = useState<null | "create" | "start" | "dismiss">(null);
   const [error, setError] = useState<string | null>(null);
+  // AgentDash (scan 4, lane N): the company's current "start new issues right
+  // away" setting picks the buttons; the value recorded on the card is the
+  // fallback (no company context, or a company not loaded yet).
+  const company = useOptionalCompany()?.selectedCompany ?? null;
+  const liveDefaultStatus =
+    company && typeof company.newIssuesStartAsTodo === "boolean"
+      ? company.newIssuesStartAsTodo
+        ? "todo"
+        : "backlog"
+      : null;
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -110,7 +121,7 @@ export function IssueProposalCard({
       setBusy(null);
     }
   }
-  const actions = issueProposalActions(payload.defaultStatus);
+  const actions = issueProposalActions(liveDefaultStatus ?? payload.defaultStatus);
 
   return (
     <div

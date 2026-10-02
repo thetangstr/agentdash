@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../api/conversations";
 
 vi.mock("./cards", () => ({
-  CardRenderer: ({ cardKind }: { cardKind: string }) => <div data-testid="card">{cardKind}</div>,
+  CardRenderer: ({ cardKind, superseded }: { cardKind: string; superseded?: boolean }) => (
+    <div data-testid="card" data-superseded={superseded ? "yes" : "no"}>
+      {cardKind}
+    </div>
+  ),
 }));
 
 import { MessageList } from "./MessageList";
@@ -62,6 +66,16 @@ describe("MessageList", () => {
     render([msg("m1", { role: "user", content: "- not a list" })]);
     expect(container.querySelector("li")).toBeNull();
     expect(container.textContent).toContain("- not a list");
+  });
+
+  it("marks every plan card but the newest as replaced", () => {
+    render([
+      msg("p1", { cardKind: "agent_plan_proposal_v1", cardPayload: {} }),
+      msg("x", { content: "Updated based on your feedback." }),
+      msg("p2", { cardKind: "agent_plan_proposal_v1", cardPayload: {} }),
+    ]);
+    const flags = Array.from(container.querySelectorAll('[data-testid="card"]')).map((c) => c.getAttribute("data-superseded"));
+    expect(flags).toEqual(["yes", "no"]);
   });
 
   it("hides an old separate Task created card for a task its proposal card already shows", () => {

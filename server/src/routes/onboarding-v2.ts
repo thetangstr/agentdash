@@ -724,8 +724,9 @@ export function onboardingV2Routes(db: Db) {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { conversationId } = req.body as { conversationId?: string };
+    const { conversationId, messageId } = req.body as { conversationId?: string; messageId?: unknown };
     if (!conversationId) throw badRequest("conversationId required");
+    if (messageId !== undefined && typeof messageId !== "string") throw badRequest("messageId must be a string");
 
     const convoRows = await db
       .select()
@@ -753,6 +754,11 @@ export function onboardingV2Routes(db: Db) {
       .limit(1);
     const planMsg = planRows[0];
     if (!planMsg) throw notFound("No plan card found in this conversation");
+    // AgentDash (scan 4, lane N): a click on an older plan card never hires
+    // the newer plan's team.
+    if (messageId !== undefined && messageId !== planMsg.id) {
+      throw conflict("A newer plan replaced this one. Use the latest plan card.", { code: "superseded_plan", latestMessageId: planMsg.id });
+    }
     const payload = planMsg.cardPayload as AgentPlanProposalV1Payload | null;
     if (!isAgentPlanPayload(payload)) {
       throw badRequest("Plan card has no agents to materialize");
@@ -974,6 +980,11 @@ ${kpis || "- (none captured)"}
     const priorPayload = planMsg.cardPayload as AgentPlanProposalV1Payload | null;
     if (!priorPayload || !Array.isArray(priorPayload.agents)) {
       throw badRequest("Latest plan card has no agents payload to revise");
+    }
+    // AgentDash (scan 4, lane N): a hired plan is not revised (no LLM call,
+    // no new card); the team already exists.
+    if (priorPayload.confirmedAt || (await readHireReceipt(companyId, conversationId, `plan:${planMsg.id}`))) {
+      throw conflict("This team is already hired. Ask your Chief of Staff for changes to the team instead.", { code: "plan_hired" });
     }
 
     // CoS authors all messages here (matches the rest of onboarding-v2).
