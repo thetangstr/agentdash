@@ -103,6 +103,15 @@ import {
   summarizeToolResult,
 } from "../lib/transcriptPresentation";
 import { cn, formatDateTime, formatShortDate } from "../lib/utils";
+// AgentDash: Readable run blocks share the RunTranscriptView presentation.
+import {
+  ReadableDetails,
+  ReadableToolRow,
+  TranscriptModeToggle,
+  type ReadableToolRowItem,
+} from "./transcript/ReadableTranscript";
+import { summarizeToolCall, toolGroupLabel } from "../lib/readableTranscript";
+import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -717,6 +726,40 @@ function cleanToolDisplayText(tool: ToolCallMessagePart): string {
 
 type IssueChatCoTPart = ReasoningMessagePart | ToolCallMessagePart;
 
+// AgentDash: map an assistant-ui tool part onto the shared Readable tool row.
+function toReadableToolRowItem(tool: ToolCallMessagePart, messageRunning: boolean): ReadableToolRowItem {
+  const input = tool.args ?? parseToolPayload(tool.argsText ?? "");
+  const result =
+    tool.result === undefined
+      ? undefined
+      : typeof tool.result === "string"
+        ? tool.result
+        : formatToolPayload(tool.result);
+  const status: ReadableToolRowItem["status"] =
+    tool.result === undefined
+      ? messageRunning ? "running" : "completed"
+      : tool.isError ? "error" : "completed";
+  return {
+    name: tool.toolName,
+    input,
+    summary: summarizeToolCall(tool.toolName, input),
+    result,
+    status,
+  };
+}
+
+const RUN_ERROR_PREFIX = "Run error:";
+
+function IssueChatReadableErrors({ lines }: { lines: string[] }) {
+  if (lines.length === 0) return null;
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-2.5 py-1.5 text-xs text-red-700 dark:text-red-300">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">{lines.join("\n")}</div>
+    </div>
+  );
+}
+
 function IssueChatChainOfThought({
   message,
   cotParts,
@@ -772,14 +815,34 @@ function IssueChatChainOfThought({
     headerVerb = "Worked";
   }
 
-  const toolSummary = toolCountSummary(toolParts);
+  // AgentDash: Readable mode (default) renders one line per tool call, keeps
+  // errors visible even when folded, and tucks reasoning behind Details.
+  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
+  const readable = transcriptMode === "readable";
+  const readableTools = useMemo(
+    () => toolParts.map((tool) => ({ key: tool.toolCallId, item: toReadableToolRowItem(tool, isMessageRunning) })),
+    [toolParts, isMessageRunning],
+  );
+  const reasoningTexts = cotParts
+    .filter((p): p is ReasoningMessagePart => p.type === "reasoning" && !!p.text)
+    .map((p) => p.text);
+  const runErrorLines = reasoningTexts.filter((text) => text.startsWith(RUN_ERROR_PREFIX));
+  const detailLines = reasoningTexts
+    .filter((text) => !text.startsWith(RUN_ERROR_PREFIX))
+    .map((text) => ({ ts: "", kind: "thinking" as const, text }));
+  const failedTools = readableTools.filter(({ item }) => item.status === "error");
+
+  const toolSummary = readable
+    ? (toolParts.length > 0 ? toolGroupLabel(readableTools.map(({ item }) => item)) : null)
+    : toolCountSummary(toolParts);
   const hasContent = allReasoningText.trim().length > 0 || toolParts.length > 0;
 
   return (
     <div>
+      <div className="flex items-center gap-2">
       <button
         type="button"
-        className="group flex w-full items-center gap-2.5 rounded-lg px-1 py-2 text-left transition-colors hover:bg-accent/5"
+        className="group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1 py-2 text-left transition-colors hover:bg-accent/5"
         onClick={() => hasContent && setExpanded((v) => !v)}
       >
         <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground/80">
@@ -809,7 +872,32 @@ function IssueChatChainOfThought({
         ) : null}
       </button>
       {expanded && hasContent ? (
-        <div className="space-y-1 py-1">
+        <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
+      ) : null}
+      </div>
+      {readable && !(expanded && hasContent) && (failedTools.length > 0 || runErrorLines.length > 0) ? (
+        <div className="space-y-1 px-1 pb-1">
+          {failedTools.map(({ key, item }) => (
+            <ReadableToolRow key={key} item={item} density="compact" />
+          ))}
+          <IssueChatReadableErrors lines={runErrorLines} />
+        </div>
+      ) : null}
+      {expanded && hasContent && readable ? (
+        <div className="space-y-0.5 px-1 py-1" data-transcript-mode="readable">
+          {readableTools.map(({ key, item }) => (
+            <ReadableToolRow key={key} item={item} density="compact" />
+          ))}
+          <IssueChatReadableErrors lines={runErrorLines} />
+          {detailLines.length > 0 ? (
+            <div className="pt-1">
+              <ReadableDetails lines={detailLines} density="compact" />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {expanded && hasContent && !readable ? (
+        <div className="space-y-1 py-1" data-transcript-mode="raw">
           {isActive ? (
             <>
               {allReasoningText ? <IssueChatReasoningPart text={allReasoningText} /> : null}
@@ -825,7 +913,7 @@ function IssueChatChainOfThought({
                   args={tool.args}
                   argsText={tool.argsText}
                   result={tool.result}
-                  isError={false}
+                  isError={tool.isError === true}
                 />
               ))}
             </>

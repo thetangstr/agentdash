@@ -2488,6 +2488,78 @@ describe("IssueChatThread", () => {
     });
   });
 
+  it("renders run blocks in the Readable presentation with a persisted Readable/Raw toggle", () => {
+    window.localStorage.removeItem("agentdash.runTranscript.mode");
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[{
+              id: "run-readable",
+              issueId: "issue-1",
+              status: "running",
+              invocationSource: "comment",
+              triggerDetail: null,
+              startedAt: "2026-04-06T12:00:00.000Z",
+              finishedAt: null,
+              createdAt: "2026-04-06T12:00:00.000Z",
+              agentId: "agent-1",
+              agentName: "Agent 1",
+              adapterType: "claude_local",
+            }]}
+            transcriptsByRunId={new Map([
+              [
+                "run-readable",
+                [
+                  { kind: "thinking", ts: "2026-04-06T12:00:05.000Z", text: "private reasoning text" },
+                  { kind: "tool_call", ts: "2026-04-06T12:00:10.000Z", name: "Read", toolUseId: "t1", input: { file_path: "ui/src/App.tsx" } },
+                  { kind: "tool_result", ts: "2026-04-06T12:00:11.000Z", toolUseId: "t1", content: "import React", isError: false },
+                  { kind: "tool_call", ts: "2026-04-06T12:00:12.000Z", name: "Bash", toolUseId: "t2", input: { command: "pnpm test" } },
+                  { kind: "tool_result", ts: "2026-04-06T12:00:20.000Z", toolUseId: "t2", content: "FAIL app.test.ts", isError: true },
+                ],
+              ],
+            ])}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const readableBody = container.querySelector('div[data-transcript-mode="readable"]');
+    expect(readableBody).not.toBeNull();
+    expect(container.textContent).toContain("Ran 2 tools");
+    expect(readableBody?.textContent).toContain("Read");
+    expect(readableBody?.textContent).toContain("ui/src/App.tsx");
+    expect(readableBody?.textContent).toContain("FAIL app.test.ts");
+    expect(container.querySelector('[data-readable-tool="error"]')).not.toBeNull();
+    // Reasoning sits behind Details.
+    expect(container.textContent).toContain("Details (1)");
+    expect(container.textContent).not.toContain("private reasoning text");
+
+    const rawButton = container.querySelector<HTMLButtonElement>('button[data-transcript-mode="raw"]');
+    expect(rawButton).not.toBeNull();
+    act(() => rawButton!.click());
+
+    expect(window.localStorage.getItem("agentdash.runTranscript.mode")).toBe("raw");
+    expect(container.querySelector('div[data-transcript-mode="raw"]')).not.toBeNull();
+    expect(container.querySelector('div[data-transcript-mode="readable"]')).toBeNull();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('button[data-transcript-mode="readable"]')!.click();
+    });
+    expect(window.localStorage.getItem("agentdash.runTranscript.mode")).toBe("readable");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("folds chain-of-thought when the same message transitions from running to complete", () => {
     expect(resolveAssistantMessageFoldedState({
       messageId: "message-1",

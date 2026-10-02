@@ -1,14 +1,31 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { LiveRunForIssue } from "../api/heartbeats";
+import { RunChatSurface } from "../components/RunChatSurface";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatDateTime } from "../lib/utils";
 import { Identity } from "../components/Identity";
 import { StatusBadge } from "../components/StatusBadge";
 import { RunTranscriptView, type TranscriptDensity, type TranscriptMode } from "../components/transcript/RunTranscriptView";
-import { runTranscriptFixtureEntries, runTranscriptFixtureMeta } from "../fixtures/runTranscriptFixtures";
-import { ExternalLink, FlaskConical, LayoutPanelLeft, MonitorCog, PanelsTopLeft, RadioTower } from "lucide-react";
+import type { TranscriptEntry } from "../adapters";
+import {
+  claudeCodeTranscriptFixtureEntries,
+  runTranscriptFixtureEntries,
+  runTranscriptFixtureMeta,
+} from "../fixtures/runTranscriptFixtures";
+// AgentDash: the lab uses the same persisted Readable/Raw toggle as the app.
+import { TranscriptModeToggle } from "../components/transcript/ReadableTranscript";
+import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 
-type SurfaceId = "detail" | "live" | "dashboard";
+type FixtureId = "claude" | "codex";
+
+const fixtureOptions: Array<{ id: FixtureId; label: string; entries: TranscriptEntry[] }> = [
+  { id: "claude", label: "Claude Code run", entries: claudeCodeTranscriptFixtureEntries },
+  { id: "codex", label: "Codex run", entries: runTranscriptFixtureEntries },
+];
+import { ExternalLink, FlaskConical, LayoutPanelLeft, MessagesSquare, MonitorCog, PanelsTopLeft, RadioTower } from "lucide-react";
+
+type SurfaceId = "detail" | "live" | "dashboard" | "chat";
 
 const surfaceOptions: Array<{
   id: SurfaceId;
@@ -21,7 +38,7 @@ const surfaceOptions: Array<{
     id: "detail",
     label: "Run Detail",
     eyebrow: "Full transcript",
-    description: "The long-form run page with the `Nice | Raw` toggle and the most inspectable transcript view.",
+    description: "The long-form run page with the `Readable | Raw` toggle and the most inspectable transcript view.",
     icon: MonitorCog,
   },
   {
@@ -38,23 +55,53 @@ const surfaceOptions: Array<{
     description: "The active-agents dashboard card, tuned for compact scanning while keeping the same transcript language.",
     icon: PanelsTopLeft,
   },
+  {
+    id: "chat",
+    label: "Issue Chat",
+    eyebrow: "Run block",
+    description: "The issue-thread run block (also used by LiveRunWidget and ActiveAgentsPanel), rendered by the shared chat surface.",
+    icon: MessagesSquare,
+  },
 ];
 
-function previewEntries(surface: SurfaceId) {
+// AgentDash: the issue chat surface renders the same fixture through RunChatSurface.
+function ChatPreview({ entries, streaming }: { entries: TranscriptEntry[]; streaming: boolean }) {
+  const run = useMemo<LiveRunForIssue>(() => ({
+    id: `${runTranscriptFixtureMeta.sourceRunId}-${streaming ? "live" : "done"}`,
+    status: streaming ? "running" : "succeeded",
+    invocationSource: "assignment",
+    triggerDetail: null,
+    startedAt: runTranscriptFixtureMeta.startedAt,
+    finishedAt: streaming ? null : runTranscriptFixtureMeta.startedAt,
+    createdAt: runTranscriptFixtureMeta.startedAt,
+    agentId: runTranscriptFixtureMeta.agentId,
+    agentName: runTranscriptFixtureMeta.agentName,
+    adapterType: "claude_local",
+  }), [streaming]);
+  return (
+    <div className="max-w-3xl rounded-xl border border-border/70 bg-background/85 p-4">
+      <RunChatSurface run={run} transcript={entries} hasOutput />
+    </div>
+  );
+}
+
+function previewEntries(surface: SurfaceId, entries: TranscriptEntry[]) {
   if (surface === "dashboard") {
-    return runTranscriptFixtureEntries.slice(-9);
+    return entries.slice(-9);
   }
   if (surface === "live") {
-    return runTranscriptFixtureEntries.slice(-14);
+    return entries.slice(-14);
   }
-  return runTranscriptFixtureEntries;
+  return entries;
 }
 
 function RunDetailPreview({
+  entries,
   mode,
   streaming,
   density,
 }: {
+  entries: TranscriptEntry[];
   mode: TranscriptMode;
   streaming: boolean;
   density: TranscriptDensity;
@@ -72,12 +119,12 @@ function RunDetailPreview({
           </span>
         </div>
         <div className="mt-2 text-sm font-medium">
-          Transcript ({runTranscriptFixtureEntries.length})
+          Transcript ({entries.length})
         </div>
       </div>
       <div className="max-h-[720px] overflow-y-auto bg-[radial-gradient(circle_at_top_left,rgba(8,145,178,0.08),transparent_36%),radial-gradient(circle_at_bottom_right,rgba(245,158,11,0.10),transparent_28%)] p-5">
         <RunTranscriptView
-          entries={runTranscriptFixtureEntries}
+          entries={entries}
           mode={mode}
           density={density}
           streaming={streaming}
@@ -88,10 +135,12 @@ function RunDetailPreview({
 }
 
 function LiveWidgetPreview({
+  entries,
   streaming,
   mode,
   density,
 }: {
+  entries: TranscriptEntry[];
   streaming: boolean;
   mode: TranscriptMode;
   density: TranscriptDensity;
@@ -125,7 +174,7 @@ function LiveWidgetPreview({
         </div>
         <div className="max-h-[460px] overflow-y-auto pr-1">
           <RunTranscriptView
-            entries={previewEntries("live")}
+            entries={previewEntries("live", entries)}
             mode={mode}
             density={density}
             limit={density === "compact" ? 10 : 12}
@@ -138,10 +187,12 @@ function LiveWidgetPreview({
 }
 
 function DashboardPreview({
+  entries,
   streaming,
   mode,
   density,
 }: {
+  entries: TranscriptEntry[];
   streaming: boolean;
   mode: TranscriptMode;
   density: TranscriptDensity;
@@ -178,7 +229,7 @@ function DashboardPreview({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <RunTranscriptView
-            entries={previewEntries("dashboard")}
+            entries={previewEntries("dashboard", entries)}
             mode={mode}
             density={density}
             limit={density === "compact" ? 6 : 8}
@@ -192,7 +243,9 @@ function DashboardPreview({
 
 export function RunTranscriptUxLab() {
   const [selectedSurface, setSelectedSurface] = useState<SurfaceId>("detail");
-  const [detailMode, setDetailMode] = useState<TranscriptMode>("nice");
+  const [detailMode, setDetailMode] = useTranscriptModePreference();
+  const [fixtureId, setFixtureId] = useState<FixtureId>("claude");
+  const entries = (fixtureOptions.find((option) => option.id === fixtureId) ?? fixtureOptions[0]).entries;
   const [streaming, setStreaming] = useState(true);
   const [density, setDensity] = useState<TranscriptDensity>("comfortable");
 
@@ -275,18 +328,19 @@ export function RunTranscriptUxLab() {
               <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                 Controls
               </span>
+              <TranscriptModeToggle mode={detailMode} onChange={setDetailMode} />
               <div className="inline-flex rounded-full border border-border/70 bg-background/80 p-1">
-                {(["nice", "raw"] as const).map((mode) => (
+                {fixtureOptions.map((option) => (
                   <button
-                    key={mode}
+                    key={option.id}
                     type="button"
                     className={cn(
-                      "rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors",
-                      detailMode === mode ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                      "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                      fixtureId === option.id ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
                     )}
-                    onClick={() => setDetailMode(mode)}
+                    onClick={() => setFixtureId(option.id)}
                   >
-                    {mode}
+                    {option.label}
                   </button>
                 ))}
               </div>
@@ -317,14 +371,16 @@ export function RunTranscriptUxLab() {
 
             {selectedSurface === "detail" ? (
               <div className={cn(density === "compact" && "max-w-5xl")}>
-                <RunDetailPreview mode={detailMode} streaming={streaming} density={density} />
+                <RunDetailPreview entries={entries} mode={detailMode} streaming={streaming} density={density} />
               </div>
             ) : selectedSurface === "live" ? (
               <div className={cn(density === "compact" && "max-w-4xl")}>
-                <LiveWidgetPreview streaming={streaming} mode={detailMode} density={density} />
+                <LiveWidgetPreview entries={entries} streaming={streaming} mode={detailMode} density={density} />
               </div>
+            ) : selectedSurface === "chat" ? (
+              <ChatPreview entries={entries} streaming={streaming} />
             ) : (
-              <DashboardPreview streaming={streaming} mode={detailMode} density={density} />
+              <DashboardPreview entries={entries} streaming={streaming} mode={detailMode} density={density} />
             )}
           </main>
         </div>

@@ -24,6 +24,7 @@ import { Workspaces } from "./pages/Workspaces";
 import { Issues } from "./pages/Issues";
 import { IssueDetail } from "./pages/IssueDetail";
 import { IssueChatLongThreadPerf } from "./pages/IssueChatLongThreadPerf";
+import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { Routines } from "./pages/Routines";
 import { RoutineDetail } from "./pages/RoutineDetail";
 import { UserProfile } from "./pages/UserProfile";
@@ -361,6 +362,10 @@ export function App() {
             same tier as /trial, no auth, no company context. */}
         <Route path="share/:shareToken" element={<SharedArtifactPage />} />
         <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
+        {/* AgentDash: dev-only run transcript UX lab (fixtures only, no API). */}
+        {import.meta.env.DEV ? (
+          <Route path="tests/ux/run-transcripts" element={<div className="min-h-screen bg-background p-6"><RunTranscriptUxLab /></div>} />
+        ) : null}
         {/* AgentDash: marketing routes — render outside CloudAccessGate so the
             cream/light surface isn't fighting the dashboard's html.dark theme.
             Landing redirects logged-in users to /companies on its own. */}

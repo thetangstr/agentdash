@@ -1,0 +1,533 @@
+// AgentDash: shared "Readable" transcript components. RunTranscriptView renders
+// whole runs with them; the issue chat (and the LiveRunWidget /
+// ActiveAgentsPanel surfaces built on it) reuses the tool row, details and
+// mode toggle so a run looks the same everywhere.
+import { useMemo, useState } from "react";
+import type { TranscriptEntry } from "../../adapters";
+import { MarkdownBody } from "../MarkdownBody";
+import { cn, formatTokens } from "../../lib/utils";
+import { formatToolPayload } from "../../lib/transcriptPresentation";
+import {
+  buildReadableTranscript,
+  formatRunDuration,
+  summarizeToolOutcome,
+  toolGroupLabel,
+  type ReadableBlock,
+  type ReadableDetailLine,
+  type ReadableResultFooter,
+  type ReadableToolItem,
+} from "../../lib/readableTranscript";
+import type { TranscriptViewMode } from "../../lib/transcriptModePreference";
+import { Check, ChevronDown, ChevronRight, CircleAlert, GitCompare, Loader2, User, X } from "lucide-react";
+
+export type ReadableDensity = "comfortable" | "compact";
+
+const OUTPUT_PREVIEW_LINES = 12;
+const OUTPUT_PREVIEW_CHARS = 1500;
+
+function hasSelectedText() {
+  if (typeof window === "undefined") return false;
+  return (window.getSelection()?.toString().length ?? 0) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Mode toggle
+// ---------------------------------------------------------------------------
+
+export function TranscriptModeToggle({
+  mode,
+  onChange,
+  className,
+}: {
+  mode: TranscriptViewMode;
+  onChange: (mode: TranscriptViewMode) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Transcript view"
+      className={cn("inline-flex rounded-lg border border-border/70 bg-background/70 p-0.5", className)}
+    >
+      {(["readable", "raw"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          aria-pressed={mode === option}
+          data-transcript-mode={option}
+          className={cn(
+            "rounded-md px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+            mode === option ? "bg-accent text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={(event) => {
+            event.stopPropagation();
+            onChange(option);
+          }}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Output with "show more"
+// ---------------------------------------------------------------------------
+
+export function CappedOutput({ text, tone = "default" }: { text: string; tone?: "default" | "error" }) {
+  const [showAll, setShowAll] = useState(false);
+  const lines = text.split(/\r?\n/);
+  const overLines = lines.length > OUTPUT_PREVIEW_LINES;
+  const overChars = text.length > OUTPUT_PREVIEW_CHARS;
+  const capped = (overLines || overChars) && !showAll;
+  const visible = capped
+    ? lines.slice(0, OUTPUT_PREVIEW_LINES).join("\n").slice(0, OUTPUT_PREVIEW_CHARS)
+    : text;
+  return (
+    <div>
+      <pre
+        className={cn(
+          "max-h-[28rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-[1.15rem]",
+          tone === "error" ? "text-red-700 dark:text-red-300" : "text-foreground/80",
+        )}
+      >
+        {visible}
+      </pre>
+      {(overLines || overChars) && (
+        <button
+          type="button"
+          className="mt-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          onClick={() => setShowAll((value) => !value)}
+        >
+          {showAll ? "Show less" : `Show more (${lines.length} lines)`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// One tool call = one line
+// ---------------------------------------------------------------------------
+
+export interface ReadableToolRowItem {
+  name: string;
+  input: unknown;
+  summary: ReadableToolItem["summary"];
+  result?: string;
+  status: ReadableToolItem["status"];
+}
+
+function ToolStatusIcon({ status }: { status: ReadableToolItem["status"] }) {
+  if (status === "running") {
+    return <Loader2 aria-label="Running" className="h-3.5 w-3.5 shrink-0 animate-spin text-cyan-600 dark:text-cyan-300" />;
+  }
+  if (status === "error") {
+    return <X aria-label="Failed" className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />;
+  }
+  return <Check aria-label="Succeeded" className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />;
+}
+
+function hasUsefulInput(item: ReadableToolRowItem): boolean {
+  if (item.summary.isCommand) return false;
+  if (item.input === null || item.input === undefined) return false;
+  if (typeof item.input === "object" && Object.keys(item.input as object).length === 0) return false;
+  return true;
+}
+
+export function ReadableToolRow({
+  item,
+  density = "comfortable",
+}: {
+  item: ReadableToolRowItem;
+  density?: ReadableDensity;
+}) {
+  const [open, setOpen] = useState(false);
+  const compact = density === "compact";
+  const outcome = summarizeToolOutcome(item.result, item.status);
+  const toggle = () => {
+    if (hasSelectedText()) return;
+    setOpen((value) => !value);
+  };
+
+  return (
+    <div data-readable-tool={item.status} className="min-w-0">
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        title={item.summary.label}
+        className="group flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30"
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setOpen((value) => !value);
+          }
+        }}
+      >
+        <ToolStatusIcon status={item.status} />
+        <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", compact ? "text-xs" : "text-[13px]")}>
+          <span className="shrink-0 font-medium text-foreground/90">{item.summary.verb}</span>
+          {item.summary.target ? (
+            <code className="min-w-0 truncate rounded bg-muted/50 px-1 font-mono text-[0.92em] text-foreground/80">
+              {item.summary.target}
+            </code>
+          ) : null}
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate",
+              item.status === "error" ? "text-red-700 dark:text-red-300" : "text-muted-foreground/80",
+            )}
+          >
+            {outcome}
+          </span>
+        </span>
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground" />
+        )}
+      </div>
+      {open && (
+        <div className="ml-5 mt-1 space-y-2 pb-1">
+          {hasUsefulInput(item) && (
+            <div>
+              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Input</div>
+              <CappedOutput text={formatToolPayload(item.input)} />
+            </div>
+          )}
+          {item.result ? (
+            <div>
+              {hasUsefulInput(item) && (
+                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Output</div>
+              )}
+              <CappedOutput text={formatToolPayload(item.result)} tone={item.status === "error" ? "error" : "default"} />
+            </div>
+          ) : (
+            <div className="text-[11px] italic text-muted-foreground">
+              {item.status === "running" ? "Waiting for output…" : "No output."}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Consecutive tool calls fold into "Ran N tools"
+// ---------------------------------------------------------------------------
+
+export function ReadableToolGroup({
+  items,
+  density = "comfortable",
+}: {
+  items: ReadableToolItem[];
+  density?: ReadableDensity;
+}) {
+  const [open, setOpen] = useState(false);
+  if (items.length === 1) return <ReadableToolRow item={items[0]} density={density} />;
+
+  const failed = items.filter((item) => item.status === "error").length;
+  const running = items.some((item) => item.status === "running");
+  // Collapsed groups keep errors and the live call visible.
+  const pinned = open
+    ? items
+    : items.filter((item, index) => item.status === "error" || (item.status === "running" && index === items.length - 1));
+
+  return (
+    <div data-readable-tool-group={items.length}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 hover:bg-accent/30"
+        onClick={() => {
+          if (hasSelectedText()) return;
+          setOpen((value) => !value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setOpen((value) => !value);
+          }
+        }}
+      >
+        {running ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-cyan-600 dark:text-cyan-300" />
+        ) : failed > 0 ? (
+          <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
+        ) : (
+          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        )}
+        <span className={cn("font-medium text-foreground/80", density === "compact" ? "text-xs" : "text-[13px]")}>
+          {toolGroupLabel(items)}
+        </span>
+        {failed > 0 && (
+          <span className="text-[11px] text-red-700 dark:text-red-300">· {failed} failed</span>
+        )}
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+        )}
+      </div>
+      {pinned.length > 0 && (
+        <div className="ml-1.5 mt-0.5 space-y-0.5 border-l border-border/50 pl-3">
+          {pinned.map((item) => (
+            <ReadableToolRow key={item.key} item={item} density={density} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Details: thinking / init / system / stderr / stdout, hidden by default
+// ---------------------------------------------------------------------------
+
+export function ReadableDetails({
+  lines,
+  density = "comfortable",
+  thinkingClassName,
+}: {
+  lines: readonly ReadableDetailLine[];
+  density?: ReadableDensity;
+  thinkingClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  if (lines.length === 0) return null;
+  return (
+    <div data-readable-details={lines.length}>
+      <button
+        type="button"
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen((value) => !value)}
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        Details ({lines.length})
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-2 border-l border-border/50 pl-3">
+          {lines.map((line, index) => (
+            <div key={`${line.kind}-${line.ts}-${index}`}>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+                {line.kind}
+              </div>
+              {line.kind === "thinking" ? (
+                <MarkdownBody
+                  className={cn(
+                    "italic text-foreground/70 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                    density === "compact" ? "text-[11px] leading-5" : "text-xs leading-5",
+                    thinkingClassName,
+                  )}
+                >
+                  {line.text}
+                </MarkdownBody>
+              ) : (
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-foreground/70">
+                  {line.text}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Result footer
+// ---------------------------------------------------------------------------
+
+export function ReadableFooter({ footer, density = "comfortable" }: { footer: ReadableResultFooter; density?: ReadableDensity }) {
+  const duration = formatRunDuration(footer.durationMs);
+  const hasTokens = footer.inputTokens > 0 || footer.outputTokens > 0;
+  const parts = [
+    footer.outcome,
+    duration,
+    hasTokens ? `${formatTokens(footer.inputTokens)} in / ${formatTokens(footer.outputTokens)} out` : null,
+    footer.costUsd > 0 ? `$${footer.costUsd.toFixed(4)}` : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return (
+    <div
+      data-readable-footer={footer.isError ? "error" : "ok"}
+      className={cn(
+        "border-t border-border/50 pt-2",
+        footer.isError && "rounded-lg border border-red-500/20 bg-red-500/[0.05] p-2.5",
+      )}
+    >
+      <div
+        className={cn(
+          "flex items-center gap-1.5 text-[11px]",
+          footer.isError ? "text-red-700 dark:text-red-300" : "text-muted-foreground",
+        )}
+      >
+        {footer.isError ? <X className="h-3.5 w-3.5 shrink-0" /> : <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />}
+        <span>{parts.join(" · ")}</span>
+      </div>
+      {footer.isError && footer.errors.length > 0 && (
+        <ul className="mt-1 list-disc pl-5 text-xs text-red-700 dark:text-red-300">
+          {footer.errors.map((error, index) => (
+            <li key={index} className="break-words">{error}</li>
+          ))}
+        </ul>
+      )}
+      {footer.text && !(footer.isError && footer.errors.includes(footer.text)) && (
+        <MarkdownBody
+          className={cn(
+            "mt-1.5 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+            footer.isError ? "text-red-700 dark:text-red-300" : "text-foreground/80",
+            density === "compact" ? "text-[11px] leading-5" : "text-xs leading-5",
+          )}
+        >
+          {footer.text}
+        </MarkdownBody>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Blocks
+// ---------------------------------------------------------------------------
+
+function ReadableMessage({
+  block,
+  density,
+}: {
+  block: Extract<ReadableBlock, { type: "message" }>;
+  density: ReadableDensity;
+}) {
+  const compact = density === "compact";
+  return (
+    <div>
+      {block.role === "user" && (
+        <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          <User className="h-3.5 w-3.5" />
+          <span>User</span>
+        </div>
+      )}
+      <MarkdownBody
+        className={cn(
+          "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          compact ? "text-xs leading-5 text-foreground/90" : "text-sm text-foreground",
+        )}
+      >
+        {block.text}
+      </MarkdownBody>
+      {block.streaming && (
+        <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium italic text-muted-foreground">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-70" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
+          </span>
+          Streaming
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReadableErrorLines({ lines }: { lines: string[] }) {
+  return (
+    <div
+      data-readable-error
+      className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/[0.05] px-2.5 py-1.5 text-red-700 dark:text-red-300"
+    >
+      <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-[11px]">{lines.join("\n")}</pre>
+    </div>
+  );
+}
+
+function ReadableDiff({ block }: { block: Extract<ReadableBlock, { type: "diff" }> }) {
+  const [open, setOpen] = useState(false);
+  const adds = block.hunks.filter((hunk) => hunk.changeType === "add").length;
+  const removes = block.hunks.filter((hunk) => hunk.changeType === "remove").length;
+  const file = block.filePath ?? "diff";
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        className="flex items-center gap-2 py-0.5 text-[13px] hover:text-foreground"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GitCompare className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-300" />
+        <span className="font-medium text-foreground/90">Changed</span>
+        <code className="truncate rounded bg-muted/50 px-1 font-mono text-[0.92em] text-foreground/80">{file}</code>
+        {(adds > 0 || removes > 0) && (
+          <span className="text-[11px] tabular-nums">
+            <span className="text-emerald-600 dark:text-emerald-400">+{adds}</span>{" "}
+            <span className="text-red-600 dark:text-red-400">-{removes}</span>
+          </span>
+        )}
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+      </button>
+      {open && (
+        <pre className="ml-5 mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px]">
+          {block.hunks.map((hunk, index) => (
+            <span
+              key={`${index}-${hunk.changeType}`}
+              className={cn(
+                "block",
+                hunk.changeType === "add" && "bg-emerald-500/[0.10] text-emerald-700 dark:text-emerald-300",
+                hunk.changeType === "remove" && "bg-red-500/[0.10] text-red-700 dark:text-red-300",
+                hunk.changeType === "file_header" && "font-semibold text-blue-600 dark:text-blue-300",
+                (hunk.changeType === "context" || hunk.changeType === "hunk") && "text-muted-foreground",
+                hunk.changeType === "truncation" && "italic text-muted-foreground",
+              )}
+            >
+              {hunk.changeType === "add" ? "+ " : hunk.changeType === "remove" ? "- " : "  "}
+              {hunk.text}
+            </span>
+          ))}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+export function ReadableTranscriptView({
+  entries,
+  streaming = false,
+  density = "comfortable",
+  limit,
+  className,
+  thinkingClassName,
+}: {
+  entries: readonly TranscriptEntry[];
+  streaming?: boolean;
+  density?: ReadableDensity;
+  limit?: number;
+  className?: string;
+  thinkingClassName?: string;
+}) {
+  const transcript = useMemo(() => buildReadableTranscript(entries, streaming), [entries, streaming]);
+  const blocks = limit ? transcript.blocks.slice(-limit) : transcript.blocks;
+
+  return (
+    <div className={cn(density === "compact" ? "space-y-2" : "space-y-3", className)} data-transcript-mode="readable">
+      {blocks.map((block, index) => (
+        <div
+          key={block.key}
+          className={cn(index === blocks.length - 1 && streaming && "animate-in fade-in slide-in-from-bottom-1 duration-300")}
+        >
+          {block.type === "message" && <ReadableMessage block={block} density={density} />}
+          {block.type === "tools" && <ReadableToolGroup items={block.items} density={density} />}
+          {block.type === "diff" && <ReadableDiff block={block} />}
+          {block.type === "error" && <ReadableErrorLines lines={block.lines} />}
+        </div>
+      ))}
+      <ReadableDetails lines={transcript.details} density={density} thinkingClassName={thinkingClassName} />
+      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} />}
+    </div>
+  );
+}
