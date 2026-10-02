@@ -1,6 +1,6 @@
 // AgentDash: canonical PATCH acceptance. Plans are private and confer no authority.
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { companies, issues, issueExecutionDecisions, issueThreadInteractions, issueWorkProducts, type Db } from "@paperclipai/db";
 import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueRouteSchema } from "@paperclipai/shared";
 import { z } from "zod";
@@ -695,13 +695,16 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               status: "approved",
               reviewState: "approved",
               metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('acceptance',
-                ${JSON.stringify(acceptance)}::jsonb || jsonb_build_object('previousReviewState', ${issueWorkProducts.reviewState}))`,
+                ${JSON.stringify(acceptance)}::jsonb || jsonb_build_object('previousReviewState', ${issueWorkProducts.reviewState}, 'previousStatus', ${issueWorkProducts.status}))`,
               updatedAt: new Date(),
             })
+            // AgentDash (Scan 4 lane M): a person closing the issue accepts
+            // what was sent back too (they decided to take it as it is);
+            // otherwise it stayed changes_requested and never reached Shipped.
             .where(and(
               eq(issueWorkProducts.companyId, issue.companyId),
               eq(issueWorkProducts.issueId, issue.id),
-              eq(issueWorkProducts.status, "ready_for_review"),
+              inArray(issueWorkProducts.status, ["ready_for_review", "changes_requested"]),
             ))
             .returning({ id: issueWorkProducts.id });
           for (const product of acceptedProducts) {
@@ -733,8 +736,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           const withoutAcceptance = sql`(${issueWorkProducts.metadata} - 'acceptance')`;
           const reopenedProducts = await tx.update(issueWorkProducts)
             .set({
-              status: "ready_for_review",
-              reviewState: sql`coalesce(${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousReviewState', 'needs_board_review')`,
+              // AgentDash (Scan 4 lane M): a product accepted while it was
+              // changes_requested goes back to changes_requested.
+              status: sql`case when ${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousStatus' = 'changes_requested' then 'changes_requested' else 'ready_for_review' end`,
+              // Only a review state a product can be waiting in is restored;
+              // anything else (e.g. "approved") falls back to needs_board_review.
+              reviewState: sql`case when ${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousReviewState' in ('none', 'needs_board_review', 'changes_requested') then ${issueWorkProducts.metadata} -> 'acceptance' ->> 'previousReviewState' else 'needs_board_review' end`,
               metadata: sql`case when ${withoutAcceptance} = '{}'::jsonb then null else ${withoutAcceptance} end`,
               updatedAt: new Date(),
             })
@@ -744,7 +751,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               eq(issueWorkProducts.status, "approved"),
               sql`${issueWorkProducts.metadata} -> 'acceptance' ->> 'reason' = 'issue_accepted'`,
             ))
-            .returning({ id: issueWorkProducts.id, reviewState: issueWorkProducts.reviewState });
+            .returning({ id: issueWorkProducts.id, status: issueWorkProducts.status, reviewState: issueWorkProducts.reviewState });
           for (const product of reopenedProducts) {
             await audit({
               companyId: issue.companyId,
@@ -759,7 +766,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
                 identifier: issue.identifier,
                 workProductId: product.id,
                 changedKeys: ["metadata", "reviewState", "status"],
-                status: "ready_for_review",
+                status: product.status,
                 reviewState: product.reviewState,
                 reason: "issue_reopened",
                 ...context.attribution,
@@ -773,7 +780,14 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         // update and its audit rows commit with the comment and status.
         if (context.requestChanges && humanBoardActor) {
           const sentBack = await tx.update(issueWorkProducts)
-            .set({ status: "changes_requested", reviewState: "changes_requested", updatedAt: new Date() })
+            .set({
+              status: "changes_requested",
+              reviewState: "changes_requested",
+              // AgentDash (Scan 4 lane M): marks it as reviewed under the new
+              // rule, so the legacy "done means accepted" read never applies.
+              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('changesRequestedAt', ${new Date().toISOString()}::text)`,
+              updatedAt: new Date(),
+            })
             .where(and(
               eq(issueWorkProducts.companyId, issue.companyId),
               eq(issueWorkProducts.issueId, issue.id),
@@ -797,6 +811,48 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
                 status: "changes_requested",
                 reviewState: "changes_requested",
                 reason: "changes_requested",
+                ...context.attribution,
+              },
+            });
+          }
+        }
+
+        // AgentDash (Scan 4 lane M): resubmission. When the issue comes back
+        // to in_review (the assignee resubmitting, or anyone else moving it),
+        // deliverables that were sent back are waiting for review again, so
+        // Accept and Request changes reappear instead of a dead end. This only
+        // returns them to ready_for_review; acceptance stays with a person.
+        if (existing.status !== "in_review" && issue.status === "in_review") {
+          const resubmitted = await tx.update(issueWorkProducts)
+            .set({
+              status: "ready_for_review",
+              reviewState: "needs_board_review",
+              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${new Date().toISOString()}::text)`,
+              updatedAt: new Date(),
+            })
+            .where(and(
+              eq(issueWorkProducts.companyId, issue.companyId),
+              eq(issueWorkProducts.issueId, issue.id),
+              eq(issueWorkProducts.status, "changes_requested"),
+            ))
+            .returning({ id: issueWorkProducts.id });
+          for (const product of resubmitted) {
+            await audit({
+              companyId: issue.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.work_product_updated",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                identifier: issue.identifier,
+                workProductId: product.id,
+                changedKeys: ["reviewState", "status"],
+                status: "ready_for_review",
+                reviewState: "needs_board_review",
+                reason: "resubmitted_for_review",
                 ...context.attribution,
               },
             });

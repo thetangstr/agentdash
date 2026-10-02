@@ -136,6 +136,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.
+// AgentDash: review-resubmit (scan 4 lane M) is inherited from the canonical
+// worker: after Request changes, revise the same issue document and resubmit by
+// moving the issue to `in_review`, which returns the work product to
+// ready_for_review. Proposal-created hires add nothing to that.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

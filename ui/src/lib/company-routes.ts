@@ -49,9 +49,60 @@ const BOARD_ROUTE_ROOTS = new Set([
   // company-relative path, and switching companies then landed on
   // "/WAN/WAN/onboarding" (a 404).
   "onboarding",
+  // AgentDash (Scan 4, lane M): board routes that were missing, so a navigate
+  // to "/settings" or "/plugins/x" from a board page was read as a company
+  // code instead of being prefixed.
+  "settings",
+  "plugins",
 ]);
 
-const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance", "claim"]);
+// AgentDash (Scan 4, lane M): every top-level route in App.tsx that is not a
+// board route must be listed here. A root missing from both sets is read as a
+// company prefix, so the company-aware navigate() on /setup turned "/cos" into
+// "/SETUP/cos" ("Company not found"). company-routes.test.ts parses App.tsx
+// and fails when a top-level route is in neither set.
+const GLOBAL_ROUTE_ROOTS = new Set([
+  "auth",
+  "forgot-password",
+  "reset-password",
+  "invite",
+  "board-claim",
+  "cli-auth",
+  "docs",
+  "instance",
+  "claim",
+  "trial",
+  "investors",
+  "pricing",
+  "mcp",
+  "terms",
+  "privacy",
+  "share",
+  "tests",
+  "demo",
+  "consulting",
+  "about",
+  "start",
+  "find",
+  "assess",
+  "company-create",
+  "setup",
+  "oauth",
+  "member-onboarding",
+]);
+
+/**
+ * Both root sets, for the test that keeps them inside the shared
+ * RESERVED_COMPANY_PREFIXES (a company may never take one as its prefix).
+ */
+export function listRouteRoots(): { global: string[]; board: string[] } {
+  return { global: [...GLOBAL_ROUTE_ROOTS], board: [...BOARD_ROUTE_ROOTS] };
+}
+
+/** True when a first path segment is a top-level, company-agnostic route. */
+export function isGlobalRouteRoot(root: string): boolean {
+  return GLOBAL_ROUTE_ROOTS.has(root.toLowerCase());
+}
 
 export function normalizeCompanyPrefix(prefix: string): string {
   return prefix.trim().toUpperCase();

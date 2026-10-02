@@ -1432,3 +1432,5 @@ export * from './validators/workforce.js';
 export * from './workforce-templates.js';
 export * from './human-control.js';
 export * from './validators/human-control.js';
+// AgentDash (Scan 4 lane M): issue prefixes that collide with page routes.
+export * from './reserved-company-prefixes.js';
