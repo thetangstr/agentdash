@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "table": "sandbox_egress",
+  "dnsServers": ["169.254.169.253"],
+  "identities": {
+    "agent": {
+      "user": "agent",
+      "dns": false,
+      "allow": [
+        { "hosts": ["api.z.ai"], "ports": [443], "proto": "tcp" },
+        { "hosts": ["mcp.clockchain.network"], "ports": [443], "proto": "tcp" }
+      ]
+    },
+    "svc": {
+      "user": "svc",
+      "dns": true,
+      "allow": [
+        { "hosts": ["telemetry.agentdash.internal"], "ports": [443], "proto": "tcp", "optional": true },
+        { "hosts": ["ethereum-sepolia-rpc.publicnode.com"], "ports": [443], "proto": "tcp" }
+      ]
+    },
+    "signer": {
+      "user": "signer",
+      "dns": true,
+      "allow": [
+        { "cidrs": ["169.254.169.254/32"], "ports": [80], "proto": "tcp" },
+        { "hosts": ["kms.us-east-1.amazonaws.com"], "ports": [443], "proto": "tcp" }
+      ]
+    }
+  }
+}
