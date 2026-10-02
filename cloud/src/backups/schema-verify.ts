@@ -188,6 +188,35 @@ export interface SchemaVerification extends SchemaComparison {
 
 /** The whole post-restore check: migrations from the restored table, a reference from our files, a catalog diff. */
 /**
+ * A function re-created from the reference starts with the default ACL
+ * (EXECUTE for PUBLIC). When the migration that created it narrowed that
+ * (e.g. 0144 revokes EXECUTE from PUBLIC), apply the reference's grants, again
+ * taken only from the reference, never from the dump.
+ */
+async function copyFunctionAcl(
+  ref: ReturnType<typeof connect>,
+  res: ReturnType<typeof connect>,
+  refOid: number,
+  key: string,
+): Promise<void> {
+  const [acl] = await ref.unsafe<Array<{ set: boolean }>>(`select proacl is not null as set from pg_proc where oid = $1`, [refOid]);
+  if (!acl?.set) return;
+  const grants = await ref.unsafe<Array<{ grantee: string | null; privilege: string; grantable: boolean }>>(
+    `select case when a.grantee = 0 then null else pg_get_userbyid(a.grantee) end as grantee,
+            a.privilege_type as privilege, a.is_grantable as grantable
+       from pg_proc p, aclexplode(p.proacl) a
+      where p.oid = $1`,
+    [refOid],
+  );
+  await res.unsafe(`REVOKE ALL ON FUNCTION ${key} FROM PUBLIC`);
+  for (const g of grants) {
+    const to = g.grantee === null ? "PUBLIC" : `"${g.grantee.replaceAll("\"", "\"\"")}"`;
+    if (!/^[A-Z ]+$/.test(g.privilege)) throw new Error(`unexpected privilege ${g.privilege}`);
+    await res.unsafe(`GRANT ${g.privilege} ON FUNCTION ${key} TO ${to}${g.grantable ? " WITH GRANT OPTION" : ""}`);
+  }
+}
+
+/**
  * Re-create, in the restored database, the objects replay does not run
  * from a dump (CHECK constraints, views, functions, triggers; GH #907), taking their
  * definitions ONLY from the reference database, which was built from our own
@@ -219,6 +248,7 @@ export async function repairFromReference(restoredUrl: string, referenceUrl: str
         if (have.has(row.key)) continue;
         await res.unsafe((build as (r: typeof row) => string)(row));
         created.push(`${what} ${row.key}`);
+        if (what === "function") await copyFunctionAcl(ref, res, (row as unknown as { oid: number }).oid, row.key);
       }
     }
     return created;
