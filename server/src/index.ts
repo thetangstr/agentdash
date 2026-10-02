@@ -60,7 +60,7 @@ import type {
 } from "./routes/instance-database-backups.js";
 import { CLAIM_ATTEMPT_HEADER } from "./lib/claim-code.js";
 import { createBackupExportService } from "./routes/agentdash-backup-export-service.js";
-import { configuredPublicBaseUrl } from "./lib/public-base-url.js";
+import { configuredPublicBaseUrl, registerConfiguredPublicBaseUrl } from "./lib/public-base-url.js";
 import { mintingOriginsForBoot, originBootReport, registerMintingOrigins } from "./lib/declared-origins.js";
 
 type BetterAuthSessionUser = {
@@ -510,6 +510,10 @@ export async function startServer(): Promise<StartedServer> {
       listenPort,
     });
   }
+  // AgentDash (#954): let link minting see the config-resolved public URL —
+  // including one that lives only in the config file's auth.publicBaseUrl,
+  // which the env vars below never name.
+  registerConfiguredPublicBaseUrl(config.authPublicBaseUrl);
   
   let authReady = config.deploymentMode === "local_trusted";
   let betterAuthHandler: RequestHandler | undefined;

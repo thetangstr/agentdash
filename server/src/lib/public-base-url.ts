@@ -22,17 +22,37 @@ import { mintingOrigins, normalizeOrigin } from "./declared-origins.js";
  * Not a secret. It is by definition the address people are told to use, and the
  * health endpoint already reports deployment mode and bootstrap state.
  */
+// AgentDash (#954): the public base URL boot resolved from the whole
+// configuration — `config.authPublicBaseUrl` — which sees sources the env
+// reads below cannot: the config file's `auth.publicBaseUrl` (what
+// `agentdash onboard` writes) and the BETTER_AUTH_URL / BETTER_AUTH_BASE_URL
+// spellings. Without this registration a config-file-only URL is trusted but
+// never canonical, so a spoofed Host header lands in minted invite links.
+let bootConfiguredPublicBaseUrl: string | undefined;
+
+/**
+ * Register the config-resolved public base URL at boot, or clear it with
+ * `null`/`undefined`. `startServer` calls this once `loadConfig` (and the
+ * listen-port rewrite) has settled.
+ */
+export function registerConfiguredPublicBaseUrl(value: string | undefined | null): void {
+  const trimmed = value?.trim().replace(/\/+$/, "");
+  bootConfiguredPublicBaseUrl = trimmed || undefined;
+}
+
 export function configuredPublicBaseUrl(): string | undefined {
   // AgentDash (#547): PAPERCLIP_CANONICAL_ORIGIN, when declared, is the
-  // address. Without it the old variables answer exactly as before, and a
-  // bare PAPERCLIP_ORIGINS list lends its first entry only when nothing else
-  // names one.
+  // address. Without it the old variables answer exactly as before, then the
+  // config-resolved URL (which keeps the config file's precedence below the
+  // env vars), and a bare PAPERCLIP_ORIGINS list lends its first entry only
+  // when nothing else names one.
   const canonical = normalizeOrigin(process.env.PAPERCLIP_CANONICAL_ORIGIN);
   if (canonical) return canonical;
   const raw =
     process.env.PAPERCLIP_PUBLIC_URL?.trim()
     || process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL?.trim();
   if (raw) return raw.replace(/\/+$/, "");
+  if (bootConfiguredPublicBaseUrl) return bootConfiguredPublicBaseUrl;
   const firstDeclared = (process.env.PAPERCLIP_ORIGINS ?? "")
     .split(",")
     .map((value) => normalizeOrigin(value))

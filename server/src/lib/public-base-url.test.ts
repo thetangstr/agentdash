@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { approvalUrl, configuredPublicBaseUrl, publicBaseUrlOr } from "./public-base-url.js";
+import {
+  approvalUrl,
+  configuredPublicBaseUrl,
+  publicBaseUrlOr,
+  registerConfiguredPublicBaseUrl,
+} from "./public-base-url.js";
 
 const ENV_KEYS = [
   "PAPERCLIP_PUBLIC_URL",
@@ -16,6 +21,7 @@ describe("configuredPublicBaseUrl", () => {
       saved.set(key, process.env[key]);
       delete process.env[key];
     }
+    registerConfiguredPublicBaseUrl(null);
   });
 
   afterEach(() => {
@@ -24,6 +30,7 @@ describe("configuredPublicBaseUrl", () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    registerConfiguredPublicBaseUrl(null);
   });
 
   it("is undefined when the instance advertises nothing", () => {
@@ -65,6 +72,28 @@ describe("configuredPublicBaseUrl", () => {
   it("treats whitespace-only configuration as absent", () => {
     process.env.PAPERCLIP_PUBLIC_URL = "   ";
     expect(configuredPublicBaseUrl()).toBeUndefined();
+  });
+
+  // AgentDash (#954): `agentdash onboard` can write auth.publicBaseUrl to the
+  // config file without setting any env var; boot registers the resolved URL.
+  it("falls back to the config-resolved URL registered at boot", () => {
+    registerConfiguredPublicBaseUrl("https://file.example.test/");
+    expect(configuredPublicBaseUrl()).toBe("https://file.example.test");
+    expect(approvalUrl("a-1")).toBe("https://file.example.test/approvals/a-1");
+  });
+
+  it("lets the env variables outrank the registered config value", () => {
+    registerConfiguredPublicBaseUrl("https://file.example.test");
+    process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL = "https://env.example.test";
+    expect(configuredPublicBaseUrl()).toBe("https://env.example.test");
+    process.env.PAPERCLIP_CANONICAL_ORIGIN = "https://canonical.example.test";
+    expect(configuredPublicBaseUrl()).toBe("https://canonical.example.test");
+  });
+
+  it("prefers the registered config value over a bare PAPERCLIP_ORIGINS first entry", () => {
+    registerConfiguredPublicBaseUrl("https://file.example.test");
+    process.env.PAPERCLIP_ORIGINS = "https://first.example,http://second.example:3102";
+    expect(configuredPublicBaseUrl()).toBe("https://file.example.test");
   });
 });
 
