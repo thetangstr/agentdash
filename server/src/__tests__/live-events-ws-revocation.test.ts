@@ -76,7 +76,15 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   };
   const clients: Client[] = [];
 
-  /** The test database, except `select` errors or never settles while dbMode says so. */
+  /**
+   * The test database, except `select` errors or never settles while dbMode
+   * says so. `faultySelects` counts only ACTOR reads — selects whose `from`
+   * is instance_user_roles or company_memberships — so an event path that
+   * legitimately recomputes the agent-visibility scope (agents, stewardships,
+   * the company row) does not trip the "no actor re-read" assertions, while
+   * a lazy actor reload still registers.
+   */
+  const ACTOR_TABLES = new Set<unknown>([instanceUserRoles, companyMemberships]);
   function faultyDb() {
     const hanging: unknown = new Proxy(function () {}, {
       get: (_t, prop) => (prop === "then" ? () => undefined : () => hanging),
@@ -84,14 +92,26 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     });
     return new Proxy(db, {
       get(target, prop, receiver) {
-        if (prop === "select") faultySelects += 1;
-        if (prop === "select" && dbMode !== "ok") {
+        if (prop !== "select") return Reflect.get(target, prop, receiver);
+        if (dbMode !== "ok") {
           return () => {
             if (dbMode === "error") throw new Error("simulated database failure");
             return hanging;
           };
         }
-        return Reflect.get(target, prop, receiver);
+        return (...args: Parameters<typeof db.select>) => {
+          const builder = Reflect.apply(db.select, db, args) as object;
+          return new Proxy(builder, {
+            get(b, bprop, breceiver) {
+              if (bprop !== "from") return Reflect.get(b, bprop, breceiver);
+              const from = Reflect.get(b, bprop, breceiver) as (table: unknown) => unknown;
+              return (table: unknown) => {
+                if (ACTOR_TABLES.has(table)) faultySelects += 1;
+                return from.call(b, table);
+              };
+            },
+          });
+        };
       },
     });
   }
@@ -143,9 +163,10 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   async function settle(watch: Client[], companyId = COMPANY) {
     const marker = randomUUID();
     publishLiveEvent({ companyId, type: "agent.status", payload: { agentId: marker } });
-    const deadline = Date.now() + 5000;
+    // performance.now: Date.now can be frozen by the nowSpy in TTL tests.
+    const deadline = performance.now() + 5000;
     while (!watch.every((c) => c.events.some((e) => e.payload.agentId === marker))) {
-      if (Date.now() > deadline) throw new Error("marker not delivered");
+      if (performance.now() > deadline) throw new Error("marker not delivered");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     return marker;
@@ -154,8 +175,8 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   /** Wait until the counting proxy stops seeing selects — i.e. every heartbeat re-check from the just-fired interval has settled. */
   async function heartbeatSettled() {
     let last = -1;
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 3000;
+    while (performance.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       if (faultySelects === last) return;
       last = faultySelects;
@@ -209,7 +230,9 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     });
     await new Promise<void>((resolve) => faultyServer!.listen(0, "127.0.0.1", resolve));
     faultyUrl = `ws://127.0.0.1:${(faultyServer.address() as AddressInfo).port}`;
-  }, 60_000);
+    // Embedded Postgres startup is slow on a saturated machine; the default
+    // hook timeout is not enough headroom there.
+  }, 180_000);
 
   afterAll(async () => {
     vi.useRealTimers();
@@ -631,6 +654,104 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
     }
   });
 
+  // AgentDash (GH #937 review): the heartbeat's refreshed actor must NOT carry
+  // the agent-visibility scope forward — the scope is cached on the request
+  // object, and its inputs (an owner-only agent created for someone else, an
+  // ended stewardship, a flipped visibility flag) are not in the fingerprint
+  // and send no access-change signal. The re-check hands the filter a fresh
+  // request each beat, so the scope outlives at most one heartbeat — while
+  // the actor itself is still never re-read.
+  it("re-resolves the agent-visibility scope across heartbeats when an owner-only agent appears out of band", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Scope Refresh Co",
+      issuePrefix: `SR${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+    });
+    const memberId = `user-${randomUUID()}`;
+    const otherUserId = `user-${randomUUID()}`;
+    await db.insert(companyMemberships)
+      .values({ companyId, principalType: "user", principalId: memberId, status: "active", membershipRole: "member" });
+    const client = await connect({ "x-test-user": memberId }, faultyUrl, companyId);
+
+    const openAgentId = randomUUID();
+    await db.insert(agents).values({ id: openAgentId, companyId, name: "Open", role: "general" });
+    const statusOf = (agentId: string) =>
+      publishLiveEvent({ companyId, type: "agent.status", payload: { agentId } });
+    const sawAgent = (agentId: string) => client.events.some((e) => e.payload.agentId === agentId);
+    // Once the scope is owner-only, a random-agent marker would itself be
+    // filtered out — the barrier is an activity event with no agent, issue,
+    // run or project reference, which every subscriber gets. Delivery is
+    // serialized per socket, so its arrival decides everything before it.
+    const barrier = async () => {
+      const marker = randomUUID();
+      publishLiveEvent({
+        companyId,
+        type: "activity.logged",
+        payload: { action: "note.added", entityType: "company", entityId: marker },
+      });
+      const deadline = performance.now() + 5000;
+      while (!client.events.some((e) => e.payload.entityId === marker)) {
+        if (performance.now() > deadline) throw new Error("barrier not delivered");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+
+    // Populate and cache the scope: no owner-only agents yet, so mode "all".
+    statusOf(openAgentId);
+    await barrier();
+    expect(sawAgent(openAgentId)).toBe(true);
+
+    // Out of band: an owner-only agent for another user. No service call, no
+    // access-change signal, no activity event — only a heartbeat can fix the
+    // scope.
+    const hiddenAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: hiddenAgentId,
+      companyId,
+      name: "Other's agent",
+      role: "general",
+      visibility: "owner",
+      accountableUserId: otherUserId,
+      createdByUserId: otherUserId,
+    });
+
+    let fakeNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+    try {
+      // Four beats past the actor TTL: the old keep-the-same-request refresh
+      // would extend the cached scope forever.
+      for (let beat = 0; beat < 4; beat++) {
+        fakeNow += HEARTBEAT_MS;
+        vi.advanceTimersByTime(HEARTBEAT_MS);
+        await heartbeatSettled();
+      }
+
+      faultySelects = 0;
+      statusOf(hiddenAgentId); // decided, then dropped for the member
+      await barrier();
+      expect(sawAgent(hiddenAgentId)).toBe(false);
+      expect(faultySelects).toBe(0); // scope recompute never re-read the actor
+      expect(client.isOpen()).toBe(true);
+
+      // The reverse: the agent becomes company-visible, again out of band —
+      // the next heartbeat's fresh scope must start delivering it.
+      await db.update(agents).set({ visibility: "company" }).where(eq(agents.id, hiddenAgentId));
+      fakeNow += HEARTBEAT_MS;
+      vi.advanceTimersByTime(HEARTBEAT_MS);
+      await heartbeatSettled();
+
+      faultySelects = 0;
+      statusOf(hiddenAgentId);
+      await barrier();
+      expect(sawAgent(hiddenAgentId)).toBe(true);
+      expect(faultySelects).toBe(0);
+      expect(client.isOpen()).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   // AgentDash (GH #938): revocation only bites if better-auth's session and
   // user deletion actually publish the access change. These tests drive a
   // REAL better-auth instance and a socket resolved from the real session
@@ -705,7 +826,7 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
       });
       await new Promise<void>((resolve) => authServer!.listen(0, "127.0.0.1", resolve));
       authUrl = `ws://127.0.0.1:${(authServer.address() as AddressInfo).port}`;
-    }, 60_000);
+    }, 180_000);
 
     afterAll(async () => {
       if (savedSecret === undefined) delete process.env.BETTER_AUTH_SECRET;

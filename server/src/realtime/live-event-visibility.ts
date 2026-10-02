@@ -172,10 +172,20 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
   const runIssue = new TtlCache<string | null>(RUN_TTL_MS, now);
   const companyProjects = new TtlCache<Promise<Map<string, ProjectRow>>>(PROJECTS_TTL_MS, now);
   const projectGeneration = new Map<string, number>();
+  // AgentDash (GH #937 review): the agent-visibility scope's inputs —
+  // stewardships, agent visibility/accountability/reporting/creator fields,
+  // newly created agents, the company default — all emit activity events.
+  // Bump a per-company generation so a socket recomputes its scope on the
+  // next event, like projectGeneration does for project decisions.
+  const agentScopeGeneration = new Map<string, number>();
   const resolved = new WeakMap<LiveEvent, Promise<LiveEventProjectRef>>();
 
   function generationOf(companyId: string) {
     return projectGeneration.get(companyId) ?? 0;
+  }
+
+  function agentScopeGenerationOf(companyId: string) {
+    return agentScopeGeneration.get(companyId) ?? 0;
   }
 
   function invalidateFor(event: LiveEvent) {
@@ -188,6 +198,15 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       issueProject.delete(payload.entityId);
       const deletedProject = deletedIssueProjectOf(event);
       if (deletedProject !== undefined) deletedIssueProject.set(payload.entityId, deletedProject);
+    }
+    // Any agent or stewardship mutation may move the visibility scope; a
+    // company update is a scope input only when the default changed.
+    if (
+      payload.entityType === "agent" ||
+      payload.entityType === "agent_stewardship" ||
+      (payload.entityType === "company" && asRecord(payload.details)?.agentVisibilityDefault !== undefined)
+    ) {
+      agentScopeGeneration.set(event.companyId, agentScopeGenerationOf(event.companyId) + 1);
     }
   }
 
@@ -309,7 +328,7 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     loadActor: () => Promise<LiveEventActor>;
   }) {
     const { companyId } = input;
-    let actorReq: { value: Promise<Request>; expiresAt: number } | null = null;
+    let actorReq: { value: Promise<Request>; expiresAt: number; agentScopeGen: number } | null = null;
     const decisions = new Map<string, { visible: boolean; generation: number; expiresAt: number }>();
     // AgentDash (GH #708): bumped by invalidateActor — and by refreshActor
     // when the re-check's fingerprint moved — so a decision computed from an
@@ -317,9 +336,24 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     let actorEpoch = 0;
 
     function currentReq(): Promise<Request> {
-      if (actorReq && actorReq.expiresAt > now()) return actorReq.value;
+      const scopeGeneration = agentScopeGenerationOf(companyId);
+      if (actorReq && actorReq.expiresAt > now()) {
+        if (actorReq.agentScopeGen === scopeGeneration) return actorReq.value;
+        // The actor is still inside its TTL, but an agent-scope input moved
+        // since this request was built. Wrap the same actor in a fresh
+        // request object: the visibility scope is cached on the request (a
+        // WeakMap in routes/visibility.ts), so this drops the stale scope
+        // without paying an actor re-read.
+        const value = actorReq.value.then((req) => ({ actor: req.actor }) as Request);
+        const entry = { value, expiresAt: actorReq.expiresAt, agentScopeGen: scopeGeneration };
+        actorReq = entry;
+        value.catch(() => {
+          if (actorReq === entry) actorReq = null;
+        });
+        return value;
+      }
       const value = input.loadActor().then((actor) => ({ actor }) as unknown as Request);
-      const entry = { value, expiresAt: now() + ACTOR_TTL_MS };
+      const entry = { value, expiresAt: now() + ACTOR_TTL_MS, agentScopeGen: scopeGeneration };
       actorReq = entry;
       value.catch(() => {
         if (actorReq === entry) actorReq = null;
@@ -385,24 +419,26 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
      * the actor — hand it here instead of letting the TTL expire and paying a
      * database re-read on the next event. `changed` means the re-check's
      * fingerprint moved: the epoch bumps and cached decisions drop so they are
-     * recomputed against the new actor. Unchanged means the stored request
-     * names the same state, so only its expiry extends — keeping the same
-     * request object preserves the caches keyed on it (the agent-visibility
-     * scope), which is where the saving actually comes from.
+     * recomputed against the new actor.
+     *
+     * A fresh request object is stored on EVERY refresh, changed or not: the
+     * agent-visibility scope is cached on the request object, and its inputs
+     * (stewardships, agent visibility flags, the company default, new agents)
+     * are not part of the fingerprint and can change with no signal reaching
+     * this socket. Reusing the request would let a scope outlive the
+     * heartbeat meant to bound it; rebuilding bounds staleness to one
+     * heartbeat while still costing zero actor reads. The saving is the actor
+     * itself, not the scope.
      */
     function refreshActor(actor: LiveEventActor, changed: boolean) {
       if (changed) {
         actorEpoch += 1;
         decisions.clear();
-        actorReq = null;
-      }
-      if (actorReq) {
-        actorReq.expiresAt = now() + ACTOR_TTL_MS;
-        return;
       }
       actorReq = {
         value: Promise.resolve({ actor } as unknown as Request),
         expiresAt: now() + ACTOR_TTL_MS,
+        agentScopeGen: agentScopeGenerationOf(companyId),
       };
     }
 
