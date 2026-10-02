@@ -20,15 +20,16 @@ async function createCompany(request: APIRequestContext, name: string) {
   return (await res.json()) as { id: string; issuePrefix: string; name: string };
 }
 
-async function companyCount(request: APIRequestContext) {
-  const res = await request.get("/api/companies");
-  expect(res.ok()).toBe(true);
-  return ((await res.json()) as unknown[]).length;
-}
-
 test("a direct load of /:prefix/onboarding opens on the agent step and Close leaves it", async ({ page, request }) => {
   const company = await createCompany(request, `E2E-LaneJ-${Date.now()}`);
-  const before = await companyCount(request);
+  // Other specs create companies in parallel, so instance-wide counts prove
+  // nothing. Record what this page itself asks for instead.
+  const companyCreates: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "POST" && new URL(req.url()).pathname === "/api/companies") {
+      companyCreates.push(req.url());
+    }
+  });
 
   await page.goto(`/${company.issuePrefix}/onboarding`);
   await expect(page.locator("h3", { hasText: /Create your first agent|Add an agent/ })).toBeVisible({ timeout: 30_000 });
@@ -45,7 +46,7 @@ test("a direct load of /:prefix/onboarding opens on the agent step and Close lea
   await expect(page.locator("h3", { hasText: /Create your first agent|Add an agent/ })).toBeVisible({ timeout: 30_000 });
   await expect(page.locator("h3", { hasText: "Name your company" })).toHaveCount(0);
 
-  expect(await companyCount(request)).toBe(before);
+  expect(companyCreates).toEqual([]);
 });
 
 test("Hire a new agent shows plain fields first and hides the technical ones under Advanced", async ({ page, request }) => {

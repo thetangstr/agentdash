@@ -6,7 +6,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { agentsApi } from "../api/agents";
 import { healthApi } from "../api/health";
-import { adapterTypeForInstancePreset } from "../lib/onboarding-defaults";
+import { WIZARD_DEFAULT_ADAPTER_TYPE, adapterTypeForInstancePreset } from "../lib/onboarding-defaults";
 import { companySkillsApi } from "../api/companySkills";
 import { queryKeys } from "../lib/queryKeys";
 import { AGENT_ROLES, type AdapterEnvironmentTestResult } from "@paperclipai/shared";
@@ -85,7 +85,10 @@ export function NewAgent() {
     queryFn: () => healthApi.get(),
     retry: false,
   });
-  const instanceAdapterType = adapterTypeForInstancePreset(health?.adapterPreset);
+  // Only a runtime the instance reports as ready; otherwise the wizard default.
+  const instanceAdapterType = health?.adapterReady
+    ? adapterTypeForInstancePreset(health.adapterPreset)
+    : WIZARD_DEFAULT_ADAPTER_TYPE;
   const [adapterTouched, setAdapterTouched] = useState(false);
   const [configValues, setConfigValues] = useState<CreateConfigValues>(() =>
     createValuesForAdapterType(instanceAdapterType as CreateConfigValues["adapterType"]),

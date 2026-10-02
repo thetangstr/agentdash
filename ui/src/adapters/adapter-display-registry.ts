@@ -151,11 +151,13 @@ export function getAdapterLabel(type: string): string {
  *
  * AgentDash (Scan 3, lane J): the Team list showed "Hermes Agent (local)" in
  * monospace. Every local harness (any `*_local` type, and Cursor) runs on the
- * machine this workspace runs on, which is the fact that matters; the harness
- * name stays available as the hover title.
+ * machine this workspace runs on, which is the fact that matters. That is the
+ * owner's own computer on a self-hosted install and a hosted server on
+ * agentdash.cloud, so the wording names neither; the harness name stays
+ * available as the hover title.
  */
 export function plainRuntimeLabel(type: string): string {
-  if (type.endsWith("_local") || type === "cursor") return "Runs on this computer";
+  if (type.endsWith("_local") || type === "cursor") return "Runs on your workspace server";
   if (type === "openclaw_gateway" || type === "http") return "Runs on another service";
   return getAdapterLabel(type);
 }

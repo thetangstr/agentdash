@@ -58,7 +58,7 @@ vi.mock("../api/heartbeats", () => ({
 
 vi.mock("../adapters/adapter-display-registry", () => ({
   getAdapterLabel: (type: string) => type,
-  plainRuntimeLabel: (type: string) => (type.endsWith("_local") ? "Runs on this computer" : type),
+  plainRuntimeLabel: (type: string) => (type.endsWith("_local") ? "Runs on your workspace server" : type),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -192,7 +192,7 @@ describe("Agents", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("Runs on this computer");
+    expect(container.textContent).toContain("Runs on your workspace server");
     expect(container.textContent).toContain("gpt-5.4");
   });
 

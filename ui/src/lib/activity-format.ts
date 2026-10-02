@@ -34,7 +34,6 @@ const SYSTEM_PLUMBING_ACTIONS = new Set([
   "environment.probed",
   "environment.probed_unsaved",
   "agent.harness_preflight_passed",
-  "agent.runtime_session_reset",
 ]);
 
 export function isSystemPlumbingActivity(action: string): boolean {
