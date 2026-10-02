@@ -5,6 +5,7 @@ import { logger } from "../middleware/logger.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
+  companyService,
   conversationService,
   conversationDispatch,
   agentService,
@@ -16,6 +17,7 @@ import {
 import { llmSummonAdapter } from "../services/agent-summoner.js";
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
+import { buildPhase0Greeting } from "../services/onboarding-orchestrator.js";
 
 const COMPANY_INBOX_TITLE = "Company Inbox";
 
@@ -64,6 +66,39 @@ export function conversationRoutes(db: Db) {
     cosResolver,
   });
 
+  // AgentDash (first-session test, Lane A item 4): a fresh company's inbox used
+  // to open empty, so the founder faced a blank Ask page. The CoS opens the
+  // inbox with the interview's first question, but only for a genuinely fresh
+  // company (#953 review):
+  // - no conversation existed before this inbox, so no CoS interview has run
+  //   (cos onboarding state is per conversation, so none exists either) and a
+  //   founder who finished the /cos interview is never greeted again;
+  // - the company has never hired: its only agent, terminated ones included,
+  //   is the Chief of Staff.
+  // Best effort: a failure here never blocks returning the inbox.
+  async function postCosOpener(companyId: string, conversationId: string) {
+    try {
+      const all = await agents.list(companyId, { includeTerminated: true });
+      const cos = all.find((a: any) => a.role === "chief_of_staff");
+      if (!cos || all.some((a: any) => a.role !== "chief_of_staff")) return;
+      let companyName: string | null = null;
+      try {
+        companyName = (await companyService(db).getById(companyId))?.name ?? null;
+      } catch {
+        // The greeting falls back to the product name.
+      }
+      await svc.postMessage({
+        conversationId,
+        authorKind: "agent",
+        authorId: cos.id,
+        body: buildPhase0Greeting(null, companyName),
+        companyId,
+      });
+    } catch (err) {
+      logger.warn({ err, companyId, conversationId }, "could not post the CoS opener");
+    }
+  }
+
   // AgentDash (security): every `/:id` route resolves the conversation first
   // and authorizes against the conversation's own company. The company is
   // never taken from the request body — a caller-supplied companyId used to
@@ -90,12 +125,16 @@ export function conversationRoutes(db: Db) {
 
     let conversation = await svc.findByCompany(companyId, { title: COMPANY_INBOX_TITLE });
     if (!conversation) {
+      // Any earlier conversation (e.g. the /cos bootstrap one) means the
+      // company is not fresh: it already has its CoS thread and greeting.
+      const earlierConversation = await svc.findByCompany(companyId);
       conversation = await svc.create({
         companyId,
         userId: req.actor.userId,
         title: COMPANY_INBOX_TITLE,
       });
       await svc.addParticipant(conversation.id, req.actor.userId, "owner");
+      if (!earlierConversation) await postCosOpener(companyId, conversation.id);
     }
     res.json(conversation);
   });

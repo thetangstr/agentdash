@@ -3,7 +3,7 @@
 // Tracks the phase + captured goals for the CoS-led onboarding flow described
 // in docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md
 // (Phases B/C/D — goals capture, plan presentation, materialization).
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   cosOnboardingStates,
@@ -139,7 +139,28 @@ export function cosOnboardingStateService(db: Db) {
     return updated[0] ? normalizeRow(updated[0]) : null;
   }
 
-  return { getOrCreate, get, recordTurn, setGoals, advancePhase };
+  // AgentDash (#953 review): compare-and-set phase move. Only the caller that
+  // finds the row still at `fromPhase` moves it; everyone else gets null. The
+  // CoS uses it so two replies racing past the interview run one plan step.
+  async function advancePhaseIf(
+    conversationId: string,
+    fromPhase: CosOnboardingPhase,
+    nextPhase: CosOnboardingPhase,
+  ): Promise<CosOnboardingStateRow | null> {
+    const updated = await db
+      .update(cosOnboardingStates)
+      .set({ phase: nextPhase, turnsInPhase: 0, updatedAt: new Date() })
+      .where(
+        and(
+          eq(cosOnboardingStates.conversationId, conversationId),
+          eq(cosOnboardingStates.phase, fromPhase),
+        ),
+      )
+      .returning();
+    return updated[0] ? normalizeRow(updated[0]) : null;
+  }
+
+  return { getOrCreate, get, recordTurn, setGoals, advancePhase, advancePhaseIf };
 }
 
 // Exported for tests.

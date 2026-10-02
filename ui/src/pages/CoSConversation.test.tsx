@@ -205,6 +205,28 @@ describe("CoSConversation", () => {
     expect(container.querySelector(".chat-panel")).toBeTruthy();
   });
 
+  // AgentDash (first-session test, Lane A item 4): the Ask page opened empty
+  // with engineering-only starter chips.
+  it("passes an opener for an empty conversation and role-neutral starter chips", async () => {
+    mockBootstrap.mockResolvedValue({ companyId: "c1", cosAgentId: "a1", conversationId: "conv1" });
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
+    });
+    await act(async () => {});
+
+    const props = mockChatPanelProps.mock.calls.at(-1)?.[0] as { suggestions: string[]; emptyState: React.ReactNode };
+    expect(props.suggestions).toEqual(["Plan this quarter with me", "Who should I hire first?", "Turn a goal into tasks"]);
+    expect(props.suggestions.join(" ")).not.toMatch(/engineering|issue/i);
+    const opener = document.createElement("div");
+    const openerRoot = createRoot(opener);
+    act(() => openerRoot.render(<>{props.emptyState}</>));
+    expect(opener.textContent).toContain("Your Chief of Staff is ready.");
+    expect(opener.textContent).toContain("this quarter");
+    act(() => openerRoot.unmount());
+  });
+
   it("shows error state when bootstrap fails", async () => {
     mockBootstrap.mockRejectedValue(new Error("Network error"));
 

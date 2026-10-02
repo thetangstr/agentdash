@@ -147,6 +147,10 @@ export function FirstRunPage() {
         onConfigured={() => {
           void queryClient.invalidateQueries({ queryKey: ["onboarding-adapter-status"] });
           void refresh();
+          // AgentDash (first-session test, Lane A item 3): with a model key the
+          // CoS can reply, so the founder goes straight to the conversation.
+          // GitHub and the first issue stay reachable from Home's nudge.
+          navigate("/cos", { replace: true });
         }}
       />
     ) : (

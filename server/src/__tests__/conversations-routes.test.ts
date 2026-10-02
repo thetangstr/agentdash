@@ -64,6 +64,7 @@ function registerModuleMocks() {
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
     conversationService: () => mockConversationService,
+    companyService: () => ({ getById: vi.fn().mockResolvedValue({ id: companyId, name: "Acme Labs" }) }),
     conversationDispatch: mockConversationDispatch,
     agentService: () => mockAgentService,
     cosReplier: vi.fn(() => ({ reply: vi.fn() })),
@@ -210,6 +211,95 @@ describe.sequential("conversation routes", () => {
       });
       expect(mockConversationService.findByCompany).toHaveBeenCalledWith(companyId, { title: "Company Inbox" });
       expect(mockConversationService.addParticipant).toHaveBeenCalledWith(conversationId, userId, "owner");
+    });
+
+    // AgentDash (first-session test, Lane A item 4): a fresh company's Ask
+    // page used to open on an empty conversation.
+    it("opens a fresh company's new inbox with a CoS greeting", async () => {
+      mockConversationService.findByCompany.mockResolvedValue(null);
+      mockConversationService.create.mockResolvedValue({ id: conversationId, companyId, userId, title: "Company Inbox", status: "active" });
+      mockAgentService.list.mockResolvedValue([{ id: "cos-1", role: "chief_of_staff", name: "Chief of Staff" }]);
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (base) =>
+        request(base).get(`/api/conversations/companies/${companyId}/inbox`),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockConversationService.postMessage).toHaveBeenCalledTimes(1);
+      expect(mockConversationService.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId,
+          authorKind: "agent",
+          authorId: "cos-1",
+          companyId,
+          body: expect.stringContaining("I'm your Chief of Staff at Acme Labs"),
+        }),
+      );
+    });
+
+    it("only greets a company that has never had a conversation and never hired", async () => {
+      mockConversationService.findByCompany.mockResolvedValue(null);
+      mockConversationService.create.mockResolvedValue({ id: conversationId, companyId, userId, title: "Company Inbox", status: "active" });
+      mockAgentService.list.mockResolvedValue([{ id: "cos-1", role: "chief_of_staff", name: "Chief of Staff" }]);
+      const app = await createApp(boardActor);
+
+      await requestApp(app, (base) => request(base).get(`/api/conversations/companies/${companyId}/inbox`));
+
+      // Terminated hires count as hires.
+      expect(mockAgentService.list).toHaveBeenCalledWith(companyId, { includeTerminated: true });
+      // The check for an earlier conversation is untitled (any CoS thread).
+      expect(mockConversationService.findByCompany).toHaveBeenCalledWith(companyId);
+    });
+
+    // Review of #953: a founder who already ran the /cos interview has an
+    // earlier conversation; their new inbox must not restart the interview.
+    it("does not greet when the company already has a CoS conversation", async () => {
+      mockConversationService.findByCompany.mockImplementation(async (_companyId: string, opts?: { title?: string }) =>
+        opts?.title ? null : { id: "bootstrap-conv", companyId, userId, title: null, status: "active" },
+      );
+      mockConversationService.create.mockResolvedValue({ id: conversationId, companyId, userId, title: "Company Inbox", status: "active" });
+      mockAgentService.list.mockResolvedValue([{ id: "cos-1", role: "chief_of_staff", name: "Chief of Staff" }]);
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (base) =>
+        request(base).get(`/api/conversations/companies/${companyId}/inbox`),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockConversationService.create).toHaveBeenCalled();
+      expect(mockConversationService.postMessage).not.toHaveBeenCalled();
+    });
+
+    it("does not greet when a past hire was terminated", async () => {
+      mockConversationService.findByCompany.mockResolvedValue(null);
+      mockConversationService.create.mockResolvedValue({ id: conversationId, companyId, userId, title: "Company Inbox", status: "active" });
+      mockAgentService.list.mockImplementation(async (_companyId: string, opts?: { includeTerminated?: boolean }) => [
+        { id: "cos-1", role: "chief_of_staff", name: "Chief of Staff", status: "idle" },
+        ...(opts?.includeTerminated ? [{ id: "old-1", role: "researcher", name: "Rae", status: "terminated" }] : []),
+      ]);
+      const app = await createApp(boardActor);
+
+      await requestApp(app, (base) => request(base).get(`/api/conversations/companies/${companyId}/inbox`));
+
+      expect(mockConversationService.postMessage).not.toHaveBeenCalled();
+    });
+
+    it("does not greet when the company already has a team", async () => {
+      mockConversationService.findByCompany.mockResolvedValue(null);
+      mockConversationService.create.mockResolvedValue({ id: conversationId, companyId, userId, title: "Company Inbox", status: "active" });
+      mockAgentService.list.mockResolvedValue([
+        { id: "cos-1", role: "chief_of_staff", name: "Chief of Staff" },
+        { id: "eng-1", role: "engineer", name: "Ellie" },
+      ]);
+      const app = await createApp(boardActor);
+
+      const res = await requestApp(app, (base) =>
+        request(base).get(`/api/conversations/companies/${companyId}/inbox`),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockConversationService.postMessage).not.toHaveBeenCalled();
     });
 
     it("rejects another company's inbox", async () => {

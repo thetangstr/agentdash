@@ -648,6 +648,98 @@ describe("POST /api/onboarding/confirm-plan", () => {
     );
   });
 
+  // AgentDash (first-session test, Lane A item 2): every hire used to be saved
+  // as role "general" whatever the card proposed.
+  it("persists the proposed roles of a 4-agent plan instead of 'general'", async () => {
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    let createdCount = 0;
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      id: `agent-${++createdCount}`,
+      companyId,
+      name: data.name,
+      pausedAt: data.pausedAt,
+      adapterConfig: {},
+    }));
+    const agent = (role: string, name: string) => ({
+      role,
+      name,
+      adapterType: "hermes_local",
+      responsibilities: ["do the work"],
+      kpis: ["ship it"],
+    });
+    const planPayload = {
+      rationale: "first team",
+      agents: [
+        agent("research_analyst", "Rae"),
+        agent("content_lead", "Cole"),
+        agent("deployment_lead", "Dee"),
+        agent("sales_support", "Sal"),
+      ],
+      alignmentToShortTerm: "short",
+      alignmentToLongTerm: "long",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    const saved = mockAgents.create.mock.calls.map(([, data]: any[]) => ({ role: data.role, title: data.title }));
+    expect(saved).toEqual([
+      { role: "researcher", title: "Research Analyst" },
+      { role: "cmo", title: "Content Lead" },
+      { role: "devops", title: "Deployment Lead" },
+      { role: "general", title: "Sales Support" },
+    ]);
+  });
+
+  // Review of #953: a model-written card must not hire a CEO or a second CoS.
+  it("hires a proposed ceo or chief_of_staff as general, keeping the wording as title", async () => {
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    let createdCount = 0;
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      id: `agent-${++createdCount}`,
+      companyId,
+      name: data.name,
+      pausedAt: data.pausedAt,
+      adapterConfig: {},
+    }));
+    const agent = (role: string, name: string) => ({
+      role,
+      name,
+      adapterType: "hermes_local",
+      responsibilities: ["run things"],
+      kpis: ["things run"],
+    });
+    const planPayload = {
+      rationale: "privileged roles",
+      agents: [agent("CEO", "Cleo"), agent("chief_of_staff", "Stan")],
+      alignmentToShortTerm: "short",
+      alignmentToLongTerm: "long",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    const saved = mockAgents.create.mock.calls.map(([, data]: any[]) => ({ role: data.role, title: data.title }));
+    expect(saved).toEqual([
+      { role: "general", title: "CEO" },
+      { role: "general", title: "Chief Of Staff" },
+    ]);
+  });
+
   it("blocks plan materialization on Free workspaces that already have the CoS", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
     mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
