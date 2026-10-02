@@ -30,6 +30,7 @@ import {
 import { AgentIcon } from "../components/AgentIconPicker";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
+import { agentIdentityLine } from "../lib/agent-identity";
 
 import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 
@@ -308,7 +309,7 @@ export function Agents() {
                 titleBadge={
                   agent.status === "terminated" ? null : <AgentKindBadge agent={agent} />
                 }
-                subtitle={`${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`}
+                subtitle={agentIdentityLine(agent)}
                 to={agentUrl(agent)}
                 className={agent.pausedAt && tab !== "paused" ? "opacity-50" : ""}
                 leading={
@@ -491,7 +492,7 @@ function PhoneAgentCard({
   liveRun: { runId: string; liveCount: number } | undefined;
   dimmed: boolean;
 }) {
-  const role = `${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`;
+  const role = agentIdentityLine(agent);
   return (
     <Link
       to={agentUrl(agent)}

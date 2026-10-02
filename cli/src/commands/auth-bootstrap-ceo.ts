@@ -15,7 +15,7 @@ function createInviteToken() {
   return `pcp_bootstrap_${randomBytes(24).toString("hex")}`;
 }
 
-function resolveDbUrl(configPath?: string, explicitDbUrl?: string) {
+export function resolveDbUrl(configPath?: string, explicitDbUrl?: string) {
   if (explicitDbUrl) return explicitDbUrl;
   // Env before config, matching resolveBaseUrl below.
   //

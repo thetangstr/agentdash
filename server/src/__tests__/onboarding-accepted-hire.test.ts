@@ -69,7 +69,9 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     };
     try {
       const response = await confirm(f); expect(response.status).toBe(201); expect(backend).toBeGreaterThan(0);
-      expect(await hires(f)).toHaveLength(1); expect((await hires(f))[0]).toMatchObject({ status: 'idle', adapterConfig: { nativeBundle: true } });
+      expect(await hires(f)).toHaveLength(1); expect((await hires(f))[0]).toMatchObject({ status: 'idle', adapterConfig: { nativeBundle: true }, role: 'cmo', title: 'Marketing', autonomy: 'autonomous', accountableUserId: f.userId });
+      // Scan 3 lane H: an autonomous hire gets no key a person could carry.
+      expect(response.body.apiKey).toBeUndefined(); expect(await db.select().from(agentApiKeys).where(eq(agentApiKeys.agentId,(await hires(f))[0].id))).toEqual([]);
       expect((await confirm(f)).status).toBe(409); expect(await hires(f)).toHaveLength(1);
       expect((await db.select().from(assistantConversations).where(eq(assistantConversations.id,f.conversation.id)))[0].metadata).toMatchObject({ keep: 'unrelated' });
     } finally { stop(); }

@@ -3,10 +3,11 @@ import type { agentInstructionsService } from './agent-instructions.js';
 import { workforceService } from './workforce.js';
 import { assertActivityAcceptance, type ActivityAcceptance } from './activity-log.js';
 import type { Db } from '@paperclipai/db';
-import type { AgentProposal, InterviewTurn } from "@paperclipai/shared";
+import { mapProposedAgentRole, proposedRoleTitle, type AgentProposal, type InterviewTurn } from "@paperclipai/shared";
 import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
+import { onboardingHireAccountability } from "./founder-stewardship.js";
 
 interface Deps {
   agents: Pick<ReturnType<typeof agentService>, 'getById' | 'create' | 'createApiKey' | 'completeMaterialization'>;
@@ -19,6 +20,12 @@ interface CreateInput {
   reportsToAgentId: string;
   proposal: AgentProposal;
   transcript: InterviewTurn[];
+  /**
+   * AgentDash (scan 3, lane H): the human confirming the hire. When they are
+   * an active member (read inside the hire transaction) the hire is created
+   * autonomous with them accountable, as /confirm-plan hires are.
+   */
+  accountableUserId?: string | null;
 }
 
 // AgentDash: accepted identity is durable before managed file work begins.
@@ -57,10 +64,18 @@ export function agentCreatorFromProposal(deps: Deps) {
     const { companyId, reportsToAgentId, proposal } = input;
     const leader = await agents.getById(reportsToAgentId);
     if (!leader || leader.companyId !== companyId) throw notFound('Reporting agent not found');
+    const membershipReader = acceptance ? acceptance.executor : deps.db;
+    const accountability = membershipReader && input.accountableUserId
+      ? await onboardingHireAccountability(membershipReader, companyId, input.accountableUserId)
+      : {};
     const data = {
-      name: proposal.name, role: 'general' as const, title: proposal.role,
+      // AgentDash (scan 3, lane H): the proposed role maps onto AGENT_ROLES
+      // (nearest fit, "general" only when nothing fits, never a privileged
+      // role) and its humanized wording is the title, as /confirm-plan does.
+      name: proposal.name, role: mapProposedAgentRole(proposal.role), title: proposedRoleTitle(proposal.role),
       adapterType: leader.adapterType, workforceTemplateId: proposal.workforceTemplateId,
       adapterConfig: {}, reportsTo: reportsToAgentId,
+      ...accountability,
       ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
     };
     const created = acceptance ? await agents.create(companyId, data, acceptance) : await agents.create(companyId, data);
@@ -71,7 +86,9 @@ export function agentCreatorFromProposal(deps: Deps) {
     return completeManagedHire(deps, created, async () => {
       const defaultBundle = await loadDefaultAgentInstructionsBundle('default');
       return { ...defaultBundle, 'AGENTS.md': renderAgents(defaultBundle['AGENTS.md'], proposal, transcript) };
-    }, proposal.workforceTemplateId, userId, true);
+    // An autonomous hire gets no key a person could carry (assertAgentMayHoldKey);
+    // like /confirm-plan hires it runs on the short-lived run JWT.
+    }, proposal.workforceTemplateId, userId, created.autonomy !== 'autonomous');
   }
   return {
     accept, complete,

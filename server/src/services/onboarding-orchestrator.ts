@@ -170,7 +170,17 @@ export function onboardingOrchestrator(deps: Deps) {
       agents: cos ? 0 : 1,
     });
 
-    // Step 2: grant agents:create FIRST (before owner promotion — see GH #72).
+    // Step 2: membership, then the agents:create grant (GH #72).
+    // AgentDash (security, PR #956 review): owner only for a brand-new
+    // membership. ensureMembership REWRITES an existing row's role, which let a
+    // viewer or member who called bootstrap become owner; an existing
+    // membership is left exactly as it is (never upgraded or downgraded).
+    if (!existingMembership) {
+      await services.access.ensureMembership(company.id, "user", user.id, "owner", "active");
+    }
+    // AgentDash (scan 3, lane H): setPrincipalPermission no longer touches an
+    // existing membership. It used to upsert `member`, which demoted a founder
+    // who created the company at /company-create the moment they opened /cos.
     await services.access.setPrincipalPermission(
       company.id,
       "user",
@@ -179,13 +189,6 @@ export function onboardingOrchestrator(deps: Deps) {
       true,
       user.id,
     );
-    // AgentDash (security, PR #956 review): owner only for a brand-new
-    // membership. ensureMembership REWRITES an existing row's role, which let a
-    // viewer or member who called bootstrap become owner; an existing
-    // membership is left exactly as it is (never upgraded or downgraded).
-    if (!existingMembership) {
-      await services.access.ensureMembership(company.id, "user", user.id, "owner", "active");
-    }
 
     // Step 3: ensure a Chief of Staff agent exists.
     if (!cos) {

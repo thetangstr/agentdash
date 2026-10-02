@@ -256,7 +256,7 @@ describe("Agents", () => {
       expect(kind.className).toContain("text-xs");
       expect(kind.className).not.toContain("text-[10px]");
       expect(cards[0]!.textContent).toContain("Runs when asked");
-      expect(cards[0]!.textContent).toContain("deployment_lead");
+      expect(cards[0]!.textContent).toContain("Deployment Lead");
     });
 
     it("collapses the toolbar to a primary New agent button and a ⋯ menu", async () => {

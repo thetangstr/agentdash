@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { onboard } from "./commands/onboard.js";
 import { setup, setupServer, setupBootstrap, setupAdapter } from "./commands/setup.js";
 import { doctor } from "./commands/doctor.js";
+import { repairFounderOwner } from "./commands/repair-founder-owner.js";
 import { envCommand } from "./commands/env.js";
 import { configure } from "./commands/configure.js";
 import { addAllowedHostname } from "./commands/allowed-hostname.js";
@@ -102,7 +103,7 @@ setupCmd
   .option("-y, --yes", "Non-interactive", false)
   .action(setupBootstrap);
 
-program
+const doctorCommand = program
   .command("doctor")
   .description("Run diagnostic checks on your Paperclip setup")
   .option("-c, --config <path>", "Path to config file")
@@ -112,6 +113,20 @@ program
   .option("-y, --yes", "Skip repair confirmation prompts")
   .action(async (opts) => {
     await doctor(opts);
+  });
+
+// AgentDash (scan 3, lane H): operator repair for founders demoted to member.
+doctorCommand
+  .command("repair-founder-owner")
+  .description("List companies with no active owner and the evidence for each member; --apply promotes one named user")
+  .option("-c, --config <path>", "Path to config file")
+  .option("--db-url <url>", "Database connection string (defaults to DATABASE_URL or the config)")
+  .option("--company <id>", "Only this company (required with --apply)")
+  .option("--user <id>", "The user to restore as owner (required with --apply)")
+  .option("--apply", "Promote the named user; without it this is a dry run", false)
+  .option("--force", "With --apply: promote even without creator evidence", false)
+  .action(async (opts) => {
+    await repairFounderOwner(opts);
   });
 
 program

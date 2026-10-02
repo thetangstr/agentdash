@@ -24,6 +24,7 @@ import { buildCompanyUserProfileMap } from "../../lib/company-members";
 import { formatCents, formatTokens } from "../../lib/utils";
 import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE } from "../../lib/token-figures";
 import { timeAgo } from "../../lib/timeAgo";
+import { agentIdentityLine } from "../../lib/agent-identity";
 import { ActivityRow } from "../ActivityRow";
 import { isSystemPlumbingActivity } from "../../lib/activity-format";
 
@@ -305,7 +306,7 @@ function FleetPanel({ agents, isLoading, error }: { agents: Agent[] | undefined;
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{agent.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {(agent.role ?? "agent").replace(/_/g, " ")}
+                      {agentIdentityLine(agent) || "Agent"}
                     </span>
                   </span>
                   <span className="shrink-0 text-right text-xs text-muted-foreground">

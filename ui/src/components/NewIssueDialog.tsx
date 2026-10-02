@@ -65,6 +65,7 @@ import { issueStatusText, issueStatusTextDefault, priorityColor, priorityColorDe
 import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./MarkdownEditor";
 import { AgentIcon } from "./AgentIconPicker";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
+import { agentPickerSubtitle } from "../lib/agent-identity";
 
 const DRAFT_KEY = "paperclip:issue-draft";
 const DEBOUNCE_MS = 800;
@@ -1393,10 +1394,20 @@ export function NewIssueDialog() {
                   const assignee = parseAssigneeValue(option.id).assigneeAgentId
                     ? (agents ?? []).find((agent) => agent.id === parseAssigneeValue(option.id).assigneeAgentId)
                     : null;
+                  // AgentDash (scan 3, lane H): the agent's title under its
+                  // name, so "Ivy" reads as "Ivy / Proposal Drafter".
+                  const subtitle = assignee ? agentPickerSubtitle(assignee) : "";
                   return (
                     <>
                       {assignee ? <AgentIcon icon={assignee.icon} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : null}
-                      <span className="truncate">{option.label}</span>
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate">{option.label}</span>
+                        {subtitle ? (
+                          <span className="truncate text-xs text-muted-foreground" data-testid="assignee-option-subtitle">
+                            {subtitle}
+                          </span>
+                        ) : null}
+                      </span>
                     </>
                   );
                 }}

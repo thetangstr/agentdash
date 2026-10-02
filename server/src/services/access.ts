@@ -734,6 +734,27 @@ export function accessService(db: Db) {
       .then((rows) => rows[0]);
   }
 
+  /**
+   * Insert a `member`/`active` membership only when the principal has none.
+   * Never updates an existing row: the role and status a person already holds
+   * are not a side effect of granting them a permission.
+   */
+  async function ensureMembershipExists(
+    companyId: string,
+    principalType: PrincipalType,
+    principalId: string,
+  ) {
+    const existing = await getMembership(companyId, principalType, principalId);
+    if (existing) return existing;
+    const inserted = await db
+      .insert(companyMemberships)
+      .values({ companyId, principalType, principalId, status: "active", membershipRole: "member" })
+      .onConflictDoNothing()
+      .returning()
+      .then((rows) => rows[0] ?? null);
+    return inserted ?? (await getMembership(companyId, principalType, principalId));
+  }
+
   async function setPrincipalGrants(
     companyId: string,
     principalType: PrincipalType,
@@ -822,7 +843,14 @@ export function accessService(db: Db) {
       return;
     }
 
-    await ensureMembership(companyId, principalType, principalId, "member", "active");
+    // AgentDash (scan 3, lane H): a permission grant never rewrites an
+    // existing membership. ensureMembership(…, "member") here used to turn the
+    // company creator's `owner` row into `member` the first time /cos ran the
+    // onboarding bootstrap (it grants agents:create to an existing owner), and
+    // every later /cos visit then refused them as a non-admin. A principal with
+    // no membership row still gets one as `member`; any existing row keeps its
+    // role and status exactly as they are.
+    await ensureMembershipExists(companyId, principalType, principalId);
 
     const existing = await db
       .select()
@@ -937,6 +965,7 @@ export function accessService(db: Db) {
     getMembership,
     getMemberById,
     ensureMembership,
+    ensureMembershipExists,
     listMembers,
     listActiveUserMemberships,
     copyActiveUserMemberships,
