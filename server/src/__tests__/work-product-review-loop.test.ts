@@ -292,6 +292,41 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect(logged.filter((row) => (row.details as Record<string, unknown> | null)?.reason === 'resubmitted_for_review')).toHaveLength(0);
   });
 
+  // AgentDash (Scan 4 lane M, canary ACM-4): the board decides to take the
+  // sent-back version as it is and closes the issue.
+  it('a board user closing the issue accepts a deliverable still in changes_requested; an agent closing it does not', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    const products = workProductService(db);
+    const sentBack = await products.createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+    });
+    const draft = await products.createForIssue(f.issue.id, f.company.id, { type: 'document', provider: 'paperclip', title: 'Scratch', status: 'draft' });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto.' })).status).toBe(200);
+
+    // The agent closing its own issue is not acceptance.
+    await db.update(issues).set({ checkoutRunId: f.run.id, executionRunId: f.run.id }).where(eq(issues.id, f.issue.id));
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.agentToken, { status: 'done', comment: 'Done.' }, f.run.id)).status).toBe(200);
+    const [afterAgent] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, sentBack!.id));
+    expect(afterAgent!.status).toBe('changes_requested');
+    expect(await shippedIds(f.company.id, f.boardToken)).not.toContain(sentBack!.id);
+
+    // Reopen, then the board closes it: accepted as it is.
+    await db.update(issues).set({ status: 'in_progress', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done' })).status).toBe(200);
+    const [accepted] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, sentBack!.id));
+    expect(accepted).toMatchObject({ status: 'approved', reviewState: 'approved' });
+    expect(await shippedIds(f.company.id, f.boardToken)).toContain(sentBack!.id);
+    const [untouched] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, draft!.id));
+    expect(untouched!.status).toBe('draft');
+
+    // Reopening withdraws that acceptance and restores what it was.
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'todo' })).status).toBe(200);
+    const [reopened] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, sentBack!.id));
+    expect(reopened).toMatchObject({ status: 'changes_requested', reviewState: 'changes_requested' });
+    expect(await shippedIds(f.company.id, f.boardToken)).not.toContain(sentBack!.id);
+  });
+
   it('legacy work that went through Request changes ships only when accepted, not because the agent closed the issue', async () => {
     const f = await fixture();
     await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
