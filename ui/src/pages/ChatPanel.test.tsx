@@ -78,7 +78,7 @@ describe("ChatPanel reply state", () => {
     vi.useRealTimers();
   });
 
-  const userMsg = (createdAt: Date) => ({ id: "u1", role: "user", content: "Are you there?", createdAt: createdAt.toISOString() });
+  const userMsg = (createdAt: Date) => ({ id: "u1", role: "user", authorUserId: "person-1", content: "Are you there?", createdAt: createdAt.toISOString() });
   const q = (id: string) => container.querySelector(`[data-testid="${id}"]`);
 
   it("shows CoS is thinking while the conversation ends on the person's message", () => {
@@ -119,5 +119,29 @@ describe("ChatPanel reply state", () => {
     });
     expect(mockRetry).toHaveBeenCalledWith("c1", "u1");
     expect(q("cos-thinking")).not.toBeNull();
+  });
+
+  it("does not say the CoS is thinking when the message is for a mentioned agent, or the company has no CoS", () => {
+    const directory = [{ id: "a1", name: "Maya", role: "engineer" }];
+    mockUseMessages.mockReturnValue([{ ...userMsg(new Date()), content: "@Maya can you look at this?" }]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" agentDirectory={directory} />));
+    expect(q("cos-thinking")).toBeNull();
+
+    mockUseMessages.mockReturnValue([userMsg(new Date())]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" hasChiefOfStaff={false} />));
+    expect(q("cos-thinking")).toBeNull();
+  });
+
+  it("offers the overdue-reply Retry only to the message's author", () => {
+    vi.useFakeTimers();
+    const sent = new Date();
+    vi.setSystemTime(sent);
+    mockUseMessages.mockReturnValue([userMsg(sent)]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" viewerUserId="someone-else" />));
+    act(() => {
+      vi.setSystemTime(new Date(sent.getTime() + REPLY_PENDING_TIMEOUT_MS + 1000));
+      vi.advanceTimersByTime(REPLY_PENDING_TIMEOUT_MS + 1000);
+    });
+    expect(q("cos-reply-stalled")).toBeNull();
   });
 });

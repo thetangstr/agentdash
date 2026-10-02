@@ -278,6 +278,18 @@ describe("conversationService WS bus emission", () => {
     );
   });
 
+  it("postMessage refuses a companyId that is not the conversation's, and never emits for it", async () => {
+    mockEmitMessageCreated.mockClear();
+    const { conversationService } = await import("../services/conversations.js");
+    const svc = conversationService(buildFakeDb(fakeMessageRow, [{ companyId: "company-from-conv" } as any]));
+    await expect(
+      svc.postMessage({ conversationId: "conv-1", authorKind: "agent", authorId: "cos-1", body: "x", companyId: "other-company" }),
+    ).rejects.toThrow(/does not match the conversation/);
+    expect(mockEmitMessageCreated).not.toHaveBeenCalled();
+    await svc.postMessage({ conversationId: "conv-1", authorKind: "agent", authorId: "cos-1", body: "x", companyId: "company-from-conv" });
+    expect(mockEmitMessageCreated).toHaveBeenCalledWith(expect.objectContaining({ companyId: "company-from-conv" }));
+  });
+
   it("postMessage does not emit when neither the caller nor the conversation gives a companyId", async () => {
     mockEmitMessageCreated.mockClear();
     const { conversationService } = await import("../services/conversations.js");

@@ -77,6 +77,7 @@ vi.mock("@tanstack/react-query", () => ({
   },
 }));
 
+vi.mock("../api/auth", () => ({ authApi: { getSession: vi.fn().mockResolvedValue(null) } }));
 vi.mock("../api/agents", () => ({
   agentsApi: {
     // The useQuery mock above invokes queryFn() synchronously and returns the

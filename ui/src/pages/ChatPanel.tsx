@@ -8,6 +8,7 @@ import { conversationsApi } from "../api/conversations";
 import type { CardContext } from "../components/cards";
 import { cn } from "../lib/utils";
 import type { Message } from "../api/conversations";
+import { parseMentions } from "@paperclipai/shared";
 
 /**
  * AgentDash: how long the chat shows "CoS is thinking…" after the person's
@@ -19,6 +20,12 @@ export const REPLY_PENDING_TIMEOUT_MS = 150_000;
 
 function authorOf(m: Message): string | undefined {
   return m.role ?? m.authorKind;
+}
+
+/** True when the message @-mentions an agent in the directory (it is not for the CoS). */
+function addressedToAgent(m: Message, directory: Array<{ id: string; name: string; role: string }>): boolean {
+  const text = m.content ?? m.body ?? "";
+  return parseMentions(text, directory).some((mention) => Boolean(mention.agentId));
 }
 
 /** The person's message still waiting for a reply, if the conversation ends on one. */
@@ -36,6 +43,8 @@ export default function ChatPanel({
   suggestions,
   emptyState,
   padComposerForSafeArea = false,
+  viewerUserId,
+  hasChiefOfStaff = true,
 }: {
   conversationId: string;
   companyId: string;
@@ -52,6 +61,14 @@ export default function ChatPanel({
    * the bottom nav and the inset.
    */
   padComposerForSafeArea?: boolean;
+  /**
+   * AgentDash: the signed-in person. Retry on a failed reply is only offered
+   * for that person's own messages (the server refuses anyone else's). When
+   * unknown, Retry is offered and the server decides.
+   */
+  viewerUserId?: string | null;
+  /** AgentDash: false when the company has no Chief of Staff, so nobody is "thinking". */
+  hasChiefOfStaff?: boolean;
 }) {
   const messages = useMessages(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -88,7 +105,19 @@ export default function ChatPanel({
   const [retryFromCount, setRetryFromCount] = useState<number | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const pending = pendingUserMessage(messages);
+  // Only a message the CoS will answer is "pending": one that @-mentions an
+  // agent goes to that agent (the summoner), and a company with no CoS has
+  // nobody to wait for.
+  const lastUser = pendingUserMessage(messages);
+  const pending =
+    lastUser && hasChiefOfStaff && !addressedToAgent(lastUser, agentDirectory) ? lastUser : null;
+  function canRetryMessage(messageId: string): boolean {
+    const message = messages.find((m) => m.id === messageId);
+    if (!message) return false;
+    // Only the author can retry (the server enforces it; old rows have no author).
+    if (!message.authorUserId) return false;
+    return !viewerUserId || message.authorUserId === viewerUserId;
+  }
   const retrying = retryFromCount !== null && messages.length <= retryFromCount;
   const pendingSince = pending ? new Date(pending.createdAt).getTime() : NaN;
   const pendingAge = Number.isFinite(pendingSince) ? now - pendingSince : 0;
@@ -135,6 +164,7 @@ export default function ChatPanel({
   const resolvedCardContext: CardContext = {
     ...baseCardContext,
     onDispatchRetry: baseCardContext.onDispatchRetry ?? retryReply,
+    canDispatchRetry: baseCardContext.canDispatchRetry ?? canRetryMessage,
   };
 
   return (
@@ -164,7 +194,7 @@ export default function ChatPanel({
               CoS is thinking…
             </div>
           ) : null}
-          {stalled && pending ? (
+          {stalled && pending && canRetryMessage(pending.id) ? (
             <div data-testid="cos-reply-stalled" role="alert" className="mt-5 flex flex-wrap items-center gap-2 text-sm text-text-secondary">
               <span>CoS hasn't replied.</span>
               <button

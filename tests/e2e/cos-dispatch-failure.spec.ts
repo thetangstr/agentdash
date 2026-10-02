@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test, expect } from "@playwright/test";
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3411);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 test("a failed CoS reply shows thinking, then the reason with Retry, then the reply", async ({ page, request }) => {

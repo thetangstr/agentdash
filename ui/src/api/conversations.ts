@@ -18,6 +18,8 @@ export interface Message {
   authorKind?: "user" | "agent";
   role?: "user" | "agent"; // upstream column name
   authorId?: string;
+  /** The signed-in person who wrote a user message (null on agent messages and old rows). */
+  authorUserId?: string | null;
   body?: string;
   content?: string; // upstream column name
   cardKind?: string | null;

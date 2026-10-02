@@ -662,6 +662,15 @@ describe("dispatchLLM names the reason Hermes printed for a failed turn", () => 
     expect(error.message).not.toContain("session_id:");
   });
 
+  it("scrubs key-shaped text a provider echoed back before it reaches the error", () => {
+    const out = describeAdapterFailure(
+      "HTTP 401: Incorrect API key provided: sk-abcdef1234567890abcd. Bearer abcdefgh12345678\n",
+      "\nsession_id: 1\n",
+    );
+    expect(out).toContain("HTTP 401");
+    expect(out).not.toMatch(/sk-abcdef|abcdefgh12345678/);
+  });
+
   it("describeAdapterFailure keeps real stderr, drops the session line, and caps the length", () => {
     expect(describeAdapterFailure(HERMES_STDOUT, HERMES_STDERR)).toMatch(/^Billing or credits exhausted: HTTP 429/);
     expect(describeAdapterFailure("", "Traceback: boom\nsession_id: x\n")).toBe("Traceback: boom");

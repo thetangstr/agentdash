@@ -46,6 +46,7 @@ vi.mock("../api/conversations", () => ({
   conversationsApi: { companyInbox: mockCompanyInbox },
 }));
 
+vi.mock("../api/auth", () => ({ authApi: { getSession: vi.fn().mockResolvedValue(null) } }));
 vi.mock("../api/agents", () => ({
   agentsApi: { list: mockAgentsList },
 }));

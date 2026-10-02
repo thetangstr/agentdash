@@ -522,6 +522,26 @@ describe("cosReplier.reply (plan arrives in the same turn)", () => {
     expect(posted.filter((m) => m.cardKind)).toHaveLength(0);
   });
 
+  it("posts the dispatch error card (with Retry target) when the follow-up plan call throws", async () => {
+    const { world, posted, conversations, cosState } = makeWorld();
+    const llm = vi
+      .fn()
+      .mockResolvedValueOnce(advancingGoalsReply)
+      .mockRejectedValueOnce(new Error("hermes exited 1: HTTP 429: Insufficient balance or no resource package"));
+
+    await cosReplier({ conversations, llm, cosState } as any).reply({
+      conversationId: "conv1",
+      cosAgentId: "cos1",
+      companyId: "co1",
+      triggerMessageId: "u1",
+    });
+
+    expect(world.phase).toBe("goals");
+    const card = posted.find((m) => m.cardKind === "cos_dispatch_error_v1");
+    expect(card).toBeDefined();
+    expect(card!.cardPayload).toMatchObject({ retryMessageId: "u1" });
+  });
+
   it("catches a failed card post in the plan phase and still answers", async () => {
     const { world, posted, conversations, cosState } = makeWorld();
     world.phase = "plan";

@@ -57,4 +57,18 @@ describe("cos_dispatch_error_v1 card", () => {
     });
     expect(container.textContent).toContain("Retry failed to start");
   });
+
+  it("hides Retry when this viewer did not write the message, and shows the hint", () => {
+    act(() =>
+      root.render(
+        <CardRenderer
+          cardKind="cos_dispatch_error_v1"
+          payload={{ reason: "x", retryMessageId: "u1", hint: "Open Settings and re-save your model key." }}
+          context={{ onDispatchRetry: vi.fn(), canDispatchRetry: () => false }}
+        />,
+      ),
+    );
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector('[data-testid="cos-dispatch-error-hint"]')?.textContent).toContain("re-save your model key");
+  });
 });

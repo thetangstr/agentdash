@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { badRequest, HttpError } from "../errors.js";
 import { agentProfileName } from "./hermes-profile.js";
+import { redactSecrets } from "./redact-secrets.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -126,6 +127,7 @@ export type HermesProviderErrorCode =
   | "provider_model_unavailable"
   | "provider_unreachable"
   | "provider_no_balance"
+  | "provider_rate_limited"
   | "provider_error"
   | "provider_owned_by_other_company"
   | "hermes_config_failed";
@@ -140,9 +142,7 @@ export class HermesProviderSetupError extends HttpError {
 
 /** Replace every occurrence of the key (and anything key-shaped) in text. */
 export function redactKey(text: string, apiKey: string): string {
-  let out = text;
-  if (apiKey) out = out.split(apiKey).join("[redacted]");
-  return out.replace(/\b(sk-[A-Za-z0-9_-]{6,}|[A-Za-z0-9]{24,}\.[A-Za-z0-9]{8,})/g, "[redacted]");
+  return redactSecrets(text, [apiKey]);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +318,12 @@ export interface VerifiedProvider {
   baseUrl: string | null;
 }
 
-type ProbeOutcome = { ok: true } | { ok: false; status: number | null };
+/**
+ * `noBalance`: HTTP 429 carrying Z.AI's code 1113 ("Insufficient balance or no
+ * resource package"). Any other 429 is a rate limit and says nothing about
+ * balance.
+ */
+type ProbeOutcome = { ok: true } | { ok: false; status: number | null; noBalance?: boolean };
 
 async function runProbe(r: ReturnType<typeof resolveDeps>, probe: ProbeRequest): Promise<ProbeOutcome> {
   let response: Response;
@@ -332,9 +337,11 @@ async function runProbe(r: ReturnType<typeof resolveDeps>, probe: ProbeRequest):
   } catch {
     return { ok: false, status: null };
   }
-  // Drain without reading into anything that could be logged.
-  await response.arrayBuffer().catch(() => undefined);
-  return response.ok ? { ok: true } : { ok: false, status: response.status };
+  // The body is read only to classify a 429, never echoed or logged.
+  const text = response.ok ? "" : await response.text().catch(() => "");
+  if (response.ok) return { ok: true };
+  const noBalance = response.status === 429 && /\b1113\b|insufficient balance|no resource package/i.test(text);
+  return { ok: false, status: response.status, noBalance };
 }
 
 /**
@@ -351,10 +358,28 @@ export async function verifyProviderKey(
   const label = HERMES_PROVIDER_SPECS[input.provider].label;
   const candidates: Array<string | undefined> = input.provider === "zai" ? [...ZAI_BASE_URLS] : [undefined];
   const statuses: number[] = [];
+  let noBalance = false;
+  let rateLimited = false;
+  // True once a more-preferred endpoint failed in a way that says nothing
+  // about the key (rate limit, network, 5xx). A later endpoint that answers is
+  // then not proof the preferred one is unusable, so nothing is pinned.
+  let preferredInconclusive = false;
   for (const baseUrl of candidates) {
     const outcome = await runProbe(r, buildProviderProbe(input, baseUrl));
-    if (outcome.ok) return { baseUrl: baseUrl ?? null };
-    if (outcome.status !== null) statuses.push(outcome.status);
+    if (outcome.ok) return { baseUrl: preferredInconclusive ? null : (baseUrl ?? null) };
+    if (outcome.status === null) {
+      preferredInconclusive = true;
+      continue;
+    }
+    statuses.push(outcome.status);
+    if (outcome.noBalance) {
+      noBalance = true;
+    } else if (outcome.status === 429) {
+      rateLimited = true;
+      preferredInconclusive = true;
+    } else if (outcome.status >= 500) {
+      preferredInconclusive = true;
+    }
   }
   if (statuses.length === 0) {
     throw new HermesProviderSetupError(
@@ -363,11 +388,18 @@ export async function verifyProviderKey(
       `Could not reach ${label} to check the key. Check the box's network and try again.`,
     );
   }
-  if (statuses.includes(429) && input.provider === "zai") {
+  if (rateLimited) {
+    throw new HermesProviderSetupError(
+      429,
+      "provider_rate_limited",
+      `${label} is rate limiting this key right now (HTTP 429), so the key could not be checked. Wait a minute and try again.`,
+    );
+  }
+  if (noBalance && input.provider === "zai") {
     throw new HermesProviderSetupError(
       422,
       "provider_no_balance",
-      `${label} accepted this key but it has no balance or resource package on any endpoint (HTTP 429). ` +
+      `${label} accepted this key but it has no balance or resource package on any endpoint (HTTP 429, code 1113). ` +
         "Top up the Z.AI account or use a key with a GLM Coding Plan, then try again.",
     );
   }
@@ -670,6 +702,10 @@ export interface ReconcileResult {
   /** Profiles whose key, provider or model had to be rewritten. */
   updated: string[];
   failed: string[];
+  /** The pinned endpoint after this run (null when none is pinned). */
+  baseUrl?: string | null;
+  /** True when this run moved the pinned endpoint to a different one. */
+  repinned?: boolean;
 }
 
 async function profileHasKey(r: ReturnType<typeof resolveDeps>, profile: string, envVar: string, value: string) {
@@ -688,7 +724,16 @@ async function profileHasKey(r: ReturnType<typeof resolveDeps>, profile: string,
  */
 export async function reconcileHermesProviderFromSecret(
   companyId: string,
-  opts: { agentIds: readonly string[] },
+  opts: {
+    agentIds: readonly string[];
+    /**
+     * Endpoint selection (Z.AI). "if_missing" (default) probes once when the
+     * marker has no pinned endpoint; "never" never probes (the first run of a
+     * new agent must not wait on the network); "force" probes again even when
+     * an endpoint is pinned (a lapsed Coding Plan, a balance that ran out).
+     */
+    probe?: "if_missing" | "never" | "force";
+  },
   deps: HermesProviderSetupDeps = {},
 ): Promise<ReconcileResult> {
   const r = resolveDeps(deps);
@@ -710,11 +755,14 @@ export async function reconcileHermesProviderFromSecret(
   // everywhere. If the check fails (offline, no balance anywhere) nothing is
   // pinned and the key is still reconciled as before.
   let baseUrl = marker.baseUrl;
-  if (baseUrlVar && !baseUrl) {
+  const probe = opts.probe ?? "if_missing";
+  if (baseUrlVar && probe !== "never" && (probe === "force" || !baseUrl)) {
     try {
-      baseUrl = (await verifyProviderKey(input, deps)).baseUrl;
+      // A probe that is inconclusive (rate limit, network) returns null and
+      // leaves the current pin alone.
+      baseUrl = (await verifyProviderKey(input, deps)).baseUrl ?? baseUrl;
     } catch {
-      baseUrl = null;
+      // No balance anywhere, key rejected, offline: keep what is pinned.
     }
   }
 
@@ -736,6 +784,6 @@ export async function reconcileHermesProviderFromSecret(
     if (baseUrl && baseUrl !== marker.baseUrl) {
       await writeMarker(r, { ...marker, baseUrl }).catch(() => undefined);
     }
-    return { status: "ok", updated, failed };
+    return { status: "ok", updated, failed, baseUrl, repinned: Boolean(baseUrl && marker.baseUrl && baseUrl !== marker.baseUrl) };
   });
 }

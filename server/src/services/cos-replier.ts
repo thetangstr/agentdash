@@ -14,7 +14,7 @@ import { logger } from "../middleware/logger.js";
 import { WORKFORCE_TEMPLATES, isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
 import type { DispatchMeter } from "./dispatch-llm.js";
-import { DISPATCH_ERROR_CARD_KIND } from "./cos-dispatch-failure.js";
+import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-failure.js";
 
 const AGENT_PLAN_ADAPTER_TYPE_LIST = [
   "claude_local",
@@ -289,7 +289,7 @@ export function cosReplier(deps: Deps) {
   const deepInterviewSpecs = deps.deepInterviewSpecs;
 
   return {
-    reply: async (input: { conversationId: string; cosAgentId: string; companyId?: string }) => {
+    reply: async (input: { conversationId: string; cosAgentId: string; companyId?: string; triggerMessageId?: string }) => {
       const recent = await deps.conversations.paginate(input.conversationId, { limit: 20 });
       const messages = recent
         .slice()
@@ -484,6 +484,19 @@ export function cosReplier(deps: Deps) {
                 await cosState.recordTurn(input.conversationId);
               } catch (err) {
                 await release("follow-up plan turn failed", err);
+                // The goals reply is up but the plan never came: say so, with a
+                // Retry, instead of leaving the chat quiet.
+                if (input.triggerMessageId) {
+                  await postDispatchFailure(deps.conversations, {
+                    conversationId: input.conversationId,
+                    companyId: input.companyId ?? "",
+                    authorId: input.cosAgentId,
+                    retryMessageId: input.triggerMessageId,
+                    err,
+                  }).catch((postErr) =>
+                    logger.warn({ err: postErr, conversationId: input.conversationId }, "cos-replier: could not post the plan failure card"),
+                  );
+                }
                 return goalsMsg;
               }
               const planReply = parseTrailer(planText);

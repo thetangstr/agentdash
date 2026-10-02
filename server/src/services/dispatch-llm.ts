@@ -10,6 +10,7 @@ import { logger } from "../middleware/logger.js";
 import { isHostedBox } from "./license.js";
 import { readFallbackChain } from "../lib/adapter-fallback-chain.js";
 import { HttpError } from "../errors.js";
+import { knownKeysFromEnv, redactSecrets } from "./redact-secrets.js";
 import type { Db } from "@paperclipai/db";
 import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
 
@@ -216,7 +217,9 @@ export function describeAdapterFailure(stdout: string, stderr: string): string {
   const parts = [err.replace(/\s+/g, " "), out].filter((part) => part.length > 0);
   const sessionId = /session_id:\s*(\S+)/.exec(stderr)?.[1];
   if (parts.length === 0) return sessionId ? `no output (session ${sessionId})` : "no output";
-  const detail = parts.join(" | ");
+  // Some providers echo part of the credential back on a 401; scrub before the
+  // text reaches the log or the chat card.
+  const detail = redactSecrets(parts.join(" | "), knownKeysFromEnv());
   return detail.length > 600 ? `${detail.slice(0, 599)}…` : detail;
 }
 

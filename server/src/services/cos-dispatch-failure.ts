@@ -4,6 +4,8 @@
 // conversation as a card the UI renders as "CoS couldn't reply: <reason>.
 // Retry", and posting it publishes `message.created` like any other message.
 
+import { knownKeysFromEnv, redactSecrets } from "./redact-secrets.js";
+
 export const DISPATCH_ERROR_CARD_KIND = "cos_dispatch_error_v1";
 
 export interface DispatchErrorCardPayload {
@@ -32,7 +34,7 @@ export function shortDispatchReason(err: unknown): string {
   const wrapped = /^Adapter "([^"]+)" failed \(([\s\S]*)\) and the adapter\/model invariant/.exec(message);
   if (wrapped) message = `${wrapped[1]}: ${wrapped[2]}`;
 
-  message = message
+  message = redactSecrets(message, knownKeysFromEnv())
     .replace(/\[dispatch-llm\]\s*/g, "")
     // The path of the adapter binary says nothing useful to a founder.
     .replace(/(^|\s)\/\S*\/([^\s/]+)/g, "$1$2")
@@ -44,14 +46,26 @@ export function shortDispatchReason(err: unknown): string {
 }
 
 /**
- * Existing installs cache the Z.AI endpoint per profile until the model key is
- * saved again (saving re-checks every endpoint and pins the working one). When
- * the reason is an exhausted balance, say so; the boot reconcile fixes boxes
- * with a stored key, and this covers the rest.
+ * Z.AI answers HTTP 429 for two different things: code 1113 "Insufficient
+ * balance or no resource package" (the account is empty on that endpoint) and
+ * rate limits (codes 1302/1305, "too many requests"). Only the first means the
+ * balance is gone; a rate-limited key must not be reported, or re-pinned, as
+ * out of balance.
  */
+export function isNoBalanceFailure(text: string): boolean {
+  return /insufficient balance|no resource package|billing or credits exhausted|\b1113\b/i.test(text);
+}
+
+export function isRateLimitFailure(text: string): boolean {
+  return !isNoBalanceFailure(text) && /rate.?limit|too many requests|\b(1302|1305)\b|HTTP 429/i.test(text);
+}
+
 export function dispatchErrorHint(reason: string): string | undefined {
-  if (/insufficient balance|no resource package|billing or credits|code 1113|HTTP 429/i.test(reason)) {
+  if (isNoBalanceFailure(reason)) {
     return "Open Settings, re-save your model key so AgentDash can pick the endpoint that still has balance, then press Retry. If it keeps failing, top up the model account.";
+  }
+  if (isRateLimitFailure(reason)) {
+    return "The model provider is limiting requests right now. Wait a minute, then press Retry.";
   }
   return undefined;
 }

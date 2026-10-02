@@ -28,11 +28,13 @@ const ZAI_CODING = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_GENERAL = "https://api.z.ai/api/paas/v4";
 
 /** Answers per Z.AI base URL; anything unlisted gets `fallback`. */
-function endpointFetch(byBase: Record<string, number>, fallback = 429) {
+function endpointFetch(byBase: Record<string, number | "rate">, fallback: number | "rate" = 429) {
   return vi.fn(async (url: string) => {
     const base = Object.keys(byBase).find((b) => url === `${b}/chat/completions`);
-    const status = base ? byBase[base]! : fallback;
-    return new Response(status === 200 ? '{"choices":[]}' : '{"error":{"code":"1113"}}', { status });
+    const answer = base ? byBase[base]! : fallback;
+    // "rate": HTTP 429 with Z.AI's rate-limit code, which is not a balance problem.
+    if (answer === "rate") return new Response('{"error":{"code":"1302","message":"Rate limit reached"}}', { status: 429 });
+    return new Response(answer === 200 ? '{"choices":[]}' : '{"error":{"code":"1113"}}', { status: answer });
   });
 }
 
@@ -371,7 +373,7 @@ describe("configureHermesProvider", () => {
       calls = [];
 
       const result = await reconcileHermesProviderFromSecret("company-1", { agentIds: [AGENT_A] }, deps());
-      expect(result).toEqual({ status: "ok", updated: [profileOf(AGENT_A)], failed: [] });
+      expect(result).toMatchObject({ status: "ok", updated: [profileOf(AGENT_A)], failed: [] });
       expect(await envOf(profileOf(AGENT_A))).toBe(`GLM_API_KEY=${KEY}\nGLM_BASE_URL=${ZAI_CODING}\n`);
       expect(statSync(join(profilesDir, profileOf(AGENT_A), ".env")).mode & 0o777).toBe(0o600);
       expect(existsSync(join(profilesDir, profileOf(OTHER_COMPANY_AGENT), ".env"))).toBe(false);
@@ -404,7 +406,7 @@ describe("configureHermesProvider", () => {
       const fetchImpl = endpointFetch({ [ZAI_CODING]: 200, [ZAI_GENERAL]: 429 });
 
       const result = await reconcileHermesProviderFromSecret("company-1", { agentIds: [AGENT_A] }, deps(fetchImpl as never));
-      expect(result).toEqual({ status: "ok", updated: ["agentdash", profileOf(AGENT_A)], failed: [] });
+      expect(result).toMatchObject({ status: "ok", updated: ["agentdash", profileOf(AGENT_A)], failed: [] });
       for (const profile of ["agentdash", profileOf(AGENT_A)]) {
         expect(await envOf(profile)).toBe(`GLM_API_KEY=${KEY}\nGLM_BASE_URL=${ZAI_CODING}\n`);
       }
@@ -414,7 +416,7 @@ describe("configureHermesProvider", () => {
       // Pinned now: the next boot neither probes nor rewrites anything.
       fetchImpl.mockClear();
       const again = await reconcileHermesProviderFromSecret("company-1", { agentIds: [AGENT_A] }, deps(fetchImpl as never));
-      expect(again).toEqual({ status: "ok", updated: [], failed: [] });
+      expect(again).toMatchObject({ status: "ok", updated: [], failed: [] });
       expect(fetchImpl).not.toHaveBeenCalled();
     });
 
@@ -426,7 +428,7 @@ describe("configureHermesProvider", () => {
       );
       secretState.set("company-1", KEY);
       const result = await reconcileHermesProviderFromSecret("company-1", { agentIds: [] }, deps(endpointFetch({}, 429) as never));
-      expect(result).toEqual({ status: "ok", updated: ["agentdash"], failed: [] });
+      expect(result).toMatchObject({ status: "ok", updated: ["agentdash"], failed: [] });
       expect(await envOf("agentdash")).toBe(`GLM_API_KEY=${KEY}\n`);
     });
 
@@ -442,6 +444,42 @@ describe("configureHermesProvider", () => {
   });
 
   describe("Z.AI endpoint selection", () => {
+    it("does not pin pay-as-you-go because the Coding Plan was only rate limited at save time", async () => {
+      const fetchImpl = endpointFetch({ [ZAI_CODING]: "rate", [ZAI_GENERAL]: 200 });
+      const input = parseHermesProviderInput({ provider: "zai", apiKey: KEY });
+      await configureHermesProvider("company-1", input, null, { agentIds: [] }, deps(fetchImpl as never));
+      expect(await envOf("agentdash")).not.toContain("GLM_BASE_URL");
+    });
+
+    it("reports a rate limit as a rate limit, not as no balance", async () => {
+      const input = parseHermesProviderInput({ provider: "zai", apiKey: KEY });
+      const attempt = configureHermesProvider("company-1", input, null, { agentIds: [] }, deps(endpointFetch({}, "rate") as never));
+      await expect(attempt).rejects.toMatchObject({ status: 429, code: "provider_rate_limited" });
+      expect(secrets.put).not.toHaveBeenCalled();
+    });
+
+    // A Coding Plan that lapses after setup stays pinned until something looks again.
+    it("probe: force re-pins a lapsed Coding Plan to the endpoint that still has balance; probe: never does not look", async () => {
+      const input = parseHermesProviderInput({ provider: "zai", apiKey: KEY });
+      await configureHermesProvider("company-1", input, null, { agentIds: [] }, deps(endpointFetch({ [ZAI_CODING]: 200 }) as never));
+      secretState.set("company-1", KEY);
+      expect(await envOf("agentdash")).toContain(`GLM_BASE_URL=${ZAI_CODING}\n`);
+
+      const lapsed = endpointFetch({ [ZAI_CODING]: 429, [ZAI_GENERAL]: 200 });
+      const skipped = await reconcileHermesProviderFromSecret("company-1", { agentIds: [], probe: "never" }, deps(lapsed as never));
+      expect(lapsed).not.toHaveBeenCalled();
+      expect(skipped.repinned).toBe(false);
+
+      const forced = await reconcileHermesProviderFromSecret("company-1", { agentIds: [], probe: "force" }, deps(lapsed as never));
+      expect(forced).toMatchObject({ status: "ok", repinned: true, baseUrl: ZAI_GENERAL });
+      expect(await envOf("agentdash")).toContain(`GLM_BASE_URL=${ZAI_GENERAL}\n`);
+
+      // A rate-limited probe is inconclusive: the pin stays.
+      const limited = await reconcileHermesProviderFromSecret("company-1", { agentIds: [], probe: "force" }, deps(endpointFetch({}, "rate") as never));
+      expect(limited.repinned).toBe(false);
+      expect(await envOf("agentdash")).toContain(`GLM_BASE_URL=${ZAI_GENERAL}\n`);
+    });
+
     it("prefers the Coding Plan endpoint and pins it", async () => {
       const fetchImpl = endpointFetch({ [ZAI_CODING]: 200, [ZAI_GENERAL]: 200 });
       const input = parseHermesProviderInput({ provider: "zai", apiKey: KEY });
