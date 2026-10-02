@@ -78,7 +78,7 @@ export function GitHubConnectStep({
   }
 
   const heading = isPage ? (
-    <h1 className="text-lg font-semibold">Connect your GitHub repo</h1>
+    <h1 className="text-lg font-semibold">Using code? Connect GitHub</h1>
   ) : (
     <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">GitHub</h3>
   );
@@ -134,7 +134,9 @@ export function GitHubConnectStep({
       <div className="flex flex-col gap-2">
         {heading}
         <p className="text-sm text-muted-foreground">
-          Your agents clone this repo, push a branch for each issue and open a pull request. They never merge.
+          {isPage
+            ? "Only needed if your team works on software. Agents clone the repo, push a branch for each task and open a pull request. They never merge."
+            : "Your agents clone this repo, push a branch for each issue and open a pull request. They never merge."}
         </p>
       </div>
 

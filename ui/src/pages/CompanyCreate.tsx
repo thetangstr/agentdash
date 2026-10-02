@@ -6,7 +6,8 @@ import { ApiError } from "../api/client";
 import { refreshAccessQueries } from "../lib/access-refresh";
 import { Button } from "@/components/ui/button";
 import { useCompany } from "../context/CompanyContext";
-import { Sparkles, Building2 } from "lucide-react";
+import { Building2 } from "lucide-react";
+import { AgentDashMark } from "@/components/brand/AgentDashMark";
 
 // AgentDash (Phase E): standalone /company-create page for the post-signup
 // redirect chain. Lifted out of OnboardingWizard.tsx step 1 so the wizard's
@@ -74,7 +75,8 @@ export function CompanyCreatePage() {
     <div className="fixed inset-0 flex bg-surface-page">
       <div className="w-full max-w-md mx-auto my-auto px-8 py-12">
         <div className="flex items-center gap-2 mb-8">
-          <Sparkles className="h-4 w-4 text-text-tertiary" />
+          {/* AgentDash (Scan 3, lane J): the brand mark, same as /auth. */}
+          <AgentDashMark size={20} />
           <span className="text-sm font-medium text-text-primary">AgentDash</span>
         </div>
 

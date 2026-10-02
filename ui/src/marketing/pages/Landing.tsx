@@ -3,6 +3,7 @@ import { Navigate, useSearchParams } from "@/lib/router";
 import { authApi } from "../../api/auth";
 import { queryKeys } from "../../lib/queryKeys";
 import { healthApi } from "../../api/health";
+import { useCompany } from "../../context/CompanyContext";
 import { MarketingShell } from "../MarketingShell";
 import { BOX_SIGN_IN_PATH } from "../WwwOnlyRoute";
 import { isMarketingHost } from "../marketing-host";
@@ -46,11 +47,31 @@ export function Landing() {
   // Every other host is an install (a hosted box, a self-hosted server, dev),
   // and an install is not the marketing site. Signed in, `/` is the app.
   const loggedIn = Boolean(healthQuery.data) && (!isAuthenticatedMode || Boolean(sessionQuery.data));
-  if (loggedIn) return <Navigate to="/companies" replace />;
+  if (loggedIn) return <SignedInRedirect />;
   // Signed out, it is the install's own sign-in — not a landing page whose
   // "Sign in" is www's /find (#949 for boxes), and not "Start free" / "Hosted
   // workspaces are opening…" shown to a self-hosted install's own users (E4).
   return <Navigate to={BOX_SIGN_IN_PATH} replace />;
+}
+
+/**
+ * Where a signed-in person lands when they arrive at `/` (which is where
+ * sign-in sends them when no `next` was given).
+ *
+ * AgentDash (Scan 3, lane J): someone with exactly one company goes straight
+ * to its Chief of Staff (`/:prefix/cos`). A bare Companies list with a single
+ * card was a dead stop between signing in and doing anything. People with
+ * several companies, or none yet, still get the Companies page, which lists
+ * them or sends a company-less person on to create one.
+ */
+export function SignedInRedirect() {
+  const { companies, loading } = useCompany();
+  if (loading) return null;
+  const active = companies.filter((company) => company.status !== "archived");
+  if (active.length === 1) {
+    return <Navigate to={`/${active[0]!.issuePrefix}/cos`} replace />;
+  }
+  return <Navigate to="/companies" replace />;
 }
 
 /**

@@ -5,6 +5,8 @@ import { useNavigate, useSearchParams } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { agentsApi } from "../api/agents";
+import { healthApi } from "../api/health";
+import { WIZARD_DEFAULT_ADAPTER_TYPE, adapterTypeForInstancePreset } from "../lib/onboarding-defaults";
 import { companySkillsApi } from "../api/companySkills";
 import { queryKeys } from "../lib/queryKeys";
 import { AGENT_ROLES, type AdapterEnvironmentTestResult } from "@paperclipai/shared";
@@ -73,7 +75,24 @@ export function NewAgent() {
   const [title, setTitle] = useState("");
   const [role, setRole] = useState("general");
   const [reportsTo, setReportsTo] = useState<string | null>(null);
-  const [configValues, setConfigValues] = useState<CreateConfigValues>(defaultCreateValues);
+  const [capabilities, setCapabilities] = useState("");
+  // AgentDash (Scan 3, lane J): the runtime starts on the instance default
+  // (health `adapterPreset`), not Claude Code. Until health answers, the
+  // cached answer or the wizard default stands in; once the person picks a
+  // runtime under Advanced, the instance default no longer overrides it.
+  const { data: health } = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+  });
+  // Only a runtime the instance reports as ready; otherwise the wizard default.
+  const instanceAdapterType = health?.adapterReady
+    ? adapterTypeForInstancePreset(health.adapterPreset)
+    : WIZARD_DEFAULT_ADAPTER_TYPE;
+  const [adapterTouched, setAdapterTouched] = useState(false);
+  const [configValues, setConfigValues] = useState<CreateConfigValues>(() =>
+    createValuesForAdapterType(instanceAdapterType as CreateConfigValues["adapterType"]),
+  );
   const [selectedSkillKeys, setSelectedSkillKeys] = useState<string[]>([]);
   const [roleOpen, setRoleOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -118,7 +137,7 @@ export function NewAgent() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: "Agents", href: "/agents" },
+      { label: "Team", href: "/agents" },
       { label: "New Agent" },
     ]);
   }, [setBreadcrumbs]);
@@ -129,6 +148,15 @@ export function NewAgent() {
       if (!title) setTitle("CEO");
     }
   }, [isFirstAgent]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (presetAdapterType || adapterTouched) return;
+    if (!isValidAdapterType(instanceAdapterType)) return;
+    setConfigValues((prev) => {
+      if (prev.adapterType === instanceAdapterType) return prev;
+      return createValuesForAdapterType(instanceAdapterType as CreateConfigValues["adapterType"]);
+    });
+  }, [instanceAdapterType, presetAdapterType, adapterTouched]);
 
   useEffect(() => {
     const requested = presetAdapterType;
@@ -220,6 +248,7 @@ export function NewAgent() {
         workforceTemplateId: workforceTemplateId || undefined,
         effectiveRole,
         title,
+        capabilities,
         reportsTo,
         selectedSkillKeys,
         configValues,
@@ -261,18 +290,16 @@ export function NewAgent() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h1 className="text-lg font-semibold">New Agent</h1>
+        <h1 className="text-lg font-semibold">Hire a new agent</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Advanced agent configuration. Need help? Ask your CoS to create one —
-          just describe the role you need.
+          Give it a role, a name and what it should do. Prefer to just describe
+          the job? Ask your Chief of Staff to hire one for you.
         </p>
       </div>
 
       <div className="bg-muted/50 border border-border rounded-lg p-3 text-sm text-muted-foreground">
-        <strong className="text-foreground">Quick start:</strong> Enter the agent
-        name and pick an adapter below. Click <em>Test Agent</em> to verify it
-        works, then <em>Create agent</em>. Most settings have sensible defaults —
-        only change the advanced options if you know what you need.
+        Press <em>Test Agent</em> to check it can run, then <em>Create agent</em>.
+        How it runs is under <em>Advanced</em>; the defaults work for most teams.
       </div>
 
       <WorkforceRoleSelect value={workforceTemplateId} onChange={setWorkforceTemplateId}/>
@@ -296,6 +323,21 @@ export function NewAgent() {
             placeholder="Title (e.g. VP of Engineering)"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
+          />
+        </div>
+
+        {/* What it should do */}
+        <div className="px-4 pb-3">
+          <label className="block text-xs text-muted-foreground mb-1" htmlFor="new-agent-capabilities">
+            What it should do
+          </label>
+          <textarea
+            id="new-agent-capabilities"
+            data-testid="new-agent-capabilities"
+            className="w-full min-h-[64px] resize-y rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+            placeholder="e.g. Answer customer emails and flag anything urgent to me"
+            value={capabilities}
+            onChange={(e) => setCapabilities(e.target.value)}
           />
         </div>
 
@@ -338,11 +380,23 @@ export function NewAgent() {
           />
         </div>
 
+        {/* AgentDash (Scan 3, lane J): the technical settings (runtime,
+            permissions, environment variables, extra arguments, skills) sit
+            in a collapsed Advanced section. <details> keeps the form mounted
+            while closed, so Test Agent still works without opening it. */}
+        <details className="group border-t border-border" data-testid="new-agent-advanced">
+          <summary className="flex min-h-11 cursor-pointer select-none items-center px-4 text-sm font-medium text-muted-foreground hover:text-foreground">
+            Advanced
+            <span className="ml-2 text-xs font-normal">How it runs, permissions and skills</span>
+          </summary>
         {/* Shared config form */}
         <AgentConfigForm
           mode="create"
           values={configValues}
-          onChange={(patch) => setConfigValues((prev) => ({ ...prev, ...patch }))}
+          onChange={(patch) => {
+            if (patch.adapterType !== undefined) setAdapterTouched(true);
+            setConfigValues((prev) => ({ ...prev, ...patch }));
+          }}
           adapterModels={adapterModels}
           onTestActionChange={handleTestAgentActionChange}
           onTestActionStateChange={handleTestAgentStateChange}
@@ -386,6 +440,7 @@ export function NewAgent() {
             )}
           </div>
         </div>
+        </details>
 
         {/* Footer */}
         <div className="border-t border-border px-4 py-3">

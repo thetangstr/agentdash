@@ -24,6 +24,7 @@ import { buildCompanyUserProfileMap } from "../../lib/company-members";
 import { formatCents, formatTokens } from "../../lib/utils";
 import { timeAgo } from "../../lib/timeAgo";
 import { ActivityRow } from "../ActivityRow";
+import { isSystemPlumbingActivity } from "../../lib/activity-format";
 
 export const FLEET_TILE_LIMIT = 6;
 export const DASHBOARD_ACTIVITY_LIMIT = 8;
@@ -345,7 +346,10 @@ function ActivityPanel({ companyId, agents }: { companyId: string; agents: Agent
     }
     return map;
   }, [activity]);
-  const events = (activity ?? []).slice(0, DASHBOARD_ACTIVITY_LIMIT);
+  // System plumbing (workspace leases, runtime checks) stays out of Home.
+  const events = (activity ?? [])
+    .filter((event) => !isSystemPlumbingActivity(event.action))
+    .slice(0, DASHBOARD_ACTIVITY_LIMIT);
 
   return (
     <Panel

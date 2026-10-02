@@ -12,6 +12,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGetSession = vi.hoisted(() => vi.fn());
+const companyState = vi.hoisted(() => ({
+  value: { companies: [] as Array<{ id: string; issuePrefix: string; status: string }>, loading: false },
+}));
+vi.mock("../context/CompanyContext", () => ({ useCompany: () => companyState.value }));
 const host = vi.hoisted(() => ({ value: "localhost" }));
 
 vi.mock("../api/auth", () => ({ authApi: { getSession: () => mockGetSession() } }));
@@ -56,6 +60,7 @@ beforeEach(() => {
   mockGetSession.mockResolvedValue(null);
   vi.stubGlobal("fetch", fetchMock);
   host.value = "localhost";
+  companyState.value = { companies: [], loading: false };
 });
 
 afterEach(() => {
@@ -189,6 +194,34 @@ describe("Landing", () => {
     host.value = "acme.agentdash.cloud";
     fetchMock.mockResolvedValue(json(BOX_HEALTH));
     mockGetSession.mockResolvedValue({ session: { id: "s" }, user: { id: "u" } });
+    await render(<Landing />);
+    expect(container.textContent).toBe("Navigate:/companies");
+  });
+
+  // AgentDash (Scan 3, lane J): one company means straight to its CoS.
+  it("sends a signed-in user with exactly one company to that company's CoS", async () => {
+    host.value = "acme.agentdash.cloud";
+    fetchMock.mockResolvedValue(json(BOX_HEALTH));
+    mockGetSession.mockResolvedValue({ session: { id: "s" }, user: { id: "u" } });
+    companyState.value = {
+      companies: [{ id: "c1", issuePrefix: "WAN", status: "active" }],
+      loading: false,
+    };
+    await render(<Landing />);
+    expect(container.textContent).toBe("Navigate:/WAN/cos");
+  });
+
+  it("keeps the Companies list for a signed-in user with several companies", async () => {
+    host.value = "acme.agentdash.cloud";
+    fetchMock.mockResolvedValue(json(BOX_HEALTH));
+    mockGetSession.mockResolvedValue({ session: { id: "s" }, user: { id: "u" } });
+    companyState.value = {
+      companies: [
+        { id: "c1", issuePrefix: "WAN", status: "active" },
+        { id: "c2", issuePrefix: "NOR", status: "active" },
+      ],
+      loading: false,
+    };
     await render(<Landing />);
     expect(container.textContent).toBe("Navigate:/companies");
   });

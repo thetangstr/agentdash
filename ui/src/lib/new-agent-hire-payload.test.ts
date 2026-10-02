@@ -62,4 +62,19 @@ describe("buildNewAgentHirePayload", () => {
     expect(buildNewAgentHirePayload({ name: 'Mira', effectiveRole: 'general', workforceTemplateId: 'sales-support', configValues: defaultCreateValues, adapterConfig: { instructions: 'Keep my custom instructions' } })).toMatchObject({ workforceTemplateId: 'sales-support', adapterConfig: { instructions: 'Keep my custom instructions' }, role: 'general' });
   });
 
+
+  // AgentDash (Scan 3, lane J): "What it should do" travels as capabilities.
+  it("sends the trimmed capabilities and omits blank ones", () => {
+    const base = {
+      name: "Helper",
+      effectiveRole: "general",
+      configValues: { ...defaultCreateValues, adapterType: "hermes_local" },
+      adapterConfig: {},
+    };
+    expect(
+      buildNewAgentHirePayload({ ...base, capabilities: "  Answer customer emails  " }),
+    ).toMatchObject({ capabilities: "Answer customer emails" });
+    expect(buildNewAgentHirePayload({ ...base, capabilities: "   " })).not.toHaveProperty("capabilities");
+    expect(buildNewAgentHirePayload(base)).not.toHaveProperty("capabilities");
+  });
 });

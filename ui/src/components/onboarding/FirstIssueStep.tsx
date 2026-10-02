@@ -47,10 +47,10 @@ export function FirstIssueStep({ companyId, repo, suggestions, onCreated }: Firs
   return (
     <form className="mx-auto flex max-w-lg flex-col gap-5 px-6 py-12" onSubmit={submit} aria-label="First issue">
       <div>
-        <h1 className="text-lg font-semibold">What should we build first?</h1>
+        <h1 className="text-lg font-semibold">What should your team do first?</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          One sentence is enough. It becomes your first issue{repo ? ` in ${repo}` : ""}; an engineer agent picks it
-          up, works on a branch and opens a pull request for you to review.
+          One sentence is enough. It becomes your first task{repo ? ` in ${repo}` : ""}; an agent picks it up
+          {repo ? ", works on a branch and opens a pull request for you to review." : " and reports back to you."}
         </p>
       </div>
 
@@ -71,12 +71,12 @@ export function FirstIssueStep({ companyId, repo, suggestions, onCreated }: Firs
       </div>
 
       <label className="flex flex-col gap-1 text-sm">
-        <span className="font-medium">Your first issue</span>
+        <span className="font-medium">Your first task</span>
         <textarea
           name="firstIssue"
           rows={3}
           className="rounded border px-3 py-2"
-          placeholder="Add a /health endpoint that returns the build version"
+          placeholder={repo ? "Add a /health endpoint that returns the build version" : "Draft a one-page summary of what we offer"}
           value={text}
           onChange={(event) => setText(event.target.value)}
         />

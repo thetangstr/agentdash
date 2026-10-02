@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
-import { useLocation, useNavigate, useParams } from "@/lib/router";
+import { useLocation, useNavigate } from "@/lib/router";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { authApi } from "../api/auth";
@@ -254,24 +254,32 @@ function MandateCheck({
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
-  const { companies, setSelectedCompanyId, loading: companiesLoading } = useCompany();
+  const {
+    companies,
+    selectedCompanyId,
+    setSelectedCompanyId,
+    loading: companiesLoading
+  } = useCompany();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const [routeDismissed, setRouteDismissed] = useState(false);
 
   // Sync disabled adapter types from server so adapter grid filters them out
   const disabledTypes = useDisabledAdaptersSync();
 
-  const routeOnboardingOptions =
-    companyPrefix && companiesLoading
-      ? null
-      : resolveRouteOnboardingOptions({
-          pathname: location.pathname,
-          companyPrefix,
-          companies,
-        });
+  // AgentDash (Scan 3, lane J): this component is mounted at the App root,
+  // outside the :companyPrefix route, so the prefix is read from the path
+  // (inside resolveRouteOnboardingOptions), and nothing opens until the
+  // company list has loaded. Opening early locked the wizard on "Name your
+  // company" for someone who already had one, and Next then made a second.
+  const routeOnboardingOptions = companiesLoading
+    ? null
+    : resolveRouteOnboardingOptions({
+        pathname: location.pathname,
+        companies,
+        selectedCompanyId,
+      });
   const effectiveOnboardingOpen =
     onboardingOpen || (routeOnboardingOptions !== null && !routeDismissed);
   const effectiveOnboardingOptions = onboardingOpen
@@ -406,9 +414,15 @@ export function OnboardingWizard() {
   // Sync step and company when onboarding opens with options.
   // Keep this independent from company-list refreshes so Step 1 completion
   // doesn't get reset after creating a company.
+  const createdCompanyIdRef = useRef<string | null>(createdCompanyId);
+  createdCompanyIdRef.current = createdCompanyId;
   useEffect(() => {
     if (!effectiveOnboardingOpen) return;
     const cId = effectiveOnboardingOptions.companyId ?? null;
+    // The company the wizard just created (on /onboarding with none yet)
+    // shows up in the route options once the list refetches; that is the
+    // company already in progress, not a reason to start over.
+    if (cId && cId === createdCompanyIdRef.current) return;
     setStep(effectiveOnboardingOptions.initialStep ?? 1);
     setCreatedCompanyId(cId);
     setCreatedCompanyPrefix(null);
@@ -446,6 +460,16 @@ export function OnboardingWizard() {
     queryFn: () => agentsApi.adapterModels(createdCompanyId!, adapterType),
     enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen && step === 2
   });
+  // Whether the company already has agents decides how step 2 is worded:
+  // "Create your first agent" is wrong for a team that has five.
+  const { data: existingAgents } = useQuery({
+    queryKey: createdCompanyId
+      ? queryKeys.agents.list(createdCompanyId)
+      : ["agents", "none"],
+    queryFn: () => agentsApi.list(createdCompanyId!),
+    enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen
+  });
+  const companyHasAgents = (existingAgents?.length ?? 0) > 0 && !createdAgentId;
   const getCapabilities = useAdapterCapabilities();
   const adapterCaps = getCapabilities(adapterType);
   const isLocalAdapter = adapterCaps.supportsInstructionsBundle || adapterCaps.supportsSkills || adapterCaps.supportsLocalAgentJwt;
@@ -571,8 +595,23 @@ export function OnboardingWizard() {
   }
 
   function handleClose() {
+    const routeDriven = !onboardingOpen && routeOnboardingOptions !== null;
+    const returnCompany =
+      companies.find((c) => c.id === createdCompanyId) ??
+      companies.find((c) => c.id === selectedCompanyId) ??
+      companies[0] ??
+      null;
     reset();
     closeOnboarding();
+    // AgentDash (Scan 3, lane J): on /onboarding the wizard is opened by the
+    // URL, so closing it has to leave that URL too — otherwise the page under
+    // it re-offers the wizard and Close looks like it did nothing.
+    setRouteDismissed(true);
+    if (routeDriven) {
+      navigate(returnCompany ? `/${returnCompany.issuePrefix}/dashboard` : "/", {
+        replace: true
+      });
+    }
   }
 
   function buildAdapterConfig(): Record<string, unknown> {
@@ -726,6 +765,21 @@ export function OnboardingWizard() {
     }));
 
   async function handleStep1Next() {
+    // AgentDash (Scan 3, lane J): the wizard never creates a second company.
+    // Someone who already has one adds an agent to it; another company is the
+    // explicit New Company action.
+    if (createdCompanyId || companies.length > 0) {
+      const existing =
+        companies.find((c) => c.id === createdCompanyId) ??
+        companies.find((c) => c.id === selectedCompanyId) ??
+        companies[0];
+      if (existing) {
+        setCreatedCompanyId(existing.id);
+        setCreatedCompanyPrefix(existing.issuePrefix);
+      }
+      setStep(2);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -1156,9 +1210,12 @@ export function OnboardingWizard() {
                   <button
                     key={s}
                     type="button"
+                    // A company that already exists is never re-created from
+                    // here, so its "Company" tab is not a step to go back to.
+                    disabled={s === 1 && Boolean(createdCompanyId)}
                     onClick={() => setStep(s)}
                     className={cn(
-                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors cursor-pointer",
+                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40",
                       s === step
                         ? "border-foreground text-foreground"
                         : "border-transparent text-muted-foreground hover:text-foreground/70 hover:border-border"
@@ -1234,7 +1291,7 @@ export function OnboardingWizard() {
                     </label>
                     <input
                       className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                      placeholder="e.g. MK-LANTEST"
+                      placeholder="e.g. ABCD-1234"
                       value={workspaceCode}
                       onChange={(e) => setWorkspaceCode(e.target.value)}
                     />
@@ -1255,9 +1312,13 @@ export function OnboardingWizard() {
                       <Bot className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div>
-                      <h3 className="font-medium">Create your first agent</h3>
+                      <h3 className="font-medium">
+                        {companyHasAgents ? "Add an agent" : "Create your first agent"}
+                      </h3>
                       <p className="text-xs text-muted-foreground">
-                        Choose how this agent will run tasks.
+                        {companyHasAgents
+                          ? "Add another agent to your team and choose how it runs."
+                          : "Choose how this agent will run tasks."}
                       </p>
                     </div>
                   </div>

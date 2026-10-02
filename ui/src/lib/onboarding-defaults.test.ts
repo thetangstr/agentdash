@@ -3,6 +3,7 @@ import {
   DEFAULT_TASK_DESCRIPTION,
   DEFAULT_TASK_TITLE,
   WIZARD_DEFAULT_ADAPTER_TYPE,
+  adapterTypeForInstancePreset,
   isRecommendedWizardAdapter,
 } from "./onboarding-defaults";
 
@@ -18,5 +19,14 @@ describe("onboarding defaults", () => {
   it("recommends exactly one way to run the agent: the preselected default", () => {
     const cards = ["claude_local", "codex_local", "hermes_local"];
     expect(cards.filter(isRecommendedWizardAdapter)).toEqual([WIZARD_DEFAULT_ADAPTER_TYPE]);
+  });
+
+  // AgentDash (Scan 3, lane J): "Hire a new agent" follows the instance default.
+  it("maps the instance's runtime preset to the agent runtime, never assuming Claude Code", () => {
+    expect(adapterTypeForInstancePreset("hermes")).toBe("hermes_local");
+    expect(adapterTypeForInstancePreset("claude_code")).toBe("claude_local");
+    expect(adapterTypeForInstancePreset("codex")).toBe("codex_local");
+    expect(adapterTypeForInstancePreset("minimax")).toBe(WIZARD_DEFAULT_ADAPTER_TYPE);
+    expect(adapterTypeForInstancePreset(undefined)).toBe(WIZARD_DEFAULT_ADAPTER_TYPE);
   });
 });

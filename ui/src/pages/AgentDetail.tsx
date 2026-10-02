@@ -32,6 +32,7 @@ import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
+import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 import { StatusBadge } from "../components/StatusBadge";
 import { accessApi } from "../api/access";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
@@ -997,7 +998,7 @@ export function AgentDetail() {
 
   useEffect(() => {
     const crumbs: { label: string; href?: string }[] = [
-      { label: "Agents", href: "/agents" },
+      { label: "Team", href: "/agents" },
     ];
     const agentName = agent?.name ?? routeAgentRef ?? "Agent";
     if (activeView === "dashboard" && !urlRunId) {
@@ -4001,16 +4002,20 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
               const displayModel = metrics.model
                 ?? asNonEmptyString(adapterConfig?.model);
               if (!adapterType && !displayProvider && !displayModel) return null;
+              // AgentDash (Scan 3, lane J): plain words, not "HERMES LOCAL
+              // kimi-coding/k3"; the raw values stay in the hover titles.
+              const modelText = displayModel
+                ? (displayProvider ? `${displayProvider}/${displayModel}` : displayModel)
+                : null;
               return (
-                <div className="text-[11px] text-muted-foreground font-mono flex items-center gap-1.5 flex-wrap">
+                <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap" data-testid="run-runtime-summary">
                   {adapterType && (
-                    <span className="bg-muted rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide">{adapterType.replace(/_/g, " ")}</span>
+                    <span className="bg-muted rounded px-1.5 py-0.5" title={getAdapterLabel(adapterType)}>
+                      {plainRuntimeLabel(adapterType)}
+                    </span>
                   )}
-                  {displayProvider && displayModel && (
-                    <span>{displayProvider}/{displayModel}</span>
-                  )}
-                  {!displayProvider && displayModel && (
-                    <span>{displayModel}</span>
+                  {modelText && (
+                    <span title={modelText}>Model: {modelText}</span>
                   )}
                 </div>
               );

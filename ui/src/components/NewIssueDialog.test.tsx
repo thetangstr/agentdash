@@ -479,6 +479,38 @@ describe("NewIssueDialog", () => {
     act(() => root.unmount());
   });
 
+  // AgentDash (Scan 3, lane J): the starting status follows the company's
+  // "Start new issues right away" setting.
+  for (const [startAsTodo, expected] of [[false, "backlog"], [true, "todo"]] as const) {
+    it(`starts a new issue as ${expected} when "Start new issues right away" is ${startAsTodo ? "on" : "off"}`, async () => {
+      const previous = companyState.selectedCompany;
+      companyState.selectedCompany = { ...previous, newIssuesStartAsTodo: startAsTodo } as typeof previous;
+      try {
+        const { root } = renderDialog(container);
+        await flush();
+        const titleInput = container.querySelector('textarea[placeholder="Issue title"]') as HTMLTextAreaElement | null;
+        await typeTextareaValue(titleInput!, "Status default");
+        await fillAcceptanceCriteria(container);
+        const submitButton = Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent?.includes("Create Issue"));
+        await vi.waitFor(() => {
+          expect(submitButton?.hasAttribute("disabled")).toBe(false);
+        });
+        await act(async () => {
+          submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        await flush();
+        expect(mockIssuesApi.create).toHaveBeenCalledWith(
+          "company-1",
+          expect.objectContaining({ status: expected }),
+        );
+        act(() => root.unmount());
+      } finally {
+        companyState.selectedCompany = previous;
+      }
+    });
+  }
+
   it("submits acceptance criteria as the issue definition of done", async () => {
     const { root } = renderDialog(container);
     await flush();

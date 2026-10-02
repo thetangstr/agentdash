@@ -31,7 +31,7 @@ import { AgentIcon } from "../components/AgentIconPicker";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
 
-import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
@@ -74,12 +74,12 @@ function NotScheduledBadge({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
+        "whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground",
         className,
       )}
-      title="This agent only runs when someone wakes it."
+      title="This agent has no schedule. It runs when it is given work or someone wakes it."
     >
-      Not scheduled
+      Runs when asked
     </span>
   );
 }
@@ -162,7 +162,7 @@ export function Agents() {
   }, [agents]);
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Agents" }]);
+    setBreadcrumbs([{ label: "Team" }]);
   }, [setBreadcrumbs]);
 
   if (!selectedCompanyId) {
@@ -340,8 +340,11 @@ export function Agents() {
                           liveCount={liveRunByAgent.get(agent.id)!.liveCount}
                         />
                       )}
-                      <span className="w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
-                        {getAdapterLabel(agent.adapterType)}
+                      <span
+                        className="w-36 truncate text-left text-xs text-muted-foreground"
+                        title={getAdapterLabel(agent.adapterType)}
+                      >
+                        {plainRuntimeLabel(agent.adapterType)}
                       </span>
                       <span
                         className="w-36 truncate text-left font-mono text-xs text-muted-foreground"
@@ -594,8 +597,11 @@ function OrgTreeNode({
             )}
             {agent && (
               <>
-                <span className="w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
-                  {getAdapterLabel(agent.adapterType)}
+                <span
+                  className="w-36 truncate text-left text-xs text-muted-foreground"
+                  title={getAdapterLabel(agent.adapterType)}
+                >
+                  {plainRuntimeLabel(agent.adapterType)}
                 </span>
                 <span
                   className="w-36 truncate text-left font-mono text-xs text-muted-foreground"

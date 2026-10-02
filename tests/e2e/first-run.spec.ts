@@ -60,16 +60,17 @@ test("a new workspace goes through the first run to Home with its first issue as
   // GitHub and the first issue stay at /setup.
   await page.goto(`${BASE_URL}/setup`);
 
-  // Step: Your repo.
-  await expect(page.getByTestId("first-run-progress")).toContainText("Your repo");
+  // Step: Code (optional). Lane J: the step says it is optional and can be skipped.
+  await expect(page.getByTestId("first-run-skip")).toBeVisible();
+  await expect(page.getByTestId("first-run-progress")).toContainText("Code (optional)");
   await page.getByLabel("Repository").fill("https://github.com/acme/firstrun");
   await page.getByLabel("Fine-grained token").fill(TOKEN);
   await page.getByRole("button", { name: "Check and connect" }).click();
-  await expect(page.getByRole("heading", { name: "What should we build first?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What should your team do first?" })).toBeVisible();
 
   // Leave and come back: resumes at the first issue.
   await page.goto(`${BASE_URL}/setup`);
-  await expect(page.getByRole("heading", { name: "What should we build first?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What should your team do first?" })).toBeVisible();
   expect(await page.content()).not.toContain(TOKEN);
 
   // Step: first issue, from a suggestion chip.

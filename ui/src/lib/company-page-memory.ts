@@ -51,6 +51,11 @@ export function sanitizeRememberedPathForCompany(params: {
   const pathname = relativePath.split("?")[0] ?? "";
   const segments = pathname.split("/").filter(Boolean);
   const [root, entityId] = segments;
+  // The onboarding wizard is a one-off flow, not a page to come back to on a
+  // company switch.
+  if (root === "onboarding") {
+    return "/dashboard";
+  }
   if (root === "issues" && entityId) {
     const identifierMatch = /^([A-Za-z]+)-\d+$/.exec(entityId);
     if (

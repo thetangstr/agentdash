@@ -1,6 +1,6 @@
 import type { Agent } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
-import { formatActivityVerb, formatIssueActivityAction } from "./activity-format";
+import { formatActivityVerb, formatIssueActivityAction, isSystemPlumbingActivity } from "./activity-format";
 
 describe("activity formatting", () => {
   const agentMap = new Map<string, Agent>([
@@ -56,5 +56,20 @@ describe("activity formatting", () => {
 
     expect(formatActivityVerb("issue.reviewers_updated", details, { agentMap })).toBe("updated reviewers on");
     expect(formatIssueActivityAction("issue.reviewers_updated", details, { agentMap })).toBe("updated reviewers");
+  });
+});
+
+// AgentDash (Scan 3, lane J): plumbing events are system events in plain words.
+describe("system plumbing activity", () => {
+  it("marks lease and preflight events as system plumbing, and leaves real work alone", () => {
+    expect(isSystemPlumbingActivity("environment.lease_acquired")).toBe(true);
+    expect(isSystemPlumbingActivity("agent.harness_preflight_passed")).toBe(true);
+    expect(isSystemPlumbingActivity("issue.created")).toBe(false);
+    expect(isSystemPlumbingActivity("agent.hired")).toBe(false);
+  });
+
+  it("relabels them without the machinery words", () => {
+    expect(formatActivityVerb("environment.lease_acquired")).not.toMatch(/lease/);
+    expect(formatActivityVerb("agent.harness_preflight_passed")).not.toMatch(/harness|preflight/);
   });
 });

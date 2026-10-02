@@ -472,12 +472,15 @@ export function CompanySettings() {
         </div>
       </div>
 
-      {/* Invites */}
-      <div className="space-y-4" data-testid="company-settings-invites-section">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          Invites
-        </div>
-        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+      {/* AgentDash (Scan 3, lane J): the OpenClaw invite snippet is a
+          technical integration, so it sits collapsed under Advanced. People
+          are invited from Members. */}
+      <details className="group space-y-4" data-testid="company-settings-invites-section">
+        <summary className="flex min-h-11 cursor-pointer select-none items-center text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground">
+          Advanced
+          <span className="ml-2 normal-case tracking-normal font-normal">Connect an outside agent (OpenClaw)</span>
+        </summary>
+        <div className="mt-2 space-y-3 rounded-md border border-border px-4 py-4">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">
               Generate an OpenClaw agent invite snippet.
@@ -548,7 +551,7 @@ export function CompanySettings() {
             </div>
           )}
         </div>
-      </div>
+      </details>
 
       {/* AgentDash (GH #785): the optional readiness assessment, for every company */}
       <ReadinessAssessmentCard />

@@ -281,7 +281,7 @@ test.describe("Multi-user: Company Settings UI", () => {
     companyPrefix = result.prefix;
   });
 
-  test("shows Team and Invites sections on settings page", async ({ page }) => {
+  test("shows Team and Advanced (invite) sections on settings page", async ({ page }) => {
     await page.goto(`${BASE}/${companyPrefix}/company/settings`);
     await page.waitForLoadState("networkidle");
     await expect(page.getByTestId("company-settings-invites-section")).toBeVisible({

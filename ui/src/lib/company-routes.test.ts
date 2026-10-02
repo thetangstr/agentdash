@@ -106,3 +106,9 @@ describe("board route roots stay in step with the router", () => {
  it('treats workforce as a company route and preserves its query and brief anchor', () => {
  expect(applyCompanyPrefix('/workforce?agent=a#company-brief', 'ACME')).toBe('/ACME/workforce?agent=a#company-brief');
  });
+
+ it('strips the company prefix from /:prefix/onboarding so a remembered path never doubles it', () => {
+ expect(toCompanyRelativePath('/WAN/onboarding')).toBe('/onboarding');
+ expect(extractCompanyPrefixFromPath('/onboarding')).toBeNull();
+ expect(extractCompanyPrefixFromPath('/WAN/onboarding')).toBe('WAN');
+ });

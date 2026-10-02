@@ -25,6 +25,9 @@ export type HealthStatus = {
   instanceHasCompany?: boolean;
   /** AgentDash (#726): a hosted agentdash.cloud box. GH #786 routes its first run to /setup, not the wizard. */
   hostedBox?: boolean;
+  /** The instance's default runtime preset (server: readAdapterStatus().preset). */
+  adapterPreset?: string;
+  adapterReady?: boolean;
   /**
    * The address the operator configured for this instance, when they set one.
    *
