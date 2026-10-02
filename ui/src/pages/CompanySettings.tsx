@@ -6,7 +6,7 @@ import {
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "@paperclipai/shared";
 import { AgentCeilingEditor } from "@/components/settings/AgentCeilingEditor";
-import { NeedsReconciliationPanel } from "@/components/settings/NeedsReconciliationPanel";
+import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/components/settings/NeedsReconciliationPanel";
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -52,6 +52,9 @@ export function CompanySettings() {
   // here — the hire path goes through the CoS. The same for every company
   // (doc/plans/2026-09-30-one-ux.md).
   const hostedHirePath = health?.hostedBox === true;
+  // AgentDash (scan 4, lane O2): reconciliation waits under Advanced only
+  // while nothing needs a verdict; with items it sits in the main page.
+  const reconciliationCount = useNeedsReconciliationCount(selectedCompanyId ?? "");
   // General settings local state
   const [companyName, setCompanyName] = useState("");
   const [description, setDescription] = useState("");
@@ -500,6 +503,11 @@ export function CompanySettings() {
           collapsed at the bottom, so the main scroll (on a phone above all)
           is the settings a CEO changes: outside agents (OpenClaw), import and
           export, agent policy ceilings and connector reconciliation. */}
+      {reconciliationCount > 0 && selectedCompany?.id ? (
+        <div data-testid="company-settings-reconciliation-attention">
+          <NeedsReconciliationPanel companyId={selectedCompany.id} />
+        </div>
+      ) : null}
       <details className="group space-y-4" data-testid="company-settings-advanced">
         <summary className="flex min-h-11 cursor-pointer select-none items-center text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground">
           Advanced
@@ -611,7 +619,7 @@ export function CompanySettings() {
           {selectedCompany?.id ? (
             <>
               <AgentCeilingEditor companyId={selectedCompany.id} />
-              <NeedsReconciliationPanel companyId={selectedCompany.id} />
+              {reconciliationCount === 0 ? <NeedsReconciliationPanel companyId={selectedCompany.id} /> : null}
             </>
           ) : null}
         </div>

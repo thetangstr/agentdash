@@ -155,6 +155,12 @@ test.describe("Agent identity and console noise (scan 4 lane O2)", () => {
     await page.waitForTimeout(1_500);
     expect(warnings).toEqual([]);
 
+    // The overlay is a pointer target only; keyboard users have View details.
+    const overlay = page.getByTestId("latest-run-card-link");
+    await expect(overlay).toHaveAttribute("tabindex", "-1");
+    await expect(overlay).toHaveAttribute("aria-hidden", "true");
+    await expect(page.getByRole("link", { name: /View details/ })).toBeVisible();
+
     // A click on the card outside the issue link still opens the run.
     await runCard.click({ position: { x: 8, y: 8 } });
     await expect(page).toHaveURL(/\/runs\//);

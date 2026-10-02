@@ -1506,10 +1506,15 @@ export function LatestRunCard({
           isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
         )}
       >
+        {/* A pointer target only: keyboard and screen-reader users reach the
+            run through "View details" above, so the overlay stays out of the
+            tab order and the accessibility tree. */}
         <Link
           to={`/agents/${agentId}/runs/${run.id}`}
-          aria-label="Open this run"
-          className="absolute inset-0 rounded-lg"
+          tabIndex={-1}
+          aria-hidden="true"
+          data-testid="latest-run-card-link"
+          className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         />
         <div className="flex items-center gap-2">
           <StatusIcon className={cn("h-3.5 w-3.5", statusInfo.color, run.status === "running" && "animate-spin")} />

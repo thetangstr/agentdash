@@ -10,19 +10,22 @@ import { AGENT_ROLES, type AgentRole } from "./constants.js";
 const ROLE_KEYWORD_RULES: ReadonlyArray<{ role: AgentRole; keywords: readonly string[] }> = [
   { role: "cto", keywords: ["cto", "technical_director", "tech_lead", "architect"] },
   { role: "cmo", keywords: ["cmo", "marketing", "content", "growth", "brand", "seo", "social", "copywrit", "communications", "pr_lead", "outreach", "campaign", "newsletter"] },
-  { role: "security", keywords: ["security", "secops", "compliance", "privacy"] },
+  { role: "cfo", keywords: ["cfo", "finance", "financial", "accounting", "accountant", "bookkeep", "controller", "treasury"] },
   // AgentDash (scan 4, lane O2): an accounting firm's plan proposed "Month End
-  // Close Coordinator" and "Close Checklist Manager". Domain words come before
-  // the generic job words in the pm rule ("coordinator"), so these land in
-  // finance instead of pm / general.
+  // Close Coordinator" and "Close Checklist Manager", which fell to pm through
+  // "coordinator" or to general. Only phrases that mean bookkeeping work are
+  // listed: a bare "audit", "billing", "budget", "tax", "ledger" or "close"
+  // also names engineering, QA, research and sales jobs ("Code Audit
+  // Engineer", "Billing Engineer", "Deal Close Specialist"). Kept below the
+  // original cfo rule and above security, qa, researcher and pm.
   {
     role: "cfo",
     keywords: [
-      "cfo", "finance", "financial", "accounting", "accountant", "bookkeep", "controller", "treasury",
-      "month_end", "year_end", "close", "books", "reconcil", "ledger", "payable", "receivable", "invoic",
-      "billing", "payroll", "tax", "audit", "expense", "budget",
+      "month_end", "year_end", "close_checklist", "period_close", "books_close",
+      "reconcil", "general_ledger", "payable", "receivable", "payroll",
     ],
   },
+  { role: "security", keywords: ["security", "secops", "compliance", "privacy"] },
   { role: "qa", keywords: ["qa", "quality", "tester", "testing", "test"] },
   { role: "devops", keywords: ["devops", "deploy", "deployment", "infrastructure", "infra", "sre", "reliability", "platform", "release", "cloud"] },
   { role: "designer", keywords: ["design", "ux", "ui", "creative", "illustrat"] },
@@ -57,14 +60,10 @@ function normalizeRoleText(role: string): string {
   return role.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
-// Longer keywords that are still only meaningful as a whole word: "close" is
-// the month-end close, not "closer" or "disclosure"; "books" is not "ebooks".
-const WHOLE_WORD_KEYWORDS: ReadonlySet<string> = new Set(["close", "books"]);
-
 function hasKeyword(normalized: string, keyword: string): boolean {
   // Short keywords ("ui", "qa", "pm", "dev") must be a whole word, so "guide"
   // is not design and "development" is not "dev"; longer ones match anywhere.
-  if (keyword.length <= 3 || WHOLE_WORD_KEYWORDS.has(keyword)) return normalized.split("_").includes(keyword);
+  if (keyword.length <= 3) return normalized.split("_").includes(keyword);
   return normalized.includes(keyword);
 }
 

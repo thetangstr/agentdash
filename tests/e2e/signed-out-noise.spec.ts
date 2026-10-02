@@ -17,10 +17,15 @@ test("the signed-out /auth page makes no 4xx API calls", async ({ page }) => {
     failures.push(`${response.request().method()} ${url.pathname} ${response.status()}`);
   });
 
+  // Ready once the page has its two answers (deployment mode and session),
+  // the form is up and the network has gone quiet: the company and adapter
+  // lists used to fire right after those answers.
+  const health = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/health");
+  const session = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/auth/get-session");
   await page.goto("/auth");
+  await Promise.all([health, session]);
   await expect(page.locator("input[type=email]")).toBeVisible();
-  // Long enough for retries and refetches to have shown up before the fix.
-  await page.waitForTimeout(4_000);
+  await page.waitForLoadState("networkidle");
 
   expect(failures).toEqual([]);
 });
