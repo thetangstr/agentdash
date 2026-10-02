@@ -10,17 +10,30 @@
 // field, one of the statement shapes packages/db/src/backup-lib.ts writes:
 //
 //   BEGIN / COMMIT, SET LOCAL session_replication_role | client_min_messages,
-//   CREATE SCHEMA IF NOT EXISTS, CREATE TYPE … AS ENUM, CREATE EXTENSION IF
-//   NOT EXISTS <allowlisted>, DROP TABLE|SEQUENCE IF EXISTS, CREATE SEQUENCE,
-//   ALTER SEQUENCE … OWNED BY, CREATE TABLE (columns, NOT NULL, DEFAULT,
-//   PRIMARY KEY, UNIQUE; never AS SELECT), CREATE INDEX, ALTER TABLE … ADD
-//   CONSTRAINT (exactly one PRIMARY KEY | UNIQUE | FOREIGN KEY), INSERT …
+//   CREATE SCHEMA IF NOT EXISTS, CREATE TYPE … AS ENUM, CREATE TYPE … AS
+//   (composite attribute list — names and types only), CREATE DOMAIN … AS
+//   <type> (COLLATE / DEFAULT <checked expression> / NOT NULL only), CREATE
+//   EXTENSION IF NOT EXISTS <allowlisted>, DROP TABLE|SEQUENCE IF EXISTS,
+//   CREATE SEQUENCE, ALTER SEQUENCE … OWNED BY, CREATE TABLE (columns, NOT
+//   NULL, DEFAULT, GENERATED ALWAYS AS <checked expression> STORED, PRIMARY
+//   KEY, UNIQUE; never AS SELECT), CREATE INDEX, ALTER TABLE … ADD CONSTRAINT
+//   (exactly one PRIMARY KEY | UNIQUE | FOREIGN KEY), INSERT …
 //   VALUES (constants only), SELECT setval(<literal>, <literal>, <literal>),
 //   COPY <table> (<columns>) FROM STDIN.
 //
 // AgentDash (GH #907): backup-lib also writes CHECK constraints, views,
 // functions and triggers. Those are refused here and SKIPPED by replay (see
 // deferredStatement below); schema-verify re-creates them from our migrations.
+//
+// AgentDash (GH #939, #944): backup-lib additionally writes ALTER DOMAIN (SET
+//   DEFAULT / ADD CONSTRAINT), ALTER TABLE … ALTER COLUMN … SET DEFAULT and
+//   ALTER TABLE … ADD COLUMN … GENERATED — all expression-bearing, all skipped
+//   like the other schema objects. CREATE DOMAIN and CREATE TYPE … AS (…) are
+//   NOT skipped: replayed CREATE TABLE statements name those types, so the
+//   domain or composite must exist — but neither can carry unchecked code, so
+//   they are validated above like a small CREATE TABLE. A constraint or index
+//   that exists only because a column was added late carries the
+//   DEFERRED_SCHEMA_MARKER comment and is skipped for the same reason.
 //
 // Any other node, any unknown field, more than one statement, and any
 // function call outside FUNCTION_ALLOWLIST is refused. Expressions (column
@@ -30,6 +43,9 @@
 import { loadModule, parseSync } from "libpg-query";
 
 export const STATEMENT_BREAKPOINT = "-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
+
+/** AgentDash (GH #944): the leading-comment marker backup-lib writes before a deferred schema statement (kept in sync with packages/db/src/backup-lib.ts — the control plane does not import box code). */
+export const DEFERRED_SCHEMA_MARKER = "-- paperclip deferred schema object";
 
 /** Extensions a box schema may create (pg_trgm today; the rest are trusted, common and harmless). */
 export const EXTENSION_ALLOWLIST = new Set(["plpgsql", "pg_trgm", "pgcrypto", "uuid-ossp", "citext", "btree_gin", "btree_gist", "unaccent", "fuzzystrmatch", "vector"]);
@@ -295,12 +311,23 @@ function expr(v: unknown, where: string): void {
 
 function constraint(v: unknown, where: string, allowed: string[]): Obj {
   const c = expectNode(v, "Constraint", where);
-  fields(c, ["contype", "conname", "raw_expr", "keys", "pktable", "fk_attrs", "pk_attrs", "fk_matchtype", "fk_upd_action", "fk_del_action", "deferrable", "initdeferred", "nulls_not_distinct"], where, { is_enforced: true, initially_valid: true });
+  fields(c, ["contype", "conname", "raw_expr", "keys", "pktable", "fk_attrs", "pk_attrs", "fk_matchtype", "fk_upd_action", "fk_del_action", "deferrable", "initdeferred", "nulls_not_distinct", "generated_when", "generated_kind"], where, { is_enforced: true, initially_valid: true });
   const type = String(c.contype);
   if (!allowed.includes(type)) fail(`${where}: ${type} is not allowed here`);
+  if (type === "CONSTR_GENERATED") {
+    // AgentDash (GH #944): GENERATED ALWAYS AS (…) STORED (and PG18's
+    // VIRTUAL) inside a CREATE TABLE column. The expression itself is checked
+    // like a DEFAULT's below.
+    if (c.generated_when !== "a") fail(`${where}: only GENERATED ALWAYS`);
+    if (c.generated_kind !== "s" && c.generated_kind !== "v") fail(`${where}: generated kind ${JSON.stringify(c.generated_kind)} is not allowed`);
+    if (c.raw_expr === undefined) fail(`${where}: a generated column needs an expression`);
+  }
   if (c.raw_expr !== undefined) {
-    if (type !== "CONSTR_DEFAULT") fail(`${where}: an expression is only allowed in DEFAULT`);
-    expr(c.raw_expr, `${where} DEFAULT`);
+    if (type !== "CONSTR_DEFAULT" && type !== "CONSTR_GENERATED" && type !== "CONSTR_CHECK") {
+      fail(`${where}: an expression is only allowed in DEFAULT, GENERATED or CHECK`);
+    }
+    const label = type === "CONSTR_GENERATED" ? "GENERATED" : type === "CONSTR_CHECK" ? "CHECK" : "DEFAULT";
+    expr(c.raw_expr, `${where} ${label}`);
   }
   strings(c.keys, where);
   strings(c.fk_attrs, where);
@@ -308,6 +335,14 @@ function constraint(v: unknown, where: string, allowed: string[]): Obj {
   if (c.pktable !== undefined) rangeVar(c.pktable, where);
   if (type === "CONSTR_FOREIGN" && c.pktable === undefined) fail(`${where}: a foreign key needs a table`);
   return c;
+}
+
+/** A `COLLATE <name>` clause, serialized inline (no node wrapper). */
+function collateClause(v: unknown, where: string): void {
+  if (v === undefined) return;
+  if (!isObj(v)) fail(`${where}: malformed COLLATE`);
+  fields(v, ["collname"], where);
+  strings(v.collname, where);
 }
 
 function defElems(v: unknown, where: string): Array<{ name: string; arg: unknown }> {
@@ -355,6 +390,35 @@ function checkTop(stmt: unknown): void {
       strings(b.typeName, w);
       strings(b.vals, w);
       return;
+    case "CompositeTypeStmt": {
+      // AgentDash (GH #944): CREATE TYPE … AS (name type, …). Attribute lists
+      // hold only names and types — nothing executable — so the type may run
+      // during replay; a CREATE TABLE later in the dump can name it.
+      fields(b, ["typevar", "coldeflist"], w);
+      rangeVar(b.typevar, w);
+      for (const el of list(b.coldeflist, w)) {
+        const cd = expectNode(el, "ColumnDef", w);
+        fields(cd, ["colname", "typeName", "collClause"], `${w} attribute`, { is_local: true });
+        typeName(cd.typeName, `${w} attribute`);
+        collateClause(cd.collClause, `${w} attribute`);
+      }
+      return;
+    }
+    case "CreateDomainStmt": {
+      // AgentDash (GH #944): CREATE DOMAIN … AS <type> [COLLATE] [DEFAULT
+      // <expr>] [CONSTRAINT <name> CHECK (<expr>)] [NOT NULL]. Validated CHECK
+      // constraints are written inline — ALTER DOMAIN cannot add them once a
+      // column of an array of the domain exists — so CHECK is accepted here
+      // and its expression goes through the same allowlist as a DEFAULT's.
+      // A check that needs an object the dump creates later still comes as
+      // ALTER DOMAIN, which replay skips.
+      fields(b, ["domainname", "typeName", "collClause", "constraints"], w);
+      strings(b.domainname, w);
+      typeName(b.typeName, w);
+      collateClause(b.collClause, w);
+      for (const c of list(b.constraints, w)) constraint(c, `${w} domain`, ["CONSTR_NOTNULL", "CONSTR_NULL", "CONSTR_DEFAULT", "CONSTR_CHECK"]);
+      return;
+    }
     case "CreateExtensionStmt": {
       // WITH SCHEMA stays allowed: backup-lib writes it to keep each extension
       // in its recorded schema, and backups already in storage rely on it. It
@@ -402,7 +466,9 @@ function checkTop(stmt: unknown): void {
         if (et === "ColumnDef") {
           fields(eb, ["colname", "typeName", "constraints"], `${w} column`, { is_local: true });
           typeName(eb.typeName, `${w} column`);
-          for (const c of list(eb.constraints, w)) constraint(c, `${w} column ${String(eb.colname)}`, ["CONSTR_NOTNULL", "CONSTR_NULL", "CONSTR_DEFAULT", "CONSTR_PRIMARY", "CONSTR_UNIQUE"]);
+          // AgentDash (GH #944): CONSTR_GENERATED is allowed — its expression
+          // is checked like a DEFAULT's inside constraint().
+          for (const c of list(eb.constraints, w)) constraint(c, `${w} column ${String(eb.colname)}`, ["CONSTR_NOTNULL", "CONSTR_NULL", "CONSTR_DEFAULT", "CONSTR_PRIMARY", "CONSTR_UNIQUE", "CONSTR_GENERATED"]);
         } else if (et === "Constraint") {
           constraint(el, `${w} table constraint`, ["CONSTR_PRIMARY", "CONSTR_UNIQUE"]);
         } else fail(`${w}: ${et} is not allowed in a table`);
@@ -515,6 +581,19 @@ export function checkStatement(statement: string): string | null {
  * Call initDumpGuard() first.
  */
 export function deferredStatement(statement: string): string | null {
+  // AgentDash (GH #944): backup-lib writes this marker ahead of a constraint
+  // or index that only exists because a column was added late (a deferred
+  // generated column — never created in replay, so the statement would fail
+  // on a missing column). The marker must be a LEADING comment of the chunk:
+  // the same text inside an INSERT's string literal does not count (it is not
+  // a comment line there). Skipping can never hurt — schema-verify re-creates
+  // these objects from our migrations — so the box-controlled marker is safe
+  // to trust in this direction.
+  for (const line of statement.split("\n")) {
+    if (isPgBlankLine(line)) continue;
+    if (!isPgCommentLine(line)) break;
+    if (pgTrim(line) === DEFERRED_SCHEMA_MARKER) return "deferred schema object";
+  }
   const body = stripLeadingComments(statement);
   if (!body || parseCopyFromStdin(body)) return null;
   if (Buffer.byteLength(body, "utf8") > MAX_STATEMENT_BYTES) return null;
@@ -551,10 +630,31 @@ export function deferredStatement(statement: string): string | null {
       if (!isObj(cmd)) return null;
       // A trigger's enabled state (DISABLE / ENABLE REPLICA / ENABLE ALWAYS TRIGGER).
       if (["AT_DisableTrig", "AT_EnableReplicaTrig", "AT_EnableAlwaysTrig", "AT_EnableTrig"].includes(String(cmd.subtype))) return "trigger state";
+      // AgentDash (GH #939): ALTER COLUMN … SET DEFAULT <expr> — the shape a
+      // function-dependent default takes. The expression is unchecked code,
+      // so it is never executed here; a DROP DEFAULT (no def) is refused.
+      if (cmd.subtype === "AT_ColumnDefault") return cmd.def !== undefined ? "column default" : null;
+      // AgentDash (GH #944): ADD COLUMN … GENERATED ALWAYS AS (…) STORED, the
+      // deferred form a generated column takes when its expression needs an
+      // object the dump creates later. Only the generated shape is skipped —
+      // a plain ADD COLUMN stays refused.
+      if (cmd.subtype === "AT_AddColumn" && isObj(cmd.def)) {
+        const cd = (cmd.def as Obj).ColumnDef;
+        if (isObj(cd) && Array.isArray(cd.constraints) && cd.constraints.some((c) => {
+          const con = isObj(c) ? c.Constraint : null;
+          return isObj(con) && con.contype === "CONSTR_GENERATED";
+        })) return "generated column";
+        return null;
+      }
       if (cmd.subtype !== "AT_AddConstraint" || !isObj(cmd.def)) return null;
       const con = (cmd.def as Obj).Constraint;
       return isObj(con) && con.contype === "CONSTR_CHECK" ? "check constraint" : null;
     }
+    // AgentDash (GH #944): every ALTER DOMAIN (SET DEFAULT, ADD CONSTRAINT,
+    // SET NOT NULL, …) is an expression-bearing or schema-shaping statement
+    // replay never runs.
+    case "AlterDomainStmt":
+      return "domain alteration";
     default:
       return null;
   }
