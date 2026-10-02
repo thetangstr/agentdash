@@ -6,6 +6,7 @@ import { logActivity } from "./activity-log.js";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import crypto from "node:crypto";
+import { publicBaseUrlOr } from "../lib/public-base-url.js";
 
 // ---------------------------------------------------------------------------
 // Slack OAuth2 configuration
@@ -23,7 +24,8 @@ function getSlackConfig(): SlackOAuthConfig {
   const clientId = process.env.SLACK_CLIENT_ID ?? "";
   const clientSecret = process.env.SLACK_CLIENT_SECRET ?? "";
   const signingSecret = process.env.SLACK_SIGNING_SECRET ?? "";
-  const publicBaseUrl = (process.env.AGENTDASH_PUBLIC_BASE_URL ?? "http://localhost:3100").replace(/\/$/, "");
+  // AgentDash (launch lane D): the configured public URL before the dev default.
+  const publicBaseUrl = publicBaseUrlOr(process.env.AGENTDASH_PUBLIC_BASE_URL, "http://localhost:3100");
 
   return { clientId, clientSecret, signingSecret, publicBaseUrl };
 }

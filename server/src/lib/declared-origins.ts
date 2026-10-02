@@ -455,6 +455,25 @@ export function registerMintingOrigins(origins: Iterable<string> | null): void {
 
 export function mintingOrigins(env: OriginEnv = process.env): Set<string> {
   if (registeredMintingOrigins) return registeredMintingOrigins;
+  return explicitMintingOrigins(env);
+}
+
+/**
+ * AgentDash (launch lane D): the origins an operator wrote down as full
+ * origins, and nothing synthesized.
+ *
+ * In legacy mode the trusted set Better Auth uses is every
+ * `PAPERCLIP_ALLOWED_HOSTNAMES` entry crossed with {http, https} and the
+ * known ports. That is right for accepting sign-ins and wrong for minting
+ * links: a hosted box lists its Railway host there so health checks and the
+ * edge hop are admitted, and the Railway edge rewrites `X-Forwarded-Host` to
+ * that host, so an invite created through `https://<slug>.agentdash.cloud`
+ * came back as `https://web-production-xxxx.up.railway.app/...`. Boot
+ * registers this set (plus the auth base URL) for minting in legacy mode, so
+ * a hostname that is only allowed, never declared as an origin, gets the
+ * public URL instead of an echo.
+ */
+export function explicitMintingOrigins(env: OriginEnv = process.env, extra: Array<string | undefined | null> = []): Set<string> {
   const set = new Set<string>();
   const add = (raw: string | undefined) => {
     const origin = normalizeOrigin(raw);
@@ -465,5 +484,22 @@ export function mintingOrigins(env: OriginEnv = process.env): Set<string> {
   add(env.PAPERCLIP_PUBLIC_URL);
   for (const name of AUTH_BASE_URL_ALIASES) add(env[name]);
   for (const entry of splitList(env.BETTER_AUTH_TRUSTED_ORIGINS)) add(entry);
+  for (const entry of extra) add(entry ?? undefined);
   return set;
+}
+
+/**
+ * AgentDash (launch lane D): the set boot registers for minting. Declared
+ * mode mints from the declared set (every entry is a full origin the
+ * operator wrote down). Legacy mode mints only from the explicit origins
+ * plus the auth base URL, never from the allowed-hostnames cross-product
+ * that Better Auth still trusts for sign-in.
+ */
+export function mintingOriginsForBoot(
+  trusted: { mode: "declared" | "legacy"; origins: string[] },
+  authPublicBaseUrl: string | undefined,
+  env: OriginEnv = process.env,
+): Iterable<string> {
+  if (trusted.mode === "declared") return trusted.origins;
+  return explicitMintingOrigins(env, [authPublicBaseUrl]);
 }

@@ -140,3 +140,17 @@ export function absoluteUrl(pathname: string): string | undefined {
   if (!base) return undefined;
   return `${base}${pathname.startsWith("/") ? "" : "/"}${pathname}`;
 }
+
+/**
+ * AgentDash (launch lane D): the base for links read outside any request
+ * (billing emails, Stripe return URLs, OAuth redirect URIs) when a feature
+ * has its own override variable. The override wins when set; otherwise the
+ * instance's configured public URL; otherwise `fallback`. Never a request
+ * host: there is no request to take one from, and a host-derived guess is
+ * how a hosted box leaked its Railway address.
+ */
+export function publicBaseUrlOr(override: string | undefined, fallback = ""): string {
+  const explicit = override?.trim().replace(/\/+$/, "");
+  if (explicit) return explicit;
+  return configuredPublicBaseUrl() ?? fallback;
+}

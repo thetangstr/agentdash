@@ -265,6 +265,91 @@ describe("POST /companies/:companyId/invites", () => {
     });
   });
 
+  // AgentDash (launch lane D): a hosted box behind the edge router. The edge
+  // sends Host = the box's Railway host and Railway rewrites X-Forwarded-Host
+  // to it too; the box lists that host in PAPERCLIP_ALLOWED_HOSTNAMES. Links
+  // must still name https://<slug>.agentdash.cloud.
+  describe("hosted box behind the edge", () => {
+    const PUBLIC = "https://acme.agentdash.cloud";
+    const RAILWAY = "web-production-1234.up.railway.app";
+    const BOX_KEYS = [
+      "PAPERCLIP_CANONICAL_ORIGIN",
+      "PAPERCLIP_ORIGINS",
+      "PAPERCLIP_PUBLIC_URL",
+      "PAPERCLIP_AUTH_PUBLIC_BASE_URL",
+      "PAPERCLIP_ALLOWED_HOSTNAMES",
+      "BETTER_AUTH_TRUSTED_ORIGINS",
+    ] as const;
+    const savedBox = new Map<string, string | undefined>();
+    beforeEach(() => {
+      for (const key of BOX_KEYS) {
+        savedBox.set(key, process.env[key]);
+        delete process.env[key];
+      }
+    });
+    afterEach(async () => {
+      for (const key of BOX_KEYS) {
+        const value = savedBox.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      const { registerMintingOrigins } = await import("../lib/declared-origins.js");
+      registerMintingOrigins(null);
+    });
+
+    async function bootBox() {
+      process.env.PAPERCLIP_PUBLIC_URL = PUBLIC;
+      process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL = PUBLIC;
+      process.env.PAPERCLIP_ALLOWED_HOSTNAMES = `acme.agentdash.cloud,${RAILWAY}`;
+      // What index.ts does at boot in authenticated mode.
+      const [{ resolveAuthTrustedOrigins }, { mintingOriginsForBoot, registerMintingOrigins, resolveOriginSettings }] =
+        await Promise.all([import("../auth/better-auth.js"), import("../lib/declared-origins.js")]);
+      const settings = resolveOriginSettings({ env: process.env });
+      const config = {
+        deploymentMode: "authenticated",
+        port: 3100,
+        authBaseUrlMode: "explicit",
+        authPublicBaseUrl: settings.authPublicBaseUrl,
+        allowedHostnames: settings.allowedHostnames,
+      } as any;
+      const trusted = resolveAuthTrustedOrigins(config, { listenPort: 3100 });
+      expect(trusted.origins).toContain(`https://${RAILWAY}`);
+      registerMintingOrigins(mintingOriginsForBoot(trusted, config.authPublicBaseUrl));
+    }
+
+    it("mints inviteUrl and onboardingTextUrl on the public name, not the Railway host", async () => {
+      await bootBox();
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .set("host", RAILWAY)
+        .set("x-forwarded-host", RAILWAY)
+        .set("x-agentdash-forwarded-host", "acme.agentdash.cloud")
+        .set("x-forwarded-proto", "https")
+        .send({ allowedJoinTypes: "both", humanRole: "member" });
+
+      expect(res.status).toBe(201);
+      expect(res.body.inviteUrl).toMatch(/^https:\/\/acme\.agentdash\.cloud\/invite\/pcp_invite_[a-z0-9]{16}$/);
+      expect(res.body.onboardingTextUrl).toMatch(/^https:\/\/acme\.agentdash\.cloud\/api\/invites\/.+\/onboarding\.txt$/);
+      expect(JSON.stringify(res.body)).not.toContain("railway.app");
+    });
+
+    it("falls back to the request host when no public URL is configured", async () => {
+      process.env.PAPERCLIP_ALLOWED_HOSTNAMES = RAILWAY;
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .set("host", RAILWAY)
+        .set("x-forwarded-proto", "https")
+        .send({ allowedJoinTypes: "human", humanRole: "member" });
+
+      expect(res.status).toBe(201);
+      expect(res.body.inviteUrl).toMatch(new RegExp(`^https://${RAILWAY.replace(/\./g, "\\.")}/invite/`));
+    });
+  });
+
   it("allows agent-only invites on Free workspaces with a human owner but no agent yet", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
     tierDepsMock.getCompany.mockResolvedValue({ planTier: "free" });

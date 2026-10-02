@@ -1039,7 +1039,10 @@ No greetings. No markdown headings outside the JSON block.`;
     // so in declared mode it names the canonical address. Without declared
     // origins it keeps the inviter's (validated) door, as before: the old
     // PAPERCLIP_PUBLIC_URL may be a plaintext LAN address, and moving
-    // invitees off a TLS door onto it would be a downgrade.
+    // invitees off a TLS door onto it would be a downgrade. (Launch lane D:
+    // in legacy mode only doors written down as full origins are echoed; a
+    // host that is merely in PAPERCLIP_ALLOWED_HOSTNAMES, such as a hosted
+    // box's Railway host, gets the public URL. See `mintingOriginsForBoot`.)
     const baseUrl = inBandBaseUrl(req);
     const emailBaseUrl = declaredOriginsEnabled() ? outOfBandBaseUrl(req) : baseUrl;
 
