@@ -124,6 +124,7 @@ doctorCommand
   .option("--company <id>", "Only this company (required with --apply)")
   .option("--user <id>", "The user to restore as owner (required with --apply)")
   .option("--apply", "Promote the named user; without it this is a dry run", false)
+  .option("--force", "With --apply: promote even without creator evidence", false)
   .action(async (opts) => {
     await repairFounderOwner(opts);
   });

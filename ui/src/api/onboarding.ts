@@ -19,7 +19,8 @@ export interface InterviewTurnResponse {
 
 export interface ConfirmResponse {
   agent: { id: string; name: string; title: string };
-  apiKey: { id: string; name: string; token: string; createdAt: string };
+  /** Absent for an autonomous hire, which gets no key a person could carry (scan 3, lane H). */
+  apiKey?: { id: string; name: string; token: string; createdAt: string };
   proposal: ProposalPayload;
 }
 
