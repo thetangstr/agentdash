@@ -382,10 +382,29 @@ export function activityVisibilityCondition(req: Request, companyId: string): SQ
       and (${activityLog.details} ->> 'scopeType') = 'project'
       and (${activityLog.details} ->> 'scopeId') ~* ${CANONICAL_UUID_PATTERN}
       then (${activityLog.details} ->> 'scopeId')::uuid end)`;
+  // AgentDash (GH #933): an approval.* activity row names the approval in
+  // entityId; a budget_override_required approval is about the project its
+  // payload scopes to, so the row resolves that project through the approval
+  // row — the same rule approvalVisibilityCondition applies to the list.
+  const approvalScopeProjectId = sql`(case when ${activityLog.entityType} = 'approval'
+      and ${activityLog.entityId} ~* ${CANONICAL_UUID_PATTERN}
+      then (select (${approvals.payload} ->> 'scopeId')::uuid from ${approvals}
+        where ${approvals.id} = ${activityLog.entityId}::uuid
+          and ${approvals.type} = 'budget_override_required'
+          and (${approvals.payload} ->> 'scopeType') = 'project'
+          and (${approvals.payload} ->> 'scopeId') ~* ${CANONICAL_UUID_PATTERN}) end)`;
+  // AgentDash (GH #933): a project-scoped budget row whose scope id cannot
+  // resolve to a project fails closed, matching the live-event filter.
+  const unresolvableBudgetScope = sql`(${activityLog.entityType} in ('budget_policy', 'budget_incident')
+      and (${activityLog.details} ->> 'scopeType') = 'project'
+      and ((${activityLog.details} ->> 'scopeId') is null
+        or (${activityLog.details} ->> 'scopeId') !~* ${CANONICAL_UUID_PATTERN}))`;
   return and(
     projectScopedVisibilityCondition(req, companyId, issues.projectId),
     projectScopedVisibilityCondition(req, companyId, projectEntityId),
     projectScopedVisibilityCondition(req, companyId, budgetScopeProjectId),
+    projectScopedVisibilityCondition(req, companyId, approvalScopeProjectId),
+    sql`not ${unresolvableBudgetScope}`,
   );
 }
 

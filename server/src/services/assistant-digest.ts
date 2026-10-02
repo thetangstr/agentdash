@@ -492,11 +492,12 @@ export function assistantDigestService(db: Db) {
     // assistant" even on rows written before the gated path stamped `via`.
     const approvalEntityRows = approvalEntityIds.length
       ? await db
-          .select({ id: approvals.id, decisionChannel: approvals.decisionChannel })
+          .select({ id: approvals.id, decisionChannel: approvals.decisionChannel, type: approvals.type, payload: approvals.payload })
           .from(approvals)
           .where(and(eq(approvals.companyId, input.companyId), inArray(approvals.id, approvalEntityIds)))
       : [];
     const approvalChannelById = new Map(approvalEntityRows.map((row) => [row.id, row.decisionChannel]));
+    const approvalById = new Map(approvalEntityRows.map((row) => [row.id, row]));
     const ASSISTANT_DECISION_ACTIONS = new Set([
       "approval.approved",
       "approval.rejected",
@@ -568,7 +569,16 @@ export function assistantDigestService(db: Db) {
         return { projectId: row.entityId, issue: null, companyLevel: false };
       }
       if (row.entityType === "approval") {
-        if (!approvalChannelById.has(row.entityId)) return null; // no such approval here
+        const approval = approvalById.get(row.entityId);
+        if (!approval) return null; // no such approval here
+        // AgentDash (GH #933): a budget_override_required approval is about
+        // the project its payload scopes to — the activity row follows the
+        // project rule, it is not company-level just because no issue links it.
+        const budgetProjectId = approvalBudgetProjectId(approval);
+        if (budgetProjectId) {
+          if (!visible.has(budgetProjectId)) return null;
+          return { projectId: budgetProjectId, issue: null, companyLevel: false };
+        }
         const linked = linksByApproval.get(row.entityId);
         if (!linked || linked.length === 0) return { projectId: null, issue: null, companyLevel: true };
         // Linked approvals are attributed through their first visible issue;

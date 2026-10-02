@@ -50,7 +50,9 @@ describeEmbeddedPostgres("GH #933: budget activity follows the restricted-projec
   const OPEN_APPROVAL = randomUUID();
   const SECRET_APPROVAL = randomUUID();
   const SECRET_INCIDENT = randomUUID();
+  const MALFORMED_POLICY = randomUUID();
   const SECRET_NAME = "Sam's restricted project";
+  const MALFORMED_SCOPE_NAME = "Unresolved project scope";
 
   // One stewarded agent per viewer: the digest and pending-decisions list
   // cover "the agents this person answers for", so each viewer needs one.
@@ -202,7 +204,28 @@ describeEmbeddedPostgres("GH #933: budget activity follows the restricted-projec
       amount: 200,
       windowKind: "calendar_month_utc",
     });
-  }, 60_000);
+
+    // The approval.* rows approvals.ts writes — the override type sits in
+    // details, the project in the approval's payload. The restricted one's
+    // row must follow the project rule, not read as company-level.
+    await budgetActivity("approval.created", "approval", SECRET_APPROVAL, {
+      type: "budget_override_required",
+      issueIds: [],
+    });
+    await budgetActivity("approval.created", "approval", OPEN_APPROVAL, {
+      type: "budget_override_required",
+      issueIds: [],
+    });
+    // A project scope whose id is not a uuid cannot resolve — the live
+    // filter fails closed on it, and the feed now matches.
+    await budgetActivity("budget.policy_upserted", "budget_policy", MALFORMED_POLICY, {
+      scopeType: "project",
+      scopeId: "not-a-uuid",
+      scopeName: MALFORMED_SCOPE_NAME,
+      amount: 1,
+      windowKind: "lifetime",
+    });
+  }, 120_000);
 
   afterAll(async () => {
     await tempDb?.cleanup();
@@ -294,6 +317,47 @@ describeEmbeddedPostgres("GH #933: budget activity follows the restricted-projec
         [COMPANY_POLICY, OPEN_POLICY, AGENT_POLICY].sort(),
       );
     });
+
+    it("hides approval.* rows for the restricted project's override", async () => {
+      const approvalIds = (body: Array<{ entityType: string; entityId: string }>) =>
+        body.filter((row) => row.entityType === "approval").map((row) => row.entityId);
+
+      const outsider = await request(appAs(OUTSIDER)).get(`/api/companies/${COMPANY}/activity`);
+      expect(outsider.status).toBe(200);
+      expect(approvalIds(outsider.body)).toEqual([OPEN_APPROVAL]);
+
+      for (const actor of [LISTED, CREATOR, ADMIN]) {
+        const res = await request(appAs(actor)).get(`/api/companies/${COMPANY}/activity`);
+        expect(approvalIds(res.body)).toEqual(
+          expect.arrayContaining([OPEN_APPROVAL, SECRET_APPROVAL]),
+        );
+      }
+
+      const onList = await request(appAs(asAgent(AGENT_ON_LIST))).get(
+        `/api/companies/${COMPANY}/activity`,
+      );
+      expect(approvalIds(onList.body)).toEqual(
+        expect.arrayContaining([OPEN_APPROVAL, SECRET_APPROVAL]),
+      );
+      const offList = await request(appAs(asAgent(AGENT_OFF_LIST))).get(
+        `/api/companies/${COMPANY}/activity`,
+      );
+      expect(approvalIds(offList.body)).toEqual([OPEN_APPROVAL]);
+    });
+
+    it("fails closed on a project scope id that cannot resolve, matching the live filter", async () => {
+      for (const actor of [OUTSIDER, LISTED, CREATOR]) {
+        const res = await request(appAs(actor)).get(`/api/companies/${COMPANY}/activity`);
+        expect(res.status).toBe(200);
+        const body = JSON.stringify(res.body);
+        expect(body).not.toContain(MALFORMED_POLICY);
+        expect(body).not.toContain(MALFORMED_SCOPE_NAME);
+        expect(body).not.toContain("not-a-uuid");
+      }
+      // An admin still audits everything, including the malformed row.
+      const admin = await request(appAs(ADMIN)).get(`/api/companies/${COMPANY}/activity`);
+      expect(admin.body.map((row: { entityId: string }) => row.entityId)).toContain(MALFORMED_POLICY);
+    });
   });
 
   describe("GET /companies/:id/sidebar-badges", () => {
@@ -355,6 +419,26 @@ describeEmbeddedPostgres("GH #933: budget activity follows the restricted-projec
 
       const outsider = await digest(OUTSIDER, `&projectId=${SECRET_PROJECT}`);
       expect(outsider.status).toBe(404);
+    });
+
+    it("drops the restricted override's approval.* activity rows from changed[]", async () => {
+      const approvalRefs = (items: Array<{ entityType: string; target: { ref: string } | null }>) =>
+        items.filter((item) => item.entityType === "approval").map((item) => item.target?.ref);
+
+      const res = await digest(OUTSIDER);
+      expect(res.status).toBe(200);
+      expect(approvalRefs(res.body.changed.items)).toEqual([OPEN_APPROVAL]);
+      expect(JSON.stringify(res.body.changed)).not.toContain(SECRET_APPROVAL);
+
+      // The listed member gets the row, labelled with its project.
+      const listed = await digest(LISTED);
+      expect(approvalRefs(listed.body.changed.items)).toEqual(
+        expect.arrayContaining([OPEN_APPROVAL, SECRET_APPROVAL]),
+      );
+      const secretRow = listed.body.changed.items.find(
+        (item: { target: { ref: string } | null }) => item.target?.ref === SECRET_APPROVAL,
+      );
+      expect(secretRow.project).toBe(SECRET_NAME);
     });
   });
 

@@ -101,7 +101,11 @@ import {
   buildInviteTokenCookieClear,
   inviteCookieSecureFlag,
 } from "../lib/signup-gate.js";
-import { inviteSignupBoundEmail } from "../services/invites.js";
+import {
+  INVITE_SIGNUP_CLAIM_KEY,
+  INVITE_SIGNUP_RESERVE_EMAIL_KEY,
+  inviteSignupBoundEmail,
+} from "../services/invites.js";
 import { isHostedBox } from "../services/license.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 // AgentDash (GH #505): one predicate for who may read member email addresses.
@@ -2055,6 +2059,36 @@ async function joinRequestForResponse(
   };
 }
 
+/**
+ * AgentDash (GH #946): an invite row headed to a management response. The
+ * `tokenHash` column is a credential verifier — it never leaves the server,
+ * whatever the caller's grants. Inside `defaultsPayload` the bound-recipient
+ * `email` and the sign-up gate's claimed/reserved addresses are member-email
+ * material under the #505 rule: an agent holding `users:invite` — or a human
+ * without member-email visibility — gets `null` for each address. The keys
+ * stay on the wire so response shapes do not change, and the stored row is
+ * never mutated.
+ */
+function inviteForResponse<I extends typeof invites.$inferSelect>(
+  req: Request,
+  canViewEmails: boolean,
+  invite: I,
+): Omit<I, "tokenHash"> {
+  const { tokenHash: _tokenHash, ...safe } = invite;
+  const payload = invite.defaultsPayload;
+  if (!isPlainObject(payload)) {
+    return { ...safe, defaultsPayload: payload ?? null } as Omit<I, "tokenHash">;
+  }
+  const defaultsPayload: Record<string, unknown> = { ...payload };
+  for (const key of ["email", INVITE_SIGNUP_CLAIM_KEY, INVITE_SIGNUP_RESERVE_EMAIL_KEY] as const) {
+    const value = defaultsPayload[key];
+    if (typeof value === "string") {
+      defaultsPayload[key] = visibleMemberEmail(req, canViewEmails, null, value);
+    }
+  }
+  return { ...safe, defaultsPayload } as Omit<I, "tokenHash">;
+}
+
 async function resolveActorEmail(db: Db, req: Request): Promise<string | null> {
   if (isLocalImplicit(req)) return "local@paperclip.local";
   const userId = req.actor.userId;
@@ -3173,7 +3207,7 @@ export function accessRoutes(
         companyBranding
       );
       res.status(201).json({
-        ...created,
+        ...inviteForResponse(req, await canViewMemberEmails(access, req, companyId), created),
         token,
         invitePath: inviteSummary.invitePath,
         inviteUrl: inviteSummary.inviteUrl,
@@ -3234,7 +3268,7 @@ export function accessRoutes(
         companyBranding
       );
       res.status(201).json({
-        ...created,
+        ...inviteForResponse(req, await canViewMemberEmails(access, req, companyId), created),
         token,
         invitePath: inviteSummary.invitePath,
         inviteUrl: inviteSummary.inviteUrl,
@@ -4056,7 +4090,11 @@ export function accessRoutes(
       await assertCompanyPermission(req, invite.companyId, "users:invite");
     }
     if (invite.acceptedAt) throw conflict("Invite already consumed");
-    if (invite.revokedAt) return res.json(invite);
+    // AgentDash (GH #946): the echoed row — freshly revoked or already
+    // revoked — drops tokenHash and follows the member-email rule inside
+    // defaultsPayload, same as the list route.
+    const canViewEmails = await canViewMemberEmails(access, req, invite.companyId ?? "");
+    if (invite.revokedAt) return res.json(inviteForResponse(req, canViewEmails, invite));
 
     const revoked = await db
       .update(invites)
@@ -4079,7 +4117,7 @@ export function accessRoutes(
       });
     }
 
-    res.json(revoked);
+    res.json(inviteForResponse(req, canViewEmails, revoked));
   });
 
   router.get("/companies/:companyId/invites", async (req, res) => {
@@ -4090,12 +4128,13 @@ export function accessRoutes(
       loadCompanyInviteRecords(db, companyId, query),
       canViewMemberEmails(access, req, companyId),
     ]);
-    // AgentDash (GH #946): invitedByUser is a member profile — an agent
-    // granted users:invite reads the list but still gets email: null.
+    // AgentDash (GH #946): invitedByUser is a member profile and the invite
+    // row itself carries recipient emails + tokenHash — an agent granted
+    // users:invite reads the list but gets neither.
     res.json({
       ...invitesForCompany,
       invites: invitesForCompany.invites.map((invite) => ({
-        ...invite,
+        ...inviteForResponse(req, canViewEmails, invite),
         invitedByUser: redactUserProfileEmail(req, canViewEmails, invite.invitedByUser),
       })),
     });
