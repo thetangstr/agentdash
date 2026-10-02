@@ -621,6 +621,13 @@ function invalidateHeartbeatQueries(
   queryClient.invalidateQueries({ queryKey: queryKeys.costs(companyId) });
   queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(companyId) });
 
+  // AgentDash (scan 4 lane O1): a finished run's usage lands on the issue's
+  // Result card and Shipped; refetch them so they stop reading "counting…".
+  const status = readString(payload.status);
+  if (status && TERMINAL_RUN_STATUSES.has(status)) {
+    queryClient.invalidateQueries({ queryKey: ["shipped", companyId] });
+  }
+
   const agentId = readString(payload.agentId);
   if (agentId) {
     queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId) });

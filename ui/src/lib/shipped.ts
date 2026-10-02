@@ -19,6 +19,31 @@ export function formatShippedUsage(usage: ShippedIssueUsage | null | undefined):
   return parts.join(" · ");
 }
 
+/** AgentDash (scan 4 lane O1): shown while a just-finished run's usage is still being recorded. */
+export const USAGE_COUNTING_LABEL = "counting…";
+
+/** How long after a deliverable is saved its missing usage reads "counting…" rather than "not metered yet". */
+export const USAGE_COUNTING_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * AgentDash (scan 4 lane O1): right after a run, the Result card read "not
+ * metered yet", which looks like an error. Usage is written as the run
+ * finishes, so for a deliverable saved in the last few minutes with no usage
+ * yet the honest word is "counting…". Older unmetered work keeps the
+ * NOT_METERED_LABEL.
+ */
+export function isUsageCounting(
+  usage: ShippedIssueUsage | null | undefined,
+  products: ReadonlyArray<{ createdAt?: Date | string | null; updatedAt?: Date | string | null }>,
+  now: number = Date.now(),
+): boolean {
+  if (usage?.metered) return false;
+  return products.some((product) => {
+    const at = new Date(product.updatedAt ?? product.createdAt ?? 0).getTime();
+    return Number.isFinite(at) && at > 0 && now - at < USAGE_COUNTING_WINDOW_MS;
+  });
+}
+
 export type WorkProductStateTone = "open" | "merged" | "closed" | "draft" | "neutral";
 
 /** Statuses that mean the work was withdrawn or sent back, so a done issue does not make them accepted. */

@@ -19,7 +19,7 @@ vi.mock("../components/MarkdownEditor", () => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TokenCeilingStatusLine } = await import("./AgentDetail");
+const { TokenCeilingStatusLine, agentBilledByProvider } = await import("./AgentDetail");
 
 function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentTokenCeilingStatus {
   return {
@@ -66,7 +66,9 @@ describe("TokenCeilingStatusLine", () => {
     const text = container!.textContent ?? "";
     expect(text).toContain("Daily token ceiling");
     expect(text).toContain("(default)");
-    expect(text).toContain("used today");
+    // Scan 4 lane O1: the ceiling count includes cached reads; it says so.
+    expect(text).toContain("counted toward it today (counts cached reads)");
+    expect(text).not.toContain("used today");
     expect(text).not.toContain("paused");
   });
 
@@ -143,5 +145,21 @@ describe("TokenCeilingStatusLine", () => {
     act(() => editButton.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     const save = [...container!.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
     expect(save.disabled).toBe(true);
+  });
+});
+
+// Scan 4 lane O1: on BYOK the agent page said "Spend this month $0.00" next to
+// real usage; it now says the model provider bills it.
+describe("agentBilledByProvider", () => {
+  const run = (inputTokens: number, outputTokens: number) => ({ usageJson: { inputTokens, outputTokens } }) as never;
+
+  it("is true when runs used tokens but no dollars were metered", () => {
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900)])).toBe(true);
+  });
+
+  it("is false when dollars were metered, or nothing ran", () => {
+    expect(agentBilledByProvider({ spentMonthlyCents: 120 }, [run(32_000, 2_900)])).toBe(false);
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [])).toBe(false);
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, [{ usageJson: null } as never])).toBe(false);
   });
 });

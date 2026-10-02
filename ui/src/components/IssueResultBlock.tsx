@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
-import { TOKENS_COUNTED_NOTE, formatShippedUsage } from "../lib/shipped";
+import { TOKENS_COUNTED_NOTE, USAGE_COUNTING_LABEL, formatShippedUsage, isUsageCounting } from "../lib/shipped";
 import { ShippedWorkProductRow } from "./ShippedWorkProductRow";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -37,6 +37,13 @@ export function IssueResultBlock({
   const { data } = useQuery({
     queryKey: queryKeys.shipped(companyId, { issueId }),
     queryFn: () => issuesApi.listShipped(companyId, { issueId }),
+    // AgentDash (scan 4 lane O1): while a fresh deliverable's usage is still
+    // being recorded, check again shortly (the run-finished live event also
+    // refetches this); stops once usage lands or the window passes.
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.length > 0 && isUsageCounting(items[0]!.usage, items) ? 5_000 : false;
+    },
   });
   const [mode, setMode] = useState<"idle" | "note">("idle");
   const [note, setNote] = useState("");
@@ -75,8 +82,8 @@ export function IssueResultBlock({
     >
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 max-sm:py-1.5">
         <h3 className="text-sm font-medium">Result</h3>
-        <span className="text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE}>
-          {formatShippedUsage(usage)}
+        <span className="text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE} data-testid="issue-result-usage">
+          {isUsageCounting(usage, items) ? USAGE_COUNTING_LABEL : formatShippedUsage(usage)}
         </span>
       </div>
       <div className="divide-y divide-border">

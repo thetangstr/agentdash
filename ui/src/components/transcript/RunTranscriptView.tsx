@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { TranscriptEntry } from "../../adapters";
 import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
-import { ReadableTranscriptView } from "./ReadableTranscript";
+import { redactSecrets } from "../../lib/readableTranscript";
+import { ReadableTranscriptView, type ReadableRunUsage } from "./ReadableTranscript";
 
 // AgentDash: "readable" is the Claude-Code-style default (see
 // ReadableTranscript.tsx). "nice" is kept as an alias for older callers and
@@ -26,6 +27,8 @@ interface RunTranscriptViewProps {
   emptyMessage?: string;
   className?: string;
   thinkingClassName?: string;
+  /** The run's metered usage, so the readable footer matches the run's own figures. */
+  usage?: ReadableRunUsage | null;
 }
 
 function findScrollParent(element: HTMLElement): HTMLElement | Window {
@@ -42,10 +45,10 @@ function findScrollParent(element: HTMLElement): HTMLElement | Window {
 
 function rawEntryContent(entry: TranscriptEntry): string {
   if (entry.kind === "tool_call") {
-    return `${entry.name}\n${formatToolPayload(entry.input)}`;
+    return redactSecrets(`${entry.name}\n${formatToolPayload(entry.input)}`);
   }
   if (entry.kind === "tool_result") {
-    return formatToolPayload(entry.content);
+    return redactSecrets(formatToolPayload(entry.content));
   }
   if (entry.kind === "result") {
     return `${entry.text}\n${formatTokens(entry.inputTokens)} / ${formatTokens(entry.outputTokens)} / $${entry.costUsd.toFixed(6)}`;
@@ -148,6 +151,7 @@ export function RunTranscriptView({
   emptyMessage = "No transcript yet.",
   className,
   thinkingClassName,
+  usage,
 }: RunTranscriptViewProps) {
   if (entries.length === 0) {
     return (
@@ -174,6 +178,7 @@ export function RunTranscriptView({
       limit={limit}
       className={className}
       thinkingClassName={thinkingClassName}
+      usage={usage}
     />
   );
 }

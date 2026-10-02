@@ -9,6 +9,7 @@ import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
 import {
   formatRunDuration,
+  redactSecrets,
   summarizeToolOutcome,
   toolGroupLabel,
   updateReadableTranscript,
@@ -230,7 +231,7 @@ export function ReadableToolRow({
           {hasUsefulInput(item) && (
             <div>
               <div className="mb-0.5 text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Input</div>
-              <CappedOutput text={item.summary.script ?? formatToolPayload(item.input)} />
+              <CappedOutput text={redactSecrets(item.summary.script ?? formatToolPayload(item.input))} />
             </div>
           )}
           {item.result ? (
@@ -238,7 +239,7 @@ export function ReadableToolRow({
               {hasUsefulInput(item) && (
                 <div className="mb-0.5 text-[10px] max-sm:text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">Output</div>
               )}
-              <CappedOutput text={formatToolPayload(item.result)} tone={item.status === "error" ? "error" : "default"} />
+              <CappedOutput text={redactSecrets(formatToolPayload(item.result))} tone={item.status === "error" ? "error" : "default"} />
             </div>
           ) : (
             <div className="text-[11px] max-sm:text-xs italic text-muted-foreground">
@@ -413,14 +414,38 @@ export function ReadableDetails({
 // Result footer
 // ---------------------------------------------------------------------------
 
-export function ReadableFooter({ footer, density = "comfortable" }: { footer: ReadableResultFooter; density?: ReadableDensity }) {
+/**
+ * AgentDash (scan 4 lane O1): the run's metered usage, from the run record.
+ * The transcript's own result line can disagree with it (the adapter reports
+ * its own count, the run record is what was metered), and the run page showed
+ * "Input 32.0k" above a footer reading "31.4k in". When the caller passes the
+ * run's usage, the footer shows that, so both read from one source.
+ */
+export interface ReadableRunUsage {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd?: number;
+}
+
+export function ReadableFooter({
+  footer,
+  density = "comfortable",
+  usage,
+}: {
+  footer: ReadableResultFooter;
+  density?: ReadableDensity;
+  usage?: ReadableRunUsage | null;
+}) {
   const duration = formatRunDuration(footer.durationMs);
-  const hasTokens = footer.inputTokens > 0 || footer.outputTokens > 0;
+  const inputTokens = usage ? usage.inputTokens : footer.inputTokens;
+  const outputTokens = usage ? usage.outputTokens : footer.outputTokens;
+  const costUsd = usage ? usage.costUsd ?? 0 : footer.costUsd;
+  const hasTokens = inputTokens > 0 || outputTokens > 0;
   const parts = [
     footer.outcome,
     duration,
-    hasTokens ? `${formatTokens(footer.inputTokens)} in / ${formatTokens(footer.outputTokens)} out` : null,
-    footer.costUsd > 0 ? `$${footer.costUsd.toFixed(4)}` : null,
+    hasTokens ? `${formatTokens(inputTokens)} in / ${formatTokens(outputTokens)} out` : null,
+    costUsd > 0 ? `$${costUsd.toFixed(4)}` : null,
   ].filter((part): part is string => Boolean(part));
 
   return (
@@ -570,6 +595,7 @@ export function ReadableTranscriptView({
   limit,
   className,
   thinkingClassName,
+  usage,
 }: {
   entries: readonly TranscriptEntry[];
   streaming?: boolean;
@@ -577,6 +603,8 @@ export function ReadableTranscriptView({
   limit?: number;
   className?: string;
   thinkingClassName?: string;
+  /** The run's metered usage; when set, the footer shows it instead of the transcript's result line. */
+  usage?: ReadableRunUsage | null;
 }) {
   const transcript = useReadableTranscript(entries, streaming);
   const blocks = limit ? transcript.blocks.slice(-limit) : transcript.blocks;
@@ -595,7 +623,7 @@ export function ReadableTranscriptView({
         </div>
       ))}
       <ReadableDetails lines={transcript.details} density={density} thinkingClassName={thinkingClassName} />
-      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} />}
+      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} usage={usage} />}
     </div>
   );
 }

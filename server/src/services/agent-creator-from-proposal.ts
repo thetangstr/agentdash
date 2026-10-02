@@ -133,6 +133,11 @@ export function agentCreatorFromProposal(deps: Deps) {
 // worker: no absolute filesystem paths, file:// URLs or raw user/agent/run ids
 // in comments; deliverables go in issue documents. Proposal-created hires add
 // nothing to that.
+// AgentDash: plain-language-summaries (scan 4 lane O1) is inherited from the
+// canonical worker: completion summaries, comments and in-run notes say "ready
+// for your review", "the document" and "you", never internal field names,
+// status values ("in_review"), "DoD", "board user", "document key" or "work
+// product". Proposal-created hires add nothing to that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.

@@ -8,6 +8,7 @@
 //   - thinking / init / system / stderr / unparsed stdout sit behind one
 //     "Details" disclosure, except anything that looks like an error;
 //   - the result entry becomes a compact footer.
+import { redactCommandText } from "@paperclipai/adapter-utils";
 import type { TranscriptEntry } from "../adapters";
 import { shouldHideNiceModeStderr, summarizeToolResult } from "./transcriptPresentation";
 
@@ -380,12 +381,259 @@ function finalize(verb: string, target: string | null, isCommand: boolean): Tool
   };
 }
 
+// ---------------------------------------------------------------------------
+// AgentDash (scan 4 lane O1): readable single commands, never secrets
+// ---------------------------------------------------------------------------
+
+const SENSITIVE_HEADER_RE =
+  /(\b(?:Proxy-)?Authorization\s*:\s*|\bX-(?:Api-Key|Auth-Token|Paperclip-Token|Agentdash-Token)\s*:\s*|\bCookie\s*:\s*)[^"'\\\n]+/gi;
+
+/**
+ * Hide credentials in command text shown to people: Authorization / API-key /
+ * Cookie header values, `--token x` style options, `FOO_TOKEN=x` assignments,
+ * and well-known key shapes. Applied to every command the readable transcript
+ * shows, collapsed or expanded.
+ */
+export function redactSecrets(text: string): string {
+  return redactCommandText(text.replace(SENSITIVE_HEADER_RE, "$1***REDACTED***"));
+}
+
+/**
+ * Shell-style words of one statement, quotes removed. Stops at an unquoted
+ * pipe or redirect: only the command itself matters for a label.
+ */
+export function shellWords(statement: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: string | null = null;
+  for (let i = 0; i < statement.length; i += 1) {
+    const char = statement[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      else if (char === "\\" && quote === '"' && i + 1 < statement.length) current += statement[++i];
+      else current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (char === "\\" && i + 1 < statement.length) {
+      current += statement[++i];
+      started = true;
+      continue;
+    }
+    if (char === "|" || char === ">" || char === "<") break;
+    if (/\s/.test(char)) {
+      if (started) words.push(current);
+      current = "";
+      started = false;
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started) words.push(current);
+  return words;
+}
+
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const COMMAND_PREFIXES = new Set(["sudo", "env", "time", "nohup", "exec", "command"]);
+/** Tools whose first positional argument says what they did (`git status`, `pnpm build`). */
+const SUBCOMMAND_TOOLS = new Set([
+  "git", "gh", "pnpm", "npm", "yarn", "npx", "bun", "deno", "docker", "kubectl", "cargo", "go", "make", "brew",
+  "pip", "pip3", "uv", "poetry", "agentdash", "paperclipai",
+]);
+
+/** The program a statement runs and its arguments, past env assignments and `sudo`/`env` prefixes. */
+function programWords(statement: string): string[] {
+  const words = shellWords(statement);
+  let index = 0;
+  while (index < words.length && (ENV_ASSIGNMENT_RE.test(words[index]) || COMMAND_PREFIXES.has(words[index]))) {
+    index += 1;
+  }
+  return words.slice(index);
+}
+
+function basename(word: string): string {
+  const parts = word.split("/");
+  return parts[parts.length - 1] || word;
+}
+
+/** "git status", "pnpm build", "curl", "python3": what a command is, without its arguments. */
+export function commandName(statement: string): string {
+  const words = programWords(statement);
+  if (words.length === 0) return compactWhitespace(statement);
+  const program = basename(words[0]);
+  if (SUBCOMMAND_TOOLS.has(program)) {
+    const sub = words.slice(1).find((word) => !word.startsWith("-"));
+    if (sub && /^[A-Za-z0-9][\w:.-]*$/.test(sub)) return `${program} ${sub}`;
+  }
+  return program;
+}
+
+const READABLE_COMMAND_MAX = 60;
+
+/**
+ * A single command, as a row label. Short, plain commands read fine as they are
+ * ("git status", "pnpm test:run"). Anything long, carrying a URL, or carrying
+ * a credential is named by its program instead ("Ran curl"); the full
+ * (redacted) command is one click away.
+ */
+function readableCommand(statement: string): string {
+  const compact = compactWhitespace(statement);
+  const noisy =
+    compact.length > READABLE_COMMAND_MAX
+    || /\bhttps?:\/\//i.test(compact)
+    || /\/api\//.test(compact)
+    || redactSecrets(compact) !== compact;
+  return noisy ? commandName(compact) : compact;
+}
+
+export interface AgentDashApiCall {
+  method: string;
+  /** Route template, e.g. "/api/issues/:id/comments". */
+  route: string;
+  /** An issue key such as "WHI-1", when the URL used one. */
+  issueRef: string | null;
+  /** Plain-language action such as "Updated issue"; null for routes without one. */
+  action: string | null;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISSUE_REF_RE = /^[A-Z][A-Z0-9]*-\d+$/;
+const VARIABLE_RE = /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/;
+const PLACEHOLDER_AFTER: Record<string, string> = {
+  issues: ":id",
+  companies: ":companyId",
+  agents: ":agentId",
+  comments: ":commentId",
+  documents: ":key",
+  "work-products": ":workProductId",
+  approvals: ":approvalId",
+  projects: ":projectId",
+  goals: ":goalId",
+  runs: ":runId",
+};
+
+const AGENTDASH_ACTIONS: Record<string, string> = {
+  "GET /api/issues/:id": "Read issue",
+  "PATCH /api/issues/:id": "Updated issue",
+  "GET /api/issues/:id/comments": "Read the comments on issue",
+  "POST /api/issues/:id/comments": "Commented on issue",
+  "POST /api/issues/:id/checkout": "Started work on issue",
+  "POST /api/issues/:id/release": "Released issue",
+  "GET /api/issues/:id/documents": "Read the documents on issue",
+  "GET /api/issues/:id/documents/:key": "Read a document on issue",
+  "PUT /api/issues/:id/documents/:key": "Saved a document on issue",
+  "POST /api/issues/:id/documents/:key": "Saved a document on issue",
+  "GET /api/issues/:id/work-products": "Read the results on issue",
+  "POST /api/issues/:id/work-products": "Recorded a result on issue",
+  "GET /api/issues/:id/heartbeat-context": "Read the brief for issue",
+  "POST /api/issues/:id/children": "Created a sub-task under issue",
+  "GET /api/agents/me": "Checked its own profile",
+  "GET /api/agents/me/inbox-lite": "Checked its inbox",
+  "GET /api/agents/me/inbox/mine": "Checked its inbox",
+  "GET /api/companies/:companyId/issues": "Listed issues",
+  "POST /api/companies/:companyId/issues": "Created an issue",
+  "GET /api/companies/:companyId/agents": "Listed the team",
+};
+
+const CURL_VALUE_FLAGS = new Set([
+  "-H", "--header", "-o", "--output", "-u", "--user", "-w", "--write-out", "-m", "--max-time", "-b", "--cookie",
+  "-c", "--cookie-jar", "-A", "--user-agent", "-e", "--referer", "--connect-timeout", "--retry", "-T",
+  "--upload-file", "--cacert", "--cert", "--key", "-x", "--proxy", "--resolve", "-K", "--config",
+]);
+const CURL_DATA_FLAGS = new Set(["-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "-F", "--form"]);
+
+function isAgentDashBase(base: string): boolean {
+  if (base.startsWith("$")) return /PAPERCLIP|AGENTDASH/i.test(base);
+  const host = base.replace(/^https?:\/\//i, "").replace(/:\d+$/, "").toLowerCase();
+  if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "[::1]") return true;
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    return host === window.location.hostname.toLowerCase();
+  }
+  return false;
+}
+
+/**
+ * A `curl` call to the AgentDash API, read back as what it did. Null for
+ * anything else (another host, a non-curl command, an unparseable URL).
+ */
+export function parseAgentDashApiCall(statement: string): AgentDashApiCall | null {
+  const words = programWords(statement);
+  if (words.length === 0 || basename(words[0]) !== "curl") return null;
+  let method: string | null = null;
+  let hasData = false;
+  let head = false;
+  let url: string | null = null;
+  for (let i = 1; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === "-X" || word === "--request") {
+      method = words[i + 1]?.toUpperCase() ?? null;
+      i += 1;
+    } else if (/^-X[A-Za-z]+$/.test(word)) {
+      method = word.slice(2).toUpperCase();
+    } else if (word.startsWith("--request=")) {
+      method = word.slice("--request=".length).toUpperCase();
+    } else if (CURL_DATA_FLAGS.has(word)) {
+      hasData = true;
+      i += 1;
+    } else if (/^--(?:data|json|form)[\w-]*=/.test(word)) {
+      hasData = true;
+    } else if (word === "--url") {
+      url = words[i + 1] ?? null;
+      i += 1;
+    } else if (word === "-I" || word === "--head") {
+      head = true;
+    } else if (CURL_VALUE_FLAGS.has(word)) {
+      i += 1;
+    } else if (!word.startsWith("-") && url === null) {
+      url = word;
+    }
+  }
+  if (!url) return null;
+  const match = url.match(/^(https?:\/\/[^/\s]+|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)(\/api(?:\/[^?#\s]*)?)/i);
+  if (!match || !isAgentDashBase(match[1])) return null;
+  const segments = match[2].split("/").filter(Boolean);
+  let issueRef: string | null = null;
+  const template = segments.map((segment, index) => {
+    const previous = segments[index - 1] ?? "";
+    if (previous === "issues" && ISSUE_REF_RE.test(segment)) issueRef = segment;
+    const dynamic =
+      UUID_RE.test(segment) || VARIABLE_RE.test(segment) || ISSUE_REF_RE.test(segment) || /^\d+$/.test(segment)
+      || previous === "documents";
+    if (!dynamic) return segment;
+    return PLACEHOLDER_AFTER[previous] ?? ":id";
+  });
+  const finalMethod = method ?? (head ? "HEAD" : hasData ? "POST" : "GET");
+  const route = `/${template.join("/")}`;
+  return { method: finalMethod, route, issueRef, action: AGENTDASH_ACTIONS[`${finalMethod} ${route}`] ?? null };
+}
+
+function agentDashCallSummary(call: AgentDashApiCall, rawCommand: string): ToolCallSummary {
+  const summary = call.action
+    ? finalize(call.action, call.action.endsWith("issue") ? call.issueRef : null, true)
+    : finalize("Called AgentDash:", `${call.method} ${call.route}`, true);
+  return { ...summary, script: redactSecrets(rawCommand.trim()) };
+}
+
 /** A shell command's summary: named by `commandLabel`, keeping the script when the name abbreviates it. */
 function finalizeCommand(verb: string, rawCommand: string | null): ToolCallSummary {
   if (rawCommand === null) return finalize(verb, null, true);
   const label = commandLabel(rawCommand);
-  const summary = finalize(verb, label, true);
-  return label === compactWhitespace(rawCommand) ? summary : { ...summary, script: rawCommand.trim() };
+  const isHeading = label.startsWith("script: ");
+  if (!isHeading) {
+    const call = parseAgentDashApiCall(label);
+    if (call) return agentDashCallSummary(call, rawCommand);
+  }
+  const readable = isHeading ? label : readableCommand(label);
+  const summary = finalize(verb, readable, true);
+  return readable === compactWhitespace(rawCommand)
+    ? summary
+    : { ...summary, script: redactSecrets(rawCommand.trim()) };
 }
 
 /**

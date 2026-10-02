@@ -4,6 +4,10 @@ import {
   ReadableTranscriptBuilder,
   buildReadableTranscript,
   commandLabel,
+  commandName,
+  parseAgentDashApiCall,
+  redactSecrets,
+  shellWords,
   updateReadableTranscript,
   formatRunDuration,
   isErrorLikeText,
@@ -76,9 +80,16 @@ describe("summarizeToolCall", () => {
   });
 
   it("truncates very long targets", () => {
-    const summary = summarizeToolCall("Bash", { command: `echo ${"x".repeat(300)}` });
+    const summary = summarizeToolCall("Grep", { pattern: "x".repeat(300) });
     expect(summary.target!.length).toBeLessThanOrEqual(96);
     expect(summary.target!.endsWith("…")).toBe(true);
+  });
+
+  it("names a long single command by its program, keeping the full command one click away", () => {
+    const command = `echo ${"x".repeat(300)}`;
+    const summary = summarizeToolCall("Bash", { command });
+    expect(summary.label).toBe("Ran echo");
+    expect(summary.script).toBe(command);
   });
 });
 
@@ -151,6 +162,98 @@ describe("commandLabel (multi-line scripts)", () => {
 
   it("carries no script when the label already is the command", () => {
     expect(summarizeToolCall("Bash", { command: "git status" }).script).toBeUndefined();
+  });
+});
+
+// AgentDash (scan 4 lane O1): the Readable transcript showed raw single
+// commands such as `curl -s "http://127.0.0.1:3489/api/issues/<uuid>" -H
+// "Authorizati…`. They now read as what they did, and never carry a credential.
+describe("single commands (scan 4 lane O1)", () => {
+  const ISSUE_UUID = "9eaca194-0091-4e45-a12a-e5bc9bc79a44";
+  const AUTH = '-H "Authorization: Bearer $PAPERCLIP_API_KEY"';
+
+  it("reads a curl to the AgentDash API as the action it took", () => {
+    const read = summarizeToolCall("Bash", { command: `curl -s "http://127.0.0.1:3489/api/issues/${ISSUE_UUID}" ${AUTH}` });
+    expect(read).toMatchObject({ verb: "Read issue", target: null, label: "Read issue", isCommand: true });
+
+    const update = summarizeToolCall("Bash", {
+      command: `curl -s -X PATCH "$PAPERCLIP_API_URL/api/issues/WHI-1" ${AUTH} -H "Content-Type: application/json" -d '{"status":"in_review"}'`,
+    });
+    expect(update.label).toBe("Updated issue WHI-1");
+
+    const comment = summarizeToolCall("Bash", {
+      command: `curl -s "$PAPERCLIP_API_URL/api/issues/$PAPERCLIP_TASK_ID/comments" ${AUTH} --data-raw '{"body":"done"}'`,
+    });
+    expect(comment.label).toBe("Commented on issue");
+
+    const doc = summarizeToolCall("Bash", {
+      command: `curl -sS --request PUT "http://localhost:3100/api/issues/WHI-1/documents/checklist" ${AUTH} -d @body.json`,
+    });
+    expect(doc.label).toBe("Saved a document on issue WHI-1");
+
+    expect(summarizeToolCall("Bash", { command: `curl -s "$PAPERCLIP_API_URL/api/agents/me" ${AUTH} | jq .name` }).label)
+      .toBe("Checked its own profile");
+  });
+
+  it("falls back to Called AgentDash: METHOD route template for routes without a phrase", () => {
+    const summary = summarizeToolCall("Bash", {
+      command: `curl -s -XPOST "http://127.0.0.1:3489/api/issues/${ISSUE_UUID}/feedback-votes?x=1" ${AUTH} -d '{}'`,
+    });
+    expect(summary.verb).toBe("Called AgentDash:");
+    expect(summary.target).toBe("POST /api/issues/:id/feedback-votes");
+  });
+
+  it("parses method, route template and issue key", () => {
+    expect(parseAgentDashApiCall(`curl "http://127.0.0.1:3100/api/companies/${ISSUE_UUID}/issues" -d '{}'`)).toEqual({
+      method: "POST",
+      route: "/api/companies/:companyId/issues",
+      issueRef: null,
+      action: "Created an issue",
+    });
+    expect(parseAgentDashApiCall(`curl "$AGENTDASH_API_URL/api/issues/WHI-12"`)?.issueRef).toBe("WHI-12");
+    // Another host is not AgentDash.
+    expect(parseAgentDashApiCall('curl -s "https://api.github.com/repos/a/b"')).toBeNull();
+    expect(parseAgentDashApiCall('curl -s "https://example.com/api/issues/1"')).toBeNull();
+    expect(parseAgentDashApiCall("git status")).toBeNull();
+  });
+
+  it("names generic noisy commands by their program", () => {
+    expect(summarizeToolCall("Bash", { command: 'curl -s "https://example.com/data.json"' }).label).toBe("Ran curl");
+    expect(summarizeToolCall("Bash", { command: `python3 scripts/build_checklist.py --input ${"a".repeat(80)}` }).label)
+      .toBe("Ran python3");
+    expect(summarizeToolCall("Bash", { command: `GITHUB_TOKEN=abc123 gh pr view 12 --json body` }).label).toBe("Ran gh pr");
+    expect(commandName("sudo /usr/bin/git log --oneline -n 5")).toBe("git log");
+    // Short, plain commands still read as themselves.
+    expect(summarizeToolCall("Bash", { command: "git status" }).label).toBe("Ran git status");
+    expect(summarizeToolCall("Bash", { command: "pnpm test:run" }).label).toBe("Ran pnpm test:run");
+  });
+
+  it("never shows an Authorization header or token, collapsed or expanded", () => {
+    const literal = `curl -s "http://127.0.0.1:3489/api/issues/${ISSUE_UUID}" -H "Authorization: Bearer pcp_live_abcdef123456" -H "X-Api-Key: k-998877"`;
+    const summary = summarizeToolCall("Bash", { command: literal });
+    expect(summary.label).not.toMatch(/Authorization|Bearer|pcp_live|k-998877/);
+    expect(summary.script).toBeDefined();
+    expect(summary.script).not.toContain("pcp_live_abcdef123456");
+    expect(summary.script).not.toContain("k-998877");
+    expect(summary.script).toContain("Authorization: ***REDACTED***");
+
+    const generic = summarizeToolCall("Bash", { command: 'curl -H "Authorization: token ghp_abcdefghijklmnopqrstuvwx" https://api.github.com/user' });
+    expect(generic.label).toBe("Ran curl");
+    expect(generic.script).not.toContain("ghp_abcdefghijklmnopqrstuvwx");
+  });
+
+  it("redactSecrets covers headers, options, assignments and JSON-escaped input", () => {
+    expect(redactSecrets('-H "Authorization: Bearer abc.def"')).toBe('-H "Authorization: ***REDACTED***"');
+    expect(redactSecrets("--token s3cr3t-value")).toBe("--token ***REDACTED***");
+    expect(redactSecrets("API_KEY=s3cr3t pnpm x")).toBe("API_KEY=***REDACTED*** pnpm x");
+    expect(redactSecrets('{"command":"curl -H \\"Authorization: Bearer xyz\\" u"}')).toBe(
+      '{"command":"curl -H \\"Authorization: ***REDACTED***\\" u"}',
+    );
+    expect(redactSecrets("plain text")).toBe("plain text");
+  });
+
+  it("splits shell words with quotes and stops at a pipe", () => {
+    expect(shellWords(`curl -s "a b" 'c d' e\\ f | jq .x`)).toEqual(["curl", "-s", "a b", "c d", "e f"]);
   });
 });
 

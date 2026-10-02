@@ -17,6 +17,13 @@ import { formatTokens } from "./utils";
 export const TOKENS_COUNTED_NOTE =
   "Input + output tokens. Cached input the model re-reads is not counted.";
 
+/**
+ * Tooltip for the daily token ceiling's own count. Enforcement counts cached
+ * input, so this figure is larger than every display figure; say so.
+ */
+export const TOKEN_CEILING_COUNT_NOTE =
+  "The daily ceiling counts cached input the model re-reads, so this is larger than the token figures on Home, Shipped and the run page (input + output only).";
+
 /** Shown where usage is real but this workspace is not charged for it. */
 export const BILLED_BY_PROVIDER_NOTE = "Billed by your model provider";
 
