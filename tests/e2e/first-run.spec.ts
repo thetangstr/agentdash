@@ -110,7 +110,7 @@ test("a new workspace goes through the first run to Home with its first issue as
   await expect(page.getByTestId("cos-conversation")).toHaveAttribute("data-layout", "embedded");
   await expect(page.getByRole("link", { name: "Ask", exact: true }).first()).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("link", { name: "Work", exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Tell me what you want built.")).toBeVisible();
+  await expect(page.getByText("Tell me what you need done.")).toBeVisible();
   await expect(page.getByTestId("chat-suggestions")).toBeVisible();
 
   // Bare /cos (onboarding, emails) redirects to the company-prefixed Ask.

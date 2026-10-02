@@ -8,6 +8,9 @@ import { AgentPlanProposal } from "./AgentPlanProposal";
 import { VerdictReviewCard } from "./VerdictReviewCard";
 import { HumanTasteGateCard } from "./HumanTasteGateCard";
 import { DispatchErrorCard } from "./DispatchErrorCard";
+// AgentDash (scan 3, lane G): a task the CoS created from chat
+import { IssueCreatedCard } from "./IssueCreatedCard";
+import { IssueProposalCard } from "./IssueProposalCard";
 
 export interface CardContext {
   onProposalConfirm?: () => void;
@@ -24,10 +27,15 @@ export function CardRenderer({
   cardKind,
   payload,
   context,
+  messageId,
+  conversationId,
 }: {
   cardKind: string;
   payload: Record<string, unknown> | null | undefined;
   context: CardContext;
+  /** AgentDash (scan 3, lane G): the card's own message, for cards that act on it. */
+  messageId?: string;
+  conversationId?: string;
 }) {
   switch (cardKind) {
     case "proposal_card_v1":
@@ -70,6 +78,10 @@ export function CardRenderer({
             ? undefined
             : context.onDispatchRetry
         } />;
+    case "issue_created_v1":
+      return <IssueCreatedCard payload={payload as any} />;
+    case "issue_proposal_v1":
+      return <IssueProposalCard payload={payload as any} messageId={messageId} conversationId={conversationId} />;
     default:
       return null;
   }
@@ -85,4 +97,6 @@ export {
   VerdictReviewCard,
   HumanTasteGateCard,
   DispatchErrorCard,
+  IssueCreatedCard,
+  IssueProposalCard,
 };

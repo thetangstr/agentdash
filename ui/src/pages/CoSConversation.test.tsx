@@ -173,6 +173,33 @@ describe("CoSConversation", () => {
     expect(mockQueryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["access", "current-board-access"], refetchType: "all" });
   });
 
+  // AgentDash (scan 3, lane G): an empty workspace has no team to review yet.
+  it("offers the team review link only once someone besides the CoS is hired", async () => {
+    const { agentsApi } = await import("../api/agents");
+    const list = agentsApi.list as unknown as ReturnType<typeof vi.fn>;
+    mockBootstrap.mockResolvedValue({ companyId: "c1", cosAgentId: "a1", conversationId: "conv1" });
+
+    list.mockReturnValue([{ id: "a1", name: "CoS", role: "chief_of_staff", status: "idle" }]);
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
+    });
+    await act(async () => {});
+    expect(container.querySelector('[data-testid="cos-review-team-link"]')).toBeNull();
+
+    list.mockReturnValue([
+      { id: "a1", name: "CoS", role: "chief_of_staff", status: "idle" },
+      { id: "a2", name: "Ellie", role: "general", status: "idle" },
+    ]);
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<MemoryRouter><CoSConversation key="again" /></MemoryRouter>);
+    });
+    await act(async () => {});
+    expect(container.querySelector('[data-testid="cos-review-team-link"]')?.textContent).toContain("Review your team");
+    list.mockReturnValue([]);
+  });
+
   // PR #956 review: a member (not owner/admin) who opens /cos before the CoS
   // exists gets 403 from bootstrap; the page explains instead of erroring.
   it("explains, without an error page, when a non-admin member cannot set up the CoS", async () => {

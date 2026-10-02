@@ -17,7 +17,8 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { ApiError } from "../api/client";
 
 // AgentDash (GH #786): the CoS page header and suggested first messages.
-export const COS_HEADER_LINE = "Tell me what you want built. I'll staff it and ask you only when it's your call.";
+// Scan 3, lane G: plain business language, not "what you want built".
+export const COS_HEADER_LINE = "Tell me what you need done. I'll get the right people on it and ask you only when it's your call.";
 // Role-neutral: the first session is not always an engineering company
 // (first-session test, Lane A item 4).
 export const COS_SUGGESTED_MESSAGES = [
@@ -29,8 +30,9 @@ export const COS_SUGGESTED_MESSAGES = [
 // arrives. A fresh company's inbox normally opens with a server-posted CoS
 // greeting; this covers a conversation that has none yet.
 export const COS_EMPTY_STATE_TITLE = "Your Chief of Staff is ready.";
-// AgentDash: the workforce review link (a bar on desktop, a header link on phones).
-export const COS_WORKFORCE_LINK_LABEL = "Review hired roles, company knowledge and first jobs";
+// AgentDash: the workforce review link (a bar on desktop, a header link on
+// phones). Scan 3, lane G: shown only once someone besides the CoS is hired.
+export const COS_WORKFORCE_LINK_LABEL = "Review your team, company knowledge and first jobs";
 // AgentDash: shown instead of a conversation that belongs to another company.
 export const COS_WRONG_COMPANY_MESSAGE =
   "This company has no Chief of Staff conversation yet. Switch to a company that has one, or ask an owner or admin to open Ask here first.";
@@ -355,6 +357,10 @@ function CoSConversationView({
     name: a.name,
     role: a.role,
   }));
+  // AgentDash (scan 3, lane G): an empty workspace has nothing to review yet.
+  const hasHiredTeam = (agents ?? []).some(
+    (a) => a.role !== "chief_of_staff" && a.status !== "terminated",
+  );
 
   // AgentDash (GH #786): the CoS page says what the Chief of Staff does and
   // offers first messages, for every company (one UX).
@@ -396,8 +402,13 @@ function CoSConversationView({
           : "fixed inset-0 flex flex-col"
       }
     >
-      {/* Phones show this as a compact link in the chat header instead (below). */}
-      <div className="shrink-0 border-b px-4 py-2 text-sm max-sm:hidden"><Link to="/workforce" className="underline">{COS_WORKFORCE_LINK_LABEL}</Link></div>
+      {/* Phones show this as a compact link in the chat header instead (below).
+          Scan 3, lane G: only once someone besides the CoS is hired. */}
+      {hasHiredTeam ? (
+        <div className="shrink-0 border-b px-4 py-2 text-sm max-sm:hidden" data-testid="cos-review-team-link">
+          <Link to="/workforce" className="underline">{COS_WORKFORCE_LINK_LABEL}</Link>
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1">
         <ChatPanel
           conversationId={bootstrapped.conversationId}
@@ -409,7 +420,7 @@ function CoSConversationView({
           padComposerForSafeArea={layout === "fullscreen"}
           headerProps={{
             agentRole: COS_HEADER_LINE,
-            action: (
+            action: hasHiredTeam ? (
               <Link
                 to="/workforce"
                 aria-label={COS_WORKFORCE_LINK_LABEL}
@@ -420,7 +431,7 @@ function CoSConversationView({
                 <ClipboardList className="h-4 w-4" aria-hidden="true" />
                 Review
               </Link>
-            ),
+            ) : undefined,
           }}
           suggestions={COS_SUGGESTED_MESSAGES}
           emptyState={

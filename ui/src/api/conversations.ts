@@ -45,4 +45,20 @@ export const conversationsApi = {
   read: (id: string, lastReadMessageId: string) =>
     api.patch(`/conversations/${id}/read`, { lastReadMessageId }),
   participants: (id: string) => api.get(`/conversations/${id}/participants`),
+  // AgentDash (scan 3, lane G): the requester confirms or declines a CoS task card.
+  confirmTaskProposal: (id: string, messageId: string) =>
+    api.post<{ proposal: Record<string, unknown>; issue: IssueCreatedSummary }>(
+      `/conversations/${id}/task-proposals/${messageId}/confirm`,
+      {},
+    ),
+  dismissTaskProposal: (id: string, messageId: string) =>
+    api.post<{ proposal: Record<string, unknown> }>(`/conversations/${id}/task-proposals/${messageId}/dismiss`, {}),
 };
+
+export interface IssueCreatedSummary {
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  assigneeName: string;
+  status: string;
+}

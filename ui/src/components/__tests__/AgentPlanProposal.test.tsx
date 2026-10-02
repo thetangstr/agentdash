@@ -58,7 +58,9 @@ describe("AgentPlanProposal", () => {
     expect(container.textContent).toContain("Hits short-term ship goal");
     expect(container.textContent).toContain("Ellie");
     expect(container.textContent).toContain("Quinn");
-    expect(container.textContent).toContain("claude_local");
+    // Scan 3, lane G: plain language — title-cased roles, no adapter chip.
+    expect(container.textContent).toContain("Engineering Lead");
+    expect(container.textContent).not.toContain("claude_local");
     expect(container.textContent).toContain("ships v2");
     expect(container.textContent).toContain("lays groundwork");
 

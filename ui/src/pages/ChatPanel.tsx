@@ -72,6 +72,12 @@ export default function ChatPanel({
 }) {
   const messages = useMessages(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  // AgentDash (scan 3, lane G): the starter chips go away as soon as this
+  // person sends anything, without waiting for the message to come back.
+  const [sentThisSession, setSentThisSession] = useState(false);
+  useEffect(() => {
+    setSentThisSession(false);
+  }, [conversationId]);
   const lastMessageId = messages[messages.length - 1]?.id;
 
   // Read pointer: PATCH /read throttled 1s after latest message changes
@@ -139,6 +145,7 @@ export default function ChatPanel({
 
   function send(body: string) {
     setSendError(null);
+    setSentThisSession(true);
     conversationsApi.post(conversationId, body, companyId).catch(() => {
       setSendError("Your message was not sent. Check your connection and try again.");
     });
@@ -220,7 +227,9 @@ export default function ChatPanel({
         )}
       >
         <div className="max-w-2xl mx-auto">
-          {suggestions && suggestions.length > 0 && !messages.some((m) => m.authorKind === "user") ? (
+          {suggestions && suggestions.length > 0 && !sentThisSession && !messages.some((m) => (m.authorKind ?? m.role) === "user") ? (
+            // AgentDash (scan 3, lane G): server rows carry `role`, not
+            // `authorKind`; the chips also hide as soon as this person sends.
             // AgentDash: on phones the starters are one sideways-scrolling row of
             // compact chips instead of a stack of tall pills.
             <div
