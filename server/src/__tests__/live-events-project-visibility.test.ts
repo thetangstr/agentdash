@@ -220,6 +220,11 @@ describeEmbeddedPostgres("live events respect restricted project visibility", ()
     server = createServer();
     setupLiveEventsWebSocketServer(server, db, {
       deploymentMode: "authenticated",
+      // Far beyond any test's runtime: no test in this file may rely on the
+      // heartbeat re-check. That matters for the agent-visibility generation
+      // test below — a change taking effect there can only come from the
+      // activity-event-driven generation bump.
+      heartbeatIntervalMs: 60 * 60_000,
       resolveSessionFromHeaders: async (headers) => {
         const userId = headers.get("x-test-user");
         if (!userId) return null;
@@ -408,5 +413,92 @@ describeEmbeddedPostgres("live events respect restricted project visibility", ()
     await settle([outsider]);
     expect(outsider.events.some((e) => e.type === "heartbeat.run.log" && e.payload.chunk === "after")).toBe(true);
     expect(outsider.events.some((e) => e.type === "heartbeat.run.log" && e.payload.chunk === "before")).toBe(false);
+  });
+
+  // GH #937 re-review: the agent-visibility scope is cached on the actor
+  // request object; an `agent` (or stewardship / company-default) activity
+  // event bumps a per-company generation so the subscriber recomputes the
+  // scope on the next event — no heartbeat needed. This server's heartbeat
+  // interval is an hour (see beforeAll), so nothing here can have come from
+  // a re-check. Falsification: drop the agentScopeGeneration bump in
+  // live-event-visibility.ts and the hidden status below is delivered.
+  it("applies an agent visibility change on the agent activity event alone, without a heartbeat", async () => {
+    const member = await asUser("outsider");
+    const admin = await asUser("admin-user");
+    const statusOf = (agentId: string, tag: string) =>
+      publishLiveEvent({ companyId: COMPANY, type: "agent.status", payload: { agentId, tag } });
+    const sawStatus = (c: Client, agentId: string, tag: string) =>
+      c.events.some((e) => e.type === "agent.status" && e.payload.agentId === agentId && e.payload.tag === tag);
+    const sawAgentEntity = (c: Client, agentId: string) =>
+      c.events.some((e) => e.type === "activity.logged" && e.payload.entityId === agentId);
+
+    // A company event with no references is delivered to every subscriber and
+    // serializes behind everything before it — once the scope is owner-mode,
+    // the usual random-agent marker would itself be filtered out.
+    async function barrier(watch: Client[]) {
+      const marker = randomUUID();
+      publishLiveEvent({
+        companyId: COMPANY,
+        type: "activity.logged",
+        payload: { action: "note.added", entityType: "company", entityId: marker },
+      });
+      const deadline = Date.now() + 5000;
+      while (!watch.every((c) => c.events.some((e) => e.payload.entityId === marker))) {
+        if (Date.now() > deadline) throw new Error("barrier not delivered");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+
+    // Warm the member's scope cache: no owner-only agents yet, so it resolves
+    // to mode "all" and the probe is delivered.
+    const probe = randomUUID();
+    statusOf(probe, "warm");
+    await barrier([member, admin]);
+    expect(sawStatus(member, probe, "warm")).toBe(true);
+
+    // Out of band row insert; the only signal is the agent activity event.
+    const hiddenAgent = randomUUID();
+    await db.insert(agents).values({
+      id: hiddenAgent,
+      companyId: COMPANY,
+      name: "Hidden",
+      role: "general",
+      visibility: "owner",
+      accountableUserId: "sam",
+      createdByUserId: "sam",
+    });
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "user",
+      actorId: "sam",
+      action: "agent.hired",
+      entityType: "agent",
+      entityId: hiddenAgent,
+      details: {},
+    });
+
+    statusOf(hiddenAgent, "hidden");
+    await barrier([member, admin]);
+    // Admin proves the publish really happened; the member's regenerated
+    // scope excludes the owner-only agent — even the hire event itself.
+    expect(sawStatus(admin, hiddenAgent, "hidden")).toBe(true);
+    expect(sawStatus(member, hiddenAgent, "hidden")).toBe(false);
+    expect(sawAgentEntity(member, hiddenAgent)).toBe(false);
+
+    // The reverse direction, same mechanism: visible again on the next
+    // agent event, still with no heartbeat.
+    await db.update(agents).set({ visibility: "company" }).where(eq(agents.id, hiddenAgent));
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "user",
+      actorId: "sam",
+      action: "agent.updated",
+      entityType: "agent",
+      entityId: hiddenAgent,
+      details: {},
+    });
+    statusOf(hiddenAgent, "visible");
+    await barrier([member, admin]);
+    expect(sawStatus(member, hiddenAgent, "visible")).toBe(true);
   });
 });
