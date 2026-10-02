@@ -99,9 +99,13 @@ export const ACCEPTANCE_RECORDED_SINCE = new Date("2026-10-02T00:00:00.000Z");
  * ACCEPTANCE_RECORDED_SINCE, when its issue is done and it was not withdrawn
  * (closed, archived, failed, draft, changes requested). Derived on read, no
  * backfill.
+ *
+ * AgentDash (Scan 4 lane M): legacy work that went through Request changes
+ * (metadata.changesRequestedAt) is under the new rule: only an explicit
+ * acceptance ships it, even after it is resubmitted.
  */
 export function acceptedWorkProductCondition(): SQL {
-  return sql`(${issueWorkProducts.status} in ('approved', 'merged') or (${issues.status} = 'done' and ${issueWorkProducts.createdAt} < ${ACCEPTANCE_RECORDED_SINCE.toISOString()}::timestamptz and ${issueWorkProducts.status} not in ('closed', 'archived', 'failed', 'draft', 'changes_requested')))`;
+  return sql`(${issueWorkProducts.status} in ('approved', 'merged') or (${issues.status} = 'done' and ${issueWorkProducts.createdAt} < ${ACCEPTANCE_RECORDED_SINCE.toISOString()}::timestamptz and ${issueWorkProducts.status} not in ('closed', 'archived', 'failed', 'draft', 'changes_requested') and not (coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) ? 'changesRequestedAt')))`;
 }
 
 /** AgentDash (Scan 3 lane I): a title that is an absolute path or a file: URL shows as its file name. */

@@ -275,10 +275,39 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     const f = await fixture();
     const products = workProductService(db);
     const draft = await products.createForIssue(f.issue.id, f.company.id, { type: 'document', provider: 'paperclip', title: 'Scratch', status: 'draft' });
+    const waiting = await products.createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Waiting', status: 'ready_for_review', reviewState: 'none',
+    });
+    const approved = await products.createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Accepted earlier', status: 'approved', reviewState: 'approved',
+    });
     const response = await call('PATCH', `/issues/${f.issue.id}`, f.agentToken, { status: 'in_review' }, f.run.id);
     expect(response.status).toBe(200);
-    const [row] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, draft!.id));
-    expect(row!.status).toBe('draft');
+    const rows = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.issueId, f.issue.id));
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    expect(byId.get(draft!.id)).toMatchObject({ status: 'draft', metadata: null });
+    expect(byId.get(waiting!.id)).toMatchObject({ status: 'ready_for_review', reviewState: 'none', metadata: null });
+    expect(byId.get(approved!.id)).toMatchObject({ status: 'approved', reviewState: 'approved', metadata: null });
+    const logged = await db.select().from(activityLog).where(eq(activityLog.entityId, f.issue.id));
+    expect(logged.filter((row) => (row.details as Record<string, unknown> | null)?.reason === 'resubmitted_for_review')).toHaveLength(0);
+  });
+
+  it('legacy work that went through Request changes ships only when accepted, not because the agent closed the issue', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    const legacy = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Old proposal', status: 'ready_for_review',
+      createdAt: new Date(ACCEPTANCE_RECORDED_SINCE.getTime() - 86_400_000),
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Redo the budget.' })).status).toBe(200);
+    await db.update(issues).set({ checkoutRunId: f.run.id, executionRunId: f.run.id }).where(eq(issues.id, f.issue.id));
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.agentToken, { status: 'in_review' }, f.run.id)).status).toBe(200);
+    const [resubmitted] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, legacy!.id));
+    expect(resubmitted!.metadata).toEqual(expect.objectContaining({ changesRequestedAt: expect.any(String), resubmittedAt: expect.any(String) }));
+
+    // The agent closing its own issue is not acceptance.
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.agentToken, { status: 'done', comment: 'Done.' }, f.run.id)).status).toBe(200);
+    expect(await shippedIds(f.company.id, f.boardToken)).not.toContain(legacy!.id);
   });
 
   it('Shipped with accepted=true lists only accepted work, including work on done issues recorded before acceptance was', async () => {

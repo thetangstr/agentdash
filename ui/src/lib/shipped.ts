@@ -40,11 +40,15 @@ export const ACCEPTANCE_RECORDED_SINCE = Date.parse("2026-10-02T00:00:00.000Z");
 export function isWorkProductAccepted(
   product: Pick<IssueWorkProduct, "status"> & {
     createdAt?: Date | string | null;
+    metadata?: Record<string, unknown> | null;
     issue?: { status?: string | null } | null;
   },
 ): boolean {
   const status = (product.status ?? "").toLowerCase();
   if (status === "approved" || status === "merged") return true;
+  // AgentDash (Scan 4 lane M): work that went through Request changes is
+  // shipped only by an explicit acceptance, even if it predates the cutoff.
+  if (product.metadata && "changesRequestedAt" in product.metadata) return false;
   const createdAt = product.createdAt ? new Date(product.createdAt).getTime() : Number.NaN;
   const legacy = Number.isFinite(createdAt) && createdAt < ACCEPTANCE_RECORDED_SINCE;
   return legacy && product.issue?.status === "done" && !NOT_SHIPPED_STATUSES.has(status);

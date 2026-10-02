@@ -1,7 +1,7 @@
 import { prepareIssueDeletion } from "./issue-dependents.js";
 import { and, count, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import type { CompanyProductProfile } from "@paperclipai/shared";
+import { isReservedCompanyPrefix, type CompanyProductProfile } from "@paperclipai/shared";
 import {
   companies,
   companyLogos,
@@ -296,6 +296,12 @@ export function companyService(db: Db) {
     let suffix = 1;
     while (suffix < 10000) {
       const candidate = `${base}${suffixForAttempt(suffix)}`;
+      // AgentDash (Scan 4 lane M): a prefix that is also a page's route
+      // ("MCP", "ORG", "U") is shadowed by that page; take the next one.
+      if (isReservedCompanyPrefix(candidate)) {
+        suffix += 1;
+        continue;
+      }
       try {
         return await insertCompanyWithMembership(
           { ...data, issuePrefix: candidate },

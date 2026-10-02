@@ -122,6 +122,20 @@ describeEmbeddedPostgres("companyService.create — atomic creator membership", 
     expect(allMemberships).toHaveLength(1);
   });
 
+  // AgentDash (Scan 4 lane M): "MCP Advisory" would get MCP, which is the
+  // /mcp page's route, so the company could never be opened at /MCP/...
+  it("skips an issue prefix that is a page route and takes the next suffix", async () => {
+    const mcp = await svc.create({ name: "MCP Advisory" });
+    expect(mcp.issuePrefix).toBe("MCPA");
+    const org = await svc.create({ name: "Org Partners" });
+    expect(org.issuePrefix).toBe("ORGA");
+    const u = await svc.create({ name: "U" });
+    expect(u.issuePrefix).toBe("UA");
+    const plain = await svc.create({ name: "Mcpherson Ltd" });
+    // MCP and MCPA are taken or reserved, so the next free one.
+    expect(plain.issuePrefix).toBe("MCPAA");
+  });
+
   it("creates no membership when creatorMembership is omitted (legacy callers)", async () => {
     const created = await svc.create({ name: "Gamma Co" });
     const rows = await db

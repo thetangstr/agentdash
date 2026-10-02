@@ -773,7 +773,14 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         // update and its audit rows commit with the comment and status.
         if (context.requestChanges && humanBoardActor) {
           const sentBack = await tx.update(issueWorkProducts)
-            .set({ status: "changes_requested", reviewState: "changes_requested", updatedAt: new Date() })
+            .set({
+              status: "changes_requested",
+              reviewState: "changes_requested",
+              // AgentDash (Scan 4 lane M): marks it as reviewed under the new
+              // rule, so the legacy "done means accepted" read never applies.
+              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('changesRequestedAt', ${new Date().toISOString()}::text)`,
+              updatedAt: new Date(),
+            })
             .where(and(
               eq(issueWorkProducts.companyId, issue.companyId),
               eq(issueWorkProducts.issueId, issue.id),
@@ -810,7 +817,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         // returns them to ready_for_review; acceptance stays with a person.
         if (existing.status !== "in_review" && issue.status === "in_review") {
           const resubmitted = await tx.update(issueWorkProducts)
-            .set({ status: "ready_for_review", reviewState: "needs_board_review", updatedAt: new Date() })
+            .set({
+              status: "ready_for_review",
+              reviewState: "needs_board_review",
+              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${new Date().toISOString()}::text)`,
+              updatedAt: new Date(),
+            })
             .where(and(
               eq(issueWorkProducts.companyId, issue.companyId),
               eq(issueWorkProducts.issueId, issue.id),

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { RESERVED_COMPANY_PREFIXES, isReservedCompanyPrefix } from "@paperclipai/shared";
 import {
   applyCompanyPrefix,
   extractCompanyPrefixFromPath,
   isBoardPathWithoutPrefix,
+  listRouteRoots,
   toCompanyRelativePath,
 } from "./company-routes";
 
@@ -146,7 +148,12 @@ describe("every top-level route in App.tsx is a global root or a board root", ()
         const tag = source.slice(i, j + 1);
         const selfClosing = source[j - 1] === "/";
         const pathMatch = tag.match(/\bpath="([^"]*)"/);
-        const node: ParsedRoute = { path: pathMatch ? pathMatch[1]! : null, children: [] };
+        // A computed path (path={...}) cannot be checked by reading source.
+        const computed = tag.match(/\bpath=\{([^}]*)\}/);
+        const node: ParsedRoute = {
+          path: pathMatch ? pathMatch[1]! : computed ? `{${computed[1]!.trim()}}` : null,
+          children: [],
+        };
         stack[stack.length - 1]!.children.push(node);
         if (!selfClosing) stack.push(node);
         i = j + 1;
@@ -163,27 +170,67 @@ describe("every top-level route in App.tsx is a global root or a board root", ()
     return routes.flatMap((route) => (route.path === null ? topLevelPaths(route.children) : [route.path]));
   }
 
-  it("leaves no top-level root to be misread as a company code", async () => {
+  async function readApp() {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const appSource = fs.readFileSync(path.resolve(import.meta.dirname, "../App.tsx"), "utf8");
     const app = appSource.match(/export function App\(\)[\s\S]*?\n\}/);
+    const board = appSource.match(/function boardRoutes\(\)[\s\S]*?\n\}/);
     expect(app, "App() should still exist in App.tsx").toBeTruthy();
+    expect(board, "boardRoutes() should still exist in App.tsx").toBeTruthy();
+    return { app: app![0], board: board![0] };
+  }
 
-    const roots = [
+  function rootsOf(paths: string[]): string[] {
+    return [
       ...new Set(
-        topLevelPaths(parseRoutes(app![0]))
+        paths
+          .filter((p) => !p.startsWith("{"))
           .map((p) => p.replace(/^\//, "").split("/")[0]!.toLowerCase())
           // "/" is the landing page, ":companyPrefix" is the company itself,
           // "*" is the not-found page.
           .filter((root) => root && root !== "*" && !root.startsWith(":")),
       ),
     ];
+  }
+
+  // The one computed top-level path: the docs shadow routes, all under /docs
+  // (DOCS_SHADOW_ROUTE_PATHS, ui/src/lib/docs-nav.ts).
+  const ALLOWED_COMPUTED_TOP_LEVEL_PATHS = ["{path}"];
+
+  it("leaves no top-level root to be misread as a company code", async () => {
+    const { app } = await readApp();
+    const paths = topLevelPaths(parseRoutes(app));
+
+    // A computed path hides its root from this check; only the docs map may.
+    const computed = paths.filter((p) => p.startsWith("{"));
+    expect(computed, "a top-level <Route path={...}> this test cannot check").toEqual(ALLOWED_COMPUTED_TOP_LEVEL_PATHS);
+    expect(app).toContain("DOCS_SHADOW_ROUTE_PATHS.map((path) => <Route key={path} path={path}");
+
+    const roots = rootsOf(paths);
     expect(roots.length, "should have found the top-level routes").toBeGreaterThan(20);
     expect(roots).toEqual(expect.arrayContaining(["setup", "company-create", "trial", "oauth", "invite", "auth", "claim"]));
 
     const misread = roots.filter((root) => extractCompanyPrefixFromPath(`/${root}`) !== null);
     expect(misread, "these top-level routes would be read as company codes").toEqual([]);
+  });
+
+  it("answers every board root unprefixed too", async () => {
+    const { app, board } = await readApp();
+    const topLevel = new Set(rootsOf(topLevelPaths(parseRoutes(app))));
+    const boardRoots = rootsOf(topLevelPaths(parseRoutes(board)));
+    expect(boardRoots.length).toBeGreaterThan(20);
+    const missing = boardRoots.filter((root) => !topLevel.has(root));
+    expect(missing, "board roots with no top-level route (add an UnprefixedBoardRedirect)").toEqual([]);
+  });
+
+  it("keeps both route sets inside the shared reserved company prefixes", () => {
+    const { global, board } = listRouteRoots();
+    const reserved = new Set<string>(RESERVED_COMPANY_PREFIXES);
+    expect([...global, ...board].filter((root) => !reserved.has(root))).toEqual([]);
+    expect(isReservedCompanyPrefix("MCP")).toBe(true);
+    expect(isReservedCompanyPrefix("ORG")).toBe(true);
+    expect(isReservedCompanyPrefix("ACME")).toBe(false);
   });
 
   it("navigates from /setup to the selected company's CoS, not /SETUP/cos", () => {

@@ -91,6 +91,14 @@ const GLOBAL_ROUTE_ROOTS = new Set([
   "member-onboarding",
 ]);
 
+/**
+ * Both root sets, for the test that keeps them inside the shared
+ * RESERVED_COMPANY_PREFIXES (a company may never take one as its prefix).
+ */
+export function listRouteRoots(): { global: string[]; board: string[] } {
+  return { global: [...GLOBAL_ROUTE_ROOTS], board: [...BOARD_ROUTE_ROOTS] };
+}
+
 /** True when a first path segment is a top-level, company-agnostic route. */
 export function isGlobalRouteRoot(root: string): boolean {
   return GLOBAL_ROUTE_ROOTS.has(root.toLowerCase());

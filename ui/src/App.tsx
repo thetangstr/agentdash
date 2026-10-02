@@ -464,6 +464,11 @@ export function App() {
           <Route path="shipped" element={<UnprefixedBoardRedirect />} />
           <Route path="decisions" element={<UnprefixedBoardRedirect />} />
           <Route path="connect-assistant" element={<UnprefixedBoardRedirect />} />
+          {/* AgentDash (Scan 4 lane M): board roots that had no unprefixed
+              redirect; company-routes.test.ts now checks every one has. */}
+          <Route path="plugins/:pluginId" element={<UnprefixedBoardRedirect />} />
+          <Route path="evaluation" element={<UnprefixedBoardRedirect />} />
+          <Route path="evaluation/*" element={<UnprefixedBoardRedirect />} />
           {/* Explicit, not a splat. React Router ranks a dynamic+static pair
               (":companyPrefix/settings") above a splat ("company/*"), so the
               wildcard lost and /company/settings was read as a company called
