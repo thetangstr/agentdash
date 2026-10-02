@@ -37,16 +37,7 @@ import {
   truncateAncestorsAtInvisible,
   visibleAgentIdsFor,
 } from "./visibility.js";
-import { decodeShippedCursor } from "../services/work-products.js";
-import {
-  deliverableDocumentBody,
-  deliverableDocumentKey,
-  isLocalWorkProduct,
-  localWorkProductPath,
-  readLocalDeliverable,
-  resolveAgentDeliverableRoots,
-  sanitizeDeliverableTitle,
-} from "../services/work-product-local-ingest.js";
+import { decodeShippedCursor, sanitizeWorkProductTitle } from "../services/work-products.js";
 import {
   addIssueCommentSchema,
   acceptIssueThreadInteractionSchema,
@@ -69,6 +60,7 @@ import {
   restoreIssueDocumentRevisionSchema,
   respondIssueThreadInteractionSchema,
   updateIssueWorkProductSchema,
+  requestIssueChangesSchema,
   upsertIssueDocumentSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
@@ -1258,101 +1250,50 @@ export function issueRoutes(
   });
 
   // AgentDash (Scan 3 lane I): the run a work product came from. The caller's
-  // own run wins; a run id in the body is kept only when it is a run in this
-  // company (it is a foreign key, and it decides which agent Shipped names).
+  // own run wins. A run id in the body is kept only when it is a run in this
+  // company and the caller may speak for it: a board user, or an agent naming
+  // its own run or a run of the issue's assignee. It is a foreign key, and it
+  // decides which agent Shipped names.
   async function resolveWorkProductRunId(
-    companyId: string,
-    actorRunId: string | null | undefined,
+    req: Request,
+    issue: { companyId: string; assigneeAgentId?: string | null },
     bodyRunId: unknown,
   ): Promise<string | null> {
-    if (actorRunId) return actorRunId;
+    const actor = getActorInfo(req);
+    if (actor.runId) return actor.runId;
     if (typeof bodyRunId !== "string" || !isCanonicalUuid(bodyRunId)) return null;
     const run = await db
-      .select({ id: heartbeatRuns.id })
+      .select({ id: heartbeatRuns.id, agentId: heartbeatRuns.agentId })
       .from(heartbeatRuns)
-      .where(and(eq(heartbeatRuns.id, bodyRunId), eq(heartbeatRuns.companyId, companyId)))
+      .where(and(eq(heartbeatRuns.id, bodyRunId), eq(heartbeatRuns.companyId, issue.companyId)))
       .then((rows) => rows[0] ?? null);
-    return run?.id ?? null;
+    if (!run) return null;
+    if (req.actor.type === "board") return run.id;
+    if (actor.agentId && (run.agentId === actor.agentId || run.agentId === issue.assigneeAgentId)) return run.id;
+    return null;
   }
 
-  // AgentDash (Scan 3 lane I): a work product pointing at a local file (a
-  // file: URL, or provider "local") is read into an issue document the
-  // reviewer can open. Only an agent's own workspace is readable, text only,
-  // size-capped. The file: URL and the absolute path are never stored.
-  async function prepareWorkProductWrite(
-    issue: { id: string; companyId: string },
-    actor: ReturnType<typeof getActorInfo>,
-    body: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> {
-    const next: Record<string, unknown> = { ...body };
-    if (typeof next.title === "string") next.title = sanitizeDeliverableTitle(next.title);
-    const input = {
-      provider: typeof body.provider === "string" ? body.provider : null,
-      url: typeof body.url === "string" ? body.url : null,
-      externalId: typeof body.externalId === "string" ? body.externalId : null,
-      metadata: (body.metadata as Record<string, unknown> | null | undefined) ?? null,
-    };
-    if (!isLocalWorkProduct(input)) return next;
-
-    const metadata: Record<string, unknown> = { ...(input.metadata ?? {}) };
-    delete metadata.path;
-    next.url = null;
-    if (input.provider?.trim().toLowerCase() === "local" && typeof next.externalId === "string") next.externalId = null;
-
-    const requestedPath = localWorkProductPath(input);
-    const read = actor.actorType !== "agent" || !actor.agentId
-      ? ({ ok: false, reason: "not_agent" } as const)
-      : !requestedPath
-        ? ({ ok: false, reason: "invalid_path" } as const)
-        : await readLocalDeliverable(
-          requestedPath,
-          await resolveAgentDeliverableRoots(db, { companyId: issue.companyId, agentId: actor.agentId, runId: actor.runId }),
-        );
-    if (!read.ok) {
-      next.metadata = { ...metadata, localFile: { ingested: false, reason: read.reason } };
-      return next;
-    }
-
-    const key = deliverableDocumentKey(read.filename);
-    const existingDoc = await documentsSvc.getIssueDocumentByKey(issue.id, key);
-    const title = typeof next.title === "string" && next.title.trim() ? next.title.trim().slice(0, 200) : read.filename;
-    const result = await documentsSvc.upsertIssueDocument({
-      issueId: issue.id,
-      key,
-      title,
-      format: "markdown",
-      body: deliverableDocumentBody(read),
-      changeSummary: existingDoc ? "Updated from the agent's deliverable file" : null,
-      baseRevisionId: existingDoc?.latestRevisionId ?? null,
-      createdByAgentId: actor.agentId ?? null,
-      createdByUserId: null,
-      createdByRunId: actor.runId ?? null,
+  // AgentDash (Scan 3 lane I): accepting work is a person's call. An agent
+  // cannot record its own work product as approved, and can record "merged"
+  // only on a pull request (the PR flow reports what GitHub merged).
+  function refuseAgentSelfAcceptance(
+    req: Request,
+    res: Response,
+    body: { status?: unknown; reviewState?: unknown },
+    type: string,
+  ): boolean {
+    if (req.actor.type !== "agent") return false;
+    const status = typeof body.status === "string" ? body.status : null;
+    const refused =
+      status === "approved"
+      || body.reviewState === "approved"
+      || (status === "merged" && type !== "pull_request");
+    if (!refused) return false;
+    res.status(403).json({
+      error: "Agents cannot accept their own work. A board user accepts it from the issue.",
+      code: "work_product_self_acceptance",
     });
-    await logActivity(db, {
-      companyId: issue.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: result.created ? "issue.document_created" : "issue.document_updated",
-      entityType: "issue",
-      entityId: issue.id,
-      details: {
-        key,
-        documentId: result.document.id,
-        title,
-        format: "markdown",
-        revisionNumber: result.document.latestRevisionNumber,
-        source: "work_product_local_file",
-        filename: read.filename,
-      },
-    });
-    next.metadata = {
-      ...metadata,
-      documentKey: key,
-      localFile: { ingested: true, filename: read.filename, byteSize: read.byteSize },
-    };
-    return next;
+    return true;
   }
 
   // AgentDash: UX-2 (#783) — the company-wide Shipped feed. Company-scoped,
@@ -1717,14 +1658,16 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (refuseAgentSelfAcceptance(req, res, req.body, req.body.type)) return;
     const actor = getActorInfo(req);
-    const prepared = await prepareWorkProductWrite(issue, actor, req.body);
     const product = await workProductsSvc.createForIssue(issue.id, issue.companyId, {
-      ...(prepared as typeof req.body),
+      ...req.body,
+      // AgentDash (Scan 3 lane I): a path-like title shows as its file name.
+      title: sanitizeWorkProductTitle(req.body.title),
       projectId: req.body.projectId ?? issue.projectId ?? null,
       // AgentDash (Scan 3 lane I): the run that recorded it, so Shipped can
       // name the agent that made it.
-      createdByRunId: await resolveWorkProductRunId(issue.companyId, actor.runId, req.body.createdByRunId),
+      createdByRunId: await resolveWorkProductRunId(req, issue, req.body.createdByRunId),
     });
     if (!product) {
       res.status(422).json({ error: "Invalid work product payload" });
@@ -1759,19 +1702,12 @@ export function issueRoutes(
       return;
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (refuseAgentSelfAcceptance(req, res, req.body, req.body.type ?? existing.type)) return;
     const actor = getActorInfo(req);
     const patch: Record<string, unknown> = { ...req.body };
-    if ("url" in patch || "provider" in patch) {
-      Object.assign(patch, await prepareWorkProductWrite(issue, actor, {
-        ...patch,
-        provider: patch.provider ?? existing.provider,
-        metadata: "metadata" in patch ? patch.metadata : existing.metadata,
-      }));
-    } else if (typeof patch.title === "string") {
-      patch.title = sanitizeDeliverableTitle(patch.title);
-    }
+    if (typeof patch.title === "string") patch.title = sanitizeWorkProductTitle(patch.title);
     if ("createdByRunId" in patch) {
-      patch.createdByRunId = await resolveWorkProductRunId(existing.companyId, actor.runId, patch.createdByRunId);
+      patch.createdByRunId = await resolveWorkProductRunId(req, issue, patch.createdByRunId);
     }
     const product = await workProductsSvc.update(id, patch);
     if (!product) {
@@ -2347,6 +2283,64 @@ export function issueRoutes(
       if (error instanceof IssueCommentPolicyRefusal) {
         if (error.body.error === "Agent cannot mutate another agent's issue") reportAuthzRefusal(req, {
           companyId: existing.companyId, entityType: "issue", entityId: existing.id, reasonCode: "ISSUE_MUTATION_OTHER_AGENT" });
+        res.status(error.status).json(error.body);
+        return;
+      }
+      throw error;
+    }
+  });
+
+  // AgentDash (Scan 3 lane I): a board user sends a deliverable back. One
+  // server action: in one transaction the note is posted as a comment, the
+  // issue returns to work (in_progress, or todo when nobody is assigned), and
+  // the work products that were waiting for review are marked
+  // changes_requested. The assignee is woken by the comment after commit.
+  router.post("/issues/:id/request-changes", validate(requestIssueChangesSchema), async (req, res) => {
+    const existing = await svc.getById(req.params.id as string);
+    if (!existing) throw notFound("Issue not found");
+    assertCompanyAccess(req, existing.companyId);
+    await assertIssueIdVisible(db, req, existing.id, "Issue");
+    if (req.actor.type !== "board" || req.actor.source === "assistant_grant" || getActorInfo(req).actorType !== "user") {
+      res.status(403).json({ error: "Only a board user can request changes on a deliverable." });
+      return;
+    }
+    if (existing.status === "done" || existing.status === "cancelled") {
+      res.status(409).json({ error: "This issue is closed. Reopen it to ask for changes." });
+      return;
+    }
+    const waiting = (await workProductsSvc.listForIssue(existing.id)).filter((product) => product.status === "ready_for_review");
+    if (waiting.length === 0) {
+      res.status(409).json({ error: "Nothing on this issue is waiting for review." });
+      return;
+    }
+    const status = existing.assigneeAgentId || existing.assigneeUserId ? "in_progress" : "todo";
+    const actions = issuePatchActions(db, heartbeat, {
+      statusChanged: (id, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(id, before, after),
+    });
+    try {
+      const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
+        actor: getActorInfo(req), actorKind: req.actor.type, actorSource: req.actor.source, attribution: assistantGrantAttribution(req),
+        intent: { status, comment: req.body.note },
+        requestChanges: true,
+        validate: async () => undefined,
+        validateResume: async () => undefined,
+        validateAssignment: (executor, current) => assertCanAssignTasks(req, current.companyId, executor as Db),
+      };
+      const accepted = await actions.accept(context);
+      const effects = await actions.dispatch(accepted);
+      if (effects.unresolved) {
+        logger.warn({ issueId: existing.id, mutationId: accepted.mutationId, effects: effects.outcomes }, "request changes accepted with unresolved effects");
+        res.status(500).json({ error: "Changes were requested, but follow-up effects are unresolved. Read the issue before retrying." });
+        return;
+      }
+      const workProducts = await workProductsSvc.listForIssue(existing.id);
+      res.json({
+        issue: { id: accepted.issue.id, identifier: accepted.issue.identifier, status: accepted.issue.status, companyId: accepted.issue.companyId },
+        comment: accepted.comment,
+        workProducts,
+      });
+    } catch (error) {
+      if (error instanceof IssueCommentPolicyRefusal) {
         res.status(error.status).json(error.body);
         return;
       }

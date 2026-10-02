@@ -35,15 +35,13 @@ test.describe("Review loop (Scan 3 lane I)", () => {
     const wpRes = await request.post(`${BASE_URL}/api/issues/${issue.id}/work-products`, {
       data: {
         type: "document",
-        provider: "custom",
+        provider: "local",
         title: "Tanaka family proposal",
         url: "file:///private/tmp/run-workspace/tanaka-japan-proposal.md",
         status: "ready_for_review",
       },
     });
     expect(wpRes.ok(), await wpRes.text()).toBe(true);
-    const product = (await wpRes.json()) as { url: string | null };
-    expect(product.url).toBeNull();
 
     // Decisions: the review is listed, and the footnote says how to clear it.
     await page.goto(`${BASE_URL}/${company.issuePrefix}/decisions`);
@@ -57,6 +55,8 @@ test.describe("Review loop (Scan 3 lane I)", () => {
     await expect(result).toBeVisible({ timeout: 20_000 });
     await expect(result.getByTestId("work-product-state")).toHaveText("ready for review");
     expect(await result.innerHTML()).not.toContain("file:");
+    expect(await result.innerHTML()).not.toContain("/private/tmp");
+    await expect(result.getByTestId("work-product-local-note")).toHaveText("The agent saved this on its computer. Ask it to attach the content.");
     await expect(result.getByTestId("issue-review-accept")).toBeVisible();
 
     await result.getByTestId("issue-review-request-changes").click();

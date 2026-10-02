@@ -8,6 +8,9 @@ import { cn, issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import {
   formatShippedUsage,
+  LOCAL_FILE_NOTE,
+  isLocalFileWorkProduct,
+  workProductDisplayTitle,
   workProductHref,
   workProductState,
   workProductTypeLabel,
@@ -26,7 +29,7 @@ export function WorkProductStateBadge({
   product,
   className,
 }: {
-  product: Pick<ShippedWorkProduct, "type" | "status"> & { issue?: { status?: string | null } | null };
+  product: Pick<ShippedWorkProduct, "type" | "status"> & { createdAt?: Date | string | null; issue?: { status?: string | null } | null };
   className?: string;
 }) {
   const state = workProductState(product);
@@ -83,7 +86,7 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
               className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
               data-testid="shipped-title"
             >
-              {product.title}
+              {workProductDisplayTitle(product.title)}
             </a>
           ) : (
             <Link
@@ -91,7 +94,7 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
               className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
               data-testid="shipped-title"
             >
-              {product.title}
+              {workProductDisplayTitle(product.title)}
             </Link>
           )}
           <WorkProductStateBadge product={product} className="text-xs" />
@@ -99,6 +102,9 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
         <p className="mt-0.5 truncate text-xs text-muted-foreground" data-testid="shipped-meta">
           {meta.join(" · ")}
         </p>
+        {!target && isLocalFileWorkProduct(product) ? (
+          <p className="mt-0.5 text-xs text-muted-foreground" data-testid="work-product-local-note">{LOCAL_FILE_NOTE}</p>
+        ) : null}
         {showUsage && usageOpen ? (
           <p className="mt-0.5 text-xs text-muted-foreground" data-testid="shipped-usage">
             {formatShippedUsage(product.usage)}
@@ -157,7 +163,7 @@ export function ShippedWorkProductRow({
               className="inline-flex min-w-0 items-center gap-1 text-sm font-medium hover:underline"
               data-testid="shipped-title"
             >
-              <span className="truncate">{product.title}</span>
+              <span className="truncate">{workProductDisplayTitle(product.title)}</span>
               <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
             </a>
           ) : target ? (
@@ -166,13 +172,16 @@ export function ShippedWorkProductRow({
               className="inline-flex min-w-0 items-center gap-1 text-sm font-medium hover:underline"
               data-testid="shipped-title"
             >
-              <span className="truncate">{product.title}</span>
+              <span className="truncate">{workProductDisplayTitle(product.title)}</span>
             </Link>
           ) : (
-            <span className="truncate text-sm font-medium" data-testid="shipped-title">{product.title}</span>
+            <span className="truncate text-sm font-medium" data-testid="shipped-title">{workProductDisplayTitle(product.title)}</span>
           )}
           <WorkProductStateBadge product={product} />
         </div>
+        {!target && isLocalFileWorkProduct(product) ? (
+          <p className="text-xs text-muted-foreground" data-testid="work-product-local-note">{LOCAL_FILE_NOTE}</p>
+        ) : null}
         {product.summary && !target?.external ? (
           <p className="line-clamp-2 text-xs text-muted-foreground">{product.summary}</p>
         ) : null}

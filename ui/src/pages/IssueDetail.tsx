@@ -1654,29 +1654,24 @@ export function IssueDetail() {
   });
   // AgentDash (Scan 3 lane I): Accept / Request changes on the Result block.
   // Accept is the existing move to done, which records the deliverables as
-  // accepted. Request changes posts the note as a comment (which wakes the
-  // assignee), moves the issue back to work, and marks the deliverables that
-  // were waiting as sent back so they leave Decisions and never count as shipped.
+  // accepted. Request changes is one server action (POST
+  // /issues/:id/request-changes): the note becomes a comment that wakes the
+  // assignee, the issue goes back to work, and the deliverables that were
+  // waiting are sent back so they leave Decisions and never count as shipped.
   const resultReviewActions = useMemo<IssueResultReviewActions>(() => ({
     onAccept: () => updateIssue.mutateAsync({ status: "done" }),
     onRequestChanges: async (note: string) => {
       const current = queryClient.getQueryData<Issue>(queryKeys.issues.detail(issueId!));
-      const hasAssignee = Boolean(current?.assigneeAgentId || current?.assigneeUserId);
-      const updated = await updateIssue.mutateAsync({ status: hasAssignee ? "in_progress" : "todo", comment: note });
-      const waiting = (await issuesApi.listWorkProducts(updated.id)).filter(
-        (product) => product.status === "ready_for_review",
-      );
-      await Promise.all(
-        waiting.map((product) =>
-          issuesApi.updateWorkProduct(product.id, { status: "changes_requested", reviewState: "changes_requested" }),
-        ),
-      );
+      const result = await issuesApi.requestChanges(current?.id ?? issueId!, note);
+      queryClient.invalidateQueries({ queryKey: ["issues", "detail"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(issueId!) });
-      queryClient.invalidateQueries({ queryKey: ["shipped", updated.companyId] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(updated.id) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(updated.companyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issueId!) });
+      queryClient.invalidateQueries({ queryKey: ["shipped", result.issue.companyId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(result.issue.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(result.issue.companyId) });
+      invalidateIssueCollections();
     },
-  }), [issueId, queryClient, updateIssue.mutateAsync]);
+  }), [invalidateIssueCollections, issueId, queryClient, updateIssue.mutateAsync]);
   // AgentDash (recovery budget remediation): "Clear recovery block & retry".
   const clearRecoveryBudget = useMutation({
     mutationFn: () => issuesApi.clearRecoveryBudget(issueId!),

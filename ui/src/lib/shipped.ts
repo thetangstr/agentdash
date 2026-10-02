@@ -22,28 +22,63 @@ export type WorkProductStateTone = "open" | "merged" | "closed" | "draft" | "neu
 const NOT_SHIPPED_STATUSES = new Set(["closed", "archived", "failed", "draft", "changes_requested"]);
 
 /**
- * AgentDash (Scan 3 lane I): accepted = approved, merged, or on an issue that
- * is done (work accepted before acceptance was recorded on the product). The
+ * AgentDash (Scan 3 lane I): work recorded before this instant predates
+ * acceptance being written onto work products; only for that work does "the
+ * issue is done" count as accepted. Same constant as the server's
+ * ACCEPTANCE_RECORDED_SINCE.
+ */
+export const ACCEPTANCE_RECORDED_SINCE = Date.parse("2026-10-02T00:00:00.000Z");
+
+/**
+ * AgentDash (Scan 3 lane I): accepted = approved, merged, or (for work
+ * recorded before ACCEPTANCE_RECORDED_SINCE) on an issue that is done. The
  * server's `accepted=true` Shipped filter uses the same rule.
  */
 export function isWorkProductAccepted(
-  product: Pick<IssueWorkProduct, "status"> & { issue?: { status?: string | null } | null },
+  product: Pick<IssueWorkProduct, "status"> & {
+    createdAt?: Date | string | null;
+    issue?: { status?: string | null } | null;
+  },
 ): boolean {
   const status = (product.status ?? "").toLowerCase();
   if (status === "approved" || status === "merged") return true;
-  return product.issue?.status === "done" && !NOT_SHIPPED_STATUSES.has(status);
+  const createdAt = product.createdAt ? new Date(product.createdAt).getTime() : Number.NaN;
+  const legacy = Number.isFinite(createdAt) && createdAt < ACCEPTANCE_RECORDED_SINCE;
+  return legacy && product.issue?.status === "done" && !NOT_SHIPPED_STATUSES.has(status);
+}
+
+/** A deliverable the agent saved on its own machine (a file: URL or provider "local"). */
+export function isLocalFileWorkProduct(product: Pick<IssueWorkProduct, "url" | "provider">): boolean {
+  return /^file:/i.test(product.url?.trim() ?? "") || (product.provider ?? "").toLowerCase() === "local";
+}
+
+export const LOCAL_FILE_NOTE = "The agent saved this on its computer. Ask it to attach the content.";
+
+/** A title that is an absolute path or a file: URL shows as its file name. */
+export function workProductDisplayTitle(title: string): string {
+  const trimmed = title.trim();
+  const looksLikePath = /^file:/i.test(trimmed) || (/^(\/|~\/|[A-Za-z]:[\\/])/.test(trimmed) && !/\s/.test(trimmed));
+  if (!looksLikePath) return title;
+  const base = trimmed.replace(/[?#].*$/, "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+  try {
+    return decodeURIComponent(base) || "Deliverable";
+  } catch {
+    return base || "Deliverable";
+  }
 }
 
 /**
- * Where a work product opens. Only http(s) links leave the app. A local file
- * the server read into an issue document opens that document. A file: URL or
- * anything else opens nothing: it would show a path from the agent's machine.
+ * Where a work product opens. Only http(s) links leave the app. A work product
+ * that names an issue document (`metadata.documentKey`) opens that document on
+ * its issue. A file: URL or anything else opens nothing: it would show a path
+ * from the agent's machine.
  */
 export function workProductHref(
   product: Pick<IssueWorkProduct, "url" | "metadata">,
   issueHref: string,
 ): { href: string; external: boolean } | null {
   const documentKey = product.metadata && typeof product.metadata.documentKey === "string"
+    && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(product.metadata.documentKey)
     ? product.metadata.documentKey
     : null;
   if (documentKey) return { href: `${issueHref}#document-${encodeURIComponent(documentKey)}`, external: false };
@@ -54,7 +89,7 @@ export function workProductHref(
 
 /** A one-word state people recognise: open / merged / closed / draft for PRs. */
 export function workProductState(
-  product: Pick<IssueWorkProduct, "type" | "status"> & { issue?: { status?: string | null } | null },
+  product: Pick<IssueWorkProduct, "type" | "status"> & { createdAt?: Date | string | null; issue?: { status?: string | null } | null },
 ): {
   label: string;
   tone: WorkProductStateTone;
