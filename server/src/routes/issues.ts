@@ -2147,7 +2147,7 @@ export function issueRoutes(
     });
     try {
       const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
-        actor: getActorInfo(req), actorKind: req.actor.type, attribution: assistantGrantAttribution(req), intent: req.body,
+        actor: getActorInfo(req), actorKind: req.actor.type, actorSource: req.actor.source, attribution: assistantGrantAttribution(req), intent: req.body,
         stageAuthority: issueCurrentAuthority(req, req.body.projectId),
         validate: async (executor, current, intent) => {
           const policyDb = executor as Db;

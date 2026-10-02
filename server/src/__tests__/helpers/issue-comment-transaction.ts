@@ -49,7 +49,16 @@ export async function installPatchServiceMocks() {
   });
 }
 
+// AgentDash (MVP launch lane B): a board move to or from done updates the
+// issue's work products in the same transaction. These fixtures hold none, so
+// the update matches no rows; any other table is a surprise.
+function emptyWorkProductUpdate(table: any) {
+  if (getTableName(table) !== "issue_work_products") throw new Error(`Unexpected patch acceptance write: ${getTableName(table)}`);
+  const chain = { set: () => chain, where: () => chain, returning: async () => [] };
+  return chain;
+}
+
 export function patchTransactionFixture(getIssue: () => Promise<any>, getRun?: () => Promise<any>) {
   const reads = commentTransactionReads(getIssue, getRun);
-  return { ...reads, transaction: async (callback: (tx: unknown) => unknown) => callback({ ...reads, insert: () => ({ values: async () => undefined }) }) };
+  return { ...reads, transaction: async (callback: (tx: unknown) => unknown) => callback({ ...reads, insert: () => ({ values: async () => undefined }), update: emptyWorkProductUpdate }) };
 }

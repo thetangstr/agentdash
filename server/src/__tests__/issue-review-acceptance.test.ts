@@ -12,6 +12,8 @@ import { errorHandler } from '../middleware/error-handler.js';
 import { issueRoutes } from '../routes/issues.js';
 import { hashBearerToken } from '../services/board-auth.js';
 import { workProductService } from '../services/work-products.js';
+import { issuePatchActions, type IssuePatchContext } from '../services/issue-patch-actions.js';
+import { heartbeatService } from '../services/heartbeat.js';
 import type { StorageService } from '../storage/types.js';
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 
@@ -113,6 +115,66 @@ describeEmbeddedPostgres('accepting an issue accepts its deliverables', () => {
     const accepted = audit.filter((row) => row.action === 'issue.work_product_updated');
     expect(accepted).toHaveLength(1);
     expect(accepted[0]!.details).toMatchObject({ workProductId: f.readyId, status: 'approved', reason: 'issue_accepted' });
+    expect((await product(f.readyId)).metadata).toMatchObject({
+      acceptance: { reason: 'issue_accepted', acceptedByUserId: f.userId, previousReviewState: 'needs_board_review' },
+    });
+  });
+
+  it('a move to done through an assistant grant is not an acceptance, and a human one records the attribution', async () => {
+    // The route sets actorSource from req.actor.source; an assistant_grant
+    // board actor is a client acting for the person. Driven through the
+    // canonical accept path because a live grant needs the OAuth loopback.
+    const f = await fixture();
+    const actions = issuePatchActions(db, heartbeatService(db) as never);
+    const grantContext: IssuePatchContext = {
+      issueId: f.issue.id, companyId: f.company.id,
+      actor: { actorType: 'user', actorId: f.userId, agentId: null, runId: null }, actorKind: 'board',
+      actorSource: 'assistant_grant', attribution: { via: 'assistant_grant grant-1 (Test client)' },
+      intent: { status: 'done' },
+      validate: async () => undefined, validateResume: async () => undefined, validateAssignment: async () => undefined,
+    };
+    const accepted = await actions.accept(grantContext);
+    await actions.dispatch(accepted);
+    const [issue] = await db.select().from(issues).where(eq(issues.id, f.issue.id));
+    expect(issue!.status).toBe('done');
+    expect(await product(f.readyId)).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review' });
+    const audit = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
+    expect(audit.filter((row) => row.action === 'issue.work_product_updated')).toHaveLength(0);
+
+    // Same path, a session human with attribution (e.g. via a bridge): the
+    // acceptance row carries it.
+    const g = await fixture();
+    const human = await actions.accept({ ...grantContext, issueId: g.issue.id, companyId: g.company.id,
+      actor: { actorType: 'user', actorId: g.userId, agentId: null, runId: null }, actorSource: 'session' });
+    await actions.dispatch(human);
+    expect(await product(g.readyId)).toMatchObject({ status: 'approved', reviewState: 'approved' });
+    const humanAudit = await db.select().from(activityLog).where(eq(activityLog.companyId, g.company.id));
+    expect(humanAudit.find((row) => row.action === 'issue.work_product_updated')?.details)
+      .toMatchObject({ reason: 'issue_accepted', via: 'assistant_grant grant-1 (Test client)' });
+  });
+
+  it('reopening an accepted issue puts the deliverables it accepted back to ready for review', async () => {
+    const f = await fixture();
+    // Approved some other way (not by accepting the issue): left alone on reopen.
+    const other = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Signed off separately', status: 'approved', reviewState: 'approved',
+    });
+    expect((await patch(f.issue.id, { status: 'done' }, f.token)).status).toBe(200);
+    expect(await product(f.readyId)).toMatchObject({ status: 'approved', reviewState: 'approved' });
+
+    const response = await patch(f.issue.id, { status: 'todo' }, f.token);
+    expect(response.status).toBe(200);
+    expect((await response.json()).status).not.toBe('done');
+
+    expect(await product(f.readyId)).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review', metadata: null });
+    expect(await product(other!.id)).toMatchObject({ status: 'approved', reviewState: 'approved' });
+    expect(await product(f.draftId)).toMatchObject({ status: 'draft', reviewState: 'none' });
+
+    const audit = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
+    const reopened = audit.filter((row) => row.action === 'issue.work_product_updated'
+      && (row.details as Record<string, unknown> | null)?.reason === 'issue_reopened');
+    expect(reopened).toHaveLength(1);
+    expect(reopened[0]!.details).toMatchObject({ workProductId: f.readyId, status: 'ready_for_review', reviewState: 'needs_board_review' });
   });
 
   it('a board update that does not move the issue to done leaves work products alone', async () => {

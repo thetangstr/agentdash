@@ -43,6 +43,11 @@ vi.mock("../services/approval-risk.js", () => ({
 vi.mock("../routes/visibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../routes/visibility.js")>()),
   listVisibleIssueIds: vi.fn(async (_db: unknown, _req: unknown, _companyId: unknown, ids: Iterable<string>) => new Set(ids)),
+  // The review list's composed issue rule (owner-only agents) runs against a
+  // real database in waiting-on-you-reviews.test.ts; here every agent is visible.
+  resolveAgentVisibility: vi.fn(async () => ({ mode: "all" })),
+  issueVisibilityCondition: vi.fn(() => undefined),
+  agentVisibilityCondition: vi.fn(() => undefined),
 }));
 
 vi.mock("../services/index.js", () => ({
