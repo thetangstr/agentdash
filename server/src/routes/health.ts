@@ -242,6 +242,10 @@ export function healthRoutes(
       bootstrapInviteActive,
       selfServeBootstrap,
       instanceHasCompany,
+      // AgentDash (scan 3 lane L): the claim state belongs on the signed-in
+      // shape too. Only the public branch carried it, so an operator or the
+      // control plane reading health with a session saw no `claimed` at all.
+      ...(claimed !== undefined ? { claimed } : {}),
       adapterReady: adapter.ready,
       adapterPreset: adapter.preset,
       adapterReason: adapter.reason,

@@ -16,7 +16,21 @@ vi.mock("../context/ToastContext", () => ({
   useToastActions: () => ({ pushToast: vi.fn() }),
 }));
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ApiError } from "../api/client";
 import BillingPage from "./BillingPage";
+
+/** Let the status query settle (it resolves after the first render). */
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
+function withQueryClient(node: React.ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+  return <QueryClientProvider client={client}>{node}</QueryClientProvider>;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -27,8 +41,9 @@ async function renderPage(status: { tier: string; seatsPaid: number; periodEnd: 
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<BillingPage companyId="c1" />);
+    root.render(withQueryClient(<BillingPage companyId="c1" />));
   });
+  await settle();
   return { container, root };
 }
 
@@ -93,16 +108,34 @@ describe("BillingPage", () => {
   });
 
   it("shows an error instead of Loading forever when status fails", async () => {
-    mockStatus.mockRejectedValue(new Error("Not a member of this company"));
+    mockStatus.mockRejectedValue(new ApiError("Not a member of this company", 403, null));
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
     rendered.push({ container, root });
     await act(async () => {
-      root.render(<BillingPage companyId="c1" />);
+      root.render(withQueryClient(<BillingPage companyId="c1" />));
     });
+    await settle();
     const text = container.textContent!;
     expect(text).not.toContain("Loading…");
     expect(text).toContain("Not a member of this company");
+  });
+
+  // AgentDash (scan 3 lane L): a 429 is answered once, in words, and is not retried.
+  it("asks once on a 429 and says so in plain words", async () => {
+    mockStatus.mockRejectedValue(new ApiError("Rate limited", 429, { error: "Rate limited" }, 900_000));
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    rendered.push({ container, root });
+    await act(async () => {
+      root.render(withQueryClient(<BillingPage companyId="c1" />));
+    });
+    await settle();
+    expect(mockStatus).toHaveBeenCalledTimes(1);
+    const text = container.textContent!;
+    expect(text).toContain("Too many plan checks");
+    expect(text).not.toContain("Rate limited");
   });
 });

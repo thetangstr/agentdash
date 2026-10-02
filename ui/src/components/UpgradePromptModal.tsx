@@ -6,10 +6,9 @@
 // the upgrade CTA without having to wire its own try/catch + UI.
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCompany } from "../context/CompanyContext";
-import { billingApi } from "../api/billing";
+import { useBillingStatus } from "../hooks/useBillingStatus";
 import { UpgradePromptCard } from "./UpgradePromptCard";
 
 type CapReason = "seat_cap_exceeded" | "agent_cap_exceeded";
@@ -26,11 +25,9 @@ export function UpgradePromptModal() {
 
   // Pull billing status so we can suppress if the user is somehow already
   // on Pro by the time this modal would show (race window after upgrade).
-  const { data: status } = useQuery({
-    queryKey: ["billing-status", eventCompanyId ?? selectedCompany?.id ?? "none"],
-    queryFn: () => billingApi.status(eventCompanyId ?? selectedCompany!.id),
-    enabled: reason !== null && Boolean(eventCompanyId ?? selectedCompany?.id),
-  });
+  // Shares the trial banner's cache entry (scan 3 lane L), so this costs no
+  // request when the banner already has the answer.
+  const { data: status } = useBillingStatus(eventCompanyId ?? selectedCompany?.id, reason !== null);
 
   useEffect(() => {
     function onCap(e: Event) {

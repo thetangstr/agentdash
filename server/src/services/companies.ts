@@ -649,9 +649,15 @@ export function companyService(db: Db) {
      *
      * Reported next to the successful total on purpose. The absolute number
      * means little; the ratio is the signal.
+     *
+     * `monthTokens` (scan 3 lane L) is this month's input + output tokens, the
+     * same definition Home and Shipped use (cached input is not counted). A
+     * BYOK workspace meters tokens but no dollars, so the Companies card shows
+     * this instead of "$0.00".
      */
-    stats: () =>
-      Promise.all([
+    stats: () => {
+      const { start, end } = currentUtcMonthWindow();
+      return Promise.all([
         db
           .select({ companyId: agents.companyId, count: count() })
           .from(agents)
@@ -669,7 +675,15 @@ export function companyService(db: Db) {
           .from(heartbeatRuns)
           .where(eq(heartbeatRuns.status, "succeeded"))
           .groupBy(heartbeatRuns.companyId),
-      ]).then(([agentRows, issueRows, runRows]) => {
+        db
+          .select({
+            companyId: costEvents.companyId,
+            tokens: sql<number>`coalesce(sum(${costEvents.inputTokens} + ${costEvents.outputTokens}), 0)::double precision`,
+          })
+          .from(costEvents)
+          .where(and(gte(costEvents.occurredAt, start), lt(costEvents.occurredAt, end)))
+          .groupBy(costEvents.companyId),
+      ]).then(([agentRows, issueRows, runRows, tokenRows]) => {
         const result: Record<
           string,
           {
@@ -677,6 +691,7 @@ export function companyService(db: Db) {
             issueCount: number;
             runsSucceeded: number;
             runsSucceededWithoutEvidence: number;
+            monthTokens: number;
           }
         > = {};
         const blank = () => ({
@@ -684,6 +699,7 @@ export function companyService(db: Db) {
           issueCount: 0,
           runsSucceeded: 0,
           runsSucceededWithoutEvidence: 0,
+          monthTokens: 0,
         });
         for (const row of agentRows) {
           result[row.companyId] = { ...blank(), agentCount: row.count };
@@ -698,7 +714,14 @@ export function companyService(db: Db) {
             runsSucceededWithoutEvidence: Number(row.withoutEvidence ?? 0),
           };
         }
+        for (const row of tokenRows) {
+          result[row.companyId] = {
+            ...(result[row.companyId] ?? blank()),
+            monthTokens: Number(row.tokens ?? 0),
+          };
+        }
         return result;
-      }),
+      });
+    },
   };
 }

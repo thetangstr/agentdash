@@ -115,6 +115,10 @@ export const queryKeys = {
   budgets: {
     overview: (companyId: string) => ["budgets", "overview", companyId] as const,
   },
+  // AgentDash (scan 3 lane L): one cache entry for every billing-status reader.
+  billing: {
+    status: (companyId: string) => ["billing", "status", companyId] as const,
+  },
   stewardships: {
     byAgent: (companyId: string, agentId: string) =>
       ["stewardships", companyId, agentId] as const,

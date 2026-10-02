@@ -24,14 +24,32 @@ vi.mock("@/api/agents", () => ({
   agentsApi: mockAgentsApi,
 }));
 
+// The panel asks /me/capabilities first (scan 3 lane L). Stewardship "on" here,
+// so the list route is asked and these tests cover its answers.
+vi.mock("@/api/capabilities", () => ({
+  capabilitiesApi: {
+    get: vi.fn().mockResolvedValue({
+      companyId: "company-1",
+      actorType: "board",
+      membershipRole: "owner",
+      isInstanceAdmin: false,
+      capabilities: {},
+      features: { stewardship: true },
+    }),
+  },
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 async function flushReact() {
-  await act(async () => {
-    await Promise.resolve();
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-  });
+  // A few rounds: the capabilities answer comes first, then the list.
+  for (let i = 0; i < 4; i += 1) {
+    await act(async () => {
+      await Promise.resolve();
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+  }
 }
 
 function row(overrides: Partial<Record<string, unknown>> = {}) {

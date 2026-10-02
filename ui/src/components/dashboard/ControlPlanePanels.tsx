@@ -22,6 +22,7 @@ import { accessApi } from "../../api/access";
 import { queryKeys } from "../../lib/queryKeys";
 import { buildCompanyUserProfileMap } from "../../lib/company-members";
 import { formatCents, formatTokens } from "../../lib/utils";
+import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE } from "../../lib/token-figures";
 import { timeAgo } from "../../lib/timeAgo";
 import { ActivityRow } from "../ActivityRow";
 import { isSystemPlumbingActivity } from "../../lib/activity-format";
@@ -29,7 +30,7 @@ import { isSystemPlumbingActivity } from "../../lib/activity-format";
 export const FLEET_TILE_LIMIT = 6;
 export const DASHBOARD_ACTIVITY_LIMIT = 8;
 export const NO_AGENTS_TEXT = "No agents yet.";
-export const BYOK_SPEND_NOTE = "Billed by your model provider";
+export const BYOK_SPEND_NOTE = BILLED_BY_PROVIDER_NOTE;
 
 /**
  * AgentDash: what the month-spend tile shows. A BYOK box meters tokens but not
@@ -126,6 +127,7 @@ function StatCard({
   detail,
   to,
   testId,
+  title,
 }: {
   icon: LucideIcon;
   label: string;
@@ -133,10 +135,13 @@ function StatCard({
   detail: ReactNode;
   to: string;
   testId: string;
+  /** Hover text saying what the number counts. */
+  title?: string;
 }) {
   return (
     <Link
       to={to}
+      title={title}
       data-testid={testId}
       className="block rounded-xl border border-border bg-card px-4 py-3 text-inherit no-underline transition-colors hover:border-foreground/20"
     >
@@ -237,6 +242,7 @@ function StatsRow({
               : "No monthly budget set"
           }
           to="/costs"
+          title={spend.unmetered ? TOKENS_COUNTED_NOTE : undefined}
           testId="dashboard-stat-spend"
         />
       </div>

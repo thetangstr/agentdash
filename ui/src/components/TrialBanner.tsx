@@ -4,20 +4,15 @@
 //   - pro_past_due → payment-failed warning (#250)
 // All other tiers self-suppress.
 
-import { useEffect, useState } from "react";
-import { billingApi } from "../api/billing";
-
-interface BillingStatusLite {
-  tier: string;
-  periodEnd: string | null;
-}
+import { useState } from "react";
+import { useBillingStatus } from "../hooks/useBillingStatus";
 
 export function TrialBanner({ companyId }: { companyId: string }) {
-  const [status, setStatus] = useState<BillingStatusLite | null>(null);
+  // AgentDash (scan 3 lane L): the shared, cached billing-status query. This
+  // used to fetch on every mount with no catch, so each 429 became an
+  // uncaught page error. A failed read now just shows no banner.
+  const { data: status } = useBillingStatus(companyId);
   const [dismissed, setDismissed] = useState(false);
-  useEffect(() => {
-    billingApi.status(companyId).then(setStatus);
-  }, [companyId]);
 
   if (!status || dismissed) return null;
 

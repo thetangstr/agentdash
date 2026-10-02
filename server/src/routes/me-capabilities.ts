@@ -14,8 +14,11 @@
 // missing control that should have been there.
 
 import { Router } from "express";
+import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { companies } from "@paperclipai/db";
 import { accessService } from "../services/index.js";
+import { requireProductProfile } from "../services/companies.js";
 import { assertAuthenticated, assertCompanyAccess, canSetCompanyDirection } from "./authz.js";
 
 /**
@@ -31,6 +34,46 @@ export type CapabilityKey =
   | "users:invite"
   | "users:manage_permissions"
   | "tasks:assign";
+
+/**
+ * Workspace features the UI would otherwise discover by probing a gated route
+ * and reading its 404.
+ *
+ * AgentDash (scan 3 lane L): Decisions, the sidebar badge, My Agent and the
+ * ceiling editor each probed `/me/inbox`, `/me/fact-requests`,
+ * `/inbox/override`, `connector-send-executions` and `/agents/:id/governance`
+ * to learn whether stewardship was on, and a workspace without it paid about
+ * 77 console 404s per route per session. This answers the same question once,
+ * with a 200.
+ *
+ * `stewardship` is decided by `requireProductProfile(company, "agentdash_mk")`,
+ * the very predicate those routes gate on, so the two cannot disagree. It is a
+ * fact about the workspace, not a permission: each gated route still runs its
+ * own authority check (a 403 there stays a 403). `null` means "could not tell";
+ * the UI then falls back to probing, as before.
+ */
+export interface WorkspaceFeatures {
+  stewardship: boolean | null;
+}
+
+async function workspaceFeatures(db: Db, companyId: string): Promise<WorkspaceFeatures> {
+  try {
+    const company = await db
+      .select({ id: companies.id, productProfile: companies.productProfile })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .then((rows) => rows[0] ?? null);
+    try {
+      requireProductProfile(company, "agentdash_mk");
+      return { stewardship: true };
+    } catch {
+      return { stewardship: false };
+    }
+  } catch {
+    // The lookup itself failed: unknown, not "off".
+    return { stewardship: null };
+  }
+}
 
 export function meCapabilityRoutes(db: Db) {
   const router = Router();
@@ -84,6 +127,7 @@ export function meCapabilityRoutes(db: Db) {
       membershipRole: membership?.membershipRole ?? null,
       isInstanceAdmin,
       capabilities,
+      features: await workspaceFeatures(db, companyId),
     });
   });
 

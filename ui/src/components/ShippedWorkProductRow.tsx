@@ -7,6 +7,7 @@ import { Link } from "@/lib/router";
 import { cn, issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import {
+  TOKENS_COUNTED_NOTE,
   formatShippedUsage,
   workProductState,
   workProductTypeLabel,
@@ -97,7 +98,7 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
           {meta.join(" · ")}
         </p>
         {showUsage && usageOpen ? (
-          <p className="mt-0.5 text-xs text-muted-foreground" data-testid="shipped-usage">
+          <p className="mt-0.5 text-xs text-muted-foreground" data-testid="shipped-usage" title={TOKENS_COUNTED_NOTE}>
             {formatShippedUsage(product.usage)}
           </p>
         ) : null}
@@ -183,7 +184,9 @@ export function ShippedWorkProductRow({
           {showUsage ? (
             <>
               <span aria-hidden>·</span>
-              <span data-testid="shipped-usage">{formatShippedUsage(product.usage)}</span>
+              <span data-testid="shipped-usage" title={TOKENS_COUNTED_NOTE}>
+                {formatShippedUsage(product.usage)}
+              </span>
             </>
           ) : null}
         </div>

@@ -54,6 +54,7 @@ import { MandatesTab } from "../components/agent/MandatesTab";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
+import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, countedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import {
@@ -4152,10 +4153,23 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 <div className="text-xs text-muted-foreground">Cached</div>
                 <div className="text-sm font-medium font-mono">{formatTokens(metrics.cached)}</div>
               </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Cost</div>
-                <div className="text-sm font-medium font-mono">{metrics.cost > 0 ? `$${metrics.cost.toFixed(4)}` : "-"}</div>
-              </div>
+              {metrics.cost > 0 ? (
+                <div>
+                  <div className="text-xs text-muted-foreground">Cost</div>
+                  <div className="text-sm font-medium font-mono">${metrics.cost.toFixed(4)}</div>
+                </div>
+              ) : (
+                // AgentDash (scan 3 lane L): an unmetered (BYOK) run has no
+                // dollar figure here; "-" read as "nothing". Show the tokens it
+                // used, counted the way Home and Shipped count them.
+                <div title={TOKENS_COUNTED_NOTE} data-testid="run-unmetered-tokens">
+                  <div className="text-xs text-muted-foreground">Tokens</div>
+                  <div className="text-sm font-medium font-mono">
+                    {formatTokens(countedTokens({ inputTokens: metrics.input, outputTokens: metrics.output }))}
+                  </div>
+                  <div className="text-xs text-muted-foreground">{BILLED_BY_PROVIDER_NOTE.toLowerCase()}</div>
+                </div>
+              )}
             </div>
           )}
         </div>

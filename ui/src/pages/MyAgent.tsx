@@ -10,6 +10,7 @@ import { ConnectYourTerminal } from "../components/agent/ConnectYourTerminal";
 import { DecisionsNeedingYou } from "../components/agent/DecisionsNeedingYou";
 import { QuestionsForYou } from "../components/agent/QuestionsForYou";
 import { AvailableOnRequest, isCapabilityNotFound } from "../components/AvailableOnRequest";
+import { useStewardshipFeature } from "../hooks/useStewardshipCapability";
 import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { describeActivity } from "../lib/agent-activity-copy";
@@ -194,12 +195,15 @@ export default function MyAgent() {
   // personal agent on first visit; the server gates it too (404, nothing
   // created, when stewardship is off), and this page still asks it only once
   // the inbox has confirmed the capability is on.
+  // AgentDash (scan 3 lane L): `/me/capabilities` answers first; when it says
+  // stewardship is off, the inbox is not asked just to read its 404.
+  const stewardshipFeature = useStewardshipFeature(selectedCompanyId);
   const inbox = useQuery({
     queryKey: queryKeys.myAgent.inbox(selectedCompanyId ?? ""),
     queryFn: () => stewardshipsApi.getMyInbox(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && stewardshipFeature !== "off" && stewardshipFeature !== "loading",
   });
-  const capabilityOff = isCapabilityNotFound(inbox.error);
+  const capabilityOff = stewardshipFeature === "off" || isCapabilityNotFound(inbox.error);
   // A non-capability inbox failure (a 500, say) still lets the rest of the page
   // load; the "needs you" count then reports itself as unknown, as before.
   const stewardshipOn = !!selectedCompanyId && !inbox.isPending && !capabilityOff;

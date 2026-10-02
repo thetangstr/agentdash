@@ -602,6 +602,7 @@ describeEmbeddedPostgres("dashboard service", () => {
     const summary = await dashboardService(db).summary(companyId);
 
     expect(summary.costs.monthSpendCents).toBe(0);
-    expect(summary.costs.monthTokens).toBe(127_000);
+    // Input + output only; the 20k cached input is not counted (scan 3 lane L).
+    expect(summary.costs.monthTokens).toBe(107_000);
   });
 });

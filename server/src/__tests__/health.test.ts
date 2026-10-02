@@ -14,6 +14,11 @@ vi.mock("../dev-server-status.js", () => ({
 }));
 
 const mockServedRelease = vi.hoisted(() => vi.fn());
+const mockBoxClaimedCached = vi.hoisted(() => vi.fn());
+
+vi.mock("../lib/claim-code.js", () => ({
+  boxClaimedCached: mockBoxClaimedCached,
+}));
 
 vi.mock("../lib/served-release.js", () => ({
   servedRelease: mockServedRelease,
@@ -30,6 +35,7 @@ describe("GET /health", () => {
     vi.clearAllMocks();
     mockReadPersistedDevServerStatus.mockReturnValue(undefined);
     mockServedRelease.mockReturnValue(null);
+    mockBoxClaimedCached.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -308,6 +314,69 @@ describe("GET /health", () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ status: "ok", deploymentMode: "authenticated", hostedBox: true });
+    });
+  });
+
+  // AgentDash (scan 3 lane L): `claimed` used to be on the public shape only,
+  // so a signed-in caller of a hosted box could not see it at all.
+  describe("claimed", () => {
+    const ORIGINAL_KIND = process.env.AGENTDASH_DEPLOYMENT_KIND;
+    afterEach(() => {
+      if (ORIGINAL_KIND === undefined) delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      else process.env.AGENTDASH_DEPLOYMENT_KIND = ORIGINAL_KIND;
+    });
+
+    const stubDb = () => ({
+      execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ count: 1 }]),
+        })),
+      })),
+    }) as unknown as Db;
+
+    function hostedApp(actorType: "none" | "board") {
+      const app = express();
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: actorType, source: actorType === "board" ? "session" : "none" };
+        next();
+      });
+      app.use(
+        "/health",
+        healthRoutes(stubDb(), {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+      return app;
+    }
+
+    it("reports claimed to an anonymous caller of a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const res = await request(hostedApp("none")).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty("db");
+      expect(res.body.claimed).toBe(true);
+    });
+
+    it("reports claimed to a signed-in caller of a hosted box too", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      mockBoxClaimedCached.mockResolvedValue(false);
+      const res = await request(hostedApp("board")).get("/health");
+      expect(res.status).toBe(200);
+      // The full-detail shape, so this is the authenticated branch.
+      expect(res.body).toHaveProperty("db");
+      expect(res.body.claimed).toBe(false);
+    });
+
+    it("omits claimed on an install that is not a hosted box", async () => {
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      const res = await request(hostedApp("board")).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty("claimed");
+      expect(mockBoxClaimedCached).not.toHaveBeenCalled();
     });
   });
 
