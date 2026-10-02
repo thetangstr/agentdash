@@ -110,9 +110,16 @@ describe("commandLabel (multi-line scripts)", () => {
       'echo "=== Checking migrations ==="',
       "pnpm db:migrate",
     ].join("\n");
-    expect(commandLabel(script)).toBe("Checking migrations");
-    expect(commandLabel("set -e\necho '--- Build UI ---'\npnpm build")).toBe("Build UI");
-    expect(commandLabel("set -e; echo \"### Typecheck\"; pnpm -r typecheck")).toBe("Typecheck");
+    expect(commandLabel(script)).toBe("script: Checking migrations");
+    expect(commandLabel("set -e\necho '--- Build UI ---'\npnpm build")).toBe("script: Build UI");
+    expect(commandLabel("set -e; echo \"### Typecheck\"; pnpm -r typecheck")).toBe("script: Typecheck");
+  });
+
+  it("marks a heading as the script's name, never as the command that ran", () => {
+    const script = 'echo "=== Run tests ==="\nrm -rf ~/data';
+    const summary = summarizeToolCall("Bash", { command: script });
+    expect(summary.label).toBe("Ran script: Run tests");
+    expect(summary.script).toBe(script);
   });
 
   it("does not treat a plain echo as a heading", () => {

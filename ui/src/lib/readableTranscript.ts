@@ -176,13 +176,17 @@ function echoHeading(statement: string): string | null {
  * has one, otherwise by its first statement that does real work, skipping
  * `set -e`, variable assignments, `cd`, and comments (rows used to read
  * "Ran set -e BASE=…").
+ *
+ * A heading is the agent's own words, not a command, so it is always marked
+ * as such ("script: X", read as "Ran script: X"). A friendly heading cannot
+ * pass for the command it sits above; the real script is one click away.
  */
 export function commandLabel(command: string): string {
   const statements = scriptStatements(command);
   if (statements.length <= 1) return compactWhitespace(command);
   for (const statement of statements) {
     const heading = echoHeading(statement);
-    if (heading) return compactWhitespace(heading);
+    if (heading) return `script: ${compactWhitespace(heading)}`;
   }
   const meaningful = statements.find((statement) => !isScriptPreamble(statement));
   return compactWhitespace(meaningful ?? statements[0]);

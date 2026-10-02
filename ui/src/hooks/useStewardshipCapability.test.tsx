@@ -124,6 +124,30 @@ describe("stewardship answered by /me/capabilities", () => {
     expect(mockInbox).toHaveBeenCalledTimes(firstRound);
   });
 
+  it("re-asks a 403 source later in the session (a promotion shows without a reload), but not a 404", async () => {
+    mockCapabilities.mockResolvedValue(capabilitiesWith(undefined));
+    mockInbox.mockRejectedValue(new ApiError("Forbidden", 403, null));
+    await render(<Sources />);
+    expect(mockInbox).toHaveBeenCalledTimes(4);
+    // A later mount with an empty cache (the entry was collected): 403s are asked again.
+    await render(null);
+    client.clear();
+    await render(<Sources />);
+    expect(mockInbox).toHaveBeenCalledTimes(8);
+
+    // Now the capability is off (404): remembered, not asked again.
+    mockInbox.mockClear();
+    mockInbox.mockRejectedValue(new ApiError("Company not found", 404, null));
+    await render(null);
+    client.clear();
+    await render(<Sources />);
+    expect(mockInbox).toHaveBeenCalledTimes(4);
+    await render(null);
+    client.clear();
+    await render(<Sources />);
+    expect(mockInbox).toHaveBeenCalledTimes(4);
+  });
+
   it("does not ask the gated route before a write when the server says off", async () => {
     mockCapabilities.mockResolvedValue(capabilitiesWith(false));
     await expect(fetchStewardshipOn(client, "c1")).resolves.toBe(false);

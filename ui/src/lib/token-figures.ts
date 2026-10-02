@@ -1,6 +1,11 @@
-// AgentDash (scan 3 lane L): one definition of "tokens" for every figure the
-// product shows. Home counted cached input and Shipped did not, so the same
-// month read "1.9M" on one page and "221.2k" on the next.
+// AgentDash (scan 3 lane L): one definition of "tokens" for every DISPLAY
+// figure the product shows (Home, Shipped, the run page, the Companies card).
+// Home counted cached input and Shipped did not, so the same month read
+// "1.9M" on one page and "221.2k" on the next.
+//
+// Display only. Enforcement is separate and unchanged: the agent token-ceiling
+// checks on the server still count cached input, because cached tokens are
+// still processed and billed. Do not reuse this definition for a limit.
 //
 // The definition: input + output tokens. Cached input (the prompt the model
 // re-reads from its cache on every turn) is excluded; it dwarfs the rest and

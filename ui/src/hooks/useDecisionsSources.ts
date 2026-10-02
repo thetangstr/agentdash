@@ -6,7 +6,7 @@ import { connectorSendExecutionsApi } from "../api/connector-send-executions";
 import { accessApi } from "../api/access";
 import { heartbeatsApi } from "../api/heartbeats";
 import { inboxDismissalsApi } from "../api/inboxDismissals";
-import { isCapabilityOff } from "../components/AvailableOnRequest";
+import { isCapabilityNotFound, isCapabilityOff } from "../components/AvailableOnRequest";
 import { buildInboxDismissedAtByKey, getLatestFailedRunsByAgent, isInboxEntityDismissed } from "../lib/inbox";
 import { useStewardshipFeature } from "./useStewardshipCapability";
 
@@ -49,11 +49,15 @@ export const FAILED_RUN_SCAN_LIMIT = 200;
 const failureStreaks = new Map<string, number>();
 
 /**
- * Sources the server said are absent for this person (a gate's 404 or 403),
- * keyed like `failureStreaks`. AgentDash (scan 3 lane L): remembered for the
+ * Sources whose capability gate answered 404 (off for this workspace), keyed
+ * like `failureStreaks`. AgentDash (scan 3 lane L): remembered for the
  * session, not just the mount, so navigating back to a page that shows the
  * Decisions count does not ask again; a workspace without a capability used
  * to log about 77 404s per gated route per session. A reload asks afresh.
+ *
+ * Only 404s. A 403 is about this person's authority, which can change in the
+ * session (a member promoted to admin), so a 403 source is still re-asked on
+ * a later mount and the promotion shows without a reload.
  */
 const absentForSession = new Set<string>();
 
@@ -70,7 +74,7 @@ export async function loadSource<T>(streakKey: string, load: () => Promise<T>): 
   } catch (error) {
     if (isCapabilityOff(error)) {
       failureStreaks.delete(streakKey);
-      absentForSession.add(streakKey);
+      if (isCapabilityNotFound(error)) absentForSession.add(streakKey);
       return null;
     }
     failureStreaks.set(streakKey, (failureStreaks.get(streakKey) ?? 0) + 1);
@@ -149,8 +153,10 @@ export function useDecisionsOtherSources(
       queryFn: () => loadSource(streakKey, load),
       enabled: !!companyId && enabled && !absentForSession.has(streakKey) && (!gated || stewardshipMaybeOn),
       retry: false,
-      // An absent source never goes stale, so a remount does not refetch it.
-      staleTime: (query: { state: { data: unknown } }) => (query.state.data === null ? Infinity : SOURCE_POLL_MS),
+      // A capability that is off (404) never goes stale, so a remount does
+      // not refetch it. A 403 goes stale normally, so authority granted
+      // mid-session is picked up on the next mount.
+      staleTime: () => (absentForSession.has(streakKey) ? Infinity : SOURCE_POLL_MS),
       refetchInterval: (query: { state: { data: unknown; status: "pending" | "error" | "success" } }) =>
         sourceRefetchInterval(query.state, failureStreaks.get(streakKey) ?? 0),
     };
