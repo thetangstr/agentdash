@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1002.1](v2026.1002.1.md) | 2026-10-02 | CoS chat never goes silent (Z.AI endpoint pinned, error card with Retry, live replies); CoS creates tasks from chat; Accept / Request changes and Shipped means accepted; founder stays owner (+ `doctor repair-founder-owner`); phone redesign; security and backup fixes; migration `0143` | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1002.1) |
 | [v2026.1002.0](v2026.1002.0.md) | 2026-10-02 | First-session release: one onboarding path, CoS plan without a nudge, Ask inside the app, reviews reach you, parked wizard tasks, no premature stalled-issue recovery, bootstrap privilege fixes | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1002.0) |
 | [v2026.1001.2](v2026.1001.2.md) | 2026-10-01 | Launch-day security release: live events stop when access ends, import SSRF guard, routine-write guard, restricted projects hidden in budgets, member emails private; backups keep the whole schema and round-trip every value | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1001.2) |
 | [v2026.1001.1](v2026.1001.1.md) | 2026-10-01 | Patch: the Agent visibility setting reads back (company reads omitted the column) | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1001.1) |
