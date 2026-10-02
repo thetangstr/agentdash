@@ -84,11 +84,27 @@ const STYLES: Record<AgentKind, string> = {
 export function AgentKindBadge({
   agent,
   className,
+  hideUnpaired = false,
 }: {
   agent: Pick<Agent, "autonomy" | "accountable">;
   className?: string;
+  /**
+   * AgentDash (canary1, v2026.1002.1): set where the workspace cannot assign
+   * stewards (the stewardship capability is off). "Needs a steward" asked for
+   * something Members & access calls "available on request", so an unpaired
+   * agent there gets a neutral "No one accountable" badge instead: still
+   * true, and fixable by making it autonomous with a person accountable.
+   */
+  hideUnpaired?: boolean;
 }) {
   const kind = agentKind(agent);
+  const unaccountable = hideUnpaired && kind === "unpaired";
+  const testId = unaccountable ? "agent-kind-unaccountable" : `agent-kind-${kind}`;
+  const label = unaccountable ? "No one accountable" : LABELS[kind];
+  const style = unaccountable ? "border-border text-muted-foreground" : STYLES[kind];
+  const explanation = unaccountable
+    ? "Nobody is accountable for this agent yet. Make it autonomous and choose the person who answers for it on its page."
+    : agentKindExplanation(agent);
   return (
     // Its own provider so the badge can be dropped into any list or panel
     // without that screen having to know it contains a tooltip. Radix throws
@@ -99,18 +115,18 @@ export function AgentKindBadge({
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            data-testid={`agent-kind-${kind}`}
+            data-testid={testId}
             className={cn(
               "cursor-default whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-              STYLES[kind],
+              style,
               className,
             )}
           >
-            {LABELS[kind]}
+            {label}
           </span>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-xs text-xs">
-          {agentKindExplanation(agent)}
+          {explanation}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

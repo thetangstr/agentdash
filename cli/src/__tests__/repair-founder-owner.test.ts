@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import {
   activityLog,
+  agentApiKeys,
   agents,
   agentStewardships,
   companies,
@@ -40,6 +41,7 @@ describeEmbeddedPostgres("doctor repair-founder-owner", () => {
   afterEach(async () => {
     await db.delete(activityLog);
     await db.delete(agentStewardships);
+    await db.delete(agentApiKeys);
     await db.delete(agents);
     await db.delete(joinRequests);
     await db.delete(invites);
@@ -119,6 +121,8 @@ describeEmbeddedPostgres("doctor repair-founder-owner", () => {
     const operator = { osUser: "ops-alice", host: "box-1" };
     const outcome = await applyFounderOwnerRepair(db, { companyId: acme.id, userId: founder, operator });
     expect(outcome).toMatchObject({ status: "restored", pairedCosAgentId: cos!.id });
+    // Two humans: the agent backfill is theirs to decide, so it is skipped.
+    expect(outcome.status === "restored" ? outcome.backfill?.skipped : null).toBe("not_sole_owner_or_admin");
     expect(await role(acme.id, founder)).toBe("owner");
     expect(await role(acme.id, teammate)).toBe("member");
     const audit = await db.select().from(activityLog).where(eq(activityLog.action, "company.owner_restored"));
@@ -217,5 +221,45 @@ describeEmbeddedPostgres("doctor repair-founder-owner", () => {
     expect(await applyFounderOwnerRepair(db, { companyId: randomUUID(), userId: founder }))
       .toEqual({ status: "company_not_found" });
     expect(await db.select().from(activityLog).where(eq(activityLog.action, "company.owner_restored"))).toEqual([]);
+  });
+  // canary1 (migration 0144): a sole founder demoted to member was skipped by
+  // the migration's backfill; the repair restores the owner and runs it.
+  it("repair of a sole demoted founder also runs the 0144 agent backfill, idempotently", async () => {
+    const solo = await company("Solo Co");
+    const founder = `founder-${randomUUID()}`;
+    await member(solo.id, founder, "member", new Date(solo.createdAt.getTime() + 500));
+    await db.insert(activityLog).values({
+      companyId: solo.id, actorType: "user", actorId: founder, action: "company.created",
+      entityType: "company", entityId: solo.id,
+    });
+    const [cos] = await db
+      .insert(agents)
+      .values({ companyId: solo.id, name: "Chief of Staff", role: "chief_of_staff", adapterType: "process" })
+      .returning();
+    const [hire] = await db
+      .insert(agents)
+      .values({ companyId: solo.id, name: "Harper", role: "general", title: "deployment_lead", adapterType: "process" })
+      .returning();
+    const [held] = await db
+      .insert(agents)
+      .values({ companyId: solo.id, name: "Laptop", role: "general", title: "sales_support", adapterType: "process" })
+      .returning();
+    await db.insert(agentApiKeys).values({ agentId: held!.id, companyId: solo.id, name: "founder laptop", keyHash: randomUUID() });
+
+    const outcome = await applyFounderOwnerRepair(db, { companyId: solo.id, userId: founder });
+    expect(outcome).toMatchObject({
+      status: "restored",
+      pairedCosAgentId: cos!.id,
+      backfill: { madeAutonomous: 1, retitled: 2, skippedHeldCredential: [held!.id] },
+    });
+    const [hireRow] = await db.select().from(agents).where(eq(agents.id, hire!.id));
+    expect(hireRow).toMatchObject({ autonomy: "autonomous", accountableUserId: founder, role: "devops", title: "Deployment Lead" });
+    const [heldRow] = await db.select().from(agents).where(eq(agents.id, held!.id));
+    expect(heldRow).toMatchObject({ autonomy: "stewarded", accountableUserId: null, title: "Sales Support" });
+    const backfillRows = await db.select().from(activityLog).where(eq(activityLog.actorId, REPAIR_ACTOR_ID));
+    expect(backfillRows.filter((row) => row.action === "agent.accountability_changed")).toHaveLength(1);
+
+    expect(await applyFounderOwnerRepair(db, { companyId: solo.id, userId: founder })).toEqual({ status: "already_owner" });
+    expect(await db.select().from(activityLog).where(eq(activityLog.actorId, REPAIR_ACTOR_ID))).toHaveLength(backfillRows.length);
   });
 });

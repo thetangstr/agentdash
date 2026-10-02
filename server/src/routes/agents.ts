@@ -467,6 +467,10 @@ export function agentRoutes(
     adapterConfig: Record<string, unknown>;
     defaultEnvironmentId: string | null | undefined;
     failureMessage?: string;
+    // AgentDash: the saved agent, when preflighting one. Adapters with per-agent
+    // state (Hermes managed profiles) need it; without it a hosted box's
+    // fail-closed Hermes check reports "the run has no agent id".
+    agent?: { id: string; companyId: string; adapterConfig: Record<string, unknown> } | null;
   }): Promise<AdapterEnvironmentTestResult> {
     const adapter = requireServerAdapter(input.adapterType);
     const { config: runtimeAdapterConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
@@ -489,6 +493,9 @@ export function agentRoutes(
         config: runtimeAdapterConfig,
         executionTarget,
         environmentName,
+        agent: input.agent
+          ? { id: input.agent.id, companyId: input.agent.companyId, adapterConfig: runtimeAdapterConfig }
+          : null,
       }),
       fallbackChecks,
     );
@@ -2612,6 +2619,7 @@ export function agentRoutes(
         adapterType: agent.adapterType,
         adapterConfig,
         defaultEnvironmentId: agent.defaultEnvironmentId,
+        agent: { id: agent.id, companyId: agent.companyId, adapterConfig },
         failureMessage: "Agent harness preflight failed. Resolve the adapter environment checks before running this agent.",
       }),
     );

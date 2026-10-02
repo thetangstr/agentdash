@@ -474,6 +474,58 @@ describe("agent routes adapter validation", () => {
     );
   });
 
+  it("passes the saved agent to the adapter's environment test (Hermes managed profiles need its id)", async () => {
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    const seen: Array<Parameters<ServerAdapterModule["testEnvironment"]>[0]> = [];
+    registerServerAdapter({
+      type: "external_ctx_capture",
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async (ctx) => {
+        seen.push(ctx);
+        return { adapterType: "external_ctx_capture", status: "pass", checks: [], testedAt: new Date(0).toISOString() };
+      },
+    });
+    mockAgentService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Capture Agent",
+      urlKey: "capture-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "external_ctx_capture",
+      adapterConfig: { model: "demo" },
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({}),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.agent).toEqual({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      adapterConfig: { model: "demo" },
+    });
+  });
+
   it("uses saved-agent wording when saved-agent harness preflight fails", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     registerServerAdapter(failingPreflightAdapter);

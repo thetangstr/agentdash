@@ -6,6 +6,7 @@ import { humanChannelsApi } from "@/api/human-channels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { queryKeys } from "@/lib/queryKeys";
+import { useStewardshipFeature } from "@/hooks/useStewardshipCapability";
 
 /**
  * AgentDash-MK: administrator audit view of every human↔channel binding in the
@@ -18,11 +19,18 @@ import { queryKeys } from "@/lib/queryKeys";
  */
 export function ChannelBindingsTable({ companyId }: { companyId: string }) {
   const queryClient = useQueryClient();
+  // AgentDash (canary1, v2026.1002.1): chat channels sit behind the same
+  // workspace gate as stewardship (requireProfileCompany), and
+  // /me/capabilities already answers it. When it says off, do not ask the
+  // gated route just to read its 404 (one console error per visit to
+  // Members & access). "unknown" still asks, as before.
+  const feature = useStewardshipFeature(companyId);
+  const channelsOff = feature === "off";
 
   const bindingsQuery = useQuery({
     queryKey: queryKeys.access.channelBindings(companyId),
     queryFn: () => humanChannelsApi.listAll(companyId),
-    enabled: !!companyId,
+    enabled: !!companyId && feature !== "loading" && !channelsOff,
     retry: false,
   });
 
@@ -46,7 +54,16 @@ export function ChannelBindingsTable({ companyId }: { companyId: string }) {
     </div>
   );
 
-  if (bindingsQuery.isLoading) {
+  if (channelsOff) {
+    return (
+      <section className="space-y-4">
+        {header}
+        <AvailableOnRequest compact capability="chat channels" />
+      </section>
+    );
+  }
+
+  if (feature === "loading" || bindingsQuery.isLoading) {
     return (
       <section className="space-y-4">
         {header}
