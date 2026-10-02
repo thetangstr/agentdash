@@ -47,7 +47,7 @@ const AUTH_HEADER_RE = new RegExp(
 // Cookie headers: everything to the end of the quoted value / line.
 const COOKIE_HEADER_RE = /(\b(?:set-)?cookie\s*:\s*)((?:\\.|[^"'\n\\])+)/gi;
 // `NAME=value` (env assignment, query parameter, form field) for a credential name.
-const ASSIGNMENT_RE = /(^|[\s;&|?("'`])([A-Za-z_][A-Za-z0-9_.-]*)=("[^"\n]*"|'[^'\n]*'|[^\s"'`;&|)]+)/g;
+const ASSIGNMENT_RE = /(^|[\s;&|?("'`])([A-Za-z_][A-Za-z0-9_.-]*)=("[^"\n]*"|'[^'\n]*'|[^\s"'`;&|()]+)/g;
 // `scheme://user:pass@host`.
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"']+):([^\s/@"']+)@/gi;
 // curl `-u user:pass` / `--user user:pass`.
@@ -69,6 +69,9 @@ const ESCAPED_JSON_SECRET_RE = new RegExp(String.raw`(\\"${JSON_KEYS}\\"\s*:\s*)
 const BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._~+/=-]{8,})/g;
 // Well-known key shapes.
 const KEY_SHAPES: RegExp[] = [
+  // Stripe secret / restricted keys and webhook signing secrets.
+  /\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}/g,
+  /\bwhsec_[A-Za-z0-9]{10,}/g,
   /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}/g,
   /\bgh[pousr]_[A-Za-z0-9_]{20,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,

@@ -772,9 +772,25 @@ export function summarizeToolOutcome(rawResult: string | undefined, status: Read
   if (status === "running") return result ? summarizeToolResult(result, false, "compact") : "Running…";
   if (status === "no_result") return "No result";
   if (!result || !result.trim()) return status === "error" ? "Failed" : "Done";
+  // JSON.parse decodes \u escapes the redaction above could not see, so the
+  // phrase is redacted again.
   const json = summarizeJsonOutput(result);
-  if (json) return json;
-  return summarizeToolResult(result, status === "error", "compact");
+  if (json) return quietCredentialError(redactSecrets(json), status);
+  return quietCredentialError(summarizeToolResult(result, status === "error", "compact"), status);
+}
+
+/**
+ * An error line about a key, token or secret ("Invalid API key sk-…",
+ * "token abc expired") reads just "Error": the detail is in the expanded,
+ * redacted output, and the collapsed row is where a half-redacted key would
+ * be most visible.
+ */
+function quietCredentialError(summary: string, status: ReadableToolStatus): string {
+  const isError = status === "error" || /^(?:error|fatal|unauthori[sz]ed|forbidden)\b/i.test(summary.trim());
+  if (isError && /\b(?:api[-_ ]?key|key|keys|token|tokens|secret|secrets|password|credentials?)\b/i.test(summary)) {
+    return "Error";
+  }
+  return summary;
 }
 
 function plural(count: number, noun: string): string {

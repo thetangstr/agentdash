@@ -335,7 +335,31 @@ describe("redaction (scan 4 lane O1, PR #990 review probes)", () => {
     ["header split across escaped newline", `curl \\\n  -H "Authorization: Bearer ${SECRET}" \\\n  https://x.test`],
     ["authorization with escaped quote inside", `curl -H "Authorization: Bearer ab\\"${SECRET}" https://x.test`],
     ["--password option", `deploy --password ${SECRET} --env prod`],
+    // PR #990 re-review (probe 3).
+    ["python call api_key=", `python3 -c 'c=Client(api_key="${SECRET}")'`],
+    ["python call api_key unquoted", `python3 -c 'c=Client(api_key=${SECRET})'`],
+    ["form client_secret", `curl -d "client_id=a&client_secret=${SECRET}" https://x.test/oauth`],
+    ["git url with token", `git clone https://oauth2:${SECRET}@gitlab.com/a/b.git`],
   ];
+
+  it("redacts Stripe keys and webhook secrets, in labels too", () => {
+    const live = "sk_live_51HxYzAbCdEfGhIjKlMnOp";
+    for (const text of [live, "rk_test_51HxYzAbCdEfGhIjKl", "whsec_AbCdEfGhIjKlMnOp12", `STRIPE_SECRET_KEY=${live}`]) {
+      expect(redactSecrets(text)).not.toMatch(/[rs]k_(?:live|test)_51|whsec_AbC/);
+    }
+    const bare = summarizeToolCall("Bash", { command: `node pay.js ${live}` });
+    expect(bare.label).toBe("Ran node");
+    expect(bare.script).not.toContain(live);
+    const wrote = summarizeToolCall("Bash", { command: `cat > /tmp/${live}.txt <<'EOF'\nhi\nEOF` });
+    expect(wrote.label).not.toContain("sk_live_51");
+    expect(wrote.label).toMatch(/^Wrote /);
+    expect(redactSecrets(`stripe charges list --api-key ${live}`)).not.toContain(live);
+  });
+
+  it("stops an unquoted assignment value at a parenthesis", () => {
+    expect(redactSecrets(`c=Client(api_key=${SECRET})`)).toBe("c=Client(api_key=***REDACTED***)");
+    expect(redactSecrets(`c=Client(api_key="${SECRET}")`)).toBe('c=Client(api_key="***REDACTED***")');
+  });
 
   it.each(COMMANDS)("%s", (_label, command) => {
     expect(redactSecrets(command)).not.toContain(SECRET);
@@ -445,7 +469,31 @@ describe("heredoc writes and JSON outputs (scan 4 lane O1)", () => {
   it("uses the JSON phrase for the collapsed outcome, redacted", () => {
     const output = JSON.stringify({ identifier: "WHI-1", title: "x" }, null, 2);
     expect(summarizeToolOutcome(output, "completed")).toBe("Got issue WHI-1");
-    expect(summarizeToolOutcome('{"error":"bad token sk-abcdefghijklmnopqrstu"}', "error")).toBe("Error: bad token ***REDACTED***");
+    expect(summarizeToolOutcome('{"error":"Issue not found"}', "error")).toBe("Error: Issue not found");
+  });
+
+  // PR #990 re-review (probe 3).
+  it("collapses an error about a key, token or secret to just 'Error'", () => {
+    expect(summarizeToolOutcome('{"error":"bad token sk-abcdefghijklmnopqrstu"}', "error")).toBe("Error");
+    expect(summarizeToolOutcome('{"error":{"message":"Incorrect API key provided: sk-proj-Zq9SECRETvalue77"}}', "completed")).toBe("Error");
+    expect(summarizeToolOutcome("Error: 401 Unauthorized for api_key Zq9SECRETvalue77", "completed")).toBe("Error");
+    expect(summarizeToolOutcome("Error: ECONNREFUSED 127.0.0.1:6379", "error")).toBe("Error: ECONNREFUSED 127.0.0.1:6379");
+    // A non-error line that mentions tokens is left alone.
+    expect(summarizeToolOutcome("tokens: 1234 in / 567 out", "completed")).toBe("tokens: 1234 in / 567 out");
+  });
+
+  it("redacts the JSON phrase after JSON.parse decodes \\u escapes", () => {
+    const SECRET = "Zq9SECRETvalue77";
+    for (const output of [
+      `{"error":"invalid \\u0073k-ant-${SECRET}abcdef"}`,
+      `{"error":"bad \\u0042earer ${SECRET}"}`,
+      `{"message":"see \\u0073k_live_51HxYzAbCdEfGhIjKlMnOp"}`,
+    ]) {
+      const outcome = summarizeToolOutcome(output, "completed");
+      expect(outcome).not.toContain(SECRET);
+      expect(outcome).not.toContain("sk_live_51");
+      expect(summarizeToolOutcome(output, "error")).not.toContain(SECRET);
+    }
     expect(summarizeToolOutcome("plain line\nsecond", "completed")).toBe("plain line");
   });
 });
