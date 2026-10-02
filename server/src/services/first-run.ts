@@ -68,7 +68,16 @@ export interface FirstRunStatus {
   showHomeNudge: boolean;
   nextStep: FirstRunStep;
   model: { required: boolean; done: boolean };
-  repo: { done: boolean; repo: string | null; projectId: string | null };
+  repo: {
+    done: boolean;
+    repo: string | null;
+    projectId: string | null;
+    /**
+     * AgentDash: the company has shipped work (a done issue) with no repo
+     * connected, so it works without code and Home stops offering GitHub.
+     */
+    shippedWithoutRepo: boolean;
+  };
   firstIssue: {
     done: boolean;
     issueId: string | null;
@@ -138,6 +147,16 @@ export function firstRunService(db: Db, deps: FirstRunDeps = {}) {
     const assignee = issue?.assigneeAgentId
       ? await db.select({ name: agents.name }).from(agents).where(eq(agents.id, issue.assigneeAgentId)).then((rows) => rows[0] ?? null)
       : null;
+    const shippedWithoutRepo = connection
+      ? false
+      : Boolean(
+          await db
+            .select({ id: issues.id })
+            .from(issues)
+            .where(and(eq(issues.companyId, companyId), eq(issues.status, "done")))
+            .limit(1)
+            .then((rows) => rows[0]),
+        );
     const nextStep: FirstRunStep = !modelDone ? "model" : !connection ? "repo" : !issue ? "first_issue" : "done";
     const applies = company.productProfile !== "agentdash_mk";
     let showHomeNudge = false;
@@ -161,6 +180,7 @@ export function firstRunService(db: Db, deps: FirstRunDeps = {}) {
         done: Boolean(connection),
         repo: connection ? `${connection.repoOwner}/${connection.repoName}` : null,
         projectId: connection?.projectId ?? null,
+        shippedWithoutRepo,
       },
       firstIssue: {
         done: Boolean(issue),

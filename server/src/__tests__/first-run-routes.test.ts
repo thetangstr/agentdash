@@ -191,6 +191,26 @@ describeEmbeddedPostgres("first-run routes", () => {
     expect(res.body.firstIssue).toMatchObject({ done: true, title: "Add a health badge", assigneeName: "Engineer" });
   });
 
+  // AgentDash: GitHub is optional; a company that ships without a repo works without code.
+  it("reports work shipped without a repo, and not once a repo is connected", async () => {
+    const { company, owner } = await seed({ connect: false });
+    const get = () => request(app(owner)).get(`/api/companies/${company.id}/first-run`);
+    expect((await get()).body.repo).toMatchObject({ done: false, shippedWithoutRepo: false });
+
+    await db.insert(issues).values({ companyId: company.id, title: "Draft the launch post", status: "in_review" });
+    expect((await get()).body.repo.shippedWithoutRepo).toBe(false);
+
+    await db.insert(issues).values({ companyId: company.id, title: "Market scan", status: "done" });
+    const res = await get();
+    expect(res.body.nextStep).toBe("repo");
+    expect(res.body.repo).toMatchObject({ done: false, shippedWithoutRepo: true });
+
+    const connected = await seed();
+    await db.insert(issues).values({ companyId: connected.company.id, title: "Shipped", status: "done" });
+    const connectedRes = await request(app(connected.owner)).get(`/api/companies/${connected.company.id}/first-run`);
+    expect(connectedRes.body.repo).toMatchObject({ done: true, shippedWithoutRepo: false });
+  });
+
   it("shows the Home nudge on a hosted box for a new company", async () => {
     const { company, owner } = await seed({ connect: false });
     const res = await request(app(owner)).get(`/api/companies/${company.id}/first-run`);

@@ -63,6 +63,12 @@ export interface DashboardSummary {
   };
   costs: {
     monthSpendCents: number;
+    /**
+     * AgentDash: input + cached input + output tokens this month. On a BYOK
+     * box cost is not metered (cost is billed by the model provider), so Home
+     * shows tokens when monthSpendCents is zero and this is not.
+     */
+    monthTokens: number;
     monthBudgetCents: number;
     monthUtilizationPercent: number;
   };

@@ -196,7 +196,14 @@ export function dashboardService(db: Db) {
     // hidden projects' budget policies, incidents and overrides out of counts.
     summary: async (
       companyId: string,
-      opts: { agentVisibleWhere?: SQL; issueVisibleWhere?: SQL; budgetVisibleWhere?: SQL; approvalVisibleWhere?: SQL } = {},
+      opts: {
+        agentVisibleWhere?: SQL;
+        issueVisibleWhere?: SQL;
+        budgetVisibleWhere?: SQL;
+        approvalVisibleWhere?: SQL;
+        /** AgentDash: cost events this actor may see (agent + project visibility). */
+        costVisibleWhere?: SQL;
+      } = {},
     ) => {
       const company = await db
         .select()
@@ -256,15 +263,19 @@ export function dashboardService(db: Db) {
       const monthStart = getUtcMonthStart(now);
       const runActivityDays = getRecentUtcDateKeys(now, DASHBOARD_RUN_ACTIVITY_DAYS);
       const runActivityStart = new Date(`${runActivityDays[0]}T00:00:00.000Z`);
-      const [{ monthSpend }] = await db
+      // AgentDash: BYOK boxes record tokens with zero cost, so Home needs the
+      // month's tokens to say something true when no dollars are metered.
+      const [{ monthSpend, monthTokens }] = await db
         .select({
           monthSpend: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::double precision`,
+          monthTokens: sql<number>`coalesce(sum(${costEvents.inputTokens} + ${costEvents.cachedInputTokens} + ${costEvents.outputTokens}), 0)::double precision`,
         })
         .from(costEvents)
         .where(
           and(
             eq(costEvents.companyId, companyId),
             gte(costEvents.occurredAt, monthStart),
+            opts.costVisibleWhere,
           ),
         );
 
@@ -543,6 +554,7 @@ export function dashboardService(db: Db) {
         tasks: taskCounts,
         costs: {
           monthSpendCents,
+          monthTokens: Number(monthTokens),
           monthBudgetCents: company.budgetMonthlyCents,
           monthUtilizationPercent: Number(utilization.toFixed(2)),
         },

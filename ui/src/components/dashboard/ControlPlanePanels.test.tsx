@@ -26,7 +26,9 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-const { ControlPlanePanels, fleetSize, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT } = await import("./ControlPlanePanels");
+const { ControlPlanePanels, fleetSize, monthSpendTile, BYOK_SPEND_NOTE, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT } = await import(
+  "./ControlPlanePanels"
+);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,7 +38,7 @@ function makeSummary(overrides: Record<string, unknown> = {}) {
     companyId: "company-1",
     agents: { active: 0, running: 0, paused: 0, error: 0 },
     tasks: { open: 2, inProgress: 1, blocked: 0, done: 4 },
-    costs: { monthSpendCents: 1250, monthBudgetCents: 10000, monthUtilizationPercent: 13 },
+    costs: { monthSpendCents: 1250, monthTokens: 40_000, monthBudgetCents: 10000, monthUtilizationPercent: 13 },
     pendingApprovals: 0,
     budgets: { activeIncidents: 0, pendingApprovals: 0, pausedAgents: 0, pausedProjects: 0 },
     ...overrides,
@@ -141,6 +143,33 @@ describe("ControlPlanePanels", () => {
     expect(q("dashboard-stat-issues")?.textContent).toContain("5 in progress · 1 blocked");
     expect(q("dashboard-stat-spend-value")?.textContent).toBe("$12.50");
     expect(q("dashboard-stat-spend")?.textContent).toContain("13% of $100.00 budget");
+  });
+
+  // AgentDash: BYOK boxes meter tokens, not dollars.
+  it("shows tokens this month and who bills them when no cost was metered", async () => {
+    mockDashboardApi.summary.mockResolvedValue(
+      makeSummary({ costs: { monthSpendCents: 0, monthTokens: 127_000, monthBudgetCents: 0, monthUtilizationPercent: 0 } }),
+    );
+    await render();
+    const tile = q("dashboard-stat-spend");
+    expect(tile?.textContent).toContain("Tokens this month");
+    expect(tile?.textContent).not.toContain("Spend this month");
+    expect(q("dashboard-stat-spend-value")?.textContent).toBe("127.0k");
+    expect(tile?.textContent).toContain(BYOK_SPEND_NOTE);
+    expect(tile?.textContent).not.toContain("$0.00");
+  });
+
+  it("keeps dollars whenever cost is known, and $0.00 when nothing ran", () => {
+    expect(monthSpendTile({ monthSpendCents: 1250, monthTokens: 9000, monthBudgetCents: 0, monthUtilizationPercent: 0 })).toEqual({
+      label: "Spend this month",
+      value: "$12.50",
+      unmetered: false,
+    });
+    expect(monthSpendTile({ monthSpendCents: 0, monthTokens: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 })).toEqual({
+      label: "Spend this month",
+      value: "$0.00",
+      unmetered: false,
+    });
   });
 
   it("shows the empty states for a brand-new company", async () => {

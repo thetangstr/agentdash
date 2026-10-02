@@ -548,4 +548,60 @@ describeEmbeddedPostgres("dashboard service", () => {
       spendPerAcceptedIssueCents: 2300,
     });
   });
+  // AgentDash: a BYOK box records tokens with zero cost; Home needs the tokens.
+  it("reports this month's tokens alongside metered spend", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const now = new Date();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Byok",
+      issuePrefix: `B${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Researcher",
+      role: "general",
+      status: "idle",
+      adapterType: "hermes_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(costEvents).values([
+      {
+        companyId,
+        agentId,
+        provider: "openrouter",
+        biller: "openrouter",
+        billingType: "unknown",
+        model: "glm-5.3",
+        inputTokens: 100_000,
+        cachedInputTokens: 20_000,
+        outputTokens: 7_000,
+        costCents: 0,
+        occurredAt: now,
+      },
+      {
+        companyId,
+        agentId,
+        provider: "openrouter",
+        biller: "openrouter",
+        billingType: "unknown",
+        model: "glm-5.3",
+        inputTokens: 999,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 0,
+        occurredAt: new Date(getUtcMonthStart(now).getTime() - 60_000),
+      },
+    ]);
+
+    const summary = await dashboardService(db).summary(companyId);
+
+    expect(summary.costs.monthSpendCents).toBe(0);
+    expect(summary.costs.monthTokens).toBe(127_000);
+  });
 });

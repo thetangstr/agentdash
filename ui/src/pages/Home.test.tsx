@@ -17,6 +17,7 @@ const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
 const mockAccessApi = vi.hoisted(() => ({ listUserDirectory: vi.fn() }));
 const mockFirstRunApi = vi.hoisted(() => ({ status: vi.fn() }));
 const mockAssistantGrantsApi = vi.hoisted(() => ({ listMine: vi.fn() }));
+const mockInboxDismissalsApi = vi.hoisted(() => ({ list: vi.fn(async () => []), dismiss: vi.fn() }));
 const mockCompany = vi.hoisted(() => ({
   current: { id: "company-1", name: "Acme Robotics", productProfile: "default" } as Record<string, unknown>,
 }));
@@ -35,6 +36,7 @@ vi.mock("../api/activity", () => ({ activityApi: mockActivityApi }));
 vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
 vi.mock("../api/firstRun", () => ({ firstRunApi: mockFirstRunApi }));
 vi.mock("../api/assistant-grants", () => ({ assistantGrantsApi: mockAssistantGrantsApi }));
+vi.mock("../api/inboxDismissals", () => ({ inboxDismissalsApi: mockInboxDismissalsApi }));
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
