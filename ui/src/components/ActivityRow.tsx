@@ -25,9 +25,15 @@ interface ActivityRowProps {
   entityNameMap: Map<string, string>;
   entityTitleMap?: Map<string, string>;
   className?: string;
+  /**
+   * AgentDash: mobile redesign. "inline" (default) is the one-line desktop row.
+   * "stacked" is the phone row: actor + action on line one, target + time on
+   * line two, nothing truncated.
+   */
+  layout?: "inline" | "stacked";
 }
 
-export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, entityTitleMap, className }: ActivityRowProps) {
+export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, entityTitleMap, className, layout = "inline" }: ActivityRowProps) {
   const verb = formatActivityVerb(event.action, event.details, { agentMap, userProfileMap });
 
   const isHeartbeatEvent = event.entityType === "heartbeat_run";
@@ -50,7 +56,28 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   const actorName = actor?.name ?? (event.actorType === "system" ? "System" : userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));
   const actorAvatarUrl = userProfile?.image ?? null;
 
-  const inner = (
+  const stacked = layout === "stacked";
+  const inner = stacked ? (
+    <div className="space-y-1" data-testid="activity-row-stacked">
+      <p className="min-w-0 break-words">
+        <Identity
+          name={actorName}
+          avatarUrl={actorAvatarUrl}
+          size="xs"
+          className="align-middle"
+        />
+        <span className="text-muted-foreground ml-1">{verb}</span>
+      </p>
+      <div className="flex items-baseline gap-3 text-xs">
+        <span className="min-w-0 flex-1 break-words">
+          {name && <span className="font-medium text-foreground">{name}</span>}
+          {entityTitle && <span className="text-muted-foreground ml-1">— {entityTitle}</span>}
+        </span>
+        <span className="shrink-0 text-muted-foreground">{timeAgo(event.createdAt)}</span>
+      </div>
+      <IssueReferenceActivitySummary event={event} />
+    </div>
+  ) : (
     <div className="space-y-2">
       <div className="flex gap-3">
         <p className="flex-1 min-w-0 truncate">
@@ -71,7 +98,7 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   );
 
   const classes = cn(
-    "px-4 py-2 text-sm",
+    stacked ? "min-h-11 px-3 py-2.5 text-sm" : "px-4 py-2 text-sm",
     link && "cursor-pointer hover:bg-accent/50 transition-colors",
     className,
   );
