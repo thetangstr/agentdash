@@ -54,6 +54,31 @@ describe("ChatPanel empty state", () => {
     expect(container.querySelector('[data-testid="chat-empty-state"]')).toBeNull();
     expect(container.querySelector('[data-testid="message-list"]')?.textContent).toBe("1 messages");
   });
+
+  // AgentDash (scan 3, lane G): server rows carry `role`, not `authorKind`.
+  it("shows starter chips only until the person has sent a message", () => {
+    const chips = ["Plan this quarter with me"];
+    mockUseMessages.mockReturnValue([{ id: "m1", role: "agent", content: "Hi" }]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" suggestions={chips} />));
+    expect(container.querySelector('[data-testid="chat-suggestions"]')).not.toBeNull();
+
+    mockUseMessages.mockReturnValue([
+      { id: "m1", role: "agent", content: "Hi" },
+      { id: "m2", role: "user", content: "Win more bids" },
+    ]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" suggestions={chips} />));
+    expect(container.querySelector('[data-testid="chat-suggestions"]')).toBeNull();
+  });
+
+  it("hides the starter chips as soon as one is sent", async () => {
+    const { conversationsApi } = await import("../api/conversations");
+    (conversationsApi.post as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "m2" });
+    mockUseMessages.mockReturnValue([{ id: "m1", role: "agent", content: "Hi" }]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" suggestions={["Who should I hire first?"]} />));
+    const chip = container.querySelector('[data-testid="chat-suggestions"] button') as HTMLButtonElement;
+    act(() => chip.click());
+    expect(container.querySelector('[data-testid="chat-suggestions"]')).toBeNull();
+  });
 });
 
 // AgentDash (P0, v2026.1002.0): the chat never sits silently on the person's

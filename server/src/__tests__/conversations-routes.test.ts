@@ -56,6 +56,16 @@ const mockConversationDispatch = vi.hoisted(() => vi.fn(() => ({
   onMessage: mockDispatchOnMessage,
 })));
 
+// AgentDash (scan 3, lane G): the CoS replier gets the issue action.
+const mockCosIssueAction = vi.hoisted(() => ({
+  roster: vi.fn(),
+  proposeFromTrailer: vi.fn(),
+  confirmProposal: vi.fn(),
+  dismissProposal: vi.fn(),
+}));
+const mockVisibleAgentIdsFor = vi.hoisted(() => vi.fn());
+const mockCosReplier = vi.hoisted(() => vi.fn((_deps: unknown) => ({ reply: vi.fn() })));
+
 function registerModuleMocks() {
   vi.doMock("../services/conversations.js", () => ({
     conversationService: () => mockConversationService,
@@ -71,7 +81,15 @@ function registerModuleMocks() {
   }));
 
   vi.doMock("../services/cos-replier.js", () => ({
-    cosReplier: vi.fn(() => ({ reply: vi.fn() })),
+    cosReplier: mockCosReplier,
+  }));
+
+  vi.doMock("../routes/visibility.js", () => ({
+    visibleAgentIdsFor: mockVisibleAgentIdsFor,
+  }));
+
+  vi.doMock("../services/cos-issue-action.js", () => ({
+    cosIssueActionForDb: () => mockCosIssueAction,
   }));
 
   vi.doMock("../services/agent-summoner.js", () => ({
@@ -85,7 +103,7 @@ function registerModuleMocks() {
     companyService: () => ({ getById: vi.fn().mockResolvedValue({ id: companyId, name: "Acme Labs" }) }),
     conversationDispatch: mockConversationDispatch,
     agentService: () => mockAgentService,
-    cosReplier: vi.fn(() => ({ reply: vi.fn() })),
+    cosReplier: mockCosReplier,
     agentSummoner: vi.fn(() => ({ summon: vi.fn() })),
     // Phase B (#PR for cos-phases-bcd): cos-replier now reads/writes a
     // cos_onboarding_state row to drive phase transitions. The route
@@ -160,6 +178,8 @@ describe.sequential("conversation routes", () => {
     vi.doUnmock("../services/agents.js");
     vi.doUnmock("../services/conversation-dispatch.js");
     vi.doUnmock("../services/cos-replier.js");
+    vi.doUnmock("../services/cos-issue-action.js");
+    vi.doUnmock("../routes/visibility.js");
     vi.doUnmock("../services/agent-summoner.js");
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../routes/conversations.js");
@@ -182,6 +202,132 @@ describe.sequential("conversation routes", () => {
     mockAgentService.list.mockResolvedValue([]);
     mockDispatchOnMessage.mockResolvedValue(undefined);
     mockConversationDispatch.mockReturnValue({ onMessage: mockDispatchOnMessage });
+    mockCosReplier.mockImplementation(() => ({ reply: vi.fn() }));
+    mockVisibleAgentIdsFor.mockResolvedValue(new Set(["agent-visible"]));
+  });
+
+  // AgentDash (scan 3, lane G): the CoS hands out work with the sender's authority.
+  describe("CoS task creation wiring", () => {
+    it("gives the CoS replier the issue action", async () => {
+      await createApp(boardActor);
+      expect(mockCosReplier).toHaveBeenCalledWith(expect.objectContaining({ issueAction: mockCosIssueAction }));
+    });
+
+    it("passes how the sender is signed in to the dispatcher", async () => {
+      const app = await createApp({ ...boardActor, source: "session", isInstanceAdmin: false });
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages`).send({ body: "Get Ellie on the Acme proposal" }),
+      );
+      await new Promise((r) => setImmediate(r));
+      expect(mockDispatchOnMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authorUserId: userId,
+          authorSource: "session",
+          authorIsInstanceAdmin: false,
+          companyId,
+        }),
+      );
+    });
+
+    it("resolves the sender's agent visibility for their own request", async () => {
+      const app = await createApp({ ...boardActor, source: "session" });
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages`).send({ body: "Have Ellie do X" }),
+      );
+      await new Promise((r) => setImmediate(r));
+      const input = mockDispatchOnMessage.mock.calls[0]![0];
+      expect(input.messageId).toBe(baseMessage.id);
+      await expect(input.authorVisibleAgentIds()).resolves.toEqual(new Set(["agent-visible"]));
+      expect(mockVisibleAgentIdsFor).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ actor: expect.objectContaining({ userId }) }), companyId);
+    });
+
+    it("marks an instance admin sender", async () => {
+      const app = await createApp({ ...boardActor, source: "session", isInstanceAdmin: true });
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages`).send({ body: "Do the thing" }),
+      );
+      await new Promise((r) => setImmediate(r));
+      expect(mockDispatchOnMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ authorIsInstanceAdmin: true }),
+      );
+    });
+  });
+
+  // AgentDash (scan 3, lane G): only the requester confirms a CoS task card.
+  describe("POST /:id/task-proposals/:messageId/confirm and /dismiss", () => {
+    const cardId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+    it("confirms with the caller's own identity and visibility", async () => {
+      mockCosIssueAction.confirmProposal.mockResolvedValue({
+        ok: true,
+        payload: { status: "created" },
+        created: { issueId: "i1", identifier: "ACM-1", title: "T", assigneeName: "Ellie", status: "todo" },
+      });
+      const app = await createApp({ ...boardActor, source: "session", isInstanceAdmin: false });
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/confirm`).send({}),
+      );
+      expect(res.status).toBe(201);
+      expect(res.body.issue).toMatchObject({ issueId: "i1", identifier: "ACM-1" });
+      expect(mockCosIssueAction.confirmProposal).toHaveBeenCalledWith({
+        companyId,
+        conversationId,
+        cardMessageId: cardId,
+        actor: { userId, source: "session", isInstanceAdmin: false, visibleAgentIds: new Set(["agent-visible"]) },
+      });
+    });
+
+    // B -> A: founder A tries to confirm a card that answered member B.
+    it("answers 403 with the polite note when the caller is not the requester", async () => {
+      mockCosIssueAction.confirmProposal.mockResolvedValue({
+        ok: false,
+        code: "forbidden",
+        note: "Only the person who asked for this task can confirm it.",
+      });
+      const app = await createApp(boardActor);
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/confirm`).send({}),
+      );
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ error: "Only the person who asked for this task can confirm it.", code: "forbidden" });
+    });
+
+    it("answers 409 for a card that was already handled", async () => {
+      mockCosIssueAction.confirmProposal.mockResolvedValue({ ok: false, code: "conflict", note: "already" });
+      const app = await createApp(boardActor);
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/confirm`).send({}),
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it("dismisses for the requester", async () => {
+      mockCosIssueAction.dismissProposal.mockResolvedValue({ ok: true, payload: { status: "dismissed" } });
+      const app = await createApp(boardActor);
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/dismiss`).send({}),
+      );
+      expect(res.status).toBe(200);
+      expect(mockCosIssueAction.dismissProposal).toHaveBeenCalledWith({
+        conversationId,
+        cardMessageId: cardId,
+        actor: { userId },
+      });
+    });
+
+    it("rejects anonymous callers and other companies", async () => {
+      const anon = await createApp(noActor);
+      const res = await requestApp(anon, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/confirm`).send({}),
+      );
+      expect(res.status).toBe(401);
+      const outsider = await createApp({ ...boardActor, companyId: "ffffffff-ffff-4fff-8fff-ffffffffffff", companyIds: ["ffffffff-ffff-4fff-8fff-ffffffffffff"] });
+      const res2 = await requestApp(outsider, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/task-proposals/${cardId}/confirm`).send({}),
+      );
+      expect(res2.status).toBe(403);
+      expect(mockCosIssueAction.confirmProposal).not.toHaveBeenCalled();
+    });
   });
 
   describe("GET /companies/:companyId/inbox", () => {
@@ -496,6 +642,38 @@ describe.sequential("conversation routes", () => {
       );
       expect(mockConversationService.getMessage).toHaveBeenCalledWith(conversationId, baseMessage.id);
       expect(mockConversationService.postMessage).not.toHaveBeenCalled();
+    });
+
+    // AgentDash (scan 3, lane G): a retried message is answered with its
+    // author's identity, so a task the CoS suggests is checked against them.
+    it("re-dispatches with the author's sign-in and agent visibility (error-card retry)", async () => {
+      mockConversationService.getMessage.mockResolvedValue(baseMessage);
+      conversationEndsOnFailedReply(mockConversationService);
+      const app = await createApp({ ...boardActor, source: "session", isInstanceAdmin: false });
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      await vi.waitFor(() => expect(mockDispatchOnMessage).toHaveBeenCalled());
+      const input = mockDispatchOnMessage.mock.calls[0]![0];
+      expect(input).toMatchObject({ messageId: baseMessage.id, authorUserId: userId, authorSource: "session", authorIsInstanceAdmin: false });
+      await expect(input.authorVisibleAgentIds()).resolves.toEqual(new Set(["agent-visible"]));
+    });
+
+    it("re-dispatches a stalled message with the author's identity too", async () => {
+      const old = { ...baseMessage, createdAt: new Date(Date.now() - 200_000) };
+      mockConversationService.getMessage.mockResolvedValue(old);
+      mockConversationService.latestByRole.mockImplementation(async (_id: string, role: string) => (role === "agent" ? null : old));
+      const app = await createApp({ ...boardActor, source: "session", isInstanceAdmin: true });
+      const res = await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages/${baseMessage.id}/retry`).send({}),
+      );
+      expect(res.status).toBe(202);
+      await vi.waitFor(() => expect(mockDispatchOnMessage).toHaveBeenCalled());
+      expect(mockDispatchOnMessage.mock.calls[0]![0]).toMatchObject({
+        authorUserId: userId,
+        authorSource: "session",
+        authorIsInstanceAdmin: true,
+      });
     });
 
     it("refuses to retry an agent message or one from another conversation", async () => {

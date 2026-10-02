@@ -15,7 +15,7 @@ export function ProposalCard({
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   return (
-    <div className="proposal-card border border-border-soft rounded-lg p-6 bg-surface-raised shadow-sm">
+    <div className="proposal-card w-full min-w-0 break-words border border-border-soft rounded-lg p-4 sm:p-6 bg-surface-raised shadow-sm">
       <div className="text-lg font-semibold text-text-primary">
         {payload.name} — {payload.role}
       </div>

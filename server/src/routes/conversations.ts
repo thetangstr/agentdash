@@ -19,12 +19,20 @@ import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, STALLED_REPLY_RETRY_AFTER_MS, isNoBalanceFailure, postDispatchFailure } from "../services/cos-dispatch-failure.js";
 import { buildPhase0Greeting } from "../services/onboarding-orchestrator.js";
+import { cosIssueActionForDb, type CosIssueAction } from "../services/cos-issue-action.js";
+import { visibleAgentIdsFor } from "./visibility.js";
 
 const COMPANY_INBOX_TITLE = "Company Inbox";
 
-export function conversationRoutes(db: Db) {
+export function conversationRoutes(
+  db: Db,
+  // AgentDash (scan 3, lane G): injectable for route tests.
+  opts: { issueAction?: CosIssueAction } = {},
+) {
   const router = Router();
   const svc = conversationService(db);
+  // AgentDash (scan 3, lane G): CoS task proposals and their confirmation.
+  const issueAction = opts.issueAction ?? cosIssueActionForDb(db, { postMessage: (input) => svc.postMessage(input) });
   const agents = agentService(db);
 
   const cosResolver = {
@@ -63,6 +71,8 @@ export function conversationRoutes(db: Db) {
       db, // AgentDash (Cloud SKU, G3): enables usage metering of CoS replies
       cosState: cosOnboardingStateService(db),
       deepInterviewSpecs: deepInterviewSpecsLoader(db),
+      // AgentDash (scan 3, lane G): the CoS may create and assign one task per reply.
+      issueAction: issueAction,
     } as any),
     cosResolver,
   });
@@ -150,13 +160,7 @@ export function conversationRoutes(db: Db) {
   // may have lapsed (a Coding Plan that ended). The endpoints are probed again,
   // at most once per 10 minutes per instance, and if the pin moved the message
   // is dispatched once more before the person sees an error.
-  async function runDispatch(input: {
-    messageId: string;
-    conversationId: string;
-    companyId: string;
-    authorUserId: string;
-    body: string;
-  }) {
+  async function runDispatch(input: Parameters<typeof dispatcher.onMessage>[0]) {
     let failure: unknown;
     try {
       await dispatcher.onMessage(input);
@@ -198,6 +202,18 @@ export function conversationRoutes(db: Db) {
         "could not post the dispatch failure into the conversation",
       );
     }
+  }
+
+  // AgentDash (scan 3, lane G): the sender's identity, carried to the CoS so a
+  // task it suggests is checked against exactly their authority and the agents
+  // they may see (resolved for their own request, once).
+  function senderAuthority(req: Request, companyId: string) {
+    let visible: Promise<ReadonlySet<string> | null> | null = null;
+    return {
+      authorSource: req.actor.source ?? null,
+      authorIsInstanceAdmin: req.actor.isInstanceAdmin === true,
+      authorVisibleAgentIds: () => (visible ??= visibleAgentIdsFor(db, req, companyId)),
+    };
   }
 
   function dispatchInBackground(
@@ -262,6 +278,8 @@ export function conversationRoutes(db: Db) {
         companyId: conversation.companyId,
         authorUserId: req.actor.userId,
         body: message.content,
+        // The route has checked this is the message's own author.
+        ...senderAuthority(req, conversation.companyId),
       },
       () => retriesInFlight.delete(conversation.id),
     );
@@ -292,6 +310,7 @@ export function conversationRoutes(db: Db) {
       companyId,
       authorUserId: req.actor.userId,
       body,
+      ...senderAuthority(req, companyId),
     });
     res.status(201).json(msg);
   });
@@ -329,6 +348,53 @@ export function conversationRoutes(db: Db) {
       throw badRequest("lastReadMessageId is not a message in this conversation");
     }
     res.status(204).end();
+  });
+
+  // AgentDash (scan 3, lane G): the person whose message the CoS answered
+  // confirms (or declines) its "Create this task?" card. Every check runs
+  // again with this request's own agent visibility and authority.
+  const proposalStatus = { not_found: 404, forbidden: 403, conflict: 409, unprocessable: 422, failed: 503 } as const;
+
+  // POST /api/conversations/:id/task-proposals/:messageId/confirm
+  router.post("/:id/task-proposals/:messageId/confirm", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const conversation = await loadAuthorizedConversation(req);
+    const result = await issueAction.confirmProposal({
+      companyId: conversation.companyId,
+      conversationId: conversation.id,
+      cardMessageId: req.params.messageId as string,
+      actor: {
+        userId: req.actor.userId,
+        source: req.actor.source ?? null,
+        isInstanceAdmin: req.actor.isInstanceAdmin === true,
+        visibleAgentIds: await visibleAgentIdsFor(db, req, conversation.companyId),
+      },
+    });
+    if (!result.ok) {
+      res.status(proposalStatus[result.code]).json({ error: result.note, code: result.code });
+      return;
+    }
+    res.status(201).json({ proposal: result.payload, issue: result.created });
+  });
+
+  // POST /api/conversations/:id/task-proposals/:messageId/dismiss
+  router.post("/:id/task-proposals/:messageId/dismiss", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const conversation = await loadAuthorizedConversation(req);
+    const result = await issueAction.dismissProposal({
+      conversationId: conversation.id,
+      cardMessageId: req.params.messageId as string,
+      actor: { userId: req.actor.userId },
+    });
+    if (!result.ok) {
+      res.status(proposalStatus[result.code]).json({ error: result.note, code: result.code });
+      return;
+    }
+    res.json({ proposal: result.payload });
   });
 
   // GET /api/conversations/:id/participants

@@ -8,7 +8,7 @@ export function HumanTasteGateCard({
 }) {
   if (!payload) return null;
   return (
-    <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-sm dark:border-yellow-700 dark:bg-yellow-950">
+    <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 sm:p-4 text-sm break-words dark:border-yellow-700 dark:bg-yellow-950">
       <p className="font-semibold">Human review requested</p>
       <p className="mt-1">{payload.summary}</p>
       <p className="mt-1 text-muted-foreground">{payload.rationale}</p>

@@ -21,6 +21,32 @@ export function MessageList({
           minute: "2-digit",
         });
 
+        // AgentDash (scan 3, lane G): a card (plan, invite, status, review)
+        // renders full width with no chat-bubble wrapper. Inside the 80%
+        // bubble next to the avatar a phone left the plan card one word wide.
+        // From sm up it lines up with the agent bubbles (avatar + gap = 44px).
+        if (m.cardKind && m.cardKind !== "interview_question_v1") {
+          return (
+            <div
+              key={m.id}
+              className="flex w-full min-w-0 flex-col gap-1 sm:pl-11"
+              data-testid="chat-card-message"
+              data-card-kind={m.cardKind}
+            >
+              <div className="w-full min-w-0">
+                <CardRenderer
+                  cardKind={m.cardKind}
+                  payload={m.cardPayload}
+                  context={cardContext}
+                  messageId={m.id}
+                  conversationId={m.conversationId}
+                />
+              </div>
+              <span className="text-[11px] text-text-tertiary px-1">{timeStr}</span>
+            </div>
+          );
+        }
+
         return (
           <div
             key={m.id}
@@ -35,22 +61,13 @@ export function MessageList({
 
             {/* Bubble + timestamp column */}
             <div className={`flex min-w-0 flex-col gap-1 max-w-[80%] max-sm:max-w-full ${isAgent ? "items-start" : "items-end"}`}>
-              {m.cardKind ? (
-                <>
-                  {m.cardKind === "interview_question_v1" ? (
-                    // Interview questions render as a normal agent text bubble —
-                    // no "Step N" chip. The chip framed it as a survey, which
-                    // didn't match the conversational tone the CoS is meant to set.
-                    <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
-                      {(m.cardPayload as any)?.question ?? text}
-                    </div>
-                  ) : (
-                    // All other card kinds — render through CardRenderer as before
-                    <div className="bg-surface-raised border border-border-soft rounded-2xl rounded-tl-sm px-4 py-3 w-full max-sm:px-3.5">
-                      <CardRenderer cardKind={m.cardKind} payload={m.cardPayload} context={cardContext} />
-                    </div>
-                  )}
-                </>
+              {m.cardKind === "interview_question_v1" ? (
+                // Interview questions render as a normal agent text bubble —
+                // no "Step N" chip. The chip framed it as a survey, which
+                // didn't match the conversational tone the CoS is meant to set.
+                <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
+                  {(m.cardPayload as any)?.question ?? text}
+                </div>
               ) : isAgent ? (
                 <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap max-sm:[overflow-wrap:anywhere] max-sm:px-3.5 max-sm:py-2.5">
                   {text}

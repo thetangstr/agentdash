@@ -66,7 +66,7 @@ export function InvitePrompt({
   const errors = result?.errors ?? [];
 
   return (
-    <div className="invite-prompt border border-border-soft rounded-lg p-6 bg-surface-raised shadow-sm">
+    <div className="invite-prompt w-full min-w-0 break-words border border-border-soft rounded-lg p-4 sm:p-6 bg-surface-raised shadow-sm">
       <div className="mb-3 text-text-primary font-medium">Want to bring anyone else in?</div>
       <input
         className="border border-border-soft px-3 py-2 w-full mb-3 rounded-md text-sm bg-surface-raised text-text-primary placeholder:text-text-tertiary focus-visible:outline-none focus-visible:border-accent-500 focus-visible:ring-2 focus-visible:ring-accent-200"

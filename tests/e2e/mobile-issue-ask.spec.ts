@@ -256,6 +256,22 @@ test.describe("Mobile issue detail and Ask (390×844)", () => {
 
   test("Ask: one row of starter chips, header link, composer above the nav", async ({ page, request }) => {
     const company = await ensureCompany(request);
+    // The team review link shows once someone besides the CoS is hired (scan 3, lane G).
+    const hire = await request.post(`${BASE_URL}/api/companies/${company.id}/agent-hires`, {
+      data: {
+        name: `Mobile Ask Worker ${Date.now()}`,
+        role: "engineer",
+        title: "Engineer",
+        adapterType: "process",
+        adapterConfig: { command: process.execPath, args: ["-e", "process.stdout.write('done\\n')"] },
+      },
+    });
+    expect(hire.ok(), await hire.text()).toBe(true);
+    const hired = (await hire.json()) as { approval?: { id: string } };
+    if (hired.approval) {
+      const approved = await request.post(`${BASE_URL}/api/approvals/${hired.approval.id}/approve`, { data: {} });
+      expect(approved.ok(), await approved.text()).toBe(true);
+    }
 
     await page.goto(`${BASE_URL}/${company.issuePrefix}/cos`);
     const conversation = page.getByTestId("cos-conversation");
