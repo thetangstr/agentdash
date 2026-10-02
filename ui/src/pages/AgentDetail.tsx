@@ -1623,21 +1623,21 @@ export function AgentVitalsStrip({
         {liveIssue ? (
           <Link
             to={`/issues/${liveIssue.identifier ?? liveIssue.id}`}
-            className="font-medium hover:underline max-sm:py-3"
+            className="font-medium hover:underline max-sm:py-3.5"
           >
             {liveIssue.title}
           </Link>
         ) : liveRun ? (
           <Link
             to={`/agents/${agentRouteRef(agent)}/runs/${liveRun.id}`}
-            className="font-medium hover:underline max-sm:py-3"
+            className="font-medium hover:underline max-sm:py-3.5"
           >
             Running now
           </Link>
         ) : inProgressIssue ? (
           <Link
             to={`/issues/${inProgressIssue.identifier ?? inProgressIssue.id}`}
-            className="font-medium hover:underline max-sm:py-3"
+            className="font-medium hover:underline max-sm:py-3.5"
           >
             {inProgressIssue.title}
           </Link>
@@ -1649,7 +1649,7 @@ export function AgentVitalsStrip({
         {shipped ? (
           <span className="space-x-2">
             {shipped.issue.identifier ? (
-              <Link to={`/issues/${shipped.issue.identifier}`} className="font-medium hover:underline max-sm:py-3">
+              <Link to={`/issues/${shipped.issue.identifier}`} className="font-medium hover:underline max-sm:py-3.5">
                 {shipped.title}
               </Link>
             ) : (

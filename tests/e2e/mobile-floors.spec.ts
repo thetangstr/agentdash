@@ -110,6 +110,23 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
   ]) {
     await post(request, `/api/issues/${issue.id}/comments`, { body });
   }
+  // Shipped means accepted: a second deliverable whose issue is done, so
+  // /shipped has a row while the first one still waits in Decisions.
+  const accepted = await post<{ id: string }>(request, `/api/companies/${company.id}/issues`, {
+    title: "Rail pass guide for the Tanaka family",
+    status: "in_review",
+    assigneeAgentId: agentIds[1],
+  });
+  await post(request, `/api/issues/${accepted.id}/work-products`, {
+    type: "document",
+    provider: "paperclip",
+    title: "Tanaka Family — 10-Day Japan Rail Pass Guide",
+    status: "ready_for_review",
+    isPrimary: true,
+  });
+  const acceptRes = await request.patch(`/api/issues/${accepted.id}`, { data: { status: "done" } });
+  expect(acceptRes.ok(), await acceptRes.text()).toBe(true);
+
   for (const [title, status] of [
     ["Competitor scan: warehouse picking grippers", "todo"],
     ["Weekly pipeline review for every open opportunity", "in_progress"],
