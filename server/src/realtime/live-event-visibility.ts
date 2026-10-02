@@ -155,6 +155,17 @@ export function liveEventRefs(event: LiveEvent): LiveEventRefs {
     if (details) {
       add(refs.issueIds, details.issueId, false);
       add(refs.projectIds, details.projectId, false);
+      // AgentDash (GH #933): a project-scoped budget activity row names its
+      // project only in details.scopeId — the event is about that project.
+      // A project scope with no resolvable id fails closed, like any other
+      // unresolvable reference.
+      if (
+        (entityType === "budget_policy" || entityType === "budget_incident") &&
+        details.scopeType === "project"
+      ) {
+        if (typeof details.scopeId === "string") add(refs.projectIds, details.scopeId, true);
+        else refs.malformed = true;
+      }
     }
   } else if (event.type.startsWith("heartbeat.run.")) {
     add(refs.runIds, payload.runId, true);

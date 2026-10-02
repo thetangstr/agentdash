@@ -100,6 +100,58 @@ describe("liveEventRefs", () => {
     });
     expect(refs.malformed).toBe(true);
   });
+
+  it("reads a project-scoped budget activity event's scope as its project (GH #933)", () => {
+    const refs = liveEventRefs({
+      ...base,
+      type: "activity.logged",
+      payload: {
+        entityType: "budget_incident",
+        entityId: randomUUID(),
+        details: { scopeType: "project", scopeId: projectId, amountObserved: 1500 },
+      },
+    });
+    expect(refs).toEqual({ issueIds: [], runIds: [], projectIds: [projectId], agentIds: [], malformed: false });
+    // Same for a budget_policy row.
+    expect(
+      liveEventRefs({
+        ...base,
+        type: "activity.logged",
+        payload: {
+          entityType: "budget_policy",
+          entityId: randomUUID(),
+          details: { scopeType: "project", scopeId: projectId, amount: 1000 },
+        },
+      }).projectIds,
+    ).toEqual([projectId]);
+    // A project scope with no resolvable id fails closed, like any other
+    // unresolvable reference.
+    expect(
+      liveEventRefs({
+        ...base,
+        type: "activity.logged",
+        payload: {
+          entityType: "budget_incident",
+          entityId: randomUUID(),
+          details: { scopeType: "project", scopeId: "not-a-uuid" },
+        },
+      }).malformed,
+    ).toBe(true);
+    // Company- and agent-scoped budget rows name no project — company-visible.
+    for (const scopeType of ["company", "agent"]) {
+      expect(
+        liveEventRefs({
+          ...base,
+          type: "activity.logged",
+          payload: {
+            entityType: "budget_policy",
+            entityId: randomUUID(),
+            details: { scopeType, scopeId: randomUUID() },
+          },
+        }).projectIds,
+      ).toEqual([]);
+    }
+  });
 });
 
 /**
@@ -285,6 +337,64 @@ describeEmbeddedPostgres("live events respect restricted project visibility", ()
       expect(sawIssue(c, SECRET_ISSUE)).toBe(false);
       expect(sawRunLog(c, SECRET_RUN)).toBe(false);
       expect(JSON.stringify(c.events)).not.toContain(`comment on ${SECRET_ISSUE}`);
+    }
+  });
+
+  // GH #933: a budget activity event names its project only in
+  // details.scopeId — delivery follows that project, same as a row in the
+  // activity feed.
+  it("delivers project-scoped budget activity events only to subscribers who can see the project", async () => {
+    const admin = await asUser("admin-user");
+    const creator = await asUser("sam");
+    const listed = await asUser("listed-member");
+    const outsider = await asUser("outsider");
+    const leadAgent = await asAgent(LEAD_TOKEN);
+    const outsideAgent = await asAgent(OUTSIDE_TOKEN);
+    const all = [admin, creator, listed, outsider, leadAgent, outsideAgent];
+
+    const secretPolicy = randomUUID();
+    const secretIncident = randomUUID();
+    const companyPolicy = randomUUID();
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "user",
+      actorId: "sam",
+      action: "budget.policy_upserted",
+      entityType: "budget_policy",
+      entityId: secretPolicy,
+      details: { scopeType: "project", scopeId: SECRET_PROJECT, scopeName: "Sam's restricted project", amount: 1000 },
+    });
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "system",
+      actorId: "budget_service",
+      action: "budget.hard_threshold_crossed",
+      entityType: "budget_incident",
+      entityId: secretIncident,
+      details: { scopeType: "project", scopeId: SECRET_PROJECT, amountObserved: 1500, amountLimit: 1000 },
+    });
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "user",
+      actorId: "sam",
+      action: "budget.policy_upserted",
+      entityType: "budget_policy",
+      entityId: companyPolicy,
+      details: { scopeType: "company", scopeId: COMPANY, amount: 10_000 },
+    });
+    await settle(all);
+
+    const saw = (c: Client, entityId: string) =>
+      c.events.some((e) => e.type === "activity.logged" && e.payload.entityId === entityId);
+    for (const c of all) expect(saw(c, companyPolicy)).toBe(true);
+    for (const c of [admin, creator, listed, leadAgent]) {
+      expect(saw(c, secretPolicy)).toBe(true);
+      expect(saw(c, secretIncident)).toBe(true);
+    }
+    for (const c of [outsider, outsideAgent]) {
+      expect(saw(c, secretPolicy)).toBe(false);
+      expect(saw(c, secretIncident)).toBe(false);
+      expect(JSON.stringify(c.events)).not.toContain("Sam's restricted project");
     }
   });
 

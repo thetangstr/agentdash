@@ -2,7 +2,7 @@ import type { Request } from 'express';
 import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import { agents, agentStewardships, authUsers, companyMemberships, issues, issueThreadInteractions, issueWorkProducts } from '@paperclipai/db';
 import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion, type WaitingOnYouReview } from '@paperclipai/shared';
-import { agentVisibilityCondition, issueVisibilityCondition, projectScopedVisibilityCondition, resolveAgentVisibility, seesEverything } from '../routes/visibility.js';
+import { agentVisibilityCondition, approvalVisibilityCondition, issueVisibilityCondition, projectScopedVisibilityCondition, resolveAgentVisibility, seesEverything } from '../routes/visibility.js';
 import type { Db } from "@paperclipai/db";
 import { assistantDigestService } from "./assistant-digest.js";
 import { approvalAuthorityService } from "./approval-authority.js";
@@ -175,7 +175,13 @@ export function waitingOnYouService(db: Db) {
     reviewsWaiting,
     list: async (companyId: string, actor: WaitingOnYouActor, opts: { decisionLimit?: number } = {}, actualRequest?: Request) => {
       const userId = actor.userId ?? null;
-      const rows = await approvals.list(companyId, undefined);
+      // AgentDash (GH #933): the pending-decisions list applies the same
+      // approval visibility rule as GET /approvals — a budget override for a
+      // restricted project is not waiting on someone who cannot see it.
+      const req = actualRequest ?? ({ actor: { ...actor, type: 'board' } } as unknown as Request);
+      const rows = await approvals.list(companyId, undefined, {
+        visibleWhere: approvalVisibilityCondition(req, companyId),
+      });
       const audience = await digest.audienceAgents(companyId, userId);
       const nameById = new Map(audience.map((agent) => [agent.id, agent.name]));
       const ranked = scopeAndRankOpenApprovals(rows as ApprovalLike[], new Set(nameById.keys()));

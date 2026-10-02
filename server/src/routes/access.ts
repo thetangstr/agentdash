@@ -101,7 +101,11 @@ import {
   buildInviteTokenCookieClear,
   inviteCookieSecureFlag,
 } from "../lib/signup-gate.js";
-import { inviteSignupBoundEmail } from "../services/invites.js";
+import {
+  INVITE_SIGNUP_CLAIM_KEY,
+  INVITE_SIGNUP_RESERVE_EMAIL_KEY,
+  inviteSignupBoundEmail,
+} from "../services/invites.js";
 import { isHostedBox } from "../services/license.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 // AgentDash (GH #505): one predicate for who may read member email addresses.
@@ -2006,6 +2010,85 @@ function toUserProfile(
   };
 }
 
+// AgentDash (GH #946): apply the one member-email rule to a nested user
+// profile before it leaves a route — an agent holding a management grant
+// passes the gate but still receives `email: null`. The key stays on the
+// wire so response shapes do not change.
+function redactUserProfileEmail<P extends { id: string; email: string | null }>(
+  req: Request,
+  canViewEmails: boolean,
+  user: P | null,
+): P | null {
+  if (!user) return user;
+  return { ...user, email: visibleMemberEmail(req, canViewEmails, user.id, user.email) };
+}
+
+/** The same rule over a member record's `user` profile. */
+function redactMemberRecordEmail(
+  req: Request,
+  canViewEmails: boolean,
+  member: CompanyMemberRecord,
+): CompanyMemberRecord {
+  if (!member.user) return member;
+  return {
+    ...member,
+    user: { ...member.user, email: visibleMemberEmail(req, canViewEmails, member.principalId, member.user.email) },
+  };
+}
+
+/**
+ * A join-request row headed to an approver-facing response: the requester's
+ * email snapshot follows the same rule — a `joins:approve` agent gets null,
+ * not an address.
+ */
+async function joinRequestForResponse(
+  req: Request,
+  access: ReturnType<typeof accessService>,
+  companyId: string,
+  row: typeof joinRequests.$inferSelect,
+) {
+  const canViewEmails = await canViewMemberEmails(access, req, companyId);
+  return {
+    ...toJoinRequestResponse(row),
+    requestEmailSnapshot: visibleMemberEmail(
+      req,
+      canViewEmails,
+      row.requestingUserId,
+      row.requestEmailSnapshot,
+    ),
+  };
+}
+
+/**
+ * AgentDash (GH #946): an invite row headed to a management response. The
+ * `tokenHash` column is a credential verifier — it never leaves the server,
+ * whatever the caller's grants. Inside `defaultsPayload` the bound-recipient
+ * `email` and the sign-up gate's claimed/reserved addresses are member-email
+ * material under the #505 rule: an agent holding `users:invite` — or a human
+ * without member-email visibility — gets `null` for each address. The keys
+ * stay on the wire so response shapes do not change, and the stored row is
+ * never mutated.
+ */
+function inviteForResponse<I extends typeof invites.$inferSelect>(
+  req: Request,
+  canViewEmails: boolean,
+  invite: I,
+): Omit<I, "tokenHash"> {
+  const { tokenHash: _tokenHash, ...safe } = invite;
+  const payload = invite.defaultsPayload;
+  if (!isPlainObject(payload)) {
+    return { ...safe, defaultsPayload: payload ?? null } as Omit<I, "tokenHash">;
+  }
+  const defaultsPayload: Record<string, unknown> = { ...payload };
+  for (const key of ["email", INVITE_SIGNUP_CLAIM_KEY, INVITE_SIGNUP_RESERVE_EMAIL_KEY] as const) {
+    const value = defaultsPayload[key];
+    if (typeof value === "string") {
+      defaultsPayload[key] = visibleMemberEmail(req, canViewEmails, null, value);
+    }
+  }
+  return { ...safe, defaultsPayload } as Omit<I, "tokenHash">;
+}
+
 async function resolveActorEmail(db: Db, req: Request): Promise<string | null> {
   if (isLocalImplicit(req)) return "local@paperclip.local";
   const userId = req.actor.userId;
@@ -3124,7 +3207,7 @@ export function accessRoutes(
         companyBranding
       );
       res.status(201).json({
-        ...created,
+        ...inviteForResponse(req, await canViewMemberEmails(access, req, companyId), created),
         token,
         invitePath: inviteSummary.invitePath,
         inviteUrl: inviteSummary.inviteUrl,
@@ -3185,7 +3268,7 @@ export function accessRoutes(
         companyBranding
       );
       res.status(201).json({
-        ...created,
+        ...inviteForResponse(req, await canViewMemberEmails(access, req, companyId), created),
         token,
         invitePath: inviteSummary.invitePath,
         inviteUrl: inviteSummary.inviteUrl,
@@ -4007,7 +4090,11 @@ export function accessRoutes(
       await assertCompanyPermission(req, invite.companyId, "users:invite");
     }
     if (invite.acceptedAt) throw conflict("Invite already consumed");
-    if (invite.revokedAt) return res.json(invite);
+    // AgentDash (GH #946): the echoed row — freshly revoked or already
+    // revoked — drops tokenHash and follows the member-email rule inside
+    // defaultsPayload, same as the list route.
+    const canViewEmails = await canViewMemberEmails(access, req, invite.companyId ?? "");
+    if (invite.revokedAt) return res.json(inviteForResponse(req, canViewEmails, invite));
 
     const revoked = await db
       .update(invites)
@@ -4030,29 +4117,66 @@ export function accessRoutes(
       });
     }
 
-    res.json(revoked);
+    res.json(inviteForResponse(req, canViewEmails, revoked));
   });
 
   router.get("/companies/:companyId/invites", async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCompanyPermission(req, companyId, "users:invite");
     const query = listCompanyInvitesQuerySchema.parse(req.query);
-    const invitesForCompany = await loadCompanyInviteRecords(db, companyId, query);
-    res.json(invitesForCompany);
+    const [invitesForCompany, canViewEmails] = await Promise.all([
+      loadCompanyInviteRecords(db, companyId, query),
+      canViewMemberEmails(access, req, companyId),
+    ]);
+    // AgentDash (GH #946): invitedByUser is a member profile and the invite
+    // row itself carries recipient emails + tokenHash — an agent granted
+    // users:invite reads the list but gets neither.
+    res.json({
+      ...invitesForCompany,
+      invites: invitesForCompany.invites.map((invite) => ({
+        ...inviteForResponse(req, canViewEmails, invite),
+        invitedByUser: redactUserProfileEmail(req, canViewEmails, invite.invitedByUser),
+      })),
+    });
   });
 
   router.get("/companies/:companyId/join-requests", async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCompanyPermission(req, companyId, "joins:approve");
     const query = listJoinRequestsQuerySchema.parse(req.query);
-    const all = await loadJoinRequestRecords(db, companyId);
+    const [all, canViewEmails] = await Promise.all([
+      loadJoinRequestRecords(db, companyId),
+      canViewMemberEmails(access, req, companyId),
+    ]);
     const filtered = all.filter((row) => {
       if (query.status && row.status !== query.status) return false;
       if (query.requestType && row.requestType !== query.requestType)
         return false;
       return true;
     });
-    res.json(filtered);
+    // AgentDash (GH #946): the email snapshot and every nested user profile
+    // follow member-email-visibility.ts — a joins:approve agent sees names
+    // and ids, never addresses.
+    res.json(
+      filtered.map((row) => ({
+        ...row,
+        requestEmailSnapshot: visibleMemberEmail(
+          req,
+          canViewEmails,
+          row.requestingUserId,
+          row.requestEmailSnapshot,
+        ),
+        requesterUser: redactUserProfileEmail(req, canViewEmails, row.requesterUser),
+        approvedByUser: redactUserProfileEmail(req, canViewEmails, row.approvedByUser),
+        rejectedByUser: redactUserProfileEmail(req, canViewEmails, row.rejectedByUser),
+        invite: row.invite
+          ? {
+              ...row.invite,
+              invitedByUser: redactUserProfileEmail(req, canViewEmails, row.invite.invitedByUser),
+            }
+          : row.invite,
+      })),
+    );
   });
 
   router.post(
@@ -4281,7 +4405,7 @@ export function accessRoutes(
         }).catch(() => {});
       }
 
-      res.json(toJoinRequestResponse(approved));
+      res.json(await joinRequestForResponse(req, access, companyId, approved));
     }
   );
 
@@ -4329,7 +4453,7 @@ export function accessRoutes(
         details: { requestType: existing.requestType }
       });
 
-      res.json(toJoinRequestResponse(rejected));
+      res.json(await joinRequestForResponse(req, access, companyId, rejected));
     }
   );
 
@@ -4462,12 +4586,16 @@ export function accessRoutes(
   router.get("/companies/:companyId/members", async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCompanyPermission(req, companyId, "users:manage_permissions");
-    const [members, currentAccess] = await Promise.all([
+    const [members, currentAccess, canViewEmails] = await Promise.all([
       loadCompanyMemberRecords(db, companyId),
       loadCompanyAccessSummary(req, access, companyId),
+      canViewMemberEmails(access, req, companyId),
     ]);
+    const membersWithRemoval = await addCompanyMemberRemovalAccess(req, db, access, companyId, members);
     res.json({
-      members: await addCompanyMemberRemovalAccess(req, db, access, companyId, members),
+      // AgentDash (GH #946): the same email rule as /people — an agent with
+      // users:manage_permissions keeps the gate but not the addresses.
+      members: membersWithRemoval.map((member) => redactMemberRecordEmail(req, canViewEmails, member)),
       access: currentAccess,
     });
   });
@@ -4594,7 +4722,9 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
-      res.json(member);
+      // AgentDash (GH #946): the echoed record obeys the same email rule as
+      // the members list — a granted agent sees the change, not the address.
+      res.json(redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member));
     }
   );
 
@@ -4722,7 +4852,8 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
-      res.json(member);
+      // AgentDash (GH #946): same email rule as the members list.
+      res.json(redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member));
     }
   );
 
@@ -4767,8 +4898,9 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
+      // AgentDash (GH #946): same email rule as the members list.
       res.json({
-        member,
+        member: redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member),
         reassignedIssueCount: result.reassignedIssueCount,
       });
     }
@@ -4806,7 +4938,8 @@ export function accessRoutes(
         (entry) => entry.id === memberId,
       );
       if (!member) throw notFound("Member not found");
-      res.json(member);
+      // AgentDash (GH #946): same email rule as the members list.
+      res.json(redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member));
     }
   );
 

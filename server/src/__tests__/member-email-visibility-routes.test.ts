@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // These fixtures inject req.actor without running the auth middleware, so no
 // verified credential exists (same arrangement as agent-visibility-routes.test.ts).
@@ -16,7 +17,10 @@ import {
   companies,
   companyMemberships,
   createDb,
+  invites,
   issues,
+  joinRequests,
+  principalPermissionGrants,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -51,8 +55,21 @@ describeEmbeddedPostgres("member email visibility routes (GH #505)", () => {
   const STEWARD = `steward-${randomUUID()}`; // member of A, stewards CASPER
   const NAMELESS = `nameless-${randomUUID()}`; // member of A with no display name
   const BOB = `bob-${randomUUID()}`; // member of B only
+  const GRANTEE = `grantee-${randomUUID()}`; // member of A with users:invite + joins:approve, not manage_permissions
+  const REQ_USER = `requester-${randomUUID()}`; // non-member whose join request was rejected
+  const REQ_USER_2 = `requester2-${randomUUID()}`; // non-member whose pending request the agent rejects
   const CASPER = randomUUID();
+  const NOGRANT = randomUUID(); // agent member of A with no grants at all
+  const CEO = randomUUID(); // company A's ceo — agent join approvals need a manager
   const ISSUE = randomUUID();
+  const INVITE_A = randomUUID(); // written by ADMIN_A, carries sign-up emails
+  const INVITE_B = randomUUID(); // written by MEMBER
+  const INVITE_C = randomUUID(); // backs the agent join request
+  const INVITE_D = randomUUID(); // backs the human request the agent rejects
+  const JR_PENDING = randomUUID(); // GRANTEE's own pending request
+  const JR_REJECTED = randomUUID(); // REQ_USER's request, rejected by STEWARD
+  const JR_AGENT_JOIN = randomUUID(); // pending agent hire CASPER approves
+  const JR_REJECT_ME = randomUUID(); // pending human request CASPER rejects
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-member-email-visibility-");
@@ -69,12 +86,16 @@ describeEmbeddedPostgres("member email visibility routes (GH #505)", () => {
       { id: STEWARD, name: "Stu Steward", email: "stu@a.test", createdAt: now, updatedAt: now },
       { id: NAMELESS, name: "", email: "quiet.person@a.test", createdAt: now, updatedAt: now },
       { id: BOB, name: "Bob", email: "bob@b.test", createdAt: now, updatedAt: now },
+      { id: GRANTEE, name: "Gia Grantee", email: "gia@a.test", createdAt: now, updatedAt: now },
+      { id: REQ_USER, name: "Rex Requester", email: "rex@a.test", createdAt: now, updatedAt: now },
+      { id: REQ_USER_2, name: "Ren Requester", email: "ren@a.test", createdAt: now, updatedAt: now },
     ]);
     for (const [companyId, userId, role] of [
       [COMPANY_A, ADMIN_A, "admin"],
       [COMPANY_A, MEMBER, "member"],
       [COMPANY_A, STEWARD, "member"],
       [COMPANY_A, NAMELESS, "member"],
+      [COMPANY_A, GRANTEE, "member"],
       [COMPANY_B, ADMIN_A, "member"],
       [COMPANY_B, BOB, "admin"],
     ] as const) {
@@ -86,14 +107,115 @@ describeEmbeddedPostgres("member email visibility routes (GH #505)", () => {
         membershipRole: role,
       });
     }
-    await db.insert(agents).values({
-      id: CASPER,
-      companyId: COMPANY_A,
-      name: "Casper",
-      role: "chief_of_staff",
-      createdByUserId: ADMIN_A,
-      visibility: "company",
-    });
+    await db.insert(agents).values([
+      {
+        id: CASPER,
+        companyId: COMPANY_A,
+        name: "Casper",
+        role: "chief_of_staff",
+        createdByUserId: ADMIN_A,
+        visibility: "company",
+      },
+      { id: NOGRANT, companyId: COMPANY_A, name: "NoGrant", role: "general" },
+      { id: CEO, companyId: COMPANY_A, name: "Chief", role: "ceo" },
+    ]);
+    // GH #946: Casper holds every member-management grant the issue names —
+    // the routes must answer, but never with an email address.
+    await db.insert(companyMemberships).values([
+      { companyId: COMPANY_A, principalType: "agent", principalId: CASPER, status: "active" },
+      { companyId: COMPANY_A, principalType: "agent", principalId: NOGRANT, status: "active" },
+      { companyId: COMPANY_A, principalType: "agent", principalId: CEO, status: "active" },
+    ]);
+    await db.insert(principalPermissionGrants).values([
+      { companyId: COMPANY_A, principalType: "agent", principalId: CASPER, permissionKey: "users:manage_permissions" },
+      { companyId: COMPANY_A, principalType: "agent", principalId: CASPER, permissionKey: "users:invite" },
+      { companyId: COMPANY_A, principalType: "agent", principalId: CASPER, permissionKey: "joins:approve" },
+      { companyId: COMPANY_A, principalType: "user", principalId: GRANTEE, permissionKey: "users:invite" },
+      { companyId: COMPANY_A, principalType: "user", principalId: GRANTEE, permissionKey: "joins:approve" },
+    ]);
+    await db.insert(invites).values([
+      {
+        id: INVITE_A,
+        companyId: COMPANY_A,
+        tokenHash: `th-${INVITE_A}`,
+        invitedByUserId: ADMIN_A,
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+        // GH #946 review: the sign-up gate stores recipient emails inside
+        // defaultsPayload — they must follow the member-email rule on the
+        // wire, and tokenHash must never leave the server.
+        defaultsPayload: {
+          email: "bound.recipient@a.test",
+          signupClaimedEmail: "claimed.signer@a.test",
+          signupReservedEmail: "reserved.signer@a.test",
+        },
+      },
+      {
+        id: INVITE_B,
+        companyId: COMPANY_A,
+        tokenHash: `th-${INVITE_B}`,
+        invitedByUserId: MEMBER,
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+      },
+      {
+        id: INVITE_C,
+        companyId: COMPANY_A,
+        tokenHash: `th-${INVITE_C}`,
+        invitedByUserId: ADMIN_A,
+        allowedJoinTypes: "agent",
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+      },
+      {
+        id: INVITE_D,
+        companyId: COMPANY_A,
+        tokenHash: `th-${INVITE_D}`,
+        invitedByUserId: ADMIN_A,
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+      },
+    ]);
+    await db.insert(joinRequests).values([
+      {
+        id: JR_PENDING,
+        inviteId: INVITE_A,
+        companyId: COMPANY_A,
+        requestType: "human",
+        status: "pending_approval",
+        requestIp: "127.0.0.1",
+        requestingUserId: GRANTEE,
+        requestEmailSnapshot: "gia@a.test",
+      },
+      {
+        id: JR_REJECTED,
+        inviteId: INVITE_B,
+        companyId: COMPANY_A,
+        requestType: "human",
+        status: "rejected",
+        requestIp: "127.0.0.1",
+        requestingUserId: REQ_USER,
+        requestEmailSnapshot: "rex@a.test",
+        rejectedByUserId: STEWARD,
+        rejectedAt: now,
+      },
+      {
+        id: JR_AGENT_JOIN,
+        inviteId: INVITE_C,
+        companyId: COMPANY_A,
+        requestType: "agent",
+        status: "pending_approval",
+        requestIp: "127.0.0.1",
+        requestEmailSnapshot: "hire.me@a.test",
+        agentName: "Hired Hand",
+      },
+      {
+        id: JR_REJECT_ME,
+        inviteId: INVITE_D,
+        companyId: COMPANY_A,
+        requestType: "human",
+        status: "pending_approval",
+        requestIp: "127.0.0.1",
+        requestingUserId: REQ_USER_2,
+        requestEmailSnapshot: "ren@a.test",
+      },
+    ]);
     await db.insert(agentStewardships).values({ companyId: COMPANY_A, agentId: CASPER, userId: STEWARD });
     await db.insert(issues).values({
       id: ISSUE,
@@ -102,7 +224,7 @@ describeEmbeddedPostgres("member email visibility routes (GH #505)", () => {
       status: "todo",
       assigneeAgentId: CASPER,
     });
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     await tempDb?.cleanup();
@@ -147,8 +269,11 @@ describeEmbeddedPostgres("member email visibility routes (GH #505)", () => {
   const adminA = () => asUser(ADMIN_A, [[COMPANY_A, "admin"], [COMPANY_B, "member"]]);
   const member = () => asUser(MEMBER, [[COMPANY_A, "member"]]);
   const nameless = () => asUser(NAMELESS, [[COMPANY_A, "member"]]);
+  const grantee = () => asUser(GRANTEE, [[COMPANY_A, "member"]]);
   const agent = () =>
     appAs({ type: "agent", agentId: CASPER, companyId: COMPANY_A, source: "agent_key", companyIds: [COMPANY_A] });
+  const ungrantedAgent = () =>
+    appAs({ type: "agent", agentId: NOGRANT, companyId: COMPANY_A, source: "agent_key", companyIds: [COMPANY_A] });
 
   const emailsIn = (body: unknown) =>
     [...JSON.stringify(body).matchAll(/[a-z0-9.]+@[ab]\.test/g)].map((m) => m[0]).sort();
@@ -157,7 +282,7 @@ describeEmbeddedPostgres("member email visibility routes (GH #505)", () => {
     it("an admin of company A sees A's emails but only their own in company B", async () => {
       const inA = await request(adminA()).get(`/api/companies/${COMPANY_A}/user-directory`);
       expect(inA.status).toBe(200);
-      expect(emailsIn(inA.body)).toEqual(["ada@a.test", "mo@a.test", "quiet.person@a.test", "stu@a.test"]);
+      expect(emailsIn(inA.body)).toEqual(["ada@a.test", "gia@a.test", "mo@a.test", "quiet.person@a.test", "stu@a.test"]);
 
       const inB = await request(adminA()).get(`/api/companies/${COMPANY_B}/user-directory`);
       expect(inB.status).toBe(200);
@@ -217,6 +342,195 @@ describeEmbeddedPostgres("member email visibility routes (GH #505)", () => {
         expect(res.status, path).toBe(200);
         expect(emailsIn(res.body), path).toEqual([]);
       }
+    });
+  });
+
+  /**
+   * GH #946: an agent granted `users:manage_permissions`, `users:invite` or
+   * `joins:approve` reaches /members, /invites and /join-requests — the gates
+   * stay, but the responses carry `email: null`, never an address.
+   */
+  describe("member-management routes for a granted agent (GH #946)", () => {
+    it("an agent holding all three grants gets the lists with every email nulled", async () => {
+      const members = await request(agent()).get(`/api/companies/${COMPANY_A}/members`);
+      expect(members.status).toBe(200);
+      expect(members.body.members.length).toBeGreaterThan(0);
+      for (const m of members.body.members) {
+        if (m.user) expect(m.user.email).toBeNull();
+      }
+      expect(emailsIn(members.body)).toEqual([]);
+
+      const inviteList = await request(agent()).get(`/api/companies/${COMPANY_A}/invites`);
+      expect(inviteList.status).toBe(200);
+      expect(inviteList.body.invites.length).toBeGreaterThan(0);
+      for (const inv of inviteList.body.invites) {
+        if (inv.invitedByUser) expect(inv.invitedByUser.email).toBeNull();
+      }
+      expect(emailsIn(inviteList.body)).toEqual([]);
+
+      const requests = await request(agent()).get(`/api/companies/${COMPANY_A}/join-requests`);
+      expect(requests.status).toBe(200);
+      expect(requests.body.length).toBeGreaterThan(0);
+      for (const jr of requests.body) {
+        expect(jr.requestEmailSnapshot).toBeNull();
+        for (const key of ["requesterUser", "approvedByUser", "rejectedByUser"] as const) {
+          if (jr[key]) expect(jr[key].email).toBeNull();
+        }
+        if (jr.invite?.invitedByUser) expect(jr.invite.invitedByUser.email).toBeNull();
+      }
+      expect(emailsIn(requests.body)).toEqual([]);
+    });
+
+    it("a member manager still gets the addresses on all three routes", async () => {
+      const members = await request(adminA()).get(`/api/companies/${COMPANY_A}/members`);
+      expect(members.status).toBe(200);
+      expect(emailsIn(members.body)).toEqual(
+        expect.arrayContaining(["ada@a.test", "mo@a.test", "stu@a.test"]),
+      );
+
+      const inviteList = await request(adminA()).get(`/api/companies/${COMPANY_A}/invites`);
+      expect(inviteList.status).toBe(200);
+      const invA = inviteList.body.invites.find((i: { id: string }) => i.id === INVITE_A);
+      expect(invA.invitedByUser).toMatchObject({ id: ADMIN_A, email: "ada@a.test" });
+      const invB = inviteList.body.invites.find((i: { id: string }) => i.id === INVITE_B);
+      expect(invB.invitedByUser).toMatchObject({ id: MEMBER, email: "mo@a.test" });
+
+      const requests = await request(adminA()).get(`/api/companies/${COMPANY_A}/join-requests`);
+      expect(requests.status).toBe(200);
+      const pending = requests.body.find((j: { id: string }) => j.id === JR_PENDING);
+      expect(pending.requestEmailSnapshot).toBe("gia@a.test");
+      expect(pending.requesterUser).toMatchObject({ id: GRANTEE, email: "gia@a.test" });
+      expect(pending.invite.invitedByUser).toMatchObject({ id: ADMIN_A, email: "ada@a.test" });
+      const rejected = requests.body.find((j: { id: string }) => j.id === JR_REJECTED);
+      expect(rejected.requestEmailSnapshot).toBe("rex@a.test");
+      expect(rejected.requesterUser).toMatchObject({ id: REQ_USER, email: "rex@a.test" });
+      expect(rejected.rejectedByUser).toMatchObject({ id: STEWARD, email: "stu@a.test" });
+      expect(rejected.invite.invitedByUser).toMatchObject({ id: MEMBER, email: "mo@a.test" });
+    });
+
+    it("a member with invite/join grants but no manage_permissions sees only their own address", async () => {
+      const inviteList = await request(grantee()).get(`/api/companies/${COMPANY_A}/invites`);
+      expect(inviteList.status).toBe(200);
+      expect(emailsIn(inviteList.body)).toEqual([]);
+
+      const requests = await request(grantee()).get(`/api/companies/${COMPANY_A}/join-requests`);
+      expect(requests.status).toBe(200);
+      const pending = requests.body.find((j: { id: string }) => j.id === JR_PENDING);
+      expect(pending.requestEmailSnapshot).toBe("gia@a.test");
+      expect(pending.requesterUser).toMatchObject({ id: GRANTEE, email: "gia@a.test" });
+      expect(pending.invite.invitedByUser.email).toBeNull();
+      const rejected = requests.body.find((j: { id: string }) => j.id === JR_REJECTED);
+      expect(rejected.requestEmailSnapshot).toBeNull();
+      expect(rejected.requesterUser.email).toBeNull();
+      expect(rejected.rejectedByUser.email).toBeNull();
+      // Her own address twice: the snapshot and the requester profile.
+      expect(emailsIn(requests.body)).toEqual(["gia@a.test", "gia@a.test"]);
+
+      // The members list keeps its gate: no users:manage_permissions, no list.
+      const members = await request(grantee()).get(`/api/companies/${COMPANY_A}/members`);
+      expect(members.status).toBe(403);
+    });
+
+    it("an agent WITHOUT the grants is still refused — the gates did not move", async () => {
+      for (const path of [
+        `/api/companies/${COMPANY_A}/members`,
+        `/api/companies/${COMPANY_A}/invites`,
+        `/api/companies/${COMPANY_A}/join-requests`,
+      ]) {
+        const res = await request(ungrantedAgent()).get(path);
+        expect(res.status, path).toBe(403);
+      }
+    });
+
+    it("keeps defaultsPayload emails and tokenHash off the invite list for agents and non-managers", async () => {
+      for (const [label, app, seesEmails] of [
+        ["agent", agent(), false],
+        ["grantee member", grantee(), false],
+        ["admin", adminA(), true],
+      ] as const) {
+        const res = await request(app).get(`/api/companies/${COMPANY_A}/invites`);
+        expect(res.status, label).toBe(200);
+        const inv = res.body.invites.find((i: { id: string }) => i.id === INVITE_A);
+        expect(inv, label).toBeTruthy();
+        expect(inv, label).not.toHaveProperty("tokenHash");
+        expect(inv.defaultsPayload.signupReservedUntil ?? null, label).toBeNull();
+        if (seesEmails) {
+          expect(inv.defaultsPayload.email, label).toBe("bound.recipient@a.test");
+          expect(inv.defaultsPayload.signupClaimedEmail, label).toBe("claimed.signer@a.test");
+          expect(inv.defaultsPayload.signupReservedEmail, label).toBe("reserved.signer@a.test");
+        } else {
+          expect(inv.defaultsPayload.email, label).toBeNull();
+          expect(inv.defaultsPayload.signupClaimedEmail, label).toBeNull();
+          expect(inv.defaultsPayload.signupReservedEmail, label).toBeNull();
+          expect(emailsIn(inv), label).toEqual([]);
+        }
+      }
+    });
+
+    it("POST /invites/:id/revoke echoes no tokenHash or sign-up emails — even when already revoked", async () => {
+      const inviteId = randomUUID();
+      await db.insert(invites).values({
+        id: inviteId,
+        companyId: COMPANY_A,
+        tokenHash: `th-${inviteId}`,
+        invitedByUserId: ADMIN_A,
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"),
+        defaultsPayload: { email: "revoke.me@a.test" },
+      });
+
+      const first = await request(agent()).post(`/api/invites/${inviteId}/revoke`);
+      expect(first.status).toBe(200);
+      expect(first.body).not.toHaveProperty("tokenHash");
+      expect(first.body.defaultsPayload.email).toBeNull();
+      expect(emailsIn(first.body)).toEqual([]);
+
+      // The already-revoked early return gets the same redaction.
+      const second = await request(agent()).post(`/api/invites/${inviteId}/revoke`);
+      expect(second.status).toBe(200);
+      expect(second.body).not.toHaveProperty("tokenHash");
+      expect(second.body.defaultsPayload.email).toBeNull();
+      expect(second.body.revokedAt).toBeTruthy();
+
+      // A member manager still sees the bound address.
+      const asAdmin = await request(adminA()).post(`/api/invites/${inviteId}/revoke`);
+      expect(asAdmin.status).toBe(200);
+      expect(asAdmin.body).not.toHaveProperty("tokenHash");
+      expect(asAdmin.body.defaultsPayload.email).toBe("revoke.me@a.test");
+    });
+
+    it("an approving/rejecting agent's join-request echo carries no email; member PATCH stays refused", async () => {
+      const approve = await request(agent()).post(
+        `/api/companies/${COMPANY_A}/join-requests/${JR_AGENT_JOIN}/approve`,
+      );
+      expect(approve.status).toBe(200);
+      expect(approve.body.status).toBe("approved");
+      expect(approve.body.requestEmailSnapshot).toBeNull();
+      expect(emailsIn(approve.body)).toEqual([]);
+
+      const reject = await request(agent()).post(
+        `/api/companies/${COMPANY_A}/join-requests/${JR_REJECT_ME}/reject`,
+      );
+      expect(reject.status).toBe(200);
+      expect(reject.body.status).toBe("rejected");
+      expect(reject.body.requestEmailSnapshot).toBeNull();
+      expect(emailsIn(reject.body)).toEqual([]);
+
+      // Member mutation routes are board-only for agents — assert the gate
+      // holds so no email-bearing echo can be produced at all.
+      const memberRow = await db
+        .select({ id: companyMemberships.id })
+        .from(companyMemberships)
+        .where(and(
+          eq(companyMemberships.companyId, COMPANY_A),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, MEMBER),
+        ))
+        .then((rows) => rows[0]);
+      const patch = await request(agent())
+        .patch(`/api/companies/${COMPANY_A}/members/${memberRow?.id}`)
+        .send({ membershipRole: "member" });
+      expect(patch.status).toBe(403);
+      expect(emailsIn(patch.body)).toEqual([]);
     });
   });
 
