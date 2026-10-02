@@ -1,5 +1,12 @@
 import type { Request } from "express";
-import { mintingOrigins, normalizeOrigin } from "./declared-origins.js";
+import {
+  explicitMintingOrigins,
+  mintingOrigins,
+  mintingOriginsForBoot,
+  normalizeOrigin,
+  registerMintingOrigins,
+  type OriginEnv,
+} from "./declared-origins.js";
 
 /**
  * The address this instance calls itself, when its operator has said one — which
@@ -22,17 +29,76 @@ import { mintingOrigins, normalizeOrigin } from "./declared-origins.js";
  * Not a secret. It is by definition the address people are told to use, and the
  * health endpoint already reports deployment mode and bootstrap state.
  */
+// AgentDash (#954): the public base URL boot resolved from the whole
+// configuration — `config.authPublicBaseUrl` in legacy mode, the declared
+// `config.canonicalOrigin` when origins are declared — which sees sources
+// the env reads below cannot: the config file's `auth.publicBaseUrl` (what
+// `agentdash onboard` writes) and the BETTER_AUTH_URL / BETTER_AUTH_BASE_URL
+// spellings. Without this registration a config-file-only URL is trusted but
+// never canonical, so a spoofed Host header lands in minted invite links.
+let bootConfiguredPublicBaseUrl: string | undefined;
+
+/**
+ * Register the config-resolved public base URL at boot, or clear it with
+ * `null`/`undefined`. `startServer` calls this via `registerBootOriginState`
+ * once `loadConfig` (and the listen-port rewrite) has settled.
+ */
+export function registerConfiguredPublicBaseUrl(value: string | undefined | null): void {
+  const trimmed = value?.trim().replace(/\/+$/, "");
+  bootConfiguredPublicBaseUrl = trimmed || undefined;
+}
+
+/**
+ * AgentDash (#954): everything `startServer` registers for link minting, in
+ * one call so boot and its tests cannot drift apart — the origins a minted
+ * link may name, and the configured public URL it falls back to.
+ *
+ * The configured URL is `config.canonicalOrigin` when origins are declared:
+ * an operator who set `PAPERCLIP_CANONICAL_ORIGIN` / `PAPERCLIP_ORIGINS`
+ * means that list to mint links, and a `BETTER_AUTH_*` alias or the config
+ * file's `auth.publicBaseUrl` must not outrank it — such a value stays a
+ * trusted door, not the canonical address. In legacy mode the configured
+ * URL is `config.authPublicBaseUrl`, which is the point of #954: a public
+ * URL that lives only in the config file still reaches link minting.
+ *
+ * `trusted` is the `resolveAuthTrustedOrigins` result — only authenticated
+ * mode computes one. Without it the minting set is the env-declared origins
+ * plus the configured public URL, which is what the unregistered fallback
+ * derives anyway.
+ */
+export function registerBootOriginState(input: {
+  config: {
+    declaredOrigins?: readonly string[] | undefined;
+    canonicalOrigin?: string | undefined;
+    authPublicBaseUrl?: string | undefined;
+  };
+  trusted?: Parameters<typeof mintingOriginsForBoot>[0] | null;
+  env?: OriginEnv;
+}): void {
+  const { config, trusted, env = process.env } = input;
+  registerMintingOrigins(
+    trusted
+      ? mintingOriginsForBoot(trusted, config.authPublicBaseUrl, env)
+      : explicitMintingOrigins(env, [config.authPublicBaseUrl]),
+  );
+  registerConfiguredPublicBaseUrl(
+    config.declaredOrigins ? config.canonicalOrigin ?? config.authPublicBaseUrl : config.authPublicBaseUrl,
+  );
+}
+
 export function configuredPublicBaseUrl(): string | undefined {
   // AgentDash (#547): PAPERCLIP_CANONICAL_ORIGIN, when declared, is the
-  // address. Without it the old variables answer exactly as before, and a
-  // bare PAPERCLIP_ORIGINS list lends its first entry only when nothing else
-  // names one.
+  // address. Without it the old variables answer exactly as before, then the
+  // config-resolved URL (which keeps the config file's precedence below the
+  // env vars), and a bare PAPERCLIP_ORIGINS list lends its first entry only
+  // when nothing else names one.
   const canonical = normalizeOrigin(process.env.PAPERCLIP_CANONICAL_ORIGIN);
   if (canonical) return canonical;
   const raw =
     process.env.PAPERCLIP_PUBLIC_URL?.trim()
     || process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL?.trim();
   if (raw) return raw.replace(/\/+$/, "");
+  if (bootConfiguredPublicBaseUrl) return bootConfiguredPublicBaseUrl;
   const firstDeclared = (process.env.PAPERCLIP_ORIGINS ?? "")
     .split(",")
     .map((value) => normalizeOrigin(value))

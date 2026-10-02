@@ -3,14 +3,19 @@ import type { Config } from "../config.js";
 import { deriveAuthTrustedOrigins, resolveAuthTrustedOrigins } from "../auth/better-auth.js";
 import {
   lintCanonicalOrigin,
-  mintingOriginsForBoot,
   originBootReport,
   registerMintingOrigins,
   resolveOriginSettings,
   unreachableHostReason,
   type OriginEnv,
 } from "../lib/declared-origins.js";
-import { configuredPublicBaseUrl, inBandBaseUrl, outOfBandBaseUrl } from "../lib/public-base-url.js";
+import {
+  configuredPublicBaseUrl,
+  inBandBaseUrl,
+  outOfBandBaseUrl,
+  registerBootOriginState,
+  registerConfiguredPublicBaseUrl,
+} from "../lib/public-base-url.js";
 
 // AgentDash (#547). Host identifiers are illustrative, shaped like a box with
 // a plaintext LAN door, an mDNS name, a CGNAT/tailnet IP and a TLS tailnet
@@ -345,6 +350,7 @@ describe("minting per audience", () => {
       delete process.env[key];
     }
     registerMintingOrigins(null);
+    registerConfiguredPublicBaseUrl(null);
   });
 
   afterEach(() => {
@@ -354,6 +360,7 @@ describe("minting per audience", () => {
       else process.env[key] = value;
     }
     registerMintingOrigins(null);
+    registerConfiguredPublicBaseUrl(null);
   });
 
   function fakeRequest(headers: Record<string, string>, protocol = "http", remoteAddress = "10.0.0.99") {
@@ -453,6 +460,7 @@ describe("hosted box behind the edge", () => {
     }
     Object.assign(process.env, BOX_ENV);
     registerMintingOrigins(null);
+    registerConfiguredPublicBaseUrl(null);
   });
 
   afterEach(() => {
@@ -462,6 +470,7 @@ describe("hosted box behind the edge", () => {
       else process.env[key] = value;
     }
     registerMintingOrigins(null);
+    registerConfiguredPublicBaseUrl(null);
   });
 
   function edgeRequest(headers: Record<string, string> = {}) {
@@ -478,7 +487,7 @@ describe("hosted box behind the edge", () => {
   function bootAs(env: OriginEnv) {
     const config = configFrom(env);
     const trusted = resolveAuthTrustedOrigins(config, { listenPort: 3100, env });
-    registerMintingOrigins(mintingOriginsForBoot(trusted, config.authPublicBaseUrl, env));
+    registerBootOriginState({ config, trusted, env });
     return trusted;
   }
 
@@ -515,5 +524,136 @@ describe("hosted box behind the edge", () => {
     const env: OriginEnv = { PAPERCLIP_ALLOWED_HOSTNAMES: RAILWAY };
     bootAs(env);
     expect(inBandBaseUrl(edgeRequest())).toBe(`https://${RAILWAY}`);
+  });
+});
+
+// AgentDash (#954): `agentdash onboard` can write auth.publicBaseUrl to the
+// config file without exporting any env var. resolveOriginSettings sees it,
+// but before the fix the minting path read env alone, so a spoofed Host
+// header still reached invite links.
+describe("config-file public URL (#954)", () => {
+  const FILE_URL = "https://file.example.test";
+  const LEGACY_DOOR = "lan-door.example.test";
+  const KEYS = [
+    "PAPERCLIP_CANONICAL_ORIGIN",
+    "PAPERCLIP_ORIGINS",
+    "PAPERCLIP_PUBLIC_URL",
+    "PAPERCLIP_AUTH_PUBLIC_BASE_URL",
+    "PAPERCLIP_ALLOWED_HOSTNAMES",
+    "BETTER_AUTH_URL",
+    "BETTER_AUTH_BASE_URL",
+    "BETTER_AUTH_TRUSTED_ORIGINS",
+  ] as const;
+  const saved = new Map<string, string | undefined>();
+
+  beforeEach(() => {
+    for (const key of KEYS) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    registerMintingOrigins(null);
+    registerConfiguredPublicBaseUrl(null);
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      const value = saved.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    registerMintingOrigins(null);
+    registerConfiguredPublicBaseUrl(null);
+  });
+
+  function fakeRequest(headers: Record<string, string>, protocol = "http", remoteAddress = "10.0.0.99") {
+    const lower = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+    return { protocol, header: (name: string) => lower[name.toLowerCase()], socket: { remoteAddress } };
+  }
+
+  /** What startServer does, minus the listen-port rewrite. */
+  function bootAs(env: OriginEnv, fileAuthPublicBaseUrl?: string) {
+    const settings = resolveOriginSettings({ env, fileAuthPublicBaseUrl });
+    const config = {
+      deploymentMode: "authenticated",
+      port: 3102,
+      authBaseUrlMode: settings.authPublicBaseUrl ? "explicit" : "auto",
+      authPublicBaseUrl: settings.authPublicBaseUrl,
+      allowedHostnames: settings.allowedHostnames,
+      ...(settings.declaredOrigins
+        ? {
+          canonicalOrigin: settings.canonicalOrigin,
+          declaredOrigins: settings.declaredOrigins,
+          trustedOriginPatterns: settings.trustedOriginPatterns,
+        }
+        : {}),
+    } as Config;
+    const trusted = resolveAuthTrustedOrigins(config, { listenPort: 3102, env });
+    // The same helper index.ts calls — minting set and configured public
+    // URL registered together, so the test cannot drift from boot.
+    registerBootOriginState({ config, trusted, env });
+    return { config, trusted };
+  }
+
+  it("mints links on the config-file URL even when Host is spoofed", () => {
+    const { config } = bootAs({}, FILE_URL);
+    expect(config.authPublicBaseUrl).toBe(FILE_URL);
+    expect(configuredPublicBaseUrl()).toBe(FILE_URL);
+
+    expect(inBandBaseUrl(fakeRequest({ host: "evil.example.test" }))).toBe(FILE_URL);
+    expect(inBandBaseUrl(fakeRequest({
+      host: "localhost:3102",
+      "x-forwarded-host": "evil.example.test",
+      "x-forwarded-proto": "https",
+    }))).toBe(FILE_URL);
+    expect(outOfBandBaseUrl(fakeRequest({ host: "evil.example.test" }))).toBe(FILE_URL);
+  });
+
+  it("answers a legacy door listed only in allowed hostnames with the public URL", () => {
+    bootAs({ PAPERCLIP_ALLOWED_HOSTNAMES: LEGACY_DOOR }, FILE_URL);
+    // The door stays trusted for sign-in (the hostname cross-product covers
+    // it) but is not a minting origin, so minted links name the configured
+    // URL — before the fix this echoed http://lan-door.example.test.
+    expect(inBandBaseUrl(fakeRequest({ host: LEGACY_DOOR }))).toBe(FILE_URL);
+    expect(inBandBaseUrl(fakeRequest({ host: `${LEGACY_DOOR}:3102` }))).toBe(FILE_URL);
+  });
+
+  it("keeps the declared ORIGINS canonical over the config-file URL", () => {
+    const settings = resolveOriginSettings({
+      env: { PAPERCLIP_ORIGINS: `http://${LAN_IP}:3102` },
+      fileAuthPublicBaseUrl: FILE_URL,
+    });
+    // PAPERCLIP_ORIGINS is the stronger claim: the file URL stays the auth
+    // base URL and a trusted door, but it does not mint links.
+    expect(settings.canonicalOrigin).toBe(`http://${LAN_IP}:3102`);
+    expect(settings.authPublicBaseUrl).toBe(FILE_URL);
+    expect(settings.declaredOrigins).toContain(FILE_URL);
+  });
+
+  it("mints links on the declared canonical, not a Better Auth alias (declared mode precedence)", () => {
+    // The MKThink case from the review: the tailnet door declared, the LAN
+    // IP only present through BETTER_AUTH_URL. configuredPublicBaseUrl must
+    // answer the canonical, not the alias.
+    process.env.PAPERCLIP_ORIGINS = `https://${TAILNET}:3112`;
+    const { config } = bootAs({
+      PAPERCLIP_ORIGINS: `https://${TAILNET}:3112`,
+      BETTER_AUTH_URL: `http://${LAN_IP}:3102`,
+    });
+
+    expect(config.canonicalOrigin).toBe(`https://${TAILNET}:3112`);
+    expect(config.authPublicBaseUrl).toBe(`http://${LAN_IP}:3102`);
+    expect(configuredPublicBaseUrl()).toBe(config.canonicalOrigin);
+    expect(outOfBandBaseUrl(fakeRequest({ host: "evil.example.test" }))).toBe(`https://${TAILNET}:3112`);
+  });
+
+  it("mints links on the declared canonical, not the config-file URL (declared mode precedence)", () => {
+    process.env.PAPERCLIP_ORIGINS = `https://${TAILNET}:3112`;
+    const { config } = bootAs({ PAPERCLIP_ORIGINS: `https://${TAILNET}:3112` }, FILE_URL);
+
+    expect(config.canonicalOrigin).toBe(`https://${TAILNET}:3112`);
+    expect(configuredPublicBaseUrl()).toBe(config.canonicalOrigin);
+    expect(inBandBaseUrl(fakeRequest({ host: "evil.example.test" }))).toBe(`https://${TAILNET}:3112`);
+    // The file URL is a declared door, so a caller arriving on it is echoed.
+    expect(inBandBaseUrl(fakeRequest({ host: "file.example.test", "x-forwarded-proto": "https" })))
+      .toBe(FILE_URL);
   });
 });

@@ -57,6 +57,8 @@ Source: `server/src/lib/declared-origins.ts`, `.env.example`.
 
 When `PAPERCLIP_CANONICAL_ORIGIN` or `PAPERCLIP_ORIGINS` is set, the declared origins become the trusted-origin list, and the older variables are folded into it. With neither set, behavior is unchanged.
 
+The config file's `auth.publicBaseUrl` (what `agentdash onboard` writes) names the same address with lower precedence: `PAPERCLIP_CANONICAL_ORIGIN`, `PAPERCLIP_PUBLIC_URL`, then `PAPERCLIP_AUTH_PUBLIC_BASE_URL` / `BETTER_AUTH_URL` / `BETTER_AUTH_BASE_URL`, then the config file, then the first `PAPERCLIP_ORIGINS` entry. In declared mode the declared canonical always mints links — an alias or the config-file value stays trusted for sign-in but is never the canonical address.
+
 ## Database
 
 Source: `server/src/config.ts`, `server/src/index.ts`. Details: [Database](/deploy/database).
