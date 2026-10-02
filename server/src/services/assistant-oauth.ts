@@ -93,7 +93,7 @@ export function issuerBaseUrlStrict(
   if (deploymentMode === "authenticated") {
     throw new OAuthError(
       "server_error",
-      "This instance has no configured public base URL (PAPERCLIP_PUBLIC_URL) — assistant credentials cannot be issued",
+      "This instance has no configured public base URL (PAPERCLIP_CANONICAL_ORIGIN, PAPERCLIP_PUBLIC_URL, or auth.publicBaseUrl in the config file) — assistant credentials cannot be issued",
       500,
     );
   }

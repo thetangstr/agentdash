@@ -181,14 +181,15 @@ export function resolveOriginSettings(input: OriginSettingsInput): OriginSetting
   const authPublicBaseUrl = explicitCanonical ?? (legacyAuthPublicBaseUrlRaw?.trim() || listed[0]);
 
   // Same precedence as `configuredPublicBaseUrl()`, so links and the health
-  // report agree with what this function calls canonical — including the
-  // config file's `auth.publicBaseUrl`, which is registered as
-  // `config.authPublicBaseUrl` at boot (AgentDash #954).
+  // report agree with what this function calls canonical. The config file's
+  // `auth.publicBaseUrl` stays out of this chain deliberately (AgentDash
+  // #954): it reaches `authPublicBaseUrl` and the trusted set above, but an
+  // operator-declared PAPERCLIP_CANONICAL_ORIGIN / PAPERCLIP_ORIGINS is the
+  // stronger claim on which address links are minted from.
   const canonicalOrigin =
     explicitCanonical ??
     normalizeOrigin(publicUrlFromEnv) ??
     normalizeOrigin(env.PAPERCLIP_AUTH_PUBLIC_BASE_URL) ??
-    normalizeOrigin(input.fileAuthPublicBaseUrl) ??
     listed[0];
 
   const aliasOrigins: string[] = [];

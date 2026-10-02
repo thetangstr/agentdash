@@ -60,8 +60,8 @@ import type {
 } from "./routes/instance-database-backups.js";
 import { CLAIM_ATTEMPT_HEADER } from "./lib/claim-code.js";
 import { createBackupExportService } from "./routes/agentdash-backup-export-service.js";
-import { configuredPublicBaseUrl, registerConfiguredPublicBaseUrl } from "./lib/public-base-url.js";
-import { mintingOriginsForBoot, originBootReport, registerMintingOrigins } from "./lib/declared-origins.js";
+import { configuredPublicBaseUrl, registerBootOriginState } from "./lib/public-base-url.js";
+import { originBootReport } from "./lib/declared-origins.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -512,8 +512,11 @@ export async function startServer(): Promise<StartedServer> {
   }
   // AgentDash (#954): let link minting see the config-resolved public URL —
   // including one that lives only in the config file's auth.publicBaseUrl,
-  // which the env vars below never name.
-  registerConfiguredPublicBaseUrl(config.authPublicBaseUrl);
+  // which the env vars below never name. In declared mode the registered URL
+  // is the canonical origin, so PAPERCLIP_ORIGINS keeps priority over a
+  // deprecated alias or the config file. Authenticated mode re-registers
+  // below once the trusted set is resolved.
+  registerBootOriginState({ config });
   
   let authReady = config.deploymentMode === "local_trusted";
   let betterAuthHandler: RequestHandler | undefined;
@@ -554,8 +557,10 @@ export async function startServer(): Promise<StartedServer> {
     const trusted = resolveAuthTrustedOrigins(config, { listenPort });
     const effectiveTrustedOrigins = trusted.origins;
     // AgentDash (launch lane D): legacy mode no longer mints from the
-    // allowed-hostnames cross-product. See `mintingOriginsForBoot`.
-    registerMintingOrigins(mintingOriginsForBoot(trusted, config.authPublicBaseUrl));
+    // allowed-hostnames cross-product; the shared helper registers both the
+    // minting set and the configured public URL, same as the early call above
+    // but with the real trusted-origin resolution. See `mintingOriginsForBoot`.
+    registerBootOriginState({ config, trusted });
     logger.info(
       {
         authBaseUrlMode: config.authBaseUrlMode,

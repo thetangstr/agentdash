@@ -90,6 +90,9 @@ describe("configuredPublicBaseUrl", () => {
     expect(configuredPublicBaseUrl()).toBe("https://canonical.example.test");
   });
 
+  // Mechanical ordering only: when PAPERCLIP_ORIGINS is set, boot registers
+  // the declared canonical origin itself, so the two can never disagree in
+  // production — this just pins the fallback order.
   it("prefers the registered config value over a bare PAPERCLIP_ORIGINS first entry", () => {
     registerConfiguredPublicBaseUrl("https://file.example.test");
     process.env.PAPERCLIP_ORIGINS = "https://first.example,http://second.example:3102";
