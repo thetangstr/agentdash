@@ -54,8 +54,18 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-const { DashboardHome, Home, firstNameFor, formatElapsed, WAITING_EMPTY_TEXT, WORKING_EMPTY_TEXT, SHIPPED_WEEK_EMPTY_TEXT } =
-  await import("./Home");
+const {
+  DashboardHome,
+  Home,
+  firstNameFor,
+  formatElapsed,
+  WAITING_EMPTY_TEXT,
+  WAITING_EMPTY_SHORT_TEXT,
+  WORKING_EMPTY_TEXT,
+  SHIPPED_WEEK_EMPTY_TEXT,
+  SHIPPED_WEEK_EMPTY_SHORT_TEXT,
+} = await import("./Home");
+const { PHONE_WIDTH, mockViewportWidth } = await import("../lib/test-viewport");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -396,6 +406,51 @@ describe("Home", () => {
     expect(q("home-working")?.querySelector('[data-testid="home-block-error"]')).not.toBeNull();
     expect(q("home-waiting-count")?.textContent).toBe("3");
     expect(q("dashboard-stats")).not.toBeNull();
+  });
+
+  describe("on a phone (390px)", () => {
+    let restoreViewport: () => void;
+    beforeEach(() => {
+      restoreViewport = mockViewportWidth(PHONE_WIDTH);
+    });
+    afterEach(() => {
+      restoreViewport();
+    });
+
+    it("turns each empty block into one compact line with an icon", async () => {
+      mockDashboardApi.waitingOnYou.mockResolvedValue({ decisions: [], total: 0, shown: 0, tasksAssignedToYou: [], tasksAssignedToYouTotal: 0, otherTasksAssignedToYou: [], otherTasksAssignedToYouTotal: 0 });
+      mockDashboardApi.workingNow.mockResolvedValue({ items: [], total: 0 });
+      mockIssuesApi.listShipped.mockResolvedValue(shippedFeed(0));
+      await render();
+
+      for (const [block, text] of [
+        ["home-waiting", WAITING_EMPTY_SHORT_TEXT],
+        ["home-working", WORKING_EMPTY_TEXT],
+        ["home-shipped", SHIPPED_WEEK_EMPTY_SHORT_TEXT],
+      ] as const) {
+        const line = q(block)!.querySelector('[data-testid="home-empty-line"]')!;
+        expect(line, block).not.toBeNull();
+        expect(line.textContent).toBe(text);
+        expect(line.className).toContain("flex");
+        expect(line.className).not.toContain("flex-col");
+        expect(line.querySelector("svg")).not.toBeNull();
+      }
+      expect(q("home-waiting")?.textContent).not.toContain(WAITING_EMPTY_TEXT);
+    });
+
+    it("keeps Finish setting up to one compact row with its action", async () => {
+      mockFirstRunApi.status.mockResolvedValue({
+        ...firstRunNotApplicable,
+        applies: true,
+        showHomeNudge: true,
+        nextStep: "first_issue",
+      });
+      await render(<DashboardHome />);
+      const nudge = q("first-run-home-resume")!;
+      expect(nudge.getAttribute("data-compact")).toBe("true");
+      expect(nudge.textContent).toContain("Finish setting up");
+      expect(nudge.querySelector('a[href="/setup"]')?.textContent).toBe("Continue setup");
+    });
   });
 });
 

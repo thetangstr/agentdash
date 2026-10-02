@@ -53,14 +53,16 @@ import { StatusIcon } from "./StatusIcon";
 import { EmptyState } from "./EmptyState";
 import { Identity } from "./Identity";
 import { IssueGroupHeader } from "./IssueGroupHeader";
-import { IssueFiltersPopover } from "./IssueFiltersPopover";
+import { IssueFiltersPanel, IssueFiltersPopover } from "./IssueFiltersPopover";
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useIsPhone } from "../hooks/useIsPhone";
 import { IssueRow } from "./IssueRow";
 import { PageSkeleton } from "./PageSkeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2 } from "lucide-react";
+import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2, SlidersHorizontal, X } from "lucide-react";
 import { KanbanBoard } from "./KanbanBoard";
 import { buildIssueTree, countDescendants } from "../lib/issue-tree";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
@@ -403,12 +405,116 @@ interface IssuesListProps {
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
 }
 
+const ISSUE_SORT_OPTIONS = [
+  ["workflow", "Workflow"],
+  ["status", "Status"],
+  ["priority", "Priority"],
+  ["title", "Title"],
+  ["created", "Created"],
+  ["updated", "Updated"],
+] as const;
+
+const ISSUE_GROUP_OPTIONS = [
+  ["status", "Status"],
+  ["priority", "Priority"],
+  ["assignee", "Assignee"],
+  ["steward", "Steward"],
+  ["workspace", "Workspace"],
+  ["parent", "Parent Issue"],
+  ["none", "None"],
+] as const;
+
+/** Sort choices, shared by the desktop popover and the phone sheet. */
+function IssueSortOptions({
+  viewState,
+  updateView,
+  touch = false,
+}: {
+  viewState: Pick<IssueViewState, "sortField" | "sortDir">;
+  updateView: (patch: Partial<IssueViewState>) => void;
+  /** Phone sizing: 44px rows. */
+  touch?: boolean;
+}) {
+  return (
+    <div className={touch ? "space-y-0.5" : "p-2 space-y-0.5"}>
+      {ISSUE_SORT_OPTIONS.map(([field, label]) => (
+        <button
+          key={field}
+          className={cn(
+            "flex items-center justify-between w-full px-2 text-sm rounded-sm",
+            touch ? "min-h-11" : "py-1.5",
+            viewState.sortField === field ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground",
+          )}
+          aria-pressed={viewState.sortField === field}
+          onClick={() => {
+            if (viewState.sortField === field) {
+              updateView({ sortDir: viewState.sortDir === "asc" ? "desc" : "asc" });
+            } else {
+              updateView({ sortField: field, sortDir: "asc" });
+            }
+          }}
+        >
+          <span>{label}</span>
+          {viewState.sortField === field && (
+            <span className="text-xs text-muted-foreground">
+              {viewState.sortDir === "asc" ? "\u2191" : "\u2193"}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Group choices, shared by the desktop popover and the phone sheet. */
+function IssueGroupOptions({
+  viewMode,
+  effectiveGroupBy,
+  updateView,
+  touch = false,
+}: {
+  viewMode: IssueViewState["viewMode"];
+  effectiveGroupBy: IssueGroupBy;
+  updateView: (patch: Partial<IssueViewState>) => void;
+  /** Phone sizing: 44px rows. */
+  touch?: boolean;
+}) {
+  return (
+    <div className={touch ? "space-y-0.5" : "p-2 space-y-0.5"}>
+      {ISSUE_GROUP_OPTIONS.map(([value, label]) => {
+        const available = isGroupOptionAvailableInView(viewMode, value);
+        const selected = effectiveGroupBy === value;
+        return (
+          <button
+            key={value}
+            disabled={!available}
+            title={available ? undefined : "Not available in board view"}
+            aria-pressed={selected}
+            className={cn(
+              "flex items-center justify-between w-full px-2 text-sm rounded-sm",
+              touch ? "min-h-11" : "py-1.5",
+              selected ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground",
+              !available && "cursor-not-allowed opacity-50 hover:bg-transparent",
+            )}
+            onClick={() => updateView({ groupBy: value })}
+          >
+            <span>{label}</span>
+            {selected && <Check className="h-3.5 w-3.5" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function IssueSearchInput({
   value,
   onDebouncedChange,
+  fullWidth = false,
 }: {
   value: string;
   onDebouncedChange?: (search: string) => void;
+  fullWidth?: boolean;
 }) {
   const [draftValue, setDraftValue] = useState(value);
   const lastCommittedValueRef = useRef(value);
@@ -432,8 +538,13 @@ function IssueSearchInput({
   }, [draftValue, onDebouncedChange]);
 
   return (
-    <div className="relative w-48 sm:w-64 md:w-80">
-      <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+    <div className={fullWidth ? "relative w-full" : "relative w-48 sm:w-64 md:w-80"}>
+      <Search
+        className={cn(
+          "pointer-events-none absolute top-1/2 -translate-y-1/2 text-muted-foreground",
+          fullWidth ? "left-3 h-4 w-4" : "left-2 h-3.5 w-3.5",
+        )}
+      />
       <Input
         value={draftValue}
         onChange={(e) => {
@@ -457,7 +568,7 @@ function IssueSearchInput({
           }
         }}
         placeholder="Search issues..."
-        className="pl-7 text-xs sm:text-sm"
+        className={fullWidth ? "h-11 pl-9 text-base" : "pl-7 text-xs sm:text-sm"}
         aria-label="Search issues"
         data-page-search-target="true"
       />
@@ -600,9 +711,17 @@ export function IssuesList({
   const initialAssigneesKey = initialAssignees?.join("|") ?? "";
   const initialWorkspacesKey = initialWorkspaces?.join("|") ?? "";
 
-  const [viewState, setViewState] = useState<IssueViewState>(() =>
+  const [storedViewState, setViewState] = useState<IssueViewState>(() =>
     getInitialWorkspaceViewState(scopedKey, initialAssignees, initialWorkspaces, defaultSortField),
   );
+  // AgentDash: mobile lists — phones always get the list view. The stored
+  // choice is left alone, so a board picked on a laptop is still there.
+  const isPhone = useIsPhone();
+  const viewState = useMemo<IssueViewState>(
+    () => (isPhone && storedViewState.viewMode !== "list" ? { ...storedViewState, viewMode: "list" } : storedViewState),
+    [isPhone, storedViewState],
+  );
+  const [phoneViewSheetOpen, setPhoneViewSheetOpen] = useState(false);
   const [assigneePickerIssueId, setAssigneePickerIssueId] = useState<string | null>(null);
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const [issueSearch, setIssueSearch] = useState(initialSearch ?? "");
@@ -1244,6 +1363,94 @@ export function IssuesList({
       ) : null}
 
       {/* Toolbar */}
+      {isPhone ? (
+        // AgentDash: mobile lists — a full-width search, then one "Filter & view"
+        // button (filters, sort, grouping in a bottom sheet) and "+".
+        <div className="space-y-2" data-testid="issues-phone-toolbar">
+          <IssueSearchInput
+            fullWidth
+            value={issueSearch}
+            onDebouncedChange={(nextSearch) => {
+              setIssueSearch(nextSearch);
+              onSearchChange?.(nextSearch);
+            }}
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 min-w-0 flex-1 justify-start"
+              onClick={() => setPhoneViewSheetOpen(true)}
+              aria-haspopup="dialog"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              <span>Filter &amp; view</span>
+              {activeFilterCount > 0 ? (
+                <span className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
+                  {activeFilterCount}
+                </span>
+              ) : null}
+            </Button>
+            <Button
+              type="button"
+              className="size-11 shrink-0"
+              size="icon"
+              onClick={() => openCreateIssueDialog()}
+              aria-label={createButtonLabel}
+              title={createButtonLabel}
+            >
+              <Plus className="h-5 w-5" />
+            </Button>
+          </div>
+          <Sheet open={phoneViewSheetOpen} onOpenChange={setPhoneViewSheetOpen}>
+            <SheetContent
+              side="bottom"
+              showCloseButton={false}
+              className="max-h-[85dvh] gap-0 overflow-y-auto overscroll-contain rounded-t-xl pb-[env(safe-area-inset-bottom)]"
+              data-testid="issues-phone-view-sheet"
+            >
+              <SheetHeader className="sticky top-0 z-10 border-b border-border bg-background pr-12">
+                <SheetTitle>Filter &amp; view</SheetTitle>
+                <SheetDescription className="text-xs">Filters, sort order and grouping for this list.</SheetDescription>
+                <SheetClose
+                  className="absolute right-2 top-2 flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5" />
+                </SheetClose>
+              </SheetHeader>
+              {/* Whole label rows are the 44px tap targets; the checkbox stays square (important beats the global coarse-pointer min-height). */}
+              <div className="border-b border-border [&_[data-slot=checkbox]]:min-h-0! [&_label]:min-h-11">
+                <IssueFiltersPanel
+                  state={viewState}
+                  onChange={updateView}
+                  activeFilterCount={activeFilterCount}
+                  agents={agents}
+                  creators={creatorOptions}
+                  projects={projects?.map((project) => ({ id: project.id, name: project.name }))}
+                  labels={labels?.map((label) => ({ id: label.id, name: label.name, color: label.color }))}
+                  currentUserId={currentUserId}
+                  enableRoutineVisibilityFilter={enableRoutineVisibilityFilter}
+                  workspaces={isolatedWorkspacesEnabled ? workspaceOptions : undefined}
+                />
+              </div>
+              <section aria-label="Sort" className="border-b border-border px-2 py-2">
+                <h3 className="px-2 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sort</h3>
+                <IssueSortOptions viewState={viewState} updateView={updateView} touch />
+              </section>
+              <section aria-label="Group" className="border-b border-border px-2 py-2">
+                <h3 className="px-2 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Group</h3>
+                <IssueGroupOptions
+                  viewMode={viewState.viewMode}
+                  effectiveGroupBy={effectiveGroupBy}
+                  updateView={updateView}
+                  touch
+                />
+              </section>
+            </SheetContent>
+          </Sheet>
+        </div>
+      ) : (
       <div className="flex items-center justify-between gap-2 sm:gap-3">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Button size="sm" variant="outline" onClick={() => openCreateIssueDialog()}>
@@ -1323,37 +1530,7 @@ export function IssuesList({
                 </Button>
               </PopoverTrigger>
               <PopoverContent align="end" className="w-48 p-0">
-                <div className="p-2 space-y-0.5">
-                  {([
-                    ["workflow", "Workflow"],
-                    ["status", "Status"],
-                    ["priority", "Priority"],
-                    ["title", "Title"],
-                    ["created", "Created"],
-                    ["updated", "Updated"],
-                  ] as const).map(([field, label]) => (
-                    <button
-                      key={field}
-                      className={`flex items-center justify-between w-full px-2 py-1.5 text-sm rounded-sm ${
-                        viewState.sortField === field ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground"
-                      }`}
-                      onClick={() => {
-                        if (viewState.sortField === field) {
-                          updateView({ sortDir: viewState.sortDir === "asc" ? "desc" : "asc" });
-                        } else {
-                          updateView({ sortField: field, sortDir: "asc" });
-                        }
-                      }}
-                    >
-                      <span>{label}</span>
-                      {viewState.sortField === field && (
-                        <span className="text-xs text-muted-foreground">
-                          {viewState.sortDir === "asc" ? "\u2191" : "\u2193"}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                <IssueSortOptions viewState={viewState} updateView={updateView} />
               </PopoverContent>
             </Popover>
           )}
@@ -1371,40 +1548,16 @@ export function IssuesList({
                 </Button>
               </PopoverTrigger>
               <PopoverContent align="end" className="w-44 p-0">
-                <div className="p-2 space-y-0.5">
-                  {([
-                    ["status", "Status"],
-                    ["priority", "Priority"],
-                    ["assignee", "Assignee"],
-                    ["steward", "Steward"],
-                    ["workspace", "Workspace"],
-                    ["parent", "Parent Issue"],
-                    ["none", "None"],
-                  ] as const).map(([value, label]) => {
-                    const available = isGroupOptionAvailableInView(viewState.viewMode, value);
-                    const selected = effectiveGroupBy === value;
-                    return (
-                      <button
-                        key={value}
-                        disabled={!available}
-                        title={available ? undefined : "Not available in board view"}
-                        className={cn(
-                          "flex items-center justify-between w-full px-2 py-1.5 text-sm rounded-sm",
-                          selected ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground",
-                          !available && "cursor-not-allowed opacity-50 hover:bg-transparent",
-                        )}
-                        onClick={() => updateView({ groupBy: value })}
-                      >
-                        <span>{label}</span>
-                        {selected && <Check className="h-3.5 w-3.5" />}
-                      </button>
-                    );
-                  })}
-                </div>
+                <IssueGroupOptions
+                  viewMode={viewState.viewMode}
+                  effectiveGroupBy={effectiveGroupBy}
+                  updateView={updateView}
+                />
               </PopoverContent>
             </Popover>
         </div>
       </div>
+      )}
 
       {isLoading && <PageSkeleton variant="issues-list" />}
       {error && <p className="text-sm text-destructive">{error.message}</p>}

@@ -1,6 +1,8 @@
 // AgentDash: UX-2 (#783) — one work product: what shipped, where, by whom, at what cost.
 import type { ShippedWorkProduct } from "@paperclipai/shared";
-import { ExternalLink, FileText, GitMerge, GitPullRequest, GitPullRequestClosed } from "lucide-react";
+import { useState } from "react";
+import { Coins, ExternalLink, FileText, GitMerge, GitPullRequest, GitPullRequestClosed } from "lucide-react";
+import { useIsPhone } from "../hooks/useIsPhone";
 import { Link } from "@/lib/router";
 import { cn, issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
@@ -19,7 +21,13 @@ const TONE_CLASSES: Record<WorkProductStateTone, string> = {
   neutral: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
 };
 
-export function WorkProductStateBadge({ product }: { product: Pick<ShippedWorkProduct, "type" | "status"> }) {
+export function WorkProductStateBadge({
+  product,
+  className,
+}: {
+  product: Pick<ShippedWorkProduct, "type" | "status">;
+  className?: string;
+}) {
   const state = workProductState(product);
   return (
     <span
@@ -27,6 +35,7 @@ export function WorkProductStateBadge({ product }: { product: Pick<ShippedWorkPr
       className={cn(
         "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap shrink-0",
         TONE_CLASSES[state.tone],
+        className,
       )}
     >
       {state.label}
@@ -43,15 +52,91 @@ function ProductIcon({ product }: { product: ShippedWorkProduct }) {
   return <GitPullRequest className={className} />;
 }
 
+/**
+ * The phone card: title (two lines at most) and state on one row, then
+ * "issue · agent · time" on one truncated line. Usage sits behind a tap so the
+ * card stays two lines tall.
+ */
+function CompactShippedWorkProductRow({ product, showUsage }: { product: ShippedWorkProduct; showUsage: boolean }) {
+  const [usageOpen, setUsageOpen] = useState(false);
+  const titleHref = product.url ?? null;
+  const meta = [
+    product.issue.identifier ?? product.issue.title,
+    product.agent?.name ?? null,
+    timeAgo(product.createdAt),
+  ].filter((part): part is string => Boolean(part));
+  return (
+    <div className="flex items-start gap-2 py-1 pl-3 pr-1" data-testid="shipped-row" data-compact="true">
+      <span className="pt-3">
+        <ProductIcon product={product} />
+      </span>
+      <div className="min-w-0 flex-1 py-2">
+        <div className="flex items-start gap-2">
+          {titleHref ? (
+            <a
+              href={titleHref}
+              target="_blank"
+              rel="noreferrer"
+              className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
+              data-testid="shipped-title"
+            >
+              {product.title}
+            </a>
+          ) : (
+            <Link
+              to={issueUrl(product.issue)}
+              className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-5 hover:underline"
+              data-testid="shipped-title"
+            >
+              {product.title}
+            </Link>
+          )}
+          <WorkProductStateBadge product={product} className="text-xs" />
+        </div>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground" data-testid="shipped-meta">
+          {meta.join(" · ")}
+        </p>
+        {showUsage && usageOpen ? (
+          <p className="mt-0.5 text-xs text-muted-foreground" data-testid="shipped-usage">
+            {formatShippedUsage(product.usage)}
+          </p>
+        ) : null}
+      </div>
+      {showUsage ? (
+        <button
+          type="button"
+          className={cn(
+            "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+            usageOpen && "bg-accent text-foreground",
+          )}
+          aria-expanded={usageOpen}
+          aria-label={usageOpen ? "Hide tokens" : "Show tokens"}
+          data-testid="shipped-usage-toggle"
+          onClick={() => setUsageOpen((open) => !open)}
+        >
+          <Coins className="h-4 w-4" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function ShippedWorkProductRow({
   product,
   showIssue = true,
   showUsage = true,
+  compactOnPhone = false,
 }: {
   product: ShippedWorkProduct;
   showIssue?: boolean;
   showUsage?: boolean;
+  /** AgentDash: mobile lists — render the compact card on phones (Shipped, Home). */
+  compactOnPhone?: boolean;
 }) {
+  const isPhone = useIsPhone();
+  if (compactOnPhone && isPhone) {
+    return <CompactShippedWorkProductRow product={product} showUsage={showUsage} />;
+  }
   return (
     <div className="flex items-start gap-3 px-3 py-2.5" data-testid="shipped-row">
       <ProductIcon product={product} />

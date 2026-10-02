@@ -19,7 +19,16 @@ import { PageTabBar } from "../components/PageTabBar";
 import { TeamViewTabs } from "../components/TeamViewTabs";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Bot, Plus, List, GitBranch, SlidersHorizontal } from "lucide-react";
+import { Bot, Plus, List, GitBranch, SlidersHorizontal, MoreHorizontal, UserPlus } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { AgentIcon } from "../components/AgentIconPicker";
+import { useIsPhone } from "../hooks/useIsPhone";
 import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
 
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
@@ -61,10 +70,13 @@ function isScheduled(agent: Agent): boolean {
   return (heartbeat as { enabled?: unknown }).enabled === true;
 }
 
-function NotScheduledBadge() {
+function NotScheduledBadge({ className }: { className?: string }) {
   return (
     <span
-      className="whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+      className={cn(
+        "whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
+        className,
+      )}
       title="This agent only runs when someone wakes it."
     >
       Not scheduled
@@ -100,10 +112,11 @@ export function Agents() {
   const navigate = useNavigate();
   const location = useLocation();
   const { isMobile } = useSidebar();
+  const isPhone = useIsPhone();
   const pathSegment = location.pathname.split("/").pop() ?? "all";
   const tab: FilterTab = (pathSegment === "all" || pathSegment === "active" || pathSegment === "paused" || pathSegment === "error") ? pathSegment : "all";
   const [view, setView] = useState<"list" | "org">("org");
-  const forceListView = isMobile;
+  const forceListView = isMobile || isPhone;
   const effectiveView: "list" | "org" = forceListView ? "list" : view;
   const [showTerminated, setShowTerminated] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -167,6 +180,16 @@ export function Agents() {
     <div className="space-y-4">
       {/* AgentDash: sidebar IA — Team is "List | Org chart"; the org chart moved off the sidebar. */}
       <TeamViewTabs active="list" />
+      {isPhone ? (
+        <PhoneAgentsToolbar
+          tab={tab}
+          onTabChange={(v) => navigate(`/agents/${v}`)}
+          showTerminated={showTerminated}
+          onShowTerminatedChange={setShowTerminated}
+          onNewAgent={openNewAgent}
+          onSetUpRole={() => navigate("/workforce")}
+        />
+      ) : (
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Tabs value={tab} onValueChange={(v) => navigate(`/agents/${v}`)}>
           <PageTabBar
@@ -241,6 +264,7 @@ export function Agents() {
           </Button>
         </div>
       </div>
+      )}
 
       {filtered.length > 0 && (
         <p className="text-xs text-muted-foreground">{filtered.length} agent{filtered.length !== 1 ? "s" : ""}</p>
@@ -259,7 +283,22 @@ export function Agents() {
       )}
 
       {/* List view */}
-      {effectiveView === "list" && filtered.length > 0 && (
+      {/* AgentDash: mobile lists — two-line cards so a name never truncates behind its chips. */}
+      {effectiveView === "list" && filtered.length > 0 && isPhone && (
+        <ul className="divide-y divide-border rounded-lg border border-border" data-testid="agents-phone-list">
+          {filtered.map((agent) => (
+            <li key={agent.id}>
+              <PhoneAgentCard
+                agent={agent}
+                liveRun={liveRunByAgent.get(agent.id)}
+                dimmed={!!agent.pausedAt && tab !== "paused"}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {effectiveView === "list" && filtered.length > 0 && !isPhone && (
         <div className="border border-border">
           {filtered.map((agent) => {
             return (
@@ -355,6 +394,144 @@ export function Agents() {
         </p>
       )}
     </div>
+  );
+}
+
+const FILTER_TAB_OPTIONS: Array<{ value: FilterTab; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "paused", label: "Paused" },
+  { value: "error", label: "Error" },
+];
+
+/**
+ * The phone toolbar: the status filter, one primary "New agent" button, and a
+ * ⋯ menu holding the rest (show terminated, set up a role). Every control is
+ * at least 44px tall.
+ */
+function PhoneAgentsToolbar({
+  tab,
+  onTabChange,
+  showTerminated,
+  onShowTerminatedChange,
+  onNewAgent,
+  onSetUpRole,
+}: {
+  tab: FilterTab;
+  onTabChange: (tab: FilterTab) => void;
+  showTerminated: boolean;
+  onShowTerminatedChange: (value: boolean) => void;
+  onNewAgent: () => void;
+  onSetUpRole: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2" data-testid="agents-phone-toolbar">
+      <select
+        value={tab}
+        onChange={(e) => onTabChange(e.target.value as FilterTab)}
+        aria-label="Filter agents by status"
+        className="h-11 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-base focus:outline-none focus:ring-1 focus:ring-ring"
+      >
+        {FILTER_TAB_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <Button className="h-11 shrink-0" onClick={onNewAgent}>
+        <Plus className="h-4 w-4" />
+        New agent
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="icon"
+            className="relative size-11 shrink-0"
+            aria-label="More agent actions"
+          >
+            <MoreHorizontal className="h-5 w-5" />
+            {showTerminated ? (
+              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary" aria-hidden="true" />
+            ) : null}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuCheckboxItem
+            className="min-h-11"
+            checked={showTerminated}
+            onCheckedChange={(checked) => onShowTerminatedChange(checked === true)}
+          >
+            Show terminated
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuItem className="min-h-11" onSelect={onSetUpRole}>
+            <UserPlus className="h-4 w-4" />
+            Set up a role
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+/**
+ * One agent on a phone: avatar, then the full name (wrapping, never
+ * truncated) and role on the first line, with the kind, status and schedule
+ * chips wrapping onto the second.
+ */
+function PhoneAgentCard({
+  agent,
+  liveRun,
+  dimmed,
+}: {
+  agent: Agent;
+  liveRun: { runId: string; liveCount: number } | undefined;
+  dimmed: boolean;
+}) {
+  const role = `${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`;
+  return (
+    <Link
+      to={agentUrl(agent)}
+      data-testid="agent-phone-card"
+      className={cn(
+        "flex min-h-11 items-start gap-3 px-4 py-3 text-inherit no-underline transition-colors hover:bg-accent/50",
+        dimmed && "opacity-50",
+      )}
+    >
+      <span className="relative mt-0.5 shrink-0">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-muted">
+          <AgentIcon icon={agent.icon} className="h-4 w-4 text-foreground/70" />
+        </span>
+        <span
+          className={cn(
+            "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background",
+            agentStatusDot[agent.status] ?? agentStatusDotDefault,
+          )}
+          aria-hidden="true"
+        />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-baseline gap-x-2">
+          <span className="break-words text-sm font-medium text-foreground" data-testid="agent-phone-name">
+            {agent.name}
+          </span>
+          <span className="break-words text-xs text-muted-foreground">{role}</span>
+        </span>
+        <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {agent.status === "terminated" ? null : <AgentKindBadge agent={agent} className="text-xs" />}
+          {liveRun ? (
+            // A chip, not LiveRunIndicator's link: the whole card is already a link.
+            <span className="flex items-center gap-1.5 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
+              <span className="h-2 w-2 rounded-full bg-blue-500" aria-hidden="true" />
+              Live{liveRun.liveCount > 1 ? ` (${liveRun.liveCount})` : ""}
+            </span>
+          ) : (
+            <StatusBadge status={agent.status} />
+          )}
+          {isScheduled(agent) || agent.status === "terminated" ? null : <NotScheduledBadge className="text-xs" />}
+        </span>
+      </span>
+    </Link>
   );
 }
 

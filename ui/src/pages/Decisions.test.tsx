@@ -50,7 +50,8 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-const { Decisions, decisionsListLength } = await import("./Decisions");
+const { Decisions, decisionsListLength, EMPTY_SHORT_TEXT } = await import("./Decisions");
+const { PHONE_WIDTH, mockViewportWidth } = await import("../lib/test-viewport");
 const { useDecisionsBadge } = await import("../hooks/useDecisionsBadge");
 
 /** What the sidebar and mobile nav render: the badge number, nothing else. */
@@ -250,6 +251,31 @@ describe("Decisions", () => {
     await render();
     expect(q("decisions-empty")?.textContent).toBe(EMPTY_TEXT);
     expect(q("decisions-count")?.textContent).toBe("0");
+  });
+
+  it("says it in one compact line with an icon on a phone (390px)", async () => {
+    const restoreViewport = mockViewportWidth(PHONE_WIDTH);
+    try {
+      mockDashboardApi.waitingOnYou.mockResolvedValue(
+        waitingWith({
+          decisions: [],
+          total: 0,
+          shown: 0,
+          tasksAssignedToYou: [],
+          tasksAssignedToYouTotal: 0,
+          otherTasksAssignedToYou: [],
+          otherTasksAssignedToYouTotal: 0,
+        }),
+      );
+      await render();
+      const empty = q("decisions-empty")!;
+      expect(empty.getAttribute("data-compact")).toBe("true");
+      expect(empty.textContent).toBe(EMPTY_SHORT_TEXT);
+      expect(empty.className).not.toContain("py-16");
+      expect(empty.querySelector("svg")).not.toBeNull();
+    } finally {
+      restoreViewport();
+    }
   });
 
   it("keeps the empty line even when only machine-generated noise waits", async () => {

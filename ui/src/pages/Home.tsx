@@ -28,11 +28,15 @@ import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
 import { decisionsListLength, useDecisionsCount } from "../hooks/useDecisionsBadge";
 import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
 import { ControlPlanePanels } from "../components/dashboard/ControlPlanePanels";
+import { useIsPhone } from "../hooks/useIsPhone";
 
 export const HOME_LIST_LIMIT = 6;
 export const WAITING_EMPTY_TEXT = "Nothing needs you right now. Decisions and issues assigned to you show up here.";
 export const WORKING_EMPTY_TEXT = "No agent is working right now.";
 export const SHIPPED_WEEK_EMPTY_TEXT = "Nothing shipped this week yet. Pull requests and results land here, with what they cost.";
+// AgentDash: mobile lists — the one-line phone versions of the empty states.
+export const WAITING_EMPTY_SHORT_TEXT = "Nothing needs you right now.";
+export const SHIPPED_WEEK_EMPTY_SHORT_TEXT = "Nothing shipped this week yet.";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The first word of a person's name; null for the synthetic local operator. */
@@ -110,7 +114,28 @@ function ErrorLine({ what }: { what: string }) {
   );
 }
 
-function EmptyLine({ icon: Icon, text, action }: { icon: typeof CircleCheck; text: string; action?: ReactNode }) {
+function EmptyLine({
+  icon: Icon,
+  text,
+  shortText,
+  action,
+}: {
+  icon: typeof CircleCheck;
+  text: string;
+  /** What a phone shows instead: one compact line next to the icon. */
+  shortText?: string;
+  action?: ReactNode;
+}) {
+  const isPhone = useIsPhone();
+  if (isPhone) {
+    return (
+      <div className="flex min-h-11 items-center gap-2 px-4 py-2 text-xs text-muted-foreground" data-testid="home-empty-line">
+        <Icon className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 flex-1">{shortText ?? text}</span>
+        {action}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col items-start gap-3 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:items-center">
       <Icon className="h-4 w-4 shrink-0" />
@@ -123,7 +148,7 @@ function EmptyLine({ icon: Icon, text, action }: { icon: typeof CircleCheck; tex
 function MoreLine({ count, to, noun }: { count: number; to: string; noun: string }) {
   if (count <= 0) return null;
   return (
-    <Link to={to} className="block px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:underline">
+    <Link to={to} className="block px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:py-3.5">
       and {count} more {noun}
     </Link>
   );
@@ -151,7 +176,7 @@ function WaitingOnYouBlock({
   return (
     <Block title="Waiting on you" count={data ? count : null} testId="home-waiting">
       {failed && !data ? <ErrorLine what="what is waiting on you" /> : null}
-      {data && count === 0 ? <EmptyLine icon={CircleCheck} text={WAITING_EMPTY_TEXT} /> : null}
+      {data && count === 0 ? <EmptyLine icon={CircleCheck} text={WAITING_EMPTY_TEXT} shortText={WAITING_EMPTY_SHORT_TEXT} /> : null}
       <ul className="divide-y divide-border">
         {shownDecisions.map((decision) => (
           <li key={decision.approvalId} data-testid="home-waiting-row" className="flex items-start gap-3 px-4 py-2.5">
@@ -311,7 +336,7 @@ export function Home() {
     <div className="mx-auto w-full max-w-[1080px] space-y-6 px-1 py-6 sm:px-4" data-testid="home">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground max-sm:text-xs">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
           </div>
           <h1 className="mt-1 text-3xl font-bold tracking-tight" data-testid="home-greeting">
@@ -323,7 +348,7 @@ export function Home() {
             {selectedCompany?.name ?? "Your workspace"}
           </p>
         </div>
-        <Button asChild variant="outline" size="sm" className="shrink-0">
+        <Button asChild variant="outline" size="sm" className="shrink-0 max-sm:h-11">
           <Link to="/cos" data-testid="home-plan-with-cos">
             <MessageSquare className="mr-1.5 h-4 w-4" />
             Plan with your Chief of Staff
@@ -341,7 +366,10 @@ export function Home() {
         count={working ? working.total : null}
         testId="home-working"
         action={
-          <Link to="/dashboard/live" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          <Link
+            to="/dashboard/live"
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+          >
             All runs
           </Link>
         }
@@ -375,16 +403,19 @@ export function Home() {
         count={shipped ? shipped.total : null}
         testId="home-shipped"
         action={
-          <Link to="/shipped" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          <Link
+            to="/shipped"
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+          >
             All shipped
           </Link>
         }
       >
         {shippedFailed && !shipped ? <ErrorLine what="what shipped this week" /> : null}
-        {shipped && shipped.total === 0 ? <EmptyLine icon={PackageCheck} text={SHIPPED_WEEK_EMPTY_TEXT} /> : null}
+        {shipped && shipped.total === 0 ? <EmptyLine icon={PackageCheck} text={SHIPPED_WEEK_EMPTY_TEXT} shortText={SHIPPED_WEEK_EMPTY_SHORT_TEXT} /> : null}
         <div className="divide-y divide-border">
           {shippedItems.map((product) => (
-            <ShippedWorkProductRow key={product.id} product={product} />
+            <ShippedWorkProductRow key={product.id} product={product} compactOnPhone />
           ))}
         </div>
         <MoreLine count={(shipped?.total ?? 0) - shippedItems.length} to="/shipped" noun="shipped" />

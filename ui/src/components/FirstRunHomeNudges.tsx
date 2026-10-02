@@ -22,6 +22,7 @@ import { inboxDismissalsApi } from "@/api/inboxDismissals";
 import { Button } from "@/components/ui/button";
 import { Link } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
+import { useIsPhone } from "@/hooks/useIsPhone";
 
 const NEXT_LABEL: Record<Exclude<FirstRunStep, "done">, string> = {
   model: "connect a model provider",
@@ -71,6 +72,7 @@ export function repoStepHidden(status: Partial<Pick<FirstRunStatus, "repo">>, di
 
 export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
   const queryClient = useQueryClient();
+  const isPhone = useIsPhone();
   const [dismissed, setDismissed] = useState(() => readFlag(dismissKey(companyId)));
   // Hides the card at once, before (or even if) the server save lands.
   const [githubDismissedNow, setGithubDismissedNow] = useState(false);
@@ -112,6 +114,48 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
     if (data.nextStep === "repo" && repoStepHidden(data, githubDismissed)) return null;
     const optionalRepo = data.nextStep === "repo";
     const blockedOnModel = data.nextStep === "model" && !data.canConfigureModel;
+    const title = STEP_COPY[data.nextStep]?.title ?? "Finish setting up";
+    const dismissGithubNow = () => {
+      setGithubDismissedNow(true);
+      dismissGithub.mutate();
+    };
+    if (isPhone) {
+      // AgentDash: mobile lists — one compact row on a phone: what is next,
+      // a one-line reason, and the action.
+      const detail = blockedOnModel
+        ? "Ask the instance administrator to add a model provider key."
+        : STEP_COPY[data.nextStep]?.text ?? `Next: ${NEXT_LABEL[data.nextStep]}.`;
+      return (
+        <section
+          className="flex items-center gap-2 rounded-xl border border-border bg-card py-1.5 pl-4 pr-1.5 text-sm"
+          data-testid="first-run-home-resume"
+          data-compact="true"
+          aria-label={optionalRepo ? "Connect GitHub (optional)" : "Finish setting up"}
+        >
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-semibold">{title}</div>
+            <p className="truncate text-xs text-muted-foreground" title={detail}>
+              {detail}
+            </p>
+          </div>
+          {blockedOnModel ? null : (
+            <Button asChild size="sm" className="h-11 shrink-0">
+              <Link to="/setup">{STEP_COPY[data.nextStep]?.action ?? "Continue setup"}</Link>
+            </Button>
+          )}
+          {optionalRepo ? (
+            <button
+              type="button"
+              aria-label="Dismiss the Connect GitHub card"
+              className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={dismissGithubNow}
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
+        </section>
+      );
+    }
     return (
       <section
         className="relative rounded-xl border border-border bg-card px-4 py-3 text-sm"
