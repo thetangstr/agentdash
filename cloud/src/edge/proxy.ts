@@ -219,8 +219,10 @@ function activityCounts(path: string): boolean {
 }
 
 /** The provisioner's health probe: GET or HEAD of exactly /api/health (query ignored). */
-export function isProvisioningHealthProbe(req: Pick<IncomingMessage, "method" | "url">): boolean {
+export function isProvisioningHealthProbe(req: Pick<IncomingMessage, "method" | "url" | "headers">): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") return false;
+  // PR #948 review: never tunnel a WebSocket upgrade to a box that is not published.
+  if (isWebSocketUpgrade(req.headers ?? {})) return false;
   const path = (req.url ?? "").split("?")[0];
   return path === "/api/health";
 }
