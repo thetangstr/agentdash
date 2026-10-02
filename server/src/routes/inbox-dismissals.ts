@@ -6,7 +6,9 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { inboxDismissalService, logActivity } from "../services/index.js";
 
 const inboxDismissalSchema = z.object({
-  itemKey: z.string().trim().min(1).regex(/^(approval|join|run):.+$/, "Unsupported inbox item key"),
+  // AgentDash: `home:` keys are per-person Home card dismissals (the optional
+  // "Connect GitHub" step); the Decisions inbox ignores keys it does not know.
+  itemKey: z.string().trim().min(1).regex(/^(approval|join|run|home):.+$/, "Unsupported inbox item key"),
 });
 
 export function inboxDismissalRoutes(db: Db) {

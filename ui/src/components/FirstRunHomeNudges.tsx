@@ -5,14 +5,19 @@
 //     set it, who can);
 //   - once the first issue exists: "Connect Muse so you can do this from your
 //     phone", linking to the in-app assistant instructions. Dismissible.
+// The repo step is optional (not every company works in code): it reads
+// "Working with code? Connect GitHub", can be dismissed per person per company
+// (stored server-side as the `home:connect-github` dismissal, with a
+// localStorage copy), and disappears once the company ships work without one.
 // Only when the server says so (`showHomeNudge`): a hosted box, and a company
 // created after the first run shipped or one with no issues yet. Established
 // companies and self-hosted installs see nothing; /setup stays reachable.
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Smartphone, X } from "lucide-react";
 import { assistantGrantsApi } from "@/api/assistant-grants";
-import { firstRunApi, type FirstRunStep } from "@/api/firstRun";
+import { firstRunApi, type FirstRunStatus, type FirstRunStep } from "@/api/firstRun";
+import { inboxDismissalsApi } from "@/api/inboxDismissals";
 import { Button } from "@/components/ui/button";
 import { Link } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
@@ -26,32 +31,73 @@ const NEXT_LABEL: Record<Exclude<FirstRunStep, "done">, string> = {
 // AgentDash: UX-11 — the repo step speaks the plan's empty-state copy and
 // names the action after what it does, not the setup flow it resumes.
 const STEP_COPY: Partial<
-  Record<Exclude<FirstRunStep, "done">, { text: string; action: string }>
+  Record<Exclude<FirstRunStep, "done">, { title?: string; text: string; action: string }>
 > = {
   repo: {
-    text: "Connect a repo so your agents have somewhere to work.",
+    title: "Working with code? Connect GitHub",
+    text: "Connect a repo so your agents have somewhere to work. Skip this if your team does not work in code.",
     action: "Connect GitHub",
   },
 };
+
+/** The server-side dismissal key for the optional GitHub step (per person, per company). */
+export const CONNECT_GITHUB_DISMISSAL_KEY = "home:connect-github";
 
 function dismissKey(companyId: string) {
   return `agentdash.connectAssistantCard.dismissed.${companyId}`;
 }
 
-function readDismissed(companyId: string): boolean {
+function githubDismissKey(companyId: string) {
+  return `agentdash.connectGithubCard.dismissed.${companyId}`;
+}
+
+function readFlag(key: string): boolean {
   try {
-    return window.localStorage.getItem(dismissKey(companyId)) === "1";
+    return window.localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
 }
 
+function writeFlag(key: string) {
+  try {
+    window.localStorage.setItem(key, "1");
+  } catch {
+    // per-viewer convenience only
+  }
+}
+
+/** Whether Home should offer the optional GitHub step at all. */
+export function repoStepHidden(status: Partial<Pick<FirstRunStatus, "repo">>, dismissed: boolean): boolean {
+  return dismissed || Boolean(status.repo?.shippedWithoutRepo);
+}
+
 export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
-  const [dismissed, setDismissed] = useState(() => readDismissed(companyId));
+  const queryClient = useQueryClient();
+  const [dismissed, setDismissed] = useState(() => readFlag(dismissKey(companyId)));
+  const [githubDismissedLocally, setGithubDismissedLocally] = useState(() => readFlag(githubDismissKey(companyId)));
   const { data } = useQuery({
     queryKey: queryKeys.firstRun(companyId),
     queryFn: () => firstRunApi.status(companyId),
   });
+  // The person's dismissals, read only while the repo step is the next one.
+  const dismissalsKey = ["home", companyId, "dismissals"] as const;
+  const dismissals = useQuery({
+    queryKey: dismissalsKey,
+    queryFn: () => inboxDismissalsApi.list(companyId),
+    enabled: data?.nextStep === "repo" && data.applies && data.showHomeNudge && data.canManage,
+    retry: false,
+  });
+  const dismissGithub = useMutation({
+    mutationFn: () => inboxDismissalsApi.dismiss(companyId, CONNECT_GITHUB_DISMISSAL_KEY),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: dismissalsKey });
+    },
+  });
+  const githubDismissed =
+    githubDismissedLocally ||
+    (Array.isArray(dismissals.data) &&
+      dismissals.data.some((dismissal) => dismissal.itemKey === CONNECT_GITHUB_DISMISSAL_KEY));
   // AgentDash (GH #793): once a grant exists the card has done its job — only
   // ask while the person has no assistant connected. Queried lazily so a
   // mid-setup company never calls it.
@@ -65,14 +111,30 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
 
   if (data.nextStep !== "done") {
     if (!data.canManage) return null;
+    if (data.nextStep === "repo" && repoStepHidden(data, githubDismissed)) return null;
+    const optionalRepo = data.nextStep === "repo";
     const blockedOnModel = data.nextStep === "model" && !data.canConfigureModel;
     return (
       <section
-        className="rounded-xl border border-border bg-card px-4 py-3 text-sm"
+        className="relative rounded-xl border border-border bg-card px-4 py-3 text-sm"
         data-testid="first-run-home-resume"
-        aria-label="Finish setting up"
+        aria-label={optionalRepo ? "Connect GitHub (optional)" : "Finish setting up"}
       >
-        <div className="font-semibold">Finish setting up</div>
+        <div className={optionalRepo ? "pr-7 font-semibold" : "font-semibold"}>{STEP_COPY[data.nextStep]?.title ?? "Finish setting up"}</div>
+        {optionalRepo ? (
+          <button
+            type="button"
+            aria-label="Dismiss the Connect GitHub card"
+            className="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => {
+              writeFlag(githubDismissKey(companyId));
+              setGithubDismissedLocally(true);
+              dismissGithub.mutate();
+            }}
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        ) : null}
         {blockedOnModel ? (
           <p className="mt-1 text-muted-foreground">
             Your agents need a model provider key before they can work. The instance administrator adds it; ask them
@@ -114,11 +176,7 @@ export function FirstRunHomeNudges({ companyId }: { companyId: string }) {
         aria-label="Dismiss the Connect Muse card"
         className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         onClick={() => {
-          try {
-            window.localStorage.setItem(dismissKey(companyId), "1");
-          } catch {
-            // per-viewer convenience only
-          }
+          writeFlag(dismissKey(companyId));
           setDismissed(true);
         }}
       >

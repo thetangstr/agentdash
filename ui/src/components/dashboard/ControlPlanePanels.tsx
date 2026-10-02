@@ -21,13 +21,33 @@ import { activityApi } from "../../api/activity";
 import { accessApi } from "../../api/access";
 import { queryKeys } from "../../lib/queryKeys";
 import { buildCompanyUserProfileMap } from "../../lib/company-members";
-import { formatCents } from "../../lib/utils";
+import { formatCents, formatTokens } from "../../lib/utils";
 import { timeAgo } from "../../lib/timeAgo";
 import { ActivityRow } from "../ActivityRow";
 
 export const FLEET_TILE_LIMIT = 6;
 export const DASHBOARD_ACTIVITY_LIMIT = 8;
 export const NO_AGENTS_TEXT = "No agents yet.";
+export const BYOK_SPEND_NOTE = "Billed by your model provider";
+
+/**
+ * AgentDash: what the month-spend tile shows. A BYOK box meters tokens but not
+ * dollars (the customer's model provider bills them), so "$0.00" next to real
+ * usage would be wrong. Dollars whenever any were metered; tokens when the
+ * agents used tokens and nothing was priced; "$0.00" only when nothing ran.
+ */
+export function monthSpendTile(costs: DashboardSummary["costs"]): {
+  label: string;
+  value: string;
+  unmetered: boolean;
+} {
+  const tokens = Number(costs.monthTokens ?? 0);
+  if (costs.monthSpendCents <= 0 && tokens > 0) {
+    return { label: "Tokens this month", value: formatTokens(tokens), unmetered: true };
+  }
+  return { label: "Spend this month", value: formatCents(costs.monthSpendCents), unmetered: false };
+}
+
 export const NO_ACTIVITY_TEXT = "No activity yet. Hires, issues and runs show up here as they happen.";
 
 /**
@@ -161,6 +181,7 @@ function StatsRow({
     );
   }
   const { agents, tasks, costs, budgets } = summary;
+  const spend = monthSpendTile(costs);
   return (
     <div className="space-y-3">
       {budgets.activeIncidents > 0 ? (
@@ -205,10 +226,12 @@ function StatsRow({
         />
         <StatCard
           icon={DollarSign}
-          label="Spend this month"
-          value={formatCents(costs.monthSpendCents)}
+          label={spend.label}
+          value={spend.value}
           detail={
-            costs.monthBudgetCents > 0
+            spend.unmetered
+              ? BYOK_SPEND_NOTE
+              : costs.monthBudgetCents > 0
               ? `${costs.monthUtilizationPercent}% of ${formatCents(costs.monthBudgetCents)} budget`
               : "No monthly budget set"
           }

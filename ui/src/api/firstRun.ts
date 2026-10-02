@@ -12,7 +12,13 @@ export interface FirstRunStatus {
   /** The model key is an instance setting: only the instance admin can set it. */
   canConfigureModel: boolean;
   model: { required: boolean; done: boolean };
-  repo: { done: boolean; repo: string | null; projectId: string | null };
+  repo: {
+    done: boolean;
+    repo: string | null;
+    projectId: string | null;
+    /** Work shipped with no repo connected: the company works without code. */
+    shippedWithoutRepo?: boolean;
+  };
   firstIssue: {
     done: boolean;
     issueId: string | null;

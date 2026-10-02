@@ -8,16 +8,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockStatus = vi.hoisted(() => vi.fn());
 const mockListGrants = vi.hoisted(() => vi.fn());
+const mockListDismissals = vi.hoisted(() => vi.fn());
+const mockDismiss = vi.hoisted(() => vi.fn());
 vi.mock("@/api/firstRun", () => ({ firstRunApi: { status: mockStatus } }));
 vi.mock("@/api/assistant-grants", () => ({
   assistantGrantsApi: { listMine: mockListGrants },
+}));
+vi.mock("@/api/inboxDismissals", () => ({
+  inboxDismissalsApi: { list: mockListDismissals, dismiss: mockDismiss },
 }));
 vi.mock("@/lib/router", async () => {
   const dom = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return { Link: dom.Link };
 });
 
-import { FirstRunHomeNudges } from "./FirstRunHomeNudges";
+import { CONNECT_GITHUB_DISMISSAL_KEY, FirstRunHomeNudges } from "./FirstRunHomeNudges";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -44,6 +49,10 @@ describe("FirstRunHomeNudges", () => {
     mockStatus.mockReset();
     mockListGrants.mockReset();
     mockListGrants.mockResolvedValue({ grants: [] });
+    mockListDismissals.mockReset();
+    mockListDismissals.mockResolvedValue([]);
+    mockDismiss.mockReset();
+    mockDismiss.mockResolvedValue({});
     try {
       window.localStorage.clear();
     } catch {
@@ -85,14 +94,65 @@ describe("FirstRunHomeNudges", () => {
     expect(container.querySelector('[data-testid="connect-muse"]')).toBeNull();
   });
 
-  it("speaks the plan's empty-state copy on the repo step (UX-11)", async () => {
-    mockStatus.mockResolvedValue({ ...base, nextStep: "repo" });
+  it("speaks the plan's empty-state copy on the repo step (UX-11), phrased as optional", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "repo", repo: { done: false, repo: null, projectId: null } });
     await render();
     const resume = container.querySelector('[data-testid="first-run-home-resume"]')!;
+    expect(resume.textContent).toContain("Working with code? Connect GitHub");
+    expect(resume.textContent).not.toContain("Finish setting up");
     expect(resume.textContent).toContain("Connect a repo so your agents have somewhere to work.");
     const link = resume.querySelector("a")!;
     expect(link.textContent).toBe("Connect GitHub");
     expect(link.getAttribute("href")).toBe("/setup");
+  });
+
+  // AgentDash: the GitHub step is optional; dismissing it is per person, per company.
+  it("hides the GitHub card once dismissed and stores the dismissal server-side", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "repo", repo: { done: false, repo: null, projectId: null } });
+    await render();
+    const dismiss = container.querySelector('button[aria-label="Dismiss the Connect GitHub card"]') as HTMLButtonElement;
+    expect(dismiss).not.toBeNull();
+    await act(async () => dismiss.click());
+    expect(container.querySelector('[data-testid="first-run-home-resume"]')).toBeNull();
+    expect(mockDismiss).toHaveBeenCalledWith("c1", CONNECT_GITHUB_DISMISSAL_KEY);
+    expect(window.localStorage.getItem("agentdash.connectGithubCard.dismissed.c1")).toBe("1");
+  });
+
+  it("stays hidden on another browser when the server has the dismissal", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "repo", repo: { done: false, repo: null, projectId: null } });
+    mockListDismissals.mockResolvedValue([
+      { id: "d1", companyId: "c1", userId: "u1", itemKey: CONNECT_GITHUB_DISMISSAL_KEY, dismissedAt: new Date(), createdAt: new Date(), updatedAt: new Date() },
+    ]);
+    await render();
+    expect(mockListDismissals).toHaveBeenCalledWith("c1");
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("still hides the card when the dismissal cannot be saved on the server", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "repo", repo: { done: false, repo: null, projectId: null } });
+    mockDismiss.mockRejectedValue(new Error("offline"));
+    await render();
+    const dismiss = container.querySelector('button[aria-label="Dismiss the Connect GitHub card"]') as HTMLButtonElement;
+    await act(async () => dismiss.click());
+    expect(container.querySelector('[data-testid="first-run-home-resume"]')).toBeNull();
+  });
+
+  it("hides the GitHub card once the company has shipped work without a repo", async () => {
+    mockStatus.mockResolvedValue({
+      ...base,
+      nextStep: "repo",
+      repo: { done: false, repo: null, projectId: null, shippedWithoutRepo: true },
+    });
+    await render();
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("keeps the model step undismissable", async () => {
+    mockStatus.mockResolvedValue({ ...base, nextStep: "model" });
+    await render();
+    expect(container.querySelector('button[aria-label="Dismiss the Connect GitHub card"]')).toBeNull();
+    expect(container.textContent).toContain("Finish setting up");
+    expect(mockListDismissals).not.toHaveBeenCalled();
   });
 
   it("says who can add the model key when this admin cannot (#794)", async () => {
