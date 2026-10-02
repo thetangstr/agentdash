@@ -289,6 +289,17 @@ describe("POST /api/onboarding/bootstrap", () => {
     expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1", { companyId: "c2", actorIsInstanceAdmin: true });
   });
 
+  it("answers 403 not_a_member, not another company's ids, for a companyId the caller does not belong to", async () => {
+    mockOrchestrator.bootstrap.mockRejectedValue(
+      new HttpError(403, "You are not an active member of that workspace.", { code: "not_a_member" }, "not_a_member"),
+    );
+    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+    const res = await request(app).post("/api/onboarding/bootstrap").send({ companyId: "c9" });
+    expect(res.status).toBe(403);
+    expect(res.body.details).toEqual({ code: "not_a_member" });
+    expect(res.body.companyId).toBeUndefined();
+  });
+
   it("answers 403 (not 500) when the orchestrator refuses a non-admin member", async () => {
     mockOrchestrator.bootstrap.mockRejectedValue(
       new HttpError(403, "Only a workspace owner or admin can set up the Chief of Staff."),

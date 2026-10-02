@@ -170,6 +170,26 @@ describe("CoSConversation", () => {
     expect(container.querySelector(".chat-panel")).toBeNull();
   });
 
+  it("says so when the caller is not a member of the selected workspace (no other company's chat)", async () => {
+    const { ApiError } = await import("../api/client");
+    mockBootstrap.mockRejectedValue(
+      new ApiError("You are not an active member of that workspace.", 403, {
+        error: "You are not an active member of that workspace.",
+        details: { code: "not_a_member" },
+      }),
+    );
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
+    });
+    await act(async () => {});
+
+    const notice = container.querySelector('[data-testid="cos-not-available"]');
+    expect(notice?.textContent).toContain("aren't an active member of this workspace");
+    expect(container.querySelector(".chat-panel")).toBeNull();
+  });
+
   // AgentDash (#725): a hosted box asks for the Hermes provider key before the CoS chat.
   it("asks for a Hermes provider key first on a hosted box that has none", async () => {
     mockBootstrap.mockResolvedValue({ companyId: "c1", cosAgentId: "a1", conversationId: "conv1" });

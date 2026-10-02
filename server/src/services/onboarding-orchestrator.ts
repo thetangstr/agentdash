@@ -279,18 +279,22 @@ export function onboardingOrchestrator(deps: Deps) {
       // AgentDash (one onboarding path): "New Company" on a self-hosted
       // instance names a second workspace at /company-create and then opens
       // /cos for it. The caller names that workspace; it is used only when
-      // this user is an active member of it, otherwise the first active
-      // membership is reused as before.
+      // this user is an active member of it, otherwise the call is refused
+      // below. Without a companyId the first active membership is reused.
       const requestedMembership = options.companyId
         ? existingMemberships.find(
             (m: any) => m.status === "active" && m.companyId === options.companyId,
           )
         : undefined;
-      // AgentDash (PR #956 re-review): a caller that names a specific
-      // workspace and must not fall back (the assessment route) is refused
-      // with 400 before anything is written.
-      if (options.strictCompanyId && options.companyId && !requestedMembership) {
-        throw badRequest("You are not an active member of that workspace.");
+      // AgentDash (PR #956 review): a named workspace is never swapped for
+      // another one. Falling back to the first membership let /cos render the
+      // wrong company's chat. Refused before anything is written: 403 on
+      // every route, 400 on the assessment route (strictCompanyId), which
+      // validates its own body. No companyId keeps the legacy behaviour.
+      if (options.companyId && !requestedMembership) {
+        const message = "You are not an active member of that workspace.";
+        if (options.strictCompanyId) throw badRequest(message);
+        throw new HttpError(403, message, { code: "not_a_member" }, "not_a_member");
       }
       const activeMembership = requestedMembership ?? existingMemberships.find(
         (m: any) => m.status === "active",

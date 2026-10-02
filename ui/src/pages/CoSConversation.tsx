@@ -32,6 +32,9 @@ export const COS_WRONG_COMPANY_MESSAGE =
 // AgentDash (PR #956 review): bootstrap refused with 403 (not an owner/admin).
 export const COS_NOT_SET_UP_MESSAGE =
   "Your workspace's Chief of Staff isn't set up yet. A workspace owner or admin sets it up the first time they open this page.";
+// AgentDash (PR #959): bootstrap refused with 403 not_a_member.
+export const COS_NOT_A_MEMBER_MESSAGE =
+  "You aren't an active member of this workspace, so its Chief of Staff isn't available to you.";
 export const COS_EMPTY_STATE_BODY =
   "Tell me what you're trying to get done this quarter and where you want to be in a year. I'll propose a small team, hire it when you say so, and turn the goal into tasks.";
 
@@ -183,10 +186,19 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
         // (409). A member who opens /cos first gets a plain explanation, not
         // an error page.
         if (err instanceof ApiError && (err.status === 403 || err.status === 409)) {
+          // PR #959: a companyId the caller is not an active member of is a
+          // 403 with details.code "not_a_member" (no fallback to another
+          // workspace); say that, not "not set up yet".
+          const notAMember =
+            (err.body as { details?: { code?: string } } | null)?.details?.code === "not_a_member";
           setResolved({
             forCompanyId,
             kind: "unavailable",
-            message: err.status === 403 ? COS_NOT_SET_UP_MESSAGE : err.message,
+            message: notAMember
+              ? COS_NOT_A_MEMBER_MESSAGE
+              : err.status === 403
+                ? COS_NOT_SET_UP_MESSAGE
+                : err.message,
           });
           return;
         }
