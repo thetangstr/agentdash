@@ -1,7 +1,7 @@
 # STATUS — devin/leaks-20261002 (#933 + #946)
 
-Phase: PR_READY
-PR: not yet opened
+Phase: PR_OPEN
+PR: https://github.com/thetangstr/agentdash/pull/970 (not merged)
 Blockers: none
 Last verification: all green —
   `pnpm -r typecheck` (workspace), `pnpm build` (workspace),
