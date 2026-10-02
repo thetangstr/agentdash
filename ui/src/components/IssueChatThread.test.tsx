@@ -1837,6 +1837,10 @@ describe("IssueChatThread", () => {
     expect(dock).not.toBeNull();
     expect(dock?.className).toContain("sticky");
     expect(dock?.className).toContain("bottom-[calc(env(safe-area-inset-bottom)+20px)]");
+    // Phones dock above the bottom nav via Layout's live offset variable, not a hard-coded height.
+    expect(dock?.className).toContain(
+      "max-md:bottom-[var(--mobile-bottom-nav-offset,calc(4rem+env(safe-area-inset-bottom)))]",
+    );
     expect(dock?.className).toContain("z-20");
 
     const composer = container.querySelector('[data-testid="issue-chat-composer"]') as HTMLDivElement | null;

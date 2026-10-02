@@ -3924,9 +3924,11 @@ export function IssueChatThread({
           <div
             ref={composerViewportAnchorRef}
             data-testid="issue-chat-composer-dock"
-            // AgentDash: below md the layout shows a 4rem bottom nav (plus the
-            // safe-area inset); dock the composer just above it so nothing hides.
-            className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-gradient-to-t from-background via-background/95 to-background/0 pt-6 max-md:bottom-[calc(4rem+env(safe-area-inset-bottom))] max-md:pb-2"
+            // AgentDash: below md the composer docks just above the bottom nav,
+            // following Layout's live --mobile-bottom-nav-offset (see
+            // lib/mobile-bottom-nav.ts); the fallback is the nav's shown height.
+            // The phone "Latest" control is bottom-full inside this dock, so it follows too.
+            className="sticky bottom-[calc(env(safe-area-inset-bottom)+20px)] z-20 space-y-2 bg-gradient-to-t from-background via-background/95 to-background/0 pt-6 max-md:bottom-[var(--mobile-bottom-nav-offset,calc(4rem+env(safe-area-inset-bottom)))] max-md:pb-2"
           >
             {latestBelowComposer ? (
               <button
