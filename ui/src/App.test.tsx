@@ -346,4 +346,143 @@ describe("CloudAccessGate", () => {
 
     await act(async () => root.unmount());
   });
+
+  // AgentDash: the first live canary claim of a hosted box. The founder signs
+  // up, names the workspace at /company-create, and the server makes them a
+  // member and instance admin. The gate stays mounted across those routes, so
+  // its board-access query still holds the pre-company "no companies" answer
+  // while health (which polls during bootstrap) already says a company
+  // exists. That used to dead-end on "No company access" until a reload.
+  it("refetches stale board access after the first company is created instead of showing No company access", async () => {
+    const session = {
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "founder@example.com", name: "Founder", image: null },
+    };
+    mockAuthApi.getSession.mockResolvedValue(session);
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "bootstrap_pending",
+      selfServeBootstrap: true,
+      instanceHasCompany: false,
+      hostedBox: true,
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: session.user,
+      userId: "user-1",
+      isInstanceAdmin: false,
+      companyIds: [],
+      source: "session",
+      keyId: null,
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CloudAccessGate />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+    // Before the company exists, the founder is sent to name the workspace.
+    expect(container.textContent).toContain("Navigate:/company-create");
+
+    // POST /api/companies?fromSignup=1 succeeded: membership + instance admin.
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "ready",
+      selfServeBootstrap: true,
+      instanceHasCompany: true,
+      hostedBox: true,
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: session.user,
+      userId: "user-1",
+      isInstanceAdmin: true,
+      companyIds: ["company-1"],
+      source: "session",
+      keyId: null,
+    });
+    const boardAccessCallsBefore = mockAccessApi.getCurrentBoardAccess.mock.calls.length;
+
+    // Only health refreshes (the bootstrap poll); board access is still the
+    // cached pre-company answer.
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["health"] });
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("Outlet content");
+      });
+    });
+    expect(container.textContent).not.toContain("No company access");
+    expect(mockAccessApi.getCurrentBoardAccess.mock.calls.length).toBe(boardAccessCallsBefore + 1);
+
+    await act(async () => root.unmount());
+  });
+
+  it("still shows No company access when fresh board access confirms there is none", async () => {
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "ready",
+      selfServeBootstrap: true,
+      instanceHasCompany: true,
+    });
+    mockAuthApi.getSession.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+      userId: "user-1",
+      isInstanceAdmin: false,
+      companyIds: [],
+      source: "session",
+      keyId: null,
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CloudAccessGate />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    // Health refreshes later (window focus); board access is refetched once,
+    // still says no access, and the gate settles on the page without looping.
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["health"] });
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+    expect(container.textContent).toContain("No company access");
+    const calls = mockAccessApi.getCurrentBoardAccess.mock.calls.length;
+    await flushReact();
+    await flushReact();
+    expect(mockAccessApi.getCurrentBoardAccess.mock.calls.length).toBe(calls);
+    expect(calls).toBeLessThanOrEqual(2);
+
+    await act(async () => root.unmount());
+  });
 });

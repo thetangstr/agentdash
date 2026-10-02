@@ -12,10 +12,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AgentDashMark } from "@/components/brand/AgentDashMark";
 import { useNavigate, useSearchParams, Link } from "@/lib/router";
 import { AuthApiError, authApi } from "../api/auth";
-import { queryKeys } from "../lib/queryKeys";
+import { refreshAccessQueries } from "../lib/access-refresh";
 import { Button } from "@/components/ui/button";
 
 export const MIN_CLAIM_PASSWORD_LENGTH = 12;
+/** /claim only renders on a box, so "Sign in" is always the box's own sign-in. */
+export const CLAIM_SIGN_IN_PATH = "/auth?next=%2F";
 
 /** The claim code from a fragment like `#code=AGD-…` (also tolerates `#AGD-…`). */
 export function readClaimCodeFromHash(hash: string): string | null {
@@ -82,8 +84,8 @@ export function ClaimPage() {
     },
     onSuccess: async () => {
       setError(null);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      // AgentDash: refetch session, board access and health before the gate sees them.
+      await refreshAccessQueries(queryClient);
       navigate("/cos", { replace: true });
     },
     onError: (err) => setError(claimErrorMessage(err)),
@@ -148,7 +150,8 @@ export function ClaimPage() {
           </>
         )}
         <p className="mt-6 text-xs text-text-tertiary">
-          Already claimed it? <Link to="/auth">Sign in</Link>
+          {/* AgentDash: the box's own sign-in, never www's /find (its API exists only on www). */}
+          Already claimed it? <Link to={CLAIM_SIGN_IN_PATH}>Sign in</Link>
         </p>
       </div>
     </div>

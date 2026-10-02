@@ -102,6 +102,7 @@ import { Start as MarketingStart } from "./marketing/pages/Start";
 import { StartVerify as MarketingStartVerify } from "./marketing/pages/StartVerify";
 import { StartProgress as MarketingStartProgress } from "./marketing/pages/StartProgress";
 import { Find as MarketingFind } from "./marketing/pages/Find";
+import { WwwOnlyRoute } from "./marketing/WwwOnlyRoute";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import MyAgent from "./pages/MyAgent";
@@ -364,10 +365,11 @@ export function App() {
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
         {/* AgentDash (SC-7, GH #768): signup, magic-link landing, progress and returning users. */}
-        <Route path="start" element={<MarketingStart />} />
-        <Route path="start/verify" element={<MarketingStartVerify />} />
-        <Route path="start/progress" element={<MarketingStartProgress />} />
-        <Route path="find" element={<MarketingFind />} />
+        {/* AgentDash: www-only (they call /api/cloud); a hosted box sends them to its own sign-in. */}
+        <Route path="start" element={<WwwOnlyRoute><MarketingStart /></WwwOnlyRoute>} />
+        <Route path="start/verify" element={<WwwOnlyRoute><MarketingStartVerify /></WwwOnlyRoute>} />
+        <Route path="start/progress" element={<WwwOnlyRoute><MarketingStartProgress /></WwwOnlyRoute>} />
+        <Route path="find" element={<WwwOnlyRoute><MarketingFind /></WwwOnlyRoute>} />
         <Route path="assess" element={<AssessPage />} />
         <Route path="assess/history" element={<AssessHistoryPage />} />
 
