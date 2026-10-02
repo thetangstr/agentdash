@@ -292,7 +292,7 @@ describe("resolveHermesStateDbResolution", () => {
   });
 });
 
-describe("HERMES_HOME vs -p precedence, as Hermes resolves it (pinned v2026.9.11)", () => {
+describe("HERMES_HOME vs -p precedence, as Hermes resolves it (pinned v2026.9.24)", () => {
   // hermes_cli/main.py `_apply_profile_override` + profiles.py
   // `resolve_profile_env`: an explicit -p always selects the profile, and
   // HERMES_HOME only decides which root the profile lives under.
@@ -381,8 +381,20 @@ describe("HERMES_HOME vs -p precedence, as Hermes resolves it (pinned v2026.9.11
     ).toBe("first");
     // `-p` followed by a value Hermes will not take as a profile id ends the scan.
     expect(
-      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["-p", "First", "-p", "second"] } }).source,
+      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["-p", "no:xdist", "-p", "second"] } })
+        .source,
     ).toBe("root_fallback");
+  });
+
+  it("canonicalises the -p value before validating it, as Hermes v2026.9.24 does", () => {
+    const root = tempHermesRoot({ profiles: ["first", "second"] });
+    const env = { AGENTDASH_HERMES_ROOT: root };
+    expect(
+      resolveHermesStateDbResolution({ env, adapterConfig: { extraArgs: ["-p", "First", "-p", "second"] } }),
+    ).toMatchObject({ profile: "first", path: path.join(root, "profiles", "first", "state.db") });
+    expect(
+      resolveHermesStateDbResolution({ env, adapterConfig: { hermesCommand: "hermes -p SECOND" } }).profile,
+    ).toBe("second");
   });
 
   it("a wrapper's -p beats extraArgs, because the wrapper's flag precedes \"$@\"", () => {
