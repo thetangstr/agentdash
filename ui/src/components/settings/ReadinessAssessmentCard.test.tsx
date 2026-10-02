@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// AgentDash (GH #785): the assessment is reachable from Settings → Advanced.
+// AgentDash (GH #785): the assessment is reachable from Settings.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,7 +25,7 @@ describe("ReadinessAssessmentCard", () => {
 
   it("links to the assessment for every company", () => {
     act(() => root.render(<ReadinessAssessmentCard />));
-    expect(container.textContent).toContain("Advanced");
+    expect(container.textContent).toContain("Readiness assessment");
     expect(container.textContent).toContain("Optional");
     expect(container.querySelector<HTMLAnchorElement>('a[href="/assess"]')?.textContent).toBe("Run the assessment");
   });

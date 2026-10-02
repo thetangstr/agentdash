@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adaptersApi, type AdapterCapabilities } from "@/api/adapters";
 import { queryKeys } from "@/lib/queryKeys";
+import { useBoardSessionReady } from "@/hooks/useBoardSessionReady";
 
 const ALL_FALSE: AdapterCapabilities = {
   supportsInstructionsBundle: false,
@@ -35,7 +36,11 @@ const KNOWN_DEFAULTS: Record<string, AdapterCapabilities> = {
  * return correct synchronous defaults to avoid cold-load regressions.
  */
 export function useAdapterCapabilities(): (type: string) => AdapterCapabilities {
+  // AgentDash (scan 4, lane O2): not for a signed-out visitor (403 noise on /auth).
+  // Until it loads, the known built-in defaults below answer.
+  const sessionReady = useBoardSessionReady();
   const { data: adapters } = useQuery({
+    enabled: sessionReady,
     queryKey: queryKeys.adapters.all,
     queryFn: () => adaptersApi.list(),
     staleTime: 5 * 60 * 1000,

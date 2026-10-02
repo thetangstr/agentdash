@@ -33,20 +33,39 @@ interface Props {
  * a human's verdict as an audit fact and does NOT resend — resending stays with
  * the approvals flow, the only decision boundary.
  */
-export function NeedsReconciliationPanel({ companyId }: Props) {
-  const queryClient = useQueryClient();
-  const listKey = ["connectorSendExecutions", companyId, "unresolved"] as const;
+function unresolvedListKey(companyId: string) {
+  return ["connectorSendExecutions", companyId, "unresolved"] as const;
+}
 
-  // AgentDash (scan 3 lane L): reconciliation is part of the stewardship
-  // feature. When /me/capabilities says it is off, the list is not asked just
-  // to read its 404.
+// AgentDash (scan 3 lane L): reconciliation is part of the stewardship
+// feature. When /me/capabilities says it is off, the list is not asked just
+// to read its 404.
+function useUnresolvedConnectorSends(companyId: string) {
   const stewardshipFeature = useStewardshipFeature(companyId);
   const list = useQuery({
-    queryKey: listKey,
+    queryKey: unresolvedListKey(companyId),
     queryFn: () => connectorSendExecutionsApi.listUnresolved(companyId),
     enabled: !!companyId && (stewardshipFeature === "on" || stewardshipFeature === "unknown"),
     retry: false,
   });
+  return { list, stewardshipFeature };
+}
+
+/**
+ * AgentDash (scan 4, lane O2): how many connector sends wait for a verdict.
+ * Settings keeps the panel under the collapsed Advanced section while this is
+ * 0 and lifts it into the main page when there is something to decide. Shares
+ * the panel's query, so it asks nothing extra.
+ */
+export function useNeedsReconciliationCount(companyId: string): number {
+  const { list } = useUnresolvedConnectorSends(companyId);
+  return list.data?.items.length ?? 0;
+}
+
+export function NeedsReconciliationPanel({ companyId }: Props) {
+  const queryClient = useQueryClient();
+  const listKey = unresolvedListKey(companyId);
+  const { list, stewardshipFeature } = useUnresolvedConnectorSends(companyId);
 
   // Presentation only: names for the requesting agents. The list route already
   // scopes rows to what the viewer may see, so this never widens visibility.

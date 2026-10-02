@@ -45,18 +45,45 @@ export function humanizeAgentTitle(title: string | null | undefined): string {
 }
 
 /**
+ * AgentDash (scan 4, lane O2): roles that are buckets rather than jobs. A plan
+ * hire with no closer template lands in `general` (older hires in `pm`), so
+ * "Month End Close Coordinator · PM" told the CEO nothing the title had not.
+ */
+const GENERIC_ROLES = new Set(["general", "pm"]);
+
+const ROLE_FAMILY_BESIDE_TITLE: Record<string, string> = {
+  cfo: "Finance",
+  cmo: "Marketing",
+  cto: "Technology",
+};
+
+export function isGenericAgentRole(role: string | null | undefined): boolean {
+  return GENERIC_ROLES.has((role ?? "").trim().toLowerCase());
+}
+
+/**
  * The one line under an agent's name: title first, then the humanized role.
  * "Proposal Drafter", "Research Analyst · Researcher", "Chief of Staff".
+ * A generic role ("General", "PM") or one the title already says is left out.
  */
 export function agentIdentityLine(agent: { role?: string | null; title?: string | null }): string {
   const title = humanizeAgentTitle(agent.title);
   const role = humanizeAgentRole(agent.role);
   if (!title) return role;
-  if (!role || agent.role === "general" || role.toLowerCase() === title.toLowerCase()) return title;
-  return `${title} · ${role}`;
+  if (!role || isGenericAgentRole(agent.role)) return title;
+  // Beside a title the executive roles read as their family: "Month End Close
+  // Coordinator · Finance", not "· CFO" (which reads as a promotion).
+  const family = ROLE_FAMILY_BESIDE_TITLE[(agent.role ?? "").trim()] ?? role;
+  if (title.toLowerCase().includes(family.toLowerCase()) || title.toLowerCase().includes(role.toLowerCase())) return title;
+  return `${title} · ${family}`;
 }
 
-/** The short label under a name in a picker: the title, or the role when there is none. */
+/**
+ * The short label under a name in a picker: the title, or the role when there
+ * is none. A generic role on its own ("General") says nothing, so it is left blank.
+ */
 export function agentPickerSubtitle(agent: { role?: string | null; title?: string | null }): string {
-  return humanizeAgentTitle(agent.title) || humanizeAgentRole(agent.role);
+  const title = humanizeAgentTitle(agent.title);
+  if (title) return title;
+  return isGenericAgentRole(agent.role) ? "" : humanizeAgentRole(agent.role);
 }

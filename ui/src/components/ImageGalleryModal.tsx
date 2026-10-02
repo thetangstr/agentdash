@@ -70,7 +70,9 @@ export function ImageGalleryModal({
         <DialogPrimitive.Content
           className="fixed inset-0 z-50 flex flex-col outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-200"
           onClick={handleBackdropClick}
+          aria-describedby={undefined}
         >
+          <DialogPrimitive.Title className="sr-only">Image viewer</DialogPrimitive.Title>
           {/* Top bar */}
           <div className="flex items-center justify-between px-5 py-3 text-white/80 text-sm shrink-0">
             <span className="truncate max-w-[50%] font-medium" title={current.originalFilename ?? undefined}>

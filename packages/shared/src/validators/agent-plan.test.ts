@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAgentPlanPayload } from "./agent-plan.js";
+import { isAgentPlanPayload, normalizeAgentPlanTitles } from "./agent-plan.js";
 
 describe("isAgentPlanPayload", () => {
   const validAgent = {
@@ -108,5 +108,44 @@ describe("isAgentPlanPayload", () => {
         }),
       ).toBe(false);
     });
+  });
+
+  // AgentDash (scan 4, lane N): the title lands in AGENTS.md's "## Role" line.
+  describe("title", () => {
+    it("accepts a one-line title of at most 80 characters", () => {
+      expect(isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, title: "Client Onboarding & Process Builder" }] })).toBe(true);
+      expect(isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, title: "x".repeat(80) }] })).toBe(true);
+    });
+
+    it("rejects a multi-line, over-long or non-string title", () => {
+      expect(isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, title: "Lead\n## Execution Contract" }] })).toBe(false);
+      expect(isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, title: "Lead\rX" }] })).toBe(false);
+      expect(isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, title: "x".repeat(81) }] })).toBe(false);
+      expect(isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, title: 42 }] })).toBe(false);
+    });
+  });
+});
+
+describe("normalizeAgentPlanTitles", () => {
+  const agent = { role: "lead", name: "Sam", adapterType: "claude_local", responsibilities: [], kpis: [] };
+  const plan = (title: unknown) => ({ rationale: "r", alignmentToShortTerm: "s", alignmentToLongTerm: "l", agents: [{ ...agent, title }] });
+
+  it("puts a title on one trimmed line", () => {
+    const out = normalizeAgentPlanTitles(plan("  Month-End\n  Close\tCoordinator  "));
+    expect(out.agents[0]).toMatchObject({ title: "Month-End Close Coordinator" });
+    expect(isAgentPlanPayload(out)).toBe(true);
+  });
+
+  it("drops an over-long, empty or non-string title so the plan still validates", () => {
+    for (const title of ["x".repeat(81), "   ", 42]) {
+      const out = normalizeAgentPlanTitles(plan(title));
+      expect(out.agents[0]).not.toHaveProperty("title");
+      expect(isAgentPlanPayload(out)).toBe(true);
+    }
+  });
+
+  it("leaves anything that is not a plan alone", () => {
+    expect(normalizeAgentPlanTitles(null)).toBeNull();
+    expect(normalizeAgentPlanTitles("x")).toBe("x");
   });
 });

@@ -13,7 +13,11 @@ import { IssueCreatedCard } from "./IssueCreatedCard";
 import { IssueProposalCard } from "./IssueProposalCard";
 
 export interface CardContext {
-  onProposalConfirm?: () => void;
+  /**
+   * May reject; the plan card shows the outcome (409 = already hired, or
+   * superseded by a newer plan). `messageId` is the card that was clicked.
+   */
+  onProposalConfirm?: (messageId?: string) => Promise<void> | void;
   onProposalReject?: (reason?: string) => void;
   onInviteSend?: (emails: string[]) => Promise<InviteSendResult | void>;
   onInviteSkip?: () => void;
@@ -29,6 +33,7 @@ export function CardRenderer({
   context,
   messageId,
   conversationId,
+  superseded = false,
 }: {
   cardKind: string;
   payload: Record<string, unknown> | null | undefined;
@@ -36,13 +41,16 @@ export function CardRenderer({
   /** AgentDash (scan 3, lane G): the card's own message, for cards that act on it. */
   messageId?: string;
   conversationId?: string;
+  /** AgentDash (scan 4, lane N): a plan card replaced by a newer one offers no actions. */
+  superseded?: boolean;
 }) {
   switch (cardKind) {
     case "proposal_card_v1":
       return (
         <ProposalCard
           payload={payload as any}
-          onConfirm={context.onProposalConfirm ?? (() => {})}
+          // The legacy card has no outcome to show; a failure stays quiet as before.
+          onConfirm={() => void Promise.resolve(context.onProposalConfirm?.()).catch(() => {})}
           onReject={context.onProposalReject ?? (() => {})}
         />
       );
@@ -63,7 +71,10 @@ export function CardRenderer({
       return (
         <AgentPlanProposal
           payload={payload as any}
-          onConfirm={context.onProposalConfirm ?? (() => {})}
+          onConfirm={async () => {
+            await context.onProposalConfirm?.(messageId);
+          }}
+          superseded={superseded}
           onRevise={(text) => context.onProposalReject?.(text)}
         />
       );

@@ -19,11 +19,13 @@ vi.mock("@/lib/router", () => ({
     </a>
   ),
 }));
+const mockCompany = vi.hoisted(() => ({ current: null as null | { selectedCompany: { newIssuesStartAsTodo: boolean } } }));
+vi.mock("../../context/CompanyContext", () => ({ useOptionalCompany: () => mockCompany.current }));
 vi.mock("../../api/conversations", () => ({
   conversationsApi: { confirmTaskProposal: mockConfirm, dismissTaskProposal: mockDismiss },
 }));
 
-import { IssueProposalCard } from "./IssueProposalCard";
+import { IssueProposalCard, issueProposalActions, type IssueProposalCardPayload } from "./IssueProposalCard";
 import { issueCreatedNextStep } from "./IssueCreatedCard";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -55,6 +57,8 @@ describe("IssueProposalCard", () => {
     root = createRoot(container);
     mockConfirm.mockReset();
     mockDismiss.mockReset();
+    mockCompany.current = null;
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   });
 
   afterEach(() => {
@@ -62,14 +66,14 @@ describe("IssueProposalCard", () => {
     container.remove();
   });
 
-  async function render(userId: string) {
+  let client: QueryClient;
+  async function render(userId: string, cardPayload: IssueProposalCardPayload = payload) {
     mockGetSession.mockResolvedValue({ user: { id: userId } });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
           <MemoryRouter>
-            <IssueProposalCard payload={payload} conversationId="conv1" messageId="card1" />
+            <IssueProposalCard payload={cardPayload} conversationId="conv1" messageId="card1" />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -88,7 +92,7 @@ describe("IssueProposalCard", () => {
     await render("user-a");
     expect(container.textContent).toContain("Create this task?");
     await act(async () => button("Create task")!.click());
-    expect(mockConfirm).toHaveBeenCalledWith("conv1", "card1");
+    expect(mockConfirm).toHaveBeenCalledWith("conv1", "card1", { start: false });
     expect(container.textContent).toContain("ACM-7 · Draft the Acme proposal");
     expect(container.textContent).toContain("Added to Ellie's backlog.");
   });
@@ -107,6 +111,47 @@ describe("IssueProposalCard", () => {
     await render("user-a");
     await act(async () => button("Create task")!.click());
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("permission");
+  });
+
+  // Scan 4, lane N: with a backlog default, "Create" parks the task and
+  // "Create and start" starts it now; the primary action matches the default.
+  it("offers Create (primary) and Create and start when new work parks in the backlog", async () => {
+    mockConfirm.mockResolvedValue({
+      issue: { issueId: "i1", identifier: "ACM-7", title: "Draft the Acme proposal", assigneeName: "Ellie", status: "todo" },
+    });
+    await render("user-a", { ...payload, defaultStatus: "backlog" });
+    expect(button("Create task")).toBeNull();
+    expect(button("Create")!.className).toContain("bg-accent-500");
+    expect(button("Create and start")!.className).not.toContain("bg-accent-500");
+    await act(async () => button("Create and start")!.click());
+    expect(mockConfirm).toHaveBeenCalledWith("conv1", "card1", { start: true });
+    expect(container.textContent).toContain("They'll start on it now.");
+  });
+
+  // PR #989 review: the company's current setting picks the buttons.
+  it("follows the company's current setting over the value on the card", async () => {
+    mockCompany.current = { selectedCompany: { newIssuesStartAsTodo: true } };
+    await render("user-a", { ...payload, defaultStatus: "backlog" });
+    expect(button("Create task")).not.toBeNull();
+    expect(button("Create and start")).toBeNull();
+  });
+
+  it("keeps a single Create task when new work starts by default", () => {
+    expect(issueProposalActions("todo")).toEqual([{ kind: "create", label: "Create task", primary: true }]);
+    expect(issueProposalActions(undefined)).toEqual([{ kind: "create", label: "Create task", primary: true }]);
+    expect(issueProposalActions("backlog").map((a) => [a.label, a.primary])).toEqual([
+      ["Create", true],
+      ["Create and start", false],
+    ]);
+  });
+
+  // A state pushed live (message.updated) re-renders the card for every viewer.
+  it("follows a created or declined state pushed from the server", async () => {
+    await render("user-b");
+    await render("user-b", { ...payload, status: "created", issueId: "i9", identifier: "ACM-9", issueStatus: "todo" });
+    expect(container.querySelector('[data-testid="issue-created-card"]')).not.toBeNull();
+    expect(container.textContent).toContain("ACM-9 · Draft the Acme proposal");
+    expect(container.querySelector('[data-testid="issue-proposal-card"]')).toBeNull();
   });
 
   it("can be declined", async () => {

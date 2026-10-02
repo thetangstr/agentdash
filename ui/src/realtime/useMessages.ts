@@ -26,8 +26,15 @@ export function useMessages(conversationId: string | null) {
       });
     });
 
-    const unsubscribe = subscribeToConversationMessages(conversationId, (incoming) => {
+    const unsubscribe = subscribeToConversationMessages(conversationId, (incoming, kind) => {
       setMessages((prev) => {
+        // AgentDash (scan 4, lane N): a card changed state; merge the update
+        // into the message on screen (an update for an unseen one is ignored;
+        // the initial page carries its latest state).
+        if (kind === "updated") {
+          if (!prev.some((m) => m.id === incoming.id)) return prev;
+          return prev.map((m) => (m.id === incoming.id ? { ...m, ...incoming } : m));
+        }
         if (prev.some((m) => m.id === incoming.id)) return prev;
         return [...prev, incoming];
       });

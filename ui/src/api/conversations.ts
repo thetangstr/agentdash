@@ -46,10 +46,11 @@ export const conversationsApi = {
     api.patch(`/conversations/${id}/read`, { lastReadMessageId }),
   participants: (id: string) => api.get(`/conversations/${id}/participants`),
   // AgentDash (scan 3, lane G): the requester confirms or declines a CoS task card.
-  confirmTaskProposal: (id: string, messageId: string) =>
+  // AgentDash (scan 4, lane N): `start` = "Create and start" (status todo + wake).
+  confirmTaskProposal: (id: string, messageId: string, opts: { start?: boolean } = {}) =>
     api.post<{ proposal: Record<string, unknown>; issue: IssueCreatedSummary }>(
       `/conversations/${id}/task-proposals/${messageId}/confirm`,
-      {},
+      opts.start ? { start: true } : {},
     ),
   dismissTaskProposal: (id: string, messageId: string) =>
     api.post<{ proposal: Record<string, unknown> }>(`/conversations/${id}/task-proposals/${messageId}/dismiss`, {}),

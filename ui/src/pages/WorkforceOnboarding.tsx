@@ -165,7 +165,7 @@ export function WorkforceWorkspace({ companyId }: { companyId: string }) {
     <header className="space-y-2">
       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Workforce setup</p>
       <h1 className="text-2xl font-semibold">Give your team the context to do good work</h1>
-      <p className="text-muted-foreground">Share approved knowledge, choose a marketing or sales role, and review a real first deliverable.</p>
+      <p className="text-muted-foreground">Share what your team should know, give each team member a role, and review a real first deliverable.</p>
       <Link to="/agents/new" className="text-sm underline">Hire a new agent</Link>
     </header>
     <WorkforceError error={brief.error || agents.error} />{brief.isPending && <p>Loading company knowledge…</p>}{brief.data && <BriefEditor key={`${companyId}:${brief.data.revision}`} companyId={companyId} brief={brief.data} />}{brief.data && <ProposalReview companyId={companyId} revision={brief.data.revision} />}

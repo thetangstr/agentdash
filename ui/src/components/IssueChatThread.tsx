@@ -103,6 +103,7 @@ import {
   summarizeToolResult,
 } from "../lib/transcriptPresentation";
 import { cn, formatDateTime, formatShortDate } from "../lib/utils";
+import { issueStatusLabel } from "../lib/issue-status-label";
 // AgentDash: Readable run blocks share the RunTranscriptView presentation.
 import {
   ReadableDetails,
@@ -612,9 +613,9 @@ const IssueChatTextPart = memo(function IssueChatTextPart({ text, recessed }: { 
   );
 });
 
+// AgentDash (scan 4, lane O2): status changes read "Backlog → To do", not "backlog → todo".
 function humanizeValue(value: string | null) {
-  if (!value) return "None";
-  return value.replace(/_/g, " ");
+  return issueStatusLabel(value);
 }
 
 function formatTimelineAssigneeLabel(

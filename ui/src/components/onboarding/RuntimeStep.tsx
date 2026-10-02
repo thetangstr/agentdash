@@ -28,19 +28,19 @@ export const LOCAL_RUNTIMES: Array<{
     adapterType: "claude_local",
     preset: "claude_code",
     label: "Claude Code",
-    description: "The claude CLI on this machine, signed in to your Anthropic account.",
+    description: "Claude Code on this computer, signed in to your Anthropic account.",
   },
   {
     adapterType: "codex_local",
     preset: "codex",
     label: "Codex",
-    description: "The codex CLI on this machine, signed in to your OpenAI account.",
+    description: "Codex on this computer, signed in to your OpenAI account.",
   },
   {
     adapterType: "hermes_local",
     preset: "hermes",
     label: "Hermes",
-    description: "The hermes CLI on this machine. It holds its own model provider key.",
+    description: "Hermes on this computer, set up with its own AI provider key.",
   },
 ];
 
@@ -87,7 +87,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
   if (statusQuery.error || !statusQuery.data) {
     return (
       <div role="alert" className="p-8 text-center text-sm text-destructive">
-        {statusQuery.error instanceof Error ? statusQuery.error.message : "Could not check the runtime."}
+        {statusQuery.error instanceof Error ? statusQuery.error.message : "Could not check your AI assistant."}
       </div>
     );
   }
@@ -115,7 +115,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
     try {
       const result = await check(runtime.adapterType);
       if (!result || result.status === "fail") {
-        setError(`${runtime.label} is not ready on this machine yet. Fix the check above, or pick another runtime.`);
+        setError(`${runtime.label} is not ready on this computer yet. Fix the check above, or pick another assistant.`);
         return;
       }
       await onboardingApi.setupAdapter(runtime.preset);
@@ -123,7 +123,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
     } catch (err) {
       // The server lets only the instance admin switch to these runtimes.
       if (err instanceof ApiError && err.status === 403) {
-        setError("Ask your instance admin to change the runtime.");
+        setError("Ask the person who set up AgentDash to change the assistant.");
         return;
       }
       setError(errorSentence(err));
@@ -144,7 +144,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
 
       <div className="rounded-lg border p-4 text-sm" data-testid="first-run-runtime-current">
         <p>
-          This instance runs on <span className="font-medium">{runtimeLabel(current.adapter)}</span>.{" "}
+          Your workspace uses <span className="font-medium">{runtimeLabel(current.adapter)}</span>.{" "}
           {current.ready ? "It is ready." : `It is not ready: ${current.reason ?? "unknown reason"}.`}
         </p>
       </div>
@@ -196,7 +196,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
       </ul>
 
       {!canConfigure ? (
-        <p className="text-sm text-muted-foreground">Only the instance administrator can change the runtime.</p>
+        <p className="text-sm text-muted-foreground">Only the person who set up AgentDash can change the assistant.</p>
       ) : null}
 
       {error ? (

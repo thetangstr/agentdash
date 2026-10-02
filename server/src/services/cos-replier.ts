@@ -11,13 +11,14 @@
 // transition; the next user turn re-runs the prompt.
 
 import { logger } from "../middleware/logger.js";
-import { WORKFORCE_TEMPLATES, isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import { WORKFORCE_TEMPLATES, isAgentPlanPayload, normalizeAgentPlanTitles, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
 import type { DispatchMeter } from "./dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-failure.js";
 // Type-only: cos-issue-action pulls in the issue and heartbeat services, which
 // this module must not load (first-run and onboarding import it).
 import type { CosIssueRequester, CosIssueRosterEntry } from "./cos-issue-action.js";
+import { PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "./cos-plan-naming.js";
 
 // AgentDash (scan 3, lane G): mirrors ISSUE_PROPOSAL_CARD_KIND in cos-issue-action.ts.
 const ISSUE_PROPOSAL_CARD_KIND = "issue_proposal_v1";
@@ -125,6 +126,9 @@ interface Deps {
   // cos-replier builds a "spec-aware" plan-phase prompt instead of running
   // Phase 1 (goals capture).
   deepInterviewSpecs?: DeepInterviewSpecsService;
+  // AgentDash (scan 4, lane N): the company's people, so the CoS never names
+  // a proposed agent after one of them. Absent: no names to avoid.
+  memberNames?: (companyId: string) => Promise<string[]>;
   // AgentDash (scan 3, lane G): lets a steady-state reply propose one task
   // (a card the requester confirms) through a validated JSON trailer.
   // Absent: no task proposals.
@@ -172,7 +176,7 @@ Only when the message you are answering clearly asks for a piece of work to be d
 {"create_issue":{"title":"Short task title","description":"What done looks like, in plain words","assigneeAgentId":"<id from the list above>"}}
 \`\`\`
 
-Rules: at most one task per reply; nothing may follow the block; pick the assignee whose role fits best and use their id exactly as listed; never invent an id. Do not suggest a task for questions, status checks, thanks, brainstorming, or when you are unsure what they want; ask one short question instead. In the visible reply, say in one sentence who you'd give it to and that they can confirm below. Never show the JSON or the id in the visible reply.`;
+Rules: at most one task per reply; nothing may follow the block; pick the assignee whose role fits best and use their id exactly as listed; never invent an id. Do not suggest a task for questions, status checks, thanks, brainstorming, or when you are unsure what they want; ask one short question instead. In the visible reply, say in one neutral sentence whose list you can add it to, for example "I can add this to Ellie's list; confirm below." Never say they will start, get started or begin right away: the person chooses on the card whether the work starts now. Never show the JSON or the id in the visible reply.`;
 }
 
 function goalsPrompt(state: CosStateRow): string {
@@ -187,7 +191,7 @@ ${JSON.stringify(state.goals, null, 2)}
 
 Ask the ONE most useful clarifying question per turn — never generic "tell me more". Reflect what you heard back in your own words first ("So short-term you want X, long-term you want Y. Got it."), then ask the next sharpest question.
 
-Once you have short-term + long-term + at least one constraint, transition to plan presentation by setting "phase_decision" to "advance_to_plan". Until then, keep it as "stay_in_goals". The plan is generated and shown right after a reply that advances, so never promise a plan ("let me pull together the plan") in a reply that stays in goals.
+Once you have short-term + long-term + at least one constraint, transition to plan presentation by setting "phase_decision" to "advance_to_plan". Until then, keep it as "stay_in_goals". The plan is generated and shown right after a reply that advances, so never promise a plan ("let me pull together the plan") in a reply that stays in goals. A reply that advances says in one short sentence that the team plan follows; it never names or lists the agents (the plan card does that).
 
 ${COS_PLAIN_LANGUAGE_GUIDANCE}
 
@@ -206,7 +210,7 @@ The visible chat body comes BEFORE the fenced block. Do not repeat the JSON in p
 // spec. The interview already captured goal/constraints/criteria via the
 // Socratic engine, so the LLM jumps directly to plan presentation. The
 // "ALREADY-CAPTURED" framing tells the model not to re-ask Phase 1 questions.
-function planPromptFromSpec(spec: DeepInterviewSpecView): string {
+function planPromptFromSpec(spec: DeepInterviewSpecView, memberNames: readonly string[] = []): string {
   const constraintsJson = JSON.stringify(spec.constraints, null, 2);
   const criteriaJson = JSON.stringify(spec.criteria, null, 2);
   return `You are the Chief of Staff for AgentDash. The user already completed a deep-interview, so goals, constraints, and success criteria are ALREADY-CAPTURED. Do NOT re-ask Phase 1 (goals capture) questions; jump directly to Phase 2 (plan presentation).
@@ -218,9 +222,9 @@ Success criteria: ${criteriaJson}
 
 ${WORKFORCE_PROPOSAL_GUIDANCE}
 
-Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and a plain role title.
+Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a title, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and its title. ${planNamingGuidance(memberNames)}
 
-In the visible body (before the JSON), give the user a short paragraph of rationale that references at least one constraint and one success criterion verbatim from the captured context, then a one-line tour of each agent. End with the question "Want me to set them up, or revise?"
+${PLAN_INTRO_GUIDANCE} The plan's "rationale" should reference at least one constraint and one success criterion from the captured context.
 
 Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 payload:
 
@@ -230,7 +234,7 @@ Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 
   "plan": {
     "rationale": "...",
     "agents": [
-      { "role": "engineering_lead", "name": "Ellie", "adapterType": "${defaultAgentPlanAdapterType()}", "responsibilities": ["..."], "kpis": ["..."] }
+      { "role": "engineering_lead", "title": "Engineering Lead", "name": "Ellie", "adapterType": "${defaultAgentPlanAdapterType()}", "responsibilities": ["..."], "kpis": ["..."] }
     ],
     "alignmentToShortTerm": "...",
     "alignmentToLongTerm": "..."
@@ -243,15 +247,15 @@ Set phase_decision to "stay_in_plan" the first time you propose — the user con
 No greetings. No markdown headings outside the JSON block.`;
 }
 
-function planPrompt(state: CosStateRow): string {
+function planPrompt(state: CosStateRow, memberNames: readonly string[] = []): string {
   return `You are the Chief of Staff for AgentDash. Goals captured:
 ${JSON.stringify(state.goals, null, 2)}
 
 ${WORKFORCE_PROPOSAL_GUIDANCE}
 
-Propose a concrete agent team that hits the short-term goal AND seeds the long-term one. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and a plain role title.
+Propose a concrete agent team that hits the short-term goal AND seeds the long-term one. Use 2-5 agents. Each agent gets a role, a title, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and its title. ${planNamingGuidance(memberNames)}
 
-In the visible body (before the JSON), give the user a short paragraph of rationale and a one-line tour of each agent. End with the question "Want me to set them up, or revise?"
+${PLAN_INTRO_GUIDANCE}
 
 Your reply MUST end with a fenced JSON block:
 
@@ -261,7 +265,7 @@ Your reply MUST end with a fenced JSON block:
   "plan": {
     "rationale": "...",
     "agents": [
-      { "role": "engineering_lead", "name": "Ellie", "adapterType": "${defaultAgentPlanAdapterType()}", "responsibilities": ["..."], "kpis": ["..."] }
+      { "role": "engineering_lead", "title": "Engineering Lead", "name": "Ellie", "adapterType": "${defaultAgentPlanAdapterType()}", "responsibilities": ["..."], "kpis": ["..."] }
     ],
     "alignmentToShortTerm": "...",
     "alignmentToLongTerm": "..."
@@ -287,6 +291,11 @@ export function parseTrailer(raw: string): ParsedTrailer {
   const body = raw.slice(0, match.index).trimEnd();
   try {
     const parsed = JSON.parse(match[1]!.trim()) as Record<string, unknown>;
+    // AgentDash (scan 4, lane N): a plan's model-written titles are put on
+    // one line of at most 80 characters before anything validates them.
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && "plan" in parsed) {
+      parsed.plan = normalizeAgentPlanTitles(parsed.plan);
+    }
     return { body, trailer: parsed };
   } catch {
     return { body: raw.trimEnd(), trailer: null };
@@ -469,6 +478,16 @@ export function cosReplier(deps: Deps) {
           content: m.content,
         })) as Array<{ role: "user" | "assistant"; content: string }>;
 
+      // AgentDash (scan 4, lane N): names the plan must not give an agent.
+      let memberNames: string[] = [];
+      if (cosState && deps.memberNames && input.companyId) {
+        try {
+          memberNames = await deps.memberNames(input.companyId);
+        } catch (err) {
+          logger.warn({ err, companyId: input.companyId }, "cos-replier: could not load member names");
+        }
+      }
+
       // Phase-aware system prompt, falling back to steady-state when cosState is unavailable.
       let state: CosStateRow | null = null;
       let system = STEADY_STATE_PROMPT;
@@ -501,14 +520,14 @@ export function cosReplier(deps: Deps) {
           if (specView) {
             // Spec-driven path: always plan-presentation, regardless of the
             // (possibly-stale) phase column.
-            system = planPromptFromSpec(specView);
+            system = planPromptFromSpec(specView, memberNames);
             // Force the in-memory state phase to "plan" so the trailer
             // handler below takes the plan-card branch.
             state = { ...state, phase: "plan" };
           } else if (state.phase === "goals") {
             system = goalsPrompt(state);
           } else if (state.phase === "plan") {
-            system = planPrompt(state);
+            system = planPrompt(state, memberNames);
           } else if (
             state.phase === "materializing" ||
             state.phase === "ready"
@@ -572,7 +591,9 @@ export function cosReplier(deps: Deps) {
       // Set once a plan intro is up, so a failed card post that lands in the
       // outer catch below does not post the same text a second time.
       let planIntroPosted = false;
-      const postPlan = async (plan: AgentPlanProposalV1Payload, planBody: string) => {
+      const postPlan = async (proposedPlan: AgentPlanProposalV1Payload, proposedBody: string) => {
+        // Never an agent named after a person in the company; titles verbatim.
+        const { plan, body: planBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
         let introMsg: unknown = null;
         try {
           introMsg = await post(planBody);
@@ -662,7 +683,7 @@ export function cosReplier(deps: Deps) {
               try {
                 planText = await deps.llm(
                   {
-                    system: planPrompt({ ...state, phase: "plan", goals }),
+                    system: planPrompt({ ...state, phase: "plan", goals }, memberNames),
                     messages: [...messages, { role: "assistant", content: visibleBody }],
                   },
                   meter,

@@ -9,8 +9,22 @@ import { AGENT_ROLES, type AgentRole } from "./constants.js";
 // specific words come before broad ones ("security engineer" -> security).
 const ROLE_KEYWORD_RULES: ReadonlyArray<{ role: AgentRole; keywords: readonly string[] }> = [
   { role: "cto", keywords: ["cto", "technical_director", "tech_lead", "architect"] },
-  { role: "cmo", keywords: ["cmo", "marketing", "content", "growth", "brand", "seo", "social", "copywrit", "communications", "pr_lead"] },
+  { role: "cmo", keywords: ["cmo", "marketing", "content", "growth", "brand", "seo", "social", "copywrit", "communications", "pr_lead", "outreach", "campaign", "newsletter"] },
   { role: "cfo", keywords: ["cfo", "finance", "financial", "accounting", "accountant", "bookkeep", "controller", "treasury"] },
+  // AgentDash (scan 4, lane O2): an accounting firm's plan proposed "Month End
+  // Close Coordinator" and "Close Checklist Manager", which fell to pm through
+  // "coordinator" or to general. Only phrases that mean bookkeeping work are
+  // listed: a bare "audit", "billing", "budget", "tax", "ledger" or "close"
+  // also names engineering, QA, research and sales jobs ("Code Audit
+  // Engineer", "Billing Engineer", "Deal Close Specialist"). Kept below the
+  // original cfo rule and above security, qa, researcher and pm.
+  {
+    role: "cfo",
+    keywords: [
+      "month_end", "year_end", "close_checklist", "period_close", "books_close",
+      "reconcil", "general_ledger", "payable", "receivable", "payroll",
+    ],
+  },
   { role: "security", keywords: ["security", "secops", "compliance", "privacy"] },
   { role: "qa", keywords: ["qa", "quality", "tester", "testing", "test"] },
   { role: "devops", keywords: ["devops", "deploy", "deployment", "infrastructure", "infra", "sre", "reliability", "platform", "release", "cloud"] },

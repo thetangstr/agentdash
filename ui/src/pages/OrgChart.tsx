@@ -19,7 +19,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useIsPhone } from "../hooks/useIsPhone";
-import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
+import { type Agent } from "@paperclipai/shared";
+import { agentPickerSubtitle } from "../lib/agent-identity";
 
 // Layout constants
 const CARD_W = 200;
@@ -650,7 +651,7 @@ export function OrgChart() {
                       {node.name}
                     </span>
                     <span className="text-[11px] text-muted-foreground leading-tight mt-0.5">
-                      {agent?.title ?? roleLabel(node.role)}
+                      {agentPickerSubtitle({ role: node.role, title: agent?.title ?? null })}
                     </span>
                     {agent && (
                       <span className="text-[10px] text-muted-foreground/60 font-mono leading-tight mt-1">
@@ -671,12 +672,6 @@ export function OrgChart() {
       </div>
     </div>
   );
-}
-
-const roleLabels: Record<string, string> = AGENT_ROLE_LABELS;
-
-function roleLabel(role: string): string {
-  return roleLabels[role] ?? role;
 }
 
 /** Indentation stops growing past this depth so deep trees stay readable at 390px. */
@@ -713,7 +708,7 @@ function PhoneOrgTreeNode({
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="break-words text-sm font-semibold leading-tight text-foreground">{node.name}</span>
           <span className="mt-0.5 break-words text-xs leading-tight text-muted-foreground">
-            {agent?.title ?? roleLabel(node.role)}
+            {agentPickerSubtitle({ role: node.role, title: agent?.title ?? null })}
           </span>
         </span>
         {reports.length > 0 ? (

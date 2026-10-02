@@ -47,6 +47,8 @@ import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize
 import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
 import { parseTrailer, WORKFORCE_PROPOSAL_GUIDANCE } from "../services/cos-replier.js";
+import { listCompanyMemberNames, PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "../services/cos-plan-naming.js";
+import { emitMessageUpdated } from "../realtime/conversation-events.js";
 import {
   applyAdapterPreset,
   readAdapterStatus,
@@ -191,6 +193,33 @@ export function onboardingV2Routes(db: Db) {
     const [row] = await db.select().from(assistantConversations).where(and(eq(assistantConversations.id, conversationId), eq(assistantConversations.companyId, companyId)));
     if (!row) throw notFound('Conversation not found');
     return receiptFrom(row.metadata, key);
+  }
+  // AgentDash (scan 4, lane N): record on the plan card that its team was
+  // hired, and push the new state to every open chat. Best effort: the hire
+  // stands either way, and a later click is answered with 409 (also "hired").
+  async function markPlanCardConfirmed(
+    companyId: string,
+    conversationId: string,
+    messageId: string,
+    payload: AgentPlanProposalV1Payload,
+    agentIds: string[],
+  ) {
+    const next: AgentPlanProposalV1Payload = { ...payload, confirmedAt: new Date().toISOString(), confirmedAgentIds: agentIds };
+    try {
+      await db
+        .update(assistantMessages)
+        .set({ cardPayload: next as unknown as Record<string, unknown> })
+        .where(and(eq(assistantMessages.id, messageId), eq(assistantMessages.conversationId, conversationId)));
+      emitMessageUpdated({
+        id: messageId,
+        conversationId,
+        companyId,
+        cardKind: "agent_plan_proposal_v1",
+        cardPayload: next as unknown as Record<string, unknown>,
+      });
+    } catch (err) {
+      logger.warn({ err, conversationId, messageId }, "[confirm-plan] could not mark the plan card hired");
+    }
   }
   function consumedHire(receipt: HireReceipt) {
     return conflict('Hire already accepted; inspect the existing agents instead of hiring again', { accepted: true, agentIds: receipt.agentIds });
@@ -695,8 +724,9 @@ export function onboardingV2Routes(db: Db) {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { conversationId } = req.body as { conversationId?: string };
+    const { conversationId, messageId } = req.body as { conversationId?: string; messageId?: unknown };
     if (!conversationId) throw badRequest("conversationId required");
+    if (messageId !== undefined && typeof messageId !== "string") throw badRequest("messageId must be a string");
 
     const convoRows = await db
       .select()
@@ -724,6 +754,11 @@ export function onboardingV2Routes(db: Db) {
       .limit(1);
     const planMsg = planRows[0];
     if (!planMsg) throw notFound("No plan card found in this conversation");
+    // AgentDash (scan 4, lane N): a click on an older plan card never hires
+    // the newer plan's team.
+    if (messageId !== undefined && messageId !== planMsg.id) {
+      throw conflict("A newer plan replaced this one. Use the latest plan card.", { code: "superseded_plan", latestMessageId: planMsg.id });
+    }
     const payload = planMsg.cardPayload as AgentPlanProposalV1Payload | null;
     if (!isAgentPlanPayload(payload)) {
       throw badRequest("Plan card has no agents to materialize");
@@ -732,7 +767,13 @@ export function onboardingV2Routes(db: Db) {
 
     const receiptKey = `plan:${planMsg.id}`;
     const previousHire = await readHireReceipt(companyId, conversationId, receiptKey);
-    if (previousHire) throw consumedHire(previousHire);
+    if (previousHire) {
+      // AgentDash (scan 4, lane N): a card hired before the confirmed state
+      // existed is marked now, so it stops offering "Set it up".
+      // A partly hired team (a hire failed mid-batch) is not marked.
+      if (!payload.confirmedAt && previousHire.agentIds.length === payload.agents.length) await markPlanCardConfirmed(companyId, conversationId, planMsg.id, payload, previousHire.agentIds);
+      throw consumedHire(previousHire);
+    }
     if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
     const accepted = await acceptOnboardingHires(companyId, conversationId, receiptKey, payload.agents.length, res, async (acceptance, index) => {
       const txAgents = agentService(acceptance.executor);
@@ -747,7 +788,8 @@ export function onboardingV2Routes(db: Db) {
         // AgentDash: keep the proposed role. It maps onto the AGENT_ROLES enum
         // (nearest fit, "general" only when nothing fits) and the card's own
         // wording stays as the title.
-        name: planAgent.name, role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.role), adapterType: planAgent.adapterType,
+        // AgentDash (scan 4, lane N): the CoS-written title, verbatim (trimmed).
+        name: planAgent.name, role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.title?.trim() || planAgent.role), adapterType: planAgent.adapterType,
         workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: {}, reportsTo: cos?.id ?? null,
         ...hireAccountability,
         ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
@@ -768,7 +810,7 @@ export function onboardingV2Routes(db: Db) {
           const agentsMd = `# AGENTS.md — ${planAgent.name}
 
 ## Role
-${planAgent.role}
+${planAgent.title?.trim() || planAgent.role}
 
 ## Why you exist
 ${payload.rationale}
@@ -801,6 +843,8 @@ ${kpis || "- (none captured)"}
     } catch (error) {
       throw acceptedHireNeedsRepair(failedHires.length > 0 ? failedHires.map(item => item.agentId) : materialized.createdAgentIds, error);
     }
+    // AgentDash (scan 4, lane N): the card now says "Team hired" for everyone.
+    await markPlanCardConfirmed(companyId, conversationId, planMsg.id, payload, materialized.createdAgentIds);
 
     // AgentDash (issue #174): materialize the captured onboarding goals
     // ({shortTerm, longTerm}) into the goals table so the user sees them on
@@ -937,6 +981,11 @@ ${kpis || "- (none captured)"}
     if (!priorPayload || !Array.isArray(priorPayload.agents)) {
       throw badRequest("Latest plan card has no agents payload to revise");
     }
+    // AgentDash (scan 4, lane N): a hired plan is not revised (no LLM call,
+    // no new card); the team already exists.
+    if (priorPayload.confirmedAt || (await readHireReceipt(companyId, conversationId, `plan:${planMsg.id}`))) {
+      throw conflict("This team is already hired. Ask your Chief of Staff for changes to the team instead.", { code: "plan_hired" });
+    }
 
     // CoS authors all messages here (matches the rest of onboarding-v2).
     const allAgents = await agents.list(companyId);
@@ -949,11 +998,19 @@ ${kpis || "- (none captured)"}
     // agents[]) can't masquerade as part of the operator's instructions.
     // Trust boundary: only the static text below is "system"; everything
     // user-controlled is a user turn.
-    const priorPlanJson = JSON.stringify(priorPayload, null, 2);
+    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, ...priorPlan } = priorPayload;
+    const priorPlanJson = JSON.stringify(priorPlan, null, 2);
     const userRevision = revisionText.trim();
+    // AgentDash (scan 4, lane N): never name an agent after a member.
+    const memberNames = await listCompanyMemberNames(db, companyId).catch((err) => {
+      logger.warn({ err, companyId }, "[revise-plan] could not load member names");
+      return [] as string[];
+    });
     const system = `${WORKFORCE_PROPOSAL_GUIDANCE}\n\nYou are the Chief of Staff for AgentDash. The user reviewed a plan you proposed and wants to revise it. Apply their feedback as a DELTA on the prior plan — preserve parts they did not call out, change only what they pushed back on.
 
-In the visible body (before the JSON), give a SHORT one-line preamble like "Updated based on your feedback:" followed by a 1-3 sentence summary of what you changed and why. Then list the revised team in one line per agent. End with "Want me to set them up, or revise again?"
+In the visible body (before the JSON), write ONE or two short sentences saying what you changed and why (for example "Updated based on your feedback: I swapped the researcher for a bookkeeper."). The card under your message shows the revised team, so do not list the agents again. End with "Want me to set them up, or revise again?"
+
+${planNamingGuidance(memberNames)}
 
 Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 payload:
 
@@ -962,7 +1019,7 @@ Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 
   "plan": {
     "rationale": "...",
     "agents": [
-      { "role": "engineering_lead", "name": "Ellie", "adapterType": "hermes_local", "responsibilities": ["..."], "kpis": ["..."] }
+      { "role": "engineering_lead", "title": "Engineering Lead", "name": "Ellie", "adapterType": "hermes_local", "responsibilities": ["..."], "kpis": ["..."] }
     ],
     "alignmentToShortTerm": "...",
     "alignmentToLongTerm": "..."
@@ -984,10 +1041,10 @@ No greetings. No markdown headings outside the JSON block.`;
       ],
     });
     const { body, trailer } = parseTrailer(text);
-    const visibleBody = body.length > 0 ? body : "Updated based on your feedback.";
+    const proposedBody = body.length > 0 ? body : "Updated based on your feedback.";
 
-    const newPlan = (trailer as { plan?: unknown })?.plan;
-    if (!isAgentPlanPayload(newPlan)) {
+    const proposedPlan = (trailer as { plan?: unknown })?.plan;
+    if (!isAgentPlanPayload(proposedPlan)) {
       logger.warn(
         { conversationId, raw: text.slice(0, 300) },
         "[revise-plan] LLM reply missing or malformed plan payload",
@@ -999,6 +1056,8 @@ No greetings. No markdown headings outside the JSON block.`;
         { statusCode: 502 },
       );
     }
+
+    const { plan: newPlan, body: visibleBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
 
     // Post the visible preamble FIRST, then the new card. Mirrors the
     // cos-replier plan-emit ordering so the timeline reads naturally.
@@ -1626,13 +1685,16 @@ async function generateInitialTeamPlan(
   }
 
   const transcriptText = transcript.map((t) => `${t.role}: ${t.content}`).join("\n");
+  // AgentDash (scan 4, lane N): never name an agent after a member.
+  const memberNames = await listCompanyMemberNames(db, companyId).catch((err) => {
+    logger.warn({ err, companyId }, "[interview/turn] could not load member names");
+    return [] as string[];
+  });
   const system = WORKFORCE_PROPOSAL_GUIDANCE + "\n\n" +
     "You are the Chief of Staff for AgentDash. The user just finished the "
     + "onboarding interview. Propose a small agent team (2-5 agents) that will "
-    + "deliver their 90-day goal. In the visible body (before the JSON), give a "
-    + "one-line preamble like \"Based on what you told me, here's the team I'd "
-    + "start with:\" then list the team one agent per line. End with \"Want me "
-    + "to set them up, or revise anything?\"\n\n"
+    + "deliver their 90-day goal. " + PLAN_INTRO_GUIDANCE + " "
+    + planNamingGuidance(memberNames) + "\n\n"
     + "Your reply MUST end with a fenced JSON block emitting an "
     + "agent_plan_proposal_v1 payload:\n"
     + "```json\n"
@@ -1640,7 +1702,7 @@ async function generateInitialTeamPlan(
     + '  "plan": {\n'
     + '    "rationale": "...",\n'
     + '    "agents": [\n'
-    + '      { "role": "engineering_lead", "name": "Ellie", "adapterType": "hermes_local", "responsibilities": ["..."], "kpis": ["..."] }\n'
+    + '      { "role": "engineering_lead", "title": "Engineering Lead", "name": "Ellie", "adapterType": "hermes_local", "responsibilities": ["..."], "kpis": ["..."] }\n'
     + "    ],\n"
     + '    "alignmentToShortTerm": "...",\n'
     + '    "alignmentToLongTerm": "..."\n'
@@ -1658,15 +1720,19 @@ async function generateInitialTeamPlan(
     messages: [{ role: "user", content: `INTERVIEW TRANSCRIPT:\n${transcriptText}` }],
   });
   const { body, trailer } = parseTrailer(raw);
-  const plan = (trailer as { plan?: unknown })?.plan;
-  if (!isAgentPlanPayload(plan)) {
+  const proposedPlan = (trailer as { plan?: unknown })?.plan;
+  if (!isAgentPlanPayload(proposedPlan)) {
     logger.warn(
       { conversationId, raw: raw.slice(0, 300) },
       "[interview/turn] initial plan proposal returned unparseable payload",
     );
     return { ok: false, reason: "model returned an unparseable plan" };
   }
-  const visibleBody = body.length > 0 ? body : "Based on what you told me, here's the team I'd start with.";
+  const { plan, body: visibleBody } = preparePlanForPosting(
+    proposedPlan,
+    body.length > 0 ? body : "Based on what you told me, here's the team I'd start with.",
+    memberNames,
+  );
   await conversationsSvc.postMessage({
     conversationId,
     authorKind: "agent",

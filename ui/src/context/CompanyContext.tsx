@@ -14,8 +14,11 @@ import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import type { CompanySelectionSource } from "../lib/company-selection";
 import { IssuePrefixesContext } from "./IssuePrefixesContext";
+import { useBoardSessionState } from "../hooks/useBoardSessionReady";
 type CompanySelectionOptions = { source?: CompanySelectionSource };
 type CompanyListResult = { companies: Company[]; unauthorized: boolean };
+const EMPTY_COMPANY_LIST: CompanyListResult = { companies: [], unauthorized: false };
+const SIGNED_OUT_COMPANY_LIST: CompanyListResult = { companies: [], unauthorized: true };
 
 interface CompanyContextValue {
   companies: Company[];
@@ -104,7 +107,13 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
   const [selectionSource, setSelectionSource] = useState<CompanySelectionSource>("bootstrap");
   const [selectedCompanyId, setSelectedCompanyIdState] = useState<string | null>(null);
 
-  const { data: companiesResult = { companies: [], unauthorized: false }, isLoading, error } = useQuery<CompanyListResult>({
+  // AgentDash (scan 4, lane O2): no company list for a signed-out visitor.
+  // While the session is being checked the list counts as loading (so a stored
+  // selection is not cleared); once it is known to be absent it counts as
+  // unauthorized, the same answer a 401 from the list gives.
+  const sessionState = useBoardSessionState();
+  const { data: queriedCompaniesResult, isLoading: companiesLoading, error } = useQuery<CompanyListResult>({
+    enabled: sessionState === "ready",
     queryKey: queryKeys.companies.all,
     queryFn: async () => {
       try {
@@ -119,6 +128,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     retry: 2,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10_000),
   });
+  const companiesResult: CompanyListResult =
+    sessionState === "signed_out"
+      ? SIGNED_OUT_COMPANY_LIST
+      : queriedCompaniesResult ?? EMPTY_COMPANY_LIST;
+  const isLoading = companiesLoading || (sessionState === "pending" && !queriedCompaniesResult);
   const companies = companiesResult.companies;
   const companyListUnauthorized = companiesResult.unauthorized;
   const sidebarCompanies = useMemo(
@@ -233,6 +247,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       <IssuePrefixesContext.Provider value={issuePrefixes}>{children}</IssuePrefixesContext.Provider>
     </CompanyContext.Provider>
   );
+}
+
+/** AgentDash (scan 4, lane N): the company context, or null outside a CompanyProvider. */
+export function useOptionalCompany(): CompanyContextValue | null {
+  return useContext(CompanyContext);
 }
 
 export function useCompany() {

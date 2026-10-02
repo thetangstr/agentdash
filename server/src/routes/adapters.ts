@@ -633,7 +633,10 @@ export function adapterRoutes() {
       return;
     }
     if (!adapter.getConfigSchema) {
-      res.status(404).json({ error: `Adapter "${type}" does not provide a config schema.` });
+      // AgentDash (scan 4, lane O2): a registered adapter without a schema
+      // (hermes_local) has no extra form fields. Answer that, not a 404 the
+      // browser logs on every /agents/new.
+      res.json({ fields: [] } satisfies AdapterConfigSchema);
       return;
     }
 

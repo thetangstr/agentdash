@@ -6,7 +6,7 @@ import {
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "@paperclipai/shared";
 import { AgentCeilingEditor } from "@/components/settings/AgentCeilingEditor";
-import { NeedsReconciliationPanel } from "@/components/settings/NeedsReconciliationPanel";
+import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/components/settings/NeedsReconciliationPanel";
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -52,6 +52,9 @@ export function CompanySettings() {
   // here — the hire path goes through the CoS. The same for every company
   // (doc/plans/2026-09-30-one-ux.md).
   const hostedHirePath = health?.hostedBox === true;
+  // AgentDash (scan 4, lane O2): reconciliation waits under Advanced only
+  // while nothing needs a verdict; with items it sits in the main page.
+  const reconciliationCount = useNeedsReconciliationCount(selectedCompanyId ?? "");
   // General settings local state
   const [companyName, setCompanyName] = useState("");
   const [description, setDescription] = useState("");
@@ -475,87 +478,6 @@ export function CompanySettings() {
         </div>
       </div>
 
-      {/* AgentDash (Scan 3, lane J): the OpenClaw invite snippet is a
-          technical integration, so it sits collapsed under Advanced. People
-          are invited from Members. */}
-      <details className="group space-y-4" data-testid="company-settings-invites-section">
-        <summary className="flex min-h-11 cursor-pointer select-none items-center text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground">
-          Advanced
-          <span className="ml-2 normal-case tracking-normal font-normal">Connect an outside agent (OpenClaw)</span>
-        </summary>
-        <div className="mt-2 space-y-3 rounded-md border border-border px-4 py-4">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground">
-              Generate an OpenClaw agent invite snippet.
-            </span>
-            <HintIcon text="Creates a short-lived OpenClaw agent invite and renders a copy-ready prompt." />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              data-testid="company-settings-invites-generate-button"
-              size="sm"
-              onClick={() => inviteMutation.mutate()}
-              disabled={inviteMutation.isPending}
-            >
-              {inviteMutation.isPending
-                ? "Generating..."
-                : "Generate OpenClaw Invite Prompt"}
-            </Button>
-          </div>
-          {inviteError && (
-            <p className="text-sm text-destructive">{inviteError}</p>
-          )}
-          {inviteSnippet && (
-            <div
-              className="rounded-md border border-border bg-muted/30 p-2"
-              data-testid="company-settings-invites-snippet"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs text-muted-foreground">
-                  OpenClaw Invite Prompt
-                </div>
-                {snippetCopied && (
-                  <span
-                    key={snippetCopyDelightId}
-                    className="flex items-center gap-1 text-xs text-green-600 animate-pulse"
-                  >
-                    <Check className="h-3 w-3" />
-                    Copied
-                  </span>
-                )}
-              </div>
-              <div className="mt-1 space-y-1.5">
-                <textarea
-                  data-testid="company-settings-invites-snippet-textarea"
-                  className="h-[28rem] w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none"
-                  value={inviteSnippet}
-                  readOnly
-                />
-                <div className="flex justify-end">
-                  <Button
-                    data-testid="company-settings-invites-copy-button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(inviteSnippet);
-                        setSnippetCopied(true);
-                        setSnippetCopyDelightId((prev) => prev + 1);
-                        setTimeout(() => setSnippetCopied(false), 2000);
-                      } catch {
-                        /* clipboard may not be available */
-                      }
-                    }}
-                  >
-                    {snippetCopied ? "Copied snippet" : "Copy snippet"}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </details>
-
       {/* AgentDash (GH #785): the optional readiness assessment, for every company */}
       <ReadinessAssessmentCard />
 
@@ -577,38 +499,137 @@ export function CompanySettings() {
         </div>
       )}
 
-      {/* Import / Export */}
-      <div className="space-y-4">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          Workspace Packages
+      {/* AgentDash (scan 4, lane O2): technical and rarely used settings sit
+          collapsed at the bottom, so the main scroll (on a phone above all)
+          is the settings a CEO changes: outside agents (OpenClaw), import and
+          export, agent policy ceilings and connector reconciliation. */}
+      {reconciliationCount > 0 && selectedCompany?.id ? (
+        <div data-testid="company-settings-reconciliation-attention">
+          <NeedsReconciliationPanel companyId={selectedCompany.id} />
         </div>
-        <div className="rounded-md border border-border px-4 py-4">
-          <p className="text-sm text-muted-foreground">
-            Import and export have moved to dedicated pages accessible from the{" "}
-            <a href="/org" className="underline hover:text-foreground">Org Chart</a> header.
-          </p>
-          <div className="mt-3 flex items-center gap-2">
-            <Button size="sm" variant="outline" asChild>
-              <a href="/company/export">
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-                Export
-              </a>
-            </Button>
-            <Button size="sm" variant="outline" asChild>
-              <a href="/company/import">
-                <Upload className="mr-1.5 h-3.5 w-3.5" />
-                Import
-              </a>
-            </Button>
+      ) : null}
+      <details className="group space-y-4" data-testid="company-settings-advanced">
+        <summary className="flex min-h-11 cursor-pointer select-none items-center text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground">
+          Advanced
+          <span className="ml-2 normal-case tracking-normal font-normal">Outside agents, import and export, agent limits</span>
+        </summary>
+        <div className="mt-2 space-y-6">
+          <div className="space-y-2" data-testid="company-settings-invites-section">
+            <div className="text-xs font-medium text-muted-foreground">Connect an outside agent (OpenClaw)</div>
+            <div className="mt-2 space-y-3 rounded-md border border-border px-4 py-4">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-muted-foreground">
+                  Generate an OpenClaw agent invite snippet.
+                </span>
+                <HintIcon text="Creates a short-lived OpenClaw agent invite and renders a copy-ready prompt." />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  data-testid="company-settings-invites-generate-button"
+                  size="sm"
+                  onClick={() => inviteMutation.mutate()}
+                  disabled={inviteMutation.isPending}
+                >
+                  {inviteMutation.isPending
+                    ? "Generating..."
+                    : "Generate OpenClaw Invite Prompt"}
+                </Button>
+              </div>
+              {inviteError && (
+                <p className="text-sm text-destructive">{inviteError}</p>
+              )}
+              {inviteSnippet && (
+                <div
+                  className="rounded-md border border-border bg-muted/30 p-2"
+                  data-testid="company-settings-invites-snippet"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-muted-foreground">
+                      OpenClaw Invite Prompt
+                    </div>
+                    {snippetCopied && (
+                      <span
+                        key={snippetCopyDelightId}
+                        className="flex items-center gap-1 text-xs text-green-600 animate-pulse"
+                      >
+                        <Check className="h-3 w-3" />
+                        Copied
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 space-y-1.5">
+                    <textarea
+                      data-testid="company-settings-invites-snippet-textarea"
+                      className="h-[28rem] w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none"
+                      value={inviteSnippet}
+                      readOnly
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        data-testid="company-settings-invites-copy-button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(inviteSnippet);
+                            setSnippetCopied(true);
+                            setSnippetCopyDelightId((prev) => prev + 1);
+                            setTimeout(() => setSnippetCopied(false), 2000);
+                          } catch {
+                            /* clipboard may not be available */
+                          }
+                        }}
+                      >
+                        {snippetCopied ? "Copied snippet" : "Copy snippet"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Danger Zone */}
-      <div className="space-y-4">
-        <div className="text-xs font-medium text-destructive uppercase tracking-wide">
-          Danger Zone
+          {/* Import / Export */}
+          <div className="space-y-4">
+            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Workspace Packages
+            </div>
+            <div className="rounded-md border border-border px-4 py-4">
+              <p className="text-sm text-muted-foreground">
+                Import and export have moved to dedicated pages accessible from the{" "}
+                <a href="/org" className="underline hover:text-foreground">Org Chart</a> header.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <Button size="sm" variant="outline" asChild>
+                  <a href="/company/export">
+                    <Download className="mr-1.5 h-3.5 w-3.5" />
+                    Export
+                  </a>
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <a href="/company/import">
+                    <Upload className="mr-1.5 h-3.5 w-3.5" />
+                    Import
+                  </a>
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {selectedCompany?.id ? (
+            <>
+              <AgentCeilingEditor companyId={selectedCompany.id} />
+              {reconciliationCount === 0 ? <NeedsReconciliationPanel companyId={selectedCompany.id} /> : null}
+            </>
+          ) : null}
         </div>
+      </details>
+
+      {/* Danger zone: collapsed, last. Archiving is rare and irreversible from here. */}
+      <details className="group space-y-4" data-testid="company-settings-danger-zone">
+        <summary className="flex min-h-11 cursor-pointer select-none items-center text-xs font-medium uppercase tracking-wide text-destructive">
+          Danger zone
+        </summary>
         <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-4">
           <p className="text-sm text-muted-foreground">
             Archive this company to hide it from the sidebar. This persists in
@@ -655,17 +676,7 @@ export function CompanySettings() {
             )}
           </div>
         </div>
-      </div>
-
-      {/* AgentDash (one UX): governance panels render for every company. Each
-          one asks the server and shows "available on request" when its
-          capability is off for this workspace. */}
-      {selectedCompany?.id ? (
-        <>
-          <AgentCeilingEditor companyId={selectedCompany.id} />
-          <NeedsReconciliationPanel companyId={selectedCompany.id} />
-        </>
-      ) : null}
+      </details>
 
     </div>
   );
