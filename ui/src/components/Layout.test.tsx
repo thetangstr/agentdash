@@ -17,6 +17,22 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
+const paramsState = vi.hoisted(() => ({ companyPrefix: "PAP" }));
+const companyContextState = vi.hoisted(() => ({
+  companies: [{ id: "company-1", issuePrefix: "PAP", name: "Paperclip" }] as Array<{
+    id: string;
+    issuePrefix: string;
+    name: string;
+  }>,
+  loading: false,
+  selectedCompany: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" } as {
+    id: string;
+    issuePrefix: string;
+    name: string;
+  } | null,
+  selectedCompanyId: "company-1" as string | null,
+  selectionSource: "manual" as "manual" | "route_sync" | "bootstrap",
+}));
 let currentPathname = "/PAP/dashboard";
 
 vi.mock("@/lib/router", () => ({
@@ -24,7 +40,7 @@ vi.mock("@/lib/router", () => ({
   useLocation: () => ({ pathname: currentPathname, search: "", hash: "", state: null }),
   useNavigate: () => mockNavigate,
   useNavigationType: () => "PUSH",
-  useParams: () => ({ companyPrefix: "PAP" }),
+  useParams: () => ({ companyPrefix: paramsState.companyPrefix }),
 }));
 
 vi.mock("./CompanyRail", () => ({
@@ -123,11 +139,7 @@ vi.mock("../context/PanelContext", () => ({
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
-    companies: [{ id: "company-1", issuePrefix: "PAP", name: "Paperclip" }],
-    loading: false,
-    selectedCompany: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" },
-    selectedCompanyId: "company-1",
-    selectionSource: "manual",
+    ...companyContextState,
     setSelectedCompanyId: mockSetSelectedCompanyId,
   }),
 }));
@@ -145,6 +157,10 @@ vi.mock("../context/SidebarContext", () => ({
 
 vi.mock("./ConnectionStatus", () => ({
   ConnectionStatus: () => <div data-testid="connection-status-stub">Connected</div>,
+}));
+
+vi.mock("../pages/NotFound", () => ({
+  NotFoundPage: () => <div data-testid="not-found-stub">Not found</div>,
 }));
 
 vi.mock("./ReportIssueButton", () => ({
@@ -199,6 +215,12 @@ describe("Layout", () => {
     document.body.appendChild(container);
     currentPathname = "/PAP/dashboard";
     sidebarState.isMobile = false;
+    paramsState.companyPrefix = "PAP";
+    companyContextState.companies = [{ id: "company-1", issuePrefix: "PAP", name: "Paperclip" }];
+    companyContextState.loading = false;
+    companyContextState.selectedCompany = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
+    companyContextState.selectedCompanyId = "company-1";
+    companyContextState.selectionSource = "manual";
     mockHealthApi.get.mockResolvedValue({
       status: "ok",
       deploymentMode: "authenticated",
@@ -381,6 +403,35 @@ describe("Layout", () => {
     const root = await renderLayout();
     expect(document.documentElement.style.getPropertyValue("--mobile-bottom-nav-offset")).toBe("0px");
     expect(document.documentElement.dataset.mobileBottomNav).toBe("none");
+    await act(async () => root.unmount());
+  });
+
+  // The unmatched-prefix fallback must not re-point the selection while the
+  // company list is a stale snapshot: right after a create, the new company's
+  // id is selected but not yet in `companies`, and falling back to
+  // companies[0] silently moves the person to another workspace's pages.
+  it("does not switch the selection to the first company while the list is stale", async () => {
+    paramsState.companyPrefix = "NEW";
+    currentPathname = "/NEW/dashboard";
+    companyContextState.companies = [{ id: "company-1", issuePrefix: "PAP", name: "Paperclip" }];
+    companyContextState.selectedCompany = null;
+    companyContextState.selectedCompanyId = "company-new";
+    const root = await renderLayout();
+
+    expect(mockSetSelectedCompanyId).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("points a missing selection at the first company on an unmatched prefix", async () => {
+    paramsState.companyPrefix = "NEW";
+    currentPathname = "/NEW/dashboard";
+    companyContextState.selectedCompany = null;
+    companyContextState.selectedCompanyId = null;
+    const root = await renderLayout();
+
+    expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1", { source: "route_sync" });
+
     await act(async () => root.unmount());
   });
 });

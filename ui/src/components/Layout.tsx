@@ -139,9 +139,14 @@ export function Layout() {
     if (!companyPrefix || companiesLoading || companies.length === 0) return;
 
     if (!matchedCompany) {
+      // A selected id missing from the list means the list is a stale
+      // snapshot (e.g. a just-created company before the invalidated query
+      // refetches). Falling back to companies[0] then would silently switch
+      // the workspace; leave the selection alone and let the next list
+      // resolve the prefix. Only re-point at the first company when there
+      // is no selection at all.
       const fallback = (selectedCompanyId ? companies.find((company) => company.id === selectedCompanyId) : null)
-        ?? companies[0]
-        ?? null;
+        ?? (selectedCompanyId === null ? companies[0] ?? null : null);
       if (fallback && selectedCompanyId !== fallback.id) {
         setSelectedCompanyId(fallback.id, { source: "route_sync" });
       }

@@ -29,6 +29,7 @@ test("CoS chat: sent and stored replies show with the WebSocket down", async ({ 
   const res = await request.post("/api/companies", { data: { name: `E2E Socket Down ${Date.now()}` } });
   expect(res.ok(), `create company: ${res.status()} ${await res.text()}`).toBe(true);
   const company = (await res.json()) as Company;
+  try {
 
   // Every company socket is accepted then closed — the client behaves as if
   // the edge refused the upgrade and keeps retrying.
@@ -95,4 +96,10 @@ test("CoS chat: sent and stored replies show with the WebSocket down", async ({ 
   // even though no socket event ever comes.
   await expect(page.getByTestId("cos-conversation")).toContainText("Yes — I can still hear you.", { timeout: 30_000 });
   await expect(page.getByTestId("cos-thinking")).toBeHidden();
+  } finally {
+    // Remove the workspace so it can't become another spec's companies[0]
+    // fallback target for the rest of the run (same cleanup as
+    // budget-hard-stop and signoff-policy).
+    await request.delete(`/api/companies/${company.id}`).catch(() => {});
+  }
 });

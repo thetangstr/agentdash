@@ -109,6 +109,39 @@ describe("resolveBootstrapCompanySelection", () => {
     })).toBe("company-1");
   });
 
+  // A company that was just created (or whose row the invalidated query has
+  // not refetched yet) is missing from a stale snapshot. Falling back to the
+  // first company then silently switches the person to another workspace —
+  // the e2e failure mode where one spec's page renders another spec's CoS.
+  it("keeps the selection when a stale list has not caught up with it", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [activeCompany],
+      sidebarCompanies: [activeCompany],
+      selectedCompanyId: "company-2",
+      storedCompanyId: "company-2",
+    })).toBe("company-2");
+  });
+
+  it("keeps the selection when a stale list has not caught up with it, even mid-route", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [activeCompany],
+      sidebarCompanies: [activeCompany],
+      selectedCompanyId: "company-2",
+      storedCompanyId: "company-2",
+      routeCompanyPrefix: "dashboard",
+      selectionSource: "bootstrap",
+    })).toBe("company-2");
+  });
+
+  it("falls back to the first selectable company when the selection is archived", () => {
+    expect(resolveBootstrapCompanySelection({
+      companies: [archivedCompany, activeCompany],
+      sidebarCompanies: [activeCompany],
+      selectedCompanyId: "archived-company",
+      storedCompanyId: null,
+    })).toBe("company-1");
+  });
+
   // AgentDash: UX-7 follow-up — a company-prefixed deep link names the company
   // it is about; on a mixed-profile instance the stored/manual company must
   // not shadow it, or profile-gated routes read the wrong profile.

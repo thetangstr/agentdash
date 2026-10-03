@@ -1,5 +1,5 @@
 import { prepareIssueDeletion } from "./issue-dependents.js";
-import { and, count, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { isReservedCompanyPrefix, type CompanyProductProfile } from "@paperclipai/shared";
 import {
@@ -225,7 +225,11 @@ export function companyService(db: Db) {
     return database
       .select(companySelection)
       .from(companies)
-      .leftJoin(companyLogos, eq(companyLogos.companyId, companies.id));
+      .leftJoin(companyLogos, eq(companyLogos.companyId, companies.id))
+      // Deterministic order: callers use companies[0] as a bootstrap fallback,
+      // and an unordered result lets a brand-new row (or a vacuumed heap)
+      // silently become "the" company.
+      .orderBy(asc(companies.createdAt), asc(companies.id));
   }
 
   function deriveIssuePrefixBase(name: string) {
