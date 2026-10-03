@@ -413,11 +413,12 @@ describe("URL userinfo edge cases", () => {
   });
 
   it("stops userinfo at the last @ before the path slash", () => {
-    // `u:p@host/a/@b` — a bare `host` is not host-shaped, so the credential
-    // runs to the final `@` and `host/a/` is consumed with the password.
+    // `u:p@host/a/@b` — `host` is a host-shaped label and the trailing `@b`
+    // has no `/` after it, so it is not a credential marker: only the
+    // password is redacted and `host/a/` survives.
     const out = redactSecrets("https://u:hunter2@host/a/@b");
     expect(out).not.toContain("hunter2");
-    expect(out).toContain("@b");
+    expect(out).toContain("host/a/@b");
   });
 
   it("does not treat `[` after scheme:// as userinfo", () => {
@@ -454,6 +455,48 @@ describe("escaped-JSON closer", () => {
     const out = redactSecrets(input);
     expect(out).not.toContain(SHAPELESS);
     expect(out).toContain(REDACTED);
+  });
+
+  it("does not run a non-secret value through later keys", () => {
+    // A `cmd` value that ate its own closer used to consume the `api_key`
+    // pair entirely — the match was rejected as non-secret and the key was
+    // never scanned.
+    const out = redactSecrets(`{\\"cmd\\":\\"x\\",\\"api_key\\":\\"${SHAPELESS}\\",\\"n\\":\\"y\\"}`);
+    expect(out).not.toContain(SHAPELESS);
+    expect(out).toContain(`\\"n\\":\\"y\\"`);
+  });
+
+  it("does not run a nested-stringify value through later keys", () => {
+    const input = JSON.stringify({
+      tool: JSON.stringify({ command: "ls -la", env: { API_KEY: SHAPELESS }, cwd: "/tmp" }),
+    });
+    const out = redactSecrets(input);
+    expect(out).not.toContain(SHAPELESS);
+    expect(out).toContain("/tmp");
+  });
+
+  it("keeps later non-secret keys visible", () => {
+    // A runaway value wipe `\",\"user\":\"alice\"` and alice vanished with it.
+    const out = redactSecrets(`{\\"api_key\\":\\"${SHAPELESS}\\",\\"user\\":\\"alice\\"}`);
+    expect(out).not.toContain(SHAPELESS);
+    expect(out).toContain("alice");
+  });
+
+  it("redacts a value ending in a literal backslash", () => {
+    // `KEY\` at end-of-value encodes `\\` + `\"` — a 5-backslash run before
+    // the quote, which must still close (≡1 mod 4), not count as content.
+    const input = JSON.stringify({ c: JSON.stringify({ api_key: `${SHAPELESS}\\` }) });
+    expect(redactSecrets(input)).not.toContain(SHAPELESS);
+  });
+
+  it("redacts a value containing a newline escape", () => {
+    const input = JSON.stringify({ c: JSON.stringify({ api_key: `a\n${SHAPELESS}` }) });
+    expect(redactSecrets(input)).not.toContain(SHAPELESS);
+  });
+
+  it("redacts a value containing 1,500 quotes", () => {
+    const input = JSON.stringify({ c: JSON.stringify({ api_key: `${"\"".repeat(1500)}${SHAPELESS}` }) });
+    expect(redactSecrets(input)).not.toContain(SHAPELESS);
   });
 });
 

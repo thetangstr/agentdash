@@ -264,13 +264,14 @@ const JSON_KV_RE =
 // group 4 is content of a value that closes inside the cap; group 5 is
 // exactly 2048 chars — a value past the cap, whose real `\"` closer the
 // callback scans for and extends the redaction over.
-// The value content is `(?:\\\"|\\\\|[^"\\])`: `\"` is the closer (a `"`
-// preceded by a `\` run of length ≡1 mod 4), while `\\\"` (run ≡3 mod 4) is
-// an escaped quote INSIDE the value (`JSON.stringify` of a value containing
-// `"` produces exactly that) and `\\\\` is a literal backslash — neither may
-// terminate the match or the tail of the value leaks.
+// The value content units, in order: `\\\\\\\\` (4 backslashes = an escaped
+// literal backslash), `\\\\\\"` (3 backslashes + quote = a quote inside the
+// value — `JSON.stringify` of a `"` produces exactly that), `\\\\[^"\\]`
+// (2 backslashes + other), `\\[^"\\]` (1 backslash + other), `[^"\\]`
+// (plain char). Only a single-backslash `\"` can close the value — a `"`
+// preceded by a `\` run ≡1 (mod 4) — matching closeEscapedJson.
 const ESCAPED_JSON_KV_RE =
-  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\"|\\\\|[^"\\]){0,2048})\\"|(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\"|\\\\|[^"\\]){2048})/gd;
+  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\\\\\\|\\\\\\"|\\\\[^"\\]|\\[^"\\]|[^"\\]){0,2048})\\"|(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\\\\\\|\\\\\\"|\\\\[^"\\]|\\[^"\\]|[^"\\]){2048})/gd;
 
 // `Bearer <token>` anywhere (JSON bodies, headers embedded in strings).
 // The value is a single flat character class — `\` is allowed mid-token
@@ -691,16 +692,25 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
         }
       }
       // The userinfo delimiter is the last `@` inside the authority — before
-      // the host/path slash — but only when the text between that `@` and
-      // the `/` reads as a host (a `.`, a `:port`, an `[` IP literal, or
-      // `localhost`). Otherwise the `@`-before-`/` is password material too:
-      // `u:p@ss/<key>@host/x` must redact through `@host`, not stop at `p@`
-      // and leak `ss/<key>`. When every `@` sits past a `/`, the slashes are
-      // password material and the last `@` delimits.
+      // the host/path slash — when the text between that `@` and the `/`
+      // reads as a host: an `[A-Za-z0-9-]+` label, or anything carrying `.`,
+      // `:port`, `[`, or the name `localhost`. The exception: when a later
+      // `@` in the region itself precedes a `/`, the slash-separated text is
+      // password material, not a host — `u:p@ss/<key>@host/x` must redact
+      // through `@host`, not stop at `p@` and leak `ss/<key>`. When every
+      // `@` sits past a `/`, the slashes are password material and the last
+      // `@` delimits.
       let delim = at;
       if (atBeforeSlash !== -1 && atBeforeSlash !== at) {
         const hostCandidate = text.slice(atBeforeSlash + 1, slash);
-        if (/[.:\[]/.test(hostCandidate) || hostCandidate === "localhost") delim = atBeforeSlash;
+        const hostLike =
+          /^[A-Za-z0-9-]+$/.test(hostCandidate) ||
+          hostCandidate === "localhost" ||
+          /[.:\[]/.test(hostCandidate);
+        const rest = text.slice(slash, end);
+        const laterAt = rest.indexOf("@");
+        const moreBeforeSlash = laterAt !== -1 && rest.indexOf("/", laterAt + 1) !== -1;
+        if (hostLike && !moreBeforeSlash) delim = atBeforeSlash;
       }
       if (delim < start) return;
       // `user:pass@` — the user has no `/`, `:` or `@`, and the pass keeps
