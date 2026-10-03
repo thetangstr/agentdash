@@ -88,16 +88,6 @@ export function resolveBootstrapCompanySelection(input: {
   if (input.selectedCompanyId && selectableCompanies.some((company) => company.id === input.selectedCompanyId)) {
     return input.selectedCompanyId;
   }
-  // The in-memory selection was valid when it was set; an id missing from the
-  // whole list (not just the non-archived subset) means the list is a stale
-  // snapshot — e.g. a just-created company before the invalidated companies
-  // query refetches. Picking the first company here would silently switch the
-  // person to a different workspace, so keep the selection and let the next
-  // list resolve it. An id that IS in `companies` but not `sidebarCompanies`
-  // is archived and falls through to the stored/first pick as before.
-  if (input.selectedCompanyId && !input.companies.some((company) => company.id === input.selectedCompanyId)) {
-    return input.selectedCompanyId;
-  }
   if (input.storedCompanyId && selectableCompanies.some((company) => company.id === input.storedCompanyId)) {
     return input.storedCompanyId;
   }

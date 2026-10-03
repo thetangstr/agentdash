@@ -340,15 +340,6 @@ export function companyService(db: Db) {
   return {
     list: async () => {
       const rows = await getCompanyQuery(db);
-      // Deterministic order: the UI uses companies[0] as a bootstrap
-      // fallback, and an unordered result lets a brand-new row (or a
-      // vacuumed heap) silently become "the" company. Sorted in JS rather
-      // than SQL so unit-test db stubs of the select chain keep working.
-      rows.sort(
-        (a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() ||
-          a.id.localeCompare(b.id),
-      );
       const hydrated = await hydrateCompanySpend(rows);
       return hydrated.map((row) => enrichCompany(row));
     },
