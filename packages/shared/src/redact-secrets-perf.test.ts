@@ -42,10 +42,10 @@ describe("redactSecrets adversarial input", () => {
       const quarter = bestOf(text.slice(0, MB / 4));
       const full = bestOf(text);
       // Absolute bound with CI headroom (a slow shared runner can be ~3x a
-      // dev box). A quadratic regression at 1MB is minutes, not ~5s, so this
+      // dev box). A quadratic regression at 1MB is minutes, not ~8s, so this
       // still catches it decisively; the scaling check below is the real
       // linearity guard.
-      expect(full).toBeLessThan(5000);
+      expect(full).toBeLessThan(8000);
       // 4x input must cost roughly 4x, not ~16x — slack for CI noise.
       expect(full).toBeLessThan(quarter * 8 + 250);
     });

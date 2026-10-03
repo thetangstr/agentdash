@@ -273,3 +273,73 @@ describe("security-review bypass cases", () => {
     expect(out).not.toContain("b3BlbnNzaC1");
   });
 });
+
+// Re-review round 3: the caps added for the perf fix truncated long values
+// mid-secret — the first 1024/2048/8192 chars were hidden and the rest came
+// back in the clear. Every shape below carries a ≥3000-char value (cookie
+// uses 9000 — its cap was 8192).
+describe("long values past the old regex caps", () => {
+  const LONG = "Ab3xZ9qW".repeat(375); // 3000 chars, credential-shaped
+  const LONG_PASS = `p${"w0rd9".repeat(500)}`; // 3001 chars
+  const JWT = `eyJ${"h".repeat(9)}.${"p".repeat(3000)}.${"s".repeat(20)}`;
+
+  it.each<[string, string, string]>([
+    ["quoted assignment", `API_KEY="${LONG}"`, LONG],
+    ["quoted assignment unclosed", `API_KEY="${LONG}`, LONG],
+    ["quoted password label", `password: "${LONG}"`, LONG],
+    ["quoted client_secret label", `client_secret: "${LONG}"`, LONG],
+    ["json value", `{"client_secret": "${LONG}"}`, LONG],
+    ["json value unquoted", `{"api_key": ${LONG}}`, LONG],
+    ["escaped json", `\\"api_key\\":\\"${LONG}\\"`, LONG],
+    ["--token", `cli --token ${LONG}`, LONG],
+    ["--token=", `cli --token=${LONG}`, LONG],
+    ["curl -u", `curl -u user:${LONG_PASS} https://x`, LONG_PASS],
+    ["curl -u nospace", `curl -uuser:${LONG_PASS} https://x`, LONG_PASS],
+    ["url userinfo", `postgres://admin:${LONG_PASS}@db.local/x`, LONG_PASS],
+    ["mysql -p", `mysql -uroot -p${LONG_PASS} db`, LONG_PASS],
+    ["sk- key", `key sk-${LONG}`, LONG],
+    ["cookie", `Cookie: session=${"c".repeat(9000)}`, "c".repeat(9000)],
+    ["bare jwt", `tok ${JWT}`, JWT],
+    ["jwt in json", `{"access_token":"${JWT}"}`, JWT],
+  ])("hides %s", (_name, input, secret) => {
+    const out = redactSecrets(input);
+    expect(out, `leaked tail: ${out.slice(-80)}`).not.toContain(secret);
+    expect(out).not.toContain(secret.slice(16, 2000));
+    expect(out).not.toContain(secret.slice(-2000));
+  });
+});
+
+// A ~6MB token after `Bearer`/`Token` used to overflow the regex call stack
+// ("Maximum call stack size exceeded"), breaking reads of the whole thread.
+// Large inputs are now scanned in 1MB windows with a 4KB carry, and each
+// shape extends a window-truncated match on the full text.
+describe("multi-megabyte values", () => {
+  const BIG = "aB3xZ9qW".repeat(1024 * 1024); // 8MB single token
+
+  it.each<[string, (v: string) => string]>([
+    ["auth scheme", (v) => `Authorization: Bearer ${v}`],
+    ["token scheme", (v) => `Token ${v}`],
+    ["jwt", (v) => `see eyJ${"h".repeat(9)}.${v}.${"s".repeat(20)} end`],
+    ["quoted assignment", (v) => `API_KEY="${v}"`],
+    ["json value", (v) => `{"client_secret":"${v}"}`],
+  ])("redacts an 8MB %s without throwing", { timeout: 60_000 }, (_name, wrap) => {
+    const input = wrap(BIG);
+    let out = "";
+    expect(() => {
+      out = redactSecrets(input);
+    }).not.toThrow();
+    expect(out).toContain(REDACTED);
+    expect(out).not.toContain(BIG.slice(0, 2000));
+    expect(out).not.toContain(BIG.slice(4096, 8192));
+    expect(out).not.toContain(BIG.slice(-2000));
+  });
+
+  it("redacts a secret straddling a window boundary", { timeout: 60_000 }, () => {
+    // The 1MB window splits the token mid-run; the boundary piece must
+    // extend the truncated match instead of emitting a partial redaction.
+    const pad = "x".repeat(1024 * 1024 - 20);
+    const input = `${pad}Authorization: Bearer ${SHAPELESS}${"y".repeat(6000)}`;
+    const out = redactSecrets(input);
+    expect(out).not.toContain(SHAPELESS);
+  });
+});
