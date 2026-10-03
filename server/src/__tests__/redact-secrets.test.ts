@@ -22,17 +22,17 @@ describe("redactSecrets", () => {
   ])("scrubs %s", (input, secret) => {
     const out = redactSecrets(input);
     expect(out).not.toContain(secret);
-    expect(out).toContain("[redacted]");
+    expect(out).toContain("***REDACTED***");
   });
 
   it("keeps the field name and leaves ordinary text and paths alone", () => {
-    expect(redactSecrets('"api_key":"abcdef123456"')).toBe('"api_key":"[redacted]"');
+    expect(redactSecrets('"api_key":"abcdef123456"')).toBe('"api_key":"***REDACTED***"');
     const plain = "hermes exited 1: HTTP 429: Insufficient balance (/Volumes/mac_studio_ssd/Projects/agentdash/.claude/worktrees/x/fake-hermes-chat.sh)";
     expect(redactSecrets(plain)).toBe(plain);
   });
 
   it("scrubs known keys even when they look like nothing", () => {
-    expect(redactSecrets("401 for plainkey-not-key-shaped", ["plainkey-not-key-shaped"])).toBe("401 for [redacted]");
+    expect(redactSecrets("401 for plainkey-not-key-shaped", ["plainkey-not-key-shaped"])).toBe("401 for ***REDACTED***");
   });
 });
 

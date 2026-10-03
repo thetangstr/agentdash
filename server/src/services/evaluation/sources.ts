@@ -23,6 +23,7 @@ import {
   type EvaluationHandoffType,
 } from "@paperclipai/shared";
 import { clampEventTime, hashCanonical, type EvaluationEventInput } from "./ledger.js";
+import { redactRunLogText } from "../run-log-redaction.js";
 
 /**
  * AgentDash: Company Evaluator — ingest sources (spec §6 T0/T2, §8 rules 4/6/7/13).
@@ -696,7 +697,11 @@ export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cur
   const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId));
   const events: EvaluationEventInput[] = [];
   for (const r of rows) {
-    const found = extractHandoffPayloads(r.body);
+    // AgentDash (GH #992): redact before parsing so a credential inside a
+    // handoff payload can never reach the ledger. The row hash stays on the
+    // stored body — hashing the redacted copy would collapse distinct
+    // comments that differ only inside a secret into one sourceVersion.
+    const found = extractHandoffPayloads(redactRunLogText(r.body));
     if (found.length === 0) continue;
     const handoffs = found.slice(0, MAX_HANDOFFS_PER_COMMENT);
     const sc = scope.get(r.issueId);

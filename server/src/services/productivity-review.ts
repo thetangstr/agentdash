@@ -16,6 +16,7 @@ import { logActivity } from "./activity-log.js";
 import { budgetService } from "./budgets.js";
 import { issueService } from "./issues.js";
 import { RECOVERY_ORIGIN_KINDS } from "./recovery/origins.js";
+import { redactRunLogText } from "./run-log-redaction.js";
 
 export const PRODUCTIVITY_REVIEW_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.issueProductivityReview;
 export const DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS = 10;
@@ -456,7 +457,11 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
         )
         .orderBy(desc(issueComments.createdAt), desc(issueComments.id))
         .limit(5)
-        .then((rows) => rows.map((row) => row.comment)),
+        // AgentDash (GH #992): comment bodies are copied verbatim into the
+        // review document — redact before they leave the comments table.
+        .then((rows) =>
+          rows.map((row) => ({ ...row.comment, body: redactRunLogText(row.comment.body) })),
+        ),
       db
         .select({ costCents: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int` })
         .from(costEvents)

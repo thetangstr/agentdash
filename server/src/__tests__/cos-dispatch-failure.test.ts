@@ -52,13 +52,13 @@ describe("cos dispatch failure card", () => {
     );
     const reason = shortDispatchReason(err);
     expect(reason).not.toMatch(/sk-abcdef|abcdefgh12345678|0123456789abcdef0123456789abcdef9/);
-    expect(reason).toContain("[redacted]");
+    expect(reason).toContain("***REDACTED***");
   });
 
   it("scrubs the exact keys this process was started with", () => {
     process.env.ZAI_TEST_API_KEY = "plainkey-not-key-shaped";
     try {
-      expect(shortDispatchReason(new Error("401 for plainkey-not-key-shaped"))).toBe("401 for [redacted]");
+      expect(shortDispatchReason(new Error("401 for plainkey-not-key-shaped"))).toBe("401 for ***REDACTED***");
     } finally {
       delete process.env.ZAI_TEST_API_KEY;
     }

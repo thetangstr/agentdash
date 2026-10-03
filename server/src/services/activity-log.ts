@@ -6,6 +6,7 @@ import { PLUGIN_EVENT_TYPES, type PluginEventType } from "@paperclipai/shared";
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import { publishLiveEvent } from "./live-events.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
+import { redactRunLogValue } from "./run-log-redaction.js";
 import { sanitizeRecord } from "../redaction.js";
 import { logger } from "../middleware/logger.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
@@ -88,7 +89,10 @@ async function insertActivityWithRedaction(
   const currentUserRedactionOptions = { enabled: censorUsernameInLogs };
   const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
   const redactedDetails = sanitizedDetails
-    ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
+    ? // AgentDash (GH #992): activity details can carry run output (error
+      // messages, excerpts) — the shared secret pass applies on top of the
+      // current-user censor.
+      redactRunLogValue(redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions))
     : null;
   // AgentDash: optional final synchronous authority/expiry guard after all reads.
   beforeInsert?.();

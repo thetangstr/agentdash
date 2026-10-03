@@ -147,6 +147,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // worker: after Request changes, revise the same issue document and resubmit by
 // moving the issue to `in_review`, which returns the work product to
 // ready_for_review. Proposal-created hires add nothing to that.
+// AgentDash: run-log-secret-redaction (GH #992) is inherited from the canonical
+// worker bundle: secrets in run output are scrubbed server-side before storage
+// and again when served, never rely on echoing a credential to read it back.
+// Proposal-created hires add nothing to that.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

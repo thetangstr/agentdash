@@ -62,6 +62,7 @@ import {
 } from "./issue-recovery-budget.js";
 import { instanceSettingsService, readInstanceExperimentalSettings, readInstanceGeneralSettings } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
+import { redactRunLogText } from "./run-log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
 import {
@@ -1997,7 +1998,9 @@ export function issueService(db: Db) {
   function redactIssueComment<T extends { body: string }>(comment: T, censorUsernameInLogs: boolean): T {
     return {
       ...comment,
-      body: redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs }),
+      // AgentDash (GH #992): comments carry run output into the issue chat;
+      // the secret pass keeps stored comments written before it shipped safe.
+      body: redactRunLogText(redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs })),
     };
   }
 
@@ -4212,7 +4215,15 @@ export function issueService(db: Db) {
         const currentUserRedactionOptions = {
           enabled: (generalSettings ?? await readInstanceGeneralSettings(executor)).censorUsernameInLogs,
         };
+        // AgentDash (GH #992): agent-authored comments persist redacted —
+        // agent output echoes tool results that can carry credentials, and
+        // other readers (productivity review, ross requests, handoff
+        // evaluation) copy bodies elsewhere. Human comments stay raw in the
+        // row and are redacted only when served (redactIssueComment), so a
+        // verbatim config quote a reviewer needs is never destroyed.
         const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+        const persistedBody =
+          actor.agentId || actor.runId ? redactRunLogText(redactedBody) : redactedBody;
         const [comment] = await executor
           .insert(issueComments)
           .values({
@@ -4221,7 +4232,7 @@ export function issueService(db: Db) {
             authorAgentId: actor.agentId ?? null,
             authorUserId: actor.userId ?? null,
             createdByRunId: actor.runId ?? null,
-            body: redactedBody,
+            body: persistedBody,
           })
           .returning();
 

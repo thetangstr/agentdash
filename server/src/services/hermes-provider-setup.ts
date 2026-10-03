@@ -28,14 +28,15 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { badRequest, HttpError } from "../errors.js";
+import { isSecretName } from "@paperclipai/shared";
 import { agentProfileName } from "./hermes-profile.js";
-import { redactSecrets } from "./redact-secrets.js";
+import { isCollectableSecretValue, redactSecrets } from "./redact-secrets.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -544,26 +545,44 @@ export function hermesProviderConfiguredSync(env: NodeJS.ProcessEnv = process.en
 }
 
 /**
- * The provider keys the managed template profile holds, for scrubbing adapter
- * output. Read from the profile's `.env` each call (cheap, and follows a
- * rotation); never logged or returned to a caller that could log it.
+ * The provider keys held by every managed Hermes profile — the template plus
+ * each per-agent and per-company clone — for scrubbing adapter output. Any
+ * credential-named `.env` entry counts, not only the provider env var, so a
+ * profile carrying extra credentials is covered too. Read from disk each
+ * call (cheap, and follows a rotation); never logged or returned to a caller
+ * that could log it.
  */
 export function configuredProviderKeysSync(env: NodeJS.ProcessEnv = process.env): string[] {
   const r = resolveDeps({ env });
   const names = new Set(Object.values(HERMES_PROVIDER_SPECS).map((spec) => spec.envVar));
+  const keys: string[] = [];
+  let profiles: string[] = [];
   try {
-    const keys: string[] = [];
-    for (const line of readFileSync(join(r.profilesDir, r.template, ".env"), "utf8").split(/\r?\n/)) {
-      const eq = line.indexOf("=");
-      if (eq > 0 && names.has(line.slice(0, eq).trim())) {
-        const value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-        if (value.length >= 6) keys.push(value);
-      }
-    }
-    return keys;
+    profiles = readdirSync(r.profilesDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
   } catch {
     return [];
   }
+  for (const profile of profiles) {
+    let lines: string[];
+    try {
+      lines = readFileSync(join(r.profilesDir, profile, ".env"), "utf8").split(/\r?\n/);
+    } catch {
+      continue;
+    }
+    for (const line of lines) {
+      const eq = line.indexOf("=");
+      if (eq <= 0) continue;
+      const name = line.slice(0, eq).trim();
+      if (!names.has(name) && !isSecretName(name)) continue;
+      const value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+      // Same guard as process env collection: a `*_FILE=` path or public key
+      // in a profile .env must not shred matching text out of every run log.
+      if (value.length >= 6 && isCollectableSecretValue(name, value)) keys.push(value);
+    }
+  }
+  return keys;
 }
 
 async function writeMarker(r: ReturnType<typeof resolveDeps>, marker: ProviderMarker): Promise<void> {

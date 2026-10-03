@@ -19,6 +19,7 @@ import type {
   WorkingNow,
 } from "@paperclipai/shared";
 import { definitionOfDoneSchema } from "@paperclipai/shared";
+import { redactRunLogText } from "./run-log-redaction.js";
 
 const DASHBOARD_RUN_ACTIVITY_DAYS = 14;
 const HARNESS_HEALTH_WINDOW_HOURS = 24;
@@ -81,7 +82,9 @@ const LAST_STEP_MAX = 160;
 
 function clipStep(text: string | null | undefined): string | null {
   if (!text) return null;
-  const oneLine = text.replace(/\s+/g, " ").trim();
+  // AgentDash (GH #992): nextAction/livenessReason/event messages are
+  // adapter-derived text — secret-redact before clipping into the dashboard.
+  const oneLine = redactRunLogText(text).replace(/\s+/g, " ").trim();
   if (!oneLine) return null;
   return oneLine.length > LAST_STEP_MAX ? `${oneLine.slice(0, LAST_STEP_MAX - 1)}…` : oneLine;
 }

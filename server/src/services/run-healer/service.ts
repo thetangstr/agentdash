@@ -17,6 +17,7 @@ import {
 } from "@paperclipai/db";
 import { logger } from "../../middleware/logger.js";
 import { redactSensitiveText } from "../../redaction.js";
+import { logSafeError, redactRunLogText } from "../run-log-redaction.js";
 import { buildHealDiagnosisPrompt, parseHealDiagnosis, type HealDiagnosis, type DiagnosisCategory } from "./diagnosis.js";
 import { executeHealFix, type HealFixResult } from "./fixer.js";
 import { dispatchLLM } from "../dispatch-llm.js";
@@ -309,7 +310,7 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
         details,
       });
     } catch (err) {
-      logger.error({ eventType, runId, error: err }, "run_healer: failed to log event");
+      logger.error({ eventType, runId, error: logSafeError(err) }, "run_healer: failed to log event");
     }
   }
 
@@ -324,9 +325,11 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
       agentName: run.agentName,
       adapterType: run.adapterType,
       errorCode: run.errorCode,
-      errorMessage: run.error ? redactSensitiveText(run.error) : null,
+      // AgentDash (GH #992): this prompt goes to an external LLM — the full
+      // run-log secret pass applies, not just the legacy scrub.
+      errorMessage: run.error ? redactRunLogText(redactSensitiveText(run.error)) : null,
       status: run.status,
-      outputTail: run.outputTail ? redactSensitiveText(run.outputTail) : "",
+      outputTail: run.outputTail ? redactRunLogText(redactSensitiveText(run.outputTail)) : "",
       recentHealAttempts: recentAttempts.map((a) => ({
         category: (a.diagnosis as HealDiagnosis).category as DiagnosisCategory,
         fixType: a.fixType,
@@ -355,7 +358,7 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
       }
       return diagnosis;
     } catch (err) {
-      logger.error({ runId: run.id, error: err }, "run_healer: diagnosis failed");
+      logger.error({ runId: run.id, error: logSafeError(err) }, "run_healer: diagnosis failed");
       return null;
     }
   }
@@ -388,7 +391,7 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
     try {
       await db.insert(healAttempts).values({ runId, ...values } as typeof healAttempts.$inferInsert);
     } catch (err) {
-      logger.error({ runId, error: err }, "run_healer: failed to record heal attempt");
+      logger.error({ runId, error: logSafeError(err) }, "run_healer: failed to record heal attempt");
     }
   }
 
@@ -463,7 +466,7 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
     try {
       fixResult = await executeHealFix(db, run, diagnosis);
     } catch (err) {
-      logger.error({ runId: run.id, error: err }, "run_healer: fix execution failed");
+      logger.error({ runId: run.id, error: logSafeError(err) }, "run_healer: fix execution failed");
       fixResult = { succeeded: false, actionTaken: "exception", costUsd: 0 };
     }
 

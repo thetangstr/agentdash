@@ -47,6 +47,7 @@ import {
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
+import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { parseTrailer, WORKFORCE_PROPOSAL_GUIDANCE } from "../services/cos-replier.js";
 import { listCompanyMemberNames, PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "../services/cos-plan-naming.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
@@ -205,7 +206,10 @@ export function onboardingV2Routes(db: Db) {
     payload: AgentPlanProposalV1Payload,
     agentIds: string[],
   ) {
-    const next: AgentPlanProposalV1Payload = { ...payload, confirmedAt: new Date().toISOString(), confirmedAgentIds: agentIds };
+    // AgentDash (GH #992): the payload is model output read back from the
+    // card row — it is re-persisted and re-emitted here, so it must be
+    // credential-clean on the way out.
+    const next: AgentPlanProposalV1Payload = redactRunLogValue({ ...payload, confirmedAt: new Date().toISOString(), confirmedAgentIds: agentIds });
     try {
       await db
         .update(assistantMessages)

@@ -47,6 +47,7 @@ import { issueReferenceService } from "./issue-references.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { defaultStatusForNewIssue, type NewIssueStatus } from "./issue-start-policy.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
+import { redactRunLogValue } from "./run-log-redaction.js";
 import { issueVisibilityCondition, resolveAgentVisibility, visibleAgentIdsFor } from "../routes/visibility.js";
 
 export const ISSUE_PROPOSAL_CARD_KIND = "issue_proposal_v1";
@@ -648,7 +649,10 @@ export function cosIssueActionForDb(db: Db): CosIssueAction {
         .from(assistantMessages)
         .where(and(eq(assistantMessages.id, messageId), eq(assistantMessages.conversationId, conversationId)))
         .limit(1);
-      return rows[0] ?? null;
+      const row = rows[0];
+      // AgentDash (GH #992): the proposal's description is copied verbatim
+      // into the issue, so the card payload must be credential-clean first.
+      return row ? { ...row, cardPayload: redactRunLogValue(row.cardPayload) } : null;
     },
     claimCard: async (messageId, fromStatus, next) => {
       const rows = await db
@@ -691,7 +695,7 @@ export function cosIssueActionForDb(db: Db): CosIssueAction {
         conversationId,
         companyId,
         cardKind: ISSUE_PROPOSAL_CARD_KIND,
-        cardPayload: payload as unknown as Record<string, unknown>,
+        cardPayload: redactRunLogValue(payload) as unknown as Record<string, unknown>,
       });
     },
     companyVisibleAgentIds: (companyId) =>

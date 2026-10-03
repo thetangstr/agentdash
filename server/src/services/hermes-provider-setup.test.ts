@@ -96,9 +96,9 @@ describe("buildProviderProbe", () => {
 describe("redactKey", () => {
   it("removes the key and key-shaped tokens", () => {
     expect(redactKey(`hermes config set GLM_API_KEY ${KEY} failed`, KEY)).toBe(
-      "hermes config set GLM_API_KEY [redacted] failed",
+      "hermes config set GLM_API_KEY ***REDACTED*** failed",
     );
-    expect(redactKey("bad sk-abcdef123456 here", "other")).toBe("bad [redacted] here");
+    expect(redactKey("bad sk-abcdef123456 here", "other")).toBe("bad ***REDACTED*** here");
   });
 });
 

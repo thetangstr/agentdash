@@ -11,6 +11,7 @@ import { isHostedBox } from "./license.js";
 import { readFallbackChain } from "../lib/adapter-fallback-chain.js";
 import { HttpError } from "../errors.js";
 import { redactForDisplay } from "./redact-for-display.js";
+import { logSafeError } from "./run-log-redaction.js";
 import type { Db } from "@paperclipai/db";
 import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
 
@@ -559,7 +560,7 @@ export async function dispatchLLM(
       }
       return reply;
     } catch (err) {
-      logger.error({ err, adapter }, "[dispatch-llm] minimax failed, falling back");
+      logger.error({ err: logSafeError(err), adapter }, "[dispatch-llm] minimax failed, falling back");
       return runFallbackAdapter(input, adapter, err, options);
     }
   }
@@ -583,7 +584,7 @@ export async function dispatchLLM(
       return text;
     } catch (err) {
       logger.error(
-        { err, adapter },
+        { err: logSafeError(err), adapter },
         "[dispatch-llm] openai_compat failed, falling back",
       );
       return runFallbackAdapter(input, adapter, err, options);
@@ -635,7 +636,7 @@ export async function dispatchLLM(
       }
       return reply;
     } catch (err) {
-      logger.error({ err, adapter }, "[dispatch-llm] hermes_local failed, falling back");
+      logger.error({ err: logSafeError(err), adapter }, "[dispatch-llm] hermes_local failed, falling back");
       return runFallbackAdapter(input, adapter, err, options);
     }
   }
@@ -678,7 +679,7 @@ export async function dispatchLLM(
       }
       return reply;
     } catch (err) {
-      logger.error({ err, adapter }, "[dispatch-llm] codex_local failed, falling back");
+      logger.error({ err: logSafeError(err), adapter }, "[dispatch-llm] codex_local failed, falling back");
       return runFallbackAdapter(input, adapter, err, options);
     }
   }
@@ -694,7 +695,7 @@ export async function dispatchLLM(
       }
       return reply;
     } catch (err) {
-      logger.error({ err, adapter }, "[dispatch-llm] claude_local failed, falling back");
+      logger.error({ err: logSafeError(err), adapter }, "[dispatch-llm] claude_local failed, falling back");
       return runFallbackAdapter(input, adapter, err, options);
     }
   }

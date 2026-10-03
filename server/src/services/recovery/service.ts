@@ -29,6 +29,7 @@ import { isUniqueViolation, pgConstraintName, unwrapPgError } from "../../lib/pg
 import { logger } from "../../middleware/logger.js";
 import { redactCurrentUserText } from "../../log-redaction.js";
 import { redactSensitiveText } from "../../redaction.js";
+import { redactRunLogText } from "../run-log-redaction.js";
 import { logActivity } from "../activity-log.js";
 import { budgetService } from "../budgets.js";
 import { instanceSettingsService } from "../instance-settings.js";
@@ -807,7 +808,9 @@ export function recoveryService(
   }
 
   function redactWatchdogEvidenceText(value: string, currentUserRedactionOptions: Awaited<ReturnType<typeof getCurrentUserRedactionOptions>>) {
-    return redactSensitiveText(redactCurrentUserText(value, currentUserRedactionOptions));
+    // AgentDash (GH #992): evidence text lands in a human-readable issue, so
+    // the full run-log secret pass applies on top of the older scrub.
+    return redactRunLogText(redactSensitiveText(redactCurrentUserText(value, currentUserRedactionOptions)));
   }
 
   function truncateEvidenceText(value: string, maxChars = 4000) {

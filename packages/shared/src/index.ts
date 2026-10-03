@@ -270,6 +270,20 @@ export {
   type CosCardKindGoalsEvalHitl,
 } from "./constants.js";
 
+// AgentDash (GH #992): credential redaction shared by the UI transcript views
+// and the server run-log persist/serve paths.
+export {
+  REDACTED,
+  CREDENTIALS_HIDDEN_NOTE,
+  isSecretName,
+  isSecretValueKey,
+  redactSecrets,
+  containsSecrets,
+  redactSecretsInValue,
+  createSecretStreamRedactor,
+  type KnownSecrets,
+} from "./redact-secrets.js";
+
 export {
   ALL_INTERFACES_BIND_HOST,
   LOOPBACK_BIND_HOST,
