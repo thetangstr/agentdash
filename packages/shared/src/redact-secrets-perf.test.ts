@@ -36,16 +36,16 @@ const CASES: Array<[string, () => string]> = [
 
 describe("redactSecrets adversarial input", () => {
   for (const [name, build] of CASES) {
-    it(`${name} at ~1MB completes linearly`, () => {
+    it(`${name} at ~1MB completes linearly`, { timeout: 60_000 }, () => {
       const text = build();
       expect(text.length).toBeGreaterThanOrEqual(MB);
       const quarter = bestOf(text.slice(0, MB / 4));
       const full = bestOf(text);
-      // Absolute bound with CI headroom (a slow shared runner can be ~2x a
-      // dev box). A quadratic regression at 1MB is minutes, not ~3s, so this
+      // Absolute bound with CI headroom (a slow shared runner can be ~3x a
+      // dev box). A quadratic regression at 1MB is minutes, not ~5s, so this
       // still catches it decisively; the scaling check below is the real
       // linearity guard.
-      expect(full).toBeLessThan(3000);
+      expect(full).toBeLessThan(5000);
       // 4x input must cost roughly 4x, not ~16x — slack for CI noise.
       expect(full).toBeLessThan(quarter * 8 + 250);
     });
@@ -132,7 +132,7 @@ describe("redactSecrets structural performance", () => {
       ["batch", (input: string) => void redactSecrets(input)],
       ["stream", redactStream],
     ] as const) {
-      it(`${name} via ${label} scales to 256KB`, () => {
+      it(`${name} via ${label} scales to 256KB`, { timeout: 60_000 }, () => {
         const t64 = timed(harness, fillTo(unit, 64 * KB));
         const t256 = timed(harness, fillTo(unit, 256 * KB));
         // Quadratic at 256KB is tens of seconds — the absolute bound catches

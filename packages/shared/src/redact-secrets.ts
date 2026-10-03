@@ -247,14 +247,16 @@ const CLI_SECRET_OPTION_RE =
 // key name is checked against isSecretValueKey, so `x-api-key`, `PRIVATE-TOKEN`,
 // `ZAI_API_KEY`, `session_token` and `secretAccessKey` are all covered while
 // `{"key": "…"}` and `{"taskKey": "…"}` are left alone.
-// Keys are bounded to 256 chars — an unbounded lazy key retries to
+// Keys are bounded to 128 chars — an unbounded lazy key retries to
 // end-of-input from every quote on an unterminated run (`API_KEY="` + `\"`×N),
 // which is quadratic and blocks the event loop on a single hostile comment.
+// 128 keeps the per-position retry cost small on adversarial input while
+// covering any real credential field name.
 const JSON_KV_RE =
-  /("(?:\\.|[^"\\]){1,256}?")([ \t]*:[ \t]*)("(?:\\.|[^"\\]){0,2048}"|'(?:\\.|[^'\\]){0,2048}'|[^\s,}\]{[]{1,2048})|('(?:\\.|[^'\\]){1,256}?')([ \t]*:[ \t]*)('(?:\\.|[^'\\]){0,2048}'|"(?:\\.|[^"\\]){0,2048}")/gd;
+  /("(?:\\.|[^"\\]){1,128}?")([ \t]*:[ \t]*)("(?:\\.|[^"\\]){0,2048}"|'(?:\\.|[^'\\]){0,2048}'|[^\s,}\]{[]{1,2048})|('(?:\\.|[^'\\]){1,128}?')([ \t]*:[ \t]*)('(?:\\.|[^'\\]){0,2048}'|"(?:\\.|[^"\\]){0,2048}")/gd;
 // The `\"key\":\"value\"` form inside a JSON string.
 const ESCAPED_JSON_KV_RE =
-  /(\\")((?:\\.|[^"\\]){1,256}?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\]){0,2048})\\"/gd;
+  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\]){0,2048})\\"/gd;
 
 // `Bearer <token>` anywhere (JSON bodies, headers embedded in strings). The
 // token may contain `\X` escape pairs mid-value (`ab\"key"`) but never ends

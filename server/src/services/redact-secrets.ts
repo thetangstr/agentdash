@@ -27,8 +27,11 @@ const EXTRA_PATTERNS: RegExp[] = [
   // Long hex strings (tokens, digests).
   /(?<![\w-])[a-f0-9]{32,4096}\b/gi,
   // Long base64-ish tokens. Paths and profile names are not matched: they
-  // contain "_", "-" or "." every few characters, which breaks the run.
-  /(?<![\w-])[A-Za-z0-9+/]{32,4096}={0,2}(?![A-Za-z0-9+/=])/g,
+  // contain "_", "-" or "." every few characters, which breaks the run. The
+  // lookbehind blocks mid-run restarts (`a+a+a+…` would otherwise pay a
+  // ~4096-deep backtrack per position) but leaves `/` out so a path-embedded
+  // token (`https://host/<token>`) still matches.
+  /(?<![\w+-])[A-Za-z0-9+/]{32,4096}={0,2}(?![A-Za-z0-9+/=])/g,
 ];
 
 // A masked key echoed by a provider, e.g. "sk-proj-****abcd" or "****abcd".

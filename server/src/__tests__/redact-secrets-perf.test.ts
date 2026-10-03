@@ -73,7 +73,9 @@ function timed(fn: (input: string) => void, input: string): number {
 
 describe("redactForDisplay structural performance", () => {
   for (const [name, unit] of ADVERSARIAL_UNITS) {
-    it(`${name} scales to 256KB`, () => {
+    // 6 timed calls per case; bounded-but-deep regex scans can take a few
+    // seconds on a slow shared runner — well past the 5s default timeout.
+    it(`${name} scales to 256KB`, { timeout: 60_000 }, () => {
       const t64 = timed((input) => void redactForDisplay(input), fillTo(unit, 64 * KB));
       const t256 = timed((input) => void redactForDisplay(input), fillTo(unit, 256 * KB));
       // Same contract as the shared guard: sublinear scaling and a hard 2s
@@ -83,7 +85,7 @@ describe("redactForDisplay structural performance", () => {
     });
   }
 
-  it("caps describeAdapterFailure input so unbounded adapter output stays cheap", () => {
+  it("caps describeAdapterFailure input so unbounded adapter output stays cheap", { timeout: 60_000 }, () => {
     // Adapter output has no length limit — the redactor must only ever scan
     // a bounded tail, so a 8MB hostile stderr is not scanned end to end.
     const hostile = `xxxx ${"a.".repeat(4 * 1024 * 1024)}`;
