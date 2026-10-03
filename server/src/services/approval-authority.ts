@@ -4,6 +4,7 @@ import { approvals, companies } from "@paperclipai/db";
 import type { ApprovalDecisionChannel } from "@paperclipai/shared";
 import { badRequest, conflict, forbidden } from "../errors.js";
 import { accessService } from "./access.js";
+import { normalizeHumanRole } from "./company-member-roles.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
@@ -69,9 +70,21 @@ export function approvalAuthorityService(db: Db) {
     return company?.productProfile === "agentdash_mk";
   }
 
+  /**
+   * AgentDash (security, GH #971 review): administrator means the admin ROLE —
+   * the same rule `seesEverything` applies to the override inbox read path.
+   * The `agents:create` grant used to stand in for it, so a member holding
+   * only that grant could write emergency overrides on an inbox they cannot
+   * even open. Role, not grant, decides both sides of the door now.
+   */
   async function isAdministrator(companyId: string, actor: ApprovalDecisionActor) {
     if (actor.source === "local_implicit" || actor.isInstanceAdmin) return true;
-    return access.canUser(companyId, actor.userId, "agents:create");
+    if (!actor.userId) return false;
+    const membership = await access.getMembership(companyId, "user", actor.userId);
+    return (
+      membership?.status === "active" &&
+      normalizeHumanRole(membership.membershipRole) === "admin"
+    );
   }
 
   /**

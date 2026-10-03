@@ -12,18 +12,26 @@
 //   keep working, and every stored value stays valid while it is unchanged —
 //   callers only validate a cwd that is being SET.
 // - Everyone else may only choose a cwd inside a server-managed root that
-//   belongs to THIS company:
+//   belongs to THIS company AND this actor:
 //     <instance>/projects/<companyId>/<projectId>/...   managed checkout dirs
-//     <instance>/workspaces/<agentId>(...)             this company's agents
-//     any cwd/providerRef an executionWorkspaces row of this company registers
-//   (the third is where git worktrees and other managed execution dirs live).
+//        of a project the actor may see (GH #980 review — an off-list member
+//        must not point a run into a restricted project's checkout)
+//     <instance>/workspaces/<agentId>/...               instance workspaces of
+//        agents the actor MANAGES (own key, or created/stewarded/accountable,
+//        plus their reports — see workspace-command-authz.ts)
 //   Paths under the instance root are also walked for symbolic links, so a
 //   link planted inside a managed area cannot lead back out — the approach
 //   instructions-root-confinement.ts uses for bundle roots.
+//
+// Registered executionWorkspaces rows used to form a third allowed root —
+// any row's cwd/providerRef, archived rows included. That let a grandfathered
+// or planted row hand an arbitrary subtree (e.g. $HOME) to any member, so
+// the category was dropped entirely (GH #980 review): a genuine git
+// worktree's providerRef already sits inside one of the managed roots above.
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, executionWorkspaces } from "@paperclipai/db";
+import { agents } from "@paperclipai/db";
 import { isUuidLike } from "@paperclipai/shared";
 import {
   resolveHomeAwarePath,
@@ -38,6 +46,18 @@ import {
 export type CompanyWorkspaceCwdCheck =
   | { ok: true; resolvedPath: string }
   | { ok: false; reason: string };
+
+/**
+ * Actor-scoped refinement of the managed roots, supplied by the route layer
+ * (which owns the request/visibility helpers). Both are only asked about a
+ * path segment that already passed the lexical + symlink containment checks.
+ */
+export interface CompanyWorkspaceCwdScope {
+  /** May the actor use <instance>/projects/<companyId>/<projectId>/... ? */
+  isManagedProjectDirAllowed(projectId: string): Promise<boolean>;
+  /** May the actor use <instance>/workspaces/<agentId>/... ? */
+  isAgentWorkspaceDirAllowed(agentId: string): Promise<boolean>;
+}
 
 function isInside(candidate: string, root: string, allowEqual: boolean): boolean {
   const relative = path.relative(root, candidate);
@@ -63,6 +83,7 @@ export async function checkCompanyWorkspaceCwd(
   db: Db,
   companyId: string,
   candidate: unknown,
+  scope: CompanyWorkspaceCwdScope,
 ): Promise<CompanyWorkspaceCwdCheck> {
   if (typeof candidate !== "string" || candidate.trim().length === 0) {
     return { ok: false, reason: "workspace path is empty" };
@@ -75,20 +96,32 @@ export async function checkCompanyWorkspaceCwd(
   const instanceRoot = resolvePaperclipInstanceRoot();
 
   // Managed project checkout dirs — strictly inside this company's dir so a
-  // bare "<instance>/projects/<companyId>" (or another company's) never passes.
+  // bare "<instance>/projects/<companyId>" (or another company's) never
+  // passes. The segment directly below names the project the checkout
+  // belongs to (see resolveManagedProjectWorkspaceDir): it must be a real
+  // project of this company that the actor may see — anything else fails
+  // closed rather than guessing which dir it names.
   const projectsRoot = path.resolve(
     instanceRoot,
     "projects",
     sanitizeFriendlyPathSegment(companyId, "company"),
   );
   if (isConfined(resolvedPath, projectsRoot, false)) {
+    const projectId = path.relative(projectsRoot, resolvedPath).split(path.sep)[0]!;
+    if (!isUuidLike(projectId)) {
+      return { ok: false, reason: "workspace path is not inside a managed project directory" };
+    }
+    if (!(await scope.isManagedProjectDirAllowed(projectId))) {
+      return { ok: false, reason: "workspace path is inside a project the actor cannot use" };
+    }
     const link = firstSymlinkBelowSync(instanceRoot, resolvedPath);
     if (link) return { ok: false, reason: `workspace path traverses a symbolic link (${link})` };
     return { ok: true, resolvedPath };
   }
 
   // Per-agent instance workspaces — only for an agent that belongs to this
-  // company, so "<instance>/workspaces/<foreign-agent>" stays refused.
+  // company AND that the actor manages, so "<instance>/workspaces/<foreign-
+  // or-unmanaged-agent>" stays refused.
   const workspacesRoot = path.resolve(instanceRoot, "workspaces");
   if (isConfined(resolvedPath, workspacesRoot, false)) {
     const relative = path.relative(workspacesRoot, resolvedPath);
@@ -100,27 +133,10 @@ export async function checkCompanyWorkspaceCwd(
           .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)))
           .then((rows) => rows[0] ?? null)
       : null;
-    if (agent) {
+    if (agent && (await scope.isAgentWorkspaceDirAllowed(agentId))) {
       const link = firstSymlinkBelowSync(instanceRoot, resolvedPath);
       if (link) return { ok: false, reason: `workspace path traverses a symbolic link (${link})` };
       return { ok: true, resolvedPath };
-    }
-  }
-
-  // Registered execution dirs — the server materializes git worktrees and
-  // other managed execution workspaces under the paths these rows name; they
-  // may live outside the instance root, so both lexical and resolved forms
-  // are compared.
-  const registered = await db
-    .select({ cwd: executionWorkspaces.cwd, providerRef: executionWorkspaces.providerRef })
-    .from(executionWorkspaces)
-    .where(eq(executionWorkspaces.companyId, companyId));
-  for (const row of registered) {
-    for (const raw of [row.cwd, row.providerRef]) {
-      if (typeof raw !== "string" || raw.trim().length === 0) continue;
-      const root = resolveHomeAwarePath(raw.trim());
-      if (!path.isAbsolute(root)) continue;
-      if (isConfined(resolvedPath, root, true)) return { ok: true, resolvedPath };
     }
   }
 
@@ -128,6 +144,6 @@ export async function checkCompanyWorkspaceCwd(
     ok: false,
     reason:
       "workspace path must be inside this company's managed directories " +
-      `(${projectsRoot}/..., ${workspacesRoot}/<agent of this company>, or a registered execution workspace)`,
+      `(${projectsRoot}/<a project you can see>, or ${workspacesRoot}/<an agent you manage>)`,
   };
 }

@@ -511,6 +511,7 @@ export function projectRoutes(db: Db) {
       );
       await assertProjectWorkspaceCwdAuthority(db, req, existing.companyId, req.body.cwd, {
         storedCwd: existingWorkspace?.cwd,
+        storedSourceType: existingWorkspace?.sourceType,
         sourceType: req.body.sourceType ?? existingWorkspace?.sourceType,
       });
       if (!existingWorkspace) {

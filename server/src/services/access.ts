@@ -954,42 +954,12 @@ export function accessService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? existing);
 
-      // AgentDash (security, GH #978): a role change without a grant reset
-      // leaves the OLD role's explicit grants live — a demoted admin kept
-      // users:manage_permissions through the grant fallback. Role-only
-      // updates rewrite grants to the new role's defaults in this
-      // transaction; deliberate extras go through updateMemberPermissions.
-      if (
-        existing.principalType === "user" &&
-        normalizeHumanRole(nextMembershipRole) !== normalizeHumanRole(existing.membershipRole)
-      ) {
-        const now = new Date();
-        await tx
-          .delete(principalPermissionGrants)
-          .where(
-            and(
-              eq(principalPermissionGrants.companyId, companyId),
-              eq(principalPermissionGrants.principalType, existing.principalType),
-              eq(principalPermissionGrants.principalId, existing.principalId),
-            ),
-          );
-        const defaultGrants = grantsForHumanRole(normalizeHumanRole(nextMembershipRole));
-        if (defaultGrants.length > 0) {
-          await tx.insert(principalPermissionGrants).values(
-            defaultGrants.map((grant) => ({
-              companyId,
-              principalType: existing.principalType,
-              principalId: existing.principalId,
-              permissionKey: grant.permissionKey,
-              scope: grant.scope ?? null,
-              grantedByUserId: null,
-              createdAt: now,
-              updatedAt: now,
-            })),
-          );
-        }
-      }
-
+      // AgentDash (security, GH #978 review): this service carries no actor,
+      // so a grant reset here could only write grantedByUserId null with no
+      // audit row — an invisible permission rewrite. Grant resets to role
+      // defaults happen on the audited PATCH /members route instead, which
+      // records the acting user and a grantsReset activity entry. Deliberate
+      // extras go through updateMemberPermissions / setPrincipalGrants.
       return updated;
     });
     publishMembershipAccessChange(result, "membership updated");

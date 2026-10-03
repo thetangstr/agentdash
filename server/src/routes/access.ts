@@ -3697,9 +3697,11 @@ export function accessRoutes(
             );
             // AgentDash (security, GH #978): the grants originate with the
             // person who issued the invite, not the joiner redeeming it —
-            // grantedByUserId must record invite.invitedByUserId. Falls back
-            // to the accepting actor only when the invite names no inviter
-            // (legacy rows, synthetic local_trusted invites).
+            // grantedByUserId must record invite.invitedByUserId. When the
+            // invite names no inviter (legacy rows, synthetic local_trusted
+            // invites) the grantor is unknown — null, never the joiner,
+            // who must not appear as the source of their own permissions
+            // (GH #978 review).
             await txAccess.setPrincipalGrants(
               companyId,
               "user",
@@ -3708,7 +3710,7 @@ export function accessRoutes(
                 invite.defaultsPayload as Record<string, unknown> | null,
                 membershipRole,
               ),
-              invite.invitedByUserId ?? req.actor.userId ?? null,
+              invite.invitedByUserId ?? null,
             );
             await memberOnboardingService(dbOrTx).startOrResume(
               companyId,

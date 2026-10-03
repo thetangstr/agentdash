@@ -915,9 +915,16 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     // these AgentDash extensions distinct from inherited paperclip* tools.
     makeTool(
       "agentdashBootstrapWorkspace",
-      "AgentDash: provision a workspace for the authenticated user — creates the company, a Chief of Staff agent, and the opening conversation. The lowest-friction way to start onboarding. Takes no input.",
-      z.object({}),
-      async () => client.requestJson("POST", "/onboarding/bootstrap", { body: {} }),
+      "AgentDash: provision a workspace for the authenticated user — creates the company, a Chief of Staff agent, and the opening conversation. The lowest-friction way to start onboarding. Pass companyId when the user belongs to more than one company — the server refuses to guess (409) and lists the candidates.",
+      z.object({
+        companyId: companyIdOptional.describe(
+          "Company to bootstrap in. Required when the user holds active memberships in more than one company; omit when they belong to exactly one or none.",
+        ),
+      }),
+      async ({ companyId }) =>
+        client.requestJson("POST", "/onboarding/bootstrap", {
+          body: { ...(companyId ? { companyId } : {}) },
+        }),
     ),
     makeTool(
       "agentdashListCompanies",

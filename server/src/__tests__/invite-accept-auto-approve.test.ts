@@ -101,7 +101,7 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
   async function seedInvite(
     companyId: string,
     autoApprove: boolean,
-    opts: { boundEmail?: string } = {},
+    opts: { boundEmail?: string; invitedByUserId?: string | null } = {},
   ) {
     const token = createInviteToken();
     await db.insert(invites).values({
@@ -115,7 +115,7 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
       },
       tokenHash: hashToken(token),
       expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
-      invitedByUserId: "inviter-1",
+      invitedByUserId: opts.invitedByUserId === undefined ? "inviter-1" : opts.invitedByUserId,
     });
     return token;
   }
@@ -228,6 +228,37 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
       status: "in_progress",
       currentStep: "welcome",
     });
+  });
+
+  it("records a null grantor — never the joiner — when the invite names no inviter", async () => {
+    // GH #978 review: legacy rows and synthetic local_trusted invites carry no
+    // invitedByUserId. Falling back to the accepting user would make the joiner
+    // the recorded source of their own permissions.
+    const companyId = await seedCompany();
+    const token = await seedInvite(companyId, true, { invitedByUserId: null });
+    const userId = `user-${randomUUID()}`;
+    const app = createApp(userId);
+
+    const res = await request(app)
+      .post(`/api/invites/${token}/accept`)
+      .send({ requestType: "human" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+
+    const grants = await db
+      .select()
+      .from(principalPermissionGrants)
+      .where(
+        and(
+          eq(principalPermissionGrants.companyId, companyId),
+          eq(principalPermissionGrants.principalType, "user"),
+          eq(principalPermissionGrants.principalId, userId),
+        ),
+      );
+    expect(grants.length).toBeGreaterThan(0);
+    for (const grant of grants) {
+      expect(grant.grantedByUserId).toBeNull();
+    }
   });
 
   it("creates a pending_approval join request with no membership when auto_approve is false", async () => {

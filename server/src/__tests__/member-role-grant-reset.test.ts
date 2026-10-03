@@ -1,14 +1,17 @@
 // AgentDash (security, GH #978): a role-only member PATCH used to leave
 // explicit permission grants untouched — a member whose role changed kept
 // grants minted for the old role, and hasPermission still honoured them. The
-// PATCH (and the service-level updateMember the issue names) now rewrite
-// grants to the new role's defaults inside the same transaction, and the
-// activity row records the reset.
+// PATCH now rewrites grants to the new role's defaults inside the same
+// transaction, and the activity row records the reset with the acting user.
+//
+// GH #978 review: the service-level updateMember carries no actor, so its
+// grant rewrite minted rows with grantedByUserId null and no audit entry.
+// It is unused in production — every real role change goes through the
+// audited PATCH below — so the service no longer touches grants at all;
+// the last test pins that contract.
 //
 // The route refuses to manage a member at-or-above the actor's own role, so
-// the reachable role change is member -> admin; the admin -> member demotion
-// the issue describes happens through access.updateMember (service level) and
-// is covered directly.
+// the reachable role change is member -> admin.
 import express from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
@@ -37,7 +40,6 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported
   : describe.skip;
 
 const ADMIN_DEFAULT_GRANTS = grantsForHumanRole("admin").map((grant) => grant.permissionKey).sort();
-const MEMBER_DEFAULT_GRANTS = grantsForHumanRole("member").map((grant) => grant.permissionKey).sort();
 
 describeEmbeddedPostgres("PATCH /companies/:companyId/members/:memberId grant reset (GH #978)", () => {
   let db!: ReturnType<typeof createDb>;
@@ -216,7 +218,13 @@ describeEmbeddedPostgres("PATCH /companies/:companyId/members/:memberId grant re
     expect(await grantKeysFor(companyId, memberUserId)).toEqual([...grantedKeys].sort());
   });
 
-  it("resets grants to member defaults when an admin is demoted (service path)", async () => {
+  it("leaves grants untouched on a service-level role change — the audited route owns resets", async () => {
+    // GH #978 review: access.updateMember has no actor, so a grant rewrite
+    // there could only mint grantedByUserId-null rows with no audit trail.
+    // No production code path calls it for role changes; the audited PATCH
+    // (and /role-and-grants for deliberate extras) is where resets happen.
+    // The service must not silently rewrite permissions — whatever a caller
+    // stored stays stored.
     const companyId = await seedCompany();
     const adminUserId = await seedUser("admin@example.com", "Admin");
     const otherAdminId = await seedUser("other@example.com", "Other Admin");
@@ -237,6 +245,8 @@ describeEmbeddedPostgres("PATCH /companies/:companyId/members/:memberId grant re
     });
 
     expect(updated?.membershipRole).toBe("member");
-    expect(await grantKeysFor(companyId, adminUserId)).toEqual(MEMBER_DEFAULT_GRANTS);
+    expect(await grantKeysFor(companyId, adminUserId)).toEqual(
+      ["agents:create", "joins:approve", "projects:create", "tasks:assign", "users:invite", "users:manage_permissions"].sort(),
+    );
   });
 });

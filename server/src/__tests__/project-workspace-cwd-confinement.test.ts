@@ -2,10 +2,18 @@
 // directory runs execute in. It used to accept any absolute path, so any
 // company member could point a run at another company's files or anywhere on
 // the host. Non-instance-admins are now confined to this company's managed
-// roots — the managed project checkout dirs, the instance workspaces of this
-// company's agents, and registered execution-workspace dirs — and only when
-// a cwd is being SET, so the repo-path values existing local installs hold
-// keep working while they are resent unchanged.
+// roots — the managed checkout dirs of projects they can see and the
+// instance workspaces of agents they manage — and only when the EFFECTIVE
+// host cwd changes: stored values keep working while the row's sourceType
+// also stays put, so the repo paths existing local installs hold still run.
+//
+// GH #980 review additions: `remote_managed` rows take no host cwd from
+// non-admins and never yield one to the heartbeat; a sourceType flip
+// re-validates the stored cwd; relative `..` worktree parents are gated like
+// absolute ones; and registered executionWorkspaces rows no longer widen the
+// allow-list at all. The probes the review used are the last tests here.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
@@ -16,7 +24,10 @@ import {
   activityLog,
   agents,
   companies,
+  companyMemberships,
   createDb,
+  executionWorkspaces,
+  principalPermissionGrants,
   projects,
   projectWorkspaces,
 } from "@paperclipai/db";
@@ -51,12 +62,18 @@ describeEmbeddedPostgres("project workspace cwd confinement (GH #980)", () => {
     db = createDb(tempDb.connectionString);
   }, 60_000);
 
+  const cleanupPaths: string[] = [];
+
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(principalPermissionGrants);
+    await db.delete(companyMemberships);
+    await db.delete(executionWorkspaces);
     await db.delete(projectWorkspaces);
     await db.delete(projects);
     await db.delete(agents);
     await db.delete(companies);
+    for (const p of cleanupPaths.splice(0)) fs.rmSync(p, { recursive: true, force: true });
   });
 
   afterAll(async () => {
@@ -110,10 +127,10 @@ describeEmbeddedPostgres("project workspace cwd confinement (GH #980)", () => {
     return rows[0]!;
   }
 
-  async function seedAgent(companyId: string, name: string) {
+  async function seedAgent(companyId: string, name: string, createdByUserId?: string) {
     const rows = await db
       .insert(agents)
-      .values({ companyId, name, role: "engineer", status: "idle", adapterType: "process" })
+      .values({ companyId, name, role: "engineer", status: "idle", adapterType: "process", createdByUserId })
       .returning();
     return rows[0]!;
   }
@@ -159,9 +176,25 @@ describeEmbeddedPostgres("project workspace cwd confinement (GH #980)", () => {
     expect(res.body.error).toMatch(/managed workspace roots/i);
   });
 
-  it("lets a member set a cwd inside an instance workspace of their own company's agent", async () => {
+  it("lets a member set a cwd inside the instance workspace of an agent they created", async () => {
     const companyId = await seedCompany("CWDE");
-    const agent = await seedAgent(companyId, "own agent");
+    const member = memberActor(companyId);
+    const agent = await seedAgent(companyId, "own agent", member.userId as string);
+    const project = await seedProject(companyId);
+    const app = createApp(member);
+
+    const res = await request(app)
+      .post(`/api/projects/${project.id}/workspaces`)
+      .send({ name: "Agent ws", cwd: path.join(agentWorkspaceRoot(agent.id), "runs") });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+
+  it("refuses a member setting a cwd inside the workspace of an agent they do not manage", async () => {
+    // GH #980 review: <instance>/workspaces/<agentId> is that agent's dir, so
+    // "same company" is not enough — the actor must manage the agent.
+    const companyId = await seedCompany("CWDH");
+    const agent = await seedAgent(companyId, "unmanaged agent");
     const project = await seedProject(companyId);
     const app = createApp(memberActor(companyId));
 
@@ -169,7 +202,28 @@ describeEmbeddedPostgres("project workspace cwd confinement (GH #980)", () => {
       .post(`/api/projects/${project.id}/workspaces`)
       .send({ name: "Agent ws", cwd: path.join(agentWorkspaceRoot(agent.id), "runs") });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/managed workspace roots|agent you manage/i);
+  });
+
+  it("refuses a member pointing into a restricted project's managed checkout they cannot see", async () => {
+    // GH #980 review: <instance>/projects/<companyId>/<projectId> names a
+    // project — an off-list member must not run inside a restricted one.
+    const companyId = await seedCompany("CWDI");
+    const restricted = await db
+      .insert(projects)
+      .values({ companyId, name: "Restricted", visibility: "restricted" })
+      .returning()
+      .then((rows) => rows[0]!);
+    const project = await seedProject(companyId);
+    const app = createApp(memberActor(companyId));
+
+    const res = await request(app)
+      .post(`/api/projects/${project.id}/workspaces`)
+      .send({ name: "Sneak", cwd: path.join(companyProjectsRoot(companyId), restricted.id, "repo") });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/project the actor cannot use|managed workspace roots/i);
   });
 
   it("lets an instance admin set any cwd", async () => {
@@ -224,5 +278,167 @@ describeEmbeddedPostgres("project workspace cwd confinement (GH #980)", () => {
       .from(projectWorkspaces)
       .where(eq(projectWorkspaces.id, stored.id));
     expect(after[0]?.cwd).toBe("/tmp/agentdash-grandfathered-repo");
+  });
+
+  // ---- GH #980 review probes, as permanent regressions ----
+
+  it("refuses a non-admin remote_managed workspace carrying a host cwd, at write and on flip (probe A)", async () => {
+    const companyId = await seedCompany("RVWA");
+    const project = await seedProject(companyId);
+    const app = createApp(memberActor(companyId));
+
+    // A remote-managed row's cwd is a REMOTE path, not a host one — nothing
+    // local may ever run in it, so a member cannot set one.
+    const create = await request(app)
+      .post(`/api/projects/${project.id}/workspaces`)
+      .send({ name: "remote", sourceType: "remote_managed", remoteWorkspaceRef: "ref", cwd: "/etc" });
+    expect(create.status).toBe(403);
+    expect(create.body.error).toMatch(/remote-managed/i);
+
+    // A row that already holds a laundered cwd (legacy data, or an admin's
+    // doing) cannot be flipped to a host source type while the stored value
+    // rides the grandfather clause — the effective cwd is re-validated.
+    const stored = await db
+      .insert(projectWorkspaces)
+      .values({
+        companyId,
+        projectId: project.id,
+        name: "legacy-remote",
+        sourceType: "remote_managed",
+        remoteWorkspaceRef: "ref",
+        cwd: "/etc",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const flip = await request(app)
+      .patch(`/api/projects/${project.id}/workspaces/${stored.id}`)
+      .send({ sourceType: "local_path" });
+    expect(flip.status).toBe(403);
+
+    const echo = await request(app)
+      .patch(`/api/projects/${project.id}/workspaces/${stored.id}`)
+      .send({ cwd: "/etc", sourceType: "non_git_path" });
+    expect(echo.status).toBe(403);
+
+    const after = await db
+      .select({ cwd: projectWorkspaces.cwd, sourceType: projectWorkspaces.sourceType })
+      .from(projectWorkspaces)
+      .where(eq(projectWorkspaces.id, stored.id));
+    expect(after[0]).toMatchObject({ cwd: "/etc", sourceType: "remote_managed" });
+  });
+
+  it("refuses a host cwd on the workspace embedded in project create (probe B)", async () => {
+    const companyId = await seedCompany("RVWB");
+    const member = memberActor(companyId);
+    // The create route needs a real membership + projects:create grant.
+    await db.insert(companyMemberships).values({
+      companyId,
+      principalType: "user",
+      principalId: member.userId as string,
+      status: "active",
+      membershipRole: "member",
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId,
+      principalType: "user",
+      principalId: member.userId as string,
+      permissionKey: "projects:create",
+      grantedByUserId: "seeder",
+    });
+    const app = createApp(member);
+
+    const res = await request(app)
+      .post(`/api/companies/${companyId}/projects`)
+      .send({ name: "P2", workspace: { name: "w", cwd: "/etc" } });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a .. traversal out of the company's managed root (probe C)", async () => {
+    const companyA = await seedCompany("RVWC");
+    const companyB = await seedCompany("RVWD");
+    const project = await seedProject(companyA);
+    const app = createApp(memberActor(companyA));
+
+    const cwd = `${companyProjectsRoot(companyA)}/${project.id}/../../${sanitizeFriendlyPathSegment(companyB, "company")}/x`;
+    const res = await request(app)
+      .post(`/api/projects/${project.id}/workspaces`)
+      .send({ name: "x", cwd });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a cwd through a symlink planted inside the managed root (probe D)", async () => {
+    const companyId = await seedCompany("RVWE");
+    const project = await seedProject(companyId);
+    const dir = path.join(companyProjectsRoot(companyId), project.id);
+    fs.mkdirSync(dir, { recursive: true });
+    cleanupPaths.push(companyProjectsRoot(companyId));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "rv999-out-"));
+    cleanupPaths.push(target);
+    fs.symlinkSync(target, path.join(dir, "link"));
+    const app = createApp(memberActor(companyId));
+
+    const res = await request(app)
+      .post(`/api/projects/${project.id}/workspaces`)
+      .send({ name: "x", cwd: path.join(dir, "link", "sub") });
+
+    expect(res.status).toBe(403);
+    // Either refusal message is correct: the canonicalized path resolves
+    // outside the managed root, or the walk spots the link itself.
+    expect(res.body.error).toMatch(/symbolic link|managed workspace roots/i);
+  });
+
+  it("does not let an executionWorkspaces row widen the allow-list (probe E)", async () => {
+    // An archived row holding a wide cwd (e.g. a grandfathered run's $HOME)
+    // must not hand that subtree to a member — registered roots are out of
+    // the allow-list entirely since the review.
+    const companyId = await seedCompany("RVWF");
+    const project = await seedProject(companyId);
+    await db.insert(executionWorkspaces).values({
+      companyId,
+      projectId: project.id,
+      mode: "shared_workspace",
+      strategyType: "project_primary",
+      name: "w",
+      status: "archived",
+      providerType: "local_fs",
+      cwd: os.homedir(),
+    } as never);
+    const app = createApp(memberActor(companyId));
+
+    const res = await request(app)
+      .post(`/api/projects/${project.id}/workspaces`)
+      .send({ name: "x", cwd: path.join(os.homedir(), ".ssh") });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/managed workspace roots/i);
+  });
+
+  it("gates a relative worktreeParentDir containing .. like an absolute one (probe F)", async () => {
+    const companyId = await seedCompany("RVWG");
+    const member = memberActor(companyId);
+    const project = await db
+      .insert(projects)
+      .values({ companyId, name: "P", createdByUserId: member.userId as string })
+      .returning()
+      .then((rows) => rows[0]!);
+    const app = createApp(member);
+
+    for (const worktreeParentDir of [
+      "../../../../../../../../tmp/rv999-escape",
+      "/tmp/rv999-escape",
+    ]) {
+      const res = await request(app)
+        .patch(`/api/projects/${project.id}`)
+        .send({
+          executionWorkspacePolicy: {
+            enabled: true,
+            workspaceStrategy: { type: "git_worktree", worktreeParentDir },
+          },
+        });
+      expect(res.status, worktreeParentDir).toBe(403);
+    }
   });
 });
