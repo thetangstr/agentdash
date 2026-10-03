@@ -158,8 +158,14 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
        * Deliberately unbounded by `range`: the question is whether metering
        * works at all, not whether this window happened to be quiet.
        */
-      const [{ everMeasured }] = await db
-        .select({ everMeasured: sql<number>`count(*)` })
+      const [{ everMeasured, everPriced }] = await db
+        .select({
+          everMeasured: sql<number>`count(*)`,
+          // AgentDash (batch 2): a BYOK/subscription workspace records token
+          // usage that is never priced here. `everPriced` separates "spent
+          // nothing" from "billed elsewhere" so the UI stops printing $0.00.
+          everPriced: sql<number>`count(*) filter (where ${costEvents.costCents} > 0)`,
+        })
         .from(costEvents)
         .where(eq(costEvents.companyId, companyId));
 
@@ -169,6 +175,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
         measured: Number(everMeasured) > 0,
+        pricedSpend: Number(everPriced) > 0,
       };
     },
 

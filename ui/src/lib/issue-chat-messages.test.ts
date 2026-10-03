@@ -3,6 +3,8 @@ import type { Agent } from "@paperclipai/shared";
 import {
   buildAssistantPartsFromTranscript,
   buildIssueChatMessages,
+  linkedRunUsage,
+  preserveReadableStreamingRetraction,
   stabilizeThreadMessages,
   type IssueChatComment,
   type IssueChatLinkedRun,
@@ -673,6 +675,108 @@ describe("buildIssueChatMessages", () => {
 });
 
 describe("stabilizeThreadMessages", () => {
+  it("reveals live streamed additions at word boundaries instead of character boundaries", () => {
+    expect(preserveReadableStreamingRetraction(
+      "Writing ",
+      "Writing the pla",
+    )).toBe("Writing the ");
+    expect(preserveReadableStreamingRetraction(
+      "Writing ",
+      "Writing the plan ",
+    )).toBe("Writing the plan ");
+    expect(preserveReadableStreamingRetraction(
+      "Writing ",
+      "Writing the plan.",
+    )).toBe("Writing the plan.");
+    expect(preserveReadableStreamingRetraction(
+      "Writing ",
+      "Writing draft",
+    )).toBe("Writing draft");
+  });
+
+  it("holds sliding-window removals until an older paragraph or group boundary drops", () => {
+    expect(preserveReadableStreamingRetraction(
+      "First sentence. Second sentence is visible",
+      "irst sentence. Second sentence is visible now ",
+    )).toBe("irst sentence. Second sentence is visible now ");
+    expect(preserveReadableStreamingRetraction(
+      "First sentence. Second sentence is visible",
+      "Second sentence is visible now ",
+    )).toBe("Second sentence is visible now ");
+    expect(preserveReadableStreamingRetraction(
+      "Paragraph one.\n\nParagraph two is visible",
+      "Paragraph two is visible now ",
+    )).toBe("Paragraph two is visible now ");
+    expect(preserveReadableStreamingRetraction(
+      "The answer is 42",
+      "42 is the answer",
+    )).toBe("42 is the answer");
+    expect(preserveReadableStreamingRetraction(
+      "The quick brown fox jumps over the lazy dog",
+      "quick brown fox jumps over the lazy dog near the river",
+    )).toBe("quick brown fox jumps over the lazy dog near the river");
+  });
+
+  it("keeps live streamed retractions readable until a whole line disappears", () => {
+    expect(preserveReadableStreamingRetraction(
+      "First line\nSecond line\nThird line is complete",
+      "First line\nSecond line\nThird line",
+    )).toBe("First line\nSecond line\nThird line is complete");
+    expect(preserveReadableStreamingRetraction(
+      "First line\nSecond line\nThird line is complete",
+      "First line\nSecond line",
+    )).toBe("First line\nSecond line");
+
+    const liveRun: LiveRunForIssue = {
+      id: "run-live-retract",
+      status: "running",
+      invocationSource: "manual",
+      triggerDetail: null,
+      startedAt: "2026-04-06T12:04:00.000Z",
+      finishedAt: null,
+      createdAt: "2026-04-06T12:04:00.000Z",
+      agentId: "agent-1",
+      agentName: "CodexCoder",
+      adapterType: "codex_local",
+    };
+    const buildLiveMessages = (text: string) => buildIssueChatMessages({
+      comments: [],
+      timelineEvents: [],
+      linkedRuns: [],
+      liveRuns: [liveRun],
+      transcriptsByRunId: new Map([
+        ["run-live-retract", [{ kind: "assistant", ts: "2026-04-06T12:04:01.000Z", text }]],
+      ]),
+      hasOutputForRun: (runId) => runId === "run-live-retract",
+      currentUserId: "user-1",
+    });
+
+    const fullText = "First line\nSecond line\nThird line is complete";
+    const firstStable = stabilizeThreadMessages(buildLiveMessages(fullText), [], new Map());
+    const partialRetractionStable = stabilizeThreadMessages(
+      buildLiveMessages("First line\nSecond line\nThird line"),
+      firstStable.messages,
+      firstStable.cache,
+    );
+
+    expect(partialRetractionStable.messages).toBe(firstStable.messages);
+    expect(partialRetractionStable.messages[0]?.content[0]).toMatchObject({
+      type: "text",
+      text: fullText,
+    });
+
+    const wholeLineRetractionStable = stabilizeThreadMessages(
+      buildLiveMessages("First line\nSecond line"),
+      partialRetractionStable.messages,
+      partialRetractionStable.cache,
+    );
+
+    expect(wholeLineRetractionStable.messages[0]?.content[0]).toMatchObject({
+      type: "text",
+      text: "First line\nSecond line",
+    });
+  });
+
   it("reuses unchanged message objects across rebuilds", () => {
     const firstPass = buildIssueChatMessages({
       comments: [createComment()],
@@ -735,5 +839,52 @@ describe("stabilizeThreadMessages", () => {
     );
 
     expect(secondStable.messages).toBe(firstStable.messages);
+  });
+});
+
+// AgentDash (batch 2): the chat footer reads the run record's final usage —
+// the same numbers the run page shows — not the transcript's own result
+// snapshot, which was metered before the run's last tokens landed.
+describe("linkedRunUsage", () => {
+  const run = (over: Partial<IssueChatLinkedRun>): IssueChatLinkedRun => ({
+    runId: "run-1",
+    status: "succeeded",
+    agentId: "agent-1",
+    createdAt: "2026-10-02T10:00:00.000Z",
+    startedAt: "2026-10-02T10:00:20.000Z",
+    finishedAt: "2026-10-02T10:02:49.000Z",
+    ...over,
+  });
+
+  it("derives tokens, cost and duration from the run record", () => {
+    const usage = linkedRunUsage(
+      run({ usageJson: { inputTokens: 36100, outputTokens: 1200, costUsd: 0.42 } }),
+    );
+    // 2m 29s — the run page's duration, not the chat's old "1m 9s".
+    expect(usage).toEqual({
+      inputTokens: 36100,
+      outputTokens: 1200,
+      costUsd: 0.42,
+      durationMs: 149_000,
+    });
+  });
+
+  it("returns null when the run record has no usage yet", () => {
+    expect(linkedRunUsage(run({ usageJson: null }))).toBeNull();
+    expect(linkedRunUsage(run({}))).toBeNull();
+  });
+
+  it("reads snake_case fields and falls back to createdAt when startedAt is null", () => {
+    const usage = linkedRunUsage(
+      run({ startedAt: null, usageJson: { input_tokens: 10, output_tokens: 5 } }),
+    );
+    expect(usage).toMatchObject({ inputTokens: 10, outputTokens: 5, durationMs: 169_000 });
+  });
+
+  it("reports no cost for subscription-billed runs", () => {
+    const usage = linkedRunUsage(
+      run({ usageJson: { inputTokens: 5, billingType: "subscription_included", costUsd: 0.42 } }),
+    );
+    expect(usage?.costUsd).toBe(0);
   });
 });
