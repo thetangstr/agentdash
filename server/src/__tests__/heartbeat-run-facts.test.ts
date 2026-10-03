@@ -87,11 +87,16 @@ if (!embeddedPostgresSupport.supported) {
 describeEmbeddedPostgres("heartbeat run facts", () => {
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+  let heartbeat!: ReturnType<typeof heartbeatService>;
 
   beforeAll(async () => {
+    // The helper allows 60s each for initdb and postgres start plus 120s for
+    // migrations; a 20s hook deadline could not outlive a slow phase on a
+    // loaded CI box.
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-run-facts-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+    heartbeat = heartbeatService(db);
+  }, 60_000);
 
   async function waitForHeartbeatIdle(timeoutMs = 5_000) {
     const deadline = Date.now() + timeoutMs;
@@ -171,10 +176,14 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
     }));
     vi.clearAllMocks();
     // Wait for heartbeat background writes to drain before deleting — a run
-    // that is still finalizing inserts FK-referencing rows mid-cleanup.
+    // that is still finalizing inserts FK-referencing rows mid-cleanup. The
+    // dispatch is fire-and-forget, so `settle(runId)` seeing a terminal status
+    // does NOT mean the finally block (post-commit writes + chained queued
+    // runs) is done; drain the tracked executions instead of sleeping.
+    await heartbeat.waitForExecutionDrain();
     await cancelActiveRunsForCleanup();
+    await heartbeat.waitForExecutionDrain();
     await waitForHeartbeatIdle();
-    await new Promise((resolve) => setTimeout(resolve, 150));
     await db.delete(activityLog);
     await db.delete(agentRuntimeState);
     await db.delete(companySkills);
@@ -236,6 +245,9 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
   });
 
   afterAll(async () => {
+    // Close the pool before the server stops so open sockets don't surface as
+    // CONNECTION_DESTROYED unhandled errors during cleanup.
+    await db?.$client.end({ timeout: 5 });
     await tempDb?.cleanup();
   });
 
@@ -377,7 +389,6 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
       };
     });
 
-    const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
     const run = await settle(runId);
 
@@ -418,7 +429,6 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
       usage: { inputTokens: 1000, outputTokens: 100 },
     }));
 
-    const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
     const first = await settle(runId);
     expect(first?.status).toBe("succeeded");
@@ -490,7 +500,6 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
       sessionId,
       usage: { inputTokens: 1000, outputTokens: 100 },
     }));
-    const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
     const first = await settle(runId);
     expect(first?.status).toBe("succeeded");
@@ -565,7 +574,6 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
       resultJson: { meteringStatus: "unmetered_no_ledger" },
     }));
 
-    const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
     const run = await settle(runId);
 
@@ -605,7 +613,6 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
       summary: "silent on usage",
     }));
 
-    const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
     const run = await settle(runId);
     expect(run?.status).toBe("succeeded");
@@ -664,7 +671,6 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
       usage: { inputTokens: 10, outputTokens: 5 },
     }));
 
-    const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
     const run = await settle(runId);
 
@@ -686,7 +692,6 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
       errorMessage: "adapter exploded",
     }));
 
-    const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
     const run = await settle(runId);
 

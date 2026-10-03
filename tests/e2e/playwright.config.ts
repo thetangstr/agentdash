@@ -2,11 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
+import { resolveE2eEmbeddedPostgresPort } from "./e2e-db-port";
 
 // Use a dedicated port so e2e tests always start their own server in local_trusted mode,
 // even when the dev server is running on :3100 in authenticated mode.
 const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+// The throwaway instance's embedded Postgres gets its own explicit port —
+// never the 54329 default, which belongs to a live local instance.
+const DB_PORT = resolveE2eEmbeddedPostgresPort(PORT);
 const PAPERCLIP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-e2e-home-"));
 const CHROMIUM_CHANNEL = process.env.PLAYWRIGHT_CHROMIUM_CHANNEL?.trim();
 
@@ -50,6 +54,7 @@ export default defineConfig({
     env: {
       ...process.env,
       PORT: String(PORT),
+      PAPERCLIP_EMBEDDED_POSTGRES_PORT: String(DB_PORT),
       PAPERCLIP_HOME,
       PAPERCLIP_INSTANCE_ID: "playwright-e2e",
       PAPERCLIP_BIND: "loopback",

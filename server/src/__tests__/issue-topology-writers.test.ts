@@ -17,7 +17,9 @@ vi.mock('../services/live-events.js', () => ({ publishLiveEvent: vi.fn() }));
 describe('central topology writers on PostgreSQL', () => {
   let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>, db: Db;
   beforeAll(async () => { temp = await startEmbeddedPostgresTestDatabase('topology-writers-'); db = createDb(temp.connectionString); await db.insert(instanceSettings).values({ experimental: { enableIsolatedWorkspaces: true } }); });
-  afterAll(async () => { await db?.$client.end({ timeout: 0 }); await temp?.cleanup(); });
+  // timeout: 5 lets any straggler query finish before sockets close — a
+  // force-ended pending query surfaces as CONNECTION_DESTROYED mid-cleanup.
+  afterAll(async () => { await db?.$client.end({ timeout: 5 }); await temp?.cleanup(); });
   async function fixture() {
     const [company, foreign] = await db.insert(companies).values(['Local', 'Private company'].map(name => ({ name, issuePrefix: randomUUID().slice(0, 8) }))).returning();
     const [project, otherProject] = await db.insert(projects).values(['Target', 'Other'].map(name => ({ companyId: company.id, name }))).returning();
@@ -80,12 +82,21 @@ describe('central topology writers on PostgreSQL', () => {
   });
 
   function gate() { let open!: () => void; const promise = new Promise<void>(resolve => { open = resolve; }); return { open, promise }; }
-  async function blockedBy(ownerPid: number, label: string) {
-    const deadline = Date.now() + 4000;
-    while (Date.now() < deadline) {
+  // Poll pg_stat_activity until the contender is observed waiting on the
+  // lock owner's `companies ... for update`. On a loaded CI box the contender
+  // can need several seconds just to reach its lock statement — a 4s deadline
+  // plus a setImmediate spin both expired early and flooded the pool with
+  // polls. The owner holds the lock until `release` opens, so the real bound
+  // is "the contender reaches its lock attempt"; 20s only fails on a genuine
+  // wedge, and we stop polling as soon as the contender settles.
+  async function blockedBy(ownerPid: number, label: string, contender: Promise<unknown>) {
+    const deadline = Date.now() + 20_000;
+    let done = false;
+    void contender.then(() => { done = true; }, () => { done = true; });
+    while (Date.now() < deadline && !done) {
       const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);
       if (row) { expect(Number(row.pid)).not.toBe(ownerPid); console.log(JSON.stringify({ label, ownerPid, waiter: row })); return row; }
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setTimeout(resolve, 25));
     }
     throw new Error(`No observed company lock wait: ${label}`);
   }
@@ -134,7 +145,9 @@ describe('central topology writers on PostgreSQL', () => {
       await Promise.race([ready.promise, first.then(() => { throw new Error('Owner returned before barrier'); })]);
       const second = order === 'writer-first' ? accept() : write();
       const results = Promise.allSettled([first, second]);
-      try { expect(String((await blockedBy(ownerPid, `${operation}/${order}`)).query)).toMatch(/companies.*for (?:no key )?update/i); }
+      // A contender that settles without ever blocking means the lock was
+      // never contended — report that instead of polling to the deadline.
+      try { expect(String((await blockedBy(ownerPid, `${operation}/${order}`, Promise.resolve(second))).query)).toMatch(/companies.*for (?:no key )?update/i); }
       finally { release.open(); }
       const settled = await results;
       expect(settled[0].status).toBe('fulfilled');

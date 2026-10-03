@@ -11,9 +11,11 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { defineConfig } from "@playwright/test";
+import { resolveE2eEmbeddedPostgresPort } from "./e2e-db-port";
 
 const external = process.env.CLAIM_E2E_BASE_URL?.trim();
 const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3299);
+const DB_PORT = external ? null : resolveE2eEmbeddedPostgresPort(PORT);
 const BASE_URL = external || `http://127.0.0.1:${PORT}`;
 if (!external) {
   process.env.CLAIM_E2E_EMAIL ??= `claim-${Date.now()}@example.test`;
@@ -44,6 +46,7 @@ export default defineConfig({
           env: {
             ...process.env,
             PORT: String(PORT),
+            PAPERCLIP_EMBEDDED_POSTGRES_PORT: String(DB_PORT),
             PAPERCLIP_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-claim-e2e-")),
             PAPERCLIP_INSTANCE_ID: "playwright-claim-link",
             PAPERCLIP_BIND: "loopback",
