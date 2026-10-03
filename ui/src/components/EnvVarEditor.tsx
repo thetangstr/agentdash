@@ -166,15 +166,17 @@ export function EnvVarEditor({
           !row.plainValue &&
           !row.secretId;
         return (
-          <div key={index} className="flex items-center gap-1.5">
+          <div key={index} className="flex items-center gap-1.5 max-sm:flex-wrap">
             <input
-              className={cn(inputClass, "flex-[2]")}
+              className={cn(inputClass, "flex-[2] max-sm:basis-full")}
               placeholder="KEY"
+              aria-label="Variable name"
               value={row.key}
               onChange={(event) => updateRow(index, { key: event.target.value })}
             />
             <select
-              className={cn(inputClass, "flex-[1] bg-background")}
+              className={cn(inputClass, "flex-[1] bg-background max-sm:w-24 max-sm:flex-none")}
+              aria-label="Value source"
               value={row.source}
               onChange={(event) =>
                 updateRow(index, {
@@ -202,7 +204,7 @@ export function EnvVarEditor({
                 </select>
                 <button
                   type="button"
-                  className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 transition-colors shrink-0"
+                  className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 transition-colors shrink-0 max-sm:min-w-11 max-sm:justify-center"
                   onClick={() => sealRow(index)}
                   disabled={!row.key.trim() || !row.plainValue}
                   title="Create secret from current plain value"
@@ -220,7 +222,7 @@ export function EnvVarEditor({
                 />
                 <button
                   type="button"
-                  className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 transition-colors shrink-0"
+                  className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 transition-colors shrink-0 max-sm:min-w-11 max-sm:justify-center"
                   onClick={() => sealRow(index)}
                   disabled={!row.key.trim() || !row.plainValue}
                   title="Store value as secret and replace with reference"
@@ -232,13 +234,14 @@ export function EnvVarEditor({
             {!isTrailing ? (
               <button
                 type="button"
-                className="shrink-0 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                className="shrink-0 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors max-sm:inline-flex max-sm:h-11 max-sm:w-11 max-sm:items-center max-sm:justify-center"
+                aria-label={row.key ? `Remove ${row.key}` : "Remove variable"}
                 onClick={() => removeRow(index)}
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             ) : (
-              <div className="w-[26px] shrink-0" />
+              <div className="w-[26px] shrink-0 max-sm:w-11" />
             )}
           </div>
         );

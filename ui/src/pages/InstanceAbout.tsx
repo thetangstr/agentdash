@@ -7,7 +7,7 @@ import { queryKeys } from "@/lib/queryKeys";
 function ValueRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-border/60 py-3 last:border-b-0">
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
       <span className="min-w-0 truncate text-right text-sm font-medium text-foreground">{value}</span>
     </div>
   );
@@ -43,7 +43,7 @@ export function InstanceAbout() {
         </Card>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Instance</CardTitle>
@@ -66,7 +66,7 @@ export function InstanceAbout() {
           <CardContent className="flex flex-col gap-3">
             <a
               href="/instance/settings/changelog"
-              className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent/50"
+              className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-3 text-sm font-medium max-sm:h-11 text-foreground transition-colors hover:bg-accent/50"
             >
               Open changelog
             </a>

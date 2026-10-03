@@ -852,10 +852,10 @@ export function IssueDocumentsSection({
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 max-sm:flex-wrap max-sm:gap-y-0">
                     <button
                       type="button"
-                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground max-sm:-my-3 max-sm:-ml-3 max-sm:h-11 max-sm:w-11"
                       onClick={() => toggleFoldedDocument(doc.key)}
                       aria-label={isFolded ? `Expand ${doc.key} document` : `Collapse ${doc.key} document`}
                       aria-expanded={!isFolded}
@@ -925,7 +925,7 @@ export function IssueDocumentsSection({
                     </DropdownMenu>
                     <a
                       href={`#document-${encodeURIComponent(doc.key)}`}
-                      className="truncate text-[11px] text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                      className="truncate text-[11px] text-muted-foreground transition-colors hover:text-foreground hover:underline max-sm:block max-sm:min-w-11 max-sm:py-[14px]"
                     >
                       updated {relativeTime(displayedUpdatedAt)}
                     </a>

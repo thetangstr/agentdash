@@ -22,7 +22,7 @@ export type FileTreeNode = {
 
 const TREE_BASE_INDENT = 16;
 const TREE_STEP_INDENT = 24;
-const TREE_ROW_HEIGHT_CLASS = "min-h-9";
+const TREE_ROW_HEIGHT_CLASS = "min-h-9 max-sm:min-h-11";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -211,8 +211,8 @@ export function PackageFileTree({
               <div
                 className={cn(
                   showCheckboxes
-                    ? "group grid w-full grid-cols-[auto_minmax(0,1fr)_2.25rem] items-center gap-x-1 pr-3 text-left text-sm text-muted-foreground hover:bg-accent/30 hover:text-foreground"
-                    : "group grid w-full grid-cols-[minmax(0,1fr)_2.25rem] items-center gap-x-1 pr-3 text-left text-sm text-muted-foreground hover:bg-accent/30 hover:text-foreground",
+                    ? "group grid w-full grid-cols-[auto_minmax(0,1fr)_2.25rem] max-sm:grid-cols-[auto_minmax(0,1fr)_2.75rem] items-center gap-x-1 pr-3 text-left text-sm text-muted-foreground hover:bg-accent/30 hover:text-foreground"
+                    : "group grid w-full grid-cols-[minmax(0,1fr)_2.25rem] max-sm:grid-cols-[minmax(0,1fr)_2.75rem] items-center gap-x-1 pr-3 text-left text-sm text-muted-foreground hover:bg-accent/30 hover:text-foreground",
                   TREE_ROW_HEIGHT_CLASS,
                 )}
                 style={{
@@ -220,13 +220,14 @@ export function PackageFileTree({
                 }}
               >
                 {showCheckboxes && (
-                  <label className="flex items-center pl-2">
+                  <label className="flex items-center pl-2 max-sm:min-h-11 max-sm:min-w-11 max-sm:justify-center max-sm:pl-0">
                     <input
                       type="checkbox"
                       checked={allChecked}
                       ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
                       onChange={() => onToggleCheck?.(node.path, "dir")}
-                      className="mr-2 accent-foreground"
+                      aria-label={`Include ${node.name}`}
+                      className="mr-2 accent-foreground max-sm:mr-0"
                     />
                   </label>
                 )}
@@ -248,7 +249,8 @@ export function PackageFileTree({
                 </button>
                 <button
                   type="button"
-                  className="flex h-9 w-9 items-center justify-center self-center rounded-sm text-muted-foreground opacity-70 transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                  className="flex h-9 w-9 items-center justify-center self-center rounded-sm text-muted-foreground opacity-70 transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground group-hover:opacity-100 max-sm:h-11 max-sm:w-11"
+                  aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
                   onClick={() => onToggleDir(node.path)}
                 >
                   {expanded ? (
@@ -296,12 +298,13 @@ export function PackageFileTree({
             onClick={() => onSelectFile(node.path)}
           >
             {showCheckboxes && (
-              <label className="flex items-center pl-2">
+              <label className="flex items-center pl-2 max-sm:min-h-11 max-sm:min-w-11 max-sm:justify-center max-sm:pl-0">
                 <input
                   type="checkbox"
                   checked={checked}
                   onChange={() => onToggleCheck?.(node.path, "file")}
-                  className="mr-2 accent-foreground"
+                  aria-label={`Include ${node.name}`}
+                  className="mr-2 accent-foreground max-sm:mr-0"
                 />
               </label>
             )}

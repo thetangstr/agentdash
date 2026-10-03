@@ -204,7 +204,7 @@ export function CompanyInvites() {
                     value={option.value}
                     checked={checked}
                     onChange={() => setHumanRole(option.value)}
-                    className="mt-1 h-4 w-4 border-border text-foreground"
+                    className="mt-1 h-4 w-4 shrink-0 border-border text-foreground"
                   />
                   <span className="min-w-0 space-y-1">
                     <span className="flex flex-wrap items-center gap-2">
@@ -229,7 +229,7 @@ export function CompanyInvites() {
             type="checkbox"
             checked={autoApprove}
             onChange={(event) => setAutoApprove(event.target.checked)}
-            className="mt-1 h-4 w-4 border-border text-foreground"
+            className="mt-1 h-4 w-4 shrink-0 border-border text-foreground"
           />
           <span className="min-w-0 space-y-1">
             <span className="block text-sm font-medium">Auto-approve on accept</span>
@@ -311,7 +311,7 @@ export function CompanyInvites() {
               Review invite status, role, inviter, and any linked join request.
             </p>
           </div>
-          <Link to="/inbox/requests" className="text-sm underline underline-offset-4">
+          <Link to="/inbox/requests" className="text-sm underline underline-offset-4 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center">
             Open join request queue
           </Link>
         </div>

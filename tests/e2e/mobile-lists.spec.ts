@@ -166,10 +166,16 @@ test.describe("mobile lists at 390×844", () => {
     const managerCard = manager.locator("> a");
     const managerBox = (await managerCard.boundingBox())!;
     let previousBottom = managerBox.y + managerBox.height;
+    // The org endpoint does not order siblings, so walk the reports in the
+    // order they render rather than the order they were created.
+    const boxes: Array<{ x: number; y: number; width: number; height: number }> = [];
     for (const name of REPORTS) {
       const report = manager.locator('[data-testid="org-chart-phone-node"]').filter({ hasText: name }).locator("> a");
       await expect(report).toBeVisible();
-      const box = (await report.boundingBox())!;
+      boxes.push((await report.boundingBox())!);
+    }
+    boxes.sort((a, b) => a.y - b.y);
+    for (const box of boxes) {
       // Stacked top to bottom, and indented under the manager.
       expect(box.y).toBeGreaterThanOrEqual(previousBottom);
       expect(box.x).toBeGreaterThan(managerBox.x);

@@ -189,7 +189,8 @@ test.describe("Agent identity and console noise (scan 4 lane O2)", () => {
     await expect(advanced).toBeVisible({ timeout: 30_000 });
     await expect(danger).toBeVisible();
     await expect(page.getByRole("button", { name: "Archive workspace" })).toBeHidden();
-    await expect(page.getByText("Needs reconciliation")).toBeHidden();
+    // The heading only: once the list loads empty, "Nothing needs reconciliation." matches too.
+    await expect(page.getByRole("heading", { name: "Needs reconciliation" })).toBeHidden();
     expect(await advanced.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
     expect(await danger.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
 
