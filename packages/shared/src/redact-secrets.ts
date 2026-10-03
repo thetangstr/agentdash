@@ -223,18 +223,13 @@ const INNER_VALUE_STICKY_RE =
 // Cookie headers: everything to the end of the quoted value / line.
 const COOKIE_HEADER_RE = /(\b(?:set-)?cookie[ \t]*:[ \t]*)([^\n]+)/gid;
 
-// `scheme://user:pass@host`. The password run is greedy so `p@ssw0rd!` and
-// `ab/cdEFGH12` inside userinfo are fully consumed before the last `@`. The
-// lookbehind blocks mid-run starts (`https://a:bhttps://a:b…`). The password
-// is `[^\s"'/]` plus single slashes — a `//` inside it would be the next
-// URL's scheme, not password material — so a `scheme://a:b` repeat with no
-// `@` fails after a few chars instead of scanning to end-of-input, and the
-// unbounded length keeps >1024-char passwords redactable.
-const URL_USERINFO_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)([^\s/@:"']+):([^\s"'/]*(?:\/(?!\/)[^\s"'/]*)*)@/gid;
-// `scheme://TOKEN@host` — credential as the whole userinfo, no `user:` prefix.
-// `{3}X+` rather than `{4,}` — a bounded-minimum quantifier builds a regex
-// backtrack frame per char and overflows on multi-megabyte runs.
-const URL_BARE_USERINFO_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)([^\s/@:"'\\]{3}[^\s/@:"'\\]+)@/gid;
+// `scheme://userinfo@host`. Only the `scheme://` prefix is a regex match —
+// the userinfo region is scanned in JS (see the callback below) because an
+// `@`-terminated pattern can never match across a scan-piece edge and a
+// bounded-minimum or alternation tail builds a regex backtrack frame per
+// char, overflowing on multi-megabyte runs. The lookbehind blocks mid-run
+// starts (`https://a:bhttps://a:b…`).
+const URL_SCHEME_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)/gd;
 
 // curl `-u user:pass`, `-uuser:pass`, `--user user:pass`, `--user=user:pass`.
 const CURL_USER_RE = /(\s--user(?:[ \t]+|=)|\s-u(?:[ \t]+|=|(?=[^\s=-])))(["']?)([^\s"':=]+):([^\s"']*)\2/gd;
@@ -483,7 +478,6 @@ const CONT_AUTH_VALUE = /[^\s"'`,;\]]/y;
 const CONT_JSON_BARE = /[^\s,}\]{[]/y;
 const CONT_LINE = /[^\n]/y;
 const CONT_TOKEN = /[^\s"']/y;
-const CONT_URL_BARE = /[^\s/@:"'\\]/y;
 const CONT_KEY_SHAPE = /[A-Za-z0-9_.-]/y;
 // Chars allowed after a mid-token `\"` escape pair — the strict lookahead
 // classes the escape-pair alternatives used to carry. `{`, `[`, `}` and `]`
@@ -723,13 +717,52 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
       push(base + span.start, valueEnd);
     });
 
-    eachMatch(URL_USERINFO_RE, slice, (m) => {
-      const span = groupSpan(m, 3);
-      if (span && !m[3].includes(REDACTED)) push(base + span.start, base + span.end, REDACTED, CONT_TOKEN);
-    });
-    eachMatch(URL_BARE_USERINFO_RE, slice, (m) => {
-      const span = groupSpan(m, 2);
-      if (span && looksLikeCredential(m[2])) push(base + span.start, base + span.end, REDACTED, CONT_URL_BARE);
+    // `scheme://userinfo@host` — scan the userinfo region on the full text
+    // (it can be multi-MB or span a piece edge): chars until whitespace or a
+    // quote, stopping at `//` (the next URL's scheme, never password
+    // material). The last `@` inside ends the credential. `user:pass@`
+    // redacts the pass; `TOKEN@` redacts the userinfo when it looks
+    // credential-shaped (`git`, `user` survive).
+    eachMatch(URL_SCHEME_RE, slice, (m) => {
+      const start = base + m.index + m[0].length;
+      let end = start;
+      let at = -1;
+      let firstAt = -1;
+      let colon = -1;
+      let slash = -1;
+      let backslash = -1;
+      for (; end < text.length; end++) {
+        const c = text.charCodeAt(end);
+        if (c <= 0x20 || c === 0x22 || c === 0x27) break;
+        if (c === 0x2f) {
+          if (text.charCodeAt(end + 1) === 0x2f) break;
+          if (slash === -1) slash = end;
+        } else if (c === 0x40) {
+          if (firstAt === -1) firstAt = end;
+          at = end;
+        } else if (c === 0x3a && colon === -1) {
+          colon = end;
+        } else if (c === 0x5c && backslash === -1) {
+          backslash = end;
+        }
+      }
+      if (at < start) return;
+      // `user:pass@` — the user has no `/`, `:` or `@`, and the pass keeps
+      // `p@ssw0rd!`/`ab/cdEFGH12` (single `/`s allowed, `//` is not).
+      if (colon > start && colon < at && (slash === -1 || slash > colon) && firstAt > colon) {
+        push(colon + 1, at);
+        return;
+      }
+      // `TOKEN@` bare userinfo — the token carries no `/`, `:` or `@`.
+      if (
+        (colon === -1 || colon > at) &&
+        (slash === -1 || slash > at) &&
+        (backslash === -1 || backslash > at) &&
+        at - start >= 4
+      ) {
+        const candidate = text.slice(start, at);
+        if (looksLikeCredential(candidate)) push(start, at);
+      }
     });
 
     eachMatch(CURL_USER_RE, slice, (m) => {

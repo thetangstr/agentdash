@@ -342,4 +342,21 @@ describe("multi-megabyte values", () => {
     const out = redactSecrets(input);
     expect(out).not.toContain(SHAPELESS);
   });
+
+  it("redacts URL userinfo straddling a window boundary", { timeout: 60_000 }, () => {
+    // Only `scheme://` is regex-matched; the userinfo region is scanned in
+    // JS so an @-terminated password survives being split across pieces.
+    const pad = "x".repeat(1024 * 1024 - 34) + " ";
+    const input = `${pad}postgres://u:${SHAPELESS}@db`;
+    expect(redactSecrets(input)).not.toContain(SHAPELESS);
+  });
+
+  it("redacts a multi-megabyte URL userinfo password", { timeout: 60_000 }, () => {
+    // Single slashes are allowed inside a URL password; this 2MB one spans
+    // three scan pieces and used to leave the whole password in the clear.
+    const pass = "a/".repeat(1024 * 1024);
+    const out = redactSecrets(`postgres://u:${pass}@db`);
+    expect(out).not.toContain(pass.slice(0, 2000));
+    expect(out).toContain("@db");
+  });
 });
