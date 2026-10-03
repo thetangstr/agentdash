@@ -93,12 +93,20 @@ describe("mobile issue + Ask (390px viewport)", () => {
     const menuItems = () => Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'));
     const open = async () => {
       // A loaded CI box can still be closing the previous menu (Radix presence)
-      // when the next open starts; wait for it to go, then for all three items.
+      // when the next open starts; wait for it to go first.
       await vi.waitFor(() => expect(menuItems()).toHaveLength(0), { timeout: 5_000 });
-      await act(async () => {
-        trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      });
-      await vi.waitFor(() => expect(menuItems()).toHaveLength(3), { timeout: 5_000 });
+      // ArrowDown can only open the menu — unlike Enter it never toggles — so
+      // re-dispatching is safe when a keydown lands while Radix is mid-
+      // transition on a loaded CI box (the single-Enter version of this test
+      // could wait 5s on a menu that never opened).
+      await vi.waitFor(async () => {
+        if (menuItems().length === 0) {
+          await act(async () => {
+            trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+          });
+        }
+        expect(menuItems()).toHaveLength(3);
+      }, { timeout: 5_000, interval: 100 });
       return menuItems();
     };
 
@@ -134,9 +142,15 @@ describe("mobile issue + Ask (390px viewport)", () => {
       ),
     );
     const trigger = container.querySelector<HTMLButtonElement>('[data-testid="issue-phone-actions-trigger"]');
-    await act(async () => {
-      trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    });
+    // Same deterministic open as the ⋯ menu test: ArrowDown only ever opens.
+    await vi.waitFor(async () => {
+      if (document.body.querySelectorAll('[role="menuitem"]').length === 0) {
+        await act(async () => {
+          trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        });
+      }
+      expect(document.body.querySelectorAll('[role="menuitem"]')).toHaveLength(3);
+    }, { timeout: 5_000, interval: 100 });
     const newDocument = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
       .find((item) => item.textContent?.trim() === "New document");
     expect(newDocument?.getAttribute("aria-disabled")).toBe("true");
