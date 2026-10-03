@@ -138,7 +138,7 @@ describeEmbeddedPostgres("cos turn context visibility (shared inbox)", () => {
     ]);
     // The facts travel as a separate context message, never in the system
     // prompt — user-authored titles must not sit where instructions live.
-    const facts = cosTurnContextMessage(context);
+    const facts = cosTurnContextMessage(context, "facts-visibilitytest");
     expect(facts?.role).toBe("user");
     expect(facts?.content).toContain("Open roadmap task");
     expect(facts?.content).not.toContain("Secret acquisition plan");

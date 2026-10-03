@@ -322,14 +322,21 @@ export function stripHermesChatter(stdout: string): string {
   return lines.slice(start).join("\n").trim();
 }
 
-function buildFlatPrompt(input: LLMInput): string {
+// Message content is user-authored; a line that opens with a role header
+// would read as a new turn in the flattened prompt. A leading backslash
+// keeps the text visible while breaking the header pattern.
+const FLAT_ROLE_HEADER = /^\[(System|User|Assistant)\]/gm;
+const escapeFlatRoleHeaders = (content: string): string =>
+  content.replace(FLAT_ROLE_HEADER, "\\$&");
+
+export function buildFlatPrompt(input: LLMInput): string {
   const parts: string[] = [];
   if (input.system) {
-    parts.push(`[System]\n${input.system}`);
+    parts.push(`[System]\n${escapeFlatRoleHeaders(input.system)}`);
   }
   for (const msg of input.messages) {
     const role = msg.role === "assistant" ? "Assistant" : "User";
-    parts.push(`[${role}]\n${msg.content}`);
+    parts.push(`[${role}]\n${escapeFlatRoleHeaders(msg.content)}`);
   }
   parts.push("[Assistant]");
   return parts.join("\n\n");

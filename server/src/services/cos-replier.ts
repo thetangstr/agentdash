@@ -180,7 +180,7 @@ export const COS_FACTS_CHANNEL_GUIDANCE = `Workspace facts arrive in a separate 
 // assumed.
 export function cosTurnContextMessage(
   context: CosTurnContext | null | undefined,
-  marker = "workspace-facts",
+  marker: string,
 ): { role: "user"; content: string } | null {
   if (!context) return null;
   const issueLine = (issue: CosTurnContext["openIssues"][number]) => {
@@ -639,9 +639,22 @@ export function cosReplier(deps: Deps) {
           }
         }
         system = steadyStatePrompt(roster, trigger ? { name: requesterName } : null);
+        // labelMessageAuthors emits one entry per non-error card in
+        // chronological order, so its index maps 1:1 onto this list.
+        const chronological = recent
+          .slice()
+          .reverse()
+          .filter((m: any) => m.cardKind !== DISPATCH_ERROR_CARD_KIND);
+        const triggerIndex = input.triggerMessageId
+          ? chronological.findIndex((m: any) => m.id === input.triggerMessageId)
+          : -1;
+        // Messages that arrived after the trigger raced this dispatch. The
+        // next dispatch answers them, so they are dropped: the prompt's
+        // "the last message in this chat" must literally be the last one.
+        const history = triggerIndex >= 0 ? chronological.slice(0, triggerIndex + 1) : chronological;
         // Several people can share this chat: every earlier person-written
         // message is labelled with who wrote it, relative to the requester.
-        llmMessages = labelMessageAuthors(recent, input.triggerMessageId, input.requestedBy?.userId ?? null);
+        llmMessages = labelMessageAuthors(history.slice().reverse(), input.triggerMessageId, input.requestedBy?.userId ?? null);
         // The workspace facts travel as their own context message immediately
         // before the message being answered (falling back to the latest user
         // turn) — user-authored data never sits in the system prompt, where
@@ -652,15 +665,7 @@ export function cosReplier(deps: Deps) {
           `facts-${randomUUID().replace(/-/g, "").slice(0, 12)}`,
         );
         if (factsMessage) {
-          // labelMessageAuthors emits one entry per non-error card in
-          // chronological order, so its index maps 1:1 onto this list.
-          const chronological = recent
-            .slice()
-            .reverse()
-            .filter((m: any) => m.cardKind !== DISPATCH_ERROR_CARD_KIND);
-          let insertAt = input.triggerMessageId
-            ? chronological.findIndex((m: any) => m.id === input.triggerMessageId)
-            : -1;
+          let insertAt = triggerIndex;
           if (insertAt < 0) insertAt = llmMessages.map((m) => m.role).lastIndexOf("user");
           llmMessages =
             insertAt < 0
