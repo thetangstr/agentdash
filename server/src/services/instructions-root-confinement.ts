@@ -63,7 +63,7 @@ export function isLexicallyWithinCompanyInstructionsArea(companyId: string, abso
 }
 
 /** First symbolic link met walking from `from` (exclusive) down to `to`, or null. Missing tails are fine. */
-function firstSymlinkBelowSync(from: string, to: string): string | null {
+export function firstSymlinkBelowSync(from: string, to: string): string | null {
   const relative = path.relative(from, to);
   if (!relative) return null;
   let current = from;
@@ -127,7 +127,7 @@ export function protectedHostDirectories(env: NodeJS.ProcessEnv = process.env): 
 }
 
 /** Resolve symlinks in the longest existing prefix of `target`, keeping the missing tail. */
-function canonicalizeExistingPrefix(target: string): string {
+export function canonicalizeExistingPrefix(target: string): string {
   let existing = path.resolve(target);
   const tail: string[] = [];
   for (;;) {

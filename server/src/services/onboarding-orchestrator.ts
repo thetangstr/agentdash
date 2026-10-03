@@ -111,6 +111,24 @@ export class OnboardingTierCapacityExceededError extends Error {
   }
 }
 
+// AgentDash (security, GH #977): a bootstrap with no companyId used to reuse
+// the FIRST active membership — arbitrary for a user who belongs to several
+// workspaces, so a CoS could be provisioned in a company the caller did not
+// intend. With more than one active membership the request is refused and the
+// caller chooses explicitly; a single active membership is still inferred.
+export class AmbiguousWorkspaceBootstrapError extends Error {
+  readonly code = "ambiguous_company";
+  readonly companies: Array<{ id: string; name: string | null }>;
+
+  constructor(companies: Array<{ id: string; name: string | null }>) {
+    super(
+      "You belong to more than one workspace. Pass companyId to choose which workspace to bootstrap.",
+    );
+    this.name = "AmbiguousWorkspaceBootstrapError";
+    this.companies = companies;
+  }
+}
+
 // In `local_trusted` deployment mode, the synthetic actor has userId="local-board"
 // and there is NO auth_users row. The orchestrator must still bootstrap a working
 // workspace so the founding user can hit /cos and start chatting.
@@ -301,9 +319,29 @@ export function onboardingOrchestrator(deps: Deps) {
         if (options.strictCompanyId) throw badRequest(message);
         throw new HttpError(403, message, { code: "not_a_member" }, "not_a_member");
       }
-      const activeMembership = requestedMembership ?? existingMemberships.find(
+      const activeMemberships = existingMemberships.filter(
         (m: any) => m.status === "active",
       );
+      // AgentDash (security, GH #977): without a companyId, inferring from
+      // the first active membership guesses between companies the caller may
+      // not have meant (the Ask page created a CoS in the other workspace).
+      // More than one candidate is a conflict the caller must resolve by
+      // naming the company — exactly one is still inferred.
+      if (!options.companyId && activeMemberships.length > 1) {
+        const candidates = await Promise.all(
+          activeMemberships.map(async (membership: any) => {
+            const found = await deps.companies
+              .getById(membership.companyId)
+              .catch(() => null);
+            return {
+              id: membership.companyId as string,
+              name: (found as { name?: string | null } | null)?.name ?? null,
+            };
+          }),
+        );
+        throw new AmbiguousWorkspaceBootstrapError(candidates);
+      }
+      const activeMembership = requestedMembership ?? activeMemberships[0];
       let company: { id: string; name?: string; emailDomain?: string | null };
       if (activeMembership) {
         // Returning user — reuse the workspace they already belong to.

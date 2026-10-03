@@ -118,6 +118,9 @@ vi.mock("../services/index.js", () => ({
       this.action = action;
     }
   },
+  // AgentDash (GH #977): the bootstrap route maps this error to 409, so the
+  // mock must export a constructor or `instanceof` throws into a 500.
+  AmbiguousWorkspaceBootstrapError: function AmbiguousWorkspaceBootstrapError() {},
   cosInterview: () => mockInterview,
   agentProposer: () => mockProposer,
   agentCreatorFromProposal: () => mockCreator,

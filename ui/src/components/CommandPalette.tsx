@@ -99,7 +99,7 @@ export function CommandPalette() {
   });
   const destinationGroups = navigationDestinationGroups({
     isInstanceAdmin: capabilities?.isInstanceAdmin === true,
-    canManageAgents: companyAccess?.access.canManageAgents === true,
+    isCompanyAdmin: companyAccess?.access.currentUserRole === "admin",
     workspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
   });
 

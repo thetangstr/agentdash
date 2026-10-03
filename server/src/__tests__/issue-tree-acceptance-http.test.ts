@@ -112,7 +112,9 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api`;
   });
   beforeEach(() => { beforeReadAuthority = undefined; readHoldQueries = 0; beforeSettingsRead = undefined; beforeFirstPrepare = undefined; afterAuthentication = undefined; beforeIssueLock = undefined; resetAssistantLoopbackTokens(); vi.restoreAllMocks(); vi.clearAllMocks(); });
-  afterAll(async () => { if (server) await new Promise<void>(resolve => server.close(() => resolve())); await temp?.cleanup(); });
+  // Close the pool before the embedded server stops — stopping postgres under
+  // open sockets is what surfaced as CONNECTION_DESTROYED during cleanup.
+  afterAll(async () => { if (server) await new Promise<void>(resolve => server.close(() => resolve())); await db?.$client.end({ timeout: 5 }); await temp?.cleanup(); });
   async function fixture() {
     const userId = randomUUID(), token = `pcp_board_${randomUUID()}`;
     await db.insert(authUsers).values({ id: userId, name: 'Human', email: `${userId}@test.invalid`, createdAt: new Date(), updatedAt: new Date() });

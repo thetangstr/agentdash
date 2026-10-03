@@ -2446,6 +2446,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const workspaceOperationsSvc = workspaceOperationService(db);
   const instructionRefreshSvc = agentInstructionRefreshService({ db });
   const activeRunExecutions = new Set<string>();
+  // Every fire-and-forget `executeRun` dispatch lands here so tests can drain
+  // background execution — including runs chained from a finished run's
+  // finally block — instead of racing teardown deletes with fixed sleeps.
+  const inFlightExecutions = new Set<Promise<unknown>>();
   const lastTimerCheckAtByAgent = new Map<string, number>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
@@ -2953,7 +2957,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const workspaceHints = projectWorkspaceRows.map((workspace) => ({
       workspaceId: workspace.id,
-      cwd: readNonEmptyString(workspace.cwd),
+      // AgentDash (security, GH #980 review): a remote_managed row's cwd is a
+      // remote path, not a host one — never report it as a local candidate.
+      cwd: workspace.sourceType === "remote_managed" ? null : readNonEmptyString(workspace.cwd),
       repoUrl: readNonEmptyString(workspace.repoUrl),
       repoRef: readNonEmptyString(workspace.repoRef),
     }));
@@ -2970,7 +2976,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           `Selected project workspace "${preferredProjectWorkspaceId}" is not available on this project.`;
       }
       for (const workspace of projectWorkspaceRows) {
-        let projectCwd = readNonEmptyString(workspace.cwd);
+        // AgentDash (security, GH #980 review): a remote_managed workspace's
+        // cwd is a remote path — a run must never execute in it on this host.
+        let projectCwd =
+          workspace.sourceType === "remote_managed" ? null : readNonEmptyString(workspace.cwd);
         let managedWorkspaceWarning: string | null = null;
         if (!projectCwd || projectCwd === REPO_ONLY_CWD_SENTINEL) {
           try {
@@ -6175,9 +6184,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // (the FK on environment_leases → heartbeat_run_id, dropped connections).
       if (autoDispatchQueuedRuns) {
         for (const claimedRun of claimedRuns) {
-          void executeRun(claimedRun.id).catch((err) => {
+          const execution = executeRun(claimedRun.id).catch((err) => {
             logger.error({ err, runId: claimedRun.id }, "queued heartbeat execution failed");
           });
+          inFlightExecutions.add(execution);
+          void execution.finally(() => inFlightExecutions.delete(execution));
         }
       }
       return claimedRuns;
@@ -9884,6 +9895,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // finalize path on a claimed run; production dispatch stays
     // fire-and-forget inside dispatchQueuedRunsForAgent.
     executeRun,
+
+    /**
+     * AgentDash (test seam): resolves once every dispatched `executeRun` —
+     * including any queued run a finishing execution chain-dispatches from
+     * its finally block — has settled. Test teardown that deletes
+     * heartbeat-run-adjacent rows should drain first rather than sleep.
+     */
+    waitForExecutionDrain: async () => {
+      while (inFlightExecutions.size > 0) {
+        await Promise.allSettled([...inFlightExecutions]);
+      }
+    },
 
     reportRunActivity: clearDetachedRunWarning,
 

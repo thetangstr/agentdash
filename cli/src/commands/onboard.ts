@@ -110,6 +110,15 @@ function parseNumberFromEnv(rawValue: string | undefined): number | null {
   return parsed;
 }
 
+function parsePortFromEnv(rawValue: string | undefined, name: string): number | null {
+  if (!rawValue) return null;
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed < 1024 || parsed > 65535) {
+    throw new Error(`${name} must be an integer between 1024 and 65535 (got ${JSON.stringify(rawValue)})`);
+  }
+  return parsed;
+}
+
 function parseEnumFromEnv<T extends string>(rawValue: string | undefined, allowedValues: readonly T[]): T | null {
   if (!rawValue) return null;
   return allowedValues.includes(rawValue as T) ? (rawValue as T) : null;
@@ -232,7 +241,11 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
       mode: databaseUrl ? "postgres" : "embedded-postgres",
       ...(databaseUrl ? { connectionString: databaseUrl } : {}),
       embeddedPostgresDataDir: resolveDefaultEmbeddedPostgresDir(instanceId),
-      embeddedPostgresPort: 54329,
+      // AgentDash: e2e webServers export PAPERCLIP_EMBEDDED_POSTGRES_PORT so the
+      // throwaway instance never grabs the 54329 live-instance default. An
+      // invalid value fails fast rather than silently falling back to 54329.
+      embeddedPostgresPort:
+        parsePortFromEnv(process.env.PAPERCLIP_EMBEDDED_POSTGRES_PORT, "PAPERCLIP_EMBEDDED_POSTGRES_PORT") ?? 54329,
       backup: {
         enabled: databaseBackupEnabled,
         intervalMinutes: databaseBackupIntervalMinutes,
