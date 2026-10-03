@@ -807,7 +807,7 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
 
   it("shows only the file name for a Hermes write_file detail path", () => {
     const summary = summarizeToolCall("write_file", {
-      detail: "/paperclip/.hermes/profiles/kailor/notes/onboarding.md",
+      detail: "/paperclip/.hermes/profiles/agent-1/notes/onboarding.md",
     });
     expect(summary.label).toBe("Write onboarding.md");
     expect(summary.label).not.toContain("/paperclip");
