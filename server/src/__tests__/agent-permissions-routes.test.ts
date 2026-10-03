@@ -257,6 +257,7 @@ function createDbStub(
     const chain: any = {
       from: vi.fn(() => chain),
       leftJoin: vi.fn(() => chain),
+      innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
       groupBy: vi.fn(() => chain),
       // The agent detail reads run health, which orders and limits. Missing
