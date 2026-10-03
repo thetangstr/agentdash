@@ -137,7 +137,7 @@ describeEmbeddedPostgres("heartbeat run-log secret redaction", () => {
     expect(log.content).not.toContain(CANARY_B64);
     expect(log.content).toContain("***REDACTED***");
     expect(JSON.stringify(await heartbeat.listEvents(queued!.id))).not.toContain(CANARY);
-    expect(JSON.stringify(await heartbeat.getRun(queued!.id))).not.toContain(CANARY);
+    expect(JSON.stringify(await heartbeat.getRunForResponse(queued!.id))).not.toContain(CANARY);
     expect(JSON.stringify(await heartbeat.list(company.id, agentId))).not.toContain(CANARY);
 
     // Persist-time proof: the raw artifacts on disk/in the DB are already clean.
@@ -191,11 +191,50 @@ describeEmbeddedPostgres("heartbeat run-log secret redaction", () => {
     expect(log.content).not.toContain(CANARY);
     expect(log.content).toContain("***REDACTED***");
 
-    const run = await heartbeat.getRun(runId);
-    expect(JSON.stringify(run)).not.toContain(CANARY);
+    // Internal reads stay raw by design — heartbeat execution consumes
+    // `contextSnapshot` verbatim — while the serving boundary scrubs.
+    const raw = await heartbeat.getRun(runId);
+    expect(JSON.stringify(raw)).toContain(CANARY);
+    const served = await heartbeat.getRunForResponse(runId);
+    expect(JSON.stringify(served)).not.toContain(CANARY);
     expect(JSON.stringify(await heartbeat.listEvents(runId))).not.toContain(CANARY);
     const listed = await heartbeat.list(company.id, agentId);
     expect(listed.length).toBeGreaterThan(0);
     expect(JSON.stringify(listed)).not.toContain(CANARY);
+  }, 30_000);
+
+  // Regression (PR #998 review): serve-time redaction used to blank
+  // identifier fields ending in "Key" (taskKey/sessionKey/…) inside
+  // `contextSnapshot`, breaking task-session resumption. Identifiers must
+  // survive both raw and served reads.
+  it("preserves contextSnapshot.taskKey through the serving boundary", async () => {
+    const { company, agentId } = await seedCompanyAndAgent("process.exit(0);");
+    const heartbeat = heartbeatService(db);
+    const taskKey = `issue:${randomUUID()}`;
+    const sessionKey = "task-session-01JABCDEF";
+
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId: company.id,
+      agentId,
+      invocationSource: "on_demand",
+      status: "failed",
+      error: `adapter failed with ${CANARY}`,
+      contextSnapshot: { issueId: "x", taskKey, sessionKey },
+      logStore: "local_file",
+      logRef: null,
+    });
+
+    const raw = await heartbeat.getRun(runId);
+    expect((raw?.contextSnapshot as Record<string, unknown>).taskKey).toBe(taskKey);
+    expect((raw?.contextSnapshot as Record<string, unknown>).sessionKey).toBe(sessionKey);
+
+    const served = await heartbeat.getRunForResponse(runId);
+    const servedSnapshot = served?.contextSnapshot as Record<string, unknown>;
+    expect(servedSnapshot.taskKey).toBe(taskKey);
+    expect(servedSnapshot.sessionKey).toBe(sessionKey);
+    expect(served?.error).not.toContain(CANARY);
+    expect(served?.error).toContain("***REDACTED***");
   }, 30_000);
 });

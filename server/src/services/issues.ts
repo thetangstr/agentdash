@@ -4215,7 +4215,10 @@ export function issueService(db: Db) {
         const currentUserRedactionOptions = {
           enabled: (generalSettings ?? await readInstanceGeneralSettings(executor)).censorUsernameInLogs,
         };
-        const redactedBody = redactRunLogText(redactCurrentUserText(body, currentUserRedactionOptions));
+        // AgentDash (GH #992): secrets are redacted at READ time
+        // (redactIssueComment), not baked into the stored body — an agent can
+        // legitimately quote config a reviewer would need verbatim.
+        const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
         const [comment] = await executor
           .insert(issueComments)
           .values({

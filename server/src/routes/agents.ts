@@ -2545,7 +2545,9 @@ export function agentRoutes(
     assertCompanyAccess(req, agent.companyId);
 
     const state = await heartbeat.getRuntimeState(id);
-    res.json(state);
+    // `lastError`/`sessionParamsJson` can carry adapter output — redact at
+    // the response boundary (GH #992).
+    res.json(redactRunLogValue(state));
   });
 
   router.get("/agents/:id/task-sessions", async (req, res) => {
@@ -4590,14 +4592,14 @@ export function agentRoutes(
         .limit(targetRunCount - liveRuns.length);
 
       const rows = [...liveRuns, ...recentRuns];
-      res.json(await Promise.all(rows.map(async (run) => ({
+      res.json(await Promise.all(rows.map(async (run) => redactRunLogValue({
         ...run,
         outputSilence: await heartbeat.buildRunOutputSilence(run),
       }))));
       return;
     }
 
-    res.json(await Promise.all(liveRuns.map(async (run) => ({
+    res.json(await Promise.all(liveRuns.map(async (run) => redactRunLogValue({
       ...run,
       outputSilence: await heartbeat.buildRunOutputSilence(run),
     }))));
@@ -4643,7 +4645,10 @@ export function agentRoutes(
       });
     }
 
-    res.json(run);
+    // AgentDash (GH #992): the cancelled row is served straight back; its
+    // `error`/`resultJson`/`contextSnapshot` go through the same serve-time
+    // pass as the detail route.
+    res.json(redactRunLogValue(run));
   });
 
   router.post("/heartbeat-runs/:runId/watchdog-decisions", async (req, res) => {
@@ -4807,7 +4812,7 @@ export function agentRoutes(
       )
       .orderBy(desc(heartbeatRuns.createdAt));
 
-    res.json(await Promise.all(liveRuns.map(async (run) => ({
+    res.json(await Promise.all(liveRuns.map(async (run) => redactRunLogValue({
       ...run,
       outputSilence: await heartbeat.buildRunOutputSilence({ ...run, companyId: issue.companyId }),
     }))));
@@ -4853,13 +4858,13 @@ export function agentRoutes(
       return;
     }
 
-    res.json({
+    res.json(redactRunLogValue({
       ...run,
       agentId: agent.id,
       agentName: agent.name,
       adapterType: agent.adapterType,
       outputSilence: await heartbeat.buildRunOutputSilence({ ...run, companyId: issue.companyId }),
-    });
+    }));
   });
 
   return router;

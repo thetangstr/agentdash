@@ -274,6 +274,7 @@ export {
   REDACTED,
   CREDENTIALS_HIDDEN_NOTE,
   isSecretName,
+  isSecretValueKey,
   redactSecrets,
   containsSecrets,
   redactSecretsInValue,

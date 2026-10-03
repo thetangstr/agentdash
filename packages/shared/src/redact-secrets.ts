@@ -5,115 +5,275 @@
 // keeps the redaction identical on both sides.
 //
 // The patterns are anchored so ordinary text survives: `KEYBOARD=us`,
-// `echo MONKEY=banana`, `grep 'TOKEN=' src` and prose such as
-// "Authorization: required for this endpoint" are left alone.
+// `echo MONKEY=banana`, `grep 'TOKEN=' src`, `token: 1500 tokens used` and
+// prose such as "Authorization: required for this endpoint" are left alone.
+// Identifier fields (`taskKey`, `sessionKey`, `issueKey`, `cacheKey`,
+// `documentKey`, `idempotencyKey`) are never blanked — `redactSecretsInValue`
+// uses the stricter isSecretValueKey for whole-value replacement.
+//
+// Detection runs on a normalized copy of the input (zero-width codepoints
+// stripped, \u00XX escapes decoded) but replacements are applied to the
+// ORIGINAL text via an index map, so stored logs keep their ZWJ emoji and
+// escape sequences untouched except where a secret is removed.
 
 export const REDACTED = "***REDACTED***";
 
-/** Name segments that mark an env var / query parameter as a credential. */
+export type KnownSecrets = readonly (string | null | undefined)[];
+
+const MIN_KNOWN_SECRET_LENGTH = 6;
+const SECRET_FRAGMENT_LENGTH = 14;
+const STREAM_MAX_HOLD = 64 * 1024;
+const PEM_MAX_HOLD = 256 * 1024;
+
+/**
+ * Segments that mark a name as a credential anywhere (log text, env names).
+ * `KEY` counts here — `MYAPP_KEY=…` in a log is almost always a credential,
+ * and over-redacting a log line is the safe direction.
+ */
 const SECRET_NAME_SEGMENTS = new Set([
-  "TOKEN", "KEY", "APIKEY", "SECRET", "PASSWORD", "PASSWD", "AUTHORIZATION", "JWT", "CREDENTIAL", "CREDENTIALS",
-  "COOKIE", "SIGNATURE",
+  "TOKEN", "KEY", "APIKEY", "SECRET", "PASSWORD", "PASSWD", "AUTHORIZATION", "JWT",
+  "CREDENTIAL", "CREDENTIALS", "COOKIE", "SIGNATURE",
 ]);
 
-/** `PAPERCLIP_API_KEY`, `api_key`, `access_token`, `key` — but not `KEYBOARD` or `MONKEY`. */
-export function isSecretName(name: string): boolean {
-  const segments = name
+/**
+ * Segments that mark a name as a credential for whole-value blanking and
+ * structured (`name: value` / JSON key) matching. `KEY` alone is excluded:
+ * `taskKey`, `sessionKey`, `cacheKey`, `documentKey`, `idempotencyKey`,
+ * `issueKey`, `publicKey` and `recoveryKey` are identifiers, not secrets.
+ */
+const STRONG_SECRET_NAME_SEGMENTS = new Set([
+  "TOKEN", "APIKEY", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "AUTHORIZATION",
+  "JWT", "CREDENTIAL", "CREDENTIALS", "COOKIE", "SIGNATURE", "PRIVATE", "BEARER",
+]);
+
+/**
+ * Segments that qualify a trailing `KEY` as a credential:
+ * `apiKey`, `privateKey`, `masterKey`, `encryptionKey`, `secretAccessKey`.
+ * Deliberately absent: TASK, ISSUE, SESSION, CACHE, DOCUMENT, IDEMPOTENCY,
+ * PUBLIC, RECOVERY and every other identifier-ish word.
+ */
+const SECRET_KEY_QUALIFIER_SEGMENTS = new Set([
+  "API", "PRIVATE", "SECRET", "MASTER", "ACCESS", "ENCRYPTION", "DECRYPTION",
+  "SIGNING", "SSH", "TLS", "SSL", "CLIENT", "CONSUMER", "SERVICE", "APP",
+  "JWT", "AUTH", "BEARER", "DB", "DATABASE", "SMTP", "PGP", "GPG", "LICENSE",
+]);
+
+/**
+ * Credential names that arrive as one undelimited word and would produce no
+ * useful segments: `PGPASSWORD`, `MYAPPSECRET`, `AWSSECRETACCESSKEY`.
+ */
+const SECRET_NAME_SUFFIX_RE =
+  /(?:PASSWORDS?|PASSWD|PASSPHRASE|SECRETS?|APIKEY|AUTHKEY|PRIVATEKEY|SECRETKEY|MASTERKEY|ACCESSKEY|ENCRYPTIONKEY|DECRYPTIONKEY|SIGNINGKEY|CLIENTSECRET|APPSECRET|APISECRET|USERSECRET|AUTHTOKEN|ACCESSTOKEN|REFRESHTOKEN|IDTOKEN|SESSIONTOKEN|BEARERTOKEN|JWTTOKEN|CREDENTIALS?|AUTHORIZATION)$/;
+
+function nameToSegments(name: string): string[] {
+  return name
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .toUpperCase()
     .split(/[_\-.]+/)
     .filter(Boolean);
-  return segments.some((segment) => SECRET_NAME_SEGMENTS.has(segment));
 }
 
-/** A header value with no auth scheme is redacted only when it looks like a credential, not prose. */
+/** `PAPERCLIP_API_KEY`, `api_key`, `key`, `PGPASSWORD` — but not `KEYBOARD` or `MONKEY`. */
+export function isSecretName(name: string): boolean {
+  const segments = nameToSegments(name);
+  if (segments.some((segment) => SECRET_NAME_SEGMENTS.has(segment))) return true;
+  return SECRET_NAME_SUFFIX_RE.test(segments.join(""));
+}
+
+/**
+ * Stricter than isSecretName for object keys and `name: value` pairs, where a
+ * false positive blanks an identifier instead of hiding a credential:
+ * `taskKey`/`sessionKey`/`cacheKey` survive, `apiKey`/`privateKey`/
+ * `secretAccessKey`/`x-api-key` still count.
+ */
+export function isSecretValueKey(name: string): boolean {
+  const segments = nameToSegments(name);
+  if (segments.some((segment) => STRONG_SECRET_NAME_SEGMENTS.has(segment))) return true;
+  if (
+    segments.length >= 2 &&
+    segments[segments.length - 1] === "KEY" &&
+    SECRET_KEY_QUALIFIER_SEGMENTS.has(segments[segments.length - 2])
+  ) {
+    return true;
+  }
+  return SECRET_NAME_SUFFIX_RE.test(segments.join(""));
+}
+
+/**
+ * Whether an unquoted `name: value` value looks like a credential and not
+ * prose. `hunter2pass99` and `f3b9…Qz9` qualify; `required`, `is`, `out` and
+ * `1500` do not (letters+digits or special characters or length ≥ 16).
+ */
+function looksLikeCredentialValue(value: string): boolean {
+  if (value.length < 4 || value.length > 512) return false;
+  if (!/[A-Za-z]/.test(value)) return false;
+  return /\d/.test(value) || /[_+/=\-.@~]/.test(value) || value.length >= 16;
+}
+
+/** Long header values with no scheme are redacted only when they look like credentials. */
 function looksLikeCredential(value: string): boolean {
   if (value.length >= 20) return true;
   return /[0-9$_.=+/-]/.test(value);
 }
 
-// Obfuscation defeats patterns: zero-width characters inside a header name
-// ("Authori​zation") and `\u00xx` escapes inside a JSON key ("api\u005fkey")
-// carry the credential past literal matching. The normalization strips
-// zero-width codepoints and decodes `\u00xx` escapes that decode to an
-// identifier-ish character — quotes and backslashes are deliberately left
-// escaped so NDJSON/JSON structure is never corrupted.
-const ZERO_WIDTH_RE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
-const UNICODE_ESCAPE_RE = /(?<!\\)\\u00([0-9a-fA-F]{2})/g;
+// ---------------------------------------------------------------------------
+// Normalization with an index map back to the original text.
+//
+// Obfuscation defeats literal patterns: zero-width characters inside a header
+// name ("Authori​zation") or a token ("sk-ant-​api03-…"), and `\u00xx`
+// escapes inside a JSON key ("api\u005fkey") or between key and colon
+// ("\u0022"). Patterns run on the normalized copy; the map lets edits land on
+// the original bytes so stored text is never mangled (ZWJ emoji survive,
+// `\u` escapes in non-secret text are left alone).
+// ---------------------------------------------------------------------------
 
-function normalizeForDetection(text: string): string {
-  const withoutZeroWidth = text.replace(ZERO_WIDTH_RE, "");
-  return withoutZeroWidth.replace(UNICODE_ESCAPE_RE, (match, hex: string) => {
-    const decoded = String.fromCharCode(parseInt(hex, 16));
-    return /^[A-Za-z0-9_.-]$/.test(decoded) ? decoded : match;
-  });
+function isZeroWidth(code: number): boolean {
+  return (
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2060 && code <= 0x2064) ||
+    code === 0xfeff
+  );
+}
+
+interface NormalizedText {
+  text: string;
+  /** start[i] = original index where normalized char i begins. */
+  start: number[];
+  /** end[i] = original index just past normalized char i. */
+  end: number[];
+}
+
+const UNICODE_ESCAPE_TAIL = /^u00([0-9a-fA-F]{2})/;
+
+function normalizeWithMap(text: string): NormalizedText {
+  const chars: string[] = [];
+  const start: number[] = [];
+  const end: number[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const code = text.codePointAt(i) as number;
+    const width = code > 0xffff ? 2 : 1;
+    // `\u00XX` escape — but not when the backslash is itself escaped (`\\u00XX`).
+    if (code === 0x5c && text.charCodeAt(i - 1) !== 0x5c) {
+      const escape = text.slice(i + 1, i + 7).match(UNICODE_ESCAPE_TAIL);
+      if (escape) {
+        chars.push(String.fromCharCode(parseInt(escape[1], 16)));
+        start.push(i);
+        end.push(i + 6);
+        i += 6;
+        continue;
+      }
+    }
+    if (!isZeroWidth(code)) {
+      chars.push(String.fromCodePoint(code));
+      start.push(i);
+      end.push(i + width);
+    }
+    i += width;
+  }
+  return { text: chars.join(""), start, end };
+}
+
+// ---------------------------------------------------------------------------
+// Pattern collection. Every pattern contributes edits {start,end,replacement}
+// in normalized coordinates; edits replace only the secret span (never the
+// name, separator, scheme or quotes), which keeps JSON/NDJSON valid.
+// ---------------------------------------------------------------------------
+
+interface Edit {
+  start: number;
+  end: number;
+  replacement: string;
 }
 
 const AUTH_SCHEMES = "(?:Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)";
 
-// Authorization-style headers: `Authorization: Bearer x`, `x-api-key: x`,
-// `X-Goog-Api-Key: x`, `api-key: x`, `PRIVATE-TOKEN: x`, `x-access-token: x`.
-// The value runs to the closing quote; an escaped quote inside it is part of it.
-const AUTH_HEADER_RE = new RegExp(
-  String.raw`(\b(?:proxy-)?authorization|\bprivate-token|(?:\bx-[\w-]*?)?\b(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|secret))(\s*:\s*)(?:(${AUTH_SCHEMES})(\s+))?((?:\\.|[^\s"'\\,;])+)`,
-  "gi",
+// `-----BEGIN … PRIVATE KEY----- … -----END …-----` (single and multi-line).
+const PEM_BLOCK_RE =
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gd;
+
+// `NAME=value` (env assignment, query parameter, `api_key = "…"`) and
+// `NAME: value` (YAML, headers) with an optional auth scheme between
+// separator and value. Backslashes are excluded from the bare-value charset so
+// a JSON escape (`\"`) after a value is never eaten.
+const NAME_VALUE_RE = new RegExp(
+  `(?<![\\w-])([A-Za-z_][A-Za-z0-9_.-]*)([ \\t]*[:=][ \\t]*)(?:(${AUTH_SCHEMES})[ \\t]+)?(?![\\/]{2})("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|[^\\s"'\\\\,;=\`&|()?]+)`,
+  "gid",
 );
+
 // Cookie headers: everything to the end of the quoted value / line.
-const COOKIE_HEADER_RE = /(\b(?:set-)?cookie\s*:\s*)((?:\\.|[^"'\n\\])+)/gi;
-// `NAME=value` (env assignment, query parameter, form field) for a credential name.
-const ASSIGNMENT_RE = /(^|[\s;&|?("'`])([A-Za-z_][A-Za-z0-9_.-]*)=("[^"\n]*"|'[^'\n]*'|[^\s"'`;&|()]+)/g;
-// `scheme://user:pass@host`.
-const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"']+):([^\s/@"']+)@/gi;
-// `scheme://TOKEN@host` — a credential as the whole userinfo with no
-// `user:` prefix. Only when the value looks credential-ish: `ssh://git@` and
-// `https://user@` are left alone.
-const URL_BARE_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"'\\]{4,})@/gi;
-// curl `-u user:pass` / `--user user:pass`.
-const CURL_USER_RE = /(\s(?:-u|--user)(?:\s+|=))(["']?)([^\s"':]+):([^\s"']+)\2/g;
+const COOKIE_HEADER_RE = /(\b(?:set-)?cookie[ \t]*:[ \t]*)((?:\\.|[^\n\\])+)/gid;
+
+// `scheme://user:pass@host`. The password run is greedy so `p@ssw0rd!` and
+// `ab/cdEFGH12` inside userinfo are fully consumed before the last `@`.
+const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"']+):([^\s"']+)@/gid;
+// `scheme://TOKEN@host` — credential as the whole userinfo, no `user:` prefix.
+const URL_BARE_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"'\\]{4,})@/gid;
+
+// curl `-u user:pass`, `-uuser:pass`, `--user user:pass`, `--user=user:pass`.
+const CURL_USER_RE = /(\s--user(?:[ \t]+|=)|\s-u(?:[ \t]+|=|(?=[^\s=-])))(["']?)([^\s"':=]+):([^\s"']*)\2/gd;
 // curl `-b "name=value"` / `--cookie` (a cookie file path has no `=` and is kept).
-const CURL_COOKIE_RE = /(\s(?:-b|--cookie)(?:\s+|=))("[^"\n]*=[^"\n]*"|'[^'\n]*=[^'\n]*'|[^\s"']*=[^\s"']*)/g;
+const CURL_COOKIE_RE = /(\s(?:-b|--cookie)(?:[ \t]+|=))(["']?)([^\s"']*=[^\s"']*)\2/gd;
+
 // mysql / mariadb `-p<password>` (no space). Only on those commands: elsewhere `-p8080` is a port.
-const MYSQL_LINE_RE = /\b(?:mysql\w*|mariadb\w*)\b[^\n]*/g;
-const MYSQL_PASSWORD_RE = /(\s-p)(?!\s)([^\s"']+)/g;
+const MYSQL_LINE_RE = /\b(?:mysql\w*|mariadb\w*)\b[^\n]*/gd;
+const MYSQL_PASSWORD_RE = /([ \t]-p)(?![ \t])([^\s"']+)/gd;
+
 // `--password x`, `--token=x`, `--api-key x`, `--client-secret=x`.
 const CLI_SECRET_OPTION_RE =
-  /((?:^|\s)--?(?:api[-_]?key|(?:access[-_]?|auth[-_]?|refresh[-_]?)?token|password|passwd|secret|client[-_]?secret|private[-_]?key|credentials?)(?:\s+|=))(["']?)(?!-)([^\s"']+)\2/gim;
-// JSON keys in bodies and responses: `"password": "x"`, `"apiKey":"x"`. Also
-// the escaped form inside a JSON string (`\"token\":\"x\"`).
-const JSON_KEYS = String.raw`(?:api[_-]?key|apiKey|token|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|secret|client[_-]?secret|clientSecret|password|passwd|private[_-]?key|privateKey|authorization)`;
-const JSON_SECRET_RE = new RegExp(String.raw`("${JSON_KEYS}"\s*:\s*)"(?:\\.|[^"\\])*"`, "gi");
-const ESCAPED_JSON_SECRET_RE = new RegExp(String.raw`(\\"${JSON_KEYS}\\"\s*:\s*)\\"(?:\\\\.|[^"\\])*\\"`, "gi");
-// `Bearer <token>` anywhere (JSON bodies, logs).
-const BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._~+/=-]{8,})/g;
+  /((?:^|\s)--?(?:api[-_]?key|(?:access[-_]?|auth[-_]?|refresh[-_]?)?token|password|passwd|secret|client[-_]?secret|private[-_]?key|credentials?|passphrase|pgpassword)(?:[ \t]+|=))(["']?)(?!-)([^\s"']+)\2/gimd;
+
+// JSON / Python-dict keys: `{"api_key": "…"}`, `{'x-api-key': '…'}`. Any quoted
+// key name is checked against isSecretValueKey, so `x-api-key`, `PRIVATE-TOKEN`,
+// `ZAI_API_KEY`, `session_token` and `secretAccessKey` are all covered while
+// `{"key": "…"}` and `{"taskKey": "…"}` are left alone.
+const JSON_KV_RE =
+  /("(?:\\.|[^"\\])+?")([ \t]*:[ \t]*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]{[]+)|('(?:\\.|[^'\\])+?')([ \t]*:[ \t]*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")/gd;
+// The `\"key\":\"value\"` form inside a JSON string.
+const ESCAPED_JSON_KV_RE =
+  /(\\")((?:\\.|[^"\\])+?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\])*)\\"/gd;
+
+// `Bearer <token>` anywhere (JSON bodies, headers embedded in strings).
+const AUTH_SCHEME_VALUE_RE = /\b(Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)([ \t]+)([^\s"'`,;\]}]+)/gd;
+
+// An AWS secret access key is an unmarked 40-char blob — only redactable when
+// an AKIA access key id sits within ~300 chars on the same line(s).
+const AWS_SECRET_AFTER_ID_RE = /(\bAKIA[0-9A-Z]{16}[^\n]{0,300}?)(?<![A-Za-z0-9/+=])([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])/gd;
+const AWS_SECRET_BEFORE_ID_RE = /(?<![A-Za-z0-9/+=])([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])(?=[^\n]{0,300}?\bAKIA[0-9A-Z]{16})/gd;
+
 // Well-known key shapes.
 const KEY_SHAPES: RegExp[] = [
   // Stripe secret / restricted keys and webhook signing secrets.
-  /\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}/g,
-  /\bwhsec_[A-Za-z0-9]{10,}/g,
-  /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}/g,
-  /\bgh[pousr]_[A-Za-z0-9_]{20,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}/gd,
+  /\bwhsec_[A-Za-z0-9]{10,}/gd,
+  /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}/gd,
+  /\bgh[pousr]_[A-Za-z0-9_]{20,}/gd,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/gd,
+  // GitLab personal access tokens.
+  /\bglpat-[A-Za-z0-9_-]{10,}/gd,
   // xAI keys (xai-…).
-  /\bxai-[A-Za-z0-9_-]{10,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bxai-[A-Za-z0-9_-]{10,}/gd,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/gd,
+  /\bAKIA[0-9A-Z]{16}\b/gd,
   // Paperclip agent API keys (`pcp_…`), board keys (`pcp_board_…`) and CLI auth
   // tokens (`pcp_cli_auth_…`) share the prefix, so this covers all three.
-  /\bpcp_[A-Za-z0-9_-]{8,}/g,
-  /\bAIza[0-9A-Za-z_-]{30,}/g,
-  /\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})?\b/g,
+  /\bpcp_[A-Za-z0-9_-]{8,}/gd,
+  /\bAIza[0-9A-Za-z_-]{30,}/gd,
+  // JWTs always begin `eyJ` (base64 of `{"`). Requiring it keeps dotted
+  // identifiers like `packages.something.abcdefgh` untouched.
+  /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{4,})?\b/gd,
 ];
 
-function redactAssignmentValue(value: string): string {
-  if (value === '""' || value === "''" || value === "") return value;
-  // A variable reference or command substitution is not itself a secret.
-  if (/^["']?\$/.test(value)) return value;
-  if (value.startsWith('"')) return `"${REDACTED}"`;
-  if (value.startsWith("'")) return `'${REDACTED}'`;
-  return REDACTED;
-}
+// ---------------------------------------------------------------------------
+// Known-secret forms: verbatim, common encodings, split-safe fragments and the
+// reversed spelling (a `[...key].reverse()` probe in a transcript should still
+// hide the key). Compiled into one alternation regex, cached by content.
+// ---------------------------------------------------------------------------
 
-export type KnownSecrets = readonly (string | null | undefined)[];
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function toBase64(secret: string): string | null {
   try {
@@ -131,11 +291,6 @@ function toHex(secret: string): string {
   return out;
 }
 
-/**
- * Alternate spellings of a known secret: the encodings a command would carry
- * (`echo $KEY | base64`, hex dumps, URL-encoded form bodies). Only forms
- * long enough that they cannot appear by accident are matched.
- */
 function secretEncodedForms(secret: string): string[] {
   const forms: string[] = [];
   const b64 = toBase64(secret);
@@ -148,6 +303,10 @@ function secretEncodedForms(secret: string): string[] {
   if (hex.length >= 16 && hex !== secret) forms.push(hex);
   const urlEncoded = encodeURIComponent(secret);
   if (urlEncoded.length >= 8 && urlEncoded !== secret) forms.push(urlEncoded);
+  if (secret.length >= 8) {
+    const reversed = [...secret].reverse().join("");
+    if (reversed !== secret) forms.push(reversed);
+  }
   return forms;
 }
 
@@ -158,8 +317,6 @@ function secretEncodedForms(secret: string): string[] {
  * ordinary words. A fragment needs 14 characters, so a 2-way split of a
  * 28+ character secret is caught on both sides.
  */
-const SECRET_FRAGMENT_LENGTH = 14;
-
 function secretFragments(secret: string): string[] {
   if (secret.length < 20 || /\s/.test(secret)) return [];
   const fragments = new Set<string>();
@@ -169,77 +326,226 @@ function secretFragments(secret: string): string[] {
   return [...fragments];
 }
 
-/**
- * Exact-match redaction for secrets the caller knows verbatim (configured
- * provider keys, resolved run-env secret values, injected run tokens), plus
- * their encoded forms and windows long enough to survive a split. Values
- * shorter than 6 characters are ignored — a tiny string would shred prose.
- */
-function redactKnownSecrets(text: string, knownSecrets: KnownSecrets | undefined): string {
-  if (!knownSecrets || knownSecrets.length === 0) return text;
-  const secrets = [...new Set(knownSecrets)]
-    .filter((secret): secret is string => typeof secret === "string" && secret.length >= 6)
-    .sort((a, b) => b.length - a.length);
-  if (secrets.length === 0) return text;
-  let out = text;
-  const fragments: string[] = [];
+const knownSecretsRegexCache = new Map<string, RegExp>();
+
+function knownSecretsRegex(secrets: readonly string[]): RegExp | null {
+  const literals = new Set<string>();
   for (const secret of secrets) {
-    if (out.includes(secret)) out = out.split(secret).join(REDACTED);
-    for (const form of secretEncodedForms(secret)) {
-      if (out.includes(form)) out = out.split(form).join(REDACTED);
+    literals.add(secret);
+    for (const form of secretEncodedForms(secret)) literals.add(form);
+    for (const fragment of secretFragments(secret)) literals.add(fragment);
+  }
+  const all = [...literals].filter(Boolean).sort((a, b) => b.length - a.length);
+  if (all.length === 0) return null;
+  const cacheKey = all.join("");
+  let regex = knownSecretsRegexCache.get(cacheKey);
+  if (!regex) {
+    regex = new RegExp(all.map(escapeRegExp).join("|"), "gd");
+    if (knownSecretsRegexCache.size > 64) knownSecretsRegexCache.clear();
+    knownSecretsRegexCache.set(cacheKey, regex);
+  }
+  return regex;
+}
+
+// ---------------------------------------------------------------------------
+// Edit collection over the normalized text.
+// ---------------------------------------------------------------------------
+
+function eachMatch(regex: RegExp, text: string, fn: (match: RegExpExecArray) => void): void {
+  regex.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    fn(match);
+    if (match[0].length === 0) regex.lastIndex++;
+  }
+}
+
+/** Span of a capture group, or null when the group did not participate. */
+function groupSpan(match: RegExpExecArray, group: number): { start: number; end: number } | null {
+  const indices = match.indices?.[group];
+  if (!indices || indices[0] < 0) return null;
+  return { start: indices[0], end: indices[1] };
+}
+
+function collectEdits(text: string, secrets: readonly string[]): Edit[] {
+  const edits: Edit[] = [];
+  const claimed: Array<[number, number]> = [];
+  const push = (start: number, end: number, replacement = REDACTED): void => {
+    if (end <= start) return;
+    for (const [s, e] of claimed) {
+      if (start < e && end > s) return;
     }
-    fragments.push(...secretFragments(secret));
+    claimed.push([start, end]);
+    edits.push({ start, end, replacement });
+  };
+
+  // PEM private-key blocks first — they claim the largest spans and keep the
+  // BEGIN/END markers so the log still reads as a key.
+  eachMatch(PEM_BLOCK_RE, text, (m) => {
+    const block = m[0];
+    const firstNl = block.indexOf("\n");
+    const lastNl = block.lastIndexOf("\n");
+    const replacement =
+      firstNl >= 0 && lastNl > firstNl
+        ? `${block.slice(0, firstNl + 1)}${REDACTED}\n${block.slice(lastNl + 1)}`
+        : REDACTED;
+    push(m.index, m.index + block.length, replacement);
+  });
+
+  // An unmarked 40-char AWS secret only counts next to its AKIA id.
+  eachMatch(AWS_SECRET_AFTER_ID_RE, text, (m) => {
+    const span = groupSpan(m, 2);
+    if (span) push(span.start, span.end);
+  });
+  eachMatch(AWS_SECRET_BEFORE_ID_RE, text, (m) => {
+    const span = groupSpan(m, 1);
+    if (span) push(span.start, span.end);
+  });
+
+  eachMatch(COOKIE_HEADER_RE, text, (m) => {
+    const span = groupSpan(m, 2);
+    if (span && !m[2].includes(REDACTED)) push(span.start, span.end);
+  });
+
+  // `NAME=value` and `NAME: value`. `=` uses the broad matcher (env
+  // assignments are intentional); `:` uses the strict matcher and requires a
+  // credential-looking bare value so prose (`password: required`,
+  // `token: 1500 tokens used`) and identifier fields survive.
+  eachMatch(NAME_VALUE_RE, text, (m) => {
+    const name = m[1];
+    const sep = m[2];
+    const scheme = m[3];
+    const value = m[4];
+    const span = groupSpan(m, 4);
+    if (!span) return;
+    const isAssignment = sep.includes("=");
+    if (isAssignment ? !isSecretName(name) : !isSecretValueKey(name)) return;
+    if (value === '""' || value === "''" || value === "") return;
+    if (value.includes(REDACTED)) return;
+    // A variable reference or command substitution is not itself a secret.
+    if (/^["']?\$/.test(value)) return;
+    if (!scheme && !isAssignment && !/^["']/.test(value) && !looksLikeCredentialValue(value)) return;
+    const quote = /^["']/.test(value) ? value[0] : "";
+    push(span.start, span.end, quote ? `${quote}${REDACTED}${quote}` : REDACTED);
+  });
+
+  eachMatch(URL_USERINFO_RE, text, (m) => {
+    const span = groupSpan(m, 3);
+    if (span && !m[3].includes(REDACTED)) push(span.start, span.end);
+  });
+  eachMatch(URL_BARE_USERINFO_RE, text, (m) => {
+    const span = groupSpan(m, 2);
+    if (span && looksLikeCredential(m[2])) push(span.start, span.end);
+  });
+
+  eachMatch(CURL_USER_RE, text, (m) => {
+    const span = groupSpan(m, 4);
+    if (span && m[4] && !m[4].includes(REDACTED)) push(span.start, span.end);
+  });
+  eachMatch(CURL_COOKIE_RE, text, (m) => {
+    const span = groupSpan(m, 3);
+    if (span && !m[3].includes(REDACTED)) push(span.start, span.end);
+  });
+
+  eachMatch(MYSQL_LINE_RE, text, (m) => {
+    eachMatch(MYSQL_PASSWORD_RE, m[0], (inner) => {
+      const span = groupSpan(inner, 2);
+      if (span && inner[2] !== REDACTED) push(m.index + span.start, m.index + span.end);
+    });
+  });
+
+  eachMatch(CLI_SECRET_OPTION_RE, text, (m) => {
+    const span = groupSpan(m, 3);
+    if (span && m[3] !== REDACTED) push(span.start, span.end);
+  });
+
+  // Quoted JSON / Python-dict keys.
+  eachMatch(JSON_KV_RE, text, (m) => {
+    const key = m[1] ?? m[4];
+    const value = m[3] ?? m[6];
+    const valueSpan = groupSpan(m, 3) ?? groupSpan(m, 6);
+    if (!key || !value || !valueSpan) return;
+    const name = key.slice(1, -1);
+    if (!isSecretValueKey(name)) return;
+    if (value.includes(REDACTED)) return;
+    const quote = /^["']/.test(value) ? value[0] : "";
+    if (!quote && !looksLikeCredentialValue(value)) return;
+    push(valueSpan.start, valueSpan.end, quote ? `${quote}${REDACTED}${quote}` : REDACTED);
+  });
+  eachMatch(ESCAPED_JSON_KV_RE, text, (m) => {
+    const name = m[2];
+    const span = groupSpan(m, 4);
+    if (!span || !isSecretValueKey(name)) return;
+    if (m[4].includes(REDACTED)) return;
+    push(span.start, span.end);
+  });
+
+  // `Bearer x` / `Basic x` anywhere.
+  eachMatch(AUTH_SCHEME_VALUE_RE, text, (m) => {
+    const span = groupSpan(m, 3);
+    const value = m[3];
+    if (!span || value.includes(REDACTED)) return;
+    if (!/^[A-Za-z0-9._~+/=-]{6,}$/.test(value)) return;
+    if (value.length < 8 && !/\d/.test(value)) return;
+    push(span.start, span.end);
+  });
+
+  for (const shape of KEY_SHAPES) {
+    eachMatch(shape, text, (m) => push(m.index, m.index + m[0].length));
   }
-  // Fragments run last and only where the full secret does not appear — a
-  // whole key is one REDACTED marker, not one per window.
-  for (const fragment of fragments) {
-    if (out.includes(fragment)) out = out.split(fragment).join(REDACTED);
+
+  const known = knownSecretsRegex(secrets);
+  if (known) {
+    eachMatch(known, text, (m) => {
+      if (m[0] === REDACTED) return;
+      push(m.index, m.index + m[0].length);
+    });
   }
-  return out;
+
+  return edits;
+}
+
+function normalizedSecrets(knownSecrets?: KnownSecrets): string[] {
+  if (!knownSecrets) return [];
+  return [...new Set(knownSecrets)]
+    .filter((secret): secret is string => typeof secret === "string" && secret.length >= MIN_KNOWN_SECRET_LENGTH)
+    .sort((a, b) => b.length - a.length);
 }
 
 /**
  * Hide credentials in text. Idempotent.
  *
- * `knownSecrets` are replaced verbatim first, so a configured key that matches
- * no pattern is still hidden; the anchored pattern set then covers everything
- * key-shaped.
+ * `knownSecrets` are replaced verbatim, so a configured key that matches no
+ * pattern is still hidden; the anchored pattern set then covers everything
+ * key-shaped. Matching runs on a normalized copy; replacements are applied to
+ * the original text.
  */
 export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string {
   if (!text) return text;
-  let out = normalizeForDetection(text);
-  out = redactKnownSecrets(out, knownSecrets);
-  out = out.replace(COOKIE_HEADER_RE, (_m, head: string) => `${head}${REDACTED}`);
-  out = out.replace(AUTH_HEADER_RE, (match, name: string, sep: string, scheme: string | undefined, gap: string | undefined, value: string) => {
-    if (value === REDACTED || value.startsWith("***")) return match;
-    if (!scheme && !looksLikeCredential(value)) return match;
-    return `${name}${sep}${scheme ? `${scheme}${gap}` : ""}${REDACTED}`;
-  });
-  out = out.replace(URL_USERINFO_RE, (_m, scheme: string, user: string) => `${scheme}${user}:${REDACTED}@`);
-  out = out.replace(URL_BARE_USERINFO_RE, (match, scheme: string, user: string) =>
-    looksLikeCredential(user) ? `${scheme}${REDACTED}@` : match);
-  out = out.replace(CURL_USER_RE, (_m, flag: string, quote: string, user: string) => `${flag}${quote}${user}:${REDACTED}${quote}`);
-  out = out.replace(CURL_COOKIE_RE, (_m, flag: string, value: string) => {
-    const quote = value.startsWith('"') || value.startsWith("'") ? value[0] : "";
-    return `${flag}${quote}${REDACTED}${quote}`;
-  });
-  out = out.replace(MYSQL_LINE_RE, (line) => line.replace(MYSQL_PASSWORD_RE, (_m, flag: string) => `${flag}${REDACTED}`));
-  out = out.replace(CLI_SECRET_OPTION_RE, (_m, flag: string, quote: string) => `${flag}${quote}${REDACTED}${quote}`);
-  out = out.replace(ASSIGNMENT_RE, (match, lead: string, name: string, value: string) => {
-    if (!isSecretName(name)) return match;
-    const redacted = redactAssignmentValue(value);
-    return redacted === value ? match : `${lead}${name}=${redacted}`;
-  });
-  out = out.replace(JSON_SECRET_RE, (_m, head: string) => `${head}"${REDACTED}"`);
-  out = out.replace(ESCAPED_JSON_SECRET_RE, (_m, head: string) => `${head}\\"${REDACTED}\\"`);
-  out = out.replace(BEARER_RE, (_m, head: string) => `${head}${REDACTED}`);
-  for (const shape of KEY_SHAPES) out = out.replace(shape, REDACTED);
+  const normalized = normalizeWithMap(text);
+  if (normalized.text.length === 0) return text;
+  const edits = collectEdits(normalized.text, normalizedSecrets(knownSecrets));
+  if (edits.length === 0) return text;
+  const original = edits
+    .map((edit) => ({
+      start: normalized.start[edit.start],
+      end: normalized.end[edit.end - 1],
+      replacement: edit.replacement,
+    }))
+    .sort((a, b) => b.start - a.start);
+  let out = text;
+  for (const edit of original) {
+    out = out.slice(0, edit.start) + edit.replacement + out.slice(edit.end);
+  }
   return out;
 }
 
 /** True when `redactSecrets` would hide something in `text`. */
 export function containsSecrets(text: string, knownSecrets?: KnownSecrets): boolean {
-  return redactSecrets(text, knownSecrets) !== text;
+  if (!text) return false;
+  const normalized = normalizeWithMap(text);
+  if (normalized.text.length === 0) return false;
+  return collectEdits(normalized.text, normalizedSecrets(knownSecrets)).length > 0;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -251,8 +557,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * `redactSecrets` over every string in a tool input or result, plus any
  * object value under a credential-named key (`{ "apiKey": "…" }`), so the
- * value is redacted before it is pretty-printed. Non-plain objects (Date,
- * class instances) pass through untouched.
+ * value is redacted before it is pretty-printed. Blank-or-redact uses the
+ * strict isSecretValueKey so identifier keys (`taskKey`, `issueKey`,
+ * `sessionKey`, `idempotencyKey`, `cacheKey`, `documentKey`) survive
+ * untouched. Non-plain objects (Date, class instances) pass through.
  */
 export function redactSecretsInValue<T>(value: T, knownSecrets?: KnownSecrets): T {
   if (typeof value === "string") return redactSecrets(value, knownSecrets) as T;
@@ -261,7 +569,7 @@ export function redactSecretsInValue<T>(value: T, knownSecrets?: KnownSecrets): 
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
       out[key] =
-        typeof item === "string" && item && isSecretName(key) && !/^(?:id|key)$/i.test(key)
+        typeof item === "string" && item && isSecretValueKey(key) && !/^(?:id|key)$/i.test(key)
           ? REDACTED
           : redactSecretsInValue(item, knownSecrets);
     }
@@ -270,41 +578,102 @@ export function redactSecretsInValue<T>(value: T, knownSecrets?: KnownSecrets): 
   return value;
 }
 
-/**
- * Redact output delivered in chunks. Emitted text only ever ends at a line
- * boundary, and no pattern spans a newline, so the stream result matches
- * redacting the joined text — a secret cut by a chunk boundary is still
- * caught. When a single line grows past `maxHold` it is emitted anyway so
- * memory stays bounded (the GH redactor upstream accepts the same bound).
- */
+// ---------------------------------------------------------------------------
+// Stream redactor.
+//
+// Emitted text only ever ends at a line boundary, so the stream result matches
+// redacting the joined text — a secret cut by a chunk boundary is still
+// caught. Two failure modes are handled explicitly:
+//
+//  * Overlong single line: when the held buffer exceeds maxHold, all but the
+//    trailing `keepTail` characters are emitted. keepTail covers the longest
+//    possible secret form so a secret straddling the emit boundary is held
+//    and completed by the next push instead of being split.
+//  * PEM private-key blocks: once a BEGIN marker is emitted the body is held
+//    (base64 body lines match no pattern and would pass through unredacted)
+//    until the END marker arrives; the block is then emitted as
+//    `BEGIN\n***REDACTED***\nEND`. If a body exceeds PEM_MAX_HOLD the marker
+//    is emitted once and the rest of the body is dropped until END.
+// ---------------------------------------------------------------------------
+
+const PEM_BEGIN_LINE_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
+const PEM_END_LINE_RE = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
+
 export function createSecretStreamRedactor(
   knownSecrets?: KnownSecrets,
-  maxHold = 64 * 1024,
+  maxHold = STREAM_MAX_HOLD,
 ): { push(chunk: string): string; flush(): string } {
+  const secrets = normalizedSecrets(knownSecrets);
+  const longestSecret = secrets.reduce((max, secret) => Math.max(max, secret.length), 0);
+  // Hex encoding doubles the length; 256 covers separators, names and shape
+  // patterns longer than any known secret.
+  const keepTail = Math.max(1024, 2 * longestSecret + 256);
   let held = "";
+  let inPem = false;
+  let pemBytes = 0;
+  let pemMarkerEmitted = false;
+
   return {
     push(chunk: string): string {
       if (!chunk) return "";
-      const text = held + chunk;
-      const lastNewline = text.lastIndexOf("\n");
-      const emitEnd = lastNewline >= 0 ? lastNewline + 1 : 0;
-      if (emitEnd > 0 && text.length - emitEnd <= maxHold) {
-        held = text.slice(emitEnd);
-        return redactSecrets(text.slice(0, emitEnd), knownSecrets);
-      }
-      // Either no newline yet, or one line exceeds maxHold: hold when the
-      // buffer is still small, otherwise emit it all so memory stays bounded.
-      if (text.length <= maxHold) {
-        held = text;
-        return "";
-      }
+      let text = held + chunk;
       held = "";
-      return redactSecrets(text, knownSecrets);
+      let out = "";
+      for (;;) {
+        const newline = text.indexOf("\n");
+        if (newline < 0) break;
+        const line = text.slice(0, newline + 1);
+        text = text.slice(newline + 1);
+        if (inPem) {
+          pemBytes += line.length;
+          if (PEM_END_LINE_RE.test(line)) {
+            if (!pemMarkerEmitted) out += `${REDACTED}\n`;
+            out += line;
+            inPem = false;
+            pemBytes = 0;
+            pemMarkerEmitted = false;
+          } else if (pemBytes > PEM_MAX_HOLD && !pemMarkerEmitted) {
+            out += `${REDACTED}\n`;
+            pemMarkerEmitted = true;
+          }
+          continue;
+        }
+        if (PEM_BEGIN_LINE_RE.test(line)) {
+          inPem = true;
+          pemBytes = line.length;
+          out += line;
+          continue;
+        }
+        out += line;
+      }
+      if (inPem) {
+        // The trailing partial line is inside a PEM body — hold it so no
+        // fragment of key material is emitted mid-block.
+        pemBytes += text.length;
+        if (pemBytes > PEM_MAX_HOLD && !pemMarkerEmitted) {
+          out += `${REDACTED}\n`;
+          pemMarkerEmitted = true;
+        }
+      } else if (text.length > maxHold) {
+        const emitEnd = text.length - keepTail;
+        out += text.slice(0, emitEnd);
+        held = text.slice(emitEnd);
+      } else {
+        held = text;
+      }
+      return out ? redactSecrets(out, secrets) : "";
     },
     flush(): string {
       const rest = held;
       held = "";
-      return rest ? redactSecrets(rest, knownSecrets) : "";
+      if (inPem) {
+        inPem = false;
+        pemBytes = 0;
+        pemMarkerEmitted = false;
+        // An unterminated PEM body must never be emitted raw.
+        return rest.length > 0 ? `${REDACTED}\n` : "";
+      }
+      return rest ? redactSecrets(rest, secrets) : "";
     },
   };
 }

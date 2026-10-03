@@ -10,7 +10,7 @@
 // text: masked key echoes ("sk-proj-****abcd"), Z.AI "<id>.<secret>" keys,
 // and long hex/base64 blobs. The extras are deliberately NOT applied to run
 // logs — long-hex would shred git SHAs in transcripts.
-import { redactSecrets as redactSharedSecrets, REDACTED } from "@paperclipai/shared";
+import { redactSecrets as redactSharedSecrets, isSecretName, REDACTED } from "@paperclipai/shared";
 
 const MASKED_KEY_RE = /[A-Za-z0-9_-]*[*•]{3,}[A-Za-z0-9_-]*/g;
 
@@ -70,7 +70,13 @@ export function redactSecrets(text: string, knownKeys: readonly (string | undefi
 export function knownKeysFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   const keys: string[] = [];
   for (const [name, value] of Object.entries(env)) {
-    if (value && value.length >= 8 && /(API_KEY|TOKEN|SECRET|PASSWORD)$/i.test(name)) keys.push(value);
+    if (!value) continue;
+    // `AWS_SECRET_ACCESS_KEY`, `PGPASSWORD`, `*_PRIVATE_KEY`, `*_MASTER_KEY`,
+    // `*SECRET_KEY` — any credential-named variable, not just the classic four.
+    if (value.length >= 8 && (isSecretName(name) || /_?KEY$/i.test(name))) keys.push(value);
+    // DSNs carry their password inline: postgres://user:pass@host.
+    const dsn = /^[a-z][a-z0-9+.-]*:\/\/[^\s/@"']+:([^\s/"']+)@/i.exec(value);
+    if (dsn && dsn[1].length >= 6) keys.push(dsn[1]);
   }
   return keys;
 }

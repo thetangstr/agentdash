@@ -65,6 +65,48 @@ export function redactRunLogValue<T>(value: T, extraSecrets?: KnownSecrets): T {
   return redactSecretsInValue(value, mergeSecrets(extraSecrets));
 }
 
+/**
+ * Serve-time pass over an NDJSON run-log file. Each line is parsed and its
+ * values redacted structurally before re-serialising, so a regex pass can
+ * never corrupt the JSON escaping (`\"`, `\\`, `\uXXXX`) of stored chunks.
+ * Lines that do not parse — truncated head/tail lines from byte-range reads —
+ * get the plain-text pass instead; they were already partial.
+ */
+export function redactRunLogNdjson(content: string, extraSecrets?: KnownSecrets): string {
+  if (!content) return content;
+  const secrets = mergeSecrets(extraSecrets);
+  return content
+    .split("\n")
+    .map((line) => {
+      if (!line.startsWith("{")) return redactSecrets(line, secrets);
+      try {
+        return JSON.stringify(redactSecretsInValue(JSON.parse(line), secrets));
+      } catch {
+        return redactSecrets(line, secrets);
+      }
+    })
+    .join("\n");
+}
+
+/**
+ * An Error (or thrown value) that is safe to hand to pino: adapter/provider
+ * failures can echo the credential they failed with, so the message and stack
+ * go through the same redaction as run output. Never logs the secret itself.
+ */
+export function logSafeError(err: unknown, extraSecrets?: KnownSecrets): unknown {
+  if (err instanceof Error) {
+    const safe: Record<string, unknown> = {
+      name: err.name,
+      message: redactRunLogText(err.message, extraSecrets),
+    };
+    if (err.stack) safe.stack = redactRunLogText(err.stack, extraSecrets);
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause !== undefined) safe.cause = logSafeError(cause, extraSecrets);
+    return safe;
+  }
+  return typeof err === "string" ? redactRunLogText(err, extraSecrets) : err;
+}
+
 /** Stateful stream redactor for chunked adapter output (one per stream). */
 export function createRunLogStreamRedactor(extraSecrets?: KnownSecrets) {
   return createSecretStreamRedactor(mergeSecrets(extraSecrets));

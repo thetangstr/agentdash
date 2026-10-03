@@ -54,6 +54,8 @@ import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, runLogBasePath, type RunLogHandle } from "./run-log-store.js";
 import {
   createRunLogStreamRedactor,
+  logSafeError,
+  redactRunLogNdjson,
   redactRunLogText,
   redactRunLogValue,
 } from "./run-log-redaction.js";
@@ -2482,7 +2484,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       status: leaseReleaseStatusForRunStatus(input.status),
       failureReason: input.failureReason ?? undefined,
     }).catch((err) => {
-      logger.warn({ err, runId: input.runId }, "failed to release environment leases for heartbeat run");
+      logger.warn({ err: logSafeError(err), runId: input.runId }, "failed to release environment leases for heartbeat run");
       return null;
     });
     for (const releaseError of releaseResult?.errors ?? []) {
@@ -2505,7 +2507,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           return typeof serverEncoding === "string" && serverEncoding.toUpperCase() === "SQL_ASCII";
         })
         .catch((err) => {
-          logger.warn({ err }, "failed to inspect database server encoding; using conservative heartbeat result projection");
+          logger.warn({ err: logSafeError(err) }, "failed to inspect database server encoding; using conservative heartbeat result projection");
           return true;
         });
     }
@@ -2532,15 +2534,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       )
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
-      // AgentDash (GH #992): the default read is served to API callers; rows
-      // written before persist-time redaction get the serve-time pass here.
-      // Internal callers that genuinely need the raw row opt into
-      // `unsafeFullResultJson` (the name already warns it is unsafe).
-      .then((rows) => {
-        const row = rows[0] ?? null;
-        if (!row || opts?.unsafeFullResultJson) return row;
-        return redactRunLogValue(row);
-      });
+      // AgentDash (GH #992): this read must stay RAW. `executeRun` consumes
+      // `contextSnapshot.taskKey` for task sessions and recovery promotion;
+      // redacting identifiers here would silently collide sessions across
+      // tasks. Serving paths redact at their boundary instead (routes wrap
+      // `getRunForResponse` / `redactRunLogValue`).
+      .then((rows) => rows[0] ?? null);
+  }
+
+  /** The run row as served to API callers — every field passed through the
+   * shared redactor so secrets persisted before this shipped stay hidden. */
+  async function getRunForResponse(runId: string) {
+    const row = await getRun(runId);
+    return row ? (redactRunLogValue(row) as typeof row) : null;
   }
 
   async function getRunLogAccess(runId: string) {
@@ -3301,7 +3307,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           status: updated.status,
           invocationSource: updated.invocationSource,
           triggerDetail: updated.triggerDetail,
-          error: updated.error ?? null,
+          error: updated.error ? redactRunLogText(updated.error) : null,
           errorCode: updated.errorCode ?? null,
           startedAt: updated.startedAt ? new Date(updated.startedAt).toISOString() : null,
           finishedAt: updated.finishedAt ? new Date(updated.finishedAt).toISOString() : null,
@@ -3353,7 +3359,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         status: run.status,
         invocationSource: run.invocationSource,
         triggerDetail: run.triggerDetail,
-        error: run.error ?? null,
+        error: run.error ? redactRunLogText(run.error) : null,
         errorCode: run.errorCode ?? null,
         issueId: typeof run.contextSnapshot === "object" && run.contextSnapshot !== null
           ? (run.contextSnapshot as Record<string, unknown>).issueId ?? null
@@ -5032,7 +5038,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       try {
         await denyPermitOfRefusedBoundRun(run);
       } catch (err) {
-        logger.warn({ err, runId: run.id }, "claimQueuedRun: failed to finalize the permit of a refused bound run");
+        logger.warn({ err: logSafeError(err), runId: run.id }, "claimQueuedRun: failed to finalize the permit of a refused bound run");
       }
     }
     return claimed;
@@ -5210,7 +5216,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       try {
         await effect();
       } catch (err) {
-        logger.warn({ err, runId: run.id }, "claimQueuedRun: post-commit recovery-budget effect failed");
+        logger.warn({ err: logSafeError(err), runId: run.id }, "claimQueuedRun: post-commit recovery-budget effect failed");
       }
     }
     if (claim.recoveryBlocked) {
@@ -5954,7 +5960,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             finalizedRun = (await getRun(factsRun.id)) ?? factsRun;
           })
           .catch((factsErr) => {
-            logger.warn({ err: factsErr, runId: factsRun.id }, "failed to persist runFacts for reaped run");
+            logger.warn({ err: logSafeError(factsErr), runId: factsRun.id }, "failed to persist runFacts for reaped run");
           });
       }
       await releaseEnvironmentLeasesForRun({
@@ -6193,7 +6199,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (autoDispatchQueuedRuns) {
         for (const claimedRun of claimedRuns) {
           void executeRun(claimedRun.id).catch((err) => {
-            logger.error({ err, runId: claimedRun.id }, "queued heartbeat execution failed");
+            logger.error({ err: logSafeError(err), runId: claimedRun.id }, "queued heartbeat execution failed");
           });
         }
       }
@@ -7613,14 +7619,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         ),
         runKnownSecrets,
       );
-      logger.error({ err, runId }, "heartbeat execution failed");
+      logger.error({ err: logSafeError(err, runKnownSecrets), runId }, "heartbeat execution failed");
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
       if (handle) {
         try {
           logSummary = await runLogStore.finalize(handle);
         } catch (finalizeErr) {
-          logger.warn({ err: finalizeErr, runId }, "failed to finalize run log after error");
+          logger.warn({ err: logSafeError(finalizeErr), runId }, "failed to finalize run log after error");
         }
       }
       const finalLogBytes = logSummary?.bytes;
@@ -7628,7 +7634,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         outputProgressState.pending.bytes = finalLogBytes;
       }
       await flushOutputProgress({ force: true }).catch((flushErr) => {
-        logger.warn({ err: flushErr, runId }, "failed to flush run output progress after error");
+        logger.warn({ err: logSafeError(flushErr), runId }, "failed to flush run output progress after error");
       });
 
       const failedRun = await setRunStatus(run.id, "failed", {
@@ -7691,7 +7697,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           })
           .where(eq(heartbeatRuns.id, failedRun.id))
           .catch((factsErr) => {
-            logger.warn({ err: factsErr, runId }, "failed to persist runFacts after error");
+            logger.warn({ err: logSafeError(factsErr), runId }, "failed to persist runFacts after error");
           });
         await refreshContinuationSummaryForRun(livenessRun, agent);
         await finalizeIssueCommentPolicy(livenessRun, agent);
@@ -7726,7 +7732,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           // Setup code before adapter.execute threw (e.g. ensureRuntimeState, resolveWorkspaceForRun).
           // The inner catch did not fire, so we must record the failure here.
           const message = outerErr instanceof Error ? outerErr.message : "Unknown setup failure";
-          logger.error({ err: outerErr, runId }, "heartbeat execution setup failed");
+          logger.error({ err: logSafeError(outerErr), runId }, "heartbeat execution setup failed");
           if (workspaceAttempt && outerErr instanceof ExecutionWorkspacePersistenceUncertain) workspaceAttempt.outcome = "unknown";
           if (workspaceAttempt && workspaceAttemptAcknowledged) await writeWorkspaceAttempt(run, workspaceAttempt).catch(() => undefined);
           const setupErrorCode = workspaceAttempt ? WORKSPACE_PERSISTENCE_RECOVERY_CODE : "adapter_failed";
@@ -7783,7 +7789,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               })
               .where(eq(heartbeatRuns.id, failedRun.id))
               .catch((factsErr) => {
-                logger.warn({ err: factsErr, runId }, "failed to persist runFacts after setup failure");
+                logger.warn({ err: logSafeError(factsErr), runId }, "failed to persist runFacts after setup failure");
               });
             const failedAgent = setupFailureAgent ?? await getAgent(run.agentId).catch(() => null);
             if (failedAgent) {
@@ -7818,7 +7824,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               // stored on the context snapshot at claim time.
               isOverage: runContext.__quotaOverage === true,
             }).catch((err) => {
-              logger.warn({ err, runId: run.id }, "[agent-runs] failed to record agent run in finally block");
+              logger.warn({ err: logSafeError(err), runId: run.id }, "[agent-runs] failed to record agent run in finally block");
             });
           }
           await releaseEnvironmentLeasesForRun({
@@ -8603,7 +8609,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await announceTokenCeilingPause(agent, ceiling).catch((err) => {
           // The notification is best-effort — the pause itself is already
           // recorded on the skipped wakeup request and never depends on it.
-          logger.warn({ err, agentId }, "failed to record token ceiling pause notice");
+          logger.warn({ err: logSafeError(err), agentId }, "failed to record token ceiling pause notice");
         });
         return null;
       }
@@ -9498,7 +9504,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }
       } catch (err) {
         result.errors += 1;
-        logger.warn({ err, runId: run.id }, "first-output deadline check failed for run");
+        logger.warn({ err: logSafeError(err), runId: run.id }, "first-output deadline check failed for run");
       }
     }
     if (result.stopped > 0 || result.wouldStop > 0) {
@@ -9636,7 +9642,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           { stream: "system", chunk: `[agentdash] ${message}\n`, ts: new Date().toISOString() },
         );
       } catch (err) {
-        logger.debug({ err, runId: run.id }, "could not append first-output shadow line to run log");
+        logger.debug({ err: logSafeError(err), runId: run.id }, "could not append first-output shadow line to run log");
       }
     }
   }
@@ -9766,6 +9772,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     },
 
     getRun,
+    getRunForResponse,
 
     getRunLogAccess,
 
@@ -9905,10 +9912,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // AgentDash (GH #992): chunks are redacted at append time, but the
         // read pass runs again so log files written before this change (or by
         // a path that missed it) are still safe to serve. The content is
-        // NDJSON — each line's `chunk` string is escaped, which the pattern
-        // set handles (escaped JSON keys included); verbatim known keys are
-        // replaced wherever they appear.
-        content: redactRunLogText(result.content),
+        // NDJSON — each line is parsed and its `chunk` redacted structurally,
+        // so JSON escaping can never be corrupted; byte-range reads still see
+        // truncated first/last lines handled as plain text.
+        content: redactRunLogNdjson(result.content),
       };
     },
 

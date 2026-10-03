@@ -110,8 +110,10 @@ describe("redactSecrets", () => {
     const escaped = '{"api\\u005fkey":"SUPERSECRETvalue123"}';
     const out = redactSecrets(escaped);
     expect(out).not.toContain(SECRET);
-    // The decoded underscore cannot corrupt the JSON either way.
-    expect(out).not.toContain("\\u005fkey");
+    // Only the value is replaced — the original escape sequence in the key is
+    // preserved byte-for-byte so stored text is never re-encoded.
+    expect(out).toContain("\\u005fkey");
+    expect(JSON.parse(out)).toEqual({ api_key: "***REDACTED***" });
   });
 
   it("redacts a header name split by zero-width characters", () => {
@@ -213,9 +215,23 @@ describe("createSecretStreamRedactor", () => {
     const key = "sk-proj-AbCdEfGhIjKlMnOp";
     const stream = createSecretStreamRedactor(undefined, 32);
     const line = ` ${key}`.repeat(10);
-    const out = stream.push(line);
+    const out = stream.push(line) + stream.flush();
+    // Everything is eventually emitted, nothing leaks — the held tail covers a
+    // secret that straddles the overflow boundary.
     expect(out).not.toContain(key);
-    expect(stream.flush()).toBe("");
+    expect(out.length).toBeGreaterThan(0);
+  });
+
+  it("keeps a secret that straddles the overflow boundary", () => {
+    const secret = "verbatim-shapeless-key-0123456789abcdef";
+    const stream = createSecretStreamRedactor([secret], 64 * 1024);
+    const filler = "x".repeat(64 * 1024 - 40);
+    // The first half of the secret is pushed right at the maxHold edge so an
+    // emit-all overflow would leak its second half in the next chunk.
+    const first = stream.push(filler + secret.slice(0, 20));
+    const second = stream.push(secret.slice(20) + "\n") + stream.flush();
+    expect(first + second).not.toContain(secret);
+    expect(first + second).toContain("***REDACTED***");
   });
 });
 

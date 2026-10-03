@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createRunLogStreamRedactor,
   instanceKnownSecrets,
+  logSafeError,
+  redactRunLogNdjson,
   redactRunLogText,
   redactRunLogValue,
 } from "../services/run-log-redaction.ts";
@@ -24,6 +26,19 @@ describe("run-log redaction", () => {
     await writeFile(
       join(profilesDir, "agentdash", ".env"),
       `OPENAI_API_KEY=${SHAPELESS_KEY}\nOTHER_SETTING=ok\n`,
+      "utf8",
+    );
+    // Per-agent and per-company profiles hold their own provider keys.
+    await mkdir(join(profilesDir, "agent-acme-eng"), { recursive: true });
+    await writeFile(
+      join(profilesDir, "agent-acme-eng", ".env"),
+      `ANTHROPIC_API_KEY=provk-agent-profile-99887766\n`,
+      "utf8",
+    );
+    await mkdir(join(profilesDir, "company-acme"), { recursive: true });
+    await writeFile(
+      join(profilesDir, "company-acme", ".env"),
+      `XAI_API_KEY=provk-company-profile-11223344\n`,
       "utf8",
     );
   });
@@ -81,5 +96,67 @@ describe("run-log redaction", () => {
     // Each half is longer than a fragment window, so both are hidden too.
     expect(out).not.toContain(first);
     expect(out).not.toContain(second);
+  });
+
+  it("collects keys from every Hermes profile directory, not just the template", () => {
+    const keys = instanceKnownSecrets({
+      HERMES_PROFILES_DIR: profilesDir,
+      PATH: "/usr/bin",
+    });
+    expect(keys).toContain(SHAPELESS_KEY);
+    expect(keys).toContain("provk-agent-profile-99887766");
+    expect(keys).toContain("provk-company-profile-11223344");
+  });
+
+  it("collects *_PRIVATE_KEY / PGPASSWORD-style env names and DSN passwords", () => {
+    const keys = instanceKnownSecrets({
+      HERMES_PROFILES_DIR: join(profilesDir, "does-not-exist"),
+      AWS_SECRET_ACCESS_KEY: "aws-secret-value-00001",
+      PGPASSWORD: "pg-password-000002",
+      SIGNING_PRIVATE_KEY: "signing-key-0000003",
+      DATABASE_URL: "postgres://app:dsn-pass-4444444@db.internal:5432/app",
+      PATH: "/usr/bin",
+    });
+    expect(keys).toContain("aws-secret-value-00001");
+    expect(keys).toContain("pg-password-000002");
+    expect(keys).toContain("signing-key-0000003");
+    expect(keys).toContain("dsn-pass-4444444");
+    // The full DSN is not collected — `DATABASE_URL` is not a secret name —
+    // but an echoed `postgres://user:pass@host` is still scrubbed by the
+    // URL-userinfo pattern plus the extracted password literal.
+    expect(keys).not.toContain("/usr/bin");
+  });
+
+  it("NDJSON pass redacts the chunk field and keeps lines parseable", () => {
+    const line = JSON.stringify({
+      ts: "2026-10-03T00:00:00Z",
+      stream: "stdout",
+      chunk: `key is ${SHAPELESS_KEY}`,
+    });
+    const out = redactRunLogNdjson(`${line}\n`, [SHAPELESS_KEY]);
+    const parsed = JSON.parse(out.trim());
+    expect(parsed.chunk).not.toContain(SHAPELESS_KEY);
+    expect(parsed.chunk).toContain("***REDACTED***");
+    expect(parsed.stream).toBe("stdout");
+  });
+
+  it("NDJSON pass falls back to text redaction on partial lines", () => {
+    // A byte-range read can start mid-line; the fragment is not valid JSON.
+    const fragment = `...truncated ${SHAPELESS_KEY} tail`;
+    const out = redactRunLogNdjson(fragment, [SHAPELESS_KEY]);
+    expect(out).not.toContain(SHAPELESS_KEY);
+    expect(out).toContain("***REDACTED***");
+  });
+
+  it("logSafeError strips secrets from message, stack and cause", () => {
+    const err = Object.assign(new Error(`401 for key ${SHAPELESS_KEY}`), {
+      cause: new Error(`upstream echoed ${SHAPELESS_KEY}`),
+    });
+    const safe = logSafeError(err, [SHAPELESS_KEY]) as { message: string; stack?: string; cause?: { message: string } };
+    expect(JSON.stringify(safe)).not.toContain(SHAPELESS_KEY);
+    expect(safe.message).toContain("***REDACTED***");
+    expect(safe.cause?.message).toContain("***REDACTED***");
+    expect(typeof logSafeError(`raw ${SHAPELESS_KEY}`, [SHAPELESS_KEY])).toBe("string");
+    expect(logSafeError(`raw ${SHAPELESS_KEY}`, [SHAPELESS_KEY])).not.toContain(SHAPELESS_KEY);
   });
 });
