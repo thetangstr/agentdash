@@ -4,9 +4,11 @@ import { hermesStatusHasConfiguredCredentials } from "../adapters/registry.js";
 function buildStatus(opts: {
   apiKeyProviders?: string[];
   authProviders?: string[];
+  apiKeys?: string[];
 }): string {
   return [
     "Hermes v0.3.0",
+    ...(opts.apiKeys ? ["", "API Keys", ...opts.apiKeys] : []),
     "",
     "Auth Providers",
     ...(opts.authProviders ?? []),
@@ -51,6 +53,23 @@ describe("hermesStatusHasConfiguredCredentials", () => {
   it("returns false for empty/unparseable output", () => {
     expect(hermesStatusHasConfiguredCredentials("")).toBe(false);
     expect(hermesStatusHasConfiguredCredentials("Hermes v0.3.0")).toBe(false);
+  });
+
+  it("recognises an env-file API key in the 'API Keys' section of status --full", () => {
+    // `hermes status --full` lists the profile's raw keys with a checkmark —
+    // a set key means Hermes can reach that provider even when the
+    // "API-Key Providers" section reports nothing.
+    const status = buildStatus({
+      apiKeys: ["  OpenAI        ✗ (not set)", "  Kimi          ✓ sk-x...xxxx"],
+    });
+    expect(hermesStatusHasConfiguredCredentials(status)).toBe(true);
+  });
+
+  it("returns false when every API Keys row is unset", () => {
+    const status = buildStatus({
+      apiKeys: ["  OpenAI        ✗ (not set)", "  Anthropic     ✗ (not set)"],
+    });
+    expect(hermesStatusHasConfiguredCredentials(status)).toBe(false);
   });
 
   it("distinguishes 'configured' from 'not configured' on the same line", () => {

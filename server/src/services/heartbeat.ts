@@ -16,6 +16,7 @@ import {
   AGENT_MEMORY_CONTEXT_KEY,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
   MODEL_PROFILE_KEYS,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
   preserveIssueRecoveryBudget,
   readIssueRecoveryBudget,
   isEnvironmentDriverSupportedForAdapter,
@@ -9307,7 +9308,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane", errorCode = "cancelled") {
+  async function cancelRunInternal(runId: string, reason = RUN_CANCELLED_BY_OPERATOR_MESSAGE, errorCode = "cancelled") {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;

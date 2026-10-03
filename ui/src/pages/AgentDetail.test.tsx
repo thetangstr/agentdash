@@ -251,6 +251,29 @@ describe("AgentRunHealthSummary", () => {
     expect(container!.querySelector('[role="alert"]')).toBeNull();
   });
 
+  it("shows a system cancellation's real reason, neutral — not 'stopped by you'", () => {
+    renderNode(
+      <AgentRunHealthSummary
+        runHealth={runHealthFixture({
+          neverRan: false,
+          total: 3,
+          succeeded: 2,
+          last: {
+            status: "cancelled",
+            error: "Cancelled due to budget pause",
+            errorCode: "cancelled",
+            finishedAt: "2026-10-02T10:00:00.000Z",
+            leftEvidence: false,
+          },
+        })}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).not.toContain("stopped by you");
+    expect(text).toContain("Last run cancelled: Cancelled due to budget pause");
+    expect(container!.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("keeps a failed last run as an error", () => {
     renderNode(
       <AgentRunHealthSummary
@@ -280,6 +303,7 @@ describe("RunStderrExcerpt", () => {
   it("hides a succeeded run's stderr behind Technical details, unred", () => {
     renderNode(
       <RunStderrExcerpt
+        censorUsernameInLogs={true}
         run={{
           status: "succeeded",
           stderrExcerpt: "SyntaxWarning at /Users/operator/.hermes/run.py",
@@ -294,9 +318,23 @@ describe("RunStderrExcerpt", () => {
     expect(container!.querySelector(".text-red-700")).toBeNull();
   });
 
+  it("follows the instance setting: shows the raw path when censoring is off", () => {
+    renderNode(
+      <RunStderrExcerpt
+        censorUsernameInLogs={false}
+        run={{
+          status: "succeeded",
+          stderrExcerpt: "SyntaxWarning at /Users/operator/.hermes/run.py",
+        }}
+      />,
+    );
+    expect(container!.textContent).toContain("/Users/operator/.hermes/run.py");
+  });
+
   it("keeps the red stderr box for failed runs, still path-masked", () => {
     renderNode(
       <RunStderrExcerpt
+        censorUsernameInLogs={true}
         run={{
           status: "failed",
           stderrExcerpt: "Traceback at /home/ubuntu/.hermes/run.py",
@@ -310,7 +348,7 @@ describe("RunStderrExcerpt", () => {
   });
 
   it("renders nothing when the excerpt is empty", () => {
-    renderNode(<RunStderrExcerpt run={{ status: "succeeded", stderrExcerpt: "  " }} />);
+    renderNode(<RunStderrExcerpt censorUsernameInLogs={true} run={{ status: "succeeded", stderrExcerpt: "  " }} />);
     expect(container!.textContent).toBe("");
   });
 });

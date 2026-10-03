@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AdapterEnvironmentTestResult } from "@paperclipai/adapter-utils";
-import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION } from "@paperclipai/shared";
+import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION, isBlockingPreflightResult } from "@paperclipai/shared";
 
 export type AgentHarnessPreflightReadinessReason =
   | "passed"
@@ -100,6 +100,12 @@ export function evaluateAgentHarnessPreflightReadiness(
     typeof harnessPreflight.contractVersion === "number" && Number.isInteger(harnessPreflight.contractVersion)
       ? harnessPreflight.contractVersion
       : null;
+  const savedChecks = Array.isArray(harnessPreflight.checks)
+    ? harnessPreflight.checks.flatMap((check) => {
+        const record = asRecord(check);
+        return record ? [{ code: record.code, level: record.level }] : [];
+      })
+    : [];
   if (!status || !testedAt || !configDigest) {
     return {
       ready: false,
@@ -119,9 +125,15 @@ export function evaluateAgentHarnessPreflightReadiness(
   }
 
   // Warnings are advisory — the evidence is usable; only a failed check blocks
-  // the agent. Anything else (unknown statuses included) still cannot be
+  // the agent. Except a warning that says the adapter cannot run at all
+  // (probe auth required, probe failed, Hermes with no provider): that blocks
+  // like a fail. Anything else (unknown statuses included) still cannot be
   // trusted, so it stays `not_passed`.
-  if (status === "fail" || (status !== "pass" && status !== "warn")) {
+  if (
+    status === "fail"
+    || (status !== "pass" && status !== "warn")
+    || isBlockingPreflightResult({ status, checks: savedChecks })
+  ) {
     return {
       ready: false,
       reason: "not_passed",

@@ -167,6 +167,25 @@ const warningPreflightAdapter: ServerAdapterModule = {
   }),
 };
 
+// A warn that means the adapter cannot run at all: the probe could not
+// authenticate. Same status, different verdict — this one must 422.
+const blockingWarnPreflightAdapter: ServerAdapterModule = {
+  type: "external_preflight_warn_blocking",
+  execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+  testEnvironment: async () => ({
+    adapterType: "external_preflight_warn_blocking",
+    status: "warn",
+    checks: [
+      {
+        code: "claude_hello_probe_auth_required",
+        level: "warn",
+        message: "Claude CLI is installed, but login is required.",
+      },
+    ],
+    testedAt: new Date(0).toISOString(),
+  }),
+};
+
 const missingAdapterType = "missing_adapter_validation_test";
 
 async function createApp() {
@@ -317,6 +336,7 @@ describe("agent routes adapter validation", () => {
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter("external_preflight_fail");
     await unregisterTestAdapter("external_preflight_warn");
+    await unregisterTestAdapter("external_preflight_warn_blocking");
     await unregisterTestAdapter(missingAdapterType);
     vi.unstubAllEnvs();
   });
@@ -325,6 +345,7 @@ describe("agent routes adapter validation", () => {
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter("external_preflight_fail");
     await unregisterTestAdapter("external_preflight_warn");
+    await unregisterTestAdapter("external_preflight_warn_blocking");
     await unregisterTestAdapter(missingAdapterType);
     if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
     else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
@@ -464,6 +485,27 @@ describe("agent routes adapter validation", () => {
     expect(mockAgentService.create).toHaveBeenCalled();
   });
 
+  it("rejects agent creation on a warn that means the adapter cannot run", async () => {
+    // "auth required" is warn-level but the agent would fail on first invoke —
+    // it 422s exactly like a fail.
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(blockingWarnPreflightAdapter);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({
+          name: "Auth Required Agent",
+          adapterType: "external_preflight_warn_blocking",
+          requireHarnessPreflight: true,
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(mockAgentService.create).not.toHaveBeenCalled();
+  });
+
   it("persists saved-agent harness preflight evidence", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     registerServerAdapter(externalAdapter);
@@ -571,6 +613,45 @@ describe("agent routes adapter validation", () => {
         }),
       }),
     );
+  });
+
+  it("returns 422 on a saved-agent preflight whose warn means the adapter cannot run", async () => {
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(blockingWarnPreflightAdapter);
+    mockAgentService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Auth Required Agent",
+      urlKey: "auth-required-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "external_preflight_warn_blocking",
+      adapterConfig: {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({}),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(mockAgentService.update).not.toHaveBeenCalled();
   });
 
   it("passes the saved agent to the adapter's environment test (Hermes managed profiles need its id)", async () => {

@@ -59,6 +59,22 @@ describe("readAgentHarnessPreflightStatus", () => {
     expect(readAgentHarnessPreflightStatus(evidence({ status: "fail" })).state).toBe("fail");
     expect(readAgentHarnessPreflightStatus(evidence({ status: "warn" })).state).toBe("warn");
   });
+
+  it("reports a warn that means the adapter cannot run as a failure", () => {
+    const status = readAgentHarnessPreflightStatus(
+      evidence({
+        status: "warn",
+        checks: [
+          {
+            code: "codex_hello_probe_auth_required",
+            level: "warn",
+            message: "Codex CLI is installed, but authentication is not ready.",
+          },
+        ],
+      }),
+    );
+    expect(status.state).toBe("fail");
+  });
 });
 
 describe("what reaches the screen", () => {

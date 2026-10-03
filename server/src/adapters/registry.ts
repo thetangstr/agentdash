@@ -467,21 +467,46 @@ export function hermesStatusHasConfiguredCredentials(statusOutput: string): bool
   }
 
   const authProviders = sectionAfter(statusOutput, "Auth Providers", "API-Key Providers");
-  return authProviders
+  if (authProviders
     .split(/\r?\n/)
-    .some((line) => /\blogged in\b/i.test(line) && !/\bnot logged in\b/i.test(line));
+    .some((line) => /\blogged in\b/i.test(line) && !/\bnot logged in\b/i.test(line))) {
+    return true;
+  }
+
+  // `hermes status --full` also lists the profile's env-file keys ("◆ API
+  // Keys", rows like "  Kimi          ✓ sk-k...ehTZ"): a set key means Hermes
+  // can reach that provider even when the provider section reports nothing.
+  const apiKeys = sectionAfter(statusOutput, "API Keys", "Auth Providers");
+  return apiKeys
+    .split(/\r?\n/)
+    .some((line) => line.includes("✓") && !line.includes("✗"));
 }
 
-async function hermesCommandHasConfiguredCredentials(command: string): Promise<boolean> {
+async function hermesCommandStatus(command: string, args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(command, ["status"], {
+    const { stdout } = await execFileAsync(command, args, {
       timeout: 10_000,
       maxBuffer: 1024 * 1024,
     });
-    return hermesStatusHasConfiguredCredentials(stdout);
+    return stdout;
   } catch {
-    return false;
+    return null;
   }
+}
+
+async function hermesCommandHasConfiguredCredentials(command: string): Promise<boolean> {
+  // Plain `hermes status` prints only a summary on current builds — the
+  // provider sections need `--full`. Older builds reject the flag, so fall
+  // back to plain status and parse whatever it prints.
+  const full = await hermesCommandStatus(command, ["status", "--full"]);
+  if (full !== null) {
+    if (hermesStatusHasConfiguredCredentials(full)) return true;
+    // A parseable full status that reports nothing configured is trustworthy —
+    // the plain-status summary would only show less.
+    if (/(API-Key Providers|Auth Providers|API Keys)/.test(full)) return false;
+  }
+  const short = await hermesCommandStatus(command, ["status"]);
+  return short !== null && hermesStatusHasConfiguredCredentials(short);
 }
 
 function summarizeAdapterEnvironmentChecks(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {

@@ -121,4 +121,32 @@ describe("agent harness preflight", () => {
       reason: "not_passed",
     });
   });
+
+  it("blocks creation on a warn that means the adapter cannot run", () => {
+    const currentConfigKey = buildAgentHarnessPreflightKey({
+      adapterType: "codex_local",
+      defaultEnvironmentId: null,
+      adapterConfig: { model: "gpt-5.5" },
+    });
+
+    // "auth required" is a warn-level check but the agent would fail the
+    // moment it ran — it blocks like a fail, same rule the server applies.
+    expect(
+      getAgentCreateHarnessPreflightGate({
+        currentConfigKey,
+        passedConfigKey: currentConfigKey,
+        pending: false,
+        result: {
+          adapterType: "codex_local",
+          status: "warn",
+          checks: [{ code: "codex_hello_probe_auth_required", level: "warn", message: "Codex CLI is installed, but authentication is not ready." }],
+          testedAt: new Date(0).toISOString(),
+        },
+        errorMessage: null,
+      }),
+    ).toMatchObject({
+      canCreate: false,
+      reason: "not_passed",
+    });
+  });
 });

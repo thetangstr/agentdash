@@ -8,7 +8,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, assistantConversations, assistantMessages, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -30,6 +30,7 @@ import {
   wakeAgentSchema,
   updateAgentSchema,
   supportedEnvironmentDriversForAdapter,
+  isBlockingPreflightResult,
 } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
@@ -500,10 +501,12 @@ export function agentRoutes(
       fallbackChecks,
     );
 
-    // Warnings are advisory, not failures: a self-hosted Hermes box warns that
-    // AgentDash's own env holds no LLM keys (they live in ~/.hermes), which is
-    // the correct setup for that adapter. Only `fail` blocks.
-    if (result.status === "fail") {
+    // Warnings are advisory, not failures — a self-hosted Hermes box warns
+    // that AgentDash's own env holds no LLM keys (they live in ~/.hermes),
+    // which is the correct setup for that adapter. But a warn that means the
+    // adapter cannot run at all (probe auth required, probe failed, Hermes
+    // with no provider anywhere) blocks exactly like a fail.
+    if (isBlockingPreflightResult(result)) {
       throw unprocessable(
         input.failureMessage
           ?? "Agent harness preflight failed. Resolve the adapter environment checks before creating this agent.",
@@ -761,7 +764,7 @@ export function agentRoutes(
       const [chatTally] = await db
         .select({
           total: count(),
-          thisMonth: sql<number>`count(*) filter (where ${assistantMessages.createdAt} >= ${monthStart})::int`,
+          thisMonth: sql<number>`count(*) filter (where ${gte(assistantMessages.createdAt, monthStart)})::int`,
         })
         .from(assistantMessages)
         .where(and(

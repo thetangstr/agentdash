@@ -1,5 +1,5 @@
 import { AlertTriangle, Info, ShieldCheck } from "lucide-react";
-import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION } from "@paperclipai/shared";
+import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION, isBlockingPreflightResult } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "../lib/utils";
 
@@ -153,11 +153,14 @@ export function readAgentHarnessPreflightStatus(
     };
   }
 
+  // A warn whose checks say the adapter cannot run at all is a failure, not
+  // an advisory — the same shared rule the server gates on.
+  const advisory = status === "warn" && !isBlockingPreflightResult({ status, checks });
   return {
-    state: status === "warn" ? "warn" : "fail",
-    title: status === "warn" ? "Harness preflight passed with warnings" : "Harness preflight failed",
+    state: advisory ? "warn" : "fail",
+    title: advisory ? "Harness preflight passed with warnings" : "Harness preflight failed",
     message:
-      status === "warn"
+      advisory
         ? "Nothing needs fixing before this agent runs — the checks below are advisory."
         : "Resolve the checks below, then run preflight again before assigning customer work.",
     adapterType,

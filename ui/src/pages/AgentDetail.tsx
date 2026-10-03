@@ -122,6 +122,7 @@ import {
   type AgentResolvedRuntime,
   type AgentRunHealth,
   type AgentTokenCeilingStatus,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
@@ -1563,11 +1564,12 @@ export function AgentRunHealthNote({ runs }: { runs: HeartbeatRun[] }) {
  */
 export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth }) {
   const chatTurns = runHealth.chatTurns ?? 0;
-  // A manual stop carries errorCode "cancelled" (or none); it is an operator
-  // action, not a failure — it reads neutral and says who stopped the run.
+  // Only the operator cancel route writes "Cancelled by control plane" —
+  // system cancellations (budget pause, quota, subtree hold, not-invokable)
+  // carry their own reason and read neutral with that reason, not "you".
+  const lastCancelled = runHealth.last?.status === "cancelled";
   const lastStoppedByYou =
-    runHealth.last?.status === "cancelled" &&
-    (!runHealth.last.errorCode || runHealth.last.errorCode === "cancelled");
+    lastCancelled && runHealth.last?.error === RUN_CANCELLED_BY_OPERATOR_MESSAGE;
   return (
     <div className="mb-4 rounded-lg border border-border bg-card p-4">
       <h3 className="text-sm font-semibold">What its runs show</h3>
@@ -1603,6 +1605,10 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
           {lastStoppedByYou ? (
             <p className="mt-2 text-xs text-muted-foreground" role="status">
               Last run stopped by you.
+            </p>
+          ) : lastCancelled ? (
+            <p className="mt-2 text-xs text-muted-foreground" role="status">
+              Last run cancelled{runHealth.last?.error ? `: ${runHealth.last.error}` : ""}
             </p>
           ) : runHealth.last?.status && runHealth.last.status !== "succeeded" ? (
             <p className="mt-2 text-xs text-destructive" role="alert">
@@ -3819,11 +3825,18 @@ function RunsTab({
  * any other outcome — a succeeded run's Python warnings, WSL/launcher chatter —
  * folds behind "Technical details", because harmless output is not an error
  * just because the adapter wrote it to stderr. Home-directory user names are
- * masked either way (a Hermes host path leaks `/Users/<name>` otherwise).
+ * masked per the instance's censorUsernameInLogs setting (a Hermes host path
+ * leaks `/Users/<name>` otherwise).
  */
-export function RunStderrExcerpt({ run }: { run: Pick<HeartbeatRun, "status" | "stderrExcerpt"> }) {
+export function RunStderrExcerpt({
+  run,
+  censorUsernameInLogs,
+}: {
+  run: Pick<HeartbeatRun, "status" | "stderrExcerpt">;
+  censorUsernameInLogs: boolean;
+}) {
   if (!run.stderrExcerpt || !run.stderrExcerpt.trim()) return null;
-  const excerpt = redactHomePathUserSegments(run.stderrExcerpt);
+  const excerpt = redactPathText(run.stderrExcerpt, censorUsernameInLogs);
   if (run.status === "failed" || run.status === "timed_out") {
     return (
       <div className="space-y-1">
@@ -3846,6 +3859,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { pushToast } = useToastActions();
+  const censorUsernameInLogs = useQuery({
+    queryKey: queryKeys.instance.generalSettings,
+    queryFn: () => instanceSettingsApi.getGeneral(),
+  }).data?.censorUsernameInLogs === true;
   const { data: hydratedRun } = useQuery({
     queryKey: queryKeys.runDetail(initialRun.id),
     queryFn: () => heartbeatsApi.get(initialRun.id),
@@ -4184,11 +4201,16 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             )}
             {run.error && (
               <div className="text-xs">
-                {run.status === "cancelled" &&
-                (!run.errorCode || run.errorCode === "cancelled") ? (
-                  // A manual stop is the operator's action, not a failure —
-                  // "Cancelled by control plane" in red read as an error.
-                  <span className="text-muted-foreground">Stopped by you.</span>
+                {run.status === "cancelled" ? (
+                  run.error === RUN_CANCELLED_BY_OPERATOR_MESSAGE ? (
+                    // A manual stop is the operator's action, not a failure —
+                    // "Cancelled by control plane" in red read as an error.
+                    <span className="text-muted-foreground">Stopped by you.</span>
+                  ) : (
+                    // System cancellations (budget pause, quota, hold) still
+                    // name the real reason — neutral, not an error.
+                    <span className="text-muted-foreground">{run.error}</span>
+                  )
                 ) : (
                   <>
                     <span className="text-red-600 dark:text-red-400">{run.error}</span>
@@ -4400,13 +4422,13 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
       {/* stderr excerpt — red only when the run actually failed; a succeeded
           run's stderr (Python warnings, launcher chatter) folds into a quiet
           "Technical details" disclosure instead. */}
-      <RunStderrExcerpt run={run} />
+      <RunStderrExcerpt run={run} censorUsernameInLogs={censorUsernameInLogs} />
 
       {/* stdout excerpt when no log is available */}
       {run.stdoutExcerpt && !run.logRef && (
         <div className="space-y-1">
           <span className="text-xs font-medium text-muted-foreground">stdout</span>
-          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{redactHomePathUserSegments(run.stdoutExcerpt)}</pre>
+          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{redactPathText(run.stdoutExcerpt, censorUsernameInLogs)}</pre>
         </div>
       )}
 

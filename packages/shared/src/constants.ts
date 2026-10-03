@@ -125,6 +125,13 @@ export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
  */
 export const AGENT_DEFAULT_MAX_DAILY_TOKENS = 5_000_000;
 export const AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION = 2;
+/**
+ * The `heartbeat_runs.error` text written by the operator-facing cancel route
+ * (heartbeat.cancelRun). System-initiated cancellations always carry their own
+ * reason, so this exact string is how the UI tells "stopped by you" apart from
+ * budget pauses, quota blocks, and hold interruptions.
+ */
+export const RUN_CANCELLED_BY_OPERATOR_MESSAGE = "Cancelled by control plane";
 export const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
 
 export const MODEL_PROFILE_KEYS = ["cheap"] as const;
