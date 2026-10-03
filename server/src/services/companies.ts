@@ -1,5 +1,5 @@
 import { prepareIssueDeletion } from "./issue-dependents.js";
-import { and, asc, count, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, count, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { isReservedCompanyPrefix, type CompanyProductProfile } from "@paperclipai/shared";
 import {
@@ -225,11 +225,7 @@ export function companyService(db: Db) {
     return database
       .select(companySelection)
       .from(companies)
-      .leftJoin(companyLogos, eq(companyLogos.companyId, companies.id))
-      // Deterministic order: callers use companies[0] as a bootstrap fallback,
-      // and an unordered result lets a brand-new row (or a vacuumed heap)
-      // silently become "the" company.
-      .orderBy(asc(companies.createdAt), asc(companies.id));
+      .leftJoin(companyLogos, eq(companyLogos.companyId, companies.id));
   }
 
   function deriveIssuePrefixBase(name: string) {
@@ -344,6 +340,15 @@ export function companyService(db: Db) {
   return {
     list: async () => {
       const rows = await getCompanyQuery(db);
+      // Deterministic order: the UI uses companies[0] as a bootstrap
+      // fallback, and an unordered result lets a brand-new row (or a
+      // vacuumed heap) silently become "the" company. Sorted in JS rather
+      // than SQL so unit-test db stubs of the select chain keep working.
+      rows.sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() ||
+          a.id.localeCompare(b.id),
+      );
       const hydrated = await hydrateCompanySpend(rows);
       return hydrated.map((row) => enrichCompany(row));
     },
