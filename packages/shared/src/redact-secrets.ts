@@ -167,8 +167,13 @@ function normalizeWithMap(text: string): NormalizedText {
     }
     if (!isZeroWidth(code)) {
       chars.push(String.fromCodePoint(code));
-      start.push(i);
-      end.push(i + width);
+      // One map entry per UTF-16 unit — an astral char pushes a surrogate
+      // pair into the normalized text, and without a second entry every
+      // edit after it lands one unit off (the secret stays, text repeats).
+      for (let u = 0; u < width; u++) {
+        start.push(i);
+        end.push(i + width);
+      }
     }
     i += width;
   }
