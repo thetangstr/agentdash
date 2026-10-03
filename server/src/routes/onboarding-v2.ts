@@ -1057,6 +1057,20 @@ No greetings. No markdown headings outside the JSON block.`;
       );
     }
 
+    // AgentDash (canary, lane chat): the LLM call above takes seconds — long
+    // enough for the person to confirm this plan in another tab. Re-check the
+    // old card before posting: a stale revision would leave a live card
+    // offering to hire a team that already exists.
+    const freshPlanRows = await db
+      .select({ cardPayload: assistantMessages.cardPayload })
+      .from(assistantMessages)
+      .where(eq(assistantMessages.id, planMsg.id))
+      .limit(1);
+    const freshPayload = freshPlanRows[0]?.cardPayload as AgentPlanProposalV1Payload | null | undefined;
+    if (freshPayload?.confirmedAt || (await readHireReceipt(companyId, conversationId, `plan:${planMsg.id}`))) {
+      throw conflict("This team is already hired. Ask your Chief of Staff for changes to the team instead.", { code: "plan_hired" });
+    }
+
     const { plan: newPlan, body: visibleBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
 
     // Post the visible preamble FIRST, then the new card. Mirrors the

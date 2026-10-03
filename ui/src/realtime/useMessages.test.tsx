@@ -12,6 +12,7 @@ vi.mock("../api/conversations", () => ({ conversationsApi: { paginate: mockPagin
 
 import { useMessages } from "./useMessages";
 import { publishConversationMessage } from "./conversationEventBus";
+import { setLiveSocketState } from "./liveSocketState";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,6 +38,7 @@ describe("useMessages", () => {
   }
 
   beforeEach(async () => {
+    setLiveSocketState("idle");
     mockPaginate.mockResolvedValue([card]);
     container = document.createElement("div");
     root = createRoot(container);
@@ -45,6 +47,8 @@ describe("useMessages", () => {
 
   afterEach(() => {
     act(() => root.unmount());
+    vi.useRealTimers();
+    setLiveSocketState("idle");
   });
 
   it("merges an update into the message on screen", async () => {
@@ -72,5 +76,100 @@ describe("useMessages", () => {
       publishConversationMessage(reply);
     });
     expect(seen.map((m) => m.id)).toEqual(["card1", "m2"]);
+  });
+});
+
+// AgentDash (canary, lane chat): the socket is a fast path only. Messages
+// must still reach the screen when it is down — once on reconnect, and every
+// 5s while the conversation is still owed a reply.
+describe("useMessages without the live socket", () => {
+  const userMsg = {
+    id: "u1",
+    conversationId: "conv1",
+    role: "user",
+    content: "how is it going?",
+    createdAt: "2026-10-02T08:01:00Z",
+  } as Message;
+  const reply = {
+    id: "a1",
+    conversationId: "conv1",
+    role: "agent",
+    content: "Great — summary attached.",
+    createdAt: "2026-10-02T08:01:05Z",
+  } as Message;
+
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  let seen: Message[] = [];
+
+  function Probe() {
+    seen = useMessages("conv1");
+    return null;
+  }
+
+  beforeEach(async () => {
+    setLiveSocketState("idle");
+    container = document.createElement("div");
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    vi.useRealTimers();
+    setLiveSocketState("idle");
+  });
+
+  it("refetches once the socket comes back", async () => {
+    // The page loaded while the socket was already down: only the user
+    // message shows, the stored reply never arrives.
+    mockPaginate.mockResolvedValue([userMsg]);
+    await act(async () => root.render(<Probe />));
+    expect(seen.map((m) => m.id)).toEqual(["u1"]);
+
+    mockPaginate.mockResolvedValue([reply, userMsg]);
+    await act(async () => setLiveSocketState("down"));
+    await act(async () => setLiveSocketState("open"));
+
+    expect(seen.map((m) => m.id)).toEqual(["u1", "a1"]);
+  });
+
+  it("polls every 5s while a reply is pending and the socket is down", async () => {
+    vi.useFakeTimers();
+    mockPaginate.mockResolvedValue([userMsg]);
+    await act(async () => root.render(<Probe />));
+    await act(async () => setLiveSocketState("down"));
+    mockPaginate.mockClear();
+
+    mockPaginate.mockResolvedValue([reply, userMsg]);
+    await act(async () => vi.advanceTimersByTime(5000));
+    expect(mockPaginate).toHaveBeenCalledTimes(1);
+    expect(seen.map((m) => m.id)).toEqual(["u1", "a1"]);
+
+    // The reply arrived: the conversation is no longer pending, so the
+    // interval keeps ticking but fetches nothing.
+    await act(async () => vi.advanceTimersByTime(15000));
+    expect(mockPaginate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not poll when the newest message is the agent's", async () => {
+    vi.useFakeTimers();
+    mockPaginate.mockResolvedValue([reply, userMsg]);
+    await act(async () => root.render(<Probe />));
+    await act(async () => setLiveSocketState("down"));
+    mockPaginate.mockClear();
+
+    await act(async () => vi.advanceTimersByTime(20000));
+    expect(mockPaginate).not.toHaveBeenCalled();
+  });
+
+  it("does not poll while the socket is live", async () => {
+    vi.useFakeTimers();
+    mockPaginate.mockResolvedValue([userMsg]);
+    await act(async () => root.render(<Probe />));
+    await act(async () => setLiveSocketState("open"));
+    mockPaginate.mockClear();
+
+    await act(async () => vi.advanceTimersByTime(20000));
+    expect(mockPaginate).not.toHaveBeenCalled();
   });
 });

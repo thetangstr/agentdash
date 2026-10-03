@@ -251,6 +251,21 @@ describe.sequential("conversation routes", () => {
         expect.objectContaining({ authorIsInstanceAdmin: true }),
       );
     });
+
+    // AgentDash (canary, lane chat): the CoS turn context answers issue
+    // visibility for the sender, which needs their memberships — an admin
+    // sees every project, a member only what they may.
+    it("passes the sender's memberships to the dispatcher", async () => {
+      const memberships = [{ companyId, membershipRole: "member", status: "active" }];
+      const app = await createApp({ ...boardActor, source: "session", memberships });
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages`).send({ body: "What is everyone working on?" }),
+      );
+      await new Promise((r) => setImmediate(r));
+      expect(mockDispatchOnMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ authorMemberships: memberships }),
+      );
+    });
   });
 
   // AgentDash (scan 3, lane G): only the requester confirms a CoS task card.

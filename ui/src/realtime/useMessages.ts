@@ -1,30 +1,56 @@
 // AgentDash: chat substrate — messages hook with live append via the
 // conversation event bus. LiveUpdatesProvider runs the company WebSocket and
 // republishes `message.created` payloads to subscribeToConversationMessages.
-import { useEffect, useState } from "react";
+//
+// The socket is a fast path, not the only one: while it is down the hook
+// refetches on reconnect, and every PENDING_REPLY_POLL_MS while a reply is
+// still owed, so a conversation never goes silent behind a dead socket.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { conversationsApi, type Message } from "../api/conversations";
 import { subscribeToConversationMessages } from "./conversationEventBus";
+import { useLiveSocketState } from "./liveSocketState";
+
+export const PENDING_REPLY_POLL_MS = 5_000;
+
+function isAuthoredByUser(message: Message): boolean {
+  return (message.role ?? message.authorKind) === "user";
+}
+
+/** The fetched page is authoritative for the ids it covers; keep the rest
+ * (live arrivals, e.g. the message this client just POSTed) and order the
+ * union by createdAt so an arrival older than the page's tail doesn't jump
+ * below newer replies. */
+function mergePage(prev: Message[], page: Message[]): Message[] {
+  if (prev.length === 0) return page;
+  const ids = new Set(page.map((m) => m.id));
+  const extras = prev.filter((m) => !ids.has(m.id));
+  return [...page, ...extras].sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+}
 
 export function useMessages(conversationId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const socketState = useLiveSocketState();
+  const conversationIdRef = useRef(conversationId);
+  conversationIdRef.current = conversationId;
+  const messagesRef = useRef<Message[]>(messages);
+  messagesRef.current = messages;
+
+  const refresh = useCallback(async (id: string) => {
+    try {
+      const rows = await conversationsApi.paginate(id, { limit: 50 });
+      if (conversationIdRef.current !== id) return;
+      const page = rows.slice().reverse(); // server returns desc; UI shows asc
+      setMessages((prev) => mergePage(prev, page));
+    } catch {
+      // A failed poll or reconnect refetch keeps what is on screen; the next
+      // one tries again.
+    }
+  }, []);
 
   useEffect(() => {
     if (!conversationId) return;
-    let cancelled = false;
 
-    conversationsApi.paginate(conversationId, { limit: 50 }).then((rows) => {
-      if (cancelled) return;
-      const initial = rows.slice().reverse(); // server returns desc; UI shows asc
-      setMessages((prev) => {
-        if (prev.length === 0) return initial;
-        // A live message may have arrived before the initial fetch resolved.
-        // Drop anything from prev that the initial page already covers, then
-        // append the rest so we don't lose realtime arrivals.
-        const initialIds = new Set(initial.map((m) => m.id));
-        const extras = prev.filter((m) => !initialIds.has(m.id));
-        return [...initial, ...extras];
-      });
-    });
+    void refresh(conversationId);
 
     const unsubscribe = subscribeToConversationMessages(conversationId, (incoming, kind) => {
       setMessages((prev) => {
@@ -41,10 +67,30 @@ export function useMessages(conversationId: string | null) {
     });
 
     return () => {
-      cancelled = true;
       unsubscribe();
     };
-  }, [conversationId]);
+  }, [conversationId, refresh]);
+
+  // A reconnect can have missed every event while the socket was down; pull
+  // the latest page once it opens again.
+  const previousSocketStateRef = useRef(socketState);
+  useEffect(() => {
+    const previous = previousSocketStateRef.current;
+    previousSocketStateRef.current = socketState;
+    if (!conversationId || socketState === previous) return;
+    if (socketState === "open") void refresh(conversationId);
+  }, [socketState, conversationId, refresh]);
+
+  // With the socket down, a pending reply only arrives by polling.
+  useEffect(() => {
+    if (!conversationId || socketState === "open") return;
+    const timer = window.setInterval(() => {
+      const list = messagesRef.current;
+      const last = list[list.length - 1];
+      if (last && isAuthoredByUser(last)) void refresh(conversationId);
+    }, PENDING_REPLY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [conversationId, socketState, refresh]);
 
   return messages;
 }

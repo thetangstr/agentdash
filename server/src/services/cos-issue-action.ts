@@ -33,9 +33,10 @@
 //
 // Every refusal is a short, polite note; nothing here throws.
 
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, notInArray, sql } from "drizzle-orm";
+import type { Request } from "express";
 import { z } from "zod";
-import { assistantMessages, type Db } from "@paperclipai/db";
+import { agents, assistantConversations, assistantMessages, issues, type Db } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { accessService } from "./access.js";
 import { logActivity } from "./activity-log.js";
@@ -46,6 +47,7 @@ import { issueReferenceService } from "./issue-references.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { defaultStatusForNewIssue, type NewIssueStatus } from "./issue-start-policy.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
+import { issueVisibilityCondition, resolveAgentVisibility } from "../routes/visibility.js";
 
 export const ISSUE_PROPOSAL_CARD_KIND = "issue_proposal_v1";
 /** Legacy: older conversations hold a separate "Task created" message of this kind. */
@@ -78,6 +80,11 @@ export interface CosIssueRequester {
   isInstanceAdmin?: boolean;
   /** Agent ids this person may see; null means every agent (routes/visibility.ts). */
   visibleAgentIds: ReadonlySet<string> | null;
+  /**
+   * req.actor.memberships — company admin vs member decides which projects and
+   * issues this person may see, so the turn context below is built with it.
+   */
+  memberships?: ReadonlyArray<{ companyId: string; membershipRole?: string | null; status?: string | null }>;
 }
 
 /** Agent statuses that can take new work. */
@@ -191,6 +198,11 @@ export interface CosIssueActionDeps {
     messageId: string;
     payload: IssueProposalPayload;
   }) => void;
+  /**
+   * Workspace facts the reply may rely on: open issues this person may see
+   * and their task cards still waiting on a decision.
+   */
+  turnContext?: (companyId: string, requester: CosIssueRequester) => Promise<CosTurnContext>;
 }
 
 export type CosIssueProposalResult = { ok: true; payload: IssueProposalPayload } | { ok: false; note: string };
@@ -203,6 +215,116 @@ export interface CosIssueRosterEntry {
   id: string;
   name: string;
   role: string;
+}
+
+/**
+ * The workspace facts a reply may rely on — AgentDash: the CoS once praised
+ * "the pricing summary you just approved" while the card still waited, and
+ * reported an agent busy on a finished issue. Whatever is not in this
+ * context is unknown to the reply, never assumed.
+ */
+export interface CosTurnContextIssue {
+  /** e.g. "ACM-7"; null for older rows without one. */
+  identifier: string | null;
+  title: string;
+  /** backlog | todo | in_progress | in_review | blocked — never done/cancelled. */
+  status: string;
+  /** Null when nobody is assigned or the assignee is an agent this person cannot see. */
+  assigneeName: string | null;
+}
+
+export interface CosTurnContextProposal {
+  title: string;
+  assigneeName: string;
+}
+
+export interface CosTurnContext {
+  /** Open issues this person may see, newest first. */
+  openIssues: CosTurnContextIssue[];
+  /** This person's "Create this task?" cards still waiting on their click. */
+  pendingProposals: CosTurnContextProposal[];
+}
+
+/** Caps keep the turn context a summary, not a database dump. */
+export const COS_ISSUE_CONTEXT_LIMIT = 15;
+const COS_PROPOSAL_CONTEXT_LIMIT = 5;
+
+/**
+ * The visibility SQL helpers read req.actor. Rebuild the actor the sender's
+ * own request carried — same userId, source, admin flag and memberships — so
+ * issueVisibilityCondition answers for them exactly as it did in their
+ * request. Fail closed: a missing role is a member, not an admin.
+ */
+function requesterVisibilityRequest(requester: CosIssueRequester): Request {
+  return {
+    actor: {
+      type: "board",
+      userId: requester.userId,
+      source: requester.source ?? undefined,
+      isInstanceAdmin: requester.isInstanceAdmin === true,
+      memberships: requester.memberships ?? [],
+    },
+  } as Request;
+}
+
+/** Open issues of this company, restricted to the ones this person may see. */
+async function listTurnContextIssues(db: Db, companyId: string, requester: CosIssueRequester): Promise<CosTurnContextIssue[]> {
+  const req = requesterVisibilityRequest(requester);
+  // issueVisibilityCondition reads the scope resolveAgentVisibility cached on
+  // this request — the same pairing the issue routes use.
+  await resolveAgentVisibility(db, req, companyId);
+  const rows = await db
+    .select({
+      identifier: issues.identifier,
+      title: issues.title,
+      status: issues.status,
+      assigneeAgentId: issues.assigneeAgentId,
+      assigneeName: agents.name,
+    })
+    .from(issues)
+    .leftJoin(agents, eq(agents.id, issues.assigneeAgentId))
+    .where(
+      and(
+        eq(issues.companyId, companyId),
+        // The schema's own definition of open (issues CHECK): not done/cancelled.
+        notInArray(issues.status, ["done", "cancelled"]),
+        issueVisibilityCondition(req, companyId),
+      ),
+    )
+    .orderBy(desc(issues.updatedAt))
+    .limit(COS_ISSUE_CONTEXT_LIMIT);
+  const seesAgent = (agentId: string | null) =>
+    agentId === null || requester.visibleAgentIds === null || requester.visibleAgentIds.has(agentId);
+  return rows.map((row) => ({
+    identifier: row.identifier,
+    title: row.title,
+    status: row.status,
+    assigneeName: seesAgent(row.assigneeAgentId) ? row.assigneeName : null,
+  }));
+}
+
+/** This person's proposal cards still waiting for a decision, company-wide. */
+async function listTurnContextProposals(db: Db, companyId: string, requester: CosIssueRequester): Promise<CosTurnContextProposal[]> {
+  const rows = await db
+    .select({ cardPayload: assistantMessages.cardPayload })
+    .from(assistantMessages)
+    .innerJoin(assistantConversations, eq(assistantConversations.id, assistantMessages.conversationId))
+    .where(
+      and(
+        eq(assistantConversations.companyId, companyId),
+        eq(assistantMessages.cardKind, ISSUE_PROPOSAL_CARD_KIND),
+        sql`${assistantMessages.cardPayload} ->> 'status' = 'pending'`,
+        sql`${assistantMessages.cardPayload} ->> 'requesterUserId' = ${requester.userId}`,
+      ),
+    )
+    .orderBy(desc(assistantMessages.createdAt))
+    .limit(COS_PROPOSAL_CONTEXT_LIMIT);
+  const proposals: CosTurnContextProposal[] = [];
+  for (const row of rows) {
+    const proposal = readProposal(row.cardPayload);
+    if (proposal) proposals.push({ title: proposal.title, assigneeName: proposal.assigneeName });
+  }
+  return proposals;
 }
 
 function isChiefOfStaff(agent: ActionAgent, cosAgentId: string | null): boolean {
@@ -268,6 +390,12 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
             (!requester.visibleAgentIds || requester.visibleAgentIds.has(a.id)),
         )
         .map((a): CosIssueRosterEntry => ({ id: a.id, name: a.name, role: a.title || a.role || "agent" }));
+    },
+
+    /** Workspace facts this person's reply may rely on; empty without them. */
+    turnContext: async (companyId: string, requester: CosIssueRequester | null | undefined): Promise<CosTurnContext> => {
+      if (!requester?.userId || !deps.turnContext) return { openIssues: [], pendingProposals: [] };
+      return deps.turnContext(companyId, requester);
     },
 
     /** Turn a trailer into a pending proposal card payload, or a polite note. */
@@ -543,6 +671,13 @@ export function cosIssueActionForDb(db: Db): CosIssueAction {
         cardKind: ISSUE_PROPOSAL_CARD_KIND,
         cardPayload: payload as unknown as Record<string, unknown>,
       });
+    },
+    turnContext: async (companyId, requester) => {
+      const [openIssues, pendingProposals] = await Promise.all([
+        listTurnContextIssues(db, companyId, requester),
+        listTurnContextProposals(db, companyId, requester),
+      ]);
+      return { openIssues, pendingProposals };
     },
   });
 }

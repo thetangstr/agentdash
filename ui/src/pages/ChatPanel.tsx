@@ -1,6 +1,7 @@
 // AgentDash: chat substrate page
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMessages } from "../realtime/useMessages";
+import { publishConversationMessage } from "../realtime/conversationEventBus";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
 import { ChatHeader, type ChatHeaderProps } from "../components/ChatHeader";
@@ -92,6 +93,28 @@ export default function ChatPanel({
     return () => clearTimeout(t);
   }, [messages, conversationId]);
 
+  // Land on the newest message the moment the first page paints. A smooth
+  // scroll used to be interrupted by the "CoS is thinking" block (and card
+  // images) still laying out, so the chat opened ~52px above the bottom.
+  const didInitialScrollRef = useRef(false);
+  useEffect(() => {
+    didInitialScrollRef.current = false;
+  }, [conversationId]);
+  useEffect(() => {
+    if (didInitialScrollRef.current || messages.length === 0) return;
+    didInitialScrollRef.current = true;
+    const node = bottomRef.current;
+    // jsdom doesn't implement scrollIntoView; feature-detect so unit tests pass.
+    if (node && typeof node.scrollIntoView === "function") {
+      node.scrollIntoView({ block: "end" });
+      // A second pass once late layout (avatars, cards, the thinking block)
+      // has settled, still instant.
+      window.requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ block: "end" });
+      });
+    }
+  }, [messages.length]);
+
   // Auto-scroll the messages area to the bottom whenever a new message arrives.
   // Keyed on length + last message id (not the array reference) to avoid running
   // on every re-render when the underlying messages haven't changed.
@@ -146,9 +169,17 @@ export default function ChatPanel({
   function send(body: string) {
     setSendError(null);
     setSentThisSession(true);
-    conversationsApi.post(conversationId, body, companyId).catch(() => {
-      setSendError("Your message was not sent. Check your connection and try again.");
-    });
+    conversationsApi
+      .post(conversationId, body, companyId)
+      .then((posted) => {
+        // The POST response is the persisted row; put it into the open chat
+        // now instead of waiting for the live socket (which may be down) to
+        // deliver it back. A later socket redelivery dedupes on the id.
+        publishConversationMessage(posted);
+      })
+      .catch(() => {
+        setSendError("Your message was not sent. Check your connection and try again.");
+      });
   }
 
   async function retryReply(messageId: string) {

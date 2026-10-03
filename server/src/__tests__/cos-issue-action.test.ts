@@ -155,6 +155,28 @@ describe("cosIssueAction.roster", () => {
   });
 });
 
+// AgentDash (canary, lane chat): the turn context is the facts a reply may
+// rely on — open issues this person may see and their own waiting task cards.
+describe("cosIssueAction.turnContext", () => {
+  it("returns the dep's facts for this person", async () => {
+    const context = {
+      openIssues: [{ identifier: "ACM-7", title: "Draft the Acme proposal", status: "in_progress", assigneeName: "Ellie" }],
+      pendingProposals: [{ title: "Price the Acme renovation", assigneeName: "Ellie" }],
+    };
+    const { deps } = makeDeps({ turnContext: vi.fn().mockResolvedValue(context) });
+    await expect(cosIssueAction(deps).turnContext(companyId, requester())).resolves.toEqual(context);
+    expect(deps.turnContext).toHaveBeenCalledWith(companyId, requester());
+  });
+
+  it("is empty without a person or without the dep, never an error", async () => {
+    const { deps } = makeDeps({ turnContext: vi.fn().mockResolvedValue({ openIssues: [{}], pendingProposals: [{}] }) });
+    await expect(cosIssueAction(deps).turnContext(companyId, null)).resolves.toEqual({ openIssues: [], pendingProposals: [] });
+    expect(deps.turnContext).not.toHaveBeenCalled();
+    const { deps: bare } = makeDeps();
+    await expect(cosIssueAction(bare).turnContext(companyId, requester())).resolves.toEqual({ openIssues: [], pendingProposals: [] });
+  });
+});
+
 describe("cosIssueAction.proposeFromTrailer", () => {
   it("returns a pending card for the requester, without creating anything", async () => {
     const { deps } = makeDeps();

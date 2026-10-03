@@ -216,6 +216,7 @@ export function conversationRoutes(
       authorSource: req.actor.source ?? null,
       authorIsInstanceAdmin: req.actor.isInstanceAdmin === true,
       authorVisibleAgentIds: () => (visible ??= visibleAgentIdsFor(db, req, companyId)),
+      authorMemberships: Array.isArray(req.actor.memberships) ? req.actor.memberships : [],
     };
   }
 
