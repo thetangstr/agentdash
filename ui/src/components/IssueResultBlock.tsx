@@ -27,11 +27,18 @@ export function IssueResultBlock({
   companyId,
   issueId,
   issueStatus,
+  issueLive,
   review,
 }: {
   companyId: string;
   issueId: string;
   issueStatus?: string | null;
+  /**
+   * AgentDash (batch 2 review lane): while the issue is Live a run may still
+   * write the revision the reviewer is being asked to accept, so the review
+   * controls stay hidden until nothing is running.
+   */
+  issueLive?: boolean;
   /**
    * AgentDash (Scan 3 lane I): passed only for a board user. With it, a
    * deliverable waiting for review gets Accept and Request changes here, on
@@ -69,11 +76,22 @@ export function IssueResultBlock({
   const items = data?.items ?? [];
   if (items.length === 0) return null;
   const usage = items[0]!.usage;
+  const hasReviewableItem = items.some((product) => product.status === "ready_for_review");
   const awaitingReview =
     !!review
     && issueStatus !== "done"
     && issueStatus !== "cancelled"
-    && items.some((product) => product.status === "ready_for_review");
+    && !issueLive
+    && hasReviewableItem;
+  // AgentDash (review #1003): while Live the controls stay hidden, but the
+  // reviewer should know why — a run may still write the revision they would
+  // be accepting.
+  const waitingOnLiveRun =
+    !!review
+    && issueStatus !== "done"
+    && issueStatus !== "cancelled"
+    && !!issueLive
+    && hasReviewableItem;
 
   async function run(kind: "accept" | "changes", action: () => Promise<unknown>) {
     setBusy(kind);
@@ -128,7 +146,7 @@ export function IssueResultBlock({
                 maxLength={REQUEST_CHANGES_NOTE_MAX}
                 autoFocus
                 rows={3}
-                placeholder="A short note for the agent, e.g. add hotel prices for Kyoto"
+                placeholder="A short note for the agent, e.g. what to add, fix, or remove"
                 onChange={(event) => setNote(event.target.value)}
               />
               <div className="flex flex-wrap items-center gap-2">
@@ -159,27 +177,29 @@ export function IssueResultBlock({
           ) : (
             <div className="flex flex-wrap items-center gap-2">
               <span className="mr-auto text-xs text-muted-foreground">Is this what you wanted?</span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="max-sm:h-11"
-                disabled={busy !== null}
-                onClick={() => setMode("note")}
-                data-testid="issue-review-request-changes"
-              >
-                Request changes
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                className="max-sm:h-11"
-                disabled={busy !== null}
-                onClick={() => void run("accept", review!.onAccept)}
-                data-testid="issue-review-accept"
-              >
-                {busy === "accept" ? "Accepting…" : "Accept"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="max-sm:h-11"
+                  disabled={busy !== null}
+                  onClick={() => setMode("note")}
+                  data-testid="issue-review-request-changes"
+                >
+                  Request changes
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="max-sm:h-11"
+                  disabled={busy !== null}
+                  onClick={() => void run("accept", review!.onAccept)}
+                  data-testid="issue-review-accept"
+                >
+                  {busy === "accept" ? "Accepting…" : "Accept"}
+                </Button>
+              </div>
             </div>
           )}
           {error ? (
@@ -188,6 +208,13 @@ export function IssueResultBlock({
             </p>
           ) : null}
         </div>
+      ) : waitingOnLiveRun ? (
+        <p
+          className="border-t border-border px-3 py-2.5 text-xs text-muted-foreground"
+          data-testid="issue-review-waiting-on-run"
+        >
+          Waiting for the agent to finish
+        </p>
       ) : null}
     </section>
   );

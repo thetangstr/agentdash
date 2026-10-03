@@ -64,6 +64,32 @@ export async function listCompanyMemberNames(db: Db, companyId: string): Promise
   return [...names];
 }
 
+/**
+ * One member's display name, for the CoS prompt's "the last message from
+ * <name>" framing (review-1006 finding 4). Null when the principal is not an
+ * active human member — the framing then stays generic.
+ */
+export async function companyMemberName(
+  db: Db,
+  companyId: string,
+  userId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ name: authUsers.name })
+    .from(companyMemberships)
+    .innerJoin(authUsers, eq(authUsers.id, companyMemberships.principalId))
+    .where(
+      and(
+        eq(companyMemberships.companyId, companyId),
+        eq(companyMemberships.principalType, "user"),
+        eq(companyMemberships.principalId, userId),
+        eq(companyMemberships.status, "active"),
+      ),
+    )
+    .limit(1);
+  return rows[0] ? sanitizeMemberName(rows[0].name) || null : null;
+}
+
 /** Lower-cased full names and first names; a name matching any of these is taken. */
 export function memberNameKeys(memberNames: readonly string[]): Set<string> {
   const keys = new Set<string>();
@@ -95,6 +121,11 @@ export function planNamingGuidance(memberNames: readonly string[]): string {
 /** Prompt guidance for the visible text above a plan card. */
 export const PLAN_INTRO_GUIDANCE =
   'In the visible body (before the JSON), write ONE short sentence that sums up the plan. The card under your message shows every agent with its responsibilities and targets, so do not list the agents, their responsibilities or the goals again. Then ask "Want me to set them up, or revise?"';
+
+// AgentDash: vague targets like "a set number of conversations" tell the board
+// nothing — every KPI needs a number and a period the plan can be held to.
+export const PLAN_KPI_GUIDANCE =
+  'Every KPI names a concrete number and a period — for example "12 qualified renewal calls a month" or "+10% retention within 6 months" — never a vague target like "a set number of" or "increase signups".';
 
 export interface PlanRename {
   from: string;

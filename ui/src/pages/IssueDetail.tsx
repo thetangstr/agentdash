@@ -1639,6 +1639,12 @@ export function IssueDetail() {
       if (context?.selectedCompanyId) {
         queryClient.setQueryData(queryKeys.issues.list(context.selectedCompanyId), context.previousList);
       }
+      // AgentDash (review #1003): a 409 here is the revision guard — refetch
+      // the documents so a retry compares against the newest numbers, not a
+      // stale cached baseline.
+      if (err instanceof ApiError && err.status === 409) {
+        queryClient.invalidateQueries({ queryKey: ["issues", "documents"] });
+      }
       pushToast({
         title: "Issue update failed",
         body: err instanceof Error ? err.message : "Unable to save issue changes",
@@ -1658,8 +1664,35 @@ export function IssueDetail() {
   // /issues/:id/request-changes): the note becomes a comment that wakes the
   // assignee, the issue goes back to work, and the deliverables that were
   // waiting are sent back so they leave Decisions and never count as shipped.
+  // AgentDash (batch 2 review lane): acceptance binds to the document
+  // revision the page showed — the cached documents query is what the
+  // reviewer saw. When it has not loaded yet, load and SHOW the documents,
+  // then stop: sending the freshly fetched numbers would accept a revision
+  // the reviewer never saw (review #1003). The retry carries the shown
+  // baseline.
+  const collectSeenDocumentRevisions = useCallback(async (): Promise<Record<string, number> | undefined> => {
+    const documentIssueId = issue?.id ?? issueId!;
+    const documentsKey = queryKeys.issues.documents(documentIssueId);
+    const documents = queryClient.getQueryData<Awaited<ReturnType<typeof issuesApi.listDocuments>>>(documentsKey);
+    if (!documents) {
+      await queryClient.fetchQuery({
+        queryKey: documentsKey,
+        queryFn: () => issuesApi.listDocuments(documentIssueId),
+      });
+      return undefined;
+    }
+    return Object.fromEntries(
+      documents.map((doc) => [doc.key, doc.latestRevisionNumber]),
+    );
+  }, [issue?.id, issueId, queryClient]);
   const resultReviewActions = useMemo<IssueResultReviewActions>(() => ({
-    onAccept: () => updateIssue.mutateAsync({ status: "done" }),
+    onAccept: async () => {
+      const acceptedDocumentRevisions = await collectSeenDocumentRevisions();
+      if (acceptedDocumentRevisions === undefined) {
+        throw new Error("The issue's documents are shown below — read the latest revision, then accept again.");
+      }
+      return updateIssue.mutateAsync({ status: "done", acceptedDocumentRevisions });
+    },
     onRequestChanges: async (note: string) => {
       const current = queryClient.getQueryData<Issue>(queryKeys.issues.detail(issueId!));
       const result = await issuesApi.requestChanges(current?.id ?? issueId!, note);
@@ -1671,7 +1704,7 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(result.issue.companyId) });
       invalidateIssueCollections();
     },
-  }), [invalidateIssueCollections, issueId, queryClient, updateIssue.mutateAsync]);
+  }), [collectSeenDocumentRevisions, invalidateIssueCollections, issueId, queryClient, updateIssue.mutateAsync]);
   // AgentDash (recovery budget remediation): "Clear recovery block & retry".
   const clearRecoveryBudget = useMutation({
     mutationFn: () => issuesApi.clearRecoveryBudget(issueId!),
@@ -1822,8 +1855,23 @@ export function IssueDetail() {
     },
   });
   const handleIssuePropertiesUpdate = useCallback((data: Record<string, unknown>) => {
-    updateIssue.mutate(data);
-  }, [updateIssue.mutate]);
+    // AgentDash (review #1003): the properties panel's move to done is an
+    // acceptance like the Result card's — it must carry the revisions the
+    // page showed, or the server asks for the baseline (409).
+    if (data.status !== "done") {
+      updateIssue.mutate(data);
+      return;
+    }
+    void (async () => {
+      let acceptedDocumentRevisions: Record<string, number> | undefined;
+      try {
+        acceptedDocumentRevisions = await collectSeenDocumentRevisions();
+      } catch {
+        acceptedDocumentRevisions = undefined;
+      }
+      updateIssue.mutate({ ...data, acceptedDocumentRevisions });
+    })();
+  }, [collectSeenDocumentRevisions, updateIssue.mutate]);
 
   const updateChildIssue = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => issuesApi.update(id, data),
@@ -3195,7 +3243,24 @@ export function IssueDetail() {
           <StatusIcon
             status={issue.status}
             blockerAttention={issue.blockerAttention}
-            onChange={(status) => updateIssue.mutate({ status })}
+            onChange={(status) => {
+              // AgentDash (batch 2 review lane): moving to done is an
+              // acceptance — send the revisions on-screen so the server can
+              // refuse a stale one. If the lookup fails, send without a
+              // baseline: the server refuses only when a document-bound
+              // deliverable actually needs one.
+              void (async () => {
+                let acceptedDocumentRevisions: Record<string, number> | undefined;
+                if (status === "done") {
+                  try {
+                    acceptedDocumentRevisions = await collectSeenDocumentRevisions();
+                  } catch {
+                    acceptedDocumentRevisions = undefined;
+                  }
+                }
+                updateIssue.mutate({ status, acceptedDocumentRevisions });
+              })();
+            }}
           />
           <PriorityIcon
             priority={issue.priority}
@@ -3478,6 +3543,7 @@ export function IssueDetail() {
           companyId={issue.companyId}
           issueId={issue.id}
           issueStatus={issue.status}
+          issueLive={hasLiveRuns}
           review={canManageTreeControl ? resultReviewActions : null}
         />
 
@@ -3744,7 +3810,7 @@ export function IssueDetail() {
       <IssueWorkspaceCard
         issue={issue}
         project={resolvedProject}
-        onUpdate={(data) => updateIssue.mutate(data)}
+        onUpdate={handleIssuePropertiesUpdate}
       />
 
       <Separator />
@@ -4062,7 +4128,7 @@ export function IssueDetail() {
                 issue={issue}
                 childIssues={childIssues}
                 onAddSubIssue={openNewSubIssue}
-                onUpdate={(data) => updateIssue.mutate(data)}
+                onUpdate={handleIssuePropertiesUpdate}
                 inline
               />
             </div>

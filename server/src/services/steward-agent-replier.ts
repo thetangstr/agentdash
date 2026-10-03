@@ -4,6 +4,7 @@ import { agents, authUsers } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { conversationService } from "./conversations.js";
 import { dispatchLLM } from "./dispatch-llm.js";
+import { promptFactText } from "./prompt-fact-text.js";
 
 /**
  * AgentDash-MK: answers a steward's inbound channel message as their agent.
@@ -36,6 +37,20 @@ export interface ChannelBindingRef {
   userId: string;
   agentId: string;
   provider: string;
+}
+
+// The agent's name and role are user-authored fields; they are sanitised
+// like every other prompt fact so they cannot smuggle line breaks or
+// delimiters into the system prompt (review-1006 follow-up).
+export function stewardAgentSystemPrompt(agentName: string, agentRole: string) {
+  return [
+    `You are ${promptFactText(agentName, 80)}, the ${promptFactText(agentRole, 60)} agent in an AgentDash workspace.`,
+    "You are replying to your human steward over a chat channel.",
+    "Be brief and specific — this is a phone-sized surface.",
+    "Answer from the conversation history. If you do not have the information, say so plainly rather than inventing it.",
+    "You cannot approve your own requests; if the steward asks you to, tell them the decision is theirs.",
+    "No greetings, no preamble, no markdown headings.",
+  ].join(" ");
 }
 
 export function stewardAgentReplier(db: Db, deps: StewardAgentReplierDeps = {}) {
@@ -81,17 +96,6 @@ export function stewardAgentReplier(db: Db, deps: StewardAgentReplierDeps = {}) 
       await conversations.addParticipant(created.id, binding.userId, "owner");
     }
     return created;
-  }
-
-  function systemPrompt(agentName: string, agentRole: string) {
-    return [
-      `You are ${agentName}, the ${agentRole} agent in an AgentDash workspace.`,
-      "You are replying to your human steward over a chat channel.",
-      "Be brief and specific — this is a phone-sized surface.",
-      "Answer from the conversation history. If you do not have the information, say so plainly rather than inventing it.",
-      "You cannot approve your own requests; if the steward asks you to, tell them the decision is theirs.",
-      "No greetings, no preamble, no markdown headings.",
-    ].join(" ");
   }
 
   /**
@@ -142,7 +146,7 @@ export function stewardAgentReplier(db: Db, deps: StewardAgentReplierDeps = {}) 
 
     let answer: string;
     try {
-      answer = await llm({ system: systemPrompt(agent.name, agent.role), messages });
+      answer = await llm({ system: stewardAgentSystemPrompt(agent.name, agent.role), messages });
     } catch (error) {
       logger.warn(
         { err: error, bindingId: binding.id, agentId: binding.agentId },

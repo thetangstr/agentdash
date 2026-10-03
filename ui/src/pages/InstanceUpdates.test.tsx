@@ -24,6 +24,10 @@ const mockOtaApi = vi.hoisted(() => ({
 
 vi.mock("@/api/ota", () => ({ otaApi: mockOtaApi }));
 
+vi.mock("@/context/BreadcrumbContext", () => ({
+  useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
+}));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { InstanceUpdates } = await import("./InstanceUpdates");

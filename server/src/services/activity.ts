@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -15,6 +15,7 @@ import {
   workspaceOperations,
 } from "@paperclipai/db";
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
+import { ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS, HIDDEN_FEED_ACTIVITY_ACTIONS } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { classifyRunLiveness } from "./run-liveness.js";
 import { redactRunLogValue } from "./run-log-redaction.js";
@@ -28,6 +29,12 @@ export interface ActivityFilters {
   /** Inclusive lower bound on `created_at` (assistant MCP `since`). */
   since?: Date;
   limit?: number;
+  /**
+   * AgentDash (review #1003): `false` excludes system-actor rows and
+   * bookkeeping actions from the company feed — the Activity page's "Show
+   * system events" toggle. Omitted means the full feed (API consumers).
+   */
+  includeSystem?: boolean;
   /**
    * The caller's visibility condition (A5). Composed with the left-joined
    * `issues` row, so it may reference `issues.project_id`.
@@ -44,6 +51,19 @@ const DEFAULT_ACTIVITY_LIMIT = 100;
 const MAX_ACTIVITY_LIMIT = 500;
 const DEFAULT_ISSUE_RUNS_LIMIT = 100;
 const MAX_ISSUE_RUNS_LIMIT = 500;
+
+// AgentDash (batch 2 review lane): bookkeeping actions hidden from issue
+// feeds by default — local inbox/read markers plus review-queue churn. The
+// lists live in packages/shared so the feed and the UI cannot drift apart.
+const ISSUE_FEED_HIDDEN_ACTIONS = [
+  ...ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
+  "queue_state_changed",
+];
+
+// AgentDash (review #1003): the company feed's "Show system events" off state
+// hides the same bookkeeping plus workspace/env machinery, and every
+// system-actor row, filtered in SQL so the limit applies to visible rows.
+const COMPANY_FEED_HIDDEN_ACTIONS = [...HIDDEN_FEED_ACTIVITY_ACTIONS];
 
 export function normalizeActivityLimit(limit: number | undefined) {
   if (!Number.isFinite(limit)) return DEFAULT_ACTIVITY_LIMIT;
@@ -366,6 +386,10 @@ export function activityService(db: Db) {
       if (filters.visibleWhere) {
         conditions.push(filters.visibleWhere);
       }
+      if (filters.includeSystem === false) {
+        conditions.push(ne(activityLog.actorType, "system"));
+        conditions.push(notInArray(activityLog.action, COMPANY_FEED_HIDDEN_ACTIONS));
+      }
 
       return db
         .select({ activityLog })
@@ -391,6 +415,10 @@ export function activityService(db: Db) {
         .then((rows) => rows.map((r) => r.activityLog));
     },
 
+    // AgentDash (batch 2 review lane): the issue page feed has no "show
+    // system events" toggle, so bookkeeping rows (read markers, inbox moves,
+    // review-queue churn) are excluded here, matching the company feed's
+    // default-hidden plumbing list.
     forIssue: (issueId: string) =>
       db
         .select()
@@ -399,6 +427,7 @@ export function activityService(db: Db) {
           and(
             eq(activityLog.entityType, "issue"),
             eq(activityLog.entityId, issueId),
+            notInArray(activityLog.action, ISSUE_FEED_HIDDEN_ACTIONS),
           ),
         )
         .orderBy(desc(activityLog.createdAt)),

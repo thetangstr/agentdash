@@ -1086,7 +1086,9 @@ describe.sequential("issue comment reopen routes", () => {
     );
   });
 
-  it("does not cancel active runs when an issue is marked done", async () => {
+  // AgentDash (batch 2 review lane): done closes the issue, so every live
+  // run bound to it is cancelled — same as cancelled.
+  it("cancels active runs when an issue is marked done", async () => {
     const issue = {
       ...makeIssue("in_progress"),
       executionRunId: "run-1",
@@ -1108,7 +1110,7 @@ describe.sequential("issue comment reopen routes", () => {
       .send({ status: "done" });
 
     expect(res.status).toBe(200);
-    expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("run-1", "Cancelled because the issue was marked done");
   });
 
   it("writes decision ids into executionState and inserts the decision inside the transaction", async () => {

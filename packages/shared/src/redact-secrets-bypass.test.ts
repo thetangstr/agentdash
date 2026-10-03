@@ -426,3 +426,52 @@ describe("escaped-JSON closer", () => {
     expect(out).not.toContain("ab\\\\");
   });
 });
+
+// An astral char (emoji) pushes a surrogate pair into the normalized text but
+// used to push only one position-map entry — every edit after it landed one
+// unit off, leaving the secret in place and duplicating the text.
+describe("astral characters before secrets", () => {
+  const LEAKS_AFTER_EMOJI: [string, string][] = [
+    ["env assignment", `API_KEY=${SHAPELESS}`],
+    ["bearer header", `Authorization: Bearer ${SHAPELESS}`],
+    ["sk- key", `token is ${ANT}`],
+    ["json value", `{"client_secret":"${SHAPELESS}"}`],
+    ["TOKEN=", `TOKEN=${SHAPELESS}`],
+    ["url userinfo", `postgres://admin:hunter2pass@db.local:5432/x`],
+  ];
+
+  it.each(LEAKS_AFTER_EMOJI)("redacts an %s after one emoji", (_name, body) => {
+    const out = redactSecrets(`\u{1F680} Deployed! ${body}`);
+    expect(out).not.toContain(SHAPELESS);
+    expect(out).not.toContain(ANT);
+    expect(out).not.toContain("hunter2pass");
+    expect(out.split("Deployed!").length - 1).toBe(1);
+    expect(out).toContain(REDACTED);
+    expect(out).toContain("\u{1F680}");
+  });
+
+  it.each(LEAKS_AFTER_EMOJI)("redacts an %s after several astral chars", (_name, body) => {
+    const out = redactSecrets(`\u{1F680}\u{1F389}\u{1F31F} done ${body}`);
+    expect(out).not.toContain(SHAPELESS);
+    expect(out).not.toContain(ANT);
+    expect(out).not.toContain("hunter2pass");
+    expect(out).toContain(REDACTED);
+  });
+
+  it("redacts secrets on both sides of emoji", () => {
+    const out = redactSecrets(`API_KEY=${SHAPELESS} \u{1F680}\u{1F389} TOKEN=${AWS_SECRET}`);
+    expect(out).not.toContain(SHAPELESS);
+    expect(out).not.toContain(AWS_SECRET);
+    expect(out).toContain("\u{1F680}\u{1F389}");
+  });
+
+  it("returns secret-free astral text byte-for-byte", () => {
+    const clean = "\u{1F680} emoji \u{1F389} CJK \u3053\u3093\u306B\u3061\u306F cafe\u0301 \u{1F468}\u{200D}\u{1F4BB} flags \u{1F1FA}\u{1F1F8}";
+    expect(redactSecrets(clean)).toBe(clean);
+  });
+
+  it("does not duplicate text around an emoji-prefixed secret", () => {
+    const out = redactSecrets(`\u{1F680} Deployed! API_KEY=${SHAPELESS}`);
+    expect(out).toBe(`\u{1F680} Deployed! API_KEY=${REDACTED}`);
+  });
+});

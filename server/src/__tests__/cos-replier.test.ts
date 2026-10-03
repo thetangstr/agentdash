@@ -3,8 +3,11 @@ import {
   announcesPlan,
   cosReplier,
   parseTrailer,
+  planPrompt,
+  planPromptFromSpec,
   defaultAgentPlanAdapterType,
 } from "../services/cos-replier.js";
+import { PLAN_KPI_GUIDANCE } from "../services/cos-plan-naming.js";
 
 describe("cosReplier.defaultAgentPlanAdapterType", () => {
   const originalValue = process.env.AGENTDASH_DEFAULT_ADAPTER;
@@ -37,6 +40,24 @@ describe("cosReplier.defaultAgentPlanAdapterType", () => {
   it("falls back to hermes_local when unset", () => {
     delete process.env.AGENTDASH_DEFAULT_ADAPTER;
     expect(defaultAgentPlanAdapterType()).toBe("hermes_local");
+  });
+});
+
+describe("cosReplier plan prompts", () => {
+  // PR #1005 review: both plan prompts must demand concrete KPIs — a vague
+  // "a set number of conversations" target is not reviewable.
+  it("includes PLAN_KPI_GUIDANCE in the goals-driven plan prompt", () => {
+    const prompt = planPrompt({ goals: { shortTerm: "ship v2" } } as never);
+    expect(prompt).toContain(PLAN_KPI_GUIDANCE);
+  });
+
+  it("includes PLAN_KPI_GUIDANCE in the spec-driven plan prompt", () => {
+    const prompt = planPromptFromSpec({
+      goal: "ship v2",
+      constraints: [],
+      criteria: [],
+    });
+    expect(prompt).toContain(PLAN_KPI_GUIDANCE);
   });
 });
 

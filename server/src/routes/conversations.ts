@@ -20,7 +20,7 @@ import { dispatchLLM } from "../services/dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, STALLED_REPLY_RETRY_AFTER_MS, isNoBalanceFailure, postDispatchFailure } from "../services/cos-dispatch-failure.js";
 import { buildPhase0Greeting } from "../services/onboarding-orchestrator.js";
 import { cosIssueActionForDb, type CosIssueAction } from "../services/cos-issue-action.js";
-import { listCompanyMemberNames } from "../services/cos-plan-naming.js";
+import { companyMemberName, listCompanyMemberNames } from "../services/cos-plan-naming.js";
 import { visibleAgentIdsFor } from "./visibility.js";
 
 const COMPANY_INBOX_TITLE = "Company Inbox";
@@ -76,6 +76,9 @@ export function conversationRoutes(
       issueAction: issueAction,
       // AgentDash (scan 4, lane N): never name a proposed agent after a member.
       memberNames: (companyId: string) => listCompanyMemberNames(db, companyId),
+      // AgentDash (review-1006 finding 4): frame the answered message by
+      // author name instead of quoting its text into the system prompt.
+      requesterName: (companyId: string, userId: string) => companyMemberName(db, companyId, userId),
     } as any),
     cosResolver,
   });

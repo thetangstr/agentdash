@@ -15,7 +15,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { cosIssueActionForDb } from "../services/cos-issue-action.js";
-import { steadyStatePrompt } from "../services/cos-replier.js";
+import { cosTurnContextMessage, steadyStatePrompt } from "../services/cos-replier.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -132,14 +132,21 @@ describeEmbeddedPostgres("cos turn context visibility (shared inbox)", () => {
     expect(names).not.toContain("Ghost");
   });
 
-  it("builds a prompt with no restricted titles or hidden names", async () => {
+  it("builds a facts message with no restricted titles or hidden names", async () => {
     const action = cosIssueActionForDb(db);
     const [context, roster] = await Promise.all([
       action.turnContext(COMPANY, adminRequester),
       action.roster(COMPANY, adminRequester, null),
     ]);
-    const prompt = steadyStatePrompt(roster, null, context);
-    expect(prompt).toContain("Open roadmap task");
+    // The facts travel as a separate context message, never in the system
+    // prompt — user-authored titles must not sit where instructions live.
+    const facts = cosTurnContextMessage(context, "facts-visibilitytest");
+    expect(facts?.role).toBe("user");
+    expect(facts?.content).toContain("Open roadmap task");
+    expect(facts?.content).not.toContain("Secret acquisition plan");
+    expect(facts?.content).not.toContain("Task for the hidden agent");
+    const prompt = steadyStatePrompt(roster, null);
+    expect(prompt).not.toContain("Open roadmap task");
     expect(prompt).not.toContain("Secret acquisition plan");
     expect(prompt).not.toContain("Task for the hidden agent");
     expect(prompt).not.toContain("Ghost");

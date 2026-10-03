@@ -128,6 +128,19 @@ describe("IssueResultBlock", () => {
     expect(onRequestChanges).toHaveBeenCalledWith("Add Kyoto prices");
   });
 
+  // AgentDash (batch 2 review lane): while the issue shows "Live" a run may
+  // still write the revision being accepted — the controls stay hidden.
+  it("hides the review controls while the issue is live, and shows them again once it is not", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue({ items: [waitingItem()], total: 1, nextCursor: null, monthTotal: null });
+    const review = { onAccept: vi.fn(), onRequestChanges: vi.fn() };
+    await render({ issueStatus: "in_review", issueLive: true, review });
+    expect(container.querySelector('[data-testid="issue-review-actions"]')).toBeNull();
+    expect(review.onAccept).not.toHaveBeenCalled();
+
+    await render({ issueStatus: "in_review", issueLive: false, review });
+    expect(container.querySelector('[data-testid="issue-review-accept"]')).not.toBeNull();
+  });
+
   it("shows no review actions without board access, or once the issue is done", async () => {
     mockIssuesApi.listShipped.mockResolvedValue({ items: [waitingItem()], total: 1, nextCursor: null, monthTotal: null });
     await render({ issueStatus: "in_review", review: null });

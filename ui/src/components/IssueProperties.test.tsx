@@ -969,4 +969,40 @@ describe("IssueProperties", () => {
 
     act(() => root.unmount());
   });
+
+  // AgentDash: an in-review issue with no configured reviewers is owned by
+  // its creator — "Reviewers: None" read as a bug next to the
+  // Accept/Request-changes bar.
+  it("shows the issue owner as the implicit reviewer while in review with no reviewers", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue({ status: "in_review", createdByUserId: "user-1" }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+    });
+    await flush();
+
+    const reviewersLabel = Array.from(container.querySelectorAll("span"))
+      .find((el) => el.childElementCount === 0 && el.textContent?.trim() === "Reviewers");
+    const reviewersRow = reviewersLabel?.parentElement;
+    expect(reviewersRow?.textContent).toContain("Me");
+    expect(reviewersRow?.textContent).not.toContain("None");
+
+    act(() => root.unmount());
+  });
+
+  it("still shows None for reviewers when the issue is not in review", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue({ status: "in_progress", createdByUserId: "user-1" }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+    });
+    await flush();
+
+    const reviewersLabel = Array.from(container.querySelectorAll("span"))
+      .find((el) => el.childElementCount === 0 && el.textContent?.trim() === "Reviewers");
+    const reviewersRow = reviewersLabel?.parentElement;
+    expect(reviewersRow?.textContent).toContain("None");
+
+    act(() => root.unmount());
+  });
 });

@@ -116,4 +116,66 @@ test.describe("Review loop (Scan 3 lane I)", () => {
       return items.find((item) => item.id === product.id)?.status;
     }, { timeout: 15_000 }).toBe("approved");
   });
+
+  // Review #1003: a document-bound deliverable — the revision the reviewer
+  // saw is the acceptance baseline, and only a newer revision resubmits it.
+  test("document-bound deliverable resubmits on a newer revision and accepts", async ({ page, request }) => {
+    const company = await createCompany(request);
+    const title = `Bind the Japan proposal ${Date.now()}`;
+    const issueRes = await request.post(`${BASE_URL}/api/companies/${company.id}/issues`, {
+      data: { title, status: "in_review" },
+    });
+    expect(issueRes.ok(), await issueRes.text()).toBe(true);
+    const issue = (await issueRes.json()) as { id: string; identifier: string | null };
+
+    const docRes = await request.put(`${BASE_URL}/api/issues/${issue.id}/documents/proposal`, {
+      data: { title: "Proposal", body: "v1", format: "markdown" },
+    });
+    expect(docRes.ok(), await docRes.text()).toBe(true);
+    const doc = (await docRes.json()) as { latestRevisionId: string | null; latestRevisionNumber: number };
+
+    const wpRes = await request.post(`${BASE_URL}/api/issues/${issue.id}/work-products`, {
+      data: {
+        type: "document",
+        provider: "paperclip",
+        title: "Tanaka family proposal",
+        status: "ready_for_review",
+        metadata: { documentKey: "proposal" },
+      },
+    });
+    expect(wpRes.ok(), await wpRes.text()).toBe(true);
+    const product = (await wpRes.json()) as { id: string };
+
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/issues/${issue.identifier ?? issue.id}`);
+    const result = page.getByTestId("issue-result-block");
+    await expect(result).toBeVisible({ timeout: 20_000 });
+    await result.getByTestId("issue-review-request-changes").click();
+    await result.getByTestId("issue-review-note").fill("Add hotel prices for Kyoto.");
+    await result.getByTestId("issue-review-send-changes").click();
+    await expect(result.getByTestId("work-product-state")).toHaveText("changes requested", { timeout: 15_000 });
+
+    // The agent writes revision 2, then moves the issue back to in_review.
+    const rev2 = await request.put(`${BASE_URL}/api/issues/${issue.id}/documents/proposal`, {
+      data: { title: "Proposal", body: "v2 with Kyoto hotel prices", format: "markdown", baseRevisionId: doc.latestRevisionId },
+    });
+    expect(rev2.ok(), await rev2.text()).toBe(true);
+
+    const resubmit = await request.patch(`${BASE_URL}/api/issues/${issue.id}`, {
+      data: { status: "in_review", comment: "Revised: added Kyoto hotel prices." },
+    });
+    expect(resubmit.ok(), await resubmit.text()).toBe(true);
+
+    await page.reload();
+    await expect(result.getByTestId("work-product-state")).toHaveText("ready for review", { timeout: 15_000 });
+    // The accept sends the revision the page showed — wait for the document
+    // to render so the baseline is collected, not fetched unseen.
+    await expect(page.locator("#document-proposal")).toBeVisible({ timeout: 15_000 });
+    await result.getByTestId("issue-review-accept").click();
+
+    await expect.poll(async () => {
+      const res = await request.get(`${BASE_URL}/api/issues/${issue.id}/work-products`);
+      const items = (await res.json()) as Array<{ id: string; status: string }>;
+      return items.find((item) => item.id === product.id)?.status;
+    }, { timeout: 15_000 }).toBe("approved");
+  });
 });

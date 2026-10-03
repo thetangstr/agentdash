@@ -105,6 +105,11 @@ export function AgentPlanProposal({
     setSubmitting(false);
   }
   const agents = Array.isArray(payload?.agents) ? payload.agents : [];
+  // AgentDash: the rationale is generated for the hire prompt
+  // (agent-creator-from-proposal renders it when the plan materializes), but
+  // the card no longer shows it — it restated the same plan prose the reply
+  // already carried, which read three times in a row. The alignment lines
+  // stay: forward-looking context nothing else renders.
   const shortTerm = isKnownPlanValue(payload?.alignmentToShortTerm) ? payload.alignmentToShortTerm : null;
   const longTerm = isKnownPlanValue(payload?.alignmentToLongTerm) ? payload.alignmentToLongTerm : null;
   return (
@@ -112,11 +117,7 @@ export function AgentPlanProposal({
       className="agent-plan-proposal w-full min-w-0 border border-border-soft rounded-lg p-3 sm:p-6 bg-surface-raised shadow-sm"
       data-testid="plan-proposal"
     >
-      {isKnownPlanValue(payload?.rationale) && (
-        <div className="text-sm sm:text-base text-text-primary break-words">{payload.rationale}</div>
-      )}
-
-      <div className="mt-3 sm:mt-4 flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {agents.map((agent, i) => {
           const role = planAgentTitle(agent);
           const kpis = (Array.isArray(agent.kpis) ? agent.kpis : []).filter(isKnownPlanValue);

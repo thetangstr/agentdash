@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { authApi } from "../api/auth";
+import { accessApi } from "../api/access";
 import { healthApi } from "../api/health";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -41,4 +42,39 @@ export function useBoardSessionState(): BoardSessionState {
 
 export function useBoardSessionReady(): boolean {
   return useBoardSessionState() === "ready";
+}
+
+/**
+ * AgentDash (b2 polish): mirrors the server's hasBoardOrgAccess — board actor
+ * AND (local implicit, instance admin, or ≥1 company membership). A session
+ * alone is not enough: a signed-up founder on /company-create has a session
+ * but no membership yet, and org-scoped reads (GET /api/adapters) answer 403.
+ *
+ * Reuses CloudAccessGate's currentBoardAccess cache entry, so the check adds
+ * no request on gated routes. Local trusted mode always has org access via
+ * local_implicit, so no /cli-auth/me call is made there.
+ *
+ * Fails open like useBoardSessionReady: on an access-check error the reads
+ * run as before and surface their own errors.
+ */
+export function useBoardOrgAccess(): boolean {
+  const sessionReady = useBoardSessionReady();
+  const health = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+  });
+  const authenticatedMode = health.data?.deploymentMode === "authenticated";
+  const access = useQuery({
+    queryKey: queryKeys.access.currentBoardAccess,
+    queryFn: () => accessApi.getCurrentBoardAccess(),
+    enabled: sessionReady && authenticatedMode,
+    retry: false,
+  });
+
+  if (!sessionReady) return false;
+  if (!authenticatedMode) return true;
+  if (access.isError) return true;
+  if (!access.data) return false;
+  return access.data.isInstanceAdmin || access.data.companyIds.length > 0;
 }

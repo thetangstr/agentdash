@@ -481,17 +481,23 @@ export function hermesStatusHasConfiguredCredentials(statusOutput: string): bool
   const apiKeys = sectionAfter(statusOutput, "API Keys", "Auth Providers");
   return apiKeys
     .split(/\r?\n/)
-    .some((line) => line.includes("✓") && !line.includes("✗") && HERMES_LLM_PROVIDER_LABEL.test(line));
+    .some((line) => {
+      const marker = line.indexOf("✓");
+      if (marker < 0 || line.includes("✗")) return false;
+      // The label sits before the ✓; the masked key value after it can contain
+      // a provider-looking substring, so match the label only.
+      return HERMES_LLM_PROVIDER_LABEL.test(line.slice(0, marker));
+    });
 }
 
 /**
  * Model-provider labels in the `hermes status --full` "API Keys" section.
  * Tool/integration keys (GitHub, Tavily, Firecrawl, ElevenLabs, FAL,
- * Browserbase, Browser Use, Keenable) deliberately do not match — a set tool
- * key does not make Hermes able to run an agent.
+ * Browserbase, Browser Use, Keenable, Perplexity) deliberately do not match —
+ * a set tool key does not make Hermes able to run an agent.
  */
 const HERMES_LLM_PROVIDER_LABEL =
-  /\b(openrouter|openai|google|gemini|deepseek|xai|grok|nvidia|nim|z\.?ai|glm|kimi|moonshot|stepfun|minimax|deepinfra|anthropic|claude|nous|qwen|mistral|groq|together|fireworks|cohere|perplexity|ollama|llama)\b/i;
+  /\b(openrouter|openai|google|gemini|deepseek|xai|grok|nvidia|nim|z\.?ai|glm|kimi|moonshot|stepfun|minimax|deepinfra|anthropic|claude|nous|qwen|mistral|groq|together|fireworks|cohere|ollama|llama)\b/i;
 
 async function hermesCommandStatus(command: string, args: string[]): Promise<string | null> {
   try {

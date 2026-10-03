@@ -838,7 +838,12 @@ export function IssueDocumentsSection({
           const displayedBody = selectedHistoricalRevision?.body ?? activeDraft?.body ?? currentRevision.body;
           const displayedRevisionNumber = selectedHistoricalRevision?.revisionNumber ?? currentRevision.revisionNumber;
           const displayedUpdatedAt = selectedHistoricalRevision?.createdAt ?? currentRevision.createdAt;
-          const showTitle = !isPlanKey(doc.key) && !!displayedTitle.trim() && !titlesMatchKey(displayedTitle, doc.key);
+          // AgentDash: a document that opens with its own markdown heading
+          // doesn't need the stored title repeated above it.
+          const bodyLeadsWithHeading = /^#{1,6}\s/.test(
+            displayedBody.split("\n").find((line) => line.trim().length > 0)?.trimStart() ?? "",
+          );
+          const showTitle = !isPlanKey(doc.key) && !!displayedTitle.trim() && !titlesMatchKey(displayedTitle, doc.key) && (isFolded || !bodyLeadsWithHeading);
           const canVoteOnDocument = Boolean(doc.latestRevisionId && doc.updatedByAgentId && !doc.updatedByUserId && onVote);
 
           return (

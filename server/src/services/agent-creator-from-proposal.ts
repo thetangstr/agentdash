@@ -143,10 +143,12 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.
-// AgentDash: review-resubmit (scan 4 lane M) is inherited from the canonical
-// worker: after Request changes, revise the same issue document and resubmit by
-// moving the issue to `in_review`, which returns the work product to
-// ready_for_review. Proposal-created hires add nothing to that.
+// AgentDash: review-resubmit (scan 4 lane M, ordering tightened in batch 2
+// review) is inherited from the canonical worker: after Request changes,
+// write the revised document first — PUT the same issue document so a new
+// revision is recorded — and only then move the issue to `in_review`, which
+// returns the work product to ready_for_review. Proposal-created hires add
+// nothing to that.
 // AgentDash: run-log-secret-redaction (GH #992) is inherited from the canonical
 // worker bundle: secrets in run output are scrubbed server-side before storage
 // and again when served, never rely on echoing a credential to read it back.

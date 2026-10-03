@@ -1221,6 +1221,11 @@ export {
 } from "./validators/index.js";
 
 export { API_PREFIX, API } from "./api.js";
+export {
+  ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
+  HIDDEN_FEED_ACTIVITY_ACTIONS,
+  IMPORTANT_SYSTEM_ACTIVITY_ACTIONS,
+} from "./activity-actions.js";
 export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";
 export { deriveProjectUrlKey, normalizeProjectUrlKey, hasNonAsciiContent } from "./project-url-key.js";
 export {
