@@ -105,11 +105,11 @@ export function AgentPlanProposal({
     setSubmitting(false);
   }
   const agents = Array.isArray(payload?.agents) ? payload.agents : [];
-  // AgentDash: the plan's rationale already reads once in the chat bubble —
-  // restating it verbatim on the card made the plan read three times in a
-  // row. The rationale still travels in the payload (it feeds hiring and
-  // materialization); it just isn't re-rendered. The alignment lines stay:
-  // they're forward-looking context the bubble doesn't carry.
+  // AgentDash: the rationale is generated for the hire prompt
+  // (agent-creator-from-proposal renders it when the plan materializes), but
+  // the card no longer shows it — it restated the same plan prose the reply
+  // already carried, which read three times in a row. The alignment lines
+  // stay: forward-looking context nothing else renders.
   const shortTerm = isKnownPlanValue(payload?.alignmentToShortTerm) ? payload.alignmentToShortTerm : null;
   const longTerm = isKnownPlanValue(payload?.alignmentToLongTerm) ? payload.alignmentToLongTerm : null;
   return (

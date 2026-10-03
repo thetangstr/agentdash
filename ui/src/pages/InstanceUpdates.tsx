@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OtaCompatibilityVerdict, OtaUpdateStatus } from "@paperclipai/shared";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { otaApi } from "@/api/ota";
 import { queryKeys } from "@/lib/queryKeys";
+import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 
 /**
  * Instance updates.
@@ -197,6 +198,14 @@ function AvailableCard({ status }: { status: OtaUpdateStatus }) {
 }
 
 export function InstanceUpdates() {
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([
+      { label: "Instance Settings", href: "/instance/settings/general" },
+      { label: "Updates" },
+    ]);
+  }, [setBreadcrumbs]);
+
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
 

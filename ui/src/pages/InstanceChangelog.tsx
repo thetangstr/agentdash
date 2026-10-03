@@ -1,11 +1,21 @@
+import { useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listReleaseNotes } from "@/lib/release-notes";
+import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 
 const MAX_RELEASES = 8;
 const MAX_ITEMS_PER_SECTION = 5;
 
 export function InstanceChangelog() {
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([
+      { label: "Instance Settings", href: "/instance/settings/general" },
+      { label: "Changelog" },
+    ]);
+  }, [setBreadcrumbs]);
+
   const notes = listReleaseNotes().slice(0, MAX_RELEASES);
 
   return (

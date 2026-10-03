@@ -305,6 +305,57 @@ describe("IssueDocumentsSection", () => {
     queryClient.clear();
   });
 
+  // AgentDash: a document that opens with its own markdown heading already
+  // announces itself — repeating the stored title above it read twice.
+  it("skips the stored title when the expanded body opens with a heading", async () => {
+    const issue = createIssue();
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    mockIssuesApi.listDocuments.mockResolvedValue([
+      createIssueDocument({
+        id: "doc-heading",
+        key: "proposal",
+        title: "Proposal Plan",
+        body: "# Proposal Plan\n\nDetails.",
+      }),
+      createIssueDocument({
+        id: "doc-plain",
+        key: "notes",
+        title: "Working notes",
+        body: "Plain body with no heading.",
+      }),
+    ]);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDocumentsSection issue={issue} canDeleteDocuments={false} />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await flush();
+
+    const headingDoc = container.querySelector("#document-proposal");
+    expect(headingDoc).not.toBeNull();
+    expect(headingDoc!.textContent).toContain("# Proposal Plan");
+    expect(headingDoc!.querySelector("p.mt-2")).toBeNull();
+
+    const plainDoc = container.querySelector("#document-notes");
+    expect(plainDoc!.querySelector("p.mt-2")?.textContent).toBe("Working notes");
+
+    await act(async () => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
   it("shows the restored document body immediately after a revision restore", async () => {
     const blankLatestDocument = createIssueDocument({
       body: "",

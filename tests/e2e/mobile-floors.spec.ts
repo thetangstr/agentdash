@@ -176,6 +176,19 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
     await post(request, `/api/companies/${company.id}/issues`, { title, status, assigneeAgentId: agentIds[2] });
   }
 
+  // A Definition of Done on the issue: the Reviews tab renders real checkbox
+  // rows, and the tap-target audit measures them.
+  const dodRes = await request.put(`/api/companies/${company.id}/issues/${issue.id}/dod`, {
+    data: {
+      summary: "The proposal is ready to send to the Tanakas.",
+      criteria: [
+        { id: "itinerary", text: "Day-by-day itinerary for all 10 days", done: true },
+        { id: "budget", text: "Every cost fits the $18k budget", done: false },
+      ],
+    },
+  });
+  expect(dodRes.ok(), await dodRes.text()).toBe(true);
+
   // A local company skill: /agents/new offers it in Advanced → Company skills,
   // and its label row is part of the tap-target audit.
   await post(request, `/api/companies/${company.id}/skills`, {
@@ -592,6 +605,23 @@ test.describe("Phone floors on every main screen", () => {
       }
     });
   }
+
+  test("breadcrumb at 390px: a long workspace name does not push the page label off", async ({ page, request }) => {
+    // ~40-char name: the parent crumb must truncate, never hide the page label.
+    const longName = "Tanaka Family Travel Holdings Co."; // 33
+    const res = await request.post("/api/companies", { data: { name: `${longName} Ltd` } });
+    expect(res.ok(), await res.text()).toBe(true);
+    const company = (await res.json()) as Company;
+
+    await page.setViewportSize(WIDTHS[0]);
+    await page.goto(`/${company.issuePrefix}/billing`);
+    const crumb = page.locator('[data-slot="breadcrumb-page"]', { hasText: "Billing" });
+    await expect(crumb).toBeVisible({ timeout: 30_000 });
+    // The page label is fully on screen — not clipped or pushed past the edge.
+    const box = (await crumb.boundingBox())!;
+    expect(box.x + box.width, "page label on screen").toBeLessThanOrEqual(WIDTHS[0].width);
+    expect.soft(box.width, "page label not truncated away").toBeGreaterThan(20);
+  });
 
   test("bottom nav at 360px: labels at least 12px, shown in full, items at least 44px", async ({ page }) => {
     await page.setViewportSize(WIDTHS[1]);

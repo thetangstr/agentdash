@@ -109,17 +109,23 @@ export function BreadcrumbBar() {
               return (
                 <Fragment key={i}>
                   {i > 0 && <BreadcrumbSeparator />}
-                  <BreadcrumbItem className={isLast ? "min-w-0" : "shrink-0"}>
+                  {/* AgentDash: on phones the parent crumb yields to the page
+                      label — a long workspace name must not push "Billing" off
+                      the bar. It truncates (bounded by the li) and keeps its
+                      44px tap floor. */}
+                  <BreadcrumbItem
+                    className={isLast ? "min-w-0" : "shrink-0 max-sm:shrink max-sm:min-w-0 max-sm:overflow-hidden"}
+                  >
                     {isLast || !crumb.href ? (
                       <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
                     ) : (
                       <BreadcrumbLink asChild>
-                        {/* AgentDash: 44px tap target on phones; the 48px header has the room. */}
+                        {/* 44px tap target on phones; the 48px header has the room. */}
                         <Link
                           to={crumb.href}
-                          className="max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center"
+                          className="max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:max-w-full max-sm:items-center"
                         >
-                          {crumb.label}
+                          <span className="min-w-0 max-sm:truncate">{crumb.label}</span>
                         </Link>
                       </BreadcrumbLink>
                     )}

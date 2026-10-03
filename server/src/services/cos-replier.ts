@@ -267,7 +267,7 @@ The visible chat body comes BEFORE the fenced block. Do not repeat the JSON in p
 // spec. The interview already captured goal/constraints/criteria via the
 // Socratic engine, so the LLM jumps directly to plan presentation. The
 // "ALREADY-CAPTURED" framing tells the model not to re-ask Phase 1 questions.
-function planPromptFromSpec(spec: DeepInterviewSpecView, memberNames: readonly string[] = []): string {
+export function planPromptFromSpec(spec: DeepInterviewSpecView, memberNames: readonly string[] = []): string {
   const constraintsJson = JSON.stringify(spec.constraints, null, 2);
   const criteriaJson = JSON.stringify(spec.criteria, null, 2);
   return `You are the Chief of Staff for AgentDash. The user already completed a deep-interview, so goals, constraints, and success criteria are ALREADY-CAPTURED. Do NOT re-ask Phase 1 (goals capture) questions; jump directly to Phase 2 (plan presentation).
@@ -304,7 +304,7 @@ Set phase_decision to "stay_in_plan" the first time you propose — the user con
 No greetings. No markdown headings outside the JSON block.`;
 }
 
-function planPrompt(state: CosStateRow, memberNames: readonly string[] = []): string {
+export function planPrompt(state: CosStateRow, memberNames: readonly string[] = []): string {
   return `You are the Chief of Staff for AgentDash. Goals captured:
 ${JSON.stringify(state.goals, null, 2)}
 
