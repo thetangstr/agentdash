@@ -80,15 +80,16 @@ export function agentIdentityLine(agent: { role?: string | null; title?: string 
   if (titleLower.includes(family.toLowerCase()) || titleLower.includes(role.toLowerCase())) return title;
   const titleWords = titleLower.split(/[^a-z0-9]+/).filter(Boolean);
   // Batch 2 canary: "Research Analyst · Researcher" — the role's stem is one
-  // of the title's own words, so it repeats rather than adds. One word of
-  // 4+ letters sharing a prefix (so "it"/"hr" can never match) counts as
+  // of the title's own words, so it repeats rather than adds. Two words of
+  // 4+ letters sharing a prefix (so "it"/"hr"/"e" can never match — an
+  // "E-commerce" title word must not swallow an "Engineer" role) counts as
   // already said.
   const sharesStem = (label: string) =>
     label
       .toLowerCase()
       .split(/[^a-z0-9]+/)
       .filter(Boolean)
-      .some((word) => word.length >= 4 && titleWords.some((tw) => word.startsWith(tw) || tw.startsWith(word)));
+      .some((word) => word.length >= 4 && titleWords.some((tw) => tw.length >= 4 && (word.startsWith(tw) || tw.startsWith(word))));
   if (sharesStem(family) || sharesStem(role)) return title;
   return `${title} · ${family}`;
 }

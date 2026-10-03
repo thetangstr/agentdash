@@ -50,6 +50,10 @@ describe("agent identity copy", () => {
     expect(agentIdentityLine({ role: "researcher", title: "Client Correspondence" })).toBe(
       "Client Correspondence · Researcher",
     );
+    // A short title word must not match either: "e" is not "Engineer"'s stem.
+    expect(agentIdentityLine({ role: "engineer", title: "E-commerce Lead" })).toBe(
+      "E-commerce Lead · Engineer",
+    );
   });
 
   it("gives pickers the title, or the role when there is none", () => {

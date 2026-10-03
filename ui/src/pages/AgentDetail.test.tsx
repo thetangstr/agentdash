@@ -228,7 +228,7 @@ describe("AgentRunHealthSummary", () => {
     expect(text).not.toContain("never run");
   });
 
-  it("shows a stopped run neutrally, not as a red control-plane error", () => {
+  it("shows an operator-stopped run neutrally, not as a red control-plane error", () => {
     renderNode(
       <AgentRunHealthSummary
         runHealth={runHealthFixture({
@@ -238,7 +238,7 @@ describe("AgentRunHealthSummary", () => {
           last: {
             status: "cancelled",
             error: "Cancelled by control plane",
-            errorCode: "cancelled",
+            errorCode: "cancelled_by_operator",
             finishedAt: "2026-10-02T10:00:00.000Z",
             leftEvidence: false,
           },
@@ -246,12 +246,12 @@ describe("AgentRunHealthSummary", () => {
       />,
     );
     const text = container!.textContent ?? "";
-    expect(text).toContain("stopped by you");
+    expect(text).toContain("stopped manually");
     expect(text).not.toContain("Cancelled by control plane");
     expect(container!.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("shows a system cancellation's real reason, neutral — not 'stopped by you'", () => {
+  it("shows a system cancellation's real reason, neutral — not 'stopped manually'", () => {
     renderNode(
       <AgentRunHealthSummary
         runHealth={runHealthFixture({
@@ -269,8 +269,37 @@ describe("AgentRunHealthSummary", () => {
       />,
     );
     const text = container!.textContent ?? "";
+    expect(text).not.toContain("stopped manually");
     expect(text).not.toContain("stopped by you");
     expect(text).toContain("Last run cancelled: Cancelled due to budget pause");
+    expect(container!.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keys manual-stop detection on the error code, not the message text", () => {
+    // A cancelled run whose code is the generic "cancelled" is a system
+    // cancellation even when the message happens to match the operator text —
+    // subtree-hold and comment-interrupt cancels share that generic code.
+    renderNode(
+      <AgentRunHealthSummary
+        runHealth={runHealthFixture({
+          neverRan: false,
+          total: 3,
+          succeeded: 2,
+          last: {
+            status: "cancelled",
+            error: "Interrupted: the issue was held by a subtree pause",
+            errorCode: "cancelled",
+            finishedAt: "2026-10-02T10:00:00.000Z",
+            leftEvidence: false,
+          },
+        })}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).not.toContain("stopped manually");
+    expect(text).toContain(
+      "Last run cancelled: Interrupted: the issue was held by a subtree pause",
+    );
     expect(container!.querySelector('[role="alert"]')).toBeNull();
   });
 

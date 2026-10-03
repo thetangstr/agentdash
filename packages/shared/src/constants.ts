@@ -128,10 +128,16 @@ export const AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION = 2;
 /**
  * The `heartbeat_runs.error` text written by the operator-facing cancel route
  * (heartbeat.cancelRun). System-initiated cancellations always carry their own
- * reason, so this exact string is how the UI tells "stopped by you" apart from
- * budget pauses, quota blocks, and hold interruptions.
+ * reason.
  */
 export const RUN_CANCELLED_BY_OPERATOR_MESSAGE = "Cancelled by control plane";
+/**
+ * The `heartbeat_runs.error_code` written only by the operator-facing cancel
+ * route — this code, not the message text, is how the UI tells a manual stop
+ * apart from system cancellations (budget pause, quota, subtree hold, comment
+ * interrupt), which share the generic "cancelled" code.
+ */
+export const RUN_CANCELLED_BY_OPERATOR_CODE = "cancelled_by_operator";
 export const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
 
 export const MODEL_PROFILE_KEYS = ["cheap"] as const;

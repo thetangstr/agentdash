@@ -31,6 +31,8 @@ import {
   updateAgentSchema,
   supportedEnvironmentDriversForAdapter,
   isBlockingPreflightResult,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+  RUN_CANCELLED_BY_OPERATOR_CODE,
 } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
@@ -751,29 +753,25 @@ export function agentRoutes(
     // every message all day still reports total: 0. Count its agent-authored
     // replies so "never run" does not claim the agent did nothing, and the
     // month count lets the spend read "Billed by your model provider" (BYOK).
-    const chatConversations = await db
-      .select({ id: assistantConversations.id })
-      .from(assistantConversations)
-      .where(eq(assistantConversations.assistantAgentId, agentId));
-    let chatTurns = 0;
-    let chatTurnsThisMonth = 0;
-    if (chatConversations.length > 0) {
-      const monthStart = new Date();
-      monthStart.setUTCDate(1);
-      monthStart.setUTCHours(0, 0, 0, 0);
-      const [chatTally] = await db
-        .select({
-          total: count(),
-          thisMonth: sql<number>`count(*) filter (where ${gte(assistantMessages.createdAt, monthStart)})::int`,
-        })
-        .from(assistantMessages)
-        .where(and(
-          eq(assistantMessages.role, "agent"),
-          inArray(assistantMessages.conversationId, chatConversations.map((c) => c.id)),
-        ));
-      chatTurns = Number(chatTally?.total ?? 0);
-      chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);
-    }
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+    const [chatTally] = await db
+      .select({
+        total: count(),
+        thisMonth: sql<number>`count(*) filter (where ${gte(assistantMessages.createdAt, monthStart)})::int`,
+      })
+      .from(assistantMessages)
+      .innerJoin(
+        assistantConversations,
+        eq(assistantMessages.conversationId, assistantConversations.id),
+      )
+      .where(and(
+        eq(assistantMessages.role, "agent"),
+        eq(assistantConversations.assistantAgentId, agentId),
+      ));
+    const chatTurns = Number(chatTally?.total ?? 0);
+    const chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);
 
     const total = Number(tally?.total ?? 0);
     return {
@@ -4662,7 +4660,7 @@ export function agentRoutes(
     if (existing) {
       assertCompanyAccess(req, existing.companyId);
     }
-    const run = await heartbeat.cancelRun(runId);
+    const run = await heartbeat.cancelRun(runId, RUN_CANCELLED_BY_OPERATOR_MESSAGE, RUN_CANCELLED_BY_OPERATOR_CODE);
 
     if (run) {
       await logActivity(db, {

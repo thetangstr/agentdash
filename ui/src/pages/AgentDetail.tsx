@@ -122,7 +122,7 @@ import {
   type AgentResolvedRuntime,
   type AgentRunHealth,
   type AgentTokenCeilingStatus,
-  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+  RUN_CANCELLED_BY_OPERATOR_CODE,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
@@ -1564,12 +1564,12 @@ export function AgentRunHealthNote({ runs }: { runs: HeartbeatRun[] }) {
  */
 export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth }) {
   const chatTurns = runHealth.chatTurns ?? 0;
-  // Only the operator cancel route writes "Cancelled by control plane" —
-  // system cancellations (budget pause, quota, subtree hold, not-invokable)
-  // carry their own reason and read neutral with that reason, not "you".
+  // Only the operator cancel route stamps "cancelled_by_operator" — system
+  // cancellations (budget pause, quota, subtree hold, comment interrupt)
+  // share the generic "cancelled" code and read neutral with their reason.
   const lastCancelled = runHealth.last?.status === "cancelled";
-  const lastStoppedByYou =
-    lastCancelled && runHealth.last?.error === RUN_CANCELLED_BY_OPERATOR_MESSAGE;
+  const lastStoppedManually =
+    lastCancelled && runHealth.last?.errorCode === RUN_CANCELLED_BY_OPERATOR_CODE;
   return (
     <div className="mb-4 rounded-lg border border-border bg-card p-4">
       <h3 className="text-sm font-semibold">What its runs show</h3>
@@ -1602,9 +1602,9 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
               </span>
             ) : null}
           </div>
-          {lastStoppedByYou ? (
+          {lastStoppedManually ? (
             <p className="mt-2 text-xs text-muted-foreground" role="status">
-              Last run stopped by you.
+              Last run stopped manually.
             </p>
           ) : lastCancelled ? (
             <p className="mt-2 text-xs text-muted-foreground" role="status">
@@ -4202,10 +4202,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             {run.error && (
               <div className="text-xs">
                 {run.status === "cancelled" ? (
-                  run.error === RUN_CANCELLED_BY_OPERATOR_MESSAGE ? (
+                  run.errorCode === RUN_CANCELLED_BY_OPERATOR_CODE ? (
                     // A manual stop is the operator's action, not a failure —
                     // "Cancelled by control plane" in red read as an error.
-                    <span className="text-muted-foreground">Stopped by you.</span>
+                    <span className="text-muted-foreground">Stopped manually.</span>
                   ) : (
                     // System cancellations (budget pause, quota, hold) still
                     // name the real reason — neutral, not an error.

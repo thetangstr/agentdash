@@ -476,11 +476,22 @@ export function hermesStatusHasConfiguredCredentials(statusOutput: string): bool
   // `hermes status --full` also lists the profile's env-file keys ("◆ API
   // Keys", rows like "  Kimi          ✓ sk-k...ehTZ"): a set key means Hermes
   // can reach that provider even when the provider section reports nothing.
+  // The section mixes tool keys (GitHub, Tavily, Firecrawl, …) with model
+  // providers, and a tool key cannot drive an agent run — only LLM labels count.
   const apiKeys = sectionAfter(statusOutput, "API Keys", "Auth Providers");
   return apiKeys
     .split(/\r?\n/)
-    .some((line) => line.includes("✓") && !line.includes("✗"));
+    .some((line) => line.includes("✓") && !line.includes("✗") && HERMES_LLM_PROVIDER_LABEL.test(line));
 }
+
+/**
+ * Model-provider labels in the `hermes status --full` "API Keys" section.
+ * Tool/integration keys (GitHub, Tavily, Firecrawl, ElevenLabs, FAL,
+ * Browserbase, Browser Use, Keenable) deliberately do not match — a set tool
+ * key does not make Hermes able to run an agent.
+ */
+const HERMES_LLM_PROVIDER_LABEL =
+  /\b(openrouter|openai|google|gemini|deepseek|xai|grok|nvidia|nim|z\.?ai|glm|kimi|moonshot|stepfun|minimax|deepinfra|anthropic|claude|nous|qwen|mistral|groq|together|fireworks|cohere|perplexity|ollama|llama)\b/i;
 
 async function hermesCommandStatus(command: string, args: string[]): Promise<string | null> {
   try {

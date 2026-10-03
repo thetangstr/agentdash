@@ -72,6 +72,30 @@ describe("hermesStatusHasConfiguredCredentials", () => {
     expect(hermesStatusHasConfiguredCredentials(status)).toBe(false);
   });
 
+  it("ignores tool keys — a set GitHub/Tavily key cannot drive an agent run", () => {
+    const status = buildStatus({
+      apiKeys: [
+        "  GitHub        ✓ gh_x...xxxx",
+        "  Tavily        ✓ tv_x...xxxx",
+        "  Firecrawl     ✓ fc_x...xxxx",
+        "  OpenAI        ✗ (not set)",
+        "  Anthropic     ✗ (not set)",
+      ],
+    });
+    expect(hermesStatusHasConfiguredCredentials(status)).toBe(false);
+  });
+
+  it("still counts an LLM key beside tool keys", () => {
+    const status = buildStatus({
+      apiKeys: [
+        "  GitHub        ✓ gh_x...xxxx",
+        "  Z.AI / GLM    ✓ configured",
+        "  Tavily        ✗ (not set)",
+      ],
+    });
+    expect(hermesStatusHasConfiguredCredentials(status)).toBe(true);
+  });
+
   it("distinguishes 'configured' from 'not configured' on the same line", () => {
     expect(
       hermesStatusHasConfiguredCredentials(

@@ -10048,7 +10048,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return { checked, enqueued, skipped, skippedNoWork };
     },
 
-    cancelRun: (runId: string) => cancelRunInternal(runId),
+    // System callers must pass a reason — the no-reason default is the
+    // operator message and is paired with "cancelled_by_operator" only by the
+    // board cancel route, so every other caller can be told apart.
+    cancelRun: (runId: string, reason?: string, errorCode?: string) =>
+      cancelRunInternal(runId, reason, errorCode),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 
