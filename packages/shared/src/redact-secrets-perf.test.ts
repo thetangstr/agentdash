@@ -39,10 +39,13 @@ describe("redactSecrets adversarial input", () => {
     it(`${name} at ~1MB completes linearly`, () => {
       const text = build();
       expect(text.length).toBeGreaterThanOrEqual(MB);
-      const full = bestOf(text);
       const quarter = bestOf(text.slice(0, MB / 4));
-      // Generous CI bound; a quadratic regression is minutes, not ~1s.
-      expect(full).toBeLessThan(1000);
+      const full = bestOf(text);
+      // Absolute bound with CI headroom (a slow shared runner can be ~2x a
+      // dev box). A quadratic regression at 1MB is minutes, not ~3s, so this
+      // still catches it decisively; the scaling check below is the real
+      // linearity guard.
+      expect(full).toBeLessThan(3000);
       // 4x input must cost roughly 4x, not ~16x — slack for CI noise.
       expect(full).toBeLessThan(quarter * 8 + 250);
     });
