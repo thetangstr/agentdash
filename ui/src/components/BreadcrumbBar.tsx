@@ -111,10 +111,11 @@ export function BreadcrumbBar() {
                   {i > 0 && <BreadcrumbSeparator />}
                   {/* AgentDash: on phones the parent crumb yields to the page
                       label — a long workspace name must not push "Billing" off
-                      the bar. It truncates (bounded by the li) and keeps its
-                      44px tap floor. */}
+                      the bar or clip it. The parent truncates (bounded by the
+                      li) and keeps its 44px tap floor; the last crumb never
+                      shrinks, so the page name always reads in full. */}
                   <BreadcrumbItem
-                    className={isLast ? "min-w-0" : "shrink-0 max-sm:shrink max-sm:min-w-0 max-sm:overflow-hidden"}
+                    className={isLast ? "min-w-0 max-sm:shrink-0" : "shrink-0 max-sm:shrink max-sm:min-w-0 max-sm:overflow-hidden"}
                   >
                     {isLast || !crumb.href ? (
                       <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>

@@ -606,21 +606,31 @@ test.describe("Phone floors on every main screen", () => {
     });
   }
 
-  test("breadcrumb at 390px: a long workspace name does not push the page label off", async ({ page, request }) => {
-    // ~40-char name: the parent crumb must truncate, never hide the page label.
-    const longName = "Tanaka Family Travel Holdings Co."; // 33
-    const res = await request.post("/api/companies", { data: { name: `${longName} Ltd` } });
+  test("breadcrumb at 390px: a long workspace name does not clip the page label", async ({ page, request }) => {
+    // ~40-char name: the parent crumb must truncate, never clip the page label.
+    const longName = "Tanaka Family Travel Holdings Co. Ltd"; // 39
+    const res = await request.post("/api/companies", { data: { name: longName } });
     expect(res.ok(), await res.text()).toBe(true);
     const company = (await res.json()) as Company;
 
     await page.setViewportSize(WIDTHS[0]);
-    await page.goto(`/${company.issuePrefix}/billing`);
-    const crumb = page.locator('[data-slot="breadcrumb-page"]', { hasText: "Billing" });
-    await expect(crumb).toBeVisible({ timeout: 30_000 });
-    // The page label is fully on screen — not clipped or pushed past the edge.
-    const box = (await crumb.boundingBox())!;
-    expect(box.x + box.width, "page label on screen").toBeLessThanOrEqual(WIDTHS[0].width);
-    expect.soft(box.width, "page label not truncated away").toBeGreaterThan(20);
+    for (const target of [
+      { path: "billing", label: "Billing" },
+      { path: "workforce", label: "Workforce" },
+      { path: "company/settings", label: "Settings" },
+    ]) {
+      await page.goto(`/${company.issuePrefix}/${target.path}`);
+      const crumb = page.locator('[data-slot="breadcrumb-page"]', { hasText: target.label });
+      await expect(crumb).toBeVisible({ timeout: 30_000 });
+      // Fully on screen — not pushed past the edge.
+      const box = (await crumb.boundingBox())!;
+      expect(box.x + box.width, `${target.label} label on screen`).toBeLessThanOrEqual(WIDTHS[0].width);
+      // And rendered in full — the workspace name absorbs all the truncation.
+      expect(
+        await crumb.evaluate((el) => el.scrollWidth <= el.clientWidth + 0.5),
+        `${target.label} label not ellipsized`,
+      ).toBe(true);
+    }
   });
 
   test("bottom nav at 360px: labels at least 12px, shown in full, items at least 44px", async ({ page }) => {
