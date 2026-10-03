@@ -7,7 +7,7 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, assistantConversations, assistantMessages, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
 import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
@@ -500,7 +500,10 @@ export function agentRoutes(
       fallbackChecks,
     );
 
-    if (result.status !== "pass") {
+    // Warnings are advisory, not failures: a self-hosted Hermes box warns that
+    // AgentDash's own env holds no LLM keys (they live in ~/.hermes), which is
+    // the correct setup for that adapter. Only `fail` blocks.
+    if (result.status === "fail") {
       throw unprocessable(
         input.failureMessage
           ?? "Agent harness preflight failed. Resolve the adapter environment checks before creating this agent.",
@@ -741,6 +744,34 @@ export function agentRoutes(
       .orderBy(desc(heartbeatRuns.createdAt))
       .limit(1);
 
+    // Chat work never touches heartbeatRuns — a Chief of Staff that answered
+    // every message all day still reports total: 0. Count its agent-authored
+    // replies so "never run" does not claim the agent did nothing, and the
+    // month count lets the spend read "Billed by your model provider" (BYOK).
+    const chatConversations = await db
+      .select({ id: assistantConversations.id })
+      .from(assistantConversations)
+      .where(eq(assistantConversations.assistantAgentId, agentId));
+    let chatTurns = 0;
+    let chatTurnsThisMonth = 0;
+    if (chatConversations.length > 0) {
+      const monthStart = new Date();
+      monthStart.setUTCDate(1);
+      monthStart.setUTCHours(0, 0, 0, 0);
+      const [chatTally] = await db
+        .select({
+          total: count(),
+          thisMonth: sql<number>`count(*) filter (where ${assistantMessages.createdAt} >= ${monthStart})::int`,
+        })
+        .from(assistantMessages)
+        .where(and(
+          eq(assistantMessages.role, "agent"),
+          inArray(assistantMessages.conversationId, chatConversations.map((c) => c.id)),
+        ));
+      chatTurns = Number(chatTally?.total ?? 0);
+      chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);
+    }
+
     const total = Number(tally?.total ?? 0);
     return {
       total,
@@ -748,6 +779,8 @@ export function agentRoutes(
       failed: Number(tally?.failed ?? 0),
       succeededWithoutEvidence: Number(tally?.withoutEvidence ?? 0),
       neverRan: total === 0,
+      chatTurns,
+      chatTurnsThisMonth,
       tokenCeilingPause,
       last: last
         ? {

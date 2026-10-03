@@ -124,8 +124,11 @@ describe("what reaches the screen", () => {
     expect(html).toContain("Check setup");
   });
 
-  it("renders warnings", () => {
-    expect(render(evidence({ status: "warn" }))).toContain("Setup check has warnings");
+  it("renders warnings as an advisory note, not a failure", () => {
+    const html = render(evidence({ status: "warn" }));
+    expect(html).toContain("Setup check passed with warnings");
+    expect(html).toContain("advisory");
+    expect(html).not.toContain("Setup check required");
   });
 
   /**

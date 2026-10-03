@@ -38,6 +38,36 @@ describe("agent harness preflight readiness", () => {
     });
   });
 
+  it("treats a warned preflight as usable evidence, but a failed one as blocking", () => {
+    const warned = withAgentHarnessPreflightMetadata(null, {
+      ...baseInput,
+      result: {
+        adapterType: "codex_local",
+        status: "warn" as const,
+        checks: [{ code: "no_llm_keys", level: "warn" as const, message: "No LLM API keys in AgentDash env" }],
+        testedAt: "2026-05-29T12:00:00.000Z",
+      },
+    });
+    expect(evaluateAgentHarnessPreflightReadiness({ ...baseInput, metadata: warned })).toMatchObject({
+      ready: true,
+      reason: "passed_with_warnings",
+    });
+
+    const failed = withAgentHarnessPreflightMetadata(null, {
+      ...baseInput,
+      result: {
+        adapterType: "codex_local",
+        status: "fail" as const,
+        checks: [{ code: "missing_token", level: "error" as const, message: "Missing token" }],
+        testedAt: "2026-05-29T12:00:00.000Z",
+      },
+    });
+    expect(evaluateAgentHarnessPreflightReadiness({ ...baseInput, metadata: failed })).toMatchObject({
+      ready: false,
+      reason: "not_passed",
+    });
+  });
+
   it("marks a previously passing preflight stale after the saved config changes", () => {
     const result = {
       adapterType: "codex_local",

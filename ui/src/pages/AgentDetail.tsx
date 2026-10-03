@@ -120,11 +120,12 @@ import {
   type LiveEvent,
   type WorkspaceOperation,
   type AgentResolvedRuntime,
+  type AgentRunHealth,
   type AgentTokenCeilingStatus,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
-import { agentIdentityLine } from "../lib/agent-identity";
+import { agentIdentityLineUnderName } from "../lib/agent-identity";
 import {
   applyAgentSkillSnapshot,
   arraysEqual,
@@ -1070,7 +1071,7 @@ export function AgentDetail() {
           <div className="min-w-0">
             <h2 className="text-2xl font-bold truncate max-sm:whitespace-normal max-sm:break-words">{agent.name}</h2>
             <p className="text-sm text-muted-foreground truncate">
-              {agentIdentityLine(agent)}
+              {agentIdentityLineUnderName(agent)}
             </p>
           </div>
         </div>
@@ -1205,54 +1206,7 @@ export function AgentDetail() {
         people are looking for when they open this page.
       */}
       {!urlRunId && agent.runHealth ? (
-        <div className="mb-4 rounded-lg border border-border bg-card p-4">
-          <h3 className="text-sm font-semibold">What its runs show</h3>
-          {agent.runHealth.neverRan ? (
-            <p className="mt-1 text-sm text-muted-foreground">
-              This agent has never run. Nothing here is broken yet — and nothing here works yet
-              either.
-            </p>
-          ) : (
-            <>
-              <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm tabular-nums">
-                <span>{agent.runHealth.total} runs</span>
-                <span className={agent.runHealth.failed > 0 ? "text-destructive" : undefined}>
-                  {agent.runHealth.failed} failed
-                </span>
-                <span
-                  title="Runs that exited zero but left no comment and no activity behind."
-                  className={
-                    agent.runHealth.succeededWithoutEvidence > 0
-                      ? "text-muted-foreground"
-                      : undefined
-                  }
-                >
-                  {agent.runHealth.succeededWithoutEvidence} succeeded without leaving anything
-                </span>
-              </div>
-              {agent.runHealth.last?.status && agent.runHealth.last.status !== "succeeded" ? (
-                <p className="mt-2 text-xs text-destructive" role="alert">
-                  Last run {agent.runHealth.last.status}
-                  {agent.runHealth.last.errorCode ? ` (${agent.runHealth.last.errorCode})` : ""}
-                  {agent.runHealth.last.error ? `: ${agent.runHealth.last.error}` : ""}
-                </p>
-              ) : null}
-              {/* The pause itself is health, not configuration — restricted
-                  readers get tokenCeiling: null but still need to see why the
-                  agent went quiet. */}
-              {agent.runHealth.tokenCeilingPause ? (
-                <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" role="status">
-                  Timer and comment wakes are paused until{" "}
-                  {formatDate(agent.runHealth.tokenCeilingPause.liftsAt)} UTC
-                  {agent.runHealth.tokenCeilingPause.reason === "unmetered runaway guard"
-                    ? " — unmetered runaway guard (spend cannot be verified)"
-                    : " — daily token ceiling"}
-                  . Assigned work and manual wakes still run.
-                </p>
-              ) : null}
-            </>
-          )}
-        </div>
+        <AgentRunHealthSummary runHealth={agent.runHealth} />
       ) : null}
 
       {!urlRunId && (
@@ -1601,6 +1555,81 @@ export function AgentRunHealthNote({ runs }: { runs: HeartbeatRun[] }) {
   );
 }
 
+/**
+ * The "what its runs show" card. `neverRan` counts heartbeat runs only — a
+ * Chief of Staff that has answered chat all day still has zero of those, so
+ * its chat turns are named alongside the run counts rather than letting
+ * "never run" claim the agent did nothing.
+ */
+export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth }) {
+  const chatTurns = runHealth.chatTurns ?? 0;
+  // A manual stop carries errorCode "cancelled" (or none); it is an operator
+  // action, not a failure — it reads neutral and says who stopped the run.
+  const lastStoppedByYou =
+    runHealth.last?.status === "cancelled" &&
+    (!runHealth.last.errorCode || runHealth.last.errorCode === "cancelled");
+  return (
+    <div className="mb-4 rounded-lg border border-border bg-card p-4">
+      <h3 className="text-sm font-semibold">What its runs show</h3>
+      {runHealth.neverRan ? (
+        <p className="mt-1 text-sm text-muted-foreground">
+          {chatTurns > 0
+            ? `No runs yet — this agent has answered ${chatTurns} chat message${chatTurns === 1 ? "" : "s"}.`
+            : "This agent has never run. Nothing here is broken yet — and nothing here works yet either."}
+        </p>
+      ) : (
+        <>
+          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm tabular-nums">
+            <span>{runHealth.total} runs</span>
+            <span className={runHealth.failed > 0 ? "text-destructive" : undefined}>
+              {runHealth.failed} failed
+            </span>
+            <span
+              title="Runs that exited zero but left no comment and no activity behind."
+              className={
+                runHealth.succeededWithoutEvidence > 0
+                  ? "text-muted-foreground"
+                  : undefined
+              }
+            >
+              {runHealth.succeededWithoutEvidence} succeeded without leaving anything
+            </span>
+            {chatTurns > 0 ? (
+              <span className="text-muted-foreground">
+                {chatTurns} chat message{chatTurns === 1 ? "" : "s"} answered
+              </span>
+            ) : null}
+          </div>
+          {lastStoppedByYou ? (
+            <p className="mt-2 text-xs text-muted-foreground" role="status">
+              Last run stopped by you.
+            </p>
+          ) : runHealth.last?.status && runHealth.last.status !== "succeeded" ? (
+            <p className="mt-2 text-xs text-destructive" role="alert">
+              Last run {runHealth.last.status}
+              {runHealth.last.errorCode ? ` (${runHealth.last.errorCode})` : ""}
+              {runHealth.last.error ? `: ${runHealth.last.error}` : ""}
+            </p>
+          ) : null}
+          {/* The pause itself is health, not configuration — restricted
+              readers get tokenCeiling: null but still need to see why the
+              agent went quiet. */}
+          {runHealth.tokenCeilingPause ? (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" role="status">
+              Timer and comment wakes are paused until{" "}
+              {formatDate(runHealth.tokenCeilingPause.liftsAt)} UTC
+              {runHealth.tokenCeilingPause.reason === "unmetered runaway guard"
+                ? " — unmetered runaway guard (spend cannot be verified)"
+                : " — daily token ceiling"}
+              . Assigned work and manual wakes still run.
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 function VitalCard({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="rounded-lg border border-border p-3 space-y-1">
@@ -1613,10 +1642,14 @@ function VitalCard({ label, children }: { label: string; children: React.ReactNo
 /**
  * AgentDash (scan 4 lane O1): true when this agent's usage is billed by the
  * customer's model provider (BYOK): no dollars metered this month, yet its
- * runs used tokens. Same rule as Home's month tile (`monthSpendTile`).
+ * runs used tokens — or, for a chat-driven agent like the Chief of Staff, its
+ * chat turns did the spending heartbeat runs never meter.
+ * Same rule as Home's month tile (`monthSpendTile`).
  */
 export function agentBilledByProvider(
-  agent: Pick<AgentDetailRecord, "spentMonthlyCents">,
+  agent: Pick<AgentDetailRecord, "spentMonthlyCents"> & {
+    runHealth?: Pick<AgentRunHealth, "chatTurnsThisMonth"> | null;
+  },
   runs: Pick<HeartbeatRun, "usageJson" | "resultJson" | "createdAt">[],
   now: Date = new Date(),
 ): boolean {
@@ -1626,6 +1659,7 @@ export function agentBilledByProvider(
   const thisMonth = runs.filter((run) => new Date(run.createdAt).getTime() >= monthStart);
   // Any run with a visible dollar cost means usage is priced here, not BYOK.
   if (thisMonth.some((run) => runMetrics(run as HeartbeatRun).cost > 0)) return false;
+  if ((agent.runHealth?.chatTurnsThisMonth ?? 0) > 0) return true;
   return thisMonth.some((run) => {
     const metrics = runMetrics(run as HeartbeatRun);
     return countedTokens({ inputTokens: metrics.input, outputTokens: metrics.output }) > 0;
@@ -1943,7 +1977,7 @@ function AgentOverview({
       {/* Costs */}
       <div className="space-y-3">
         <h3 className="text-sm font-medium">Costs</h3>
-        <CostsSection runtimeState={runtimeState} runs={runs} />
+        <CostsSection runtimeState={runtimeState} runs={runs} chatTurns={agent.runHealth?.chatTurns ?? 0} />
       </div>
     </div>
   );
@@ -2080,9 +2114,11 @@ export function TokenCeilingStatusLine({
 function CostsSection({
   runtimeState,
   runs,
+  chatTurns = 0,
 }: {
   runtimeState?: AgentRuntimeState;
   runs: HeartbeatRun[];
+  chatTurns?: number;
 }) {
   const runsWithCost = runs
     .filter((r) => {
@@ -2090,6 +2126,15 @@ function CostsSection({
       return metrics.cost > 0 || metrics.input > 0 || metrics.output > 0 || metrics.cached > 0;
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  // AgentDash (batch 2 canary): on BYOK the model provider bills the usage —
+  // metered tokens or CoS chat turns — so "Total cost $0.00" next to real work
+  // reads as "free". Say who bills instead, the same as "Spend this month".
+  const totalTokens = runtimeState
+    ? (runtimeState.totalInputTokens ?? 0) + (runtimeState.totalOutputTokens ?? 0) + (runtimeState.totalCachedInputTokens ?? 0)
+    : 0;
+  const billedByProvider =
+    runtimeState != null && (runtimeState.totalCostCents ?? 0) === 0 && (totalTokens > 0 || chatTurns > 0);
 
   return (
     <div className="space-y-4">
@@ -2110,7 +2155,11 @@ function CostsSection({
             </div>
             <div>
               <span className="text-xs text-muted-foreground block">Total cost</span>
-              <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              {billedByProvider ? (
+                <span className="text-sm text-muted-foreground block pt-1">{BILLED_BY_PROVIDER_NOTE}</span>
+              ) : (
+                <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              )}
             </div>
           </div>
         </div>
@@ -3765,6 +3814,34 @@ function RunsTab({
 
 /* ---- Run Detail (expanded) ---- */
 
+/**
+ * The run's stderr excerpt. Failed and timed-out runs keep the red error box;
+ * any other outcome — a succeeded run's Python warnings, WSL/launcher chatter —
+ * folds behind "Technical details", because harmless output is not an error
+ * just because the adapter wrote it to stderr. Home-directory user names are
+ * masked either way (a Hermes host path leaks `/Users/<name>` otherwise).
+ */
+export function RunStderrExcerpt({ run }: { run: Pick<HeartbeatRun, "status" | "stderrExcerpt"> }) {
+  if (!run.stderrExcerpt || !run.stderrExcerpt.trim()) return null;
+  const excerpt = redactHomePathUserSegments(run.stderrExcerpt);
+  if (run.status === "failed" || run.status === "timed_out") {
+    return (
+      <div className="space-y-1">
+        <span className="text-xs font-medium text-red-600 dark:text-red-400">stderr</span>
+        <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-red-700 dark:text-red-300 overflow-x-auto whitespace-pre-wrap">{excerpt}</pre>
+      </div>
+    );
+  }
+  return (
+    <details className="rounded-md border border-border bg-muted/30 px-3 py-2">
+      <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground">
+        Technical details
+      </summary>
+      <pre className="mt-2 bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{excerpt}</pre>
+    </details>
+  );
+}
+
 function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -4107,8 +4184,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             )}
             {run.error && (
               <div className="text-xs">
-                <span className="text-red-600 dark:text-red-400">{run.error}</span>
-                {run.errorCode && <span className="text-muted-foreground ml-1">({run.errorCode})</span>}
+                {run.status === "cancelled" &&
+                (!run.errorCode || run.errorCode === "cancelled") ? (
+                  // A manual stop is the operator's action, not a failure —
+                  // "Cancelled by control plane" in red read as an error.
+                  <span className="text-muted-foreground">Stopped by you.</span>
+                ) : (
+                  <>
+                    <span className="text-red-600 dark:text-red-400">{run.error}</span>
+                    {run.errorCode && <span className="text-muted-foreground ml-1">({run.errorCode})</span>}
+                  </>
+                )}
               </div>
             )}
             <RunQuotaUpgrade run={run} />
@@ -4311,19 +4397,16 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
         </div>
       )}
 
-      {/* stderr excerpt for failed runs */}
-      {run.stderrExcerpt && (
-        <div className="space-y-1">
-          <span className="text-xs font-medium text-red-600 dark:text-red-400">stderr</span>
-          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-red-700 dark:text-red-300 overflow-x-auto whitespace-pre-wrap">{run.stderrExcerpt}</pre>
-        </div>
-      )}
+      {/* stderr excerpt — red only when the run actually failed; a succeeded
+          run's stderr (Python warnings, launcher chatter) folds into a quiet
+          "Technical details" disclosure instead. */}
+      <RunStderrExcerpt run={run} />
 
       {/* stdout excerpt when no log is available */}
       {run.stdoutExcerpt && !run.logRef && (
         <div className="space-y-1">
           <span className="text-xs font-medium text-muted-foreground">stdout</span>
-          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{run.stdoutExcerpt}</pre>
+          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{redactHomePathUserSegments(run.stdoutExcerpt)}</pre>
         </div>
       )}
 

@@ -148,6 +148,25 @@ const failingPreflightAdapter: ServerAdapterModule = {
   }),
 };
 
+// The self-hosted Hermes shape from the canary: the only warning is that
+// AgentDash's own env holds no LLM keys — they live in the Hermes profile.
+const warningPreflightAdapter: ServerAdapterModule = {
+  type: "external_preflight_warn",
+  execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+  testEnvironment: async () => ({
+    adapterType: "external_preflight_warn",
+    status: "warn",
+    checks: [
+      {
+        code: "no_llm_keys",
+        level: "warn",
+        message: "No LLM API keys in AgentDash env",
+      },
+    ],
+    testedAt: new Date(0).toISOString(),
+  }),
+};
+
 const missingAdapterType = "missing_adapter_validation_test";
 
 async function createApp() {
@@ -297,6 +316,7 @@ describe("agent routes adapter validation", () => {
     });
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter("external_preflight_fail");
+    await unregisterTestAdapter("external_preflight_warn");
     await unregisterTestAdapter(missingAdapterType);
     vi.unstubAllEnvs();
   });
@@ -304,6 +324,7 @@ describe("agent routes adapter validation", () => {
   afterEach(async () => {
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter("external_preflight_fail");
+    await unregisterTestAdapter("external_preflight_warn");
     await unregisterTestAdapter(missingAdapterType);
     if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
     else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
@@ -421,6 +442,28 @@ describe("agent routes adapter validation", () => {
     expect(mockAgentService.create).not.toHaveBeenCalled();
   });
 
+  it("allows launch-safe agent creation when adapter preflight only warns", async () => {
+    // Warnings are advisory (a self-hosted Hermes box keeps its LLM keys in
+    // ~/.hermes, so "No LLM API keys in AgentDash env" is the correct setup),
+    // not a reason to block the hire.
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(warningPreflightAdapter);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({
+          name: "Warned Agent",
+          adapterType: "external_preflight_warn",
+          requireHarnessPreflight: true,
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockAgentService.create).toHaveBeenCalled();
+  });
+
   it("persists saved-agent harness preflight evidence", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     registerServerAdapter(externalAdapter);
@@ -468,6 +511,62 @@ describe("agent routes adapter validation", () => {
           harnessPreflight: expect.objectContaining({
             status: "pass",
             configDigest: expect.any(String),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("returns 200 and persists warn evidence instead of rejecting a warned preflight", async () => {
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(warningPreflightAdapter);
+    mockAgentService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Warned Agent",
+      urlKey: "warned-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "external_preflight_warn",
+      adapterConfig: {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({}),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.result).toMatchObject({
+      adapterType: "external_preflight_warn",
+      status: "warn",
+    });
+    expect(res.body.readiness).toMatchObject({
+      ready: true,
+      reason: "passed_with_warnings",
+    });
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          harnessPreflight: expect.objectContaining({
+            status: "warn",
           }),
         }),
       }),

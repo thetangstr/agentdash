@@ -4,6 +4,7 @@ import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION } from "@paperclipai/shared";
 
 export type AgentHarnessPreflightReadinessReason =
   | "passed"
+  | "passed_with_warnings"
   | "missing"
   | "not_passed"
   | "stale"
@@ -117,7 +118,10 @@ export function evaluateAgentHarnessPreflightReadiness(
     };
   }
 
-  if (status !== "pass") {
+  // Warnings are advisory — the evidence is usable; only a failed check blocks
+  // the agent. Anything else (unknown statuses included) still cannot be
+  // trusted, so it stays `not_passed`.
+  if (status === "fail" || (status !== "pass" && status !== "warn")) {
     return {
       ready: false,
       reason: "not_passed",
@@ -137,8 +141,11 @@ export function evaluateAgentHarnessPreflightReadiness(
 
   return {
     ready: true,
-    reason: "passed",
-    message: "Harness preflight passed for the current agent configuration.",
+    reason: status === "warn" ? "passed_with_warnings" : "passed",
+    message:
+      status === "warn"
+        ? "Harness preflight passed with warnings for the current agent configuration."
+        : "Harness preflight passed for the current agent configuration.",
     testedAt,
   };
 }

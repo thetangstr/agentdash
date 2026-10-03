@@ -31,7 +31,7 @@ import {
 import { AgentIcon } from "../components/AgentIconPicker";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { type Agent } from "@paperclipai/shared";
-import { agentIdentityLine } from "../lib/agent-identity";
+import { agentIdentityLineUnderName } from "../lib/agent-identity";
 
 import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 
@@ -314,7 +314,7 @@ export function Agents() {
                 titleBadge={
                   agent.status === "terminated" ? null : <AgentKindBadge agent={agent} hideUnpaired={hideUnpaired} />
                 }
-                subtitle={agentIdentityLine(agent)}
+                subtitle={agentIdentityLineUnderName(agent)}
                 to={agentUrl(agent)}
                 className={agent.pausedAt && tab !== "paused" ? "opacity-50" : ""}
                 leading={
@@ -499,7 +499,7 @@ function PhoneAgentCard({
   dimmed: boolean;
   hideUnpaired: boolean;
 }) {
-  const role = agentIdentityLine(agent);
+  const role = agentIdentityLineUnderName(agent);
   return (
     <Link
       to={agentUrl(agent)}
@@ -580,7 +580,7 @@ function OrgTreeNode({
             <AgentKindBadge agent={agent} className="ml-2 align-middle" hideUnpaired={hideUnpaired} />
           ) : null}
           <span className="text-xs text-muted-foreground ml-2" data-testid="agent-org-row-identity">
-            {agentIdentityLine({ role: node.role, title: agent?.title ?? null })}
+            {agentIdentityLineUnderName({ name: node.name, role: node.role, title: agent?.title ?? null })}
           </span>
         </div>
         <div className="flex items-center gap-3 shrink-0">

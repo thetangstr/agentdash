@@ -54,7 +54,9 @@ export function getAgentCreateHarnessPreflightGate(input: {
       message: "Run Test Agent and resolve any checks before creating this agent.",
     };
   }
-  if (input.result.status !== "pass") {
+  // Warnings are advisory (e.g. a self-hosted Hermes box legitimately holds its
+  // LLM keys outside AgentDash's env), so only an outright `fail` blocks create.
+  if (input.result.status === "fail") {
     return {
       canCreate: false,
       reason: "not_passed",

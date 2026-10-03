@@ -1,4 +1,4 @@
-import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Info, ShieldCheck } from "lucide-react";
 import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "../lib/utils";
@@ -155,8 +155,11 @@ export function readAgentHarnessPreflightStatus(
 
   return {
     state: status === "warn" ? "warn" : "fail",
-    title: status === "warn" ? "Harness preflight has warnings" : "Harness preflight failed",
-    message: "Resolve the checks below, then run preflight again before assigning customer work.",
+    title: status === "warn" ? "Harness preflight passed with warnings" : "Harness preflight failed",
+    message:
+      status === "warn"
+        ? "Nothing needs fixing before this agent runs — the checks below are advisory."
+        : "Resolve the checks below, then run preflight again before assigning customer work.",
     adapterType,
     testedAt,
     checks,
@@ -189,7 +192,9 @@ export function needsBackgroundPreflight(state: AgentHarnessPreflightStatus["sta
 
 function toneForState(state: AgentHarnessPreflightStatus["state"]) {
   if (state === "pass") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200";
-  if (state === "warn") return "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200";
+  // Warnings are advisory and surface as a quiet note — red (and amber, which
+  // reads as a milder error) is reserved for a check that actually failed.
+  if (state === "warn") return "border-border bg-muted/40 text-muted-foreground";
   return "border-red-500/30 bg-red-500/10 text-red-900 dark:text-red-200";
 }
 
@@ -223,7 +228,7 @@ export function AgentHarnessReadinessPanel({
   // An error from a manual run still shows, because that one was asked for.
   if (!shouldSurfaceHarnessPreflight(status.state) && !error) return null;
 
-  const Icon = status.state === "pass" ? ShieldCheck : AlertTriangle;
+  const Icon = status.state === "pass" ? ShieldCheck : status.state === "warn" ? Info : AlertTriangle;
   return (
     <section className={cn("rounded-lg border px-4 py-3 text-sm", toneForState(status.state), className)}>
       <div className="flex flex-wrap items-start justify-between gap-3">

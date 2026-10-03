@@ -76,11 +76,31 @@ describe("agent harness preflight", () => {
     });
   });
 
-  it("blocks creation when the latest preflight has warnings or failures", () => {
+  it("blocks creation only when the latest preflight failed — warnings are advisory", () => {
     const currentConfigKey = buildAgentHarnessPreflightKey({
       adapterType: "codex_local",
       defaultEnvironmentId: null,
       adapterConfig: { model: "gpt-5.5" },
+    });
+
+    // A self-hosted Hermes box legitimately warns about keys living outside
+    // AgentDash's env; that warning must not block creating the agent.
+    expect(
+      getAgentCreateHarnessPreflightGate({
+        currentConfigKey,
+        passedConfigKey: currentConfigKey,
+        pending: false,
+        result: {
+          adapterType: "codex_local",
+          status: "warn",
+          checks: [],
+          testedAt: new Date(0).toISOString(),
+        },
+        errorMessage: null,
+      }),
+    ).toMatchObject({
+      canCreate: true,
+      reason: "passed",
     });
 
     expect(
@@ -90,7 +110,7 @@ describe("agent harness preflight", () => {
         pending: false,
         result: {
           adapterType: "codex_local",
-          status: "warn",
+          status: "fail",
           checks: [],
           testedAt: new Date(0).toISOString(),
         },

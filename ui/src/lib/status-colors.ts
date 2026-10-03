@@ -45,7 +45,9 @@ export const statusBadge: Record<string, string> = {
   running: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300",
   scheduled_retry: "bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300",
   paused: "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300",
-  idle: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300",
+  // Idle is the default between-runs state of every healthy agent, not a
+  // warning — it reads neutral, not yellow.
+  idle: "bg-muted text-muted-foreground",
   archived: "bg-muted text-muted-foreground",
 
   // Goal statuses
@@ -87,7 +89,7 @@ export const agentStatusDot: Record<string, string> = {
   running: "bg-cyan-400 animate-pulse",
   active: "bg-green-400",
   paused: "bg-yellow-400",
-  idle: "bg-yellow-400",
+  idle: "bg-neutral-400",
   pending_approval: "bg-amber-400",
   error: "bg-red-400",
   archived: "bg-neutral-400",

@@ -319,7 +319,7 @@ From `packages/shared/src/types/agent.ts`. The fields an integration reads:
 | --- | --- | --- |
 | `chainOfCommand` | array of `{ id, name, role, title }` | The managers above the agent, nearest first, at most 50 (`server/src/services/agents.ts`). |
 | `access` | object | `canAssignTasks`, `taskAssignSource` (`explicit_grant` · `agent_creator` · `ceo_role` · `none`), the agent's membership and its grants. |
-| `runHealth` | object | Counts from the agent's runs: `total`, `succeeded`, `failed`, `succeededWithoutEvidence`, `neverRan`, `tokenCeilingPause`, and the `last` run. |
+| `runHealth` | object | Counts from the agent's runs: `total`, `succeeded`, `failed`, `succeededWithoutEvidence`, `neverRan`, `tokenCeilingPause`, and the `last` run. `chatTurns` counts the agent's chat answers all time (a chat-driven agent can answer many chats while `neverRan` stays true — `neverRan` counts heartbeat runs only) and `chatTurnsThisMonth` the same for the current month. |
 | `resolvedRuntime` | `{ model, provider, source }` or null | What will serve the next run; null `model` means unknown. |
 | `tokenCeiling` | object or null | Today's tokens against the daily ceiling. null on the restricted view. |
 
