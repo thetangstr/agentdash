@@ -11,6 +11,8 @@ import {
   companies,
   companyMemberships,
   createDb,
+  principalPermissionGrants,
+  projects,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -36,7 +38,9 @@ describeEmbeddedPostgres("agentdash-mk personal inbox", () => {
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(principalPermissionGrants);
     await db.delete(approvals);
+    await db.delete(projects);
     await db.delete(agentStewardships);
     await db.delete(agents);
     await db.delete(companyMemberships);
@@ -329,6 +333,83 @@ describeEmbeddedPostgres("agentdash-mk personal inbox", () => {
       request(baseUrl).get(`/api/companies/${company.id}/inbox/override`),
     );
     expect(denied.status).toBe(403);
+  });
+
+  it("denies the override view to an off-list member who holds agents:create (GH #971)", async () => {
+    // The gate used to be `agents:create` — a permission that can be granted
+    // to a plain member, who then saw every company approval including
+    // restricted-project budget overrides with the scope name and spend. The
+    // gate is now the admin role itself.
+    const { company, steward } = await seed();
+    const restricted = await db
+      .insert(projects)
+      .values({ companyId: company.id, name: "Restricted spend", visibility: "restricted" })
+      .returning()
+      .then((rows) => rows[0]!);
+    await db.insert(approvals).values({
+      companyId: company.id,
+      type: "budget_override_required",
+      status: "pending",
+      payload: {
+        scopeType: "project",
+        scopeId: restricted.id,
+        scopeName: restricted.name,
+        observedSpendUsd: 9000,
+      },
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: steward.principalId,
+      permissionKey: "agents:create",
+      grantedByUserId: "granter",
+    });
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/inbox/override`),
+    );
+
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(res.body)).not.toContain("Restricted spend");
+    expect(JSON.stringify(res.body)).not.toContain(restricted.id);
+  });
+
+  it("still returns a restricted-project budget override to a company admin", async () => {
+    // The gate tightened to the admin role; the visibility condition must not
+    // over-filter what an admin legitimately decides (admins see every
+    // project by the restricted-visibility rule).
+    const { company, owner } = await seed();
+    const restricted = await db
+      .insert(projects)
+      .values({ companyId: company.id, name: "Restricted spend", visibility: "restricted" })
+      .returning()
+      .then((rows) => rows[0]!);
+    const overrideApproval = await db
+      .insert(approvals)
+      .values({
+        companyId: company.id,
+        type: "budget_override_required",
+        status: "pending",
+        payload: {
+          scopeType: "project",
+          scopeId: restricted.id,
+          scopeName: restricted.name,
+          observedSpendUsd: 9000,
+        },
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const app = await createApp(boardActor(company.id, owner.principalId, "owner"));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/inbox/override`),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.items.map((item: { approvalId: string }) => item.approvalId)).toContain(
+      overrideApproval.id,
+    );
   });
 
   it("redacts approval payloads exactly like every other approval read path", async () => {

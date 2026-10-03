@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  AmbiguousWorkspaceBootstrapError,
   OnboardingTierCapacityExceededError,
   onboardingOrchestrator,
 } from "../services/onboarding-orchestrator.js";
@@ -271,13 +272,26 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockAgents.create).toHaveBeenCalled();
   });
 
-  it("keeps the legacy behaviour without a companyId: the first active membership", async () => {
+  // AgentDash (security, GH #977): several active memberships and no
+  // companyId used to reuse the first membership arbitrarily — it now
+  // refuses and names the candidates so the caller chooses explicitly.
+  it("refuses an ambiguous bootstrap with several active memberships and no companyId", async () => {
     mockAccess.listUserCompanyAccess.mockResolvedValue([
       { companyId: "company-1", status: "active", principalId: "user-1", membershipRole: "owner" },
       { companyId: "company-2", status: "active", principalId: "user-1", membershipRole: "owner" },
     ]);
-    const result = await onboardingOrchestrator(deps as any).bootstrap("user-1");
-    expect(result.companyId).toBe("company-1");
+    await expect(onboardingOrchestrator(deps as any).bootstrap("user-1")).rejects.toThrowError(
+      AmbiguousWorkspaceBootstrapError,
+    );
+    await expect(onboardingOrchestrator(deps as any).bootstrap("user-1")).rejects.toMatchObject({
+      code: "ambiguous_company",
+      companies: expect.arrayContaining([
+        expect.objectContaining({ id: "company-1" }),
+        expect.objectContaining({ id: "company-2" }),
+      ]),
+    });
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockConversations.create).not.toHaveBeenCalled();
   });
 
   // PR #956 review (HIGH): bootstrap used to grant agents:create and rewrite

@@ -943,7 +943,7 @@ export function accessService(db: Db) {
         }
       }
 
-      return tx
+      const updated = await tx
         .update(companyMemberships)
         .set({
           membershipRole: nextMembershipRole,
@@ -953,6 +953,14 @@ export function accessService(db: Db) {
         .where(eq(companyMemberships.id, existing.id))
         .returning()
         .then((rows) => rows[0] ?? existing);
+
+      // AgentDash (security, GH #978 review): this service carries no actor,
+      // so a grant reset here could only write grantedByUserId null with no
+      // audit row — an invisible permission rewrite. Grant resets to role
+      // defaults happen on the audited PATCH /members route instead, which
+      // records the acting user and a grantsReset activity entry. Deliberate
+      // extras go through updateMemberPermissions / setPrincipalGrants.
+      return updated;
     });
     publishMembershipAccessChange(result, "membership updated");
     return result;

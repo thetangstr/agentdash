@@ -1,6 +1,7 @@
 // AgentDash: chat substrate page
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useMessages } from "../realtime/useMessages";
+import { useMessages, REPLY_PENDING_TIMEOUT_MS } from "../realtime/useMessages";
+import { publishConversationMessage } from "../realtime/conversationEventBus";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
 import { ChatHeader, type ChatHeaderProps } from "../components/ChatHeader";
@@ -16,7 +17,7 @@ import { parseMentions } from "@paperclipai/shared";
  * 120s (AGENTDASH_ADAPTER_TIMEOUT_MS) and then posts an error card, so a reply
  * that has not arrived well after that is not coming.
  */
-export const REPLY_PENDING_TIMEOUT_MS = 150_000;
+export { REPLY_PENDING_TIMEOUT_MS };
 
 function authorOf(m: Message): string | undefined {
   return m.role ?? m.authorKind;
@@ -71,7 +72,7 @@ export default function ChatPanel({
   hasChiefOfStaff?: boolean;
 }) {
   const messages = useMessages(conversationId);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   // AgentDash (scan 3, lane G): the starter chips go away as soon as this
   // person sends anything, without waiting for the message to come back.
   const [sentThisSession, setSentThisSession] = useState(false);
@@ -92,14 +93,38 @@ export default function ChatPanel({
     return () => clearTimeout(t);
   }, [messages, conversationId]);
 
+  // Land on the newest message the moment the first page paints. A smooth
+  // scroll used to be interrupted by the "CoS is thinking" block (and card
+  // images) still laying out, so the chat opened ~52px above the bottom; and
+  // scrollIntoView on a marker inside the pb-4 scroller stops that padding
+  // short, so the container's own scrollTop is set instead.
+  const didInitialScrollRef = useRef(false);
+  useEffect(() => {
+    didInitialScrollRef.current = false;
+  }, [conversationId]);
+  useEffect(() => {
+    if (didInitialScrollRef.current || messages.length === 0) return;
+    didInitialScrollRef.current = true;
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      // A second pass once late layout (avatars, cards, the thinking block)
+      // has settled, still instant.
+      window.requestAnimationFrame(() => {
+        const node = scrollRef.current;
+        if (node) node.scrollTop = node.scrollHeight;
+      });
+    }
+  }, [messages.length]);
+
   // Auto-scroll the messages area to the bottom whenever a new message arrives.
   // Keyed on length + last message id (not the array reference) to avoid running
   // on every re-render when the underlying messages haven't changed.
   useEffect(() => {
-    const node = bottomRef.current;
-    // jsdom doesn't implement scrollIntoView; feature-detect so unit tests pass.
-    if (node && typeof node.scrollIntoView === "function") {
-      node.scrollIntoView({ behavior: "smooth", block: "end" });
+    const el = scrollRef.current;
+    // jsdom doesn't implement scrollTo; feature-detect so unit tests pass.
+    if (el && typeof el.scrollTo === "function") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [messages.length, lastMessageId]);
 
@@ -146,9 +171,17 @@ export default function ChatPanel({
   function send(body: string) {
     setSendError(null);
     setSentThisSession(true);
-    conversationsApi.post(conversationId, body, companyId).catch(() => {
-      setSendError("Your message was not sent. Check your connection and try again.");
-    });
+    conversationsApi
+      .post(conversationId, body, companyId)
+      .then((posted) => {
+        // The POST response is the persisted row; put it into the open chat
+        // now instead of waiting for the live socket (which may be down) to
+        // deliver it back. A later socket redelivery dedupes on the id.
+        publishConversationMessage(posted);
+      })
+      .catch(() => {
+        setSendError("Your message was not sent. Check your connection and try again.");
+      });
   }
 
   async function retryReply(messageId: string) {
@@ -177,7 +210,7 @@ export default function ChatPanel({
   return (
     <div className="chat-panel flex flex-col h-full bg-surface-page">
       <ChatHeader {...(headerProps ?? {})} />
-      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4 max-sm:px-3">
+      <div ref={scrollRef} data-testid="chat-scroller" className="flex-1 overflow-y-auto px-4 pt-3 pb-4 max-sm:px-3">
         {/* min-h-full + justify-end pins messages to the bottom of the scroll
             area so a short conversation sits next to the composer instead of
             floating at the top with a big empty gap. As messages accumulate
@@ -216,7 +249,6 @@ export default function ChatPanel({
           {sendError ? (
             <p data-testid="chat-send-error" role="alert" className="mt-3 text-xs text-danger-500">{sendError}</p>
           ) : null}
-          <div ref={bottomRef} aria-hidden="true" />
         </div>
       </div>
       <div

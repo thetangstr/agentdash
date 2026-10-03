@@ -2977,7 +2977,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const workspaceHints = projectWorkspaceRows.map((workspace) => ({
       workspaceId: workspace.id,
-      cwd: readNonEmptyString(workspace.cwd),
+      // AgentDash (security, GH #980 review): a remote_managed row's cwd is a
+      // remote path, not a host one — never report it as a local candidate.
+      cwd: workspace.sourceType === "remote_managed" ? null : readNonEmptyString(workspace.cwd),
       repoUrl: readNonEmptyString(workspace.repoUrl),
       repoRef: readNonEmptyString(workspace.repoRef),
     }));
@@ -2994,7 +2996,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           `Selected project workspace "${preferredProjectWorkspaceId}" is not available on this project.`;
       }
       for (const workspace of projectWorkspaceRows) {
-        let projectCwd = readNonEmptyString(workspace.cwd);
+        // AgentDash (security, GH #980 review): a remote_managed workspace's
+        // cwd is a remote path — a run must never execute in it on this host.
+        let projectCwd =
+          workspace.sourceType === "remote_managed" ? null : readNonEmptyString(workspace.cwd);
         let managedWorkspaceWarning: string | null = null;
         if (!projectCwd || projectCwd === REPO_ONLY_CWD_SENTINEL) {
           try {
@@ -7114,19 +7119,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const ts = new Date().toISOString();
         if (firstOutputAt === null) firstOutputAt = new Date(ts);
 
+        outputSeq += 1;
+        const chunkSeq = outputSeq;
         let appendedBytes = 0;
         if (handle) {
           appendedBytes = await runLogStore.append(handle, {
             stream,
             chunk: sanitizedChunk,
             ts,
+            seq: chunkSeq,
           });
           persistedLogBytes += appendedBytes;
         }
-        outputSeq += 1;
         outputProgressState.pending = {
           at: new Date(ts),
-          seq: outputSeq,
+          seq: chunkSeq,
           stream,
           bytes: persistedLogBytes,
         };
@@ -7144,6 +7151,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             runId: run.id,
             agentId: run.agentId,
             ts,
+            seq: chunkSeq,
             stream,
             chunk: payloadChunk,
             truncated: payloadChunk.length !== sanitizedChunk.length,

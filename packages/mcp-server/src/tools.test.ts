@@ -364,6 +364,22 @@ describe("paperclip MCP tools", () => {
     expect(response.content[0]?.text).toContain("cos-1");
   });
 
+  it("agentdashBootstrapWorkspace forwards an explicit companyId (multi-company 409 recovery)", async () => {
+    // GH #977: the server refuses to guess a workspace for a multi-company
+    // user — the tool must let the caller retry with the chosen company.
+    const companyId = "99999999-9999-4999-8999-999999999999";
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ company: { id: companyId }, cosAgent: { id: "cos-9" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = getTool("agentdashBootstrapWorkspace");
+    await tool.execute({ companyId });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ companyId });
+  });
+
   it("agentdashCreateCompany POSTs to /companies with the company body", async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "co-2" }));
     vi.stubGlobal("fetch", fetchMock);

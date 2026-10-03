@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   COS_PLAIN_LANGUAGE_GUIDANCE,
+  COS_TRUTHFULNESS_GUIDANCE,
   WORKFORCE_PROPOSAL_GUIDANCE,
   cosReplier,
   extractCreateIssueTrailer,
@@ -32,7 +33,7 @@ const defaultHistory = [
 
 function setup(
   llmText: string,
-  opts: { outcome?: unknown; phase?: string; history?: unknown[]; laterHistory?: unknown[] } = {},
+  opts: { outcome?: unknown; phase?: string; history?: unknown[]; laterHistory?: unknown[]; turnContext?: unknown } = {},
 ) {
   const history = opts.history ?? defaultHistory;
   const paginate = vi.fn().mockResolvedValueOnce(history).mockResolvedValue(opts.laterHistory ?? history);
@@ -42,6 +43,12 @@ function setup(
   };
   const issueAction = {
     roster: vi.fn().mockResolvedValue([{ id: agentId, name: "Ellie", role: "Proposal Drafter" }]),
+    turnContext: vi.fn().mockResolvedValue(
+      opts.turnContext ?? {
+        openIssues: [{ identifier: "ACM-7", title: "Draft the Acme proposal", status: "in_progress", assigneeName: "Ellie" }],
+        pendingProposals: [{ title: "Price the Acme renovation", assigneeName: "Ellie" }],
+      },
+    ),
     proposeFromTrailer: vi.fn().mockResolvedValue(opts.outcome ?? { ok: true, payload: proposal }),
   };
   const llm = vi.fn().mockResolvedValue(llmText);
@@ -292,6 +299,59 @@ describe("CoS prompts stay in plain language", () => {
     const { llm, replier } = setup('Got it.\n\n```json\n{"captured":{},"phase_decision":"stay_in_goals"}\n```', { phase: "goals" });
     await reply(replier);
     expect(llm.mock.calls[0]![0].system).toContain(COS_PLAIN_LANGUAGE_GUIDANCE);
+  });
+});
+
+// AgentDash (canary, lane chat): the CoS praised "the pricing summary you
+// just approved" while the card still waited, and reported an agent busy on
+// a finished issue. The steady-state prompt now carries the workspace facts
+// the reply may rely on, and a rule that nothing else may be claimed.
+describe("cosReplier steady state: workspace facts it may rely on", () => {
+  it("lists this person's open issues and waiting task cards, with the only-state-what-you-see rule", async () => {
+    const { llm, issueAction, replier } = setup("Here is where things stand.");
+    await reply(replier);
+    expect(issueAction.turnContext).toHaveBeenCalledWith("co1", requestedBy);
+    const system = llm.mock.calls[0]![0].system as string;
+    expect(system).toContain('ACM-7 "Draft the Acme proposal" is in progress — assigned to Ellie');
+    expect(system).toContain('"Price the Acme renovation" for Ellie — still waiting for this person to confirm or decline it');
+    expect(system).toContain("never approved");
+    expect(system).toContain(COS_TRUTHFULNESS_GUIDANCE);
+    expect(system).toContain("say plainly that you do not know");
+  });
+
+  it("renders statuses in plain words, not role slugs", async () => {
+    const { llm, replier } = setup("Here is where things stand.", {
+      turnContext: {
+        openIssues: [{ identifier: "ACM-9", title: "Competitor scan", status: "in_review", assigneeName: null }],
+        pendingProposals: [],
+      },
+    });
+    await reply(replier);
+    const system = llm.mock.calls[0]![0].system as string;
+    expect(system).toContain('ACM-9 "Competitor scan" is in review');
+    expect(system).not.toContain("in_review");
+  });
+
+  it("says none when there is no open work and no waiting card", async () => {
+    const { llm, replier } = setup("Here is where things stand.", { turnContext: { openIssues: [], pendingProposals: [] } });
+    await reply(replier);
+    const system = llm.mock.calls[0]![0].system as string;
+    expect(system).toContain("- none you can see");
+    expect(system).toContain(COS_TRUTHFULNESS_GUIDANCE);
+  });
+
+  it("still answers when the turn context cannot be loaded, with no facts to claim", async () => {
+    const { llm, issueAction, replier } = setup("Here is where things stand.");
+    issueAction.turnContext.mockRejectedValue(new Error("db down"));
+    await reply(replier);
+    const system = llm.mock.calls[0]![0].system as string;
+    expect(system).not.toContain("Workspace facts");
+  });
+
+  it("never loads the context outside the steady state", async () => {
+    const goals = setup("Hi there.", { phase: "goals" });
+    await reply(goals.replier);
+    expect(goals.issueAction.turnContext).not.toHaveBeenCalled();
   });
 });
 

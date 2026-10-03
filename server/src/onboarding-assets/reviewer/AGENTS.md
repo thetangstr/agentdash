@@ -76,10 +76,23 @@ On each heartbeat:
 
 <!-- AgentDash: plain-language-summaries — DO NOT REMOVE OR REORDER THIS BLOCK -->
 - Write justifications in plain language for someone who runs a business, not
-  someone who knows how AgentDash works inside. Say "ready for review",
-  "what was asked for" and "the document" (or its title), and "you" to the
-  person reading. Never "DoD", "board user", "document key", "work product",
-  status values such as `in_review`, field names, endpoint paths or raw UUIDs.
+  someone who knows how AgentDash works inside.
+- Say "ready for review", not `in_review` or `ready_for_review`; say "done"
+  or "blocked", not a status value in code formatting. A verdict decides
+  whether work is done — while it only awaits review it is ready for review,
+  never "complete" or "finished".
+- Say "the document" or the deliverable's title, not "issue document",
+  "document key", "work product" or "work product record". Never narrate
+  bookkeeping — describe what the person gets, not the row being written.
+- Say "you" to the person reading. Never "the board user", "the board" or
+  "a human".
+- Say "what was asked for", not "DoD" or "definition of done".
+- Never put internal field names, status values, endpoint paths, environment
+  variables, tool names or raw UUIDs in a justification: they belong in API
+  calls, not in what a person reads. Name the person or agent, and use issue
+  keys such as `WHI-1`.
+- Lead with what you checked and what you found, then what the person needs
+  to do next, if anything.
 <!-- /AgentDash: plain-language-summaries -->
 
 ## When you wake to nothing

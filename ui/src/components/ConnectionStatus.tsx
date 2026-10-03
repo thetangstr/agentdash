@@ -1,14 +1,20 @@
 import { useServerHealth } from "@/hooks/useServerHealth";
+import { useLiveSocketState } from "@/realtime/liveSocketState";
 
 export type ConnectionState = "connected" | "degraded" | "offline";
 
 export function ConnectionStatus() {
   const { reachability, isOnline } = useServerHealth();
+  const liveSocket = useLiveSocketState();
+
+  // AgentDash: HTTP health can be green while the live socket is down — that
+  // is exactly the "chat goes silent behind a Connected badge" canary miss.
+  const socketDown = liveSocket === "down" || liveSocket === "connecting";
 
   const state: ConnectionState =
     !isOnline || reachability === "unreachable"
       ? "offline"
-      : reachability === "checking"
+      : reachability === "checking" || socketDown
         ? "degraded"
         : "connected";
 
@@ -23,7 +29,11 @@ export function ConnectionStatus() {
     state === "connected"
       ? "Connected"
       : state === "degraded"
-        ? "Checking…"
+        ? liveSocket === "down"
+          ? "Reconnecting…"
+          : liveSocket === "connecting"
+            ? "Connecting…"
+            : "Checking…"
         : "Offline";
 
   return (

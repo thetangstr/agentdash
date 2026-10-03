@@ -43,6 +43,7 @@ import { usePaperclipIssueRuntime, type PaperclipIssueRuntimeReassignment } from
 import {
   buildIssueChatMessages,
   formatDurationWords,
+  linkedRunUsage,
   stabilizeThreadMessages,
   type IssueChatComment,
   type IssueChatLinkedRun,
@@ -110,6 +111,7 @@ import {
   ReadableRunSummary,
   ReadableToolGroup,
   TranscriptModeToggle,
+  type ReadableRunUsage,
   type ReadableToolGroupItem,
 } from "./transcript/ReadableTranscript";
 import type { TranscriptEntry } from "../adapters";
@@ -773,6 +775,18 @@ function useIssueChatRunTranscript(message: ThreadMessage): readonly IssueChatTr
   return entries && entries.length > 0 ? entries : null;
 }
 
+// AgentDash (batch 2): each run's authoritative usage by run id, so the chat
+// footer's duration and token figures come from the run record — the same
+// numbers the run page shows — rather than the transcript's result snapshot.
+const IssueChatRunUsageCtx = createContext<ReadonlyMap<string, ReadableRunUsage> | undefined>(undefined);
+
+function useIssueChatRunUsage(message: ThreadMessage): ReadableRunUsage | null {
+  const usageByRun = useContext(IssueChatRunUsageCtx);
+  const custom = message.metadata.custom as Record<string, unknown>;
+  const runId = typeof custom.runId === "string" ? custom.runId : null;
+  return (runId ? usageByRun?.get(runId) : undefined) ?? null;
+}
+
 function IssueChatReadableErrors({ lines }: { lines: string[] }) {
   if (lines.length === 0) return null;
   return (
@@ -790,13 +804,14 @@ function IssueChatReadableErrors({ lines }: { lines: string[] }) {
  */
 function IssueChatRunReadableSummary({ message, streaming }: { message: ThreadMessage; streaming: boolean }) {
   const entries = useIssueChatRunTranscript(message);
+  const usage = useIssueChatRunUsage(message);
   const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
   if (!entries) return null;
   return (
     <div className="flex items-start gap-2">
       <div className="min-w-0 flex-1">
         {transcriptMode === "readable" ? (
-          <ReadableRunSummary entries={entries as readonly TranscriptEntry[]} streaming={streaming} />
+          <ReadableRunSummary entries={entries as readonly TranscriptEntry[]} streaming={streaming} usage={usage} />
         ) : null}
       </div>
       <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
@@ -3346,6 +3361,14 @@ export function IssueChatThread({
   });
   const resolvedTranscriptByRun = transcriptsByRunId ?? transcriptByRun;
   const resolvedHasOutputForRun = hasOutputForRunOverride ?? hasOutputForRun;
+  const runUsageByRunId = useMemo(() => {
+    const map = new Map<string, ReadableRunUsage>();
+    for (const run of linkedRuns) {
+      const usage = linkedRunUsage(run);
+      if (usage) map.set(run.runId, usage);
+    }
+    return map;
+  }, [linkedRuns]);
   const rawMessages = useMemo(
     () =>
       buildIssueChatMessages({
@@ -3850,6 +3873,7 @@ export function IssueChatThread({
     <AssistantRuntimeProvider runtime={runtime}>
       <IssueChatCtx.Provider value={chatCtx}>
       <IssueChatTranscriptsCtx.Provider value={resolvedTranscriptByRun}>
+      <IssueChatRunUsageCtx.Provider value={runUsageByRunId}>
       <div className={cn(variant === "embedded" ? "space-y-3" : "space-y-4")}>
         {resolvedShowJumpToLatest ? (
           <div className="flex justify-end">
@@ -3971,6 +3995,7 @@ export function IssueChatThread({
           </div>
         ) : null}
       </div>
+      </IssueChatRunUsageCtx.Provider>
       </IssueChatTranscriptsCtx.Provider>
       </IssueChatCtx.Provider>
     </AssistantRuntimeProvider>

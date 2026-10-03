@@ -121,6 +121,8 @@ describe("AgentDash-MK prompt surface synchronization", () => {
 
   // AgentDash (scan 4 lane O1): run summaries read "no DoD", "board user",
   // "in_review", "document key", "work product" to a non-technical owner.
+  // Batch 2 strengthened the block: agents still wrote "the work product
+  // record" and called an issue "complete" while it only sat in review.
   it("tells every prompt surface to write summaries and comments in plain language", () => {
     for (const surface of renderedPromptSurfaces) {
       expect(surface.content, `${surface.name} is missing the plain-language block`).toContain(
@@ -129,7 +131,32 @@ describe("AgentDash-MK prompt surface synchronization", () => {
       expect(surface.content).toContain("<!-- /AgentDash: plain-language-summaries -->");
       expect(surface.content).toContain('Say "ready for your review"');
       expect(surface.content).toContain('Never "the board user"');
+      expect(
+        surface.content,
+        `${surface.name} still permits "complete" for work that is only in review`,
+      ).toContain('Never call an issue "complete"');
+      expect(
+        surface.content,
+        `${surface.name} still permits internal record names in summaries`,
+      ).toContain('"work product record"');
     }
+  });
+
+  // AgentDash (batch 2): the reviewer mandate is a specialist surface, so it
+  // sits outside renderedPromptSurfaces — but its plain-language block carries
+  // the same rules, phrased for justifications.
+  it("carries the strengthened plain-language rules in the reviewer mandate", () => {
+    const reviewer = readFileSync(
+      path.join(serverSrc, "onboarding-assets/reviewer/AGENTS.md"),
+      "utf8",
+    );
+    expect(reviewer).toContain("<!-- AgentDash: plain-language-summaries");
+    expect(reviewer).toContain("<!-- /AgentDash: plain-language-summaries -->");
+    expect(reviewer).toContain('Say "ready for review"');
+    expect(reviewer).toContain('Never "the board user"');
+    expect(reviewer).toContain('never "complete" or "finished"');
+    expect(reviewer).toContain('"work product record"');
+    expect(reviewer).toContain('"what was asked for"');
   });
 
   it("includes the AgentDash-MK workforce block in every prompt surface", () => {

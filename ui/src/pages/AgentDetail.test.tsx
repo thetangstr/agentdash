@@ -19,7 +19,7 @@ vi.mock("../components/MarkdownEditor", () => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TokenCeilingStatusLine, agentBilledByProvider } = await import("./AgentDetail");
+const { TokenCeilingStatusLine, agentBilledByProvider, CostsSection } = await import("./AgentDetail");
 
 function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentTokenCeilingStatus {
   return {
@@ -175,5 +175,63 @@ describe("agentBilledByProvider", () => {
     expect(
       agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900), run(1_000, 100, "2026-10-03T09:00:00.000Z", { costUsd: 0.12 })], now),
     ).toBe(false);
+  });
+});
+
+// AgentDash (batch 2): the agent page's "Total cost" tile must not print
+// $0.00 on a BYOK workspace — the owner's provider billed real money the
+// control plane cannot see.
+describe("CostsSection on BYOK", () => {
+  function runtimeState(overrides: Record<string, unknown> = {}) {
+    return {
+      agentId: "agent-1",
+      companyId: "company-1",
+      adapterType: "hermes_local",
+      sessionId: null,
+      stateJson: {},
+      lastRunId: null,
+      lastRunStatus: null,
+      totalInputTokens: 36_100,
+      totalOutputTokens: 1_200,
+      totalCachedInputTokens: 50_000,
+      totalCostCents: 0,
+      lastError: null,
+      createdAt: new Date("2026-10-02T10:00:00.000Z"),
+      updatedAt: new Date("2026-10-02T10:02:49.000Z"),
+      ...overrides,
+    } as never;
+  }
+
+  function renderCosts(runtimeState?: Record<string, unknown>) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(<CostsSection runtimeState={runtimeState as never} runs={[]} />);
+    });
+    return container.textContent ?? "";
+  }
+
+  it("says 'Billed by your model provider' instead of $0.00 when usage is unpriced", () => {
+    const text = renderCosts(runtimeState());
+    expect(text).toContain("Total cost");
+    expect(text).toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
+    // The token figures still render — they are the honest number.
+    expect(text).toContain("36.1k");
+  });
+
+  it("shows real dollars when spend is priced", () => {
+    const text = renderCosts(runtimeState({ totalCostCents: 4200 }));
+    expect(text).toContain("$42.00");
+    expect(text).not.toContain("Billed by your model provider");
+  });
+
+  it("shows a dash when nothing ran at all", () => {
+    const text = renderCosts(
+      runtimeState({ totalInputTokens: 0, totalOutputTokens: 0, totalCachedInputTokens: 0 }),
+    );
+    expect(text).not.toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
   });
 });

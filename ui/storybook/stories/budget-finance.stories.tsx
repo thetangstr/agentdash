@@ -682,6 +682,7 @@ function BudgetFinanceMatrix() {
                   budgetMonthlyCents={250_000}
                   totalCompanySpendCents={entry.totalCompanySpendCents}
                   providerRows={entry.providerRows}
+                  pricedSpend
                 />
               </CaseFrame>
             ))}

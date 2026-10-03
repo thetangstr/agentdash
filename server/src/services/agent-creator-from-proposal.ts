@@ -137,7 +137,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // canonical worker: completion summaries, comments and in-run notes say "ready
 // for your review", "the document" and "you", never internal field names,
 // status values ("in_review"), "DoD", "board user", "document key" or "work
-// product". Proposal-created hires add nothing to that.
+// product". Batch 2 strengthened the canonical block: no internal record
+// names ("work product record") and never "complete" or "done" while a change
+// only awaits review. Proposal-created hires add nothing to that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.
@@ -179,6 +181,11 @@ ${userVoice || "No interview context was captured."}
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry
 // or destructive compensation; separate setup/persistence/link phases stay truthful.
+
+// AgentDash: host-execution-config (GH #980) is inherited from the canonical
+// default bundle: a project workspace's `cwd` must stay inside the company's
+// managed directories unless an instance admin sets it — same class as the
+// adapterConfig host-execution fields the bundle already describes.
 
 // AgentDash: task-recovery-permit is inherited from the canonical default
 // bundle: a persisted exhausted marker refuses every wake source, including a
