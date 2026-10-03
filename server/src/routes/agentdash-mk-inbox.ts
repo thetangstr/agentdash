@@ -6,7 +6,7 @@ import { agents, approvals, companies } from "@paperclipai/db";
 import { isUuidLike } from "@paperclipai/shared";
 import { badRequest, forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
-import { accessService } from "../services/access.js";
+import { approvalVisibilityCondition, seesEverything } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { summarizeApprovalRisk } from "../services/approval-risk.js";
 import { issueApprovalService } from "../services/issue-approvals.js";
@@ -31,7 +31,6 @@ function hireApprovalAgentId(approval: { type: string; payload: unknown }): stri
 export function agentdashMkInboxRoutes(db: Db) {
   const router = Router();
   const stewardships = agentStewardshipService(db);
-  const access = accessService(db);
   const issueApprovals = issueApprovalService(db);
   const governance = agentGovernanceService(db);
 
@@ -74,6 +73,7 @@ export function agentdashMkInboxRoutes(db: Db) {
     scope: { agentIds: string[]; userId?: string } | { allCompanyAgents: true },
     requiresOverride: boolean,
     options: { includeResolved?: boolean } = {},
+    approvalVisibleWhere?: ReturnType<typeof approvalVisibilityCondition>,
   ) {
     let scopeCondition: ReturnType<typeof or> | undefined;
     if (!("allCompanyAgents" in scope)) {
@@ -123,6 +123,11 @@ export function agentdashMkInboxRoutes(db: Db) {
                 or(isNull(approvals.expiresAt), gt(approvals.expiresAt, new Date()))!,
               ]),
           ...(scopeCondition ? [scopeCondition] : []),
+          // AgentDash (security, GH #971): a project-scoped budget override
+          // carries the project's name and spend in its payload, so it
+          // follows the restricted-project rule like every other approval
+          // read path — off-list members never see it, whatever the scope.
+          ...(approvalVisibleWhere ? [approvalVisibleWhere] : []),
         ),
       )
       .orderBy(desc(approvals.createdAt))
@@ -244,6 +249,7 @@ export function agentdashMkInboxRoutes(db: Db) {
         { agentIds: current ? [current.agent.id] : [], userId },
         false,
         { includeResolved: statusParam === "all" },
+        approvalVisibilityCondition(req, companyId),
       ),
     });
   });
@@ -257,17 +263,27 @@ export function agentdashMkInboxRoutes(db: Db) {
     await requireProfileCompany(req, companyId);
     requireBoardUser(req);
 
-    const isAdmin =
-      req.actor.source === "local_implicit" ||
-      req.actor.isInstanceAdmin ||
-      (await access.canUser(companyId, req.actor.userId, "agents:create"));
-    if (!isAdmin) {
+    // AgentDash (security, GH #971): this is the owner/admin decision
+    // surface, and it used to admit anyone holding `agents:create` — a
+    // permission that can be granted to a plain member. The gate is the
+    // admin role itself, matching the message below; the visibility
+    // condition additionally scopes project-bound budget overrides so no
+    // future widening of the gate re-opens the restricted-project leak.
+    if (!seesEverything(req, companyId)) {
       throw forbidden("The override view requires company owner or administrator access");
     }
 
     // Scoped by company on the approvals table itself, so approvals with no
     // requesting agent are included rather than filtered out by an agent list.
-    res.json({ items: await buildItems(companyId, { allCompanyAgents: true }, true) });
+    res.json({
+      items: await buildItems(
+        companyId,
+        { allCompanyAgents: true },
+        true,
+        {},
+        approvalVisibilityCondition(req, companyId),
+      ),
+    });
   });
 
   return router;
