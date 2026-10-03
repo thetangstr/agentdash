@@ -1110,7 +1110,7 @@ describe.sequential("issue comment reopen routes", () => {
       .send({ status: "done" });
 
     expect(res.status).toBe(200);
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("run-1");
+    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("run-1", "Cancelled because the issue was marked done");
   });
 
   it("writes decision ids into executionState and inserts the decision inside the transaction", async () => {
