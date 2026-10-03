@@ -60,11 +60,15 @@ function resolveWithin(basePath: string, relativePath: string) {
 }
 
 function createLocalFileRunLogStore(basePath: string): RunLogStore {
-  // Paths appended through the redacting append() in this process. Capped:
-  // if it ever fills, old entries are dropped and those files simply get
-  // the serve-time pass again — the mark is an optimization, not a safety
-  // boundary.
-  const redactedAtPersist = new Set<string>();
+  // Files created by begin() in this process — every byte in them arrived
+  // through the redacting append() path. The mark is recorded at begin()
+  // (never at append(): appending to a pre-existing file must not mark its
+  // legacy content safe) and verified on read against the file's actual
+  // inode/size so a restored or externally-written file loses the mark.
+  // Capped: if it ever fills, entries are dropped and those files simply
+  // get the serve-time pass again — the mark is an optimization, not a
+  // safety boundary.
+  const redactedAtPersist = new Map<string, { ino: number; size: number }>();
 
   async function ensureDir(relativeDir: string) {
     const dir = resolveWithin(basePath, relativeDir);
@@ -117,6 +121,14 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
 
       const absPath = resolveWithin(basePath, relPath);
       await fs.writeFile(absPath, "", "utf8");
+      // The file is fresh and empty; from here on every append goes through
+      // the redacting path, so the whole file is safe to serve without the
+      // read pass. Record identity+size so a later mismatch drops the mark.
+      const created = await fs.stat(absPath).catch(() => null);
+      if (created && created.size === 0) {
+        if (redactedAtPersist.size > 100_000) redactedAtPersist.clear();
+        redactedAtPersist.set(absPath, { ino: created.ino, size: created.size });
+      }
 
       return { store: "local_file", logRef: relPath };
     },
@@ -134,10 +146,14 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
         chunk: redactRunLogText(event.chunk),
       });
       const persisted = `${line}\n`;
+      const persistedBytes = Buffer.byteLength(persisted, "utf8");
       await fs.appendFile(absPath, persisted, "utf8");
-      if (redactedAtPersist.size > 100_000) redactedAtPersist.clear();
-      redactedAtPersist.add(absPath);
-      return Buffer.byteLength(persisted, "utf8");
+      // Keep the recorded size honest for marked files. Appending to a file
+      // that was not created by begin() never earns the mark — its earlier
+      // content may be legacy raw output.
+      const mark = redactedAtPersist.get(absPath);
+      if (mark) mark.size += persistedBytes;
+      return persistedBytes;
     },
 
     async finalize(handle) {
@@ -164,7 +180,17 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       const offset = opts?.offset ?? 0;
       const limitBytes = opts?.limitBytes ?? 256_000;
       const result = await readFileRange(absPath, offset, limitBytes);
-      return { ...result, redactedAtPersist: redactedAtPersist.has(absPath) };
+      const mark = redactedAtPersist.get(absPath);
+      let marked = false;
+      if (mark) {
+        // Trust the mark only while the file is still the one begin()
+        // created and its size matches exactly the bytes append() wrote —
+        // a restored copy or a concurrent external writer drops it.
+        const stat = await fs.stat(absPath).catch(() => null);
+        marked = !!stat && stat.ino === mark.ino && stat.size === mark.size;
+        if (!marked) redactedAtPersist.delete(absPath);
+      }
+      return { ...result, redactedAtPersist: marked };
     },
   };
 }
@@ -181,6 +207,11 @@ export function getRunLogStore() {
   if (cachedStore) return cachedStore;
   cachedStore = createLocalFileRunLogStore(runLogBasePath());
   return cachedStore;
+}
+
+/** Tests only: drop the cached store after RUN_LOG_BASE_PATH changes. */
+export function resetRunLogStoreForTests(): void {
+  cachedStore = null;
 }
 
 // (ci: re-triggered after a flaky verify hang; no functional change)

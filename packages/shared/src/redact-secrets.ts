@@ -659,6 +659,30 @@ export function redactSecretsInValue<T>(value: T, knownSecrets?: KnownSecrets): 
 const PEM_BEGIN_LINE_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
 const PEM_END_LINE_RE = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
 
+// Absolute bound on the held tail when a line has no delimiter at all.
+const STREAM_HARD_CAP = 1024 * 1024;
+
+// Last whitespace/delimiter (` `, tab, newline, CR, `'`, `"`, `` ` ``, `,`, `;`)
+// at or before `end`. `=` is excluded on purpose: `NAME=value` pairs must be
+// held whole, or the bare value leaks without its secret name.
+function lastDelimiterBefore(text: string, end: number): number {
+  for (let i = Math.min(end, text.length) - 1; i >= 0; i--) {
+    switch (text.charCodeAt(i)) {
+      case 0x20:
+      case 0x09:
+      case 0x0a:
+      case 0x0d:
+      case 0x22:
+      case 0x27:
+      case 0x60:
+      case 0x2c:
+      case 0x3b:
+        return i;
+    }
+  }
+  return -1;
+}
+
 export function createSecretStreamRedactor(
   knownSecrets?: KnownSecrets,
   maxHold = STREAM_MAX_HOLD,
@@ -715,9 +739,23 @@ export function createSecretStreamRedactor(
           pemMarkerEmitted = true;
         }
       } else if (text.length > maxHold) {
+        // Never cut at a fixed position: a key starting a few chars before the
+        // cut would be persisted in two halves. Emit only up to the last
+        // delimiter before the tail window so a token straddling it is held
+        // whole. `=` is deliberately not a delimiter — `NAME=value` must be
+        // held as one piece. With no delimiter at all the buffer keeps
+        // growing until STREAM_HARD_CAP, where the whole buffer is emitted
+        // (redacted) to bound memory.
         const emitEnd = text.length - keepTail;
-        out += text.slice(0, emitEnd);
-        held = text.slice(emitEnd);
+        const cut = lastDelimiterBefore(text, emitEnd);
+        if (cut >= 0) {
+          out += text.slice(0, cut + 1);
+          held = text.slice(cut + 1);
+        } else if (text.length > STREAM_HARD_CAP) {
+          out += text;
+        } else {
+          held = text;
+        }
       } else {
         held = text;
       }

@@ -77,11 +77,17 @@ const PUBLIC_NAME_RE = /(?:^|_)(?:PUBLISHABLE|PUBLIC)(?:_|$)/i;
 
 /** A value that is a filesystem path or URL is a pointer, not the secret. */
 function looksLikeLocation(value: string): boolean {
-  return (
-    /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ||
-    /^~?[/.]/.test(value) ||
-    /^[A-Za-z]:[\\/]/.test(value)
-  );
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return true;
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  if (value.startsWith("~")) return true;
+  if (/^[/.]/.test(value)) {
+    // A base64 secret can legitimately start with "/" — about 1 in 64 AWS
+    // secret keys do — so a lone leading slash is not a path. A path needs
+    // at least two slashes ("/a/b") and must not look like a base64 token.
+    const slashes = (value.match(/\//g) ?? []).length;
+    return slashes >= 2 && !/^[A-Za-z0-9+/=]{30,}$/.test(value);
+  }
+  return false;
 }
 
 /**
@@ -104,24 +110,48 @@ export function knownKeysFromEnv(env: NodeJS.ProcessEnv = process.env): string[]
   const keys: string[] = [];
   for (const [name, value] of Object.entries(env)) {
     if (!value) continue;
-    // `AWS_SECRET_ACCESS_KEY`, `PGPASSWORD`, `*_PRIVATE_KEY`, `*_MASTER_KEY`,
-    // `*SECRET_KEY` — any credential-named variable, not just the classic four.
-    // Skipped: location-named and public-named variables, and values that are
-    // paths/URLs (`GOOGLE_APPLICATION_CREDENTIALS` points at a file).
+    const credentialNamed = isSecretName(name) || /_?KEY$/i.test(name);
     if (
       value.length >= 8 &&
-      (isSecretName(name) || /_?KEY$/i.test(name)) &&
+      credentialNamed &&
       isCollectableSecretValue(name, value)
     ) {
       keys.push(value);
     }
-    // DSNs carry their password inline: postgres://user:pass@host. The
-    // password counts only when it looks real — the embedded default
-    // `paperclip:paperclip` (any `user == pass`, or a short password) would
+    // A URL is normally a location, not a secret — but a secret- or
+    // webhook-named URL carries its credential in the path
+    // (`hooks.slack.com/services/T…/B…/<token>`, `*_TOKEN_URL`). Collect the
+    // whole URL verbatim; public-named ones stay excluded.
+    if (
+      value.length >= 8 &&
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(value) &&
+      !PUBLIC_NAME_RE.test(name) &&
+      (credentialNamed || /WEBHOOK/i.test(name))
+    ) {
+      keys.push(value);
+    }
+    // DSNs carry their credential inline: postgres://user:pass@host, or a
+    // bare userinfo credential like a Sentry DSN key (https://<key>@host).
+    // It counts only when it looks real — the embedded default
+    // `paperclip:paperclip` (user == pass, or a well-known default) would
     // redact a common word out of every line, and persist-time
     // over-redaction cannot be undone.
-    const dsn = /^[a-z][a-z0-9+.-]*:\/\/([^\s/@"']+):([^\s/"']+)@/i.exec(value);
-    if (dsn && dsn[2].length >= 12 && dsn[2] !== dsn[1]) keys.push(dsn[2]);
+    const dsn = /^[a-z][a-z0-9+.-]*:\/\/([^\s/@"']+?)(?::([^\s/"']+))?@/i.exec(value);
+    if (dsn) {
+      const candidate = dsn[2] ?? dsn[1];
+      if (
+        candidate !== dsn[1] &&
+        candidate.length >= 8 &&
+        !/^(?:paperclip|postgres|password)$/i.test(candidate) &&
+        (/\d/.test(candidate) || (/[a-z]/.test(candidate) && /[A-Z]/.test(candidate)))
+      ) {
+        keys.push(candidate);
+      } else if (!dsn[2] && candidate.length >= 16 && /\d/.test(candidate)) {
+        // No ":" — the userinfo itself is the credential (Sentry-style keys
+        // are long and digit-bearing); a bare username is not.
+        keys.push(candidate);
+      }
+    }
   }
   return keys;
 }

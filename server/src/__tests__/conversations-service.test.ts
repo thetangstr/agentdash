@@ -194,6 +194,43 @@ describeEmbeddedPostgres("conversationService", () => {
     expect(rows[0]!.content).toBe("third");
     expect(rows[2]!.content).toBe("first");
   });
+
+  it("persists agent-authored content redacted but keeps human content raw", async () => {
+    // GH #992: model output can echo a credential, so agent messages store
+    // redacted; a human's verbatim quote stays raw in the row. Both are safe
+    // when served because every read path runs the pass again.
+    const canary = "provk-chat-canary-7f3a9c2d4e5ab6c78d9e0f1a2b3c4d5e";
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const conversation = await service.create({ companyId, userId: TEST_USER_ID });
+    await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "agent",
+      authorId: "cos-1",
+      body: `the key is api_key=${canary}`,
+    });
+    await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "user",
+      authorId: TEST_USER_ID,
+      body: `my key is api_key=${canary}`,
+    });
+
+    const stored = await db
+      .select({ role: assistantMessages.role, content: assistantMessages.content })
+      .from(assistantMessages)
+      .orderBy(assistantMessages.createdAt);
+    const agentRow = stored.find((row) => row.role === "agent");
+    const userRow = stored.find((row) => row.role === "user");
+    expect(agentRow?.content).not.toContain(canary);
+    expect(agentRow?.content).toContain("***REDACTED***");
+    expect(userRow?.content).toContain(canary);
+
+    const page = await service.paginate(conversation.id, { limit: 10 });
+    for (const message of page) expect(message.content).not.toContain(canary);
+    const latest = await service.latestByRole(conversation.id, "agent");
+    expect(latest?.content).not.toContain(canary);
+  });
 });
 
 // WS event emission tests — these use a stub DB so they run without embedded postgres.

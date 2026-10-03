@@ -240,6 +240,43 @@ describe("createSecretStreamRedactor", () => {
     expect(first + second).not.toContain(secret);
     expect(first + second).toContain("***REDACTED***");
   });
+
+  it("cuts the overflow emit at a delimiter so a straddling key is held whole", () => {
+    // A fixed-position cut at `text.length - keepTail` splits a key that
+    // starts a few chars before the boundary; both halves then persist.
+    const KEY = "sk-ant-api03-Q7xZp2Lm9RtV4wYb8NcK1jHf"; // synthetic
+    const total = 64 * 1024 + 100;
+    const emitEnd = total - 1024; // keepTail with no known secrets
+    for (const offset of [-40, -30, -20, -12, -10, -5, -3, 0, 5]) {
+      const stream = createSecretStreamRedactor([]);
+      const pos = emitEnd + offset;
+      const line =
+        "a ".repeat(Math.floor(pos / 2)) + KEY + " " + "b".repeat(total - pos - KEY.length - 1);
+      let out = stream.push(line.slice(0, total));
+      out += stream.push(line.slice(total) + "\n");
+      out += stream.flush();
+      expect(out, `offset ${offset}`).not.toContain(KEY);
+      expect(out, `offset ${offset}`).not.toContain(KEY.slice(0, 20));
+      expect(out, `offset ${offset}`).not.toContain(KEY.slice(-12));
+    }
+    // A known (verbatim) secret straddling the boundary too.
+    const known = "Zq8Rk2Vm7Tn4Wb9Xc3LsAbc123XyZ"; // synthetic
+    const stream = createSecretStreamRedactor([known]);
+    const line = "x".repeat(emitEnd - 10) + " " + known + " " + "y".repeat(2000);
+    let out = stream.push(line.slice(0, total));
+    out += stream.push(line.slice(total) + "\n");
+    out += stream.flush();
+    expect(out).not.toContain(known.slice(0, 10));
+    expect(out).not.toContain(known.slice(10));
+  });
+
+  it("emits a delimiter-free line at the hard cap instead of holding forever", () => {
+    const stream = createSecretStreamRedactor([]);
+    const blob = "x".repeat(1024 * 1024 + 64); // > STREAM_HARD_CAP, no delimiter
+    const out = stream.push(blob);
+    expect(out.length).toBeGreaterThan(0);
+    expect(stream.push("tail\n")).toContain("tail");
+  });
 });
 
 describe("containsSecrets", () => {

@@ -6,8 +6,19 @@ import {
   assistantMessages,
 } from "@paperclipai/db";
 import { emitMessageCreated, emitMessageRead } from "../realtime/conversation-events.js";
+import { redactRunLogText } from "./run-log-redaction.js";
 
 export function conversationService(db: Db) {
+  // AgentDash (GH #992): agent-authored messages are model output and can
+  // echo credentials, so they persist redacted (postMessage). The serve pass
+  // also covers human-authored content and rows written before the persist
+  // pass shipped — applied everywhere a message row leaves this service.
+  function redactMessage<T extends { content?: string | null }>(message: T): T {
+    return typeof message.content === "string" && message.content.length > 0
+      ? { ...message, content: redactRunLogText(message.content) }
+      : message;
+  }
+
   return {
     getById: async (id: string) => {
       const rows = await db
@@ -102,7 +113,7 @@ export function conversationService(db: Db) {
         .from(assistantMessages)
         .where(and(eq(assistantMessages.id, messageId), eq(assistantMessages.conversationId, conversationId)))
         .limit(1);
-      return rows[0] ?? null;
+      return rows[0] ? redactMessage(rows[0]) : null;
     },
 
     // AgentDash: the newest message of one role, or null.
@@ -113,7 +124,7 @@ export function conversationService(db: Db) {
         .where(and(eq(assistantMessages.conversationId, conversationId), eq(assistantMessages.role, role)))
         .orderBy(desc(assistantMessages.createdAt), desc(assistantMessages.id))
         .limit(1);
-      return rows[0] ?? null;
+      return rows[0] ? redactMessage(rows[0]) : null;
     },
 
     // AgentDash: whether any message of this card kind exists in the conversation.
@@ -162,16 +173,18 @@ export function conversationService(db: Db) {
           role: input.authorKind,
           // AgentDash: remember who wrote a person's message (Retry is theirs only).
           authorUserId: input.authorKind === "user" ? input.authorId : null,
-          content: input.body,
+          // AgentDash (GH #992): agent-authored text persists redacted.
+          content: input.authorKind === "agent" ? redactRunLogText(input.body) : input.body,
           cardKind: input.cardKind ?? null,
           cardPayload: input.cardPayload ?? null,
         })
         .returning();
       const row = rows[0]!;
+      const served = redactMessage(row);
       if (companyId) {
-        emitMessageCreated({ ...row, companyId });
+        emitMessageCreated({ ...served, companyId });
       }
-      return row;
+      return served;
     },
 
     paginate: async (
@@ -204,7 +217,8 @@ export function conversationService(db: Db) {
         .from(assistantMessages)
         .where(and(...conditions))
         .orderBy(desc(assistantMessages.createdAt))
-        .limit(limit);
+        .limit(limit)
+        .then((rows) => rows.map(redactMessage));
     },
   };
 }

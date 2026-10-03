@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals, bridgeTasks } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
+import { redactRunLogText } from "./run-log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
@@ -59,7 +60,10 @@ export function approvalService(db: Db) {
   function redactApprovalComment<T extends { body: string }>(comment: T, censorUsernameInLogs: boolean): T {
     return {
       ...comment,
-      body: redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs }),
+      // AgentDash (GH #992): agent-authored approval comments are persisted
+      // redacted (addComment), but the serve pass also covers human comments
+      // and rows written before the persist pass shipped.
+      body: redactRunLogText(redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs })),
     };
   }
 
@@ -528,6 +532,10 @@ export function approvalService(db: Db) {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
       const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+      // AgentDash (GH #992): agent-authored comments persist redacted — the
+      // body is model output that can echo a credential. Human comments stay
+      // raw in the row and are redacted only when served.
+      const persistedBody = actor.agentId ? redactRunLogText(redactedBody) : redactedBody;
       return db
         .insert(approvalComments)
         .values({
@@ -535,7 +543,7 @@ export function approvalService(db: Db) {
           approvalId,
           authorAgentId: actor.agentId ?? null,
           authorUserId: actor.userId ?? null,
-          body: redactedBody,
+          body: persistedBody,
         })
         .returning()
         .then((rows) => redactApprovalComment(rows[0], currentUserRedactionOptions.enabled));

@@ -163,6 +163,60 @@ describe("run-log redaction", () => {
     expect(keys).toContain("r00t-longpassword-99");
   });
 
+  it("collects a base64 secret that starts with '/' (AWS secret keys can)", () => {
+    // ~1/64 of AWS secret access keys begin with "/"; treating any
+    // slash-leading value as a path drops them from verbatim matching.
+    const keys = knownKeysFromEnv({
+      AWS_SECRET_ACCESS_KEY: "/k3Zq8Rk2Vm7Tn4Wb9Xc3LsQ7xZp2Lm9RtV4wYb8",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(keys).toContain("/k3Zq8Rk2Vm7Tn4Wb9Xc3LsQ7xZp2Lm9RtV4wYb8");
+    // Real paths still excluded.
+    const pathKeys = knownKeysFromEnv({
+      AWS_SECRET_ACCESS_KEY: "/etc/ssl/aws-secret",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(pathKeys).not.toContain("/etc/ssl/aws-secret");
+  });
+
+  it("collects short-but-real DSN passwords and rejects weak ones", () => {
+    const keys = knownKeysFromEnv({
+      DATABASE_URL: "postgres://app:Qx7mR2pL9z@db.internal:5432/app",
+      WEAK_DSN: "postgres://app:loweronly@db.internal:5432/app",
+      DEFAULT_DSN: "postgres://db:postgres@db.internal:5432/app",
+      PW_DSN: "postgres://db:password@db.internal:5432/app",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(keys).toContain("Qx7mR2pL9z");
+    // 8+ chars but no digit and no mixed case — not credential-looking.
+    expect(keys).not.toContain("loweronly");
+    expect(keys).not.toContain("postgres");
+    expect(keys).not.toContain("password");
+  });
+
+  it("collects webhook/secret-named URLs verbatim and Sentry-style DSN keys", () => {
+    const webhook = "https://hooks.slack.com/services/T0SYNTH/B0SYNTH/Zq8Rk2Vm7Tn4Wb9Xc3Ls";
+    const tokenUrl = "https://discord.com/api/webhooks/123/Zq8Rk2Vm7Tn4Wb9Xc3LsAbc";
+    const sentry = "https://abcdef0123456789abcdef0123456789@o1.ingest.sentry.io/1";
+    const keys = knownKeysFromEnv({
+      SLACK_WEBHOOK_URL: webhook,
+      DISCORD_WEBHOOK_TOKEN_URL: tokenUrl,
+      SENTRY_DSN: sentry,
+      PAPERCLIP_PUBLIC_KEY_URL: "https://agentdash.example.com/.well-known/jwks.json",
+      MY_SECRET_PATH: "/etc/x",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(keys).toContain(webhook);
+    expect(keys).toContain(tokenUrl);
+    expect(keys).toContain("abcdef0123456789abcdef0123456789");
+    expect(keys).not.toContain("https://agentdash.example.com/.well-known/jwks.json");
+    expect(keys).not.toContain("/etc/x");
+    // And printing any of them bare is redacted by the collected key.
+    for (const [bare, collected] of [
+      [webhook, webhook],
+      [tokenUrl, tokenUrl],
+      ["abcdef0123456789abcdef0123456789", sentry],
+    ]) {
+      expect(redactSecrets(`echo ${bare} done`, keys), bare).not.toContain(collected);
+    }
+  });
+
   it("NDJSON pass redacts the chunk field and keeps lines parseable", () => {
     const line = JSON.stringify({
       ts: "2026-10-03T00:00:00Z",
