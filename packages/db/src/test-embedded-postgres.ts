@@ -17,6 +17,7 @@ type EmbeddedPostgresCtor = new (opts: {
   port: number;
   persistent: boolean;
   initdbFlags?: string[];
+  postgresFlags?: string[];
   onLog?: (message: unknown) => void;
   onError?: (message: unknown) => void;
 }) => EmbeddedPostgresInstance;
@@ -92,7 +93,11 @@ async function createEmbeddedPostgresTestInstance(tempDirPrefix: string) {
     password: "paperclip",
     port,
     persistent: true,
-    initdbFlags: ["--encoding=UTF8", "--locale=C", "--lc-messages=C"],
+    // AgentDash: throwaway test clusters never need durable writes — fsync off
+    // cuts initdb and migration time several-fold on loaded CI boxes, which is
+    // what pushed suite beforeAll hooks past their deadlines (#984).
+    initdbFlags: ["--encoding=UTF8", "--locale=C", "--lc-messages=C", "--no-sync"],
+    postgresFlags: ["-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"],
     onLog: () => {},
     onError: () => {},
   });

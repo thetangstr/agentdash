@@ -8,9 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { defineConfig } from "@playwright/test";
+import { resolveE2eEmbeddedPostgresPort } from "./e2e-db-port";
 
 const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3298);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+const DB_PORT = resolveE2eEmbeddedPostgresPort(PORT);
 const CHROMIUM_CHANNEL = process.env.PLAYWRIGHT_CHROMIUM_CHANNEL?.trim();
 
 export default defineConfig({
@@ -38,6 +40,7 @@ export default defineConfig({
     env: {
       ...process.env,
       PORT: String(PORT),
+      PAPERCLIP_EMBEDDED_POSTGRES_PORT: String(DB_PORT),
       PAPERCLIP_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-signed-out-e2e-")),
       PAPERCLIP_INSTANCE_ID: "playwright-signed-out",
       PAPERCLIP_BIND: "loopback",

@@ -232,7 +232,10 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
       mode: databaseUrl ? "postgres" : "embedded-postgres",
       ...(databaseUrl ? { connectionString: databaseUrl } : {}),
       embeddedPostgresDataDir: resolveDefaultEmbeddedPostgresDir(instanceId),
-      embeddedPostgresPort: 54329,
+      // AgentDash: e2e webServers export PAPERCLIP_EMBEDDED_POSTGRES_PORT so the
+      // throwaway instance never grabs the 54329 live-instance default.
+      embeddedPostgresPort:
+        parseNumberFromEnv(process.env.PAPERCLIP_EMBEDDED_POSTGRES_PORT) ?? 54329,
       backup: {
         enabled: databaseBackupEnabled,
         intervalMinutes: databaseBackupIntervalMinutes,

@@ -469,7 +469,32 @@ export function OnboardingWizard() {
     queryFn: () => agentsApi.list(createdCompanyId!),
     enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen
   });
-  const companyHasAgents = (existingAgents?.length ?? 0) > 0 && !createdAgentId;
+  // AgentDash (#995): the wording and the CoS prefill are decided by the
+  // agents that existed when the wizard picked this company — a snapshot —
+  // not by whatever the live list refetches to. A CoS provisioned by the
+  // server's onboarding bootstrap while the wizard is open must not clear
+  // the prefilled name or flip "Create your first agent" mid-flow.
+  const [agentsSnapshot, setAgentsSnapshot] = useState<{
+    companyId: string;
+    hasAgents: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (!effectiveOnboardingOpen || !createdCompanyId || existingAgents === undefined) return;
+    setAgentsSnapshot((current) =>
+      current?.companyId === createdCompanyId
+        ? current
+        : { companyId: createdCompanyId, hasAgents: existingAgents.length > 0 }
+    );
+  }, [effectiveOnboardingOpen, createdCompanyId, existingAgents]);
+  useEffect(() => {
+    if (!effectiveOnboardingOpen) setAgentsSnapshot(null);
+  }, [effectiveOnboardingOpen]);
+  const companyHasAgents = Boolean(
+    agentsSnapshot &&
+      agentsSnapshot.companyId === createdCompanyId &&
+      agentsSnapshot.hasAgents &&
+      !createdAgentId
+  );
   // AgentDash (scan 4, lane O2): "CoS" is the first agent's name. A company
   // that already has agents has its Chief of Staff, so the name starts empty
   // (a role-based placeholder suggests one) unless the user typed something.
@@ -598,6 +623,7 @@ export function OnboardingWizard() {
     setCreatedAgentId(null);
     setCreatedProjectId(null);
     setCreatedIssueRef(null);
+    setAgentsSnapshot(null);
   }
 
   function handleClose() {
@@ -820,6 +846,10 @@ export function OnboardingWizard() {
       setCreatedCompanyId(company.id);
       setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
+      // #995: a company the wizard just created had no agents when the wizard
+      // opened — pin that snapshot now so a bootstrap-provisioned CoS landing
+      // before the agents fetch resolves can never clear the "CoS" prefill.
+      setAgentsSnapshot({ companyId: company.id, hasAgents: false });
       // AgentDash: the first company may have just been created; refetch the
       // access queries CloudAccessGate decides on.
       await refreshAccessQueries(queryClient);

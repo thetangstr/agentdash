@@ -313,7 +313,13 @@ export function loadConfig(): Config {
     embeddedPostgresDataDir: resolveHomeAwarePath(
       fileConfig?.database.embeddedPostgresDataDir ?? resolveDefaultEmbeddedPostgresDir(),
     ),
-    embeddedPostgresPort: fileConfig?.database.embeddedPostgresPort ?? 54329,
+    // AgentDash: the env override wins over the file so e2e webServers (and
+    // deploy tooling that already exports it) can pin a throwaway DB port
+    // without rewriting config.json — 54329 stays the interactive default.
+    embeddedPostgresPort:
+      Number(process.env.PAPERCLIP_EMBEDDED_POSTGRES_PORT) ||
+      fileConfig?.database.embeddedPostgresPort ||
+      54329,
     databaseBackupEnabled,
     databaseBackupIntervalMinutes,
     databaseBackupRetentionDays,

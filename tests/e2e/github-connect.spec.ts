@@ -32,16 +32,31 @@ test("an owner connects a repo from project settings and sees it connected", asy
   await expect(section.getByTestId("github-token-howto")).toContainText("Contents: Read and write");
   await expect(section.getByTestId("github-token-howto")).toContainText("can read this token");
 
+  // The alert/connected panel renders off the PUT github-connections
+  // permission check; wait for that response rather than asserting on timing.
+  const connectCheck = () =>
+    page.waitForResponse(
+      (res) =>
+        res.request().method() === "PUT" &&
+        res.url().includes(`/api/companies/${company.id}/github-connections`),
+    );
+
   // Wrong scope: named permission, nothing connected.
   await section.getByLabel("Repository").fill("https://github.com/acme/readonly");
   await section.getByLabel("Fine-grained token").fill(TOKEN);
-  await section.getByRole("button", { name: "Check and connect" }).click();
+  await Promise.all([
+    connectCheck(),
+    section.getByRole("button", { name: "Check and connect" }).click(),
+  ]);
   await expect(section.getByRole("alert")).toContainText("Missing permission: Contents: Read and write");
 
   // Right scope: connected.
   await section.getByLabel("Repository").fill("https://github.com/acme/app");
   await section.getByLabel("Fine-grained token").fill(TOKEN);
-  await section.getByRole("button", { name: "Check and connect" }).click();
+  await Promise.all([
+    connectCheck(),
+    section.getByRole("button", { name: "Check and connect" }).click(),
+  ]);
   await expect(section.getByTestId("github-connected")).toContainText("acme/app");
   await expect(section.getByTestId("github-connected")).toContainText("Default branch main");
 
