@@ -24,7 +24,7 @@ This page selects lines by their words, so it can include a line about an intern
 
 **Upgrade notes**
 
-- **Migration `0144_upgrade_agent_accountability_backfill`:** an agent someone holds a credential for (a live API key not named "default", or a redeemed connect code) stays stewarded.
+- **Migration `0144` (agent accountability backfill):** an agent someone holds a credential for (a live API key not named "default", or a redeemed connect code) stays stewarded.
 - **Reserved company prefixes** (#988). New companies can no longer take a prefix that a page already uses, such as MCP, ORG, U, API, LLMS or DOWNLOADS. "MCP Advisory" now gets MCPA and "API Partners" gets APIA. Existing companies that already collide stay as they are and stay shadowed by the page. Renaming them needs a separate decision, because their links already exist.
 - `GET /api/adapters/:type/config-schema` now answers `{ "fields": [] }` for a registered adapter with no schema. Unregistered types still answer 404.
 
