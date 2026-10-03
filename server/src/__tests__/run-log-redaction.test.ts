@@ -134,8 +134,8 @@ describe("run-log redaction", () => {
     // `paperclip` out of every run log — and persist-time over-redaction is
     // permanent.
     const keys = knownKeysFromEnv({
-      PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/Users/kailor/.paperclip/instances/default/secrets/master.key",
-      GOOGLE_APPLICATION_CREDENTIALS: "/Users/kailor/.config/gcloud/application_default_credentials.json",
+      PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/Users/example/.paperclip/instances/default/secrets/master.key",
+      GOOGLE_APPLICATION_CREDENTIALS: "/Users/example/.config/gcloud/application_default_credentials.json",
       STRIPE_PUBLISHABLE_KEY: "pk_live_abcdefghijklmnopqrstuvwx",
       DATABASE_URL: "postgres://paperclip:paperclip@127.0.0.1:54329/paperclip",
       BETTER_AUTH_SECRET: "abcdefghijklmnopqrstuvwxyz012345",
@@ -144,8 +144,8 @@ describe("run-log redaction", () => {
     expect(keys).toEqual(["abcdefghijklmnopqrstuvwxyz012345"]);
 
     for (const line of [
-      "reading /Users/kailor/.paperclip/instances/default/data/run-logs/abc.ndjson",
-      "cat /Users/kailor/.config/gcloud/application_default_credentials.json",
+      "reading /Users/example/.paperclip/instances/default/data/run-logs/abc.ndjson",
+      "cat /Users/example/.config/gcloud/application_default_credentials.json",
       "user paperclip connected to db paperclip",
       "GET https://agentdash.example.com/.well-known/jwks.json",
       "pk_live_abcdefghijklmnopqrstuvwx is publishable",
