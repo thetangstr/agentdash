@@ -177,12 +177,24 @@ async function createApp() {
     next();
   });
   // AgentDash (batch 2 review lane): the document-write review hook reads
-  // work products on the request db. This suite stubs services, so the stub
-  // db answers "no bound deliverables".
+  // work products on the request db inside a transaction. This suite stubs
+  // services, so the stub db answers "no issue row, no bound deliverables".
+  const emptySelectChain: any = new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "then") {
+          return <T>(onFulfilled?: (rows: unknown[]) => T) => Promise.resolve([]).then(onFulfilled);
+        }
+        return () => emptySelectChain;
+      },
+    },
+  );
   const stubDb = {
-    select: () => ({
-      from: () => ({ where: () => Promise.resolve([]) }),
-    }),
+    select: () => emptySelectChain,
+    insert: () => emptySelectChain,
+    update: () => emptySelectChain,
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(stubDb),
   } as any;
   app.use("/api", issueRoutes(stubDb, {} as any));
   app.use(errorHandler);

@@ -1,7 +1,7 @@
 // AgentDash: canonical PATCH acceptance. Plans are private and confer no authority.
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
-import { companies, documents, heartbeatRuns, issueDocuments, issues, issueExecutionDecisions, issueThreadInteractions, issueWorkProducts, type Db } from "@paperclipai/db";
+import { companies, heartbeatRuns, issues, issueExecutionDecisions, issueThreadInteractions, issueWorkProducts, type Db } from "@paperclipai/db";
 import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueRouteSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
@@ -15,6 +15,7 @@ import { featureFlagsService } from "./feature-flags.js";
 import { resolveAgentClosingStatus } from "./issue-blocked-declaration.js";
 import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
 import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
+import { listIssueDocumentsByKey, resubmitSentBackDeliverables, workProductDocumentKey } from "./work-products.js";
 import {
   digestIssueIntentFacts, IssueCommentPolicyRefusal, selectActiveIssueRun, isClosedIssueStatus, shouldImplicitlyMoveCommentedIssueToTodo,
   summarizeIssueReferenceActivityDetails, summarizeIssueRelationForActivity, type IssueCommentExecutor, type IssueCommentContext
@@ -246,42 +247,9 @@ function retainedReferenceFacts(text: string | null) {
     .sort((left, right) => left.identifier.localeCompare(right.identifier));
 }
 
-// AgentDash (batch 2 review lane): the document a document-typed deliverable
-// points at lives behind metadata.documentKey (the key the agent wrote it
-// under), joined through issue_documents.
-function workProductDocumentKey(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
-  const key = (metadata as Record<string, unknown>).documentKey;
-  return typeof key === "string" && key.length > 0 ? key : null;
-}
-
-async function listIssueDocumentsByKey(
-  executor: IssueCommentExecutor,
-  companyId: string,
-  issueId: string,
-  keys: string[],
-) {
-  const unique = [...new Set(keys)];
-  if (unique.length === 0) return new Map<string, { key: string; latestRevisionId: string | null; latestRevisionNumber: number; updatedAt: Date }>();
-  const rows = await executor
-    .select({
-      key: issueDocuments.key,
-      latestRevisionId: documents.latestRevisionId,
-      latestRevisionNumber: documents.latestRevisionNumber,
-      // documents.updated_at is the instant of the latest revision write; it
-      // stands in for revision.created_at when only a changes-requested
-      // timestamp is available to compare against.
-      updatedAt: documents.updatedAt,
-    })
-    .from(issueDocuments)
-    .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
-    .where(and(
-      eq(issueDocuments.companyId, companyId),
-      eq(issueDocuments.issueId, issueId),
-      inArray(issueDocuments.key, unique),
-    ));
-  return new Map(rows.map((row) => [row.key, row]));
-}
+// AgentDash (batch 2 review lane): document/revision helpers and the
+// resubmission flip live in work-products.ts so the run-finish path can reuse
+// them (see resubmitSentBackDeliverablesAfterRunFinished).
 
 // AgentDash (batch 2 review lane): every queued, scheduled or running run that
 // was woken for this issue — not only the active one — so a queued wake cannot
@@ -774,10 +742,21 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             const doc = documentKey ? docsByKey.get(documentKey) : null;
             if (doc) {
               const seenRevision = seenRevisions[documentKey!];
-              if (seenRevision === undefined || doc.latestRevisionNumber > seenRevision) {
-                throw conflict("The document changed after you reviewed it. Read the newest revision before accepting.", {
+              // AgentDash (review #1003): a missing baseline is not a stale
+              // one — it gets its own code and wording so clients (and
+              // people) can tell "say what you saw" apart from "it changed".
+              if (seenRevision === undefined) {
+                throw conflict("Tell us which document revision you saw before accepting: read the latest revision, then try again.", {
+                  code: "document_revision_required",
                   documentKey,
-                  seenRevisionNumber: seenRevision ?? null,
+                  latestRevisionNumber: doc.latestRevisionNumber,
+                });
+              }
+              if (doc.latestRevisionNumber > seenRevision) {
+                throw conflict("The document changed after you reviewed it. Read the newest revision before accepting.", {
+                  code: "document_revision_stale",
+                  documentKey,
+                  seenRevisionNumber: seenRevision,
                   latestRevisionNumber: doc.latestRevisionNumber,
                 });
               }
@@ -945,78 +924,20 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         //
         // AgentDash (batch 2 review lane): a document-bound deliverable only
         // comes back when the document has a revision newer than the one the
-        // changes request was made against, or when no issue-bound run is live
-        // (the run that could still write one has finished). Otherwise the
-        // review buttons would reappear for a revision the agent has not
-        // written yet — the hosted ACM-5 / local WHI-1 race.
+        // changes request was made against, or when no ASSIGNEE run is live —
+        // a queued reviewer or CoS run bound to the issue does not count. The
+        // calling run is live too when it is the assignee's: an agent
+        // resubmitting mid-run has not finished, so only an already-written
+        // revision lets the deliverable back to review. When the run later
+        // finishes, resubmitSentBackDeliverablesAfterRunFinished re-runs this
+        // same flip — the "or your run has finished" half.
         if (existing.status !== "in_review" && issue.status === "in_review") {
-          const sentBack = await tx
-            .select({ id: issueWorkProducts.id, metadata: issueWorkProducts.metadata })
-            .from(issueWorkProducts)
-            .where(and(
-              eq(issueWorkProducts.companyId, issue.companyId),
-              eq(issueWorkProducts.issueId, issue.id),
-              eq(issueWorkProducts.status, "changes_requested"),
-            ));
-          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId, issue.id,
-            sentBack.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
-          // The calling run is live too — an agent resubmitting from its own
-          // run has not finished, so only an already-written revision lets the
-          // deliverable back to review. A later document write (or a later
-          // move to in_review once nothing is live) completes the flip.
-          const liveRun =
-            sentBack.length > 0
-              ? ((await selectIssueRunsForClose(tx, issue, null))[0]
-                  ?? (await selectActiveIssueRun(tx, issue))
-                  ?? (actor.actorType === "agent" && actor.runId ? { id: actor.runId } : null))
-              : null;
-          const resubmittedAt = new Date().toISOString();
-          for (const product of sentBack) {
-            const documentKey = workProductDocumentKey(product.metadata);
-            if (documentKey) {
-              const doc = docsByKey.get(documentKey);
-              const meta = product.metadata as Record<string, unknown> | null;
-              const requestedRevision =
-                typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
-              const requestedAtRaw = meta?.changesRequestedAt;
-              const requestedAt =
-                typeof requestedAtRaw === "string" && !Number.isNaN(Date.parse(requestedAtRaw))
-                  ? new Date(requestedAtRaw)
-                  : null;
-              const hasNewerRevision = !!doc && (
-                (requestedRevision !== null && doc.latestRevisionNumber > requestedRevision)
-                || (requestedRevision === null && requestedAt !== null && doc.updatedAt.getTime() > requestedAt.getTime())
-              );
-              if (!hasNewerRevision && liveRun) continue;
-            }
-            await tx.update(issueWorkProducts)
-              .set({
-                status: "ready_for_review",
-                reviewState: "needs_board_review",
-                metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${resubmittedAt}::text)`,
-                updatedAt: new Date(),
-              })
-              .where(eq(issueWorkProducts.id, product.id));
-            await audit({
-              companyId: issue.companyId,
-              actorType: actor.actorType,
-              actorId: actor.actorId,
-              agentId: actor.agentId,
-              runId: actor.runId,
-              action: "issue.work_product_updated",
-              entityType: "issue",
-              entityId: issue.id,
-              details: {
-                identifier: issue.identifier,
-                workProductId: product.id,
-                changedKeys: ["reviewState", "status"],
-                status: "ready_for_review",
-                reviewState: "needs_board_review",
-                reason: "resubmitted_for_review",
-                ...context.attribution,
-              },
-            });
-          }
+          await resubmitSentBackDeliverables(tx, issue, {
+            actor,
+            audit,
+            callingRunIsLive: true,
+            activityDetails: context.attribution,
+          });
         }
 
         if (Array.isArray(intent.blockedByIssueIds)) {

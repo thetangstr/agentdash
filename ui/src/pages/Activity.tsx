@@ -58,8 +58,8 @@ export function Activity() {
   }, [setBreadcrumbs]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: ACTIVITY_PAGE_LIMIT }],
-    queryFn: () => activityApi.list(selectedCompanyId!, { limit: ACTIVITY_PAGE_LIMIT }),
+    queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: ACTIVITY_PAGE_LIMIT, includeSystem: showSystem }],
+    queryFn: () => activityApi.list(selectedCompanyId!, { limit: ACTIVITY_PAGE_LIMIT, includeSystem: showSystem }),
     enabled: !!selectedCompanyId,
   });
 

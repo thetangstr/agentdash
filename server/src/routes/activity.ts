@@ -88,6 +88,9 @@ export function activityRoutes(db: Db) {
       entityId: req.query.entityId as string | undefined,
       since,
       limit: normalizeActivityLimit(Number(req.query.limit)),
+      // AgentDash (review #1003): the Activity page asks for the filtered
+      // feed; every other consumer keeps the full one.
+      includeSystem: req.query.includeSystem === "false" ? false : undefined,
       // A5 (GH #830): rows about an issue or project the actor cannot see
       // are absent, so `?entityType=issue&entityId=` cannot read around the
       // guarded /issues/:id/activity.

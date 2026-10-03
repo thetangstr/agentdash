@@ -222,11 +222,18 @@ import type { ActivityAcceptance } from '../services/activity-log.js';
  * an assistant grant (not an acceptance on done either), cannot record a work
  * product as approved or merged: nothing verifies a merge with GitHub today,
  * and the caller picks the type. An agent cannot change a work product's type.
+ *
+ * AgentDash (batch 2 review lane, review #1003): an agent cannot send a work
+ * product back to review either. Only the in_review move and the
+ * document-write hook may flip changes_requested to ready_for_review —
+ * otherwise a direct PATCH would bring Accept back for a revision the
+ * reviewer never saw.
  */
 export function workProductSelfAcceptanceRefusal(
   actor: { type?: string | null; source?: string | null },
   body: { status?: unknown; reviewState?: unknown; type?: unknown },
   existingType?: string,
+  existingStatus?: string,
 ): string | null {
   const notAPerson = actor.type === "agent" || actor.source === "assistant_grant";
   if (!notAPerson) return null;
@@ -236,6 +243,13 @@ export function workProductSelfAcceptanceRefusal(
   const status = typeof body.status === "string" ? body.status : null;
   if (status === "approved" || status === "merged" || body.reviewState === "approved") {
     return "Only a person can accept work. A board user accepts it from the issue.";
+  }
+  const backToReview = status === "ready_for_review" || body.reviewState === "needs_board_review";
+  // "Back to review" means the deliverable already went through review — a
+  // sent-back or accepted one. A fresh or still-active product is only being
+  // submitted, which the create/submit paths legitimately do.
+  if (backToReview && (existingStatus === "changes_requested" || existingStatus === "approved" || existingStatus === "merged")) {
+    return "Only the server sends a deliverable back to review: write the revised document revision, then move the issue to in_review.";
   }
   return null;
 }
@@ -247,126 +261,184 @@ export function workProductSelfAcceptanceRefusal(
  * ready_for_review — and reopens a done issue to in_review so the review
  * actually surfaces again; a sent-back deliverable on an issue already in
  * review becomes reviewable once the revision it was asked for lands.
+ *
+ * AgentDash (review #1003): a board user's own write or restore does not
+ * reopen what they accepted — the new revision is recorded as the accepted
+ * one instead. The issue status is re-read under the row lock so a
+ * concurrent PATCH cannot move the issue between the route's stale read and
+ * this hook, and the reopen goes through the issue service rather than a raw
+ * update.
  */
 async function applyDeliverableReviewAfterDocumentRevision(input: {
   db: Db;
-  issue: { id: string; companyId: string; identifier?: string | null; status: string; title: string };
+  issue: { id: string; companyId: string; identifier?: string | null };
   key: string;
+  latestRevisionId: string | null;
   latestRevisionNumber: number;
-  actor: { actorType: "agent" | "plugin" | "system" | "user"; actorId: string; agentId: string | null; runId: string | null };
+  actor: { actorType: "agent" | "plugin" | "system" | "user"; actorId: string; agentId: string | null; runId: string | null; source?: string | null };
   onIssueStatusChanged: (issueId: string, before: string, after: string) => Promise<unknown>;
 }) {
-  const { db, issue, key, latestRevisionNumber, actor, onIssueStatusChanged } = input;
-  const candidates = await db
-    .select({ id: issueWorkProducts.id, status: issueWorkProducts.status, metadata: issueWorkProducts.metadata })
-    .from(issueWorkProducts)
-    .where(and(
-      eq(issueWorkProducts.companyId, issue.companyId),
-      eq(issueWorkProducts.issueId, issue.id),
-      inArray(issueWorkProducts.status, ["approved", "changes_requested"]),
-      sql`${issueWorkProducts.metadata} ->> 'documentKey' = ${key}`,
-    ));
-  if (candidates.length === 0) return;
-  const now = new Date();
-  let reopenedAccepted = false;
-  for (const product of candidates) {
-    const meta = (product.metadata ?? null) as Record<string, unknown> | null;
-    if (product.status === "approved") {
-      const acceptance = meta?.acceptance as Record<string, unknown> | undefined;
-      const acceptedRevision =
-        typeof acceptance?.acceptedRevisionNumber === "number" ? acceptance.acceptedRevisionNumber : null;
-      // The revision the person accepted already covers this write.
-      if (acceptedRevision !== null && acceptedRevision >= latestRevisionNumber) continue;
-      await db.update(issueWorkProducts)
-        .set({
-          status: "ready_for_review",
-          reviewState: "needs_board_review",
-          metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object(
-            'reviewReopenedAt', ${now.toISOString()}::text,
-            'reviewReopenReason', 'document_revised_after_acceptance')`,
-          updatedAt: now,
-        })
-        .where(eq(issueWorkProducts.id, product.id));
-      reopenedAccepted = true;
-      await logActivity(db, {
+  const { db, issue, key, latestRevisionId, latestRevisionNumber, actor, onIssueStatusChanged } = input;
+  const publications: ActivityPublication[] = [];
+  let reopenedDoneIssue = false;
+  await db.transaction(async (tx) => {
+    const freshIssue = await tx
+      .select({ status: issues.status, identifier: issues.identifier })
+      .from(issues)
+      .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)))
+      .for("update")
+      .then((rows) => rows[0] ?? null);
+    if (!freshIssue) return;
+    const identifier = freshIssue.identifier ?? issue.identifier ?? null;
+    const candidates = await tx
+      .select({ id: issueWorkProducts.id, status: issueWorkProducts.status, metadata: issueWorkProducts.metadata })
+      .from(issueWorkProducts)
+      .where(and(
+        eq(issueWorkProducts.companyId, issue.companyId),
+        eq(issueWorkProducts.issueId, issue.id),
+        inArray(issueWorkProducts.status, ["approved", "changes_requested"]),
+        sql`${issueWorkProducts.metadata} ->> 'documentKey' = ${key}`,
+      ));
+    if (candidates.length === 0) return;
+    const now = new Date();
+    let reopenedAccepted = false;
+    for (const product of candidates) {
+      const meta = (product.metadata ?? null) as Record<string, unknown> | null;
+      if (product.status === "approved") {
+        const acceptance = meta?.acceptance as Record<string, unknown> | undefined;
+        const acceptedRevision =
+          typeof acceptance?.acceptedRevisionNumber === "number" ? acceptance.acceptedRevisionNumber : null;
+        // The revision the person accepted already covers this write.
+        if (acceptedRevision !== null && acceptedRevision >= latestRevisionNumber) continue;
+        // A board user's own edit or restore accepts what they just wrote —
+        // reopening their own change would churn the review queue. Writes by
+        // an agent, plugin or assistant grant are not the reviewer.
+        const boardUserWrite = actor.actorType === "user" && actor.source !== "assistant_grant";
+        if (boardUserWrite) {
+          await tx.update(issueWorkProducts)
+            .set({
+              metadata: sql`${issueWorkProducts.metadata} || jsonb_build_object('acceptance',
+                coalesce(${issueWorkProducts.metadata} -> 'acceptance', '{}'::jsonb) || jsonb_build_object(
+                  'acceptedRevisionId', ${latestRevisionId}::text,
+                  'acceptedRevisionNumber', ${latestRevisionNumber}::int,
+                  'acceptedAt', ${now.toISOString()}::text,
+                  'acceptedByUserId', ${actor.actorId}::text))`,
+              updatedAt: now,
+            })
+            .where(eq(issueWorkProducts.id, product.id));
+          publications.push(await insertActivity(tx, {
+            companyId: issue.companyId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            agentId: actor.agentId,
+            runId: actor.runId,
+            action: "issue.work_product_updated",
+            entityType: "issue",
+            entityId: issue.id,
+            details: {
+              identifier,
+              workProductId: product.id,
+              changedKeys: ["metadata"],
+              reason: "accepted_revision_updated",
+              key,
+              revisionNumber: latestRevisionNumber,
+            },
+          }));
+          continue;
+        }
+        await tx.update(issueWorkProducts)
+          .set({
+            status: "ready_for_review",
+            reviewState: "needs_board_review",
+            metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object(
+              'reviewReopenedAt', ${now.toISOString()}::text,
+              'reviewReopenReason', 'document_revised_after_acceptance')`,
+            updatedAt: now,
+          })
+          .where(eq(issueWorkProducts.id, product.id));
+        reopenedAccepted = true;
+        publications.push(await insertActivity(tx, {
+          companyId: issue.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.work_product_updated",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            identifier,
+            workProductId: product.id,
+            changedKeys: ["metadata", "reviewState", "status"],
+            status: "ready_for_review",
+            reviewState: "needs_board_review",
+            reason: "document_revised_after_acceptance",
+            key,
+            revisionNumber: latestRevisionNumber,
+          },
+        }));
+      } else if (product.status === "changes_requested") {
+        // A sent-back deliverable is resubmitted by the new revision only
+        // while the issue sits in review — and only when this revision is
+        // newer than the one the changes request was made against.
+        if (freshIssue.status !== "in_review") continue;
+        const requestedRevision =
+          typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
+        if (requestedRevision !== null && latestRevisionNumber <= requestedRevision) continue;
+        await tx.update(issueWorkProducts)
+          .set({
+            status: "ready_for_review",
+            reviewState: "needs_board_review",
+            metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${now.toISOString()}::text)`,
+            updatedAt: now,
+          })
+          .where(eq(issueWorkProducts.id, product.id));
+        publications.push(await insertActivity(tx, {
+          companyId: issue.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.work_product_updated",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            identifier,
+            workProductId: product.id,
+            changedKeys: ["metadata", "reviewState", "status"],
+            status: "ready_for_review",
+            reviewState: "needs_board_review",
+            reason: "resubmitted_for_review",
+            key,
+            revisionNumber: latestRevisionNumber,
+          },
+        }));
+      }
+    }
+    if (reopenedAccepted && freshIssue.status === "done") {
+      reopenedDoneIssue = true;
+      await issueService(tx as unknown as Db).update(issue.id, { status: "in_review" }, tx as unknown as Db);
+      publications.push(await insertActivity(tx, {
         companyId: issue.companyId,
         actorType: actor.actorType,
         actorId: actor.actorId,
         agentId: actor.agentId,
         runId: actor.runId,
-        action: "issue.work_product_updated",
+        action: "issue.updated",
         entityType: "issue",
         entityId: issue.id,
         details: {
-          identifier: issue.identifier ?? null,
-          workProductId: product.id,
-          changedKeys: ["metadata", "reviewState", "status"],
-          status: "ready_for_review",
-          reviewState: "needs_board_review",
+          identifier,
+          status: "in_review",
+          _previous: { status: "done" },
           reason: "document_revised_after_acceptance",
           key,
-          revisionNumber: latestRevisionNumber,
         },
-      });
-    } else if (product.status === "changes_requested") {
-      // A sent-back deliverable is resubmitted by the new revision only while
-      // the issue sits in review — and only when this revision is newer than
-      // the one the changes request was made against.
-      if (issue.status !== "in_review") continue;
-      const requestedRevision =
-        typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
-      if (requestedRevision !== null && latestRevisionNumber <= requestedRevision) continue;
-      await db.update(issueWorkProducts)
-        .set({
-          status: "ready_for_review",
-          reviewState: "needs_board_review",
-          metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${now.toISOString()}::text)`,
-          updatedAt: now,
-        })
-        .where(eq(issueWorkProducts.id, product.id));
-      await logActivity(db, {
-        companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.work_product_updated",
-        entityType: "issue",
-        entityId: issue.id,
-        details: {
-          identifier: issue.identifier ?? null,
-          workProductId: product.id,
-          changedKeys: ["metadata", "reviewState", "status"],
-          status: "ready_for_review",
-          reviewState: "needs_board_review",
-          reason: "resubmitted_for_review",
-          key,
-          revisionNumber: latestRevisionNumber,
-        },
-      });
+      }));
     }
-  }
-  if (reopenedAccepted && issue.status === "done") {
-    await db.update(issues)
-      .set({ status: "in_review", completedAt: null, updatedAt: now })
-      .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
-    await logActivity(db, {
-      companyId: issue.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "issue.updated",
-      entityType: "issue",
-      entityId: issue.id,
-      details: {
-        identifier: issue.identifier ?? null,
-        status: "in_review",
-        _previous: { status: "done" },
-        reason: "document_revised_after_acceptance",
-        key,
-      },
-    });
+  });
+  for (const publication of publications) publishActivity(publication);
+  if (reopenedDoneIssue) {
     await onIssueStatusChanged(issue.id, "done", "in_review");
   }
 }
@@ -1433,9 +1505,14 @@ export function issueRoutes(
     req: Request,
     res: Response,
     body: { status?: unknown; reviewState?: unknown; type?: unknown },
-    existingType?: string,
+    existing?: { type: string; status: string },
   ): boolean {
-    const error = workProductSelfAcceptanceRefusal({ type: req.actor.type, source: req.actor.source }, body, existingType);
+    const error = workProductSelfAcceptanceRefusal(
+      { type: req.actor.type, source: req.actor.source },
+      body,
+      existing?.type,
+      existing?.status,
+    );
     if (!error) return false;
     res.status(403).json({ error, code: "work_product_self_acceptance" });
     return true;
@@ -1446,20 +1523,38 @@ export function issueRoutes(
   // resubmittedAt on resubmit). An agent or assistant grant can neither set
   // nor erase it: client values for these keys are dropped and the stored
   // ones carried over, since a metadata PATCH replaces the whole object.
-  const SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS = ["acceptance", "changesRequestedAt", "resubmittedAt"] as const;
+  const SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS = [
+    "acceptance",
+    "changesRequestedAt",
+    "changesRequestedAtRevision",
+    "changesRequestedRevisionId",
+    "resubmittedAt",
+    "reviewReopenedAt",
+    "reviewReopenReason",
+  ] as const;
+  // AgentDash (review #1003): once a deliverable is sent back or accepted, the
+  // document it binds to is server-owned too — otherwise an agent could drop
+  // or rewrite documentKey and the revision baseline check would be skipped.
+  const DOCUMENT_KEY_LOCKED_STATUSES = new Set(["changes_requested", "approved", "merged"]);
   function protectServerOwnedMetadata<T extends object>(
     req: Request,
     body: T,
     existingMetadata: Record<string, unknown> | null | undefined,
+    existingStatus?: string | null,
   ): T {
     if (req.actor.type !== "agent" && req.actor.source !== "assistant_grant") return body;
     if (!("metadata" in body)) return body;
+    const documentKeyLocked = !!existingStatus && DOCUMENT_KEY_LOCKED_STATUSES.has(existingStatus);
     const supplied = (body as { metadata?: unknown }).metadata;
     const incoming = supplied && typeof supplied === "object" ? { ...(supplied as Record<string, unknown>) } : null;
     for (const key of SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS) delete incoming?.[key];
+    if (documentKeyLocked) delete incoming?.documentKey;
     const kept: Record<string, unknown> = {};
     for (const key of SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS) {
       if (existingMetadata && key in existingMetadata) kept[key] = existingMetadata[key];
+    }
+    if (documentKeyLocked && existingMetadata && "documentKey" in existingMetadata) {
+      kept.documentKey = existingMetadata.documentKey;
     }
     const merged = { ...(incoming ?? {}), ...kept };
     return { ...body, metadata: Object.keys(merged).length > 0 ? merged : incoming } as T;
@@ -1658,8 +1753,9 @@ export function issueRoutes(
       db,
       issue,
       key: doc.key,
+      latestRevisionId: doc.latestRevisionId,
       latestRevisionNumber: doc.latestRevisionNumber,
-      actor,
+      actor: { ...actor, source: req.actor.source },
       onIssueStatusChanged: (issueId, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(issueId, before, after),
     });
 
@@ -1764,8 +1860,9 @@ export function issueRoutes(
         db,
         issue,
         key: result.document.key,
+        latestRevisionId: result.document.latestRevisionId,
         latestRevisionNumber: result.document.latestRevisionNumber,
-        actor,
+        actor: { ...actor, source: req.actor.source },
         onIssueStatusChanged: (issueId, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(issueId, before, after),
       });
 
@@ -1895,12 +1992,13 @@ export function issueRoutes(
       return;
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
-    if (refuseSelfAcceptance(req, res, req.body, existing.type)) return;
+    if (refuseSelfAcceptance(req, res, req.body, existing)) return;
     const actor = getActorInfo(req);
     const patch: Record<string, unknown> = protectServerOwnedMetadata(
       req,
       { ...withoutLocalFileUrl(req.body as { url?: unknown }) },
       existing.metadata,
+      existing.status,
     );
     if (typeof patch.title === "string") patch.title = sanitizeWorkProductTitle(patch.title);
     if ("createdByRunId" in patch) {

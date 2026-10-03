@@ -211,7 +211,22 @@ export function Issues() {
         enableRoutineVisibilityFilter
         hasMoreIssues={hasMoreServerIssues}
         onLoadMoreIssues={loadMoreServerIssues}
-        onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
+        onUpdateIssue={(id, data) => {
+          // AgentDash (review #1003): moving to done accepts the issue's
+          // deliverables — the server needs the document revisions the person
+          // saw as the baseline. The list/board shows no documents, so only a
+          // cached set (rendered on the issue page earlier) counts; with none,
+          // send no baseline and let the server refuse with
+          // document_revision_required, which sends the reviewer to the issue
+          // page to actually read the document.
+          const documents = data.status === "done"
+            ? queryClient.getQueryData<Awaited<ReturnType<typeof issuesApi.listDocuments>>>(queryKeys.issues.documents(id))
+            : undefined;
+          const acceptedDocumentRevisions = documents?.length
+            ? Object.fromEntries(documents.map((doc) => [doc.key, doc.latestRevisionNumber]))
+            : undefined;
+          updateIssue.mutate({ id, data: { ...data, acceptedDocumentRevisions } });
+        }}
         searchFilters={
           participantAgentId || workspaceIdFilter || workView !== "all"
             ? { participantAgentId, workspaceId: workspaceIdFilter, ...workViewFilters(workView) }

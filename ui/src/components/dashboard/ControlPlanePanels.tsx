@@ -26,7 +26,7 @@ import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE } from "../../lib/token-fi
 import { timeAgo } from "../../lib/timeAgo";
 import { agentIdentityLineUnderName } from "../../lib/agent-identity";
 import { ActivityRow } from "../ActivityRow";
-import { isSystemPlumbingActivity } from "../../lib/activity-format";
+import { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS, isSystemPlumbingActivity } from "../../lib/activity-format";
 
 export const FLEET_TILE_LIMIT = 6;
 export const DASHBOARD_ACTIVITY_LIMIT = 8;
@@ -353,10 +353,14 @@ function ActivityPanel({ companyId, agents }: { companyId: string; agents: Agent
     }
     return map;
   }, [activity]);
-  // System plumbing (workspace leases, runtime checks, review-queue churn)
-  // stays out of Home — including rows stamped with the system actor.
+  // System plumbing (workspace leases, runtime checks, read/queue noise)
+  // stays out of Home — but the system events an owner must not miss (budget
+  // hard-stops, ceiling pauses, failed recovery, escalations, failed hire
+  // hooks) stay in.
   const events = (activity ?? [])
-    .filter((event) => event.actorType !== "system" && !isSystemPlumbingActivity(event.action))
+    .filter((event) =>
+      !isSystemPlumbingActivity(event.action)
+      && (event.actorType !== "system" || IMPORTANT_SYSTEM_ACTIVITY_ACTIONS.has(event.action)))
     .slice(0, DASHBOARD_ACTIVITY_LIMIT);
 
   return (

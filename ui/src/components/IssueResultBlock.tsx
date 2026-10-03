@@ -76,12 +76,22 @@ export function IssueResultBlock({
   const items = data?.items ?? [];
   if (items.length === 0) return null;
   const usage = items[0]!.usage;
+  const hasReviewableItem = items.some((product) => product.status === "ready_for_review");
   const awaitingReview =
     !!review
     && issueStatus !== "done"
     && issueStatus !== "cancelled"
     && !issueLive
-    && items.some((product) => product.status === "ready_for_review");
+    && hasReviewableItem;
+  // AgentDash (review #1003): while Live the controls stay hidden, but the
+  // reviewer should know why — a run may still write the revision they would
+  // be accepting.
+  const waitingOnLiveRun =
+    !!review
+    && issueStatus !== "done"
+    && issueStatus !== "cancelled"
+    && !!issueLive
+    && hasReviewableItem;
 
   async function run(kind: "accept" | "changes", action: () => Promise<unknown>) {
     setBusy(kind);
@@ -196,6 +206,13 @@ export function IssueResultBlock({
             </p>
           ) : null}
         </div>
+      ) : waitingOnLiveRun ? (
+        <p
+          className="border-t border-border px-3 py-2.5 text-xs text-muted-foreground"
+          data-testid="issue-review-waiting-on-run"
+        >
+          Waiting for the agent to finish
+        </p>
       ) : null}
     </section>
   );

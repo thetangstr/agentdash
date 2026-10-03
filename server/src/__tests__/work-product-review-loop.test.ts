@@ -11,7 +11,7 @@ import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/error-handler.js';
 import { issueRoutes, workProductSelfAcceptanceRefusal } from '../routes/issues.js';
 import { hashBearerToken } from '../services/board-auth.js';
-import { ACCEPTANCE_RECORDED_SINCE, workProductService } from '../services/work-products.js';
+import { ACCEPTANCE_RECORDED_SINCE, resubmitSentBackDeliverablesAfterRunFinished, workProductService } from '../services/work-products.js';
 import type { StorageService } from '../storage/types.js';
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 
@@ -193,7 +193,13 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'session' }, merged)).toBeNull();
     expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'session' }, { type: 'pull_request' }, 'document')).toBeNull();
     expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { type: 'pull_request' }, 'document')).not.toBeNull();
+    // Review #1003: submitting fresh work as ready_for_review is fine; only a
+    // deliverable already through review may not be pushed back to it.
     expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'ready_for_review' })).toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'ready_for_review' }, undefined, 'changes_requested')).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { reviewState: 'needs_board_review' }, undefined, 'approved')).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'assistant_grant' }, { status: 'ready_for_review' }, undefined, 'changes_requested')).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'session' }, { status: 'ready_for_review' }, undefined, 'changes_requested')).toBeNull();
   });
 
   it('request changes: one server action posts the note, sends the issue back, marks waiting work, wakes the assignee', async () => {
@@ -574,5 +580,145 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     const g = await fixture();
     expect((await call('PATCH', `/issues/${g.issue.id}`, g.boardToken, { status: 'cancelled' })).status).toBe(200);
     expect(cancelRun.mock.calls.map(([id]) => id)).toContain(g.run.id);
+  });
+
+  // AgentDash (review #1003, finding 1): the bypass — a direct work-product
+  // PATCH must not push a sent-back (or accepted) deliverable back to review;
+  // only the in_review move and the document-write hook may do that.
+  it('an agent cannot send a sent-back or accepted deliverable back to review itself', async () => {
+    const f = await fixture();
+    const sentBack = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'changes_requested', reviewState: 'changes_requested',
+    });
+    expect((await call('PATCH', `/work-products/${sentBack!.id}`, f.agentToken, { status: 'ready_for_review' }, f.run.id)).status).toBe(403);
+    expect((await call('PATCH', `/work-products/${sentBack!.id}`, f.agentToken, { reviewState: 'needs_board_review' }, f.run.id)).status).toBe(403);
+    const accepted = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Accepted', status: 'approved', reviewState: 'approved',
+    });
+    expect((await call('PATCH', `/work-products/${accepted!.id}`, f.agentToken, { status: 'ready_for_review' }, f.run.id)).status).toBe(403);
+
+    // Submitting fresh or still-active work as ready_for_review stays allowed.
+    const active = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Draft', status: 'active',
+    });
+    expect((await call('PATCH', `/work-products/${active!.id}`, f.agentToken, { status: 'ready_for_review' }, f.run.id)).status).toBe(200);
+    expect((await call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
+      type: 'document', provider: 'paperclip', title: 'New', status: 'ready_for_review',
+    }, f.run.id)).status).toBe(201);
+
+    // And a board user can still do any of it.
+    expect((await call('PATCH', `/work-products/${sentBack!.id}`, f.boardToken, { status: 'ready_for_review' })).status).toBe(200);
+  });
+
+  // AgentDash (review #1003, finding 2): once a deliverable is sent back, the
+  // document it binds to is server-owned — otherwise dropping documentKey
+  // would skip the revision baseline check.
+  it('an agent cannot rebind or drop documentKey once a deliverable is sent back', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const product = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto.' })).status).toBe(200);
+    const [sentBack] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(sentBack!.metadata).toEqual(expect.objectContaining({ documentKey: 'proposal', changesRequestedAtRevision: 1 }));
+
+    // Dropping it with a whole-object metadata write: the lock carries it over.
+    expect((await call('PATCH', `/work-products/${product!.id}`, f.agentToken, { metadata: {} }, f.run.id)).status).toBe(200);
+    let [row] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect((row!.metadata as Record<string, unknown>).documentKey).toBe('proposal');
+
+    // Rewriting it or the revision baseline: dropped, the stored values win.
+    expect((await call('PATCH', `/work-products/${product!.id}`, f.agentToken, {
+      metadata: { documentKey: 'other', changesRequestedAtRevision: 99, changesRequestedRevisionId: 'forged', reviewReopenReason: 'x' },
+    }, f.run.id)).status).toBe(200);
+    [row] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(row!.metadata).toEqual(expect.objectContaining({
+      documentKey: 'proposal', changesRequestedAtRevision: 1, changesRequestedAt: expect.any(String),
+    }));
+    expect((row!.metadata as Record<string, unknown>).reviewReopenReason).toBeUndefined();
+  });
+
+  // AgentDash (review #1003, finding 3): a missing baseline is not a stale
+  // one — each carries its own code so a client can tell them apart.
+  it('a missing revision baseline and a stale one are different 409s', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const deliverable = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect(deliverable).not.toBeNull();
+
+    const missing = await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done' });
+    expect(missing.status).toBe(409);
+    const missingBody = await missing.json();
+    expect((missingBody.details as Record<string, unknown>).code).toBe('document_revision_required');
+    expect(missingBody.error).not.toContain('changed after');
+
+    // A baseline that was once right but no longer is.
+    expect((await writeDocumentRevision(f, '# rev 2')).status).toBe(200);
+    const stale = await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done', acceptedDocumentRevisions: { proposal: 1 } });
+    expect(stale.status).toBe(409);
+    const staleBody = await stale.json();
+    expect((staleBody.details as Record<string, unknown>).code).toBe('document_revision_stale');
+  });
+
+  // AgentDash (review #1003, finding 4): only the assignee's runs keep a
+  // sent-back deliverable out of review — a queued reviewer or CoS run bound
+  // to the same issue does not.
+  it('a queued run for another agent does not defer resubmission; an assignee one does', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const deliverable = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto.' })).status).toBe(200);
+
+    // The assignee's run is over; a queued run for ANOTHER agent (a queued
+    // reviewer or CoS wake) is bound to the same issue.
+    await db.update(heartbeatRuns).set({ status: 'succeeded' }).where(eq(heartbeatRuns.id, f.run.id));
+    await db.insert(heartbeatRuns).values({
+      companyId: f.company.id, agentId: f.other.id, status: 'queued', contextSnapshot: { issueId: f.issue.id },
+    });
+    const resubmit = await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'in_review' });
+    expect(resubmit.status).toBe(200);
+    const [flipped] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(flipped).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review' });
+  });
+
+  // AgentDash (review #1003, finding 4): the "or your run has finished" half —
+  // when the live assignee run ends without writing a revision, the deferred
+  // deliverable gets its second evaluation and returns to review.
+  it('a deferred deliverable returns to review when the issue-bound assignee run finishes', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const deliverable = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto.' })).status).toBe(200);
+
+    // The assignee resubmits mid-run: the deliverable stays sent back.
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: f.issue.id } }).where(eq(heartbeatRuns.id, f.run.id));
+    await db.update(issues).set({ checkoutRunId: f.run.id, executionRunId: f.run.id }).where(eq(issues.id, f.issue.id));
+    const resubmit = await call('PATCH', `/issues/${f.issue.id}`, f.agentToken, { status: 'in_review' }, f.run.id);
+    expect(resubmit.status).toBe(200);
+    const [deferred] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(deferred).toMatchObject({ status: 'changes_requested' });
+
+    // The run goes terminal without a new revision — the finish re-evaluates.
+    const [finished] = await db.update(heartbeatRuns).set({ status: 'succeeded' })
+      .where(eq(heartbeatRuns.id, f.run.id)).returning();
+    const flipped = await resubmitSentBackDeliverablesAfterRunFinished(db, finished!);
+    expect(flipped).toBe(1);
+    const [back] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(back).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review' });
   });
 });

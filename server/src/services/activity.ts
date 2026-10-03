@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -30,6 +30,12 @@ export interface ActivityFilters {
   since?: Date;
   limit?: number;
   /**
+   * AgentDash (review #1003): `false` excludes system-actor rows and
+   * bookkeeping actions from the company feed — the Activity page's "Show
+   * system events" toggle. Omitted means the full feed (API consumers).
+   */
+  includeSystem?: boolean;
+  /**
    * The caller's visibility condition (A5). Composed with the left-joined
    * `issues` row, so it may reference `issues.project_id`.
    */
@@ -51,6 +57,18 @@ const MAX_ISSUE_RUNS_LIMIT = 500;
 const ISSUE_FEED_HIDDEN_ACTIONS = [
   ...ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
   "queue_state_changed",
+];
+
+// AgentDash (review #1003): the company feed's "Show system events" off state
+// hides the same bookkeeping plus workspace/env machinery, and every
+// system-actor row, filtered in SQL so the limit applies to visible rows.
+const COMPANY_FEED_HIDDEN_ACTIONS = [
+  ...ISSUE_FEED_HIDDEN_ACTIONS,
+  "environment.lease_acquired",
+  "environment.lease_released",
+  "environment.probed",
+  "environment.probed_unsaved",
+  "agent.harness_preflight_passed",
 ];
 
 export function normalizeActivityLimit(limit: number | undefined) {
@@ -373,6 +391,10 @@ export function activityService(db: Db) {
       }
       if (filters.visibleWhere) {
         conditions.push(filters.visibleWhere);
+      }
+      if (filters.includeSystem === false) {
+        conditions.push(ne(activityLog.actorType, "system"));
+        conditions.push(notInArray(activityLog.action, COMPANY_FEED_HIDDEN_ACTIONS));
       }
 
       return db

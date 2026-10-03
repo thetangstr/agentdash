@@ -49,6 +49,25 @@ export function isSystemPlumbingActivity(action: string): boolean {
   return SYSTEM_PLUMBING_ACTIONS.has(action);
 }
 
+/**
+ * AgentDash (review #1003): system-actor events an owner DOES need to see —
+ * budget hard-stops, ceiling pauses, failed recovery, escalations and failed
+ * hire hooks. Home hides system-actor plumbing but whitelists these.
+ */
+export const IMPORTANT_SYSTEM_ACTIVITY_ACTIONS = new Set([
+  "budget.hard_threshold_crossed",
+  "agent.token_ceiling_paused",
+  "agent.paused",
+  "issue.recovery_budget_exhausted",
+  "heartbeat.recovery_budget_refusal",
+  "issue.task_recovery_permit_denied",
+  "heartbeat.output_stale_escalated",
+  "issue.harness_liveness_escalation_created",
+  "agent_fact.escalated",
+  "hire_hook.failed",
+  "hire_hook.error",
+]);
+
 const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "environment.lease_acquired": "prepared a workspace for a run",
   "environment.lease_released": "cleaned up a run's workspace",

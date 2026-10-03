@@ -1,7 +1,8 @@
-import { and, desc, eq, gte, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
-import { agents, costEvents, heartbeatRuns, issueWorkProducts, issues } from "@paperclipai/db";
+import { agents, costEvents, documents, heartbeatRuns, issueDocuments, issueWorkProducts, issues } from "@paperclipai/db";
+import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
 import type {
   IssueWorkProduct,
   ShippedFeed,
@@ -34,6 +35,209 @@ function toIssueWorkProduct(row: IssueWorkProductRow): IssueWorkProduct {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+type ReviewLoopExecutor = Pick<Db, "select" | "insert" | "update">;
+type ReviewLoopIssue = Pick<
+  typeof issues.$inferSelect,
+  "id" | "companyId" | "identifier" | "assigneeAgentId" | "executionRunId" | "checkoutRunId"
+>;
+
+// AgentDash (batch 2 review lane): the document a document-typed deliverable
+// points at lives behind metadata.documentKey (the key the agent wrote it
+// under), joined through issue_documents.
+export function workProductDocumentKey(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const key = (metadata as Record<string, unknown>).documentKey;
+  return typeof key === "string" && key.length > 0 ? key : null;
+}
+
+export async function listIssueDocumentsByKey(
+  executor: Pick<Db, "select">,
+  companyId: string,
+  issueId: string,
+  keys: string[],
+) {
+  const unique = [...new Set(keys)];
+  if (unique.length === 0) return new Map<string, { key: string; latestRevisionId: string | null; latestRevisionNumber: number; updatedAt: Date }>();
+  const rows = await executor
+    .select({
+      key: issueDocuments.key,
+      latestRevisionId: documents.latestRevisionId,
+      latestRevisionNumber: documents.latestRevisionNumber,
+      // documents.updated_at is the instant of the latest revision write; it
+      // stands in for revision.created_at when only a changes-requested
+      // timestamp is available to compare against.
+      updatedAt: documents.updatedAt,
+    })
+    .from(issueDocuments)
+    .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
+    .where(and(
+      eq(issueDocuments.companyId, companyId),
+      eq(issueDocuments.issueId, issueId),
+      inArray(issueDocuments.key, unique),
+    ));
+  return new Map(rows.map((row) => [row.key, row]));
+}
+
+// AgentDash (review #1003): liveness for the resubmission gate counts only
+// the assignee's runs — a queued reviewer or CoS run bound to the same issue
+// cannot keep a sent-back deliverable out of review forever.
+export async function listLiveAssigneeIssueRuns(
+  executor: Pick<Db, "select">,
+  issue: ReviewLoopIssue,
+) {
+  if (!issue.assigneeAgentId) return [];
+  return executor
+    .select({ id: heartbeatRuns.id, agentId: heartbeatRuns.agentId, status: heartbeatRuns.status })
+    .from(heartbeatRuns)
+    .where(and(
+      eq(heartbeatRuns.companyId, issue.companyId),
+      eq(heartbeatRuns.agentId, issue.assigneeAgentId),
+      inArray(heartbeatRuns.status, ["queued", "running", "scheduled_retry"]),
+      or(
+        sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+        sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issue.id}`,
+        issue.executionRunId ? eq(heartbeatRuns.id, issue.executionRunId) : undefined,
+        issue.checkoutRunId ? eq(heartbeatRuns.id, issue.checkoutRunId) : undefined,
+      ),
+    ));
+}
+
+/**
+ * AgentDash (batch 2 review lane): the flip shared by the in_review PATCH
+ * transition and the run-finish re-check. A sent-back deliverable returns to
+ * ready_for_review when its document has a revision newer than the one the
+ * changes request was made against, or when no assignee run is live anymore
+ * ("or your run has finished"). callingRunIsLive is the PATCH case: an agent
+ * resubmitting mid-run has not finished, so only an already-written revision
+ * may flip. Returns the number of products flipped.
+ */
+export async function resubmitSentBackDeliverables(
+  executor: ReviewLoopExecutor,
+  issue: ReviewLoopIssue,
+  opts: {
+    actor: { actorType: "agent" | "user" | "system" | "plugin"; actorId: string; agentId: string | null; runId: string | null };
+    audit: (input: LogActivityInput) => Promise<unknown>;
+    /** Count the calling run as live when it belongs to the assignee (PATCH-time resubmission). */
+    callingRunIsLive?: boolean;
+    activityDetails?: Record<string, unknown>;
+  },
+): Promise<number> {
+  const sentBack = await executor
+    .select({ id: issueWorkProducts.id, metadata: issueWorkProducts.metadata })
+    .from(issueWorkProducts)
+    .where(and(
+      eq(issueWorkProducts.companyId, issue.companyId),
+      eq(issueWorkProducts.issueId, issue.id),
+      eq(issueWorkProducts.status, "changes_requested"),
+    ));
+  if (sentBack.length === 0) return 0;
+  const docsByKey = await listIssueDocumentsByKey(executor, issue.companyId, issue.id,
+    sentBack.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
+  const liveRunIds = new Set((await listLiveAssigneeIssueRuns(executor, issue)).map((run) => run.id));
+  // A still-running assignee resubmitting itself counts as live even before
+  // its row settles in the table.
+  if (opts.callingRunIsLive && opts.actor.runId && opts.actor.agentId && opts.actor.agentId === issue.assigneeAgentId) {
+    liveRunIds.add(opts.actor.runId);
+  }
+  const hasLiveAssigneeRun = liveRunIds.size > 0;
+  const resubmittedAt = new Date().toISOString();
+  let flipped = 0;
+  for (const product of sentBack) {
+    const documentKey = workProductDocumentKey(product.metadata);
+    if (documentKey) {
+      const doc = docsByKey.get(documentKey);
+      const meta = product.metadata as Record<string, unknown> | null;
+      const requestedRevision =
+        typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
+      const requestedAtRaw = meta?.changesRequestedAt;
+      const requestedAt =
+        typeof requestedAtRaw === "string" && !Number.isNaN(Date.parse(requestedAtRaw))
+          ? new Date(requestedAtRaw)
+          : null;
+      const hasNewerRevision = !!doc && (
+        (requestedRevision !== null && doc.latestRevisionNumber > requestedRevision)
+        || (requestedRevision === null && requestedAt !== null && doc.updatedAt.getTime() > requestedAt.getTime())
+      );
+      if (!hasNewerRevision && hasLiveAssigneeRun) continue;
+    }
+    await executor.update(issueWorkProducts)
+      .set({
+        status: "ready_for_review",
+        reviewState: "needs_board_review",
+        metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${resubmittedAt}::text)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(issueWorkProducts.id, product.id));
+    flipped += 1;
+    await opts.audit({
+      companyId: issue.companyId,
+      actorType: opts.actor.actorType,
+      actorId: opts.actor.actorId,
+      agentId: opts.actor.agentId,
+      runId: opts.actor.runId,
+      action: "issue.work_product_updated",
+      entityType: "issue",
+      entityId: issue.id,
+      details: {
+        identifier: issue.identifier,
+        workProductId: product.id,
+        changedKeys: ["reviewState", "status"],
+        status: "ready_for_review",
+        reviewState: "needs_board_review",
+        reason: "resubmitted_for_review",
+        ...opts.activityDetails,
+      },
+    });
+  }
+  return flipped;
+}
+
+/**
+ * AgentDash (review #1003): the "or your run has finished" half. When an
+ * issue-bound run goes terminal, sent-back deliverables that were deferred at
+ * resubmission (the run was still live, no newer revision yet) get their
+ * second evaluation — with the finished run now out of the live set.
+ */
+export async function resubmitSentBackDeliverablesAfterRunFinished(
+  db: Db,
+  run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId" | "agentId" | "contextSnapshot">,
+): Promise<number> {
+  const context = (run.contextSnapshot ?? null) as Record<string, unknown> | null;
+  const issueId = [context?.issueId, context?.taskId].find((value): value is string => typeof value === "string");
+  if (!issueId) return 0;
+  const publications: ActivityPublication[] = [];
+  const flipped = await db.transaction(async (tx) => {
+    const issue = await tx
+      .select({
+        id: issues.id,
+        companyId: issues.companyId,
+        identifier: issues.identifier,
+        status: issues.status,
+        assigneeAgentId: issues.assigneeAgentId,
+        executionRunId: issues.executionRunId,
+        checkoutRunId: issues.checkoutRunId,
+      })
+      .from(issues)
+      .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)))
+      .for("update")
+      .then((rows) => rows[0] ?? null);
+    if (!issue || issue.status !== "in_review") return 0;
+    return resubmitSentBackDeliverables(tx, issue, {
+      actor: {
+        actorType: run.agentId ? "agent" : "system",
+        actorId: run.agentId ?? "system",
+        agentId: run.agentId ?? null,
+        runId: run.id,
+      },
+      audit: async (input) => { publications.push(await insertActivity(tx, input)); },
+      callingRunIsLive: false,
+      activityDetails: { finishedRunId: run.id },
+    });
+  });
+  for (const publication of publications) publishActivity(publication);
+  return flipped;
 }
 
 // AgentDash: UX-2 (#783) — company-wide Shipped feed.

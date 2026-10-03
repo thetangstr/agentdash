@@ -51,6 +51,7 @@ import {
 } from "@paperclipai/db";
 import { conflict, HttpError, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { resubmitSentBackDeliverablesAfterRunFinished } from "./work-products.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, runLogBasePath, type RunLogHandle } from "./run-log-store.js";
 import {
@@ -3338,6 +3339,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             errorCode: updated.errorCode ?? undefined,
           },
         });
+      }
+      // AgentDash (review #1003): "or your run has finished" — a sent-back
+      // deliverable deferred at resubmission because this run was still live
+      // re-evaluates once it goes terminal. Post-commit by construction:
+      // deferred publishes run this after the caller's commit lands.
+      if (isHeartbeatRunTerminalStatus(updated.status)) {
+        const context = (updated.contextSnapshot ?? null) as Record<string, unknown> | null;
+        if (typeof context?.issueId === "string" || typeof context?.taskId === "string") {
+          void resubmitSentBackDeliverablesAfterRunFinished(db, updated)
+            .catch((err) => logger.warn({ err, runId: updated.id }, "post-run resubmission re-check failed"));
+        }
       }
     }
   }
