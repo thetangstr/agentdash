@@ -716,7 +716,17 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   const { data: linkedRuns } = useQuery({
     queryKey: queryKeys.issues.runs(issueId),
     queryFn: () => activityApi.runsForIssue(issueId),
-    refetchInterval: hasLiveRuns ? 5000 : false,
+    // Keep polling briefly after a run finishes: the server writes the final
+    // usageJson moments after the status flips, and the chat footer's duration
+    // and token figures read from that record.
+    refetchInterval: (query) => {
+      if (hasLiveRuns) return 5000;
+      const runs = query.state.data ?? [];
+      const justFinished = runs.some(
+        (run) => run.finishedAt && Date.now() - new Date(run.finishedAt).getTime() < 60_000,
+      );
+      return justFinished ? 5000 : false;
+    },
     placeholderData: keepPreviousDataForSameQueryTail<RunForIssue[]>(issueId),
   });
   const resolvedActivity = activity ?? [];

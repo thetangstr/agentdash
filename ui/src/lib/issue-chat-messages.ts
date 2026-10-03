@@ -18,6 +18,8 @@ import type { IssueTimelineEvent } from "./issue-timeline-events";
 import {
   summarizeNotice,
 } from "./transcriptPresentation";
+import { visibleRunCostUsd } from "./utils";
+import type { ReadableRunUsage } from "../components/transcript/ReadableTranscript";
 
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 type JsonObject = { [key: string]: JsonValue };
@@ -45,6 +47,7 @@ export interface IssueChatLinkedRun {
   finishedAt?: Date | string | null;
   hasStoredOutput?: boolean;
   logBytes?: number | null;
+  usageJson?: Record<string, unknown> | null;
   resultJson?: Record<string, unknown> | null;
 }
 
@@ -525,6 +528,37 @@ function createInteractionMessage(interaction: IssueThreadInteraction) {
 
 function runTimestamp(run: IssueChatLinkedRun) {
   return run.finishedAt ?? run.startedAt ?? run.createdAt;
+}
+
+function usageNumber(usage: Record<string, unknown> | null, ...keys: string[]) {
+  for (const key of keys) {
+    const value = usage?.[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+/**
+ * AgentDash (batch 2): the run record's final usage, in the shape the
+ * transcript footer reads. The chat footer used to quote the transcript's own
+ * result line — a snapshot taken before the run's last tokens were metered —
+ * so it disagreed with the run page ("1m 9s · 24.8k" vs a real 2m 29s). When
+ * the run record carries usage at all it is authoritative, for duration
+ * (started→finished) as much as for tokens and cost.
+ */
+export function linkedRunUsage(run: IssueChatLinkedRun): ReadableRunUsage | null {
+  const usage = run.usageJson ?? null;
+  if (!usage) return null;
+  const start = run.startedAt ?? run.createdAt;
+  const durationMs = run.finishedAt != null && start != null
+    ? Math.max(0, toTimestamp(run.finishedAt) - toTimestamp(start))
+    : null;
+  return {
+    inputTokens: usageNumber(usage, "inputTokens", "input_tokens"),
+    outputTokens: usageNumber(usage, "outputTokens", "output_tokens"),
+    costUsd: visibleRunCostUsd(usage, run.resultJson ?? null),
+    durationMs,
+  };
 }
 
 export interface SegmentTiming {

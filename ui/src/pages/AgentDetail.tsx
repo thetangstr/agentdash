@@ -2105,12 +2105,26 @@ function CostsSection({
               <span className="text-lg font-semibold">{formatTokens(runtimeState.totalOutputTokens)}</span>
             </div>
             <div>
-              <span className="text-xs text-muted-foreground block">Cached tokens</span>
-              <span className="text-lg font-semibold">{formatTokens(runtimeState.totalCachedInputTokens)}</span>
+              <span className="text-xs text-muted-foreground block">Cached reads</span>
+              <span className="text-lg font-semibold" title={TOKENS_COUNTED_NOTE}>
+                {formatTokens(runtimeState.totalCachedInputTokens)}
+              </span>
             </div>
             <div>
               <span className="text-xs text-muted-foreground block">Total cost</span>
-              <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              {/*
+                AgentDash (batch 2): a BYOK workspace records tokens its own
+                provider billed — "Total cost $0.00" there is technically true
+                and substantively false. When tokens exist but no priced spend
+                does, the honest cell names who bills them.
+              */}
+              {runtimeState.totalCostCents > 0 ? (
+                <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              ) : runtimeState.totalInputTokens + runtimeState.totalOutputTokens > 0 ? (
+                <span className="block text-sm font-medium leading-6">{BILLED_BY_PROVIDER_NOTE}</span>
+              ) : (
+                <span className="text-lg font-semibold text-muted-foreground">—</span>
+              )}
             </div>
           </div>
         </div>
@@ -4338,11 +4352,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
 
 function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: string }) {
   // AgentDash (scan 4 lane O1): the footer reads the same metered figures as
-  // the Input / Output tiles above it, not the adapter's own result line.
+  // the Input / Output tiles above it, not the adapter's own result line —
+  // duration included (batch 2): the run record's started→finished window is
+  // authoritative, the transcript's result line is a snapshot.
   const runUsage = useMemo(() => {
+    if (!run.usageJson) return null;
     const metrics = runMetrics(run);
-    if (metrics.input <= 0 && metrics.output <= 0) return null;
-    return { inputTokens: metrics.input, outputTokens: metrics.output, costUsd: metrics.cost };
+    const start = run.startedAt ?? run.createdAt;
+    const durationMs = run.finishedAt && start
+      ? Math.max(0, new Date(run.finishedAt).getTime() - new Date(start).getTime())
+      : null;
+    return { inputTokens: metrics.input, outputTokens: metrics.output, costUsd: metrics.cost, durationMs };
   }, [run]);
   const [events, setEvents] = useState<HeartbeatRunEvent[]>([]);
   const [logLines, setLogLines] = useState<Array<{ ts: string; stream: "stdout" | "stderr" | "system"; chunk: string }>>([]);

@@ -3,6 +3,7 @@ import type { Agent } from "@paperclipai/shared";
 import {
   buildAssistantPartsFromTranscript,
   buildIssueChatMessages,
+  linkedRunUsage,
   preserveReadableStreamingRetraction,
   stabilizeThreadMessages,
   type IssueChatComment,
@@ -838,5 +839,52 @@ describe("stabilizeThreadMessages", () => {
     );
 
     expect(secondStable.messages).toBe(firstStable.messages);
+  });
+});
+
+// AgentDash (batch 2): the chat footer reads the run record's final usage —
+// the same numbers the run page shows — not the transcript's own result
+// snapshot, which was metered before the run's last tokens landed.
+describe("linkedRunUsage", () => {
+  const run = (over: Partial<IssueChatLinkedRun>): IssueChatLinkedRun => ({
+    runId: "run-1",
+    status: "succeeded",
+    agentId: "agent-1",
+    createdAt: "2026-10-02T10:00:00.000Z",
+    startedAt: "2026-10-02T10:00:20.000Z",
+    finishedAt: "2026-10-02T10:02:49.000Z",
+    ...over,
+  });
+
+  it("derives tokens, cost and duration from the run record", () => {
+    const usage = linkedRunUsage(
+      run({ usageJson: { inputTokens: 36100, outputTokens: 1200, costUsd: 0.42 } }),
+    );
+    // 2m 29s — the run page's duration, not the chat's old "1m 9s".
+    expect(usage).toEqual({
+      inputTokens: 36100,
+      outputTokens: 1200,
+      costUsd: 0.42,
+      durationMs: 149_000,
+    });
+  });
+
+  it("returns null when the run record has no usage yet", () => {
+    expect(linkedRunUsage(run({ usageJson: null }))).toBeNull();
+    expect(linkedRunUsage(run({}))).toBeNull();
+  });
+
+  it("reads snake_case fields and falls back to createdAt when startedAt is null", () => {
+    const usage = linkedRunUsage(
+      run({ startedAt: null, usageJson: { input_tokens: 10, output_tokens: 5 } }),
+    );
+    expect(usage).toMatchObject({ inputTokens: 10, outputTokens: 5, durationMs: 169_000 });
+  });
+
+  it("reports no cost for subscription-billed runs", () => {
+    const usage = linkedRunUsage(
+      run({ usageJson: { inputTokens: 5, billingType: "subscription_included", costUsd: 0.42 } }),
+    );
+    expect(usage?.costUsd).toBe(0);
   });
 });

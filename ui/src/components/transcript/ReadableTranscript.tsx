@@ -426,6 +426,8 @@ export interface ReadableRunUsage {
   inputTokens: number;
   outputTokens: number;
   costUsd?: number;
+  /** Run-record wall-clock duration; wins over the transcript's snapshot. */
+  durationMs?: number | null;
 }
 
 export function ReadableFooter({
@@ -437,7 +439,7 @@ export function ReadableFooter({
   density?: ReadableDensity;
   usage?: ReadableRunUsage | null;
 }) {
-  const duration = formatRunDuration(footer.durationMs);
+  const duration = formatRunDuration(usage?.durationMs ?? footer.durationMs);
   const inputTokens = usage ? usage.inputTokens : footer.inputTokens;
   const outputTokens = usage ? usage.outputTokens : footer.outputTokens;
   const costUsd = usage ? usage.costUsd ?? 0 : footer.costUsd;
@@ -638,10 +640,13 @@ export function ReadableRunSummary({
   entries,
   streaming = false,
   density = "compact",
+  usage,
 }: {
   entries: readonly TranscriptEntry[];
   streaming?: boolean;
   density?: ReadableDensity;
+  /** The run record's final usage; wins over the transcript's result line. */
+  usage?: ReadableRunUsage | null;
 }) {
   const transcript = useReadableTranscript(entries, streaming);
   // The chat shows assistant text and tool calls from its own message parts;
@@ -652,7 +657,7 @@ export function ReadableRunSummary({
     <div className="space-y-2" data-readable-run-summary>
       {errorLines.length > 0 && <ReadableErrorLines lines={errorLines} />}
       <ReadableDetails lines={transcript.details} density={density} />
-      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} />}
+      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} usage={usage} />}
     </div>
   );
 }

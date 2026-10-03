@@ -3,6 +3,7 @@ import type { CostByBiller, CostByProviderModel } from "@paperclipai/shared";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { QuotaBar } from "./QuotaBar";
 import { billingTypeDisplayName, formatCents, formatTokens, providerDisplayName } from "@/lib/utils";
+import { TOKENS_COUNTED_NOTE } from "../lib/token-figures";
 
 interface BillerSpendCardProps {
   row: CostByBiller;
@@ -29,7 +30,9 @@ export function BillerSpendCard({
         outputTokens: 0,
       };
       current.costCents += entry.costCents;
-      current.inputTokens += entry.inputTokens + entry.cachedInputTokens;
+      // Display totals count input + output only (ui/src/lib/token-figures.ts);
+      // cached reads are billed at a fraction and would dwarf the figure.
+      current.inputTokens += entry.inputTokens;
       current.outputTokens += entry.outputTokens;
       map.set(entry.provider, current);
     }
@@ -61,10 +64,16 @@ export function BillerSpendCard({
             <CardTitle className="text-sm font-semibold">
               {providerDisplayName(row.biller)}
             </CardTitle>
-            <CardDescription className="text-xs mt-0.5">
-              <span className="font-mono">{formatTokens(row.inputTokens + row.cachedInputTokens)}</span> in
+            <CardDescription className="text-xs mt-0.5" title={TOKENS_COUNTED_NOTE}>
+              <span className="font-mono">{formatTokens(row.inputTokens)}</span> in
               {" · "}
               <span className="font-mono">{formatTokens(row.outputTokens)}</span> out
+              {row.cachedInputTokens > 0 ? (
+                <>
+                  {" · "}
+                  <span className="font-mono">{formatTokens(row.cachedInputTokens)}</span> cached reads
+                </>
+              ) : null}
               {" · "}
               {row.providerCount} provider{row.providerCount === 1 ? "" : "s"}
               {" · "}

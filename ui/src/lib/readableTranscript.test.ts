@@ -7,6 +7,7 @@ import {
   commandName,
   parseAgentDashApiCall,
   redactSecrets,
+  scriptEnv,
   shellWords,
   updateReadableTranscript,
   formatRunDuration,
@@ -745,5 +746,88 @@ describe("incremental building", () => {
     const first = updateReadableTranscript(null, entries, true);
     const next = updateReadableTranscript(first.cache, entries, false);
     expect(next.cache.builder).not.toBe(first.cache.builder);
+  });
+});
+
+// AgentDash (batch 2, insurance-agency canary): Hermes binds the API base
+// once (`API="$PAPERCLIP_API_URL/api"`) and curls `"$API/<route>"` after
+// that — the unresolved variable read as a bare "Ran curl" row. And
+// execute_code's `--- stderr ---` section divider became the row's outcome.
+describe("script-local API variables and Hermes rows (batch 2)", () => {
+  const AUTH = '-H "Authorization: Bearer $PAPERCLIP_API_KEY"';
+
+  beforeEach(() => {
+    vi.stubGlobal("window", { location: { host: "127.0.0.1:3489", hostname: "127.0.0.1" } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves a leading $VAR in the curl URL against the script's assignments", () => {
+    const env = scriptEnv('API="$PAPERCLIP_API_URL/api"');
+    expect(parseAgentDashApiCall('curl -s "$API/issues/WHI-1"', env)).toMatchObject({
+      method: "GET",
+      route: "/api/issues/:id",
+      issueRef: "WHI-1",
+      action: "Read issue",
+    });
+    // Chained bindings: BASE=$PAPERCLIP_API_URL; API=$BASE/api.
+    const chained = scriptEnv('BASE="$PAPERCLIP_API_URL"\nAPI="$BASE/api"');
+    expect(parseAgentDashApiCall('curl -s -X PATCH "$API/issues/WHI-2"', chained)?.action)
+      .toBe("Updated issue");
+    // A literal base bound to a variable resolves the same way.
+    const literal = scriptEnv('API="http://127.0.0.1:3489/api"');
+    expect(parseAgentDashApiCall('curl -s "$API/issues/WHI-1"', literal)?.issueRef).toBe("WHI-1");
+  });
+
+  it("reads the variable-backed calls when the whole script is summarised", () => {
+    const script = [
+      'API="$PAPERCLIP_API_URL/api"',
+      `curl -s "$API/issues/WHI-1" ${AUTH}`,
+      `curl -s -X PATCH "$API/issues/WHI-1" ${AUTH} -d '{"status":"in_review"}'`,
+    ].join("\n");
+    expect(summarizeToolCall("Bash", { command: script }).label).toBe("Ran a script (2 AgentDash calls)");
+    // One bound call alone is named by its action.
+    expect(
+      summarizeToolCall("Bash", {
+        command: `API="$PAPERCLIP_API_URL/api"\ncurl -s "$API/issues/WHI-1" ${AUTH}`,
+      }).label,
+    ).toBe("Read issue WHI-1");
+  });
+
+  it("still refuses variables it cannot resolve or that do not point at an /api base", () => {
+    const env = scriptEnv('API="$PAPERCLIP_API_URL/api"');
+    expect(parseAgentDashApiCall('curl -s "$UNKNOWN/api/issues/WHI-1"', env)).toBeNull();
+    const notApi = scriptEnv('API="https://api.github.com"');
+    expect(parseAgentDashApiCall('curl -s "$API/repos/a/b"', notApi)).toBeNull();
+    // A variable bound to a foreign host is never AgentDash.
+    const other = scriptEnv('API="http://127.0.0.1:9999/api"');
+    expect(parseAgentDashApiCall('curl -s "$API/issues/WHI-1"', other)).toBeNull();
+  });
+
+  it("shows only the file name for a Hermes write_file detail path", () => {
+    const summary = summarizeToolCall("write_file", {
+      detail: "/paperclip/.hermes/profiles/kailor/notes/onboarding.md",
+    });
+    expect(summary.label).toBe("Write onboarding.md");
+    expect(summary.label).not.toContain("/paperclip");
+    // An explicit file_path still wins over detail.
+    expect(
+      summarizeToolCall("write_file", { file_path: "docs/x.md", detail: "/paperclip/.hermes/other.md" }).label,
+    ).toBe("Write docs/x.md");
+  });
+
+  it("folds an execute_code section marker into the row's real outcome", () => {
+    const output = "\n--- stderr ---\nSyntaxWarning: \"\\W\" is an invalid escape sequence";
+    expect(summarizeToolOutcome(output, "error")).toBe('SyntaxWarning: "\\W" is an invalid escape sequence');
+    expect(summarizeToolOutcome(output, "completed")).toBe(
+      'SyntaxWarning: "\\W" is an invalid escape sequence',
+    );
+    // A marker embedded mid-line splits there too.
+    expect(summarizeToolOutcome("all good -- stderr -- DeprecationWarning: x", "completed"))
+      .toBe("DeprecationWarning: x");
+    // A marker with nothing after it has nothing to quote.
+    expect(summarizeToolOutcome("--- stderr ---", "error")).toBe("Failed");
+    expect(summarizeToolOutcome("--- stderr ---", "completed")).toBe("Done");
   });
 });

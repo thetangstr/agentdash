@@ -71,17 +71,18 @@ function budgetOverview() {
   };
 }
 
-function setup(measured: boolean, budgetCents: number) {
+function setup(measured: boolean, budgetCents: number, pricedSpend = measured) {
   mockCostsApi.summary.mockResolvedValue({
     companyId: "company-1",
-    spendCents: measured ? 12_345 : 0,
+    spendCents: measured && pricedSpend ? 12_345 : 0,
     budgetCents,
-    utilizationPercent: measured && budgetCents > 0 ? 25 : 0,
+    utilizationPercent: measured && pricedSpend && budgetCents > 0 ? 25 : 0,
     measured,
+    pricedSpend,
   });
   mockCostsApi.byAgent.mockResolvedValue(
     measured
-      ? [{ agentId: "a1", agentName: "CoS", costCents: 12_345, inputTokens: 900, cachedInputTokens: 0, outputTokens: 100 }]
+      ? [{ agentId: "a1", agentName: "CoS", costCents: pricedSpend ? 12_345 : 0, inputTokens: 900, cachedInputTokens: 0, outputTokens: 100 }]
       : [],
   );
   mockCostsApi.byProject.mockResolvedValue([]);
@@ -249,5 +250,40 @@ describe("Costs when spend is metered", () => {
       .not.toBe("—");
     expect(text).toContain("25%");
     expect(text).toContain("of monthly budget consumed");
+  });
+});
+
+describe("Costs on a BYOK workspace (usage recorded, never priced)", () => {
+  // AgentDash (batch 2): measured but unpriced is a third state between
+  // "spent nothing" and "cannot measure" — a BYOK owner's provider billed
+  // real money, and "$0.00 inference spend" is the misleading middle ground
+  // this page used to print.
+  it("says 'Billed by your model provider' with the token count, never $0.00", async () => {
+    setup(true, 0, false);
+    await render();
+    const region = inferenceRegion();
+    expect(region).not.toMatch(/\$0\.00/);
+    expect(region).toContain("Billed by your model provider");
+    // 900 in + 100 out — cached reads never inflate the display figure.
+    expect(region).toContain("1.0k");
+  });
+
+  it("does not report budget consumption it cannot price", async () => {
+    setup(true, 50_000, false);
+    const text = await render();
+    expect(text).not.toContain("of monthly budget consumed");
+    expect(text).not.toMatch(/\$0\.00 of \$500\.00/);
+    expect(text).toContain("$500.00 cap");
+    expect(text).toContain("billed by your model provider");
+  });
+
+  it("hides pull-request wording when no PR work products exist", async () => {
+    setup(true, 0, false);
+    const text = await render();
+    expect(container.querySelector('[data-testid="cost-per-shipped-pr-tile"]')).toBeNull();
+    expect(text).not.toContain("Cost per shipped PR");
+    expect(text).not.toContain("pull request");
+    const shipped = container.querySelector('[data-testid="shipped-count-tile"]')?.textContent ?? "";
+    expect(shipped).toContain("items accepted");
   });
 });

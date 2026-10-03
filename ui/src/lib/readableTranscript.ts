@@ -355,7 +355,19 @@ const VERB_RULES: VerbRule[] = [
     verb: "Edit",
     target: pathTarget,
   },
-  { keys: ["write", "writefile", "createfile", "newfile"], verb: "Write", target: pathTarget },
+  {
+    keys: ["write", "writefile", "createfile", "newfile"],
+    verb: "Write",
+    // Hermes' write_file carries the file's absolute path under `detail`
+    // (/paperclip/.hermes/profiles/…); that path only exists inside the
+    // runtime's own state dir, so the row shows the file's name.
+    target: (input, record) => {
+      const target = pathTarget(input, record);
+      if (target) return target;
+      const detail = firstString(record, ["detail"]);
+      return detail ? basename(detail) : null;
+    },
+  },
   { keys: ["applypatch", "patch", "filechange"], verb: "Patched", target: (input) => patchTarget(input) },
   {
     keys: ["bash", "shell", "zsh", "commandexecution", "execcommand", "localshell", "shelltoolcall", "runterminalcmd", "runcommand", "terminal", "exec", "powershell"],
@@ -489,6 +501,24 @@ function basename(word: string): string {
   return parts[parts.length - 1] || word;
 }
 
+/**
+ * AgentDash (batch 2): `NAME=value` bindings a script sets for itself. Shell
+ * quotes are already stripped by `shellWords`, so `API="$BASE/api"` reads as
+ * `API=$BASE/api` — kept verbatim for later `$VAR` resolution.
+ */
+export function scriptEnv(script: string): Map<string, string> {
+  const env = new Map<string, string>();
+  for (const statement of scriptStatements(script)) {
+    for (const word of shellWords(statement)) {
+      if (word === "export" || word === "readonly" || word === "local") continue;
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(word);
+      if (!match) break;
+      env.set(match[1]!, match[2]!);
+    }
+  }
+  return env;
+}
+
 /** "git status", "pnpm build", "curl", "python3": what a command is, without its arguments. */
 export function commandName(statement: string): string {
   const words = programWords(statement);
@@ -618,8 +648,16 @@ function isAgentDashBase(base: string): boolean {
 /**
  * A `curl` call to the AgentDash API, read back as what it did. Null for
  * anything else (another host, a non-curl command, an unparseable URL).
+ *
+ * `env` carries the script's own `NAME=value` bindings (see `scriptEnv`):
+ * scripts hold the API base in a variable (`API="$PAPERCLIP_API_URL/api"`)
+ * and then curl `"$API/issues/…"`, which only reads as an AgentDash call once
+ * the leading `$VAR` is resolved.
  */
-export function parseAgentDashApiCall(statement: string): AgentDashApiCall | null {
+export function parseAgentDashApiCall(
+  statement: string,
+  env?: ReadonlyMap<string, string>,
+): AgentDashApiCall | null {
   const words = programWords(statement);
   if (words.length === 0 || basename(words[0]) !== "curl") return null;
   let method: string | null = null;
@@ -660,6 +698,15 @@ export function parseAgentDashApiCall(statement: string): AgentDashApiCall | nul
     }
   }
   if (!url) return null;
+  // Resolve leading $VARs against the script's own bindings; depth-capped so a
+  // self-referencing assignment (`A=$A`) can't loop.
+  for (let depth = 0; depth < 3 && env && url.startsWith("$"); depth += 1) {
+    const variable: RegExpMatchArray | null = url.match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/);
+    if (!variable) break;
+    const value = env.get(variable[1]!);
+    if (value === undefined) break;
+    url = `${value}${url.slice(variable[0].length)}`;
+  }
   const match = url.match(/^(https?:\/\/[^/\s]+|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)(\/api(?:\/[^?#\s]*)?)/i);
   if (!match || !isAgentDashBase(match[1])) return null;
   const segments = match[2].split("/").filter(Boolean);
@@ -694,6 +741,9 @@ function finalizeCommand(verb: string, rawCommand: string | null): ToolCallSumma
   // (`a && curl -X DELETE …`, several calls) is never named after one of its
   // calls: that would let a GET stand for a DELETE that follows it.
   const meaningful = scriptStatements(rawCommand).filter((statement) => !isScriptPreamble(statement));
+  // The script's own `NAME=value` bindings let `curl "$API/issues/…"` be read
+  // as an AgentDash call when API was set to an .../api base.
+  const env = scriptEnv(rawCommand);
   // AgentDash (scan 4 lane O1): a heredoc that only writes files reads as
   // "Wrote doc.json" (a file name, never the absolute path).
   const writes = meaningful.map(heredocWriteTarget);
@@ -706,11 +756,11 @@ function finalizeCommand(verb: string, rawCommand: string | null): ToolCallSumma
   const working = meaningful.filter((statement) => !heredocWriteTarget(statement));
   if (working.length <= 1) {
     if (!isHeading) {
-      const call = parseAgentDashApiCall(label);
+      const call = parseAgentDashApiCall(label, env);
       if (call) return agentDashCallSummary(call, rawCommand);
     }
   } else {
-    const calls = working.filter((statement) => parseAgentDashApiCall(statement) !== null).length;
+    const calls = working.filter((statement) => parseAgentDashApiCall(statement, env) !== null).length;
     if (calls > 0) {
       const summary = finalize(verb, `a script (${calls} AgentDash call${calls === 1 ? "" : "s"})`, true);
       return { ...summary, script: redactSecrets(rawCommand.trim()) };

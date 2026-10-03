@@ -121,6 +121,8 @@ describe("AgentDash-MK prompt surface synchronization", () => {
 
   // AgentDash (scan 4 lane O1): run summaries read "no DoD", "board user",
   // "in_review", "document key", "work product" to a non-technical owner.
+  // Batch 2 strengthened the block: agents still wrote "the work product
+  // record" and called an issue "complete" while it only sat in review.
   it("tells every prompt surface to write summaries and comments in plain language", () => {
     for (const surface of renderedPromptSurfaces) {
       expect(surface.content, `${surface.name} is missing the plain-language block`).toContain(
@@ -129,6 +131,14 @@ describe("AgentDash-MK prompt surface synchronization", () => {
       expect(surface.content).toContain("<!-- /AgentDash: plain-language-summaries -->");
       expect(surface.content).toContain('Say "ready for your review"');
       expect(surface.content).toContain('Never "the board user"');
+      expect(
+        surface.content,
+        `${surface.name} still permits "complete" for work that is only in review`,
+      ).toContain('Never call an issue "complete"');
+      expect(
+        surface.content,
+        `${surface.name} still permits internal record names in summaries`,
+      ).toContain('"work product record"');
     }
   });
 
