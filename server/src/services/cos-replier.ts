@@ -157,17 +157,33 @@ const STEADY_STATE_PROMPT = `You are the Chief of Staff in an AgentDash workspac
 // issue.
 export const COS_TRUTHFULNESS_GUIDANCE = `Only state what the workspace facts above show. Approval, progress and finished work may be claimed ONLY when those facts say so; a card under "still waiting for a decision" was never approved and nothing from it has started. When the facts do not say, say plainly that you do not know — never guess.`;
 
+/**
+ * Facts come from user-authored rows — an issue title or agent name is a
+ * free-text field anyone with write access controls. Control and format
+ * characters are stripped (no injected line breaks, no bidi tricks) and each
+ * value is capped, so a crafted string cannot break out of its line in the
+ * prompt or smuggle a directive into it.
+ */
+function promptFactText(value: string, max = 120): string {
+  return value
+    .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
 // The turn context rendered into the system prompt; every line is a fact the
 // reply may rely on. Nothing listed means unknown, not assumed.
 function cosTurnContextBlock(context: CosTurnContext | null | undefined): string {
   if (!context) return "";
   const issueLine = (issue: CosTurnContext["openIssues"][number]) => {
-    const name = issue.identifier ? `${issue.identifier} "${issue.title}"` : `"${issue.title}"`;
-    const assignee = issue.assigneeName ? ` — assigned to ${issue.assigneeName}` : "";
+    const title = `"${promptFactText(issue.title)}"`;
+    const name = issue.identifier ? `${promptFactText(issue.identifier, 32)} ${title}` : title;
+    const assignee = issue.assigneeName ? ` — assigned to ${promptFactText(issue.assigneeName, 80)}` : "";
     return `- ${name} is ${issue.status.replace(/_/g, " ")}${assignee}`;
   };
   const proposalLine = (proposal: CosTurnContext["pendingProposals"][number]) =>
-    `- "${proposal.title}" for ${proposal.assigneeName} — still waiting for this person to confirm or decline it`;
+    `- "${promptFactText(proposal.title)}"${proposal.assigneeName ? ` for ${promptFactText(proposal.assigneeName, 80)}` : ""} — still waiting for this person to confirm or decline it`;
   const issues = context.openIssues.length > 0 ? context.openIssues.map(issueLine).join("\n") : "- none you can see";
   const proposals =
     context.pendingProposals.length > 0
@@ -196,7 +212,7 @@ export function steadyStatePrompt(
   if (!roster || roster.length === 0) {
     return `${STEADY_STATE_PROMPT} You cannot hand out tasks from this chat right now because nobody on the team can take work from this person yet; if asked, say so plainly and suggest hiring someone first.${contextBlock}`;
   }
-  const team = roster.map((a) => `- ${a.name} (${a.role}): ${a.id}`).join("\n");
+  const team = roster.map((a) => `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}`).join("\n");
   const requestBlock = request
     ? `
 

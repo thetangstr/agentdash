@@ -17,7 +17,6 @@ interface Deps {
         source?: string | null;
         isInstanceAdmin?: boolean;
         visibleAgentIds: ReadonlySet<string> | null;
-        memberships?: ReadonlyArray<{ companyId: string; membershipRole?: string | null; status?: string | null }>;
       } | null;
     }) => Promise<any>;
   };
@@ -39,9 +38,6 @@ export function conversationDispatch(deps: Deps) {
       // The agents the author may see (null: all), resolved for their own
       // request. Called only when the CoS answers.
       authorVisibleAgentIds?: () => Promise<ReadonlySet<string> | null>;
-      // req.actor.memberships — admin vs member decides which projects/issues
-      // the CoS turn context may show this person.
-      authorMemberships?: ReadonlyArray<{ companyId: string; membershipRole?: string | null; status?: string | null }>;
     }) => {
       const agents = await deps.agents.listForCompany(input.companyId);
       const dir: AgentDirEntry[] = agents.map((a: any) => ({
@@ -80,7 +76,6 @@ export function conversationDispatch(deps: Deps) {
           source: input.authorSource ?? null,
           isInstanceAdmin: input.authorIsInstanceAdmin === true,
           visibleAgentIds,
-          memberships: input.authorMemberships ?? [],
         },
       });
     },

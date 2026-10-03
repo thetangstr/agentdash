@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockUseMessages = vi.hoisted(() => vi.fn());
 
-vi.mock("../realtime/useMessages", () => ({ useMessages: mockUseMessages }));
+vi.mock("../realtime/useMessages", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../realtime/useMessages")>()),
+  useMessages: mockUseMessages,
+}));
 vi.mock("../components/MessageList", () => ({
   MessageList: ({ messages }: { messages: Array<{ id: string }> }) => (
     <div data-testid="message-list">{messages.length} messages</div>
@@ -165,12 +168,20 @@ describe("ChatPanel initial scroll", () => {
       { id: "m1", role: "agent", content: "Hi" },
       { id: "m2", role: "agent", content: "Newest" },
     ]);
-    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" />));
-
-    const calls = (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock.calls;
-    // The first scroll is instant ({ block: "end" }, no smooth behaviour), so
-    // nothing still laying out can interrupt it above the bottom.
-    expect(calls[0]).toEqual([{ block: "end" }]);
+    // jsdom reports scrollHeight 0; fake a tall scroller so the effect has
+    // something to land on.
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
+    Object.defineProperty(Element.prototype, "scrollHeight", { value: 640, configurable: true });
+    try {
+      act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" />));
+      const scroller = container.querySelector('[data-testid="chat-scroller"]') as HTMLElement;
+      // The container's own scrollTop is set (scrollIntoView on a marker
+      // stopped the pb-4 padding short of the bottom), instantly — nothing
+      // still laying out can interrupt it above the bottom.
+      expect(scroller.scrollTop).toBe(640);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollHeight", original);
+    }
   });
 });
 

@@ -103,3 +103,53 @@ test("CoS chat: sent and stored replies show with the WebSocket down", async ({ 
     await request.delete(`/api/companies/${company.id}`).catch(() => {});
   }
 });
+
+// AgentDash (canary, lane chat / review #1000): the chat must open at the
+// newest message — it used to open ~52px short of the bottom. Enough fixture
+// rows to overflow the scroller, then assert scrollTop reaches the bottom on
+// first paint at both desktop and phone widths.
+for (const [label, viewport] of [
+  ["desktop", { width: 1280, height: 720 }],
+  ["phone", { width: 390, height: 700 }],
+] as const) {
+  test(`CoS chat opens at the newest message (${label})`, async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const res = await request.post("/api/companies", { data: { name: `E2E Scroll ${label} ${Date.now()}` } });
+    expect(res.ok(), `create company: ${res.status()} ${await res.text()}`).toBe(true);
+    const company = (await res.json()) as Company;
+    try {
+      await page.setViewportSize(viewport);
+      await page.route("**/api/conversations/*/messages*", async (route) => {
+        const req = route.request();
+        if (req.method() !== "GET") {
+          await route.continue();
+          return;
+        }
+        const convoId = new URL(req.url()).pathname.match(/\/api\/conversations\/([^/]+)\/messages/)?.[1] ?? "c";
+        const rows = Array.from({ length: 40 }, (_, i) => ({
+          id: id(i + 1),
+          conversationId: convoId,
+          role: i % 2 === 0 ? "agent" : "user",
+          content: `Fixture message ${i + 1} — long enough to wrap onto several lines at narrow widths so the thread overflows.`,
+          cardKind: null,
+          cardPayload: null,
+          createdAt: new Date(Date.now() - (40 - i) * 60_000).toISOString(),
+        }));
+        // The server returns newest first.
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows.reverse()) });
+      });
+
+      await page.goto(`/${company.issuePrefix}/cos`);
+      await expect(page.getByTestId("cos-conversation")).toContainText("Fixture message 40", { timeout: 30_000 });
+
+      const metrics = await page.getByTestId("chat-scroller").evaluate((el) => ({
+        overflow: el.scrollHeight - el.clientHeight,
+        distanceFromBottom: el.scrollHeight - el.clientHeight - el.scrollTop,
+      }));
+      expect(metrics.overflow, "fixture thread should overflow the scroller").toBeGreaterThan(50);
+      expect(metrics.distanceFromBottom, "chat should open at the newest message").toBeLessThanOrEqual(8);
+    } finally {
+      await request.delete(`/api/companies/${company.id}`).catch(() => {});
+    }
+  });
+}

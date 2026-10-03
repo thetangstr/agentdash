@@ -153,6 +153,18 @@ describe("cosIssueAction.roster", () => {
     const { deps } = makeDeps();
     await expect(cosIssueAction(deps).roster(companyId, null, cosAgentId)).resolves.toEqual([]);
   });
+
+  // AgentDash (review #1000): the roster lands in a reply every member can
+  // read, so it is the company-visible list — an agent only the sender (an
+  // owner) can see must not be named there.
+  it("names only company-visible agents when the dep provides them", async () => {
+    const { deps } = makeDeps({
+      companyVisibleAgentIds: vi.fn().mockResolvedValue(new Set([agentId])),
+    });
+    // The sender sees every agent (null), but the hidden one is omitted.
+    const roster = await cosIssueAction(deps).roster(companyId, requester(), cosAgentId);
+    expect(roster.map((a) => a.id)).toEqual([agentId]);
+  });
 });
 
 // AgentDash (canary, lane chat): the turn context is the facts a reply may

@@ -47,7 +47,7 @@ import { issueReferenceService } from "./issue-references.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { defaultStatusForNewIssue, type NewIssueStatus } from "./issue-start-policy.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
-import { issueVisibilityCondition, resolveAgentVisibility } from "../routes/visibility.js";
+import { issueVisibilityCondition, resolveAgentVisibility, visibleAgentIdsFor } from "../routes/visibility.js";
 
 export const ISSUE_PROPOSAL_CARD_KIND = "issue_proposal_v1";
 /** Legacy: older conversations hold a separate "Task created" message of this kind. */
@@ -80,11 +80,6 @@ export interface CosIssueRequester {
   isInstanceAdmin?: boolean;
   /** Agent ids this person may see; null means every agent (routes/visibility.ts). */
   visibleAgentIds: ReadonlySet<string> | null;
-  /**
-   * req.actor.memberships — company admin vs member decides which projects and
-   * issues this person may see, so the turn context below is built with it.
-   */
-  memberships?: ReadonlyArray<{ companyId: string; membershipRole?: string | null; status?: string | null }>;
 }
 
 /** Agent statuses that can take new work. */
@@ -199,8 +194,14 @@ export interface CosIssueActionDeps {
     payload: IssueProposalPayload;
   }) => void;
   /**
-   * Workspace facts the reply may rely on: open issues this person may see
-   * and their task cards still waiting on a decision.
+   * Agent ids every member of this company may see (null: all) — the
+   * least-privileged view, because the roster lands in a reply every member
+   * can read. Absent: fall back to the requester's own visibility.
+   */
+  companyVisibleAgentIds?: (companyId: string) => Promise<ReadonlySet<string> | null>;
+  /**
+   * Workspace facts the reply may rely on: open issues any member may see
+   * and this person's task cards still waiting on a decision.
    */
   turnContext?: (companyId: string, requester: CosIssueRequester) => Promise<CosTurnContext>;
 }
@@ -235,7 +236,8 @@ export interface CosTurnContextIssue {
 
 export interface CosTurnContextProposal {
   title: string;
-  assigneeName: string;
+  /** Null when the proposed assignee is an agent not every member may see. */
+  assigneeName: string | null;
 }
 
 export interface CosTurnContext {
@@ -250,29 +252,32 @@ export const COS_ISSUE_CONTEXT_LIMIT = 15;
 const COS_PROPOSAL_CONTEXT_LIMIT = 5;
 
 /**
- * The visibility SQL helpers read req.actor. Rebuild the actor the sender's
- * own request carried — same userId, source, admin flag and memberships — so
- * issueVisibilityCondition answers for them exactly as it did in their
- * request. Fail closed: a missing role is a member, not an admin.
+ * The reply lands in the company-wide shared inbox — every member can read
+ * it, not just the sender — so the facts behind it are built for the
+ * least-privileged reader: a member with no per-user grants, for whom only
+ * company-visible projects and agents exist. The nil user id fails every
+ * per-user clause (created, listed, mine), so the shared visibility helpers
+ * answer for exactly that reader, whoever sent the message.
  */
-function requesterVisibilityRequest(requester: CosIssueRequester): Request {
+const LEAST_PRIVILEGED_USER_ID = "00000000-0000-0000-0000-000000000000";
+function leastPrivilegedRequest(companyId: string): Request {
   return {
     actor: {
       type: "board",
-      userId: requester.userId,
-      source: requester.source ?? undefined,
-      isInstanceAdmin: requester.isInstanceAdmin === true,
-      memberships: requester.memberships ?? [],
+      userId: LEAST_PRIVILEGED_USER_ID,
+      isInstanceAdmin: false,
+      memberships: [{ companyId, membershipRole: "member", status: "active" }],
     },
   } as Request;
 }
 
-/** Open issues of this company, restricted to the ones this person may see. */
-async function listTurnContextIssues(db: Db, companyId: string, requester: CosIssueRequester): Promise<CosTurnContextIssue[]> {
-  const req = requesterVisibilityRequest(requester);
+/** Open issues of this company any member may see — never sender-scoped. */
+async function listTurnContextIssues(db: Db, companyId: string): Promise<CosTurnContextIssue[]> {
+  const req = leastPrivilegedRequest(companyId);
   // issueVisibilityCondition reads the scope resolveAgentVisibility cached on
   // this request — the same pairing the issue routes use.
   await resolveAgentVisibility(db, req, companyId);
+  const visibleAgentIds = await visibleAgentIdsFor(db, req, companyId);
   const rows = await db
     .select({
       identifier: issues.identifier,
@@ -294,7 +299,7 @@ async function listTurnContextIssues(db: Db, companyId: string, requester: CosIs
     .orderBy(desc(issues.updatedAt))
     .limit(COS_ISSUE_CONTEXT_LIMIT);
   const seesAgent = (agentId: string | null) =>
-    agentId === null || requester.visibleAgentIds === null || requester.visibleAgentIds.has(agentId);
+    agentId === null || visibleAgentIds === null || visibleAgentIds.has(agentId);
   return rows.map((row) => ({
     identifier: row.identifier,
     title: row.title,
@@ -303,8 +308,15 @@ async function listTurnContextIssues(db: Db, companyId: string, requester: CosIs
   }));
 }
 
-/** This person's proposal cards still waiting for a decision, company-wide. */
-async function listTurnContextProposals(db: Db, companyId: string, requester: CosIssueRequester): Promise<CosTurnContextProposal[]> {
+/** This person's proposal cards still waiting for a decision, company-wide.
+ * The assignee name is a fact quoted into a shared reply, so it is shown only
+ * for agents every member may see. */
+async function listTurnContextProposals(
+  db: Db,
+  companyId: string,
+  requester: CosIssueRequester,
+  companyVisible: ReadonlySet<string> | null,
+): Promise<CosTurnContextProposal[]> {
   const rows = await db
     .select({ cardPayload: assistantMessages.cardPayload })
     .from(assistantMessages)
@@ -322,7 +334,9 @@ async function listTurnContextProposals(db: Db, companyId: string, requester: Co
   const proposals: CosTurnContextProposal[] = [];
   for (const row of rows) {
     const proposal = readProposal(row.cardPayload);
-    if (proposal) proposals.push({ title: proposal.title, assigneeName: proposal.assigneeName });
+    if (!proposal) continue;
+    const assigneeVisible = companyVisible === null || companyVisible.has(proposal.assigneeAgentId);
+    proposals.push({ title: proposal.title, assigneeName: assigneeVisible ? proposal.assigneeName : null });
   }
   return proposals;
 }
@@ -377,9 +391,17 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
   }
 
   return {
-    /** Agents this person may hand work to, for the steady-state prompt. */
+    /**
+     * Agents this person may hand work to, for the steady-state prompt. The
+     * prompt's reply posts into a chat every member can read, so the team
+     * list is the company-visible one — a name only the sender may see would
+     * leak to everyone else.
+     */
     roster: async (companyId: string, requester: CosIssueRequester | null | undefined, cosAgentId: string | null) => {
       if (!requester?.userId) return [];
+      const visibleToAll = deps.companyVisibleAgentIds
+        ? await deps.companyVisibleAgentIds(companyId)
+        : requester.visibleAgentIds;
       const all = await deps.listAgents(companyId);
       return all
         .filter(
@@ -387,7 +409,7 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
             a.companyId === companyId &&
             ASSIGNABLE_AGENT_STATUSES.has(a.status) &&
             !isChiefOfStaff(a, cosAgentId) &&
-            (!requester.visibleAgentIds || requester.visibleAgentIds.has(a.id)),
+            (!visibleToAll || visibleToAll.has(a.id)),
         )
         .map((a): CosIssueRosterEntry => ({ id: a.id, name: a.name, role: a.title || a.role || "agent" }));
     },
@@ -672,10 +694,13 @@ export function cosIssueActionForDb(db: Db): CosIssueAction {
         cardPayload: payload as unknown as Record<string, unknown>,
       });
     },
+    companyVisibleAgentIds: (companyId) =>
+      visibleAgentIdsFor(db, leastPrivilegedRequest(companyId), companyId),
     turnContext: async (companyId, requester) => {
+      const companyVisible = await visibleAgentIdsFor(db, leastPrivilegedRequest(companyId), companyId);
       const [openIssues, pendingProposals] = await Promise.all([
-        listTurnContextIssues(db, companyId, requester),
-        listTurnContextProposals(db, companyId, requester),
+        listTurnContextIssues(db, companyId),
+        listTurnContextProposals(db, companyId, requester, companyVisible),
       ]);
       return { openIssues, pendingProposals };
     },

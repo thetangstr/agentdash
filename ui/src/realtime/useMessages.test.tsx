@@ -77,6 +77,24 @@ describe("useMessages", () => {
     });
     expect(seen.map((m) => m.id)).toEqual(["card1", "m2"]);
   });
+
+  // AgentDash (review #1000): switching threads must not leak the old
+  // conversation's tail — mergePage keeps extras, so the list is reset on a
+  // conversationId change.
+  it("clears the list when the conversation changes", async () => {
+    function Switchable({ id }: { id: string }) {
+      seen = useMessages(id);
+      return null;
+    }
+    const otherCard = { ...card, id: "other1", conversationId: "conv2" } as Message;
+    mockPaginate.mockResolvedValueOnce([otherCard]);
+    await act(async () => root.render(<Switchable id="conv2" />));
+    expect(seen.map((m) => m.id)).toEqual(["other1"]);
+
+    mockPaginate.mockResolvedValueOnce([card]);
+    await act(async () => root.render(<Switchable id="conv1" />));
+    expect(seen.map((m) => m.id)).toEqual(["card1"]);
+  });
 });
 
 // AgentDash (canary, lane chat): the socket is a fast path only. Messages
@@ -135,6 +153,8 @@ describe("useMessages without the live socket", () => {
 
   it("polls every 5s while a reply is pending and the socket is down", async () => {
     vi.useFakeTimers();
+    // "Now" is just after the user message — the reply is still fresh.
+    vi.setSystemTime(new Date("2026-10-02T08:01:30Z"));
     mockPaginate.mockResolvedValue([userMsg]);
     await act(async () => root.render(<Probe />));
     await act(async () => setLiveSocketState("down"));
@@ -148,6 +168,27 @@ describe("useMessages without the live socket", () => {
     // The reply arrived: the conversation is no longer pending, so the
     // interval keeps ticking but fetches nothing.
     await act(async () => vi.advanceTimersByTime(15000));
+    expect(mockPaginate).toHaveBeenCalledTimes(1);
+  });
+
+  // AgentDash (review #1000): the poll is a fallback for a pending reply, not
+  // a permanent subscription — once the pending message is older than the
+  // reply timeout the UI already shows Retry, so polling stops.
+  it("stops polling once the pending reply is past the reply timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-02T08:01:30Z"));
+    mockPaginate.mockResolvedValue([userMsg]);
+    await act(async () => root.render(<Probe />));
+    await act(async () => setLiveSocketState("down"));
+    mockPaginate.mockClear();
+
+    await act(async () => vi.advanceTimersByTime(5000));
+    expect(mockPaginate).toHaveBeenCalledTimes(1);
+
+    // Jump past the 150s reply timeout — the user message is still last, but
+    // it is no longer a reply worth waiting for.
+    vi.setSystemTime(new Date("2026-10-02T08:05:00Z"));
+    await act(async () => vi.advanceTimersByTime(20000));
     expect(mockPaginate).toHaveBeenCalledTimes(1);
   });
 

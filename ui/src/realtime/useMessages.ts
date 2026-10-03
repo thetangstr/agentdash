@@ -11,6 +11,10 @@ import { subscribeToConversationMessages } from "./conversationEventBus";
 import { useLiveSocketState } from "./liveSocketState";
 
 export const PENDING_REPLY_POLL_MS = 5_000;
+// Mirrors the server-side stalled-reply marker (STALLED_REPLY_RETRY_AFTER_MS):
+// once a pending reply is this old it is declared timed out, so the fallback
+// poll stops too — a dead dispatch should not be polled forever.
+export const REPLY_PENDING_TIMEOUT_MS = 150_000;
 
 function isAuthoredByUser(message: Message): boolean {
   return (message.role ?? message.authorKind) === "user";
@@ -50,6 +54,10 @@ export function useMessages(conversationId: string | null) {
   useEffect(() => {
     if (!conversationId) return;
 
+    // The list belongs to this conversation only — switching threads clears
+    // it, otherwise mergePage would carry the old thread's tail into the new
+    // one until its first page landed.
+    setMessages([]);
     void refresh(conversationId);
 
     const unsubscribe = subscribeToConversationMessages(conversationId, (incoming, kind) => {
@@ -81,13 +89,17 @@ export function useMessages(conversationId: string | null) {
     if (socketState === "open") void refresh(conversationId);
   }, [socketState, conversationId, refresh]);
 
-  // With the socket down, a pending reply only arrives by polling.
+  // With the socket down, a pending reply only arrives by polling — but only
+  // until the reply is stale enough that the UI already calls it timed out.
   useEffect(() => {
     if (!conversationId || socketState === "open") return;
     const timer = window.setInterval(() => {
       const list = messagesRef.current;
       const last = list[list.length - 1];
-      if (last && isAuthoredByUser(last)) void refresh(conversationId);
+      if (!last || !isAuthoredByUser(last)) return;
+      const sentAt = new Date(last.createdAt).getTime();
+      if (Number.isFinite(sentAt) && Date.now() - sentAt >= REPLY_PENDING_TIMEOUT_MS) return;
+      void refresh(conversationId);
     }, PENDING_REPLY_POLL_MS);
     return () => window.clearInterval(timer);
   }, [conversationId, socketState, refresh]);

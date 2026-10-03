@@ -888,7 +888,8 @@ describe("POST /api/onboarding/revise-plan", () => {
   ].join("\n");
 
   // The queue, front to back: conversation lookup, latest plan card,
-  // pre-LLM hire receipt, post-LLM card re-read, post-LLM hire receipt.
+  // pre-LLM hire receipt, locked conversation row (FOR UPDATE re-check),
+  // post-LLM card re-read.
   // (The member-names query fails on the stub — no innerJoin — and is
   // caught, so it never pops the queue.)
   let dbQueue: unknown[][];
@@ -900,8 +901,8 @@ describe("POST /api/onboarding/revise-plan", () => {
       convoRow,
       planCardRow,
       convoRow,
-      [{ cardPayload: planPayload }],
       convoRow,
+      [{ cardPayload: planPayload }],
     ];
   });
 
@@ -938,7 +939,7 @@ describe("POST /api/onboarding/revise-plan", () => {
   // route re-checks the card before posting and answers 409.
   it("returns 409 when the plan was confirmed while the LLM was revising it", async () => {
     const queue = [...dbQueue];
-    queue[3] = [{ cardPayload: { ...planPayload, confirmedAt: "2026-10-03T10:00:00Z", confirmedAgentIds: ["agent-1"] } }];
+    queue[4] = [{ cardPayload: { ...planPayload, confirmedAt: "2026-10-03T10:00:00Z", confirmedAgentIds: ["agent-1"] } }];
     const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, queue);
     const res = await request(app)
       .post("/api/onboarding/revise-plan")
@@ -949,7 +950,7 @@ describe("POST /api/onboarding/revise-plan", () => {
 
   it("returns 409 when a hire receipt landed while the LLM was revising it", async () => {
     const queue = [...dbQueue];
-    queue[4] = [
+    queue[3] = [
       {
         id: "conv1",
         companyId: "c1",
