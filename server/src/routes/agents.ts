@@ -7,8 +7,8 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
+import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, assistantConversations, assistantMessages, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { and, count, desc, eq, gte, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -30,6 +30,9 @@ import {
   wakeAgentSchema,
   updateAgentSchema,
   supportedEnvironmentDriversForAdapter,
+  isBlockingPreflightResult,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+  RUN_CANCELLED_BY_OPERATOR_CODE,
 } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
@@ -500,7 +503,12 @@ export function agentRoutes(
       fallbackChecks,
     );
 
-    if (result.status !== "pass") {
+    // Warnings are advisory, not failures — a self-hosted Hermes box warns
+    // that AgentDash's own env holds no LLM keys (they live in ~/.hermes),
+    // which is the correct setup for that adapter. But a warn that means the
+    // adapter cannot run at all (probe auth required, probe failed, Hermes
+    // with no provider anywhere) blocks exactly like a fail.
+    if (isBlockingPreflightResult(result)) {
       throw unprocessable(
         input.failureMessage
           ?? "Agent harness preflight failed. Resolve the adapter environment checks before creating this agent.",
@@ -741,6 +749,30 @@ export function agentRoutes(
       .orderBy(desc(heartbeatRuns.createdAt))
       .limit(1);
 
+    // Chat work never touches heartbeatRuns — a Chief of Staff that answered
+    // every message all day still reports total: 0. Count its agent-authored
+    // replies so "never run" does not claim the agent did nothing, and the
+    // month count lets the spend read "Billed by your model provider" (BYOK).
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+    const [chatTally] = await db
+      .select({
+        total: count(),
+        thisMonth: sql<number>`count(*) filter (where ${gte(assistantMessages.createdAt, monthStart)})::int`,
+      })
+      .from(assistantMessages)
+      .innerJoin(
+        assistantConversations,
+        eq(assistantMessages.conversationId, assistantConversations.id),
+      )
+      .where(and(
+        eq(assistantMessages.role, "agent"),
+        eq(assistantConversations.assistantAgentId, agentId),
+      ));
+    const chatTurns = Number(chatTally?.total ?? 0);
+    const chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);
+
     const total = Number(tally?.total ?? 0);
     return {
       total,
@@ -748,6 +780,8 @@ export function agentRoutes(
       failed: Number(tally?.failed ?? 0),
       succeededWithoutEvidence: Number(tally?.withoutEvidence ?? 0),
       neverRan: total === 0,
+      chatTurns,
+      chatTurnsThisMonth,
       tokenCeilingPause,
       last: last
         ? {
@@ -4626,7 +4660,7 @@ export function agentRoutes(
     if (existing) {
       assertCompanyAccess(req, existing.companyId);
     }
-    const run = await heartbeat.cancelRun(runId);
+    const run = await heartbeat.cancelRun(runId, RUN_CANCELLED_BY_OPERATOR_MESSAGE, RUN_CANCELLED_BY_OPERATOR_CODE);
 
     if (run) {
       await logActivity(db, {

@@ -6,7 +6,8 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentTokenCeilingStatus } from "@paperclipai/shared";
+import type { ReactNode } from "react";
+import type { AgentRunHealth, AgentTokenCeilingStatus } from "@paperclipai/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -19,7 +20,7 @@ vi.mock("../components/MarkdownEditor", () => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TokenCeilingStatusLine, agentBilledByProvider, CostsSection } = await import("./AgentDetail");
+const { TokenCeilingStatusLine, agentBilledByProvider, AgentRunHealthSummary, RunStderrExcerpt, CostsSection } = await import("./AgentDetail");
 
 function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentTokenCeilingStatus {
   return {
@@ -51,6 +52,30 @@ function render(status: AgentTokenCeilingStatus, onSave = vi.fn(), pending = fal
     );
   });
   return onSave;
+}
+
+function renderNode(node: ReactNode) {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  act(() => {
+    root!.render(node);
+  });
+}
+
+function runHealthFixture(overrides: Partial<AgentRunHealth> = {}): AgentRunHealth {
+  return {
+    total: 0,
+    succeeded: 0,
+    failed: 0,
+    succeededWithoutEvidence: 0,
+    neverRan: true,
+    chatTurns: 0,
+    chatTurnsThisMonth: 0,
+    tokenCeilingPause: null,
+    last: null,
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -175,6 +200,185 @@ describe("agentBilledByProvider", () => {
     expect(
       agentBilledByProvider({ spentMonthlyCents: 0 }, [run(32_000, 2_900), run(1_000, 100, "2026-10-03T09:00:00.000Z", { costUsd: 0.12 })], now),
     ).toBe(false);
+  });
+
+  it("is true when this month's usage was only chat turns (CoS does no runs)", () => {
+    expect(
+      agentBilledByProvider(
+        { spentMonthlyCents: 0, runHealth: { chatTurnsThisMonth: 14 } },
+        [],
+        now,
+      ),
+    ).toBe(true);
+  });
+});
+
+// Batch 2 canary: "This agent has never run" + "$0.00" sat on a Chief of Staff
+// that had run the whole chat; chat turns count as activity.
+describe("AgentRunHealthSummary", () => {
+  it("says the agent never ran only when it truly did nothing", () => {
+    renderNode(<AgentRunHealthSummary runHealth={runHealthFixture()} />);
+    expect(container!.textContent).toContain("This agent has never run");
+  });
+
+  it("names chat activity instead of claiming the agent never ran", () => {
+    renderNode(<AgentRunHealthSummary runHealth={runHealthFixture({ chatTurns: 12 })} />);
+    const text = container!.textContent ?? "";
+    expect(text).toContain("answered 12 chat messages");
+    expect(text).not.toContain("never run");
+  });
+
+  it("shows an operator-stopped run neutrally, not as a red control-plane error", () => {
+    renderNode(
+      <AgentRunHealthSummary
+        runHealth={runHealthFixture({
+          neverRan: false,
+          total: 3,
+          succeeded: 2,
+          last: {
+            status: "cancelled",
+            error: "Cancelled by control plane",
+            errorCode: "cancelled_by_operator",
+            finishedAt: "2026-10-02T10:00:00.000Z",
+            leftEvidence: false,
+          },
+        })}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("stopped manually");
+    expect(text).not.toContain("Cancelled by control plane");
+    expect(container!.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("shows a system cancellation's real reason, neutral — not 'stopped manually'", () => {
+    renderNode(
+      <AgentRunHealthSummary
+        runHealth={runHealthFixture({
+          neverRan: false,
+          total: 3,
+          succeeded: 2,
+          last: {
+            status: "cancelled",
+            error: "Cancelled due to budget pause",
+            errorCode: "cancelled",
+            finishedAt: "2026-10-02T10:00:00.000Z",
+            leftEvidence: false,
+          },
+        })}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).not.toContain("stopped manually");
+    expect(text).not.toContain("stopped by you");
+    expect(text).toContain("Last run cancelled: Cancelled due to budget pause");
+    expect(container!.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keys manual-stop detection on the error code, not the message text", () => {
+    // A cancelled run whose code is the generic "cancelled" is a system
+    // cancellation even when the message happens to match the operator text —
+    // subtree-hold and comment-interrupt cancels share that generic code.
+    renderNode(
+      <AgentRunHealthSummary
+        runHealth={runHealthFixture({
+          neverRan: false,
+          total: 3,
+          succeeded: 2,
+          last: {
+            status: "cancelled",
+            error: "Interrupted: the issue was held by a subtree pause",
+            errorCode: "cancelled",
+            finishedAt: "2026-10-02T10:00:00.000Z",
+            leftEvidence: false,
+          },
+        })}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).not.toContain("stopped manually");
+    expect(text).toContain(
+      "Last run cancelled: Interrupted: the issue was held by a subtree pause",
+    );
+    expect(container!.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps a failed last run as an error", () => {
+    renderNode(
+      <AgentRunHealthSummary
+        runHealth={runHealthFixture({
+          neverRan: false,
+          total: 3,
+          succeeded: 2,
+          failed: 1,
+          last: {
+            status: "failed",
+            error: "process exited 1",
+            errorCode: "adapter_error",
+            finishedAt: "2026-10-02T10:00:00.000Z",
+            leftEvidence: false,
+          },
+        })}
+      />,
+    );
+    expect(container!.querySelector('[role="alert"]')).not.toBeNull();
+    expect(container!.textContent).toContain("Last run failed (adapter_error): process exited 1");
+  });
+});
+
+// Batch 2 canary: a succeeded run's stderr is adapter chatter, not an error —
+// and host paths stay masked.
+describe("RunStderrExcerpt", () => {
+  it("hides a succeeded run's stderr behind Technical details, unred", () => {
+    renderNode(
+      <RunStderrExcerpt
+        censorUsernameInLogs={true}
+        run={{
+          status: "succeeded",
+          stderrExcerpt: "SyntaxWarning at /Users/operator/.hermes/run.py",
+        }}
+      />,
+    );
+    const details = container!.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details!.textContent).toContain("Technical details");
+    expect(details!.textContent).toContain("/Users/o*******/.hermes/run.py");
+    expect(details!.textContent).not.toContain("operator");
+    expect(container!.querySelector(".text-red-700")).toBeNull();
+  });
+
+  it("follows the instance setting: shows the raw path when censoring is off", () => {
+    renderNode(
+      <RunStderrExcerpt
+        censorUsernameInLogs={false}
+        run={{
+          status: "succeeded",
+          stderrExcerpt: "SyntaxWarning at /Users/operator/.hermes/run.py",
+        }}
+      />,
+    );
+    expect(container!.textContent).toContain("/Users/operator/.hermes/run.py");
+  });
+
+  it("keeps the red stderr box for failed runs, still path-masked", () => {
+    renderNode(
+      <RunStderrExcerpt
+        censorUsernameInLogs={true}
+        run={{
+          status: "failed",
+          stderrExcerpt: "Traceback at /home/ubuntu/.hermes/run.py",
+        }}
+      />,
+    );
+    expect(container!.querySelector("details")).toBeNull();
+    expect(container!.textContent).toContain("stderr");
+    expect(container!.textContent).toContain("/home/u*****/.hermes/run.py");
+    expect(container!.querySelector(".text-red-700")).not.toBeNull();
+  });
+
+  it("renders nothing when the excerpt is empty", () => {
+    renderNode(<RunStderrExcerpt censorUsernameInLogs={true} run={{ status: "succeeded", stderrExcerpt: "  " }} />);
+    expect(container!.textContent).toBe("");
   });
 });
 

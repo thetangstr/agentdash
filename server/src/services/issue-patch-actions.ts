@@ -1045,13 +1045,13 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     }
     for (const publication of accepted.publications) await effect("publication", undefined, async () => publishActivity(publication));
     let interruptedRunId: string | null = null;
-    const cancellations = new Map<string, { run: NonNullable<typeof plan.interruptRun>; source: string }>();
-    if (plan.interruptRun) cancellations.set(plan.interruptRun.id, { run: plan.interruptRun, source: "issue_comment_interrupt" });
+    const cancellations = new Map<string, { run: NonNullable<typeof plan.interruptRun>; source: string; reason: string }>();
+    if (plan.interruptRun) cancellations.set(plan.interruptRun.id, { run: plan.interruptRun, source: "issue_comment_interrupt", reason: "Interrupted by a new comment" });
     if (plan.runToCancelForCancelledStatus && !cancellations.has(plan.runToCancelForCancelledStatus.id)) cancellations.set(plan.runToCancelForCancelledStatus.id,
-      { run: plan.runToCancelForCancelledStatus, source: "issue_status_cancelled" });
-    for (const [runId, { run, source }] of cancellations) {
+      { run: plan.runToCancelForCancelledStatus, source: "issue_status_cancelled", reason: "Cancelled because the issue was cancelled" });
+    for (const [runId, { run, source, reason }] of cancellations) {
       const cancelled = await effect("cancel", runId, async () => {
-        const result = await heartbeat.cancelRun(runId);
+        const result = await heartbeat.cancelRun(runId, reason);
         return result?.status === "cancelled" ? result : null;
       });
       if (cancelled) {

@@ -63,8 +63,10 @@ export function isGenericAgentRole(role: string | null | undefined): boolean {
 
 /**
  * The one line under an agent's name: title first, then the humanized role.
- * "Proposal Drafter", "Research Analyst · Researcher", "Chief of Staff".
- * A generic role ("General", "PM") or one the title already says is left out.
+ * "Proposal Drafter", "Research Analyst", "Chief of Staff".
+ * A generic role ("General", "PM"), one the title already says, or one that
+ * shares the title's own stem ("Researcher" beside "Research Analyst") is left
+ * out — the suffix only stays when it adds a word the title does not have.
  */
 export function agentIdentityLine(agent: { role?: string | null; title?: string | null }): string {
   const title = humanizeAgentTitle(agent.title);
@@ -74,7 +76,21 @@ export function agentIdentityLine(agent: { role?: string | null; title?: string 
   // Beside a title the executive roles read as their family: "Month End Close
   // Coordinator · Finance", not "· CFO" (which reads as a promotion).
   const family = ROLE_FAMILY_BESIDE_TITLE[(agent.role ?? "").trim()] ?? role;
-  if (title.toLowerCase().includes(family.toLowerCase()) || title.toLowerCase().includes(role.toLowerCase())) return title;
+  const titleLower = title.toLowerCase();
+  if (titleLower.includes(family.toLowerCase()) || titleLower.includes(role.toLowerCase())) return title;
+  const titleWords = titleLower.split(/[^a-z0-9]+/).filter(Boolean);
+  // Batch 2 canary: "Research Analyst · Researcher" — the role's stem is one
+  // of the title's own words, so it repeats rather than adds. Two words of
+  // 4+ letters sharing a prefix (so "it"/"hr"/"e" can never match — an
+  // "E-commerce" title word must not swallow an "Engineer" role) counts as
+  // already said.
+  const sharesStem = (label: string) =>
+    label
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+      .some((word) => word.length >= 4 && titleWords.some((tw) => tw.length >= 4 && (word.startsWith(tw) || tw.startsWith(word))));
+  if (sharesStem(family) || sharesStem(role)) return title;
   return `${title} · ${family}`;
 }
 
@@ -86,4 +102,30 @@ export function agentPickerSubtitle(agent: { role?: string | null; title?: strin
   const title = humanizeAgentTitle(agent.title);
   if (title) return title;
   return isGenericAgentRole(agent.role) ? "" : humanizeAgentRole(agent.role);
+}
+
+/**
+ * The identity line beneath an agent's own name, or "" when it would just
+ * restate the name — "Chief of Staff" over "Chief of Staff" read as a bug on
+ * every Team, Home and Org surface the canary scanned.
+ */
+export function agentIdentityLineUnderName(agent: {
+  name?: string | null;
+  role?: string | null;
+  title?: string | null;
+}): string {
+  const line = agentIdentityLine(agent);
+  const name = (agent.name ?? "").trim();
+  return name && line.toLowerCase() === name.toLowerCase() ? "" : line;
+}
+
+/** Same rule in pickers: a subtitle that repeats the option's name adds nothing. */
+export function agentPickerSubtitleUnderName(agent: {
+  name?: string | null;
+  role?: string | null;
+  title?: string | null;
+}): string {
+  const line = agentPickerSubtitle(agent);
+  const name = (agent.name ?? "").trim();
+  return name && line.toLowerCase() === name.toLowerCase() ? "" : line;
 }

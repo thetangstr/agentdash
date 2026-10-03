@@ -2994,6 +2994,10 @@ components:
           type: number
         neverRan:
           type: boolean
+        chatTurns:
+          type: number
+        chatTurnsThisMonth:
+          type: number
         tokenCeilingPause:
           anyOf:
             - type: object
@@ -3044,6 +3048,8 @@ components:
         - failed
         - succeededWithoutEvidence
         - neverRan
+        - chatTurns
+        - chatTurnsThisMonth
         - tokenCeilingPause
         - last
     AgentRuntimeConfig:

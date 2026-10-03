@@ -17,6 +17,8 @@ export {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   AGENT_DEFAULT_MAX_DAILY_TOKENS,
   AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+  RUN_CANCELLED_BY_OPERATOR_CODE,
   WORKSPACE_BRANCH_ROUTINE_VARIABLE,
   MODEL_PROFILE_KEYS,
   AGENT_ICON_NAMES,
@@ -1322,6 +1324,14 @@ export {
 export { isAgentPlanPayload, normalizeAgentPlanTitles, PLAN_AGENT_TITLE_MAX_LENGTH } from "./validators/agent-plan.js";
 // AgentDash: plan-card role -> AGENT_ROLES mapping used by /onboarding/confirm-plan.
 export { PRIVILEGED_PLAN_ROLES, mapProposedAgentRole, proposedRoleTitle } from "./agent-role-mapping.js";
+
+// AgentDash: the one preflight blocking rule shared by the create/preflight
+// routes, the launch readiness evaluator, and the new-agent UI gate.
+export {
+  isBlockingPreflightResult,
+  isBlockingPreflightWarnCode,
+  type PreflightResultLike,
+} from "./agent-harness-preflight.js";
 
 // AgentDash: chat substrate card payload types
 export * from "./cards.js";

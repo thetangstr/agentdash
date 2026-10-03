@@ -467,21 +467,57 @@ export function hermesStatusHasConfiguredCredentials(statusOutput: string): bool
   }
 
   const authProviders = sectionAfter(statusOutput, "Auth Providers", "API-Key Providers");
-  return authProviders
+  if (authProviders
     .split(/\r?\n/)
-    .some((line) => /\blogged in\b/i.test(line) && !/\bnot logged in\b/i.test(line));
+    .some((line) => /\blogged in\b/i.test(line) && !/\bnot logged in\b/i.test(line))) {
+    return true;
+  }
+
+  // `hermes status --full` also lists the profile's env-file keys ("◆ API
+  // Keys", rows like "  Kimi          ✓ sk-k...ehTZ"): a set key means Hermes
+  // can reach that provider even when the provider section reports nothing.
+  // The section mixes tool keys (GitHub, Tavily, Firecrawl, …) with model
+  // providers, and a tool key cannot drive an agent run — only LLM labels count.
+  const apiKeys = sectionAfter(statusOutput, "API Keys", "Auth Providers");
+  return apiKeys
+    .split(/\r?\n/)
+    .some((line) => line.includes("✓") && !line.includes("✗") && HERMES_LLM_PROVIDER_LABEL.test(line));
 }
 
-async function hermesCommandHasConfiguredCredentials(command: string): Promise<boolean> {
+/**
+ * Model-provider labels in the `hermes status --full` "API Keys" section.
+ * Tool/integration keys (GitHub, Tavily, Firecrawl, ElevenLabs, FAL,
+ * Browserbase, Browser Use, Keenable) deliberately do not match — a set tool
+ * key does not make Hermes able to run an agent.
+ */
+const HERMES_LLM_PROVIDER_LABEL =
+  /\b(openrouter|openai|google|gemini|deepseek|xai|grok|nvidia|nim|z\.?ai|glm|kimi|moonshot|stepfun|minimax|deepinfra|anthropic|claude|nous|qwen|mistral|groq|together|fireworks|cohere|perplexity|ollama|llama)\b/i;
+
+async function hermesCommandStatus(command: string, args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(command, ["status"], {
+    const { stdout } = await execFileAsync(command, args, {
       timeout: 10_000,
       maxBuffer: 1024 * 1024,
     });
-    return hermesStatusHasConfiguredCredentials(stdout);
+    return stdout;
   } catch {
-    return false;
+    return null;
   }
+}
+
+async function hermesCommandHasConfiguredCredentials(command: string): Promise<boolean> {
+  // Plain `hermes status` prints only a summary on current builds — the
+  // provider sections need `--full`. Older builds reject the flag, so fall
+  // back to plain status and parse whatever it prints.
+  const full = await hermesCommandStatus(command, ["status", "--full"]);
+  if (full !== null) {
+    if (hermesStatusHasConfiguredCredentials(full)) return true;
+    // A parseable full status that reports nothing configured is trustworthy —
+    // the plain-status summary would only show less.
+    if (/(API-Key Providers|Auth Providers|API Keys)/.test(full)) return false;
+  }
+  const short = await hermesCommandStatus(command, ["status"]);
+  return short !== null && hermesStatusHasConfiguredCredentials(short);
 }
 
 function summarizeAdapterEnvironmentChecks(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {

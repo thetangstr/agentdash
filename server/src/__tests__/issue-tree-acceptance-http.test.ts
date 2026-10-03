@@ -311,6 +311,9 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
       return outcome==='null'?null:{...run,status:outcome};
     });
     await svc.dispatchTreeEffects(accepted,{cancelRun,wakeup:vi.fn()} as any); expect(cancelRun).toHaveBeenCalledOnce();
+    // The hold interrupt names its own reason so the run does not read as an
+    // operator stop (cancelled_by_operator belongs to the cancel route only).
+    expect(cancelRun).toHaveBeenCalledWith(run.id, "Interrupted: the issue was held by a subtree pause");
     const audits = await db.select().from(activityLog).where(eq(activityLog.companyId,f.company.id));
     expect(audits.some(row=>row.action==='issue.tree_hold_run_interrupted')).toBe(outcome==='cancelled');
     expect(audits.at(-1)?.details).toMatchObject({outcome});

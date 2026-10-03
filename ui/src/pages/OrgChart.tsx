@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { type Agent } from "@paperclipai/shared";
-import { agentPickerSubtitle } from "../lib/agent-identity";
+import { agentPickerSubtitleUnderName } from "../lib/agent-identity";
 
 // Layout constants
 const CARD_W = 200;
@@ -165,13 +165,13 @@ function touchCenter(a: React.Touch, b: React.Touch, container: HTMLDivElement):
 
 // ── Status dot colors (raw hex for SVG) ─────────────────────────────────
 
-import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 
 const statusDotColor: Record<string, string> = {
   running: "#22d3ee",
   active: "#4ade80",
   paused: "#facc15",
-  idle: "#facc15",
+  idle: "#a3a3a3",
   error: "#f87171",
   terminated: "#a3a3a3",
 };
@@ -651,11 +651,14 @@ export function OrgChart() {
                       {node.name}
                     </span>
                     <span className="text-[11px] text-muted-foreground leading-tight mt-0.5">
-                      {agentPickerSubtitle({ role: node.role, title: agent?.title ?? null })}
+                      {agentPickerSubtitleUnderName({ name: node.name, role: node.role, title: agent?.title ?? null })}
                     </span>
                     {agent && (
-                      <span className="text-[10px] text-muted-foreground/60 font-mono leading-tight mt-1">
-                        {getAdapterLabel(agent.adapterType)}
+                      <span
+                        className="text-[10px] text-muted-foreground/70 leading-tight mt-1"
+                        title={getAdapterLabel(agent.adapterType)}
+                      >
+                        {plainRuntimeLabel(agent.adapterType)}
                       </span>
                     )}
                     {agent && agent.capabilities && (
@@ -708,7 +711,7 @@ function PhoneOrgTreeNode({
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="break-words text-sm font-semibold leading-tight text-foreground">{node.name}</span>
           <span className="mt-0.5 break-words text-xs leading-tight text-muted-foreground">
-            {agentPickerSubtitle({ role: node.role, title: agent?.title ?? null })}
+            {agentPickerSubtitleUnderName({ name: node.name, role: node.role, title: agent?.title ?? null })}
           </span>
         </span>
         {reports.length > 0 ? (
