@@ -18,9 +18,10 @@ export function promptFactText(value: string, max = 120): string {
 
 /**
  * A user-authored structure rendered into a prompt (interview goals, a
- * deep-interview spec). Every string leaf passes promptFactText so a nested
- * value cannot smuggle control characters, line breaks or delimiter runs
- * into the system prompt; numbers, booleans and null pass through as-is.
+ * deep-interview spec). Every string leaf AND every object key passes
+ * promptFactText so a nested value cannot smuggle control characters, line
+ * breaks or delimiter runs into the system prompt; numbers, booleans and
+ * null pass through as-is.
  */
 export function sanitizePromptData(value: unknown, max = 500): unknown {
   if (typeof value === "string") return promptFactText(value, max);
@@ -28,7 +29,7 @@ export function sanitizePromptData(value: unknown, max = 500): unknown {
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-        key,
+        promptFactText(key, 60),
         sanitizePromptData(item, max),
       ]),
     );
