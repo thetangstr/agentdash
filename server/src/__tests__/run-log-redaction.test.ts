@@ -250,10 +250,10 @@ describe("run-log redaction", () => {
     );
   });
 
-  it("collects only path segments that look like tokens, not slugs or ids", () => {
-    // A credential-named URL whose last segment is a name or a numeric id
-    // must not be collected — it would shred `database-password-prod` or a
-    // Discord channel id out of every log line permanently.
+  it("collects webhook URLs verbatim but only token-like path fragments", () => {
+    // A WEBHOOK-named URL is collected verbatim — possessing the URL is the
+    // credential — but its slug/id path segments are NOT collected as
+    // fragments, so a bare `database-password-prod` in a log line survives.
     const keys = knownKeysFromEnv({
       SLACK_WEBHOOK_URL: "https://hooks.example.com/services/database-password-prod",
       ORG_WEBHOOK_URL: "https://hooks.example.com/services/my-organization-name",
@@ -264,10 +264,17 @@ describe("run-log redaction", () => {
       // …but 10-15 all-lowercase+digits is an id, not a token:
       LOWER_TOKEN_URL: "https://hooks.example.com/x/abcdef123456",
     } as unknown as NodeJS.ProcessEnv);
+    // Webhook URLs themselves are collected verbatim and redact on echo…
     for (const url of [
       "https://hooks.example.com/services/database-password-prod",
       "https://hooks.example.com/services/my-organization-name",
       "https://discord.com/api/webhooks/123456789012345678/extra",
+    ]) {
+      expect(keys, url).toContain(url);
+      expect(redactSecrets(`echo ${url} done`, keys), url).not.toContain(url);
+    }
+    // …while non-webhook credential-named URLs keep the strict rules.
+    for (const url of [
       "https://hooks.example.com/t/db-prod-2024-cluster",
       "https://hooks.example.com/x/abcdef123456",
     ]) {
@@ -278,9 +285,38 @@ describe("run-log redaction", () => {
     expect(keys).toContain("Zq8Rk2Vm7Tn4");
     expect(redactSecrets("echo Zq8Rk2Vm7Tn4 done", keys)).not.toContain("Zq8Rk2Vm7Tn4");
     // Identifier fragments stay printable.
-    for (const frag of ["database-password-prod", "my-organization-name", "123456789012345678"]) {
+    for (const frag of ["database-password-prod", "my-organization-name", "123456789012345678", "db-prod-2024-cluster"]) {
       expect(redactSecrets(`echo ${frag} done`, keys), frag).toContain(frag);
     }
+  });
+
+  it("collects a webhook URL's slug-shaped or digit-mixing last segment", () => {
+    // Webhook tokens sit in the last path segment and are often slug-shaped
+    // or case-mixed without digits — >=16 chars with mixed case OR a digit.
+    const slackUrl = "https://hooks.example.com/services/ZqRkVmTnWbXcLsQxZpLm";
+    const hyphenUrl = "https://hooks.example.com/t/ab12-cd34-ef56-gh78-ij90";
+    const keys = knownKeysFromEnv({
+      MIXED_WEBHOOK_URL: slackUrl,
+      HYPHEN_WEBHOOK_URL: hyphenUrl,
+    } as unknown as NodeJS.ProcessEnv);
+    for (const [url, seg] of [
+      [slackUrl, "ZqRkVmTnWbXcLsQxZpLm"],
+      [hyphenUrl, "ab12-cd34-ef56-gh78-ij90"],
+    ] as const) {
+      expect(keys, url).toContain(url);
+      expect(keys, seg).toContain(seg);
+      expect(redactSecrets(`echo ${seg} done`, keys), seg).not.toContain(seg);
+    }
+    // …but the loose rule is last-segment-only: the same shape mid-path or
+    // under a non-webhook name is still an identifier, not a token.
+    const mid = "https://hooks.example.com/ab12-cd34-ef56-gh78-ij90/extra";
+    const keys2 = knownKeysFromEnv({
+      MID_WEBHOOK_URL: mid,
+      SLUG_TOKEN_URL: "https://hooks.example.com/t/ab12-cd34-ef56-gh78-ij90",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(keys2).toContain(mid); // webhook URL is still collected verbatim
+    expect(keys2).not.toContain("ab12-cd34-ef56-gh78-ij90");
+    expect(redactSecrets("echo ab12-cd34-ef56-gh78-ij90 done", keys2)).toContain("ab12-cd34-ef56-gh78-ij90");
   });
 
   it("NDJSON pass redacts the chunk field and keeps lines parseable", () => {

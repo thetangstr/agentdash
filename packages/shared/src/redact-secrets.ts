@@ -192,8 +192,12 @@ interface Edit {
 const AUTH_SCHEMES = "(?:Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)";
 
 // `-----BEGIN … PRIVATE KEY----- … -----END …-----` (single and multi-line).
+// The tempered body `(?:(?!-----BEGIN)[\s\S])*?` cannot cross another BEGIN
+// marker, so an unterminated marker fails at the next one instead of scanning
+// to end-of-input from every `-----BEGIN` position (quadratic on adversarial
+// logs that repeat the marker).
 const PEM_BLOCK_RE =
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gd;
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:(?!-----BEGIN)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gd;
 
 // `NAME=value` (env assignment, query parameter, `api_key = "…"`) and
 // `NAME: value` (YAML, headers) with an optional auth scheme between
@@ -231,11 +235,14 @@ const CLI_SECRET_OPTION_RE =
 // key name is checked against isSecretValueKey, so `x-api-key`, `PRIVATE-TOKEN`,
 // `ZAI_API_KEY`, `session_token` and `secretAccessKey` are all covered while
 // `{"key": "…"}` and `{"taskKey": "…"}` are left alone.
+// Keys are bounded to 256 chars — an unbounded lazy key retries to
+// end-of-input from every quote on an unterminated run (`API_KEY="` + `\"`×N),
+// which is quadratic and blocks the event loop on a single hostile comment.
 const JSON_KV_RE =
-  /("(?:\\.|[^"\\])+?")([ \t]*:[ \t]*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]{[]+)|('(?:\\.|[^'\\])+?')([ \t]*:[ \t]*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")/gd;
+  /("(?:\\.|[^"\\]){1,256}?")([ \t]*:[ \t]*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]{[]+)|('(?:\\.|[^'\\]){1,256}?')([ \t]*:[ \t]*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")/gd;
 // The `\"key\":\"value\"` form inside a JSON string.
 const ESCAPED_JSON_KV_RE =
-  /(\\")((?:\\.|[^"\\])+?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\])*)\\"/gd;
+  /(\\")((?:\\.|[^"\\]){1,256}?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\])*)\\"/gd;
 
 // `Bearer <token>` anywhere (JSON bodies, headers embedded in strings). The
 // token may contain `\X` escape pairs mid-value (`ab\"key"`) but never ends
@@ -472,12 +479,19 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     if (!span) return;
     const isAssignment = sep.includes("=");
     if (isAssignment ? !isSecretName(name) : !isSecretValueKey(name)) {
-      // A non-secret label (`run:`, `note:`, `x:`, `stdout:`) swallows the
-      // inner name as its value — `run: TOKEN=abc` consumes `TOKEN` and the
-      // `=abc` tail is never checked. Rewind to the value start so the inner
-      // `NAME=` assignment is scanned on its own. The rescan always starts
-      // strictly after this match's start, so the loop still terminates.
-      return span.start;
+      // A non-secret label (`run:`, `note:`, `x:`, `stdout:`) can swallow an
+      // inner `NAME=` as its value — `run: TOKEN=abc` consumes `TOKEN` and the
+      // `=abc` tail is never checked. Rewind only when the value ends right
+      // before `=`, and jump to the last identifier in the value (not the
+      // value start). Rewinding unconditionally rescans the value tail once
+      // per rejected label — quadratic on `a:a:a:…` — and rewinding to the
+      // value start can re-match the same label-value pair and loop.
+      if (text[span.end] === "=") {
+        let start = span.end;
+        while (start > span.start && /[A-Za-z0-9_.-]/.test(text[start - 1])) start--;
+        if (start < span.end && /[A-Za-z_]/.test(text[start])) return start;
+      }
+      return;
     }
     if (value === '""' || value === "''" || value === "") return;
     if (value.includes(REDACTED)) return;
