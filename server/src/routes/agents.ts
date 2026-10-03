@@ -7,8 +7,8 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
+import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, assistantConversations, assistantMessages, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { and, count, desc, eq, gte, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -30,6 +30,9 @@ import {
   wakeAgentSchema,
   updateAgentSchema,
   supportedEnvironmentDriversForAdapter,
+  isBlockingPreflightResult,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+  RUN_CANCELLED_BY_OPERATOR_CODE,
 } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
@@ -130,6 +133,7 @@ import {
 } from "../adapters/index.js";
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
+import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { resolveMaxDailyTokens, tokenCeilingService } from "../services/token-ceiling.js";
@@ -500,7 +504,12 @@ export function agentRoutes(
       fallbackChecks,
     );
 
-    if (result.status !== "pass") {
+    // Warnings are advisory, not failures — a self-hosted Hermes box warns
+    // that AgentDash's own env holds no LLM keys (they live in ~/.hermes),
+    // which is the correct setup for that adapter. But a warn that means the
+    // adapter cannot run at all (probe auth required, probe failed, Hermes
+    // with no provider anywhere) blocks exactly like a fail.
+    if (isBlockingPreflightResult(result)) {
       throw unprocessable(
         input.failureMessage
           ?? "Agent harness preflight failed. Resolve the adapter environment checks before creating this agent.",
@@ -741,6 +750,30 @@ export function agentRoutes(
       .orderBy(desc(heartbeatRuns.createdAt))
       .limit(1);
 
+    // Chat work never touches heartbeatRuns — a Chief of Staff that answered
+    // every message all day still reports total: 0. Count its agent-authored
+    // replies so "never run" does not claim the agent did nothing, and the
+    // month count lets the spend read "Billed by your model provider" (BYOK).
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+    const [chatTally] = await db
+      .select({
+        total: count(),
+        thisMonth: sql<number>`count(*) filter (where ${gte(assistantMessages.createdAt, monthStart)})::int`,
+      })
+      .from(assistantMessages)
+      .innerJoin(
+        assistantConversations,
+        eq(assistantMessages.conversationId, assistantConversations.id),
+      )
+      .where(and(
+        eq(assistantMessages.role, "agent"),
+        eq(assistantConversations.assistantAgentId, agentId),
+      ));
+    const chatTurns = Number(chatTally?.total ?? 0);
+    const chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);
+
     const total = Number(tally?.total ?? 0);
     return {
       total,
@@ -748,6 +781,8 @@ export function agentRoutes(
       failed: Number(tally?.failed ?? 0),
       succeededWithoutEvidence: Number(tally?.withoutEvidence ?? 0),
       neverRan: total === 0,
+      chatTurns,
+      chatTurnsThisMonth,
       tokenCeilingPause,
       last: last
         ? {
@@ -2544,7 +2579,9 @@ export function agentRoutes(
     assertCompanyAccess(req, agent.companyId);
 
     const state = await heartbeat.getRuntimeState(id);
-    res.json(state);
+    // `lastError`/`sessionParamsJson` can carry adapter output — redact at
+    // the response boundary (GH #992).
+    res.json(redactRunLogValue(state));
   });
 
   router.get("/agents/:id/task-sessions", async (req, res) => {
@@ -4589,14 +4626,14 @@ export function agentRoutes(
         .limit(targetRunCount - liveRuns.length);
 
       const rows = [...liveRuns, ...recentRuns];
-      res.json(await Promise.all(rows.map(async (run) => ({
+      res.json(await Promise.all(rows.map(async (run) => redactRunLogValue({
         ...run,
         outputSilence: await heartbeat.buildRunOutputSilence(run),
       }))));
       return;
     }
 
-    res.json(await Promise.all(liveRuns.map(async (run) => ({
+    res.json(await Promise.all(liveRuns.map(async (run) => redactRunLogValue({
       ...run,
       outputSilence: await heartbeat.buildRunOutputSilence(run),
     }))));
@@ -4611,11 +4648,13 @@ export function agentRoutes(
     }
     assertCompanyAccess(req, run.companyId);
     const retryExhaustedReason = await heartbeat.getRetryExhaustedReason(runId);
+    // AgentDash (GH #992): the run row carries `error`, `resultJson` and the
+    // excerpts — provider 401s can echo credentials into all of them.
     res.json(
-      redactCurrentUserValue(
+      redactRunLogValue(redactCurrentUserValue(
         { ...run, retryExhaustedReason, outputSilence: await heartbeat.buildRunOutputSilence(run) },
         await getCurrentUserRedactionOptions(),
-      ),
+      )),
     );
   });
 
@@ -4626,7 +4665,7 @@ export function agentRoutes(
     if (existing) {
       assertCompanyAccess(req, existing.companyId);
     }
-    const run = await heartbeat.cancelRun(runId);
+    const run = await heartbeat.cancelRun(runId, RUN_CANCELLED_BY_OPERATOR_MESSAGE, RUN_CANCELLED_BY_OPERATOR_CODE);
 
     if (run) {
       await logActivity(db, {
@@ -4640,7 +4679,10 @@ export function agentRoutes(
       });
     }
 
-    res.json(run);
+    // AgentDash (GH #992): the cancelled row is served straight back; its
+    // `error`/`resultJson`/`contextSnapshot` go through the same serve-time
+    // pass as the detail route.
+    res.json(redactRunLogValue(run));
   });
 
   router.post("/heartbeat-runs/:runId/watchdog-decisions", async (req, res) => {
@@ -4804,7 +4846,7 @@ export function agentRoutes(
       )
       .orderBy(desc(heartbeatRuns.createdAt));
 
-    res.json(await Promise.all(liveRuns.map(async (run) => ({
+    res.json(await Promise.all(liveRuns.map(async (run) => redactRunLogValue({
       ...run,
       outputSilence: await heartbeat.buildRunOutputSilence({ ...run, companyId: issue.companyId }),
     }))));
@@ -4850,13 +4892,13 @@ export function agentRoutes(
       return;
     }
 
-    res.json({
+    res.json(redactRunLogValue({
       ...run,
       agentId: agent.id,
       agentName: agent.name,
       adapterType: agent.adapterType,
       outputSilence: await heartbeat.buildRunOutputSilence({ ...run, companyId: issue.companyId }),
-    });
+    }));
   });
 
   return router;

@@ -17,6 +17,8 @@ export {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   AGENT_DEFAULT_MAX_DAILY_TOKENS,
   AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+  RUN_CANCELLED_BY_OPERATOR_CODE,
   WORKSPACE_BRANCH_ROUTINE_VARIABLE,
   MODEL_PROFILE_KEYS,
   AGENT_ICON_NAMES,
@@ -267,6 +269,20 @@ export {
   type ActivityLogActionGoalsEvalHitl,
   type CosCardKindGoalsEvalHitl,
 } from "./constants.js";
+
+// AgentDash (GH #992): credential redaction shared by the UI transcript views
+// and the server run-log persist/serve paths.
+export {
+  REDACTED,
+  CREDENTIALS_HIDDEN_NOTE,
+  isSecretName,
+  isSecretValueKey,
+  redactSecrets,
+  containsSecrets,
+  redactSecretsInValue,
+  createSecretStreamRedactor,
+  type KnownSecrets,
+} from "./redact-secrets.js";
 
 export {
   ALL_INTERFACES_BIND_HOST,
@@ -1322,6 +1338,14 @@ export {
 export { isAgentPlanPayload, normalizeAgentPlanTitles, PLAN_AGENT_TITLE_MAX_LENGTH } from "./validators/agent-plan.js";
 // AgentDash: plan-card role -> AGENT_ROLES mapping used by /onboarding/confirm-plan.
 export { PRIVILEGED_PLAN_ROLES, mapProposedAgentRole, proposedRoleTitle } from "./agent-role-mapping.js";
+
+// AgentDash: the one preflight blocking rule shared by the create/preflight
+// routes, the launch readiness evaluator, and the new-agent UI gate.
+export {
+  isBlockingPreflightResult,
+  isBlockingPreflightWarnCode,
+  type PreflightResultLike,
+} from "./agent-harness-preflight.js";
 
 // AgentDash: chat substrate card payload types
 export * from "./cards.js";

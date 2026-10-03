@@ -10,7 +10,7 @@
 // Staff, the same as on a hosted box.
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
+import { isBlockingPreflightResult, type AdapterEnvironmentTestResult } from "@paperclipai/shared";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
 import { onboardingApi, type LocalRuntimePreset } from "@/api/onboarding";
@@ -61,7 +61,9 @@ function errorSentence(error: unknown): string {
 function checkSummary(result: AdapterEnvironmentTestResult): string {
   if (result.status === "pass") return "Ready";
   const problem = result.checks.find((check) => check.level === "error") ?? result.checks.find((check) => check.level === "warn");
-  const prefix = result.status === "warn" ? "Ready with a warning" : "Not ready";
+  // A blocking warn (auth required, probe cannot run) is not an advisory — it
+  // reads "Not ready" the same as a fail, matching the create/launch gates.
+  const prefix = result.status === "warn" && !isBlockingPreflightResult(result) ? "Ready with a warning" : "Not ready";
   return problem ? `${prefix}: ${problem.message}` : prefix;
 }
 
@@ -114,7 +116,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
     setApplying(runtime.adapterType);
     try {
       const result = await check(runtime.adapterType);
-      if (!result || result.status === "fail") {
+      if (!result || isBlockingPreflightResult(result)) {
         setError(`${runtime.label} is not ready on this computer yet. Fix the check above, or pick another assistant.`);
         return;
       }
@@ -185,7 +187,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
                 </div>
               </div>
               {state?.result ? (
-                <p className={`mt-2 ${state.result.status === "fail" ? "text-destructive" : "text-muted-foreground"}`}>
+                <p className={`mt-2 ${isBlockingPreflightResult(state.result) ? "text-destructive" : "text-muted-foreground"}`}>
                   {checkSummary(state.result)}
                 </p>
               ) : null}

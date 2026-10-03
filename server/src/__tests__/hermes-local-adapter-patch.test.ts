@@ -61,8 +61,13 @@ describe("patched hermes-paperclip-adapter behavior", () => {
         '  process.stdout.write("Hermes Agent v0.14.0 Project: /tmp Python: 3.11.15\\n");',
         "  process.exit(0);",
         "}",
-        'if (process.argv[2] === "status") {',
+        'if (process.argv[2] === "status" && process.argv[3] === "--full") {',
         '  process.stdout.write(["API-Key Providers", "  MiniMax (China)  configured", "Terminal Backend"].join("\\n"));',
+        "  process.exit(0);",
+        "}",
+        'if (process.argv[2] === "status") {',
+        // Current builds print only a summary here — no provider sections.
+        '  process.stdout.write("Hermes Agent Status\\n  Model: k3\\n");',
         "  process.exit(0);",
         "}",
         "process.exit(1);",
@@ -83,6 +88,43 @@ describe("patched hermes-paperclip-adapter behavior", () => {
         code: "hermes_no_api_keys",
         level: "info",
         message: "Hermes status reports a configured local provider",
+      }),
+    );
+  });
+
+  it("keeps the no-api-keys warning when status --full reports nothing configured", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-unconfigured-"));
+    const hermesCommand = join(tempDir, "hermes");
+    await writeFile(
+      hermesCommand,
+      [
+        "#!/usr/bin/env node",
+        'if (process.argv[2] === "--version") {',
+        '  process.stdout.write("Hermes Agent v0.14.0 Project: /tmp Python: 3.11.15\\n");',
+        "  process.exit(0);",
+        "}",
+        'if (process.argv[2] === "status" && process.argv[3] === "--full") {',
+        '  process.stdout.write(["Auth Providers", "  OpenAI Codex  ✗ not logged in", "", "API-Key Providers", "  MiniMax  ✗ not configured", "", "Terminal Backend"].join("\\n"));',
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
+      ].join("\n"),
+    );
+    await chmod(hermesCommand, 0o755);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    const result = await getServerAdapter("hermes_local").testEnvironment({
+      adapterType: "hermes_local",
+      companyId: "company-1",
+      config: { hermesCommand },
+    });
+
+    // No provider anywhere: the warning survives as a real warn — the shared
+    // preflight rule then blocks creation exactly like a fail.
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        code: "hermes_no_api_keys",
+        level: "warn",
       }),
     );
   });

@@ -17,6 +17,7 @@ import {
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { classifyRunLiveness } from "./run-liveness.js";
+import { redactRunLogValue } from "./run-log-redaction.js";
 import { summarizeHeartbeatRunContextSnapshot } from "./heartbeat.js";
 
 export interface ActivityFilters {
@@ -518,7 +519,10 @@ export function activityService(db: Db) {
             : typeof leaseMetadata?.remoteWorkspacePath === "string" && leaseMetadata.remoteWorkspacePath.trim().length > 0
               ? leaseMetadata.remoteWorkspacePath
               : null;
-        return {
+        // AgentDash (GH #992): failureClassification / resultJson text can
+        // carry a provider-echoed credential; serve-time pass as in the run
+        // list and detail routes.
+        return redactRunLogValue({
           ...run,
           contextSnapshot: summarizeHeartbeatRunContextSnapshot(run.contextSnapshot),
           environment: leaseRow
@@ -544,7 +548,7 @@ export function activityService(db: Db) {
               }
             : null,
           retryExhaustedReason: retryExhaustedReasonByRunId.get(run.runId) ?? null,
-        };
+        });
       });
     },
 

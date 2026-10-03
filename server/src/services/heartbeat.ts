@@ -19,6 +19,7 @@ import {
   preserveIssueRecoveryBudget,
   readIssueRecoveryBudget,
   isEnvironmentDriverSupportedForAdapter,
+  isSecretName,
   type BillingType,
   type EnvironmentLeaseStatus,
   type ExecutionWorkspace,
@@ -51,6 +52,13 @@ import { conflict, HttpError, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, runLogBasePath, type RunLogHandle } from "./run-log-store.js";
+import {
+  createRunLogStreamRedactor,
+  logSafeError,
+  redactRunLogNdjson,
+  redactRunLogText,
+  redactRunLogValue,
+} from "./run-log-redaction.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import type {
   AdapterExecutionResult,
@@ -2480,7 +2488,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       status: leaseReleaseStatusForRunStatus(input.status),
       failureReason: input.failureReason ?? undefined,
     }).catch((err) => {
-      logger.warn({ err, runId: input.runId }, "failed to release environment leases for heartbeat run");
+      logger.warn({ err: logSafeError(err), runId: input.runId }, "failed to release environment leases for heartbeat run");
       return null;
     });
     for (const releaseError of releaseResult?.errors ?? []) {
@@ -2503,7 +2511,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           return typeof serverEncoding === "string" && serverEncoding.toUpperCase() === "SQL_ASCII";
         })
         .catch((err) => {
-          logger.warn({ err }, "failed to inspect database server encoding; using conservative heartbeat result projection");
+          logger.warn({ err: logSafeError(err) }, "failed to inspect database server encoding; using conservative heartbeat result projection");
           return true;
         });
     }
@@ -2530,7 +2538,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       )
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
+      // AgentDash (GH #992): this read must stay RAW. `executeRun` consumes
+      // `contextSnapshot.taskKey` for task sessions and recovery promotion;
+      // redacting identifiers here would silently collide sessions across
+      // tasks. Serving paths redact at their boundary instead (routes wrap
+      // `getRunForResponse` / `redactRunLogValue`).
       .then((rows) => rows[0] ?? null);
+  }
+
+  /** The run row as served to API callers — every field passed through the
+   * shared redactor so secrets persisted before this shipped stay hidden. */
+  async function getRunForResponse(runId: string) {
+    const row = await getRun(runId);
+    return row ? (redactRunLogValue(row) as typeof row) : null;
   }
 
   async function getRunLogAccess(runId: string) {
@@ -3296,7 +3316,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           status: updated.status,
           invocationSource: updated.invocationSource,
           triggerDetail: updated.triggerDetail,
-          error: updated.error ?? null,
+          error: updated.error ? redactRunLogText(updated.error) : null,
           errorCode: updated.errorCode ?? null,
           startedAt: updated.startedAt ? new Date(updated.startedAt).toISOString() : null,
           finishedAt: updated.finishedAt ? new Date(updated.finishedAt).toISOString() : null,
@@ -3348,7 +3368,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         status: run.status,
         invocationSource: run.invocationSource,
         triggerDetail: run.triggerDetail,
-        error: run.error ?? null,
+        error: run.error ? redactRunLogText(run.error) : null,
         errorCode: run.errorCode ?? null,
         issueId: typeof run.contextSnapshot === "object" && run.contextSnapshot !== null
           ? (run.contextSnapshot as Record<string, unknown>).issueId ?? null
@@ -3942,13 +3962,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   ) {
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
     // AgentDash (GH #782): GitHub tokens are scrubbed by shape from events too.
+    // AgentDash (GH #992): the full secret pattern set plus this instance's
+    // known keys run on top, so a provider key or run token echoed into an
+    // event never reaches the table or the live bus.
     const sanitizedMessage = event.message
-      ? redactGitHubTokens(redactCurrentUserText(event.message, currentUserRedactionOptions))
+      ? redactRunLogText(redactGitHubTokens(redactCurrentUserText(event.message, currentUserRedactionOptions)))
       : event.message;
     const boundedPayload = event.payload
       ? redactGitHubTokensInValue(boundHeartbeatRunEventPayloadForStorage(event.payload))
       : event.payload;
-    const secretSanitizedPayload = boundedPayload ? redactEventPayload(boundedPayload) : boundedPayload;
+    const secretSanitizedPayload = boundedPayload ? redactRunLogValue(redactEventPayload(boundedPayload)) : boundedPayload;
     const sanitizedPayload = secretSanitizedPayload
       ? redactCurrentUserValue(secretSanitizedPayload, currentUserRedactionOptions)
       : secretSanitizedPayload;
@@ -5024,7 +5047,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       try {
         await denyPermitOfRefusedBoundRun(run);
       } catch (err) {
-        logger.warn({ err, runId: run.id }, "claimQueuedRun: failed to finalize the permit of a refused bound run");
+        logger.warn({ err: logSafeError(err), runId: run.id }, "claimQueuedRun: failed to finalize the permit of a refused bound run");
       }
     }
     return claimed;
@@ -5202,7 +5225,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       try {
         await effect();
       } catch (err) {
-        logger.warn({ err, runId: run.id }, "claimQueuedRun: post-commit recovery-budget effect failed");
+        logger.warn({ err: logSafeError(err), runId: run.id }, "claimQueuedRun: post-commit recovery-budget effect failed");
       }
     }
     if (claim.recoveryBlocked) {
@@ -5946,7 +5969,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             finalizedRun = (await getRun(factsRun.id)) ?? factsRun;
           })
           .catch((factsErr) => {
-            logger.warn({ err: factsErr, runId: factsRun.id }, "failed to persist runFacts for reaped run");
+            logger.warn({ err: logSafeError(factsErr), runId: factsRun.id }, "failed to persist runFacts for reaped run");
           });
       }
       await releaseEnvironmentLeasesForRun({
@@ -6185,7 +6208,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (autoDispatchQueuedRuns) {
         for (const claimedRun of claimedRuns) {
           const execution = executeRun(claimedRun.id).catch((err) => {
-            logger.error({ err, runId: claimedRun.id }, "queued heartbeat execution failed");
+            logger.error({ err: logSafeError(err), runId: claimedRun.id }, "queued heartbeat execution failed");
           });
           inFlightExecutions.add(execution);
           void execution.finally(() => inFlightExecutions.delete(execution));
@@ -6954,6 +6977,28 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     let persistedLogBytes = Number(run.logBytes ?? 0);
     // OBS-1: time to first output byte feeds runFacts.firstOutputMs.
     let firstOutputAt: Date | null = null;
+    const adapter = getServerAdapter(agent.adapterType);
+    const authToken = adapter.supportsLocalAgentJwt
+      ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
+      : null;
+    // AgentDash (GH #992): verbatim secrets this run knows — the injected
+    // PAPERCLIP_API_KEY and every secret-named or secret-ref value the
+    // resolved adapter env hands the agent — on top of the instance keys
+    // the run-log redactor always applies (configured provider key,
+    // credential-valued process env).
+    const runKnownSecrets = Object.entries(parseObject(resolvedConfig.env))
+      .filter(
+        ([key, value]) =>
+          typeof value === "string" &&
+          value.length >= 8 &&
+          (secretKeys.has(key) || isSecretName(key)),
+      )
+      .map(([, value]) => value as string);
+    if (authToken) runKnownSecrets.push(authToken);
+    const secretLogRedactors = {
+      stdout: createRunLogStreamRedactor(runKnownSecrets),
+      stderr: createRunLogStreamRedactor(runKnownSecrets),
+    };
     const flushOutputProgress = async (opts?: { force?: boolean }) => {
       const pendingOutputProgress = outputProgressState.pending;
       if (!pendingOutputProgress) return;
@@ -7033,6 +7078,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .where(eq(heartbeatRuns.id, runId));
 
       const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
+      if (adapter.supportsLocalAgentJwt && !authToken) {
+        logger.warn(
+          {
+            companyId: agent.companyId,
+            agentId: agent.id,
+            runId: run.id,
+            adapterType: agent.adapterType,
+          },
+          "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
+        );
+      }
       // AgentDash (GH #782): an agent can print a GitHub token from its shell;
       // scrub anything token-shaped before it is stored or streamed. Stateful
       // per stream, so a token split across two chunks is still caught.
@@ -7044,13 +7100,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const githubSafeChunk = githubTokenRedactors[stream].push(
           redactCurrentUserText(chunk, currentUserRedactionOptions),
         );
-        if (githubSafeChunk.length === 0 && chunk.length > 0) return;
-        await appendRunLogChunk(stream, githubSafeChunk);
+        const safeChunk = secretLogRedactors[stream].push(githubSafeChunk);
+        if (safeChunk.length === 0 && chunk.length > 0) return;
+        await appendRunLogChunk(stream, safeChunk);
       };
-      const flushGitHubTokenRedactors = async () => {
+      const flushLogRedactors = async () => {
         for (const stream of ["stdout", "stderr"] as const) {
           const rest = githubTokenRedactors[stream].flush();
-          if (rest) await appendRunLogChunk(stream, rest);
+          const pending =
+            secretLogRedactors[stream].push(rest) + secretLogRedactors[stream].flush();
+          if (pending) await appendRunLogChunk(stream, pending);
         }
       };
       const appendRunLogChunk = async (stream: "stdout" | "stderr", redactedChunk: string) => {
@@ -7060,19 +7119,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const ts = new Date().toISOString();
         if (firstOutputAt === null) firstOutputAt = new Date(ts);
 
+        outputSeq += 1;
+        const chunkSeq = outputSeq;
         let appendedBytes = 0;
         if (handle) {
           appendedBytes = await runLogStore.append(handle, {
             stream,
             chunk: sanitizedChunk,
             ts,
+            seq: chunkSeq,
           });
           persistedLogBytes += appendedBytes;
         }
-        outputSeq += 1;
         outputProgressState.pending = {
           at: new Date(ts),
-          seq: outputSeq,
+          seq: chunkSeq,
           stream,
           bytes: persistedLogBytes,
         };
@@ -7090,6 +7151,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             runId: run.id,
             agentId: run.agentId,
             ts,
+            seq: chunkSeq,
             stream,
             chunk: payloadChunk,
             truncated: payloadChunk.length !== sanitizedChunk.length,
@@ -7174,21 +7236,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         });
       };
 
-      const adapter = getServerAdapter(agent.adapterType);
-      const authToken = adapter.supportsLocalAgentJwt
-        ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
-        : null;
-      if (adapter.supportsLocalAgentJwt && !authToken) {
-        logger.warn(
-          {
-            companyId: agent.companyId,
-            agentId: agent.id,
-            runId: run.id,
-            adapterType: agent.adapterType,
-          },
-          "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
-        );
-      }
       // AgentDash (GH #782): result text is persisted and shown; no GitHub token in it.
       let rawAdapterResult: Awaited<ReturnType<typeof adapter.execute>>;
       try {
@@ -7217,9 +7264,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         authToken: authToken ?? undefined,
       });
       } finally {
-        await flushGitHubTokenRedactors();
+        await flushLogRedactors();
       }
-      const adapterResult = redactGitHubTokensInValue(rawAdapterResult);
+      const adapterResult = redactRunLogValue(redactGitHubTokensInValue(rawAdapterResult), runKnownSecrets);
       adapterResult.resultJson = withoutWorkspaceResultFields(adapterResult.resultJson ?? null);
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
@@ -7579,18 +7626,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       await finalizeAgentStatus(agent.id, outcome);
     } catch (err) {
-      const message = redactCurrentUserText(
-        err instanceof Error ? err.message : "Unknown adapter failure",
-        await getCurrentUserRedactionOptions(),
+      const message = redactRunLogText(
+        redactCurrentUserText(
+          err instanceof Error ? err.message : "Unknown adapter failure",
+          await getCurrentUserRedactionOptions(),
+        ),
+        runKnownSecrets,
       );
-      logger.error({ err, runId }, "heartbeat execution failed");
+      logger.error({ err: logSafeError(err, runKnownSecrets), runId }, "heartbeat execution failed");
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
       if (handle) {
         try {
           logSummary = await runLogStore.finalize(handle);
         } catch (finalizeErr) {
-          logger.warn({ err: finalizeErr, runId }, "failed to finalize run log after error");
+          logger.warn({ err: logSafeError(finalizeErr), runId }, "failed to finalize run log after error");
         }
       }
       const finalLogBytes = logSummary?.bytes;
@@ -7598,7 +7648,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         outputProgressState.pending.bytes = finalLogBytes;
       }
       await flushOutputProgress({ force: true }).catch((flushErr) => {
-        logger.warn({ err: flushErr, runId }, "failed to flush run output progress after error");
+        logger.warn({ err: logSafeError(flushErr), runId }, "failed to flush run output progress after error");
       });
 
       const failedRun = await setRunStatus(run.id, "failed", {
@@ -7661,7 +7711,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           })
           .where(eq(heartbeatRuns.id, failedRun.id))
           .catch((factsErr) => {
-            logger.warn({ err: factsErr, runId }, "failed to persist runFacts after error");
+            logger.warn({ err: logSafeError(factsErr), runId }, "failed to persist runFacts after error");
           });
         await refreshContinuationSummaryForRun(livenessRun, agent);
         await finalizeIssueCommentPolicy(livenessRun, agent);
@@ -7696,7 +7746,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           // Setup code before adapter.execute threw (e.g. ensureRuntimeState, resolveWorkspaceForRun).
           // The inner catch did not fire, so we must record the failure here.
           const message = outerErr instanceof Error ? outerErr.message : "Unknown setup failure";
-          logger.error({ err: outerErr, runId }, "heartbeat execution setup failed");
+          logger.error({ err: logSafeError(outerErr), runId }, "heartbeat execution setup failed");
           if (workspaceAttempt && outerErr instanceof ExecutionWorkspacePersistenceUncertain) workspaceAttempt.outcome = "unknown";
           if (workspaceAttempt && workspaceAttemptAcknowledged) await writeWorkspaceAttempt(run, workspaceAttempt).catch(() => undefined);
           const setupErrorCode = workspaceAttempt ? WORKSPACE_PERSISTENCE_RECOVERY_CODE : "adapter_failed";
@@ -7753,7 +7803,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               })
               .where(eq(heartbeatRuns.id, failedRun.id))
               .catch((factsErr) => {
-                logger.warn({ err: factsErr, runId }, "failed to persist runFacts after setup failure");
+                logger.warn({ err: logSafeError(factsErr), runId }, "failed to persist runFacts after setup failure");
               });
             const failedAgent = setupFailureAgent ?? await getAgent(run.agentId).catch(() => null);
             if (failedAgent) {
@@ -7788,7 +7838,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               // stored on the context snapshot at claim time.
               isOverage: runContext.__quotaOverage === true,
             }).catch((err) => {
-              logger.warn({ err, runId: run.id }, "[agent-runs] failed to record agent run in finally block");
+              logger.warn({ err: logSafeError(err), runId: run.id }, "[agent-runs] failed to record agent run in finally block");
             });
           }
           await releaseEnvironmentLeasesForRun({
@@ -8573,7 +8623,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await announceTokenCeilingPause(agent, ceiling).catch((err) => {
           // The notification is best-effort — the pause itself is already
           // recorded on the skipped wakeup request and never depends on it.
-          logger.warn({ err, agentId }, "failed to record token ceiling pause notice");
+          logger.warn({ err: logSafeError(err), agentId }, "failed to record token ceiling pause notice");
         });
         return null;
       }
@@ -9307,7 +9357,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane", errorCode = "cancelled") {
+  async function cancelRunInternal(runId: string, reason = "Cancelled", errorCode = "cancelled") {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
@@ -9468,7 +9518,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }
       } catch (err) {
         result.errors += 1;
-        logger.warn({ err, runId: run.id }, "first-output deadline check failed for run");
+        logger.warn({ err: logSafeError(err), runId: run.id }, "first-output deadline check failed for run");
       }
     }
     if (result.stopped > 0 || result.wouldStop > 0) {
@@ -9606,7 +9656,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           { stream: "system", chunk: `[agentdash] ${message}\n`, ts: new Date().toISOString() },
         );
       } catch (err) {
-        logger.debug({ err, runId: run.id }, "could not append first-output shadow line to run log");
+        logger.debug({ err: logSafeError(err), runId: run.id }, "could not append first-output shadow line to run log");
       }
     }
   }
@@ -9705,7 +9755,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           resultCostUsdCamel?: string | null;
         };
 
-        return {
+        // AgentDash (GH #992): `error` and the projected resultJson text
+        // fields can carry a credential a provider echoed back; rows written
+        // before persist-time redaction get the serve-time pass here.
+        return redactRunLogValue({
           ...rest,
           contextSnapshot: summarizeHeartbeatRunContextSnapshot({
             issueId: contextIssueId,
@@ -9728,11 +9781,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 costUsd: resultCostUsd,
                 costUsdCamel: resultCostUsdCamel,
               }),
-        };
+        });
       });
     },
 
     getRun,
+    getRunForResponse,
 
     getRunLogAccess,
 
@@ -9801,13 +9855,22 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
     },
 
+    // AgentDash (GH #992): event rows are redacted at insert, and again here
+    // so rows written before that pass shipped cannot leak a stored key.
     listEvents: (runId: string, afterSeq = 0, limit = 200) =>
       db
         .select()
         .from(heartbeatRunEvents)
         .where(and(eq(heartbeatRunEvents.runId, runId), gt(heartbeatRunEvents.seq, afterSeq)))
         .orderBy(asc(heartbeatRunEvents.seq))
-        .limit(Math.max(1, Math.min(limit, 1000))),
+        .limit(Math.max(1, Math.min(limit, 1000)))
+        .then((rows) =>
+          rows.map((row) => ({
+            ...row,
+            message: row.message ? redactRunLogText(row.message) : row.message,
+            payload: row.payload ? redactRunLogValue(row.payload) : row.payload,
+          })),
+        ),
 
     getRetryExhaustedReason: async (runId: string) => {
       const row = await db
@@ -9860,9 +9923,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         store: run.logStore,
         logRef: run.logRef,
         ...result,
-        // Run-log chunks are already redacted before they are appended to the store.
-        // Rewriting the full chunk again on every poll creates avoidable string copies.
-        content: result.content,
+        // AgentDash (GH #992): chunks are redacted at append time, but the
+        // read pass runs again so log files written before this change (or by
+        // a path that missed it) are still safe to serve. The content is
+        // NDJSON — each line is parsed and its `chunk` redacted structurally,
+        // so JSON escaping can never be corrupted; byte-range reads still see
+        // truncated first/last lines handled as plain text. Files the store
+        // marks redactedAtPersist skip the pass — every byte in them already
+        // went through the redacting append in this process.
+        content: result.redactedAtPersist ? result.content : redactRunLogNdjson(result.content),
       };
     },
 
@@ -10047,7 +10116,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return { checked, enqueued, skipped, skippedNoWork };
     },
 
-    cancelRun: (runId: string) => cancelRunInternal(runId),
+    // System callers must pass a reason — the no-reason default is the
+    // operator message and is paired with "cancelled_by_operator" only by the
+    // board cancel route, so every other caller can be told apart.
+    cancelRun: (runId: string, reason?: string, errorCode?: string) =>
+      cancelRunInternal(runId, reason, errorCode),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 

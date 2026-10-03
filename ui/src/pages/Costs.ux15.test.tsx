@@ -86,6 +86,7 @@ function mockHappyApis() {
     budgetCents: 0,
     utilizationPercent: 0,
     measured: true,
+    pricedSpend: true,
   });
   mockCostsApi.runActivity.mockResolvedValue({
     companyId: "company-1",
@@ -220,6 +221,7 @@ describe("Costs page (UX-15)", () => {
       budgetCents: 0,
       utilizationPercent: 0,
       measured: false,
+      pricedSpend: false,
     });
     await render();
     expect(container.querySelector('[data-testid="cost-per-shipped-pr-tile"]')?.textContent).toContain("Not metered yet");

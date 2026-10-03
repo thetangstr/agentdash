@@ -1451,7 +1451,7 @@ export function issueTreeControlService(db: Db) {
       let outcome: string, runtimeId: string | null = null;
       try {
         if (effect.kind === 'cancelRun') {
-          const run = await runtime.cancelRun(effect.runId);
+          const run = await runtime.cancelRun(effect.runId, "Interrupted: the issue was held by a subtree pause");
           outcome = run && run.id !== effect.runId ? 'unconfirmed' : run?.status ?? 'null'; runtimeId = effect.runId;
         } else {
           const run = await runtime.wakeup(effect.agentId, effect.options);

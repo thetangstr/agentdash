@@ -30,6 +30,7 @@ import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { goalService } from "./goals.js";
 import { documentService } from "./documents.js";
 import { heartbeatService } from "./heartbeat.js";
+import { redactRunLogText } from "./run-log-redaction.js";
 import { budgetService } from "./budgets.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import { subscribeCompanyLiveEvents } from "./live-events.js";
@@ -638,6 +639,9 @@ export function buildHostServices(
 
     return rows.map((row) => ({
       ...row,
+      // AgentDash (GH #992): run errors can echo provider credentials; plugin
+      // guests see the same redacted form as the API.
+      error: row.error ? redactRunLogText(row.error) : null,
       startedAt: row.startedAt?.toISOString() ?? null,
       finishedAt: row.finishedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),

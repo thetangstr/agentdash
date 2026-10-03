@@ -46,7 +46,10 @@ test.describe("Agent identity copy (scan 3, lane H)", () => {
     const ivyRow = fleet.getByTestId("dashboard-fleet-row").filter({ hasText: "Ivy" });
     const scoutRow = fleet.getByTestId("dashboard-fleet-row").filter({ hasText: "Scout" });
     await expect(ivyRow).toContainText("Proposal Drafter");
-    await expect(scoutRow).toContainText("Research Analyst · Researcher");
+    // Batch 2 canary: a role whose stem is already in the title is dropped —
+    // "Research Analyst", not "Research Analyst · Researcher".
+    await expect(scoutRow).toContainText("Research Analyst");
+    await expect(scoutRow).not.toContainText("Research Analyst · Researcher");
     const fleetText = (await fleet.textContent()) ?? "";
     expect(fleetText).not.toMatch(/proposal_drafter|research_analyst|\bgeneral\b/);
 

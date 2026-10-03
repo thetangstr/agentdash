@@ -1,4 +1,5 @@
 import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
+import { isBlockingPreflightResult } from "@paperclipai/shared";
 
 type HarnessPreflightReason =
   | "passed"
@@ -54,7 +55,11 @@ export function getAgentCreateHarnessPreflightGate(input: {
       message: "Run Test Agent and resolve any checks before creating this agent.",
     };
   }
-  if (input.result.status !== "pass") {
+  // Warnings are advisory (e.g. a self-hosted Hermes box legitimately holds its
+  // LLM keys outside AgentDash's env) — except a warn that says the adapter
+  // cannot run at all (probe auth required, probe failed). Those block like a
+  // fail; the shared rule keeps this gate in step with the server.
+  if (isBlockingPreflightResult(input.result)) {
     return {
       canCreate: false,
       reason: "not_passed",

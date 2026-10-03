@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { sanitizeRecord } from "../redaction.js";
+import { redactRunLogText } from "./run-log-redaction.js";
 
 export type FeedbackRedactionState = {
   redactedFields: Set<string>;
@@ -114,6 +115,16 @@ export function sanitizeFeedbackText(
   if (output !== input) {
     recordField(state, fieldPath);
     increment(state, "current_user", 1);
+  }
+
+  // AgentDash (GH #992): the shared pattern set plus this instance's known
+  // keys — the bundle leaves the box, so pcp_/xai-/provider keys and the
+  // configured Hermes key must be gone before it does.
+  const secretResult = redactRunLogText(output);
+  if (secretResult !== output) {
+    output = secretResult;
+    recordField(state, fieldPath);
+    increment(state, "shared_secret", 1);
   }
 
   for (const pattern of FREE_TEXT_PATTERNS) {

@@ -137,7 +137,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // canonical worker: completion summaries, comments and in-run notes say "ready
 // for your review", "the document" and "you", never internal field names,
 // status values ("in_review"), "DoD", "board user", "document key" or "work
-// product". Proposal-created hires add nothing to that.
+// product". Batch 2 strengthened the canonical block: no internal record
+// names ("work product record") and never "complete" or "done" while a change
+// only awaits review. Proposal-created hires add nothing to that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.
@@ -145,6 +147,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // worker: after Request changes, revise the same issue document and resubmit by
 // moving the issue to `in_review`, which returns the work product to
 // ready_for_review. Proposal-created hires add nothing to that.
+// AgentDash: run-log-secret-redaction (GH #992) is inherited from the canonical
+// worker bundle: secrets in run output are scrubbed server-side before storage
+// and again when served, never rely on echoing a credential to read it back.
+// Proposal-created hires add nothing to that.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

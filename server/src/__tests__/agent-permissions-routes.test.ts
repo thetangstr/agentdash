@@ -1,5 +1,9 @@
 import express from "express";
 import request from "supertest";
+import {
+  RUN_CANCELLED_BY_OPERATOR_CODE,
+  RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+} from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // GH #830: issue, run and workspace routes run the A5 project-visibility
@@ -257,6 +261,7 @@ function createDbStub(
     const chain: any = {
       from: vi.fn(() => chain),
       leftJoin: vi.fn(() => chain),
+      innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
       groupBy: vi.fn(() => chain),
       // The agent detail reads run health, which orders and limits. Missing
@@ -1589,6 +1594,42 @@ describe.sequential("agent permission routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+  });
+
+  it("marks a manual heartbeat cancellation with the operator error code", async () => {
+    mockHeartbeatService.getRun.mockResolvedValue({
+      id: "run-1",
+      companyId,
+      agentId,
+      status: "running",
+    });
+    mockHeartbeatService.cancelRun.mockResolvedValue({
+      id: "run-1",
+      companyId,
+      agentId,
+      status: "cancelled",
+      errorCode: RUN_CANCELLED_BY_OPERATOR_CODE,
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).post("/api/heartbeat-runs/run-1/cancel").send({}));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    // The operator path — and only the operator path — stamps
+    // "cancelled_by_operator"; the UI keys on this code to say
+    // "Stopped manually" instead of showing the raw cancellation reason.
+    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith(
+      "run-1",
+      RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+      RUN_CANCELLED_BY_OPERATOR_CODE,
+    );
   });
 
   // AgentDash (security): agent self-edits are an allowlist. An ordinary agent

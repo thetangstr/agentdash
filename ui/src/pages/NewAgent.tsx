@@ -9,7 +9,7 @@ import { healthApi } from "../api/health";
 import { WIZARD_DEFAULT_ADAPTER_TYPE, adapterTypeForInstancePreset } from "../lib/onboarding-defaults";
 import { companySkillsApi } from "../api/companySkills";
 import { queryKeys } from "../lib/queryKeys";
-import { AGENT_ROLES, type AdapterEnvironmentTestResult } from "@paperclipai/shared";
+import { AGENT_ROLES, isBlockingPreflightResult, type AdapterEnvironmentTestResult } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -132,7 +132,10 @@ export function NewAgent() {
     enabled: Boolean(selectedCompanyId),
   });
 
-  const isFirstAgent = !agents || agents.length === 0;
+  // `agents === undefined` is "still loading", not "no agents" — treating the
+  // unloaded state as first-agent prefilled CEO details into companies that
+  // already have a team.
+  const isFirstAgent = agents !== undefined && agents.length === 0;
   const effectiveRole = isFirstAgent ? "ceo" : role;
 
   useEffect(() => {
@@ -141,13 +144,6 @@ export function NewAgent() {
       { label: "New Agent" },
     ]);
   }, [setBreadcrumbs]);
-
-  useEffect(() => {
-    if (isFirstAgent) {
-      if (!name) setName("CEO");
-      if (!title) setTitle("CEO");
-    }
-  }, [isFirstAgent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (presetAdapterType || adapterTouched) return;
@@ -282,7 +278,9 @@ export function NewAgent() {
     result: AdapterEnvironmentTestResult | null;
   }) => {
     setTestAgentFeedback(feedback);
-    if (feedback.result?.status === "pass") {
+    // A warned check is an advisory pass unless it carries a blocking code —
+    // the same shared rule the create gate and the server apply.
+    if (feedback.result && !isBlockingPreflightResult(feedback.result)) {
       setPassedHarnessPreflightKey(currentHarnessPreflightKey);
     }
   }, [currentHarnessPreflightKey]);

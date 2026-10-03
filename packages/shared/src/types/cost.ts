@@ -35,6 +35,17 @@ export interface CostSummary {
    * adapter reports no token usage, which is the case for local Hermes today.
    */
   measured: boolean;
+  /**
+   * Has any cost event ever carried a real billed amount (`costCents > 0`)?
+   *
+   * A BYOK or subscription workspace records token usage with no invoice —
+   * every event sits at 0¢. There "Inference spend $0.00" is technically true
+   * and substantively false: the model provider billed real money somewhere
+   * AgentDash cannot see. When `measured` is true but `pricedSpend` is false,
+   * the honest display is the token count plus "Billed by your model
+   * provider".
+   */
+  pricedSpend: boolean;
 }
 
 /**

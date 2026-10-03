@@ -22,6 +22,12 @@ vi.mock("../services/hire-hook.js", () => ({
   notifyHireApproved: mockNotifyHireApproved,
 }));
 
+vi.mock("../services/instance-settings.js", () => ({
+  instanceSettingsService: vi.fn(() => ({
+    getGeneral: async () => ({ censorUsernameInLogs: false }),
+  })),
+}));
+
 type ApprovalRecord = {
   id: string;
   companyId: string;
@@ -165,6 +171,42 @@ describe("approvalService resolution idempotency", () => {
 
     expect(result.applied).toBe(true);
     expect(mockNotifyHireApproved).not.toHaveBeenCalled();
+  });
+});
+
+describe("approvalService comment redaction", () => {
+  function createCommentDbStub(approval: ApprovalRecord) {
+    const insertedBodies: string[] = [];
+    const db = {
+      select: () => ({
+        from: () => ({ where: async () => [approval] }),
+      }),
+      insert: () => ({
+        values: (values: { body: string }) => {
+          insertedBodies.push(values.body);
+          return { returning: async () => [{ id: "comment-1", body: values.body }] };
+        },
+      }),
+    };
+    return { db, insertedBodies };
+  }
+
+  it("persists agent-authored comments redacted and human comments raw", async () => {
+    // GH #992: an agent comment is model output that can echo a credential;
+    // a human's verbatim quote stays raw in the row (serving redacts again).
+    const canary = "provk-appr-canary-7f3a9c2d4e5ab6c78d9e0f1a2b3c4d5e";
+    const { db, insertedBodies } = createCommentDbStub(createApproval("pending"));
+    const svc = approvalService(db as any);
+
+    const agentComment = await svc.addComment("approval-1", `echo api_key=${canary}`, { agentId: "agent-1" });
+    const humanComment = await svc.addComment("approval-1", `echo api_key=${canary}`, { userId: "user-1" });
+
+    expect(insertedBodies[0]).not.toContain(canary);
+    expect(insertedBodies[0]).toContain("***REDACTED***");
+    expect(insertedBodies[1]).toContain(canary);
+    // Both are safe as returned (the serve pass covers human comments too).
+    expect(agentComment.body).not.toContain(canary);
+    expect(humanComment.body).not.toContain(canary);
   });
 });
 

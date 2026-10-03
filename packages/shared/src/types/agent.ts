@@ -147,6 +147,15 @@ export interface AgentRunHealth {
   succeededWithoutEvidence: number;
   neverRan: boolean;
   /**
+   * Agent-authored CoS chat replies — the work that never goes through
+   * heartbeatRuns, so a Chief of Staff that ran the whole chat still reports
+   * `total: 0`. `chatTurns` is all-time; `chatTurnsThisMonth` covers the same
+   * month `spentMonthlyCents` does, so "Billed by your model provider" can read
+   * the month honestly.
+   */
+  chatTurns: number;
+  chatTurnsThisMonth: number;
+  /**
    * OBS-2: non-null while a token-ceiling pause (or the unmetered runaway
    * guard) is skipping this agent's unattended wakes. Carries no figures, so
    * the restricted detail view can show it — "this agent is paused" is health,

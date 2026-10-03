@@ -24,7 +24,7 @@ import {
 import { getRecentProjectIds, trackRecentProject } from "../lib/recent-projects";
 import { orderItemsBySelectedAndRecent } from "../lib/recent-selections";
 import { formatAssigneeUserLabel } from "../lib/assignees";
-import { agentPickerSubtitle } from "../lib/agent-identity";
+import { agentPickerSubtitleUnderName } from "../lib/agent-identity";
 import { buildExecutionPolicy, stageParticipantValues } from "../lib/issue-execution-policy";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon } from "./PriorityIcon";
@@ -678,12 +678,12 @@ export function IssueProperties({
               ) : option.kind === "user" ? (
                 <User className="h-3 w-3 shrink-0 text-muted-foreground" />
               ) : null}
-              {option.kind === "agent" && agentPickerSubtitle(option.agent) ? (
+              {option.kind === "agent" && agentPickerSubtitleUnderName(option.agent) ? (
                 // AgentDash (scan 3, lane H): the agent's title under its name.
                 <span className="flex min-w-0 flex-col text-left">
                   <span className="truncate">{option.label}</span>
                   <span className="truncate text-muted-foreground" data-testid="assignee-option-subtitle">
-                    {agentPickerSubtitle(option.agent)}
+                    {agentPickerSubtitleUnderName(option.agent)}
                   </span>
                 </span>
               ) : (
