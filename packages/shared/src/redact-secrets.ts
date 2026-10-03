@@ -195,10 +195,11 @@ const PEM_BLOCK_RE =
 
 // `NAME=value` (env assignment, query parameter, `api_key = "…"`) and
 // `NAME: value` (YAML, headers) with an optional auth scheme between
-// separator and value. Backslashes are excluded from the bare-value charset so
-// a JSON escape (`\"`) after a value is never eaten.
+// separator and value. A bare value may contain `\X` escape pairs mid-token
+// (`Bearer ab\"key"` in a transcript) but never ends on one: the lookahead
+// keeps a trailing `\"` (a JSON string boundary) out of the match.
 const NAME_VALUE_RE = new RegExp(
-  `(?<![\\w-])([A-Za-z_][A-Za-z0-9_.-]*)([ \\t]*[:=][ \\t]*)(?:(${AUTH_SCHEMES})[ \\t]+)?(?![\\/]{2})("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|[^\\s"'\\\\,;=\`&|()?]+)`,
+  `(?<![\\w-])([A-Za-z_][A-Za-z0-9_.-]*)([ \\t]*[:=][ \\t]*)(?:(${AUTH_SCHEMES})[ \\t]+)?(?![\\/]{2})("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|(?:[^\\s"'\\\\,;=\`&|()?]+|\\\\.(?=[^\\s"'\\\\,;=\`&|()?}\\]]))+)`,
   "gid",
 );
 
@@ -234,8 +235,10 @@ const JSON_KV_RE =
 const ESCAPED_JSON_KV_RE =
   /(\\")((?:\\.|[^"\\])+?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\])*)\\"/gd;
 
-// `Bearer <token>` anywhere (JSON bodies, headers embedded in strings).
-const AUTH_SCHEME_VALUE_RE = /\b(Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)([ \t]+)([^\s"'`,;\]}]+)/gd;
+// `Bearer <token>` anywhere (JSON bodies, headers embedded in strings). The
+// token may contain `\X` escape pairs mid-value (`ab\"key"`) but never ends
+// on one, so a `\"` closing a JSON string stays outside the span.
+const AUTH_SCHEME_VALUE_RE = /\b(Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)([ \t]+)((?:[^\s"'`,;\]\\]+|\\.(?=[^\s"'`,;\]\\}\[{]))+)/gd;
 
 // An AWS secret access key is an unmarked 40-char blob — only redactable when
 // an AKIA access key id sits within ~300 chars on the same line(s).
@@ -485,8 +488,11 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     const span = groupSpan(m, 3);
     const value = m[3];
     if (!span || value.includes(REDACTED)) return;
-    if (!/^[A-Za-z0-9._~+/=-]{6,}$/.test(value)) return;
-    if (value.length < 8 && !/\d/.test(value)) return;
+    // `\X` escape pairs inside a token are part of it; strip before the shape
+    // check so `ab\"key` is judged on `abkey`.
+    const unescaped = value.replace(/\\(.)/g, "$1");
+    if (!/^[A-Za-z0-9._~+/=-]{6,}$/.test(unescaped)) return;
+    if (unescaped.length < 8 && !/\d/.test(unescaped)) return;
     push(span.start, span.end);
   });
 

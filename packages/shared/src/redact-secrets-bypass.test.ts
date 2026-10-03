@@ -75,6 +75,11 @@ const LEAKS: [string, string, string[]?][] = [
   ["set -x trace", `+ curl -H 'X-Api-Key: ${SHAPELESS}' https://x`],
   ["lowercase bearer", `authorization: bearer ${SHAPELESS}`],
   ["bearer short", `Authorization: Bearer abc123`],
+  // Shell-escaped quote inside a header value — the secret must not survive
+  // past a `\"` mid-token (verify-shard 2 regression).
+  ["header escaped quote", `curl -H "Authorization: Bearer ab\\"${SHAPELESS}" https://x.test`],
+  ["bearer escaped quote", `Authorization: Bearer ab\\"${SHAPELESS}"`],
+  ["token escaped quote", `api_token=ab\\"${SHAPELESS}"`],
 ];
 
 const PROBE_FRAGMENTS = [
@@ -152,6 +157,18 @@ describe("security-review bypass cases", () => {
     const line = JSON.stringify({ ts: "t", stream: "stdout", chunk });
     const out = redactSecrets(line);
     expect(() => JSON.parse(out)).not.toThrow();
+  });
+
+  it("never eats a trailing escaped quote at a JSON boundary", () => {
+    // `\"` inside raw text is an escape, not a value character — a token that
+    // ends right before it must keep the pair intact.
+    const line = '{"h":"Bearer abcdef12345\\"}';
+    const out = redactSecrets(line);
+    expect(out).toContain(REDACTED);
+    expect(out.endsWith('\\"}')).toBe(true);
+    const assignment = '{"k":"API_KEY=abcdef12345\\"}';
+    const out2 = redactSecrets(assignment);
+    expect(out2.endsWith('\\"}')).toBe(true);
   });
 
   it("holds a secret that straddles the overflow boundary", () => {
