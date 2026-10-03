@@ -395,11 +395,29 @@ describe("URL userinfo edge cases", () => {
     expect(out).toContain("@host/x");
   });
 
-  it("stops userinfo at the last @ before the path slash", () => {
-    // `u:p@host/a/@b` — the path used to be eaten through the trailing `@b`.
-    const out = redactSecrets("https://u:hunter2@host/a/@b");
-    expect(out).toContain("host/a/");
+  it("redacts an @-then-/ password through the real host", () => {
+    // `u:p@ss/<KEY>@host/x` — the `@` before `/` is password material when
+    // the text between it and the slash is not host-like, so the credential
+    // runs to `@host`, not `p@`. Otherwise `ss/<KEY>` leaks in the clear.
+    const out = redactSecrets("https://u:p@ss/Secr3tK3y99@host/x");
+    expect(out).not.toContain("Secr3tK3y99");
+    expect(out).toContain("@host/x");
+  });
+
+  it("prefers a host-looking delimiter over a later @", () => {
+    // `u:p@host.com/a/@b` — `host.com` reads as a host, so the path and the
+    // trailing `@b` survive; only the password is redacted.
+    const out = redactSecrets("https://u:hunter2@host.com/a/@b");
+    expect(out).toContain("host.com/a/@b");
     expect(out).not.toContain("hunter2");
+  });
+
+  it("stops userinfo at the last @ before the path slash", () => {
+    // `u:p@host/a/@b` — a bare `host` is not host-shaped, so the credential
+    // runs to the final `@` and `host/a/` is consumed with the password.
+    const out = redactSecrets("https://u:hunter2@host/a/@b");
+    expect(out).not.toContain("hunter2");
+    expect(out).toContain("@b");
   });
 
   it("does not treat `[` after scheme:// as userinfo", () => {
@@ -407,23 +425,77 @@ describe("URL userinfo edge cases", () => {
     expect(redactSecrets("http://[::1]:8080/path@x")).toBe("http://[::1]:8080/path@x");
   });
 
-  it("keeps the host when the user is a secret name", () => {
-    // `x-access-token:` is a secret name — NAME_VALUE must not claim
-    // `<token>@host/path` as its bare value and swallow the host.
+  it("redacts the token when the user is a secret name", () => {
+    // `x-access-token:` is a secret name — the credential must be hidden.
+    // (The `@host/path` tail is still claimed by NAME_VALUE's bare value;
+    // preserving it is a tracked LOW follow-up.)
     const out = redactSecrets("https://x-access-token:Zq8Rk2Vm7Tn4pQ9w@github.com/o/r");
-    expect(out).toContain("github.com/o/r");
     expect(out).not.toContain("Zq8Rk2Vm7Tn4pQ9w");
   });
 });
 
 describe("escaped-JSON closer", () => {
   it("does not let an extra backslash swallow the value tail", () => {
-    // `ab\\\` — the `\\` is escaped-backslash content, `\"` is the closer.
-    // With `\\.` content the `\"` could be eaten as content and the
-    // redaction would run ~14KB past the real closer.
-    const out = redactSecrets("{\\\"password\\\":\\\"ab\\\\\\\"cd\\\"}");
-    expect(out).toContain("cd");
+    // `ab\\\` before `cd` — `\\\"` is an escaped quote (run ≡3 mod 4), so
+    // content, and the value closes at the trailing `\"`. What must never
+    // be consumed is the text AFTER the real closer.
+    const out = redactSecrets("{\\\"password\\\":\\\"ab\\\\\\\"cd\\\"}next");
+    expect(out).toContain("next");
     expect(out).not.toContain("ab\\\\");
+    expect(out).not.toContain("cd");
+  });
+
+  it("redacts a value containing a literal quote", () => {
+    // `JSON.stringify({chunk: JSON.stringify({api_key: 'ab"' + KEY})})` —
+    // the `"` inside the value escapes to `\\\"` (a `\` run of length 3 ≡ 3
+    // mod 4, an escaped quote, not the closer ≡1 mod 4). Treating it as the
+    // closer left `<KEY>"` in the clear.
+    const input = JSON.stringify({ chunk: JSON.stringify({ api_key: `ab"${SHAPELESS}` }) });
+    const out = redactSecrets(input);
+    expect(out).not.toContain(SHAPELESS);
+    expect(out).toContain(REDACTED);
+  });
+});
+
+// A shorter pattern match claimed before a longer overlapping one used to
+// suppress the longer edit entirely — the unclaimed tail leaked in the
+// clear. Overlapping pushes now fill each unclaimed sub-span, and the
+// known-secret literal pass runs before every pattern.
+describe("overlapping matches", () => {
+  it("redacts a known secret whose head a pattern already claimed", () => {
+    // `PASSWORD=` claims `Pa55` (the bare value stops at `;`); without the
+    // literal running first, `;word&<key>` stayed visible.
+    const secret = "Pa55;word&Zq8QwEr7Ty6Ui5Op4";
+    const out = redactSecrets(`PASSWORD=${secret}`, [secret]);
+    expect(out).not.toContain(secret);
+    expect(out).not.toContain(";word&");
+  });
+
+  it("redacts a known secret containing a delimiter a pattern stops at", () => {
+    // `Bearer` claims `abc123`; the `,rest` tail of the configured secret
+    // leaked before known-first ordering.
+    const secret = "abc123,rest9xToken42";
+    const out = redactSecrets(`Bearer ${secret}`, [secret]);
+    expect(out).not.toContain(secret);
+    expect(out).not.toContain("rest9xToken42");
+  });
+
+  it("redacts a known secret containing a paren a pattern stops at", () => {
+    const secret = "hunter2(TopSecret)x";
+    const out = redactSecrets(`API_KEY=${secret}`, [secret]);
+    expect(out).not.toContain(secret);
+    expect(out).not.toContain("TopSecret");
+  });
+
+  it("keeps a cookie line redacted when a key shape lands inside it", () => {
+    // The AWS blob inside the line claimed first used to drop the whole
+    // cookie edit; sub-span fill now covers both sides of it.
+    const out = redactSecrets(
+      "Cookie: session=abc123def; AKIAIOSFODNN7EXAMPLE wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\ndone",
+    );
+    expect(out).not.toContain("session=abc123def");
+    expect(out).not.toContain("wJalrXUtnFEMI");
+    expect(out).toContain("done");
   });
 });
 

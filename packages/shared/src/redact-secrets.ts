@@ -264,10 +264,13 @@ const JSON_KV_RE =
 // group 4 is content of a value that closes inside the cap; group 5 is
 // exactly 2048 chars — a value past the cap, whose real `\"` closer the
 // callback scans for and extends the redaction over.
-// The value content is `(?:\\[^"]|[^"\\])` — a `\"` is always the closer,
-// never content, so a run of `\\\\\"…` can't eat 14KB past the real closer.
+// The value content is `(?:\\\"|\\\\|[^"\\])`: `\"` is the closer (a `"`
+// preceded by a `\` run of length ≡1 mod 4), while `\\\"` (run ≡3 mod 4) is
+// an escaped quote INSIDE the value (`JSON.stringify` of a value containing
+// `"` produces exactly that) and `\\\\` is a literal backslash — neither may
+// terminate the match or the tail of the value leaks.
 const ESCAPED_JSON_KV_RE =
-  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\[^"]|[^"\\]){0,2048})\\"|(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\[^"]|[^"\\]){2048})/gd;
+  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\"|\\\\|[^"\\]){0,2048})\\"|(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\"|\\\\|[^"\\]){2048})/gd;
 
 // `Bearer <token>` anywhere (JSON bodies, headers embedded in strings).
 // The value is a single flat character class — `\` is allowed mid-token
@@ -550,44 +553,52 @@ function closeQuoted(text: string, from: number, q: string): number {
 
 /**
  * Position of the `\` starting the `\"` that closes an escaped-JSON string
- * value — a `"` preceded by an odd run of `\` — or end of input. Returning
- * the closer's start keeps the `\"` itself outside the redacted span.
+ * value, or end of input. In doubly-escaped JSON a `"` closes the value only
+ * when the `\` run before it has length ≡1 (mod 4): `\\\"` (≡3 mod 4) is an
+ * escaped quote inside the value and `\\\\` (even) is a literal backslash —
+ * a literal `\` at end-of-value makes the closer's run 5, 9, … Returning the
+ * closer's start keeps the `\"` itself outside the redacted span.
  */
 function closeEscapedJson(text: string, from: number): number {
   for (let i = from; i < text.length; i++) {
     if (text[i] !== '"') continue;
     let backslashes = 0;
     for (let j = i - 1; j >= 0 && text[j] === "\\"; j--) backslashes++;
-    if (backslashes % 2 === 1) return i - 1;
+    if (backslashes % 4 === 1) return i - 1;
   }
   return text.length;
 }
 
 function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   const edits: Edit[] = [];
-  // Per-byte claim mask. The `frontier` fast-path skips the check entirely
-  // for pushes starting right of every claim; a push landing inside
-  // already-claimed territory exits on the first marked byte. Marking and
-  // checking are both O(span), never O(prior edits) — a linear `claimed`
-  // scan is quadratic on `-b a=`×N and AWS-blob×N above the 1MB bound
-  // (11–14s and ~85s at 8MB before this mask).
+  // Per-byte claim mask. Marking and checking are both O(span), never
+  // O(prior edits) — a linear `claimed` scan is quadratic on `-b a=`×N and
+  // AWS-blob×N above the 1MB bound (11–14s and ~85s at 8MB before this
+  // mask).
   const claimed = new Uint8Array(text.length);
-  // Rightmost byte any claim reaches.
-  let frontier = 0;
   // End of the piece currently being scanned — a push ending exactly there is
   // a window-truncated match, extended through `cont` on the full text.
   let pieceEnd = text.length;
   const push = (start: number, end: number, replacement = REDACTED, cont?: RegExp): void => {
     if (cont && end === pieceEnd && end < text.length) end = extendRight(text, end, cont);
     if (end <= start) return;
-    if (start < frontier) {
-      for (let i = start; i < end; i++) {
-        if (claimed[i]) return;
-      }
+    // A push fully inside earlier claims adds nothing; a PARTIALLY claimed
+    // push fills each unclaimed sub-span instead of dropping — a short
+    // match claimed first must not suppress a longer match's tail
+    // (`PASSWORD=Pa55;word&<known>`: `Pa55` claimed by NAME_VALUE would
+    // otherwise drop the known literal and leak `;word&<known>`).
+    let i = start;
+    while (i < end) {
+      while (i < end && claimed[i]) i++;
+      let j = i;
+      while (j < end && !claimed[j]) j++;
+      if (j <= i) return;
+      claimed.fill(1, i, j);
+      // Only a clean whole-span push keeps a custom replacement (e.g. the
+      // PEM markers); split fills use the plain marker.
+      edits.push({ start: i, end: j, replacement: i === start && j === end ? replacement : REDACTED });
+      i = j;
     }
-    claimed.fill(1, start, end);
-    if (end > frontier) frontier = end;
-    edits.push({ start, end, replacement });
   };
 
   // PEM private-key blocks first — they claim the largest spans and keep the
@@ -604,6 +615,22 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
         : REDACTED;
     push(m.index, m.index + block.length, replacement);
   });
+
+  // Configured (known) secrets next — once over the whole text and BEFORE
+  // every pattern pass. A shorter pattern match claimed first would make the
+  // literal's push land as a partial overlap: even with sub-span fill the
+  // literal then redacts as two fragments and a custom shape in between can
+  // still break it apart. Claimed first, the literal is a single span and
+  // overlapping pattern pushes fill around it harmlessly. Running inside the
+  // windows is also unsafe: a fragment claim in an earlier window can
+  // suppress the full match in the next one and leak the tail.
+  const known = knownSecretsRegex(secrets);
+  if (known) {
+    eachMatch(known, text, (m) => {
+      if (m[0] === REDACTED) return;
+      push(m.index, m.index + m[0].length);
+    });
+  }
 
   // Scan the piece [base, limit). Match spans are piece-relative; callbacks
   // translate to full-text offsets with `base` — context reads go to `text`
@@ -664,10 +691,17 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
         }
       }
       // The userinfo delimiter is the last `@` inside the authority — before
-      // the host/path slash — so `u:p@host/a/@b` keeps `host/a/`. When every
-      // `@` sits past a `/`, the slashes are password material instead and
-      // the last `@` delimits (`redis://default:Zq8R//k2Vm==@cache`).
-      const delim = atBeforeSlash !== -1 ? atBeforeSlash : at;
+      // the host/path slash — but only when the text between that `@` and
+      // the `/` reads as a host (a `.`, a `:port`, an `[` IP literal, or
+      // `localhost`). Otherwise the `@`-before-`/` is password material too:
+      // `u:p@ss/<key>@host/x` must redact through `@host`, not stop at `p@`
+      // and leak `ss/<key>`. When every `@` sits past a `/`, the slashes are
+      // password material and the last `@` delimits.
+      let delim = at;
+      if (atBeforeSlash !== -1 && atBeforeSlash !== at) {
+        const hostCandidate = text.slice(atBeforeSlash + 1, slash);
+        if (/[.:\[]/.test(hostCandidate) || hostCandidate === "localhost") delim = atBeforeSlash;
+      }
       if (delim < start) return;
       // `user:pass@` — the user has no `/`, `:` or `@`, and the pass keeps
       // `p@ssw0rd!`, `ab/cdEFGH12` and `//` pairs.
@@ -926,18 +960,6 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   for (let pos = 0; pos < text.length; pos += SCAN_PIECE) {
     collect(Math.max(0, pos - SCAN_LEFT), Math.min(pos + SCAN_PIECE + SCAN_OVERLAP, text.length));
   }
-  // Configured (known) secrets run once over the whole text, like PEM. A
-  // literal split across a window boundary lets the earlier window claim a
-  // 14-char fragment literal, after which the next window's full match —
-  // the alternation prefers longest-first — is dropped as overlapping and
-  // the secret's tail stays in the clear.
-  const known = knownSecretsRegex(secrets);
-  if (known) {
-    eachMatch(known, text, (m) => {
-      if (m[0] === REDACTED) return;
-      push(m.index, m.index + m[0].length);
-    });
-  }
   return edits;
 }
 
@@ -971,12 +993,15 @@ export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string
     .sort((a, b) => a.start - b.start);
   // Build the output in one pass: splicing into `out` per edit is O(N) each
   // — quadratic on inputs that produce many edits (`mysql -pa`×N yields
-  // ~270K at 1MB, ~5s before this).
+  // ~270K at 1MB, ~5s before this). Contiguous same-marker edits coalesce
+  // (sub-span fills around an earlier claim read as one redaction).
   const parts: string[] = [];
   let cursor = 0;
   for (const edit of original) {
     if (edit.start < cursor) continue;
-    parts.push(text.slice(cursor, edit.start), edit.replacement);
+    const gap = text.slice(cursor, edit.start);
+    if (gap) parts.push(gap);
+    if (parts[parts.length - 1] !== edit.replacement) parts.push(edit.replacement);
     cursor = edit.end;
   }
   parts.push(text.slice(cursor));
