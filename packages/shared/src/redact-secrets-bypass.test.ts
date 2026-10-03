@@ -360,3 +360,69 @@ describe("multi-megabyte values", () => {
     expect(out).toContain("@db");
   });
 });
+
+// Review-4 seam: a known secret placed so a 14-char fragment lands in piece
+// N while the rest lands in piece N+1 used to leak the tail — the fragment's
+// claim suppressed the full-secret match in the later window. Known secrets
+// now match once over the full text after all windowed pattern scans.
+describe("known-secret window seams", () => {
+  const KNOWN = "Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk0Lz"; // ≥20 chars, fragments emitted
+  const TAIL = KNOWN.slice(14);
+  const MB = 1024 * 1024;
+  const KB = 1024;
+  for (const seamEnd of [MB + 4 * KB, 2 * MB + 4 * KB]) {
+    for (const delta of [-20, -18, -16, -14, -8, 0, 8, 20]) {
+      it(`redacts a known secret crossing a scan seam (${seamEnd}${delta >= 0 ? "+" : ""}${delta})`, { timeout: 60_000 }, () => {
+        const text = "x".repeat(seamEnd + delta) + KNOWN + "y".repeat(64);
+        const out = redactSecrets(text, [KNOWN]);
+        expect(out, `tail visible: ${out.slice(-80)}`).not.toContain(TAIL);
+      });
+    }
+  }
+});
+
+describe("URL userinfo edge cases", () => {
+  it("keeps `//` inside a URL password", () => {
+    // `Zq8R//k2Vm…` — only a `://` (the next URL's scheme) ends the region.
+    const out = redactSecrets("redis://default:Zq8R//k2VmLnQpW9xY1b==@cache");
+    expect(out).not.toContain("Zq8R//k2VmLnQpW9xY1b==");
+    expect(out).toContain("@cache");
+  });
+
+  it("matches an uppercase scheme", () => {
+    const out = redactSecrets("HTTPS://admin:hunter2pass@host/x");
+    expect(out).not.toContain("hunter2pass");
+    expect(out).toContain("@host/x");
+  });
+
+  it("stops userinfo at the last @ before the path slash", () => {
+    // `u:p@host/a/@b` — the path used to be eaten through the trailing `@b`.
+    const out = redactSecrets("https://u:hunter2@host/a/@b");
+    expect(out).toContain("host/a/");
+    expect(out).not.toContain("hunter2");
+  });
+
+  it("does not treat `[` after scheme:// as userinfo", () => {
+    // `http://[::1]:8080/…` — an IP literal, not credentials.
+    expect(redactSecrets("http://[::1]:8080/path@x")).toBe("http://[::1]:8080/path@x");
+  });
+
+  it("keeps the host when the user is a secret name", () => {
+    // `x-access-token:` is a secret name — NAME_VALUE must not claim
+    // `<token>@host/path` as its bare value and swallow the host.
+    const out = redactSecrets("https://x-access-token:Zq8Rk2Vm7Tn4pQ9w@github.com/o/r");
+    expect(out).toContain("github.com/o/r");
+    expect(out).not.toContain("Zq8Rk2Vm7Tn4pQ9w");
+  });
+});
+
+describe("escaped-JSON closer", () => {
+  it("does not let an extra backslash swallow the value tail", () => {
+    // `ab\\\` — the `\\` is escaped-backslash content, `\"` is the closer.
+    // With `\\.` content the `\"` could be eaten as content and the
+    // redaction would run ~14KB past the real closer.
+    const out = redactSecrets("{\\\"password\\\":\\\"ab\\\\\\\"cd\\\"}");
+    expect(out).toContain("cd");
+    expect(out).not.toContain("ab\\\\");
+  });
+});

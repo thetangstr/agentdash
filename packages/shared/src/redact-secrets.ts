@@ -228,8 +228,8 @@ const COOKIE_HEADER_RE = /(\b(?:set-)?cookie[ \t]*:[ \t]*)([^\n]+)/gid;
 // `@`-terminated pattern can never match across a scan-piece edge and a
 // bounded-minimum or alternation tail builds a regex backtrack frame per
 // char, overflowing on multi-megabyte runs. The lookbehind blocks mid-run
-// starts (`https://a:bhttps://a:b…`).
-const URL_SCHEME_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)/gd;
+// starts (`https://a:bhttps://a:b…`). Case-insensitive: `HTTPS://` counts.
+const URL_SCHEME_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)/gid;
 
 // curl `-u user:pass`, `-uuser:pass`, `--user user:pass`, `--user=user:pass`.
 const CURL_USER_RE = /(\s--user(?:[ \t]+|=)|\s-u(?:[ \t]+|=|(?=[^\s=-])))(["']?)([^\s"':=]+):([^\s"']*)\2/gd;
@@ -259,8 +259,10 @@ const JSON_KV_RE =
 // group 4 is content of a value that closes inside the cap; group 5 is
 // exactly 2048 chars — a value past the cap, whose real `\"` closer the
 // callback scans for and extends the redaction over.
+// The value content is `(?:\\[^"]|[^"\\])` — a `\"` is always the closer,
+// never content, so a run of `\\\\\"…` can't eat 14KB past the real closer.
 const ESCAPED_JSON_KV_RE =
-  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\]){0,2048})\\"|(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\]){2048})/gd;
+  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\[^"]|[^"\\]){0,2048})\\"|(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\[^"]|[^"\\]){2048})/gd;
 
 // `Bearer <token>` anywhere (JSON bodies, headers embedded in strings).
 // The value is a single flat character class — `\` is allowed mid-token
@@ -558,13 +560,14 @@ function closeEscapedJson(text: string, from: number): number {
 
 function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   const edits: Edit[] = [];
-  const claimed: Array<[number, number]> = [];
-  // Rightmost byte any claim reaches. A push starting at or past it cannot
-  // overlap anything, so the overwhelmingly common case — many small,
-  // left-to-right claims — stays O(1) per push. Only a push landing inside
-  // already-claimed territory pays the scan, and it exits on the first hit.
-  // (Scanning `claimed` unconditionally was O(E^2): `mysql -pa`×N produces
-  // ~270K pushes at 1MB, ~5s and superlinear.)
+  // Per-byte claim mask. The `frontier` fast-path skips the check entirely
+  // for pushes starting right of every claim; a push landing inside
+  // already-claimed territory exits on the first marked byte. Marking and
+  // checking are both O(span), never O(prior edits) — a linear `claimed`
+  // scan is quadratic on `-b a=`×N and AWS-blob×N above the 1MB bound
+  // (11–14s and ~85s at 8MB before this mask).
+  const claimed = new Uint8Array(text.length);
+  // Rightmost byte any claim reaches.
   let frontier = 0;
   // End of the piece currently being scanned — a push ending exactly there is
   // a window-truncated match, extended through `cont` on the full text.
@@ -573,12 +576,12 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     if (cont && end === pieceEnd && end < text.length) end = extendRight(text, end, cont);
     if (end <= start) return;
     if (start < frontier) {
-      for (const [s, e] of claimed) {
-        if (start < e && end > s) return;
+      for (let i = start; i < end; i++) {
+        if (claimed[i]) return;
       }
     }
+    claimed.fill(1, start, end);
     if (end > frontier) frontier = end;
-    claimed.push([start, end]);
     edits.push({ start, end, replacement });
   };
 
@@ -617,6 +620,66 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     eachMatch(COOKIE_HEADER_RE, slice, (m) => {
       const span = groupSpan(m, 2);
       if (span && !m[2].includes(REDACTED)) push(base + span.start, base + span.end, REDACTED, CONT_LINE);
+    });
+
+    // `scheme://userinfo@host`. Only the `scheme://` prefix is a regex match —
+    // the userinfo region is scanned in JS (see the callback below) because an
+    // `@`-terminated pattern can never match across a scan-piece edge and a
+    // bounded-minimum or alternation tail builds a regex backtrack frame per
+    // char, overflowing on multi-megabyte runs. This runs BEFORE NAME_VALUE so
+    // a secret name inside the URL (`x-access-token:`) cannot claim
+    // `<token>@host/path` as its bare value and eat the host.
+    eachMatch(URL_SCHEME_RE, slice, (m) => {
+      const start = base + m.index + m[0].length;
+      // `[` opens an IP literal (`http://[::1]:8080/…`) — never userinfo.
+      if (text.charCodeAt(start) === 0x5b) return;
+      let end = start;
+      let at = -1;
+      let atBeforeSlash = -1;
+      let firstAt = -1;
+      let colon = -1;
+      let slash = -1;
+      let backslash = -1;
+      for (; end < text.length; end++) {
+        const c = text.charCodeAt(end);
+        if (c <= 0x20 || c === 0x22 || c === 0x27) break;
+        if (c === 0x2f) {
+          // Only a `://` (the next URL's scheme) ends the userinfo region —
+          // `//` inside the password is content (`Zq8R//k2Vm…==` base64).
+          if (text.charCodeAt(end + 1) === 0x2f && text.charCodeAt(end - 1) === 0x3a) break;
+          if (slash === -1) slash = end;
+        } else if (c === 0x40) {
+          if (firstAt === -1) firstAt = end;
+          if (slash === -1) atBeforeSlash = end;
+          at = end;
+        } else if (c === 0x3a && colon === -1) {
+          colon = end;
+        } else if (c === 0x5c && backslash === -1) {
+          backslash = end;
+        }
+      }
+      // The userinfo delimiter is the last `@` inside the authority — before
+      // the host/path slash — so `u:p@host/a/@b` keeps `host/a/`. When every
+      // `@` sits past a `/`, the slashes are password material instead and
+      // the last `@` delimits (`redis://default:Zq8R//k2Vm==@cache`).
+      const delim = atBeforeSlash !== -1 ? atBeforeSlash : at;
+      if (delim < start) return;
+      // `user:pass@` — the user has no `/`, `:` or `@`, and the pass keeps
+      // `p@ssw0rd!`, `ab/cdEFGH12` and `//` pairs.
+      if (colon > start && colon < delim && (slash === -1 || slash > colon) && firstAt > colon) {
+        push(colon + 1, delim);
+        return;
+      }
+      // `TOKEN@` bare userinfo — the token carries no `/`, `:` or `@`.
+      if (
+        (colon === -1 || colon > delim) &&
+        (slash === -1 || slash > delim) &&
+        (backslash === -1 || backslash > delim) &&
+        delim - start >= 4
+      ) {
+        const candidate = text.slice(start, delim);
+        if (looksLikeCredential(candidate)) push(start, delim);
+      }
     });
 
     // `NAME=value` and `NAME: value`. `=` uses the broad matcher (env
@@ -715,54 +778,6 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
       if (/^["']?</.test(bare) || /^["']?value["']?$/i.test(bare)) return;
       if (!scheme && !isAssignment && !looksLikeCredentialValue(bare)) return;
       push(base + span.start, valueEnd);
-    });
-
-    // `scheme://userinfo@host` — scan the userinfo region on the full text
-    // (it can be multi-MB or span a piece edge): chars until whitespace or a
-    // quote, stopping at `//` (the next URL's scheme, never password
-    // material). The last `@` inside ends the credential. `user:pass@`
-    // redacts the pass; `TOKEN@` redacts the userinfo when it looks
-    // credential-shaped (`git`, `user` survive).
-    eachMatch(URL_SCHEME_RE, slice, (m) => {
-      const start = base + m.index + m[0].length;
-      let end = start;
-      let at = -1;
-      let firstAt = -1;
-      let colon = -1;
-      let slash = -1;
-      let backslash = -1;
-      for (; end < text.length; end++) {
-        const c = text.charCodeAt(end);
-        if (c <= 0x20 || c === 0x22 || c === 0x27) break;
-        if (c === 0x2f) {
-          if (text.charCodeAt(end + 1) === 0x2f) break;
-          if (slash === -1) slash = end;
-        } else if (c === 0x40) {
-          if (firstAt === -1) firstAt = end;
-          at = end;
-        } else if (c === 0x3a && colon === -1) {
-          colon = end;
-        } else if (c === 0x5c && backslash === -1) {
-          backslash = end;
-        }
-      }
-      if (at < start) return;
-      // `user:pass@` — the user has no `/`, `:` or `@`, and the pass keeps
-      // `p@ssw0rd!`/`ab/cdEFGH12` (single `/`s allowed, `//` is not).
-      if (colon > start && colon < at && (slash === -1 || slash > colon) && firstAt > colon) {
-        push(colon + 1, at);
-        return;
-      }
-      // `TOKEN@` bare userinfo — the token carries no `/`, `:` or `@`.
-      if (
-        (colon === -1 || colon > at) &&
-        (slash === -1 || slash > at) &&
-        (backslash === -1 || backslash > at) &&
-        at - start >= 4
-      ) {
-        const candidate = text.slice(start, at);
-        if (looksLikeCredential(candidate)) push(start, at);
-      }
     });
 
     eachMatch(CURL_USER_RE, slice, (m) => {
@@ -896,25 +911,27 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
       push(base + m.index, end);
     });
 
-    const known = knownSecretsRegex(secrets);
-    if (known) {
-      eachMatch(known, slice, (m) => {
-        if (m[0] === REDACTED) return;
-        push(base + m.index, base + m.index + m[0].length);
-      });
-    }
   };
 
-  if (text.length <= SCAN_PIECE + SCAN_OVERLAP) {
-    collect(0, text.length);
-    return edits;
-  }
-  // Past the single-piece bound: 1MB windows, each re-scanning the previous
-  // window's last 4KB so a label/value crossing the boundary is matched
-  // whole (duplicate pushes are dropped by `claimed`), and carrying 64 chars
-  // of left context so lookbehind/`\b` at the window edge see real text.
+  // 1MB windows, each re-scanning the previous window's last 4KB so a
+  // label/value crossing the boundary is matched whole (duplicate pushes
+  // are dropped by the claim mask), and carrying 64 chars of left context
+  // so lookbehind/`\b` at the window edge see real text. Small inputs take
+  // the same path through a single window.
   for (let pos = 0; pos < text.length; pos += SCAN_PIECE) {
     collect(Math.max(0, pos - SCAN_LEFT), Math.min(pos + SCAN_PIECE + SCAN_OVERLAP, text.length));
+  }
+  // Configured (known) secrets run once over the whole text, like PEM. A
+  // literal split across a window boundary lets the earlier window claim a
+  // 14-char fragment literal, after which the next window's full match —
+  // the alternation prefers longest-first — is dropped as overlapping and
+  // the secret's tail stays in the clear.
+  const known = knownSecretsRegex(secrets);
+  if (known) {
+    eachMatch(known, text, (m) => {
+      if (m[0] === REDACTED) return;
+      push(m.index, m.index + m[0].length);
+    });
   }
   return edits;
 }

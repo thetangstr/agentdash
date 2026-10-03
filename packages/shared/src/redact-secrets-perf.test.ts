@@ -144,3 +144,24 @@ describe("redactSecrets structural performance", () => {
     }
   }
 });
+
+// Review-4: a push whose start precedes the claim frontier used to rescan
+// every prior edit — O(E) per push, roughly linear below the 1MB window but
+// quadratic past it once thousands of small matches accumulate. The claim
+// mask makes overlap checks O(1) per byte touched, so doubling the input
+// must stay under ~2.5x at 1/2/4MB (pre-fix the AWS run was ~85s at 8MB).
+describe("redactSecrets above-window scaling", () => {
+  for (const [name, unit] of [
+    ["cookie run", ` -b a=`],
+    ["aws run", `AKIAIOSFODNN7EXAMPLE wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY `],
+  ]) {
+    it(`${name} stays under 2.5x per doubling at 1/2/4MB`, { timeout: 120_000 }, () => {
+      const batch = (input: string) => void redactSecrets(input);
+      const t1 = timed(batch, fillTo(unit, MB));
+      const t2 = timed(batch, fillTo(unit, 2 * MB));
+      const t4 = timed(batch, fillTo(unit, 4 * MB));
+      expect(t2).toBeLessThan(t1 * 2.5 + 250);
+      expect(t4).toBeLessThan(t2 * 2.5 + 250);
+    });
+  }
+});
