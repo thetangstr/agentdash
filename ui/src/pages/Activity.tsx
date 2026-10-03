@@ -138,6 +138,7 @@ export function Activity() {
             <input
               type="checkbox"
               className="accent-foreground"
+              aria-label="Show system events"
               checked={showSystem}
               onChange={(e) => setShowSystem(e.target.checked)}
             />

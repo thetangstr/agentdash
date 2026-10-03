@@ -15,6 +15,12 @@ vi.mock("@/lib/router", () => ({
 vi.mock("../context/ToastContext", () => ({
   useToastActions: () => ({ pushToast: vi.fn() }),
 }));
+vi.mock("../context/CompanyContext", () => ({
+  useCompany: () => ({ selectedCompany: { id: "c1", name: "Acme", issuePrefix: "ACM" } }),
+}));
+vi.mock("../context/BreadcrumbContext", () => ({
+  useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
+}));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError } from "../api/client";

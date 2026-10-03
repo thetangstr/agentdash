@@ -405,7 +405,13 @@ function CoSConversationView({
           Scan 3, lane G: only once someone besides the CoS is hired. */}
       {hasHiredTeam ? (
         <div className="shrink-0 border-b px-4 py-2 text-sm max-sm:hidden" data-testid="cos-review-team-link">
-          <Link to="/workforce" className="underline">{COS_WORKFORCE_LINK_LABEL}</Link>
+          <Link
+            to="/workforce"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-sunken hover:text-text-primary"
+          >
+            <ClipboardList className="h-4 w-4" aria-hidden="true" />
+            {COS_WORKFORCE_LINK_LABEL}
+          </Link>
         </div>
       ) : null}
       <div className="min-h-0 flex-1">

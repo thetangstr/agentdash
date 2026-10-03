@@ -96,8 +96,11 @@ describe("AgentPlanProposal", () => {
     expect(text).not.toContain("hermes_local");
     expect(text).not.toContain("Unknown");
     expect(text).not.toContain("Outcome measurements");
+    // AgentDash (b2 polish): the rationale repeats the chat bubble, so it is
+    // not re-rendered; the alignment lines stay on the card.
+    expect(text).not.toContain("Two people to win more bids.");
     expect(text).not.toContain("Short-term:");
-    expect(text).toContain("Long-term: Builds a repeatable sales motion");
+    expect(text).toContain("Long-term:");
     expect(text).toContain("Targets: Proposals sent within 48 hours");
   });
 

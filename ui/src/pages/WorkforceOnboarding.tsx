@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, WorkforceBrief, WorkforceEnrollment } from '@paperclipai/shared';
 import { supportsWorkforcePrompt } from '@paperclipai/shared';
 import { Link } from '@/lib/router';
 import { useCompany } from '@/context/CompanyContext';
+import { useBreadcrumbs } from '@/context/BreadcrumbContext';
 import { workforceApi, workforceKeys } from '@/api/workforce';
 import { agentsApi } from '@/api/agents';
 import { accessApi } from '@/api/access';
@@ -174,4 +175,14 @@ export function WorkforceWorkspace({ companyId }: { companyId: string }) {
       </label>{selected && <WorkforceAgentPanel key={`${companyId}:${selected.id}`} companyId={companyId} agent={selected} />}</> : <p className="rounded-xl border p-5 text-sm">Hire a team member to choose its role and start a first job.</p>}
   </div>;
 }
-export function WorkforceOnboarding() { const { selectedCompanyId } = useCompany(); return selectedCompanyId ? <WorkforceWorkspace key={selectedCompanyId} companyId={selectedCompanyId} /> : <p>Select a company first.</p>; }
+export function WorkforceOnboarding() {
+  const { selectedCompany, selectedCompanyId } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([
+      { label: selectedCompany?.name ?? 'Company', href: '/dashboard' },
+      { label: 'Workforce' },
+    ]);
+  }, [setBreadcrumbs, selectedCompany?.name]);
+  return selectedCompanyId ? <WorkforceWorkspace key={selectedCompanyId} companyId={selectedCompanyId} /> : <p>Select a company first.</p>;
+}

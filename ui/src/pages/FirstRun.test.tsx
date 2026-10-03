@@ -167,10 +167,17 @@ describe("FirstRunPage", () => {
     expect(mockNavigate).toHaveBeenCalledWith(expect.stringMatching(/\/dashboard$/), { replace: true });
   });
 
-  it("hides the model step when the box does not need one", async () => {
+  // AgentDash (b2 polish): revisiting /setup used to renumber "Code
+  // (optional)" as step 1 — the assistant step is always listed so the
+  // numbering matches where the founder actually is.
+  it("resumes at Code on a self-hosted revisit, assistant step marked done", async () => {
     mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: false, done: true } }));
     await render();
-    expect(container.querySelector('[data-testid="first-run-progress"]')?.textContent).not.toContain("Your model");
+    const progress = container.querySelector('[data-testid="first-run-progress"]');
+    expect(progress?.textContent).toContain("Your AI assistant");
+    expect(progress?.textContent).not.toContain("Your model");
+    expect(progress?.textContent).toContain("2. Code (optional)");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Code (optional)");
   });
 
   it("creates the first issue from a suggestion and goes Home", async () => {

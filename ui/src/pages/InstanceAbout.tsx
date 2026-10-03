@@ -1,8 +1,10 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { healthApi } from "@/api/health";
 import { queryKeys } from "@/lib/queryKeys";
+import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 
 function ValueRow({ label, value }: { label: string; value: string }) {
   return (
@@ -19,6 +21,14 @@ function boolLabel(value: boolean | undefined) {
 }
 
 export function InstanceAbout() {
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([
+      { label: "Instance Settings", href: "/instance/settings/general" },
+      { label: "About" },
+    ]);
+  }, [setBreadcrumbs]);
+
   const { data: health, isLoading, error } = useQuery({
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),

@@ -527,6 +527,7 @@ export function CompanySettings() {
                 <Button
                   data-testid="company-settings-invites-generate-button"
                   size="sm"
+                  variant="outline"
                   onClick={() => inviteMutation.mutate()}
                   disabled={inviteMutation.isPending}
                 >
@@ -595,11 +596,7 @@ export function CompanySettings() {
               Workspace Packages
             </div>
             <div className="rounded-md border border-border px-4 py-4">
-              <p className="text-sm text-muted-foreground">
-                Import and export have moved to dedicated pages accessible from the{" "}
-                <a href="/org" className="underline hover:text-foreground">Org Chart</a> header.
-              </p>
-              <div className="mt-3 flex items-center gap-2">
+              <div className="flex items-center gap-2">
                 <Button size="sm" variant="outline" asChild>
                   <a href="/company/export">
                     <Download className="mr-1.5 h-3.5 w-3.5" />
@@ -632,8 +629,8 @@ export function CompanySettings() {
         </summary>
         <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-4">
           <p className="text-sm text-muted-foreground">
-            Archive this company to hide it from the sidebar. This persists in
-            the database.
+            Archive this workspace to hide it from the sidebar. Nothing is
+            deleted — its work and history stay stored.
           </p>
           <div className="flex items-center gap-2">
             <Button

@@ -20,7 +20,7 @@ import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-fa
 // Type-only: cos-issue-action pulls in the issue and heartbeat services, which
 // this module must not load (first-run and onboarding import it).
 import type { CosIssueRequester, CosIssueRosterEntry, CosTurnContext } from "./cos-issue-action.js";
-import { PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "./cos-plan-naming.js";
+import { PLAN_INTRO_GUIDANCE, PLAN_KPI_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "./cos-plan-naming.js";
 
 // AgentDash (scan 3, lane G): mirrors ISSUE_PROPOSAL_CARD_KIND in cos-issue-action.ts.
 const ISSUE_PROPOSAL_CARD_KIND = "issue_proposal_v1";
@@ -254,7 +254,7 @@ function goalsPrompt(state: CosStateRow): string {
 You already have so far:
 ${JSON.stringify(sanitizePromptData(state.goals), null, 2)}
 
-Ask the ONE most useful clarifying question per turn — never generic "tell me more". Reflect what you heard back in your own words first ("So short-term you want X, long-term you want Y. Got it."), then ask the next sharpest question.
+Ask the ONE most useful clarifying question per turn — never generic "tell me more". When you ask about scale or targets, ask for a concrete number and a period ("how many qualified conversations a month should this drive?"), never a vague quantity like "a set number of". Reflect what you heard back in your own words first ("So short-term you want X, long-term you want Y. Got it."), then ask the next sharpest question.
 
 Once you have short-term + long-term + at least one constraint, transition to plan presentation by setting "phase_decision" to "advance_to_plan". Until then, keep it as "stay_in_goals". The plan is generated and shown right after a reply that advances, so never promise a plan ("let me pull together the plan") in a reply that stays in goals. A reply that advances says in one short sentence that the team plan follows; it never names or lists the agents (the plan card does that).
 
@@ -275,7 +275,7 @@ The visible chat body comes BEFORE the fenced block. Do not repeat the JSON in p
 // spec. The interview already captured goal/constraints/criteria via the
 // Socratic engine, so the LLM jumps directly to plan presentation. The
 // "ALREADY-CAPTURED" framing tells the model not to re-ask Phase 1 questions.
-function planPromptFromSpec(spec: DeepInterviewSpecView, memberNames: readonly string[] = []): string {
+export function planPromptFromSpec(spec: DeepInterviewSpecView, memberNames: readonly string[] = []): string {
   // The spec's fields are user-derived free text; they are sanitised before
   // they enter the system prompt (review-1006 follow-up).
   const constraintsJson = JSON.stringify(sanitizePromptData(spec.constraints), null, 2);
@@ -289,7 +289,7 @@ Success criteria: ${criteriaJson}
 
 ${WORKFORCE_PROPOSAL_GUIDANCE}
 
-Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a title, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and its title. ${planNamingGuidance(memberNames)}
+Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a title, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. ${PLAN_KPI_GUIDANCE} Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and its title. ${planNamingGuidance(memberNames)}
 
 ${PLAN_INTRO_GUIDANCE} The plan's "rationale" should reference at least one constraint and one success criterion from the captured context.
 
@@ -314,13 +314,13 @@ Set phase_decision to "stay_in_plan" the first time you propose — the user con
 No greetings. No markdown headings outside the JSON block.`;
 }
 
-function planPrompt(state: CosStateRow, memberNames: readonly string[] = []): string {
+export function planPrompt(state: CosStateRow, memberNames: readonly string[] = []): string {
   return `You are the Chief of Staff for AgentDash. Goals captured:
 ${JSON.stringify(sanitizePromptData(state.goals), null, 2)}
 
 ${WORKFORCE_PROPOSAL_GUIDANCE}
 
-Propose a concrete agent team that hits the short-term goal AND seeds the long-term one. Use 2-5 agents. Each agent gets a role, a title, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and its title. ${planNamingGuidance(memberNames)}
+Propose a concrete agent team that hits the short-term goal AND seeds the long-term one. Use 2-5 agents. Each agent gets a role, a title, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. ${PLAN_KPI_GUIDANCE} Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter. The adapterType and role id go in the JSON only; in the visible body, refer to each agent by name and its title. ${planNamingGuidance(memberNames)}
 
 ${PLAN_INTRO_GUIDANCE}
 

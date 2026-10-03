@@ -53,6 +53,7 @@ const WIDTHS = [
 const MIN_TAP = 44;
 const MIN_FONT = 12;
 const LONG_AGENT = "Ivy Longname-Worthington";
+const COMPANY_SKILL = "Ryokan pricing cheatsheet";
 
 test.use({ viewport: WIDTHS[0], hasTouch: true, isMobile: true });
 
@@ -174,6 +175,28 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
   ] as const) {
     await post(request, `/api/companies/${company.id}/issues`, { title, status, assigneeAgentId: agentIds[2] });
   }
+
+  // A Definition of Done on the issue: the Reviews tab renders real checkbox
+  // rows, and the tap-target audit measures them.
+  const dodRes = await request.put(`/api/companies/${company.id}/issues/${issue.id}/dod`, {
+    data: {
+      summary: "The proposal is ready to send to the Tanakas.",
+      criteria: [
+        { id: "itinerary", text: "Day-by-day itinerary for all 10 days", done: true },
+        { id: "budget", text: "Every cost fits the $18k budget", done: false },
+      ],
+    },
+  });
+  expect(dodRes.ok(), await dodRes.text()).toBe(true);
+
+  // A local company skill: /agents/new offers it in Advanced → Company skills,
+  // and its label row is part of the tap-target audit.
+  await post(request, `/api/companies/${company.id}/skills`, {
+    name: COMPANY_SKILL,
+    slug: "ryokan-pricing",
+    description: "Currency conventions, seasonal surcharges and the usual price bands for ryokans.",
+    markdown: `# ${COMPANY_SKILL}\n\n- Quote totals per night, tax included.\n`,
+  });
 
   // A plan document on the issue: the issue page shows the Documents section.
   const docRes = await request.put(`/api/issues/${issue.id}/documents/plan`, {
@@ -460,6 +483,18 @@ const PAGES: Target[] = [
   { name: "ask", path: () => "cos", ready: (p) => main(p).getByText(/Your Chief of Staff is ready/) },
   { name: "work", path: () => "issues", ready: (p) => main(p).getByText(/Competitor scan: warehouse picking grippers/) },
   { name: "issue", path: (s) => `issues/${s.issueRef}`, ready: (p) => main(p).getByText(/Draft is attached as a document/) },
+  // The issue's Reviews tab: Definition of Done criteria checkboxes + the
+  // verdict timeline.
+  {
+    name: "issue-reviews",
+    path: (s) => `issues/${s.issueRef}`,
+    ready: (p) => main(p).getByText(/Draft is attached as a document/),
+    prepare: async (p) => {
+      await main(p).getByRole("tab", { name: "Reviews", exact: true }).click();
+      await expect(main(p).getByText("Review timeline")).toBeVisible();
+      await settle(p);
+    },
+  },
   { name: "team", path: () => "agents/all", ready: (p) => main(p).getByText("Maya", { exact: true }) },
   { name: "agent", path: (s) => `agents/${s.agentId}`, ready: (p) => main(p).getByText(/Draft a 10-day Japan proposal/) },
   // The agent config form: Field labels with hint icons above every input.
@@ -479,6 +514,8 @@ const PAGES: Target[] = [
         await details.locator("summary").first().click();
       }
       await expect(details).toHaveAttribute("open", "");
+      // The seeded company skill renders the checkbox rows this page audits.
+      await expect(details.getByText(COMPANY_SKILL)).toBeVisible({ timeout: 15_000 });
     },
   },
   // An open dialog (New issue, from the agent header): Radix hides the page
@@ -568,6 +605,33 @@ test.describe("Phone floors on every main screen", () => {
       }
     });
   }
+
+  test("breadcrumb at 390px: a long workspace name does not clip the page label", async ({ page, request }) => {
+    // ~40-char name: the parent crumb must truncate, never clip the page label.
+    const longName = "Tanaka Family Travel Holdings Co. Ltd"; // 39
+    const res = await request.post("/api/companies", { data: { name: longName } });
+    expect(res.ok(), await res.text()).toBe(true);
+    const company = (await res.json()) as Company;
+
+    await page.setViewportSize(WIDTHS[0]);
+    for (const target of [
+      { path: "billing", label: "Billing" },
+      { path: "workforce", label: "Workforce" },
+      { path: "company/settings", label: "Settings" },
+    ]) {
+      await page.goto(`/${company.issuePrefix}/${target.path}`);
+      const crumb = page.locator('[data-slot="breadcrumb-page"]', { hasText: target.label });
+      await expect(crumb).toBeVisible({ timeout: 30_000 });
+      // Fully on screen — not pushed past the edge.
+      const box = (await crumb.boundingBox())!;
+      expect(box.x + box.width, `${target.label} label on screen`).toBeLessThanOrEqual(WIDTHS[0].width);
+      // And rendered in full — the workspace name absorbs all the truncation.
+      expect(
+        await crumb.evaluate((el) => el.scrollWidth <= el.clientWidth + 0.5),
+        `${target.label} label not ellipsized`,
+      ).toBe(true);
+    }
+  });
 
   test("bottom nav at 360px: labels at least 12px, shown in full, items at least 44px", async ({ page }) => {
     await page.setViewportSize(WIDTHS[1]);

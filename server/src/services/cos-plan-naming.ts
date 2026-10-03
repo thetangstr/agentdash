@@ -122,6 +122,11 @@ export function planNamingGuidance(memberNames: readonly string[]): string {
 export const PLAN_INTRO_GUIDANCE =
   'In the visible body (before the JSON), write ONE short sentence that sums up the plan. The card under your message shows every agent with its responsibilities and targets, so do not list the agents, their responsibilities or the goals again. Then ask "Want me to set them up, or revise?"';
 
+// AgentDash: vague targets like "a set number of conversations" tell the board
+// nothing — every KPI needs a number and a period the plan can be held to.
+export const PLAN_KPI_GUIDANCE =
+  'Every KPI names a concrete number and a period — for example "12 qualified renewal calls a month" or "+10% retention within 6 months" — never a vague target like "a set number of" or "increase signups".';
+
 export interface PlanRename {
   from: string;
   to: string;

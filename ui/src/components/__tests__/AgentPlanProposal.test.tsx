@@ -45,7 +45,7 @@ describe("AgentPlanProposal", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders rationale, all agents, alignment, and CTAs", async () => {
+  it("renders all agents and CTAs without repeating the plan prose", async () => {
     const onConfirm = vi.fn();
     const onRevise = vi.fn();
     const root = createRoot(container);
@@ -55,12 +55,14 @@ describe("AgentPlanProposal", () => {
       );
     });
 
-    expect(container.textContent).toContain("Hits short-term ship goal");
     expect(container.textContent).toContain("Ellie");
     expect(container.textContent).toContain("Quinn");
     // Scan 3, lane G: plain language — title-cased roles, no adapter chip.
     expect(container.textContent).toContain("Engineering Lead");
     expect(container.textContent).not.toContain("claude_local");
+    // AgentDash (b2 polish): the rationale repeats the chat bubble and is not
+    // re-rendered; the short/long-term alignment lines stay on the card.
+    expect(container.textContent).not.toContain("Hits short-term ship goal");
     expect(container.textContent).toContain("ships v2");
     expect(container.textContent).toContain("lays groundwork");
 

@@ -53,14 +53,6 @@ export function BreadcrumbBar() {
     );
   }
 
-  if (breadcrumbs.length === 0) {
-    return (
-      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end">
-        {globalToolbarSlots}
-      </div>
-    );
-  }
-
   const menuButton = isMobile && (
     <Button
       variant="ghost"
@@ -72,6 +64,23 @@ export function BreadcrumbBar() {
       <Menu className="h-5 w-5" />
     </Button>
   );
+
+  if (breadcrumbs.length === 0) {
+    // AgentDash: a page that registers no breadcrumb (Billing, Workforce)
+    // still gets the sidebar menu and the workspace name on phones —
+    // otherwise the top bar is empty and the nav is unreachable.
+    return (
+      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end">
+        {menuButton}
+        {isMobile && selectedCompany ? (
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <h1 className="text-sm font-semibold uppercase tracking-wider truncate">{selectedCompany.name}</h1>
+          </div>
+        ) : null}
+        {globalToolbarSlots}
+      </div>
+    );
+  }
 
   // Single breadcrumb = page title (uppercase)
   if (breadcrumbs.length === 1) {
@@ -100,17 +109,24 @@ export function BreadcrumbBar() {
               return (
                 <Fragment key={i}>
                   {i > 0 && <BreadcrumbSeparator />}
-                  <BreadcrumbItem className={isLast ? "min-w-0" : "shrink-0"}>
+                  {/* AgentDash: on phones the parent crumb yields to the page
+                      label — a long workspace name must not push "Billing" off
+                      the bar or clip it. The parent truncates (bounded by the
+                      li) and keeps its 44px tap floor; the last crumb never
+                      shrinks, so the page name always reads in full. */}
+                  <BreadcrumbItem
+                    className={isLast ? "min-w-0 max-sm:shrink-0" : "shrink-0 max-sm:shrink max-sm:min-w-0 max-sm:overflow-hidden"}
+                  >
                     {isLast || !crumb.href ? (
                       <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
                     ) : (
                       <BreadcrumbLink asChild>
-                        {/* AgentDash: 44px tap target on phones; the 48px header has the room. */}
+                        {/* 44px tap target on phones; the 48px header has the room. */}
                         <Link
                           to={crumb.href}
-                          className="max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:items-center"
+                          className="max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:max-w-full max-sm:items-center"
                         >
-                          {crumb.label}
+                          <span className="min-w-0 max-sm:truncate">{crumb.label}</span>
                         </Link>
                       </BreadcrumbLink>
                     )}

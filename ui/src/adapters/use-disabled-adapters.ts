@@ -4,7 +4,7 @@ import { adaptersApi } from "@/api/adapters";
 import { setDisabledAdapterTypes } from "@/adapters/disabled-store";
 import { syncExternalAdapters } from "@/adapters/registry";
 import { queryKeys } from "@/lib/queryKeys";
-import { useBoardSessionReady } from "@/hooks/useBoardSessionReady";
+import { useBoardOrgAccess } from "@/hooks/useBoardSessionReady";
 
 /**
  * Fetch adapters and keep the disabled-adapter store + UI adapter registry
@@ -18,10 +18,11 @@ import { useBoardSessionReady } from "@/hooks/useBoardSessionReady";
  * Call this at the top of any component that renders adapter menus.
  */
 export function useDisabledAdaptersSync(): Set<string> {
-  // AgentDash (scan 4, lane O2): not for a signed-out visitor (403 noise on /auth).
-  const sessionReady = useBoardSessionReady();
+  // AgentDash (scan 4, lane O2 + b2 polish): not for a signed-out visitor, nor
+  // for a session without org access (/company-create right after sign-up).
+  const orgAccess = useBoardOrgAccess();
   const { data: adapters } = useQuery({
-    enabled: sessionReady,
+    enabled: orgAccess,
     queryKey: queryKeys.adapters.all,
     queryFn: () => adaptersApi.list(),
     staleTime: 5 * 60 * 1000,
