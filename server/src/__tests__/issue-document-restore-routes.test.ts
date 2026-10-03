@@ -176,7 +176,15 @@ async function createApp() {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  // AgentDash (batch 2 review lane): the document-write review hook reads
+  // work products on the request db. This suite stubs services, so the stub
+  // db answers "no bound deliverables".
+  const stubDb = {
+    select: () => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }),
+  } as any;
+  app.use("/api", issueRoutes(stubDb, {} as any));
   app.use(errorHandler);
   return app;
 }

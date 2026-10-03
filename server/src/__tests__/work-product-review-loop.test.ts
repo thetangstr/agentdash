@@ -16,13 +16,14 @@ import type { StorageService } from '../storage/types.js';
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 
 const wakeup = vi.hoisted(() => vi.fn());
+const cancelRun = vi.hoisted(() => vi.fn(async (id: string) => ({ id, status: 'cancelled' })));
 
 vi.mock('../services/live-events.js', () => ({ publishLiveEvent: vi.fn() }));
 vi.mock('../services/heartbeat.js', () => ({
   heartbeatService: (db: ReturnType<typeof createDb>) => ({
     getRun: async (id: string) => (await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, id)))[0] ?? null,
     getActiveRunForAgent: async () => null,
-    cancelRun: async () => null,
+    cancelRun,
     wakeup: wakeup.mockResolvedValue(null),
     reportRunActivity: vi.fn().mockResolvedValue(undefined),
   }),
@@ -63,6 +64,7 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
 
   beforeEach(() => {
     wakeup.mockClear();
+    cancelRun.mockClear();
   });
 
   async function fixture() {
@@ -431,5 +433,146 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect(feed.total).toBe(2);
 
     expect((await call('GET', `/companies/${f.company.id}/work-products?accepted=maybe`, f.boardToken)).status).toBe(400);
+  });
+
+  // AgentDash (batch 2 review lane): the document a deliverable points at is
+  // keyed through metadata.documentKey, and acceptance binds to the revision
+  // the reviewer was shown.
+  async function writeDocumentRevision(f: Awaited<ReturnType<typeof fixture>>, body: string) {
+    const existing = await (await call('GET', `/issues/${f.issue.id}/documents/proposal`, f.agentToken, undefined, f.run.id)).json().catch(() => null);
+    const res = await call('PUT', `/issues/${f.issue.id}/documents/proposal`, f.agentToken,
+      { format: 'markdown', body, ...(existing?.latestRevisionId ? { baseRevisionId: existing.latestRevisionId } : {}) }, f.run.id);
+    return res;
+  }
+
+  it('acceptance requires the revision the reviewer saw: a newer revision is a 409, the seen one accepts', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const deliverable = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    // The document moves ahead of what the reviewer was shown.
+    expect((await writeDocumentRevision(f, '# rev 2')).status).toBe(200);
+
+    const stale = await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done', acceptedDocumentRevisions: { proposal: 1 } });
+    expect(stale.status).toBe(409);
+    // The whole patch rolled back.
+    const [stillOpen] = await db.select().from(issues).where(eq(issues.id, f.issue.id));
+    expect(stillOpen!.status).toBe('in_review');
+    const [stillWaiting] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(stillWaiting!.status).toBe('ready_for_review');
+
+    // Omitting the revision cannot prove the reviewer saw it either.
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done' })).status).toBe(409);
+
+    const accept = await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done', acceptedDocumentRevisions: { proposal: 2 } });
+    expect(accept.status).toBe(200);
+    const [accepted] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    const acceptance = (accepted!.metadata as Record<string, unknown>).acceptance as Record<string, unknown>;
+    expect(acceptance).toMatchObject({ reason: 'issue_accepted', documentKey: 'proposal', acceptedRevisionNumber: 2 });
+    expect(await shippedIds(f.company.id, f.boardToken)).toContain(deliverable!.id);
+  });
+
+  // AgentDash (batch 2 review lane, hosted ACM-5 / local WHI-1): the agent
+  // moved the issue back to in_review while its run was still live and wrote
+  // the revised revision seconds later. The deliverable must not return to
+  // review off the status move alone; the document write completes the flip,
+  // and acceptance then binds to the newest revision.
+  it('review race: resubmitting mid-run keeps the deliverable sent back until its newer revision lands', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const deliverable = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto hotel prices.' })).status).toBe(200);
+    const [sentBack] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(sentBack).toMatchObject({ status: 'changes_requested', reviewState: 'changes_requested' });
+    expect((sentBack!.metadata as Record<string, unknown>).changesRequestedAtRevision).toBe(1);
+
+    // The woken agent resubmits while its run is still live.
+    await db.update(issues).set({ checkoutRunId: f.run.id, executionRunId: f.run.id }).where(eq(issues.id, f.issue.id));
+    const resubmit = await call('PATCH', `/issues/${f.issue.id}`, f.agentToken, { status: 'in_review', comment: 'Revising now.' }, f.run.id);
+    expect(resubmit.status).toBe(200);
+    expect((await resubmit.json()).status).toBe('in_review');
+    const [deferred] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(deferred).toMatchObject({ status: 'changes_requested', reviewState: 'changes_requested' });
+
+    // The revised revision lands after — the document write returns the
+    // deliverable to review on its own.
+    expect((await writeDocumentRevision(f, '# rev 2 — Kyoto hotel prices')).status).toBe(200);
+    const [resubmitted] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(resubmitted).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review' });
+
+    // Accepting rev 1 is refused; accepting what is actually there works.
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done', acceptedDocumentRevisions: { proposal: 1 } })).status).toBe(409);
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done', acceptedDocumentRevisions: { proposal: 2 } })).status).toBe(200);
+  });
+
+  it('a sent-back deliverable returns to review without a new revision once no issue-bound run is live', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const deliverable = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto.' })).status).toBe(200);
+
+    // The run that could write a revision is over and none is queued.
+    await db.update(heartbeatRuns).set({ status: 'succeeded' }).where(eq(heartbeatRuns.id, f.run.id));
+    const resubmit = await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'in_review' });
+    expect(resubmit.status).toBe(200);
+    const [back] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(back).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review' });
+  });
+
+  it('writing a newer revision to an accepted deliverable sends it back to review and reopens the issue', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const deliverable = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done', acceptedDocumentRevisions: { proposal: 1 } })).status).toBe(200);
+    expect(await shippedIds(f.company.id, f.boardToken)).toContain(deliverable!.id);
+
+    // A late write lands after acceptance — it cannot stay silently accepted.
+    expect((await writeDocumentRevision(f, '# rev 2 — landed after accept')).status).toBe(200);
+    const [product] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
+    expect(product).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review' });
+    expect((product!.metadata as Record<string, unknown>).reviewReopenReason).toBe('document_revised_after_acceptance');
+    const [issue] = await db.select().from(issues).where(eq(issues.id, f.issue.id));
+    expect(issue!.status).toBe('in_review');
+    expect(await shippedIds(f.company.id, f.boardToken)).not.toContain(deliverable!.id);
+  });
+
+  it('moving the issue to done or cancelled cancels every queued, running and retrying run woken for it', async () => {
+    const f = await fixture();
+    const [queued] = await db.insert(heartbeatRuns).values({
+      companyId: f.company.id, agentId: f.agent.id, status: 'queued',
+      contextSnapshot: { issueId: f.issue.id },
+    }).returning();
+    const [retrying] = await db.insert(heartbeatRuns).values({
+      companyId: f.company.id, agentId: f.agent.id, status: 'scheduled_retry',
+      contextSnapshot: { taskId: f.issue.id },
+    }).returning();
+    const [unrelated] = await db.insert(heartbeatRuns).values({
+      companyId: f.company.id, agentId: f.agent.id, status: 'queued',
+      contextSnapshot: { issueId: randomUUID() },
+    }).returning();
+
+    expect((await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done' })).status).toBe(200);
+    const cancelledIds = cancelRun.mock.calls.map(([id]) => id).sort();
+    expect(cancelledIds).toEqual([f.run.id, queued.id, retrying.id].sort());
+    expect(cancelledIds).not.toContain(unrelated.id);
+
+    const g = await fixture();
+    expect((await call('PATCH', `/issues/${g.issue.id}`, g.boardToken, { status: 'cancelled' })).status).toBe(200);
+    expect(cancelRun.mock.calls.map(([id]) => id)).toContain(g.run.id);
   });
 });

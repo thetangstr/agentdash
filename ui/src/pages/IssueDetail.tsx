@@ -1658,8 +1658,25 @@ export function IssueDetail() {
   // /issues/:id/request-changes): the note becomes a comment that wakes the
   // assignee, the issue goes back to work, and the deliverables that were
   // waiting are sent back so they leave Decisions and never count as shipped.
+  // AgentDash (batch 2 review lane): acceptance binds to the document
+  // revision the page showed. The documents query is what the reviewer saw;
+  // if it was never loaded (the section was collapsed) the latest numbers are
+  // fetched so the server still has a baseline to compare.
+  const collectSeenDocumentRevisions = useCallback(async () => {
+    const documentIssueId = issue?.id ?? issueId!;
+    const documents =
+      queryClient.getQueryData<Awaited<ReturnType<typeof issuesApi.listDocuments>>>(
+        queryKeys.issues.documents(documentIssueId),
+      ) ?? (await issuesApi.listDocuments(documentIssueId));
+    return Object.fromEntries(
+      (documents ?? []).map((doc) => [doc.key, doc.latestRevisionNumber]),
+    );
+  }, [issue?.id, issueId, queryClient]);
   const resultReviewActions = useMemo<IssueResultReviewActions>(() => ({
-    onAccept: () => updateIssue.mutateAsync({ status: "done" }),
+    onAccept: async () => {
+      const acceptedDocumentRevisions = await collectSeenDocumentRevisions();
+      return updateIssue.mutateAsync({ status: "done", acceptedDocumentRevisions });
+    },
     onRequestChanges: async (note: string) => {
       const current = queryClient.getQueryData<Issue>(queryKeys.issues.detail(issueId!));
       const result = await issuesApi.requestChanges(current?.id ?? issueId!, note);
@@ -1671,7 +1688,7 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(result.issue.companyId) });
       invalidateIssueCollections();
     },
-  }), [invalidateIssueCollections, issueId, queryClient, updateIssue.mutateAsync]);
+  }), [collectSeenDocumentRevisions, invalidateIssueCollections, issueId, queryClient, updateIssue.mutateAsync]);
   // AgentDash (recovery budget remediation): "Clear recovery block & retry".
   const clearRecoveryBudget = useMutation({
     mutationFn: () => issuesApi.clearRecoveryBudget(issueId!),
@@ -3195,7 +3212,24 @@ export function IssueDetail() {
           <StatusIcon
             status={issue.status}
             blockerAttention={issue.blockerAttention}
-            onChange={(status) => updateIssue.mutate({ status })}
+            onChange={(status) => {
+              // AgentDash (batch 2 review lane): moving to done is an
+              // acceptance — send the revisions on-screen so the server can
+              // refuse a stale one. If the lookup fails, send without a
+              // baseline: the server refuses only when a document-bound
+              // deliverable actually needs one.
+              void (async () => {
+                let acceptedDocumentRevisions: Record<string, number> | undefined;
+                if (status === "done") {
+                  try {
+                    acceptedDocumentRevisions = await collectSeenDocumentRevisions();
+                  } catch {
+                    acceptedDocumentRevisions = undefined;
+                  }
+                }
+                updateIssue.mutate({ status, acceptedDocumentRevisions });
+              })();
+            }}
           />
           <PriorityIcon
             priority={issue.priority}
@@ -3478,6 +3512,7 @@ export function IssueDetail() {
           companyId={issue.companyId}
           issueId={issue.id}
           issueStatus={issue.status}
+          issueLive={hasLiveRuns}
           review={canManageTreeControl ? resultReviewActions : null}
         />
 

@@ -353,9 +353,10 @@ function ActivityPanel({ companyId, agents }: { companyId: string; agents: Agent
     }
     return map;
   }, [activity]);
-  // System plumbing (workspace leases, runtime checks) stays out of Home.
+  // System plumbing (workspace leases, runtime checks, review-queue churn)
+  // stays out of Home — including rows stamped with the system actor.
   const events = (activity ?? [])
-    .filter((event) => !isSystemPlumbingActivity(event.action))
+    .filter((event) => event.actorType !== "system" && !isSystemPlumbingActivity(event.action))
     .slice(0, DASHBOARD_ACTIVITY_LIMIT);
 
   return (

@@ -645,7 +645,9 @@ function issueLastActivityAtExpr(companyId: string, userId: string) {
   `;
 }
 
-const ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS = [
+// AgentDash (batch 2 review lane): exported so the activity feed can hide the
+// same bookkeeping actions the "latest activity" computation already ignores.
+export const ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS = [
   "issue.read_marked",
   "issue.read_unmarked",
   "issue.inbox_archived",

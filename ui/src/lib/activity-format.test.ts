@@ -82,3 +82,23 @@ describe("system plumbing activity", () => {
     expect(formatActivityVerb("agent.harness_preflight_passed")).not.toMatch(/harness|preflight/);
   });
 });
+
+// AgentDash (batch 2 review lane): read markers, inbox moves and review-queue
+// churn are bookkeeping — hidden by default, plain words when shown.
+describe("bookkeeping activity", () => {
+  it("marks read/inbox/queue actions as system plumbing", () => {
+    expect(isSystemPlumbingActivity("issue.read_marked")).toBe(true);
+    expect(isSystemPlumbingActivity("issue.read_unmarked")).toBe(true);
+    expect(isSystemPlumbingActivity("issue.inbox_archived")).toBe(true);
+    expect(isSystemPlumbingActivity("issue.inbox_unarchived")).toBe(true);
+    expect(isSystemPlumbingActivity("queue_state_changed")).toBe(true);
+    expect(isSystemPlumbingActivity("issue.work_product_updated")).toBe(false);
+  });
+
+  it("says them in plain language, not raw action names", () => {
+    expect(formatActivityVerb("issue.read_marked")).not.toMatch(/read_marked|issue\./);
+    expect(formatActivityVerb("queue_state_changed")).not.toMatch(/queue_state_changed/);
+    expect(formatActivityVerb("issue.work_product_updated")).toBe("updated a deliverable on");
+    expect(formatIssueActivityAction("issue.work_product_updated")).toBe("updated a deliverable");
+  });
+});

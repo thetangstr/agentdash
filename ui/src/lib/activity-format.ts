@@ -35,6 +35,14 @@ const SYSTEM_PLUMBING_ACTIONS = new Set([
   "environment.probed",
   "environment.probed_unsaved",
   "agent.harness_preflight_passed",
+  // AgentDash (batch 2 review lane): read markers and review-queue churn are
+  // bookkeeping, not work a person needs to read about — hidden until "Show
+  // system events" is on.
+  "issue.read_marked",
+  "issue.read_unmarked",
+  "issue.inbox_archived",
+  "issue.inbox_unarchived",
+  "queue_state_changed",
 ]);
 
 export function isSystemPlumbingActivity(action: string): boolean {
@@ -58,6 +66,14 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "issue.document_created": "created document for",
   "issue.document_updated": "updated document on",
   "issue.document_deleted": "deleted document from",
+  "issue.read_marked": "marked as read",
+  "issue.read_unmarked": "marked as unread",
+  "issue.inbox_archived": "archived",
+  "issue.inbox_unarchived": "unarchived",
+  "queue_state_changed": "updated the review queue on",
+  "issue.work_product_created": "added a deliverable to",
+  "issue.work_product_updated": "updated a deliverable on",
+  "issue.work_product_deleted": "removed a deliverable from",
   "issue.commented": "commented on",
   "issue.deleted": "deleted",
   "agent.created": "created",
@@ -100,6 +116,14 @@ const ISSUE_ACTIVITY_LABELS: Record<string, string> = {
   "issue.document_created": "created a document",
   "issue.document_updated": "updated a document",
   "issue.document_deleted": "deleted a document",
+  "issue.read_marked": "marked the issue as read",
+  "issue.read_unmarked": "marked the issue as unread",
+  "issue.inbox_archived": "archived the issue",
+  "issue.inbox_unarchived": "unarchived the issue",
+  "queue_state_changed": "updated the review queue",
+  "issue.work_product_created": "added a deliverable",
+  "issue.work_product_updated": "updated a deliverable",
+  "issue.work_product_deleted": "removed a deliverable",
   "issue.deleted": "deleted the issue",
   "agent.created": "created an agent",
   "agent.updated": "updated the agent",

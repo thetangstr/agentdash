@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -15,6 +15,7 @@ import {
   workspaceOperations,
 } from "@paperclipai/db";
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
+import { ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS } from "./issues.js";
 import { logger } from "../middleware/logger.js";
 import { classifyRunLiveness } from "./run-liveness.js";
 import { redactRunLogValue } from "./run-log-redaction.js";
@@ -44,6 +45,13 @@ const DEFAULT_ACTIVITY_LIMIT = 100;
 const MAX_ACTIVITY_LIMIT = 500;
 const DEFAULT_ISSUE_RUNS_LIMIT = 100;
 const MAX_ISSUE_RUNS_LIMIT = 500;
+
+// AgentDash (batch 2 review lane): bookkeeping actions hidden from issue
+// feeds by default — local inbox/read markers plus review-queue churn.
+const ISSUE_FEED_HIDDEN_ACTIONS = [
+  ...ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
+  "queue_state_changed",
+];
 
 export function normalizeActivityLimit(limit: number | undefined) {
   if (!Number.isFinite(limit)) return DEFAULT_ACTIVITY_LIMIT;
@@ -391,6 +399,10 @@ export function activityService(db: Db) {
         .then((rows) => rows.map((r) => r.activityLog));
     },
 
+    // AgentDash (batch 2 review lane): the issue page feed has no "show
+    // system events" toggle, so bookkeeping rows (read markers, inbox moves,
+    // review-queue churn) are excluded here, matching the company feed's
+    // default-hidden plumbing list.
     forIssue: (issueId: string) =>
       db
         .select()
@@ -399,6 +411,7 @@ export function activityService(db: Db) {
           and(
             eq(activityLog.entityType, "issue"),
             eq(activityLog.entityId, issueId),
+            notInArray(activityLog.action, ISSUE_FEED_HIDDEN_ACTIONS),
           ),
         )
         .orderBy(desc(activityLog.createdAt)),

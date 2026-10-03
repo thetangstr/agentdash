@@ -1,7 +1,7 @@
 // AgentDash: canonical PATCH acceptance. Plans are private and confer no authority.
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { companies, issues, issueExecutionDecisions, issueThreadInteractions, issueWorkProducts, type Db } from "@paperclipai/db";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { companies, documents, heartbeatRuns, issueDocuments, issues, issueExecutionDecisions, issueThreadInteractions, issueWorkProducts, type Db } from "@paperclipai/db";
 import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueRouteSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
@@ -28,7 +28,7 @@ type Intent = z.infer<typeof updateIssueRouteSchema>;
 type Runtime = Pick<ReturnType<typeof heartbeatService>, "cancelRun" | "wakeup" | "reportRunActivity">;
 export type IssuePatchSnapshot = {
   version: number; companyId: string; issueId: string; intentDigest: string; stateDigest: string; policyDigest: string;
-  interruptRunId: string | null; statusCancelRunId: string | null; mentionedIds: string[]; confirmationIds: string[]; blockedByIds: string[]
+  interruptRunId: string | null; statusCancelRunIds: string[]; mentionedIds: string[]; confirmationIds: string[]; blockedByIds: string[]
 };
 export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | "validate" | "expectedSnapshot"> {
   intent: Intent;
@@ -246,6 +246,68 @@ function retainedReferenceFacts(text: string | null) {
     .sort((left, right) => left.identifier.localeCompare(right.identifier));
 }
 
+// AgentDash (batch 2 review lane): the document a document-typed deliverable
+// points at lives behind metadata.documentKey (the key the agent wrote it
+// under), joined through issue_documents.
+function workProductDocumentKey(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const key = (metadata as Record<string, unknown>).documentKey;
+  return typeof key === "string" && key.length > 0 ? key : null;
+}
+
+async function listIssueDocumentsByKey(
+  executor: IssueCommentExecutor,
+  companyId: string,
+  issueId: string,
+  keys: string[],
+) {
+  const unique = [...new Set(keys)];
+  if (unique.length === 0) return new Map<string, { key: string; latestRevisionId: string | null; latestRevisionNumber: number; updatedAt: Date }>();
+  const rows = await executor
+    .select({
+      key: issueDocuments.key,
+      latestRevisionId: documents.latestRevisionId,
+      latestRevisionNumber: documents.latestRevisionNumber,
+      // documents.updated_at is the instant of the latest revision write; it
+      // stands in for revision.created_at when only a changes-requested
+      // timestamp is available to compare against.
+      updatedAt: documents.updatedAt,
+    })
+    .from(issueDocuments)
+    .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
+    .where(and(
+      eq(issueDocuments.companyId, companyId),
+      eq(issueDocuments.issueId, issueId),
+      inArray(issueDocuments.key, unique),
+    ));
+  return new Map(rows.map((row) => [row.key, row]));
+}
+
+// AgentDash (batch 2 review lane): every queued, scheduled or running run that
+// was woken for this issue — not only the active one — so a queued wake cannot
+// start after the issue is already done or cancelled. The calling run is
+// excluded: it is finishing the transition it just made.
+async function selectIssueRunsForClose(
+  executor: IssueCommentExecutor,
+  issue: Pick<Issue, "id" | "companyId" | "executionRunId" | "checkoutRunId">,
+  actorRunId: string | null,
+) {
+  return executor
+    .select({ id: heartbeatRuns.id, agentId: heartbeatRuns.agentId, status: heartbeatRuns.status })
+    .from(heartbeatRuns)
+    .where(and(
+      eq(heartbeatRuns.companyId, issue.companyId),
+      inArray(heartbeatRuns.status, ["queued", "running", "scheduled_retry"]),
+      or(
+        sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+        sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issue.id}`,
+        issue.executionRunId ? eq(heartbeatRuns.id, issue.executionRunId) : undefined,
+        issue.checkoutRunId ? eq(heartbeatRuns.id, issue.checkoutRunId) : undefined,
+      ),
+      actorRunId ? sql`${heartbeatRuns.id} <> ${actorRunId}` : undefined,
+    ));
+}
+
 export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
   statusChanged?(issueId: string, before: string, after: string): Promise<unknown>;
   completed?(agentId: string): Promise<unknown>;
@@ -299,11 +361,10 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       resume: resumeRequested,
       interrupt: _interruptRequested,
       hiddenAt: hiddenAtRaw,
+      acceptedDocumentRevisions: _acceptedDocumentRevisions,
       ...rawUpdateFields
     } = intent;
     const updateFields: Parameters<typeof svc.update>[1] = { ...rawUpdateFields };
-    const shouldCancelActiveRunForCancelledStatus =
-      existing.status !== "cancelled" && updateFields.status === "cancelled";
     if (resumeRequested === true) await context.validateResume(executor, existing);
     if (resumeRequested !== true && reopenRequested === true && context.actorKind === "agent") {
       await context.validateResume(executor, existing);
@@ -332,8 +393,6 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       throw new IssueCommentPolicyRefusal(409, { error: "Issue follow-up blocked by unresolved blockers" });
     }
     const interruptRun = intent.interrupt ? await selectActiveIssueRun(executor, existing) : null;
-    const runToCancelForCancelledStatus = shouldCancelActiveRunForCancelledStatus
-      ? await selectActiveIssueRun(executor, existing) : null;
 
     if (hiddenAtRaw !== undefined) {
       updateFields.hiddenAt = hiddenAtRaw ? new Date(hiddenAtRaw) : null;
@@ -410,6 +469,13 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       };
     }
     Object.assign(updateFields, transition.patch);
+    // AgentDash (batch 2 review lane): computed on the final target status, so
+    // both done and cancelled stop every queued, scheduled or running run that
+    // was woken for this issue — not just the one currently active.
+    const runsToCancelForClosedStatus =
+      ["done", "cancelled"].includes(String(updateFields.status)) && existing.status !== updateFields.status
+        ? await selectIssueRunsForClose(executor, existing, actor.runId ?? null)
+        : [];
     if (reviewRequest !== undefined && transition.patch.executionState === undefined) {
       const existingExecutionState = parseIssueExecutionState(existing.executionState);
       if (!existingExecutionState || existingExecutionState.status !== "pending") {
@@ -540,13 +606,13 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           .map(row => summarizeIssueRelationForActivity(row.issue)).sort((a, b) => a.id.localeCompare(b.id)),
       }),
       interruptRunId: interruptRun?.id ?? null,
-      statusCancelRunId: runToCancelForCancelledStatus?.id ?? null,
+      statusCancelRunIds: runsToCancelForClosedStatus.map((run) => run.id).sort(),
       mentionedIds: [...mentionedIds].sort(), confirmationIds,
       blockedByIds: existingRelations?.blockedBy.map(row => row.id).sort() ?? [],
     };
     if (context.expectedSnapshot && JSON.stringify(context.expectedSnapshot) !== JSON.stringify(snapshot)) throw conflict("Issue changed since update preparation");
     return {
-      context, existing, intent, snapshot, domain, updateFields, transition, decisionId, checkout, interruptRun, runToCancelForCancelledStatus,
+      context, existing, intent, snapshot, domain, updateFields, transition, decisionId, checkout, interruptRun, runsToCancelForClosedStatus,
       mentionedIds, titleOrDescriptionChanged, existingRelations, updateReferenceSummaryBefore, commentBody, resumeRequested,
       effectiveMoveToTodoRequested, isClosed, isBlocked, hasUnresolvedFirstClassBlockers, previousExecutionPolicy, nextExecutionPolicy
     };
@@ -662,7 +728,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
             ...(plan.interruptRun ? { requestedInterruptRunId: plan.interruptRun.id } : {}),
-            ...(plan.runToCancelForCancelledStatus ? { requestedStatusCancelRunId: plan.runToCancelForCancelledStatus.id } : {}),
+            ...(plan.runsToCancelForClosedStatus.length > 0
+              ? { requestedStatusCancelRunIds: plan.runsToCancelForClosedStatus.map((run) => run.id) }
+              : {}),
             _previous: hasFieldChanges ? previous : undefined,
             ...summarizeIssueReferenceActivityDetails(
               updateReferenceDiff
@@ -685,29 +753,57 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         // metadata.acceptance lets a reopen undo exactly this.
         const humanBoardActor = context.actorKind === "board" && context.actorSource !== "assistant_grant" && actor.actorType === "user";
         if (humanBoardActor && existing.status !== "done" && issue.status === "done") {
-          const acceptance = {
-            reason: "issue_accepted",
-            acceptedAt: new Date().toISOString(),
-            acceptedByUserId: actor.actorId,
-          };
-          const acceptedProducts = await tx.update(issueWorkProducts)
-            .set({
-              status: "approved",
-              reviewState: "approved",
-              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('acceptance',
-                ${JSON.stringify(acceptance)}::jsonb || jsonb_build_object('previousReviewState', ${issueWorkProducts.reviewState}, 'previousStatus', ${issueWorkProducts.status}))`,
-              updatedAt: new Date(),
-            })
-            // AgentDash (Scan 4 lane M): a person closing the issue accepts
-            // what was sent back too (they decided to take it as it is);
-            // otherwise it stayed changes_requested and never reached Shipped.
+          // AgentDash (batch 2 review lane): acceptance binds to the document
+          // revision the person saw. The issue row is locked for update here,
+          // so a document write cannot slip a newer revision between this read
+          // and the commit; if the client sent a revision older than the
+          // latest, the whole PATCH is refused with 409.
+          const awaiting = await tx
+            .select({ id: issueWorkProducts.id, metadata: issueWorkProducts.metadata })
+            .from(issueWorkProducts)
             .where(and(
               eq(issueWorkProducts.companyId, issue.companyId),
               eq(issueWorkProducts.issueId, issue.id),
               inArray(issueWorkProducts.status, ["ready_for_review", "changes_requested"]),
-            ))
-            .returning({ id: issueWorkProducts.id });
-          for (const product of acceptedProducts) {
+            ));
+          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId, issue.id,
+            awaiting.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
+          const seenRevisions = intent.acceptedDocumentRevisions ?? {};
+          for (const product of awaiting) {
+            const documentKey = workProductDocumentKey(product.metadata);
+            const doc = documentKey ? docsByKey.get(documentKey) : null;
+            if (doc) {
+              const seenRevision = seenRevisions[documentKey!];
+              if (seenRevision === undefined || doc.latestRevisionNumber > seenRevision) {
+                throw conflict("The document changed after you reviewed it. Read the newest revision before accepting.", {
+                  documentKey,
+                  seenRevisionNumber: seenRevision ?? null,
+                  latestRevisionNumber: doc.latestRevisionNumber,
+                });
+              }
+            }
+            const acceptance = {
+              reason: "issue_accepted",
+              acceptedAt: new Date().toISOString(),
+              acceptedByUserId: actor.actorId,
+              ...(doc ? {
+                documentKey,
+                acceptedRevisionId: doc.latestRevisionId,
+                acceptedRevisionNumber: doc.latestRevisionNumber,
+              } : {}),
+            };
+            // AgentDash (Scan 4 lane M): a person closing the issue accepts
+            // what was sent back too (they decided to take it as it is);
+            // otherwise it stayed changes_requested and never reached Shipped.
+            await tx.update(issueWorkProducts)
+              .set({
+                status: "approved",
+                reviewState: "approved",
+                metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('acceptance',
+                  ${JSON.stringify(acceptance)}::jsonb || jsonb_build_object('previousReviewState', ${issueWorkProducts.reviewState}, 'previousStatus', ${issueWorkProducts.status}))`,
+                updatedAt: new Date(),
+              })
+              .where(eq(issueWorkProducts.id, product.id));
             await audit({
               companyId: issue.companyId,
               actorType: actor.actorType,
@@ -724,6 +820,8 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
                 status: "approved",
                 reviewState: "approved",
                 reason: "issue_accepted",
+                ...(documentKey ? { documentKey } : {}),
+                ...(doc ? { acceptedRevisionNumber: doc.latestRevisionNumber } : {}),
                 ...context.attribution,
               },
             });
@@ -779,22 +877,44 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         // waiting for review when the request was made are sent back; the
         // update and its audit rows commit with the comment and status.
         if (context.requestChanges && humanBoardActor) {
-          const sentBack = await tx.update(issueWorkProducts)
-            .set({
-              status: "changes_requested",
-              reviewState: "changes_requested",
-              // AgentDash (Scan 4 lane M): marks it as reviewed under the new
-              // rule, so the legacy "done means accepted" read never applies.
-              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('changesRequestedAt', ${new Date().toISOString()}::text)`,
-              updatedAt: new Date(),
-            })
+          const waitingForReview = await tx
+            .select({ id: issueWorkProducts.id, metadata: issueWorkProducts.metadata })
+            .from(issueWorkProducts)
             .where(and(
               eq(issueWorkProducts.companyId, issue.companyId),
               eq(issueWorkProducts.issueId, issue.id),
               eq(issueWorkProducts.status, "ready_for_review"),
-            ))
-            .returning({ id: issueWorkProducts.id });
-          for (const product of sentBack) {
+            ));
+          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId, issue.id,
+            waitingForReview.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
+          const changesRequestedAt = new Date().toISOString();
+          for (const product of waitingForReview) {
+            const documentKey = workProductDocumentKey(product.metadata);
+            const doc = documentKey ? docsByKey.get(documentKey) : null;
+            // AgentDash (batch 2 review lane): the revision the request was
+            // made against is the baseline. Resubmission only counts once a
+            // strictly newer revision exists (or the run that would write it
+            // has finished).
+            await tx.update(issueWorkProducts)
+              .set({
+                status: "changes_requested",
+                reviewState: "changes_requested",
+                // AgentDash (Scan 4 lane M): marks it as reviewed under the new
+                // rule, so the legacy "done means accepted" read never applies.
+                // The revision keys are only written when the deliverable is
+                // document-bound — no null-valued keys in metadata.
+                metadata: doc
+                  ? sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object(
+                      'changesRequestedAt', ${changesRequestedAt}::text,
+                      'changesRequestedAtRevision', ${doc.latestRevisionNumber}::int,
+                      'changesRequestedRevisionId', ${doc.latestRevisionId}::text)`
+                  : sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object(
+                      'changesRequestedAt', ${changesRequestedAt}::text)`,
+                updatedAt: new Date(),
+              })
+              .where(eq(issueWorkProducts.id, product.id));
+          }
+          for (const product of waitingForReview) {
             await audit({
               companyId: issue.companyId,
               actorType: actor.actorType,
@@ -822,21 +942,61 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         // deliverables that were sent back are waiting for review again, so
         // Accept and Request changes reappear instead of a dead end. This only
         // returns them to ready_for_review; acceptance stays with a person.
+        //
+        // AgentDash (batch 2 review lane): a document-bound deliverable only
+        // comes back when the document has a revision newer than the one the
+        // changes request was made against, or when no issue-bound run is live
+        // (the run that could still write one has finished). Otherwise the
+        // review buttons would reappear for a revision the agent has not
+        // written yet — the hosted ACM-5 / local WHI-1 race.
         if (existing.status !== "in_review" && issue.status === "in_review") {
-          const resubmitted = await tx.update(issueWorkProducts)
-            .set({
-              status: "ready_for_review",
-              reviewState: "needs_board_review",
-              metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${new Date().toISOString()}::text)`,
-              updatedAt: new Date(),
-            })
+          const sentBack = await tx
+            .select({ id: issueWorkProducts.id, metadata: issueWorkProducts.metadata })
+            .from(issueWorkProducts)
             .where(and(
               eq(issueWorkProducts.companyId, issue.companyId),
               eq(issueWorkProducts.issueId, issue.id),
               eq(issueWorkProducts.status, "changes_requested"),
-            ))
-            .returning({ id: issueWorkProducts.id });
-          for (const product of resubmitted) {
+            ));
+          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId, issue.id,
+            sentBack.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
+          // The calling run is live too — an agent resubmitting from its own
+          // run has not finished, so only an already-written revision lets the
+          // deliverable back to review. A later document write (or a later
+          // move to in_review once nothing is live) completes the flip.
+          const liveRun =
+            sentBack.length > 0
+              ? ((await selectIssueRunsForClose(tx, issue, null))[0]
+                  ?? (await selectActiveIssueRun(tx, issue))
+                  ?? (actor.actorType === "agent" && actor.runId ? { id: actor.runId } : null))
+              : null;
+          const resubmittedAt = new Date().toISOString();
+          for (const product of sentBack) {
+            const documentKey = workProductDocumentKey(product.metadata);
+            if (documentKey) {
+              const doc = docsByKey.get(documentKey);
+              const meta = product.metadata as Record<string, unknown> | null;
+              const requestedRevision =
+                typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
+              const requestedAtRaw = meta?.changesRequestedAt;
+              const requestedAt =
+                typeof requestedAtRaw === "string" && !Number.isNaN(Date.parse(requestedAtRaw))
+                  ? new Date(requestedAtRaw)
+                  : null;
+              const hasNewerRevision = !!doc && (
+                (requestedRevision !== null && doc.latestRevisionNumber > requestedRevision)
+                || (requestedRevision === null && requestedAt !== null && doc.updatedAt.getTime() > requestedAt.getTime())
+              );
+              if (!hasNewerRevision && liveRun) continue;
+            }
+            await tx.update(issueWorkProducts)
+              .set({
+                status: "ready_for_review",
+                reviewState: "needs_board_review",
+                metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${resubmittedAt}::text)`,
+                updatedAt: new Date(),
+              })
+              .where(eq(issueWorkProducts.id, product.id));
             await audit({
               companyId: issue.companyId,
               actorType: actor.actorType,
@@ -1045,10 +1205,14 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     }
     for (const publication of accepted.publications) await effect("publication", undefined, async () => publishActivity(publication));
     let interruptedRunId: string | null = null;
-    const cancellations = new Map<string, { run: NonNullable<typeof plan.interruptRun>; source: string; reason: string }>();
+    const closedStatusCancelRunIds = new Set(plan.runsToCancelForClosedStatus.map((run) => run.id));
+    const statusCancelSource = issue.status === "done" ? "issue_status_done" : "issue_status_cancelled";
+    const statusCancelReason = issue.status === "done" ? "Cancelled because the issue was marked done" : "Cancelled because the issue was cancelled";
+    const cancellations = new Map<string, { run: { id: string; agentId: string | null }; source: string; reason: string }>();
     if (plan.interruptRun) cancellations.set(plan.interruptRun.id, { run: plan.interruptRun, source: "issue_comment_interrupt", reason: "Interrupted by a new comment" });
-    if (plan.runToCancelForCancelledStatus && !cancellations.has(plan.runToCancelForCancelledStatus.id)) cancellations.set(plan.runToCancelForCancelledStatus.id,
-      { run: plan.runToCancelForCancelledStatus, source: "issue_status_cancelled", reason: "Cancelled because the issue was cancelled" });
+    for (const run of plan.runsToCancelForClosedStatus) {
+      if (!cancellations.has(run.id)) cancellations.set(run.id, { run, source: statusCancelSource, reason: statusCancelReason });
+    }
     for (const [runId, { run, source, reason }] of cancellations) {
       const cancelled = await effect("cancel", runId, async () => {
         const result = await heartbeat.cancelRun(runId, reason);
@@ -1064,12 +1228,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           });
           publishActivity(publication);
         });
-      } else if (cancelled === undefined && plan.runToCancelForCancelledStatus?.id === runId) {
+      } else if (cancelled === undefined && closedStatusCancelRunIds.has(runId)) {
         await effect("cancel_failure_audit", runId, async () => {
           const publication = await insertActivity(db, {
             companyId: issue.companyId, ...actor,
             action: "heartbeat.cancel_failed", entityType: "heartbeat_run", entityId: runId,
-            details: { source: "issue_status_cancelled", issueId: id, mutationId: accepted.mutationId }
+            details: { source: statusCancelSource, issueId: id, mutationId: accepted.mutationId }
           });
           publishActivity(publication);
         });

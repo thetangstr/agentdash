@@ -27,11 +27,18 @@ export function IssueResultBlock({
   companyId,
   issueId,
   issueStatus,
+  issueLive,
   review,
 }: {
   companyId: string;
   issueId: string;
   issueStatus?: string | null;
+  /**
+   * AgentDash (batch 2 review lane): while the issue is Live a run may still
+   * write the revision the reviewer is being asked to accept, so the review
+   * controls stay hidden until nothing is running.
+   */
+  issueLive?: boolean;
   /**
    * AgentDash (Scan 3 lane I): passed only for a board user. With it, a
    * deliverable waiting for review gets Accept and Request changes here, on
@@ -73,6 +80,7 @@ export function IssueResultBlock({
     !!review
     && issueStatus !== "done"
     && issueStatus !== "cancelled"
+    && !issueLive
     && items.some((product) => product.status === "ready_for_review");
 
   async function run(kind: "accept" | "changes", action: () => Promise<unknown>) {

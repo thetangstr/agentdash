@@ -15,8 +15,8 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { agents, heartbeatRuns, issueExecutionDecisions, issues } from "@paperclipai/db";
-import { and, eq } from "drizzle-orm";
+import { agents, heartbeatRuns, issueExecutionDecisions, issues, issueWorkProducts } from "@paperclipai/db";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   assertFeedbackTraceVisible,
   assertIssueIdVisible,
@@ -238,6 +238,137 @@ export function workProductSelfAcceptanceRefusal(
     return "Only a person can accept work. A board user accepts it from the issue.";
   }
   return null;
+}
+
+/**
+ * AgentDash (batch 2 review lane): a new revision written to the document of
+ * a deliverable sends that deliverable back to review. An accepted
+ * deliverable whose document changed after the accepted revision returns to
+ * ready_for_review — and reopens a done issue to in_review so the review
+ * actually surfaces again; a sent-back deliverable on an issue already in
+ * review becomes reviewable once the revision it was asked for lands.
+ */
+async function applyDeliverableReviewAfterDocumentRevision(input: {
+  db: Db;
+  issue: { id: string; companyId: string; identifier?: string | null; status: string; title: string };
+  key: string;
+  latestRevisionNumber: number;
+  actor: { actorType: "agent" | "plugin" | "system" | "user"; actorId: string; agentId: string | null; runId: string | null };
+  onIssueStatusChanged: (issueId: string, before: string, after: string) => Promise<unknown>;
+}) {
+  const { db, issue, key, latestRevisionNumber, actor, onIssueStatusChanged } = input;
+  const candidates = await db
+    .select({ id: issueWorkProducts.id, status: issueWorkProducts.status, metadata: issueWorkProducts.metadata })
+    .from(issueWorkProducts)
+    .where(and(
+      eq(issueWorkProducts.companyId, issue.companyId),
+      eq(issueWorkProducts.issueId, issue.id),
+      inArray(issueWorkProducts.status, ["approved", "changes_requested"]),
+      sql`${issueWorkProducts.metadata} ->> 'documentKey' = ${key}`,
+    ));
+  if (candidates.length === 0) return;
+  const now = new Date();
+  let reopenedAccepted = false;
+  for (const product of candidates) {
+    const meta = (product.metadata ?? null) as Record<string, unknown> | null;
+    if (product.status === "approved") {
+      const acceptance = meta?.acceptance as Record<string, unknown> | undefined;
+      const acceptedRevision =
+        typeof acceptance?.acceptedRevisionNumber === "number" ? acceptance.acceptedRevisionNumber : null;
+      // The revision the person accepted already covers this write.
+      if (acceptedRevision !== null && acceptedRevision >= latestRevisionNumber) continue;
+      await db.update(issueWorkProducts)
+        .set({
+          status: "ready_for_review",
+          reviewState: "needs_board_review",
+          metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object(
+            'reviewReopenedAt', ${now.toISOString()}::text,
+            'reviewReopenReason', 'document_revised_after_acceptance')`,
+          updatedAt: now,
+        })
+        .where(eq(issueWorkProducts.id, product.id));
+      reopenedAccepted = true;
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.work_product_updated",
+        entityType: "issue",
+        entityId: issue.id,
+        details: {
+          identifier: issue.identifier ?? null,
+          workProductId: product.id,
+          changedKeys: ["metadata", "reviewState", "status"],
+          status: "ready_for_review",
+          reviewState: "needs_board_review",
+          reason: "document_revised_after_acceptance",
+          key,
+          revisionNumber: latestRevisionNumber,
+        },
+      });
+    } else if (product.status === "changes_requested") {
+      // A sent-back deliverable is resubmitted by the new revision only while
+      // the issue sits in review — and only when this revision is newer than
+      // the one the changes request was made against.
+      if (issue.status !== "in_review") continue;
+      const requestedRevision =
+        typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
+      if (requestedRevision !== null && latestRevisionNumber <= requestedRevision) continue;
+      await db.update(issueWorkProducts)
+        .set({
+          status: "ready_for_review",
+          reviewState: "needs_board_review",
+          metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${now.toISOString()}::text)`,
+          updatedAt: now,
+        })
+        .where(eq(issueWorkProducts.id, product.id));
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.work_product_updated",
+        entityType: "issue",
+        entityId: issue.id,
+        details: {
+          identifier: issue.identifier ?? null,
+          workProductId: product.id,
+          changedKeys: ["metadata", "reviewState", "status"],
+          status: "ready_for_review",
+          reviewState: "needs_board_review",
+          reason: "resubmitted_for_review",
+          key,
+          revisionNumber: latestRevisionNumber,
+        },
+      });
+    }
+  }
+  if (reopenedAccepted && issue.status === "done") {
+    await db.update(issues)
+      .set({ status: "in_review", completedAt: null, updatedAt: now })
+      .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+    await logActivity(db, {
+      companyId: issue.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "issue.updated",
+      entityType: "issue",
+      entityId: issue.id,
+      details: {
+        identifier: issue.identifier ?? null,
+        status: "in_review",
+        _previous: { status: "done" },
+        reason: "document_revised_after_acceptance",
+        key,
+      },
+    });
+    await onIssueStatusChanged(issue.id, "done", "in_review");
+  }
 }
 
 export function issueRoutes(
@@ -1523,6 +1654,15 @@ export function issueRoutes(
       });
     }
 
+    await applyDeliverableReviewAfterDocumentRevision({
+      db,
+      issue,
+      key: doc.key,
+      latestRevisionNumber: doc.latestRevisionNumber,
+      actor,
+      onIssueStatusChanged: (issueId, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(issueId, before, after),
+    });
+
     res.status(result.created ? 201 : 200).json(doc);
   });
 
@@ -1618,6 +1758,15 @@ export function issueRoutes(
         interactions: expiredInteractions,
         actor,
         source: "issue.document_restored",
+      });
+
+      await applyDeliverableReviewAfterDocumentRevision({
+        db,
+        issue,
+        key: result.document.key,
+        latestRevisionNumber: result.document.latestRevisionNumber,
+        actor,
+        onIssueStatusChanged: (issueId, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(issueId, before, after),
       });
 
       res.json(result.document);
@@ -2284,7 +2433,7 @@ export function issueRoutes(
           }
           if (intent.executionWorkspaceSettings?.environmentId) await assertEnvironmentSelectionForCompany(environmentService(policyDb),
             current.companyId, intent.executionWorkspaceSettings.environmentId, { allowedDrivers: ["local", "ssh", "sandbox"] });
-          const { comment, reviewRequest, reopen: _reopen, resume: _resume, interrupt: _interrupt, hiddenAt: _hiddenAt, ...fields } = intent;
+          const { comment, reviewRequest, reopen: _reopen, resume: _resume, interrupt: _interrupt, hiddenAt: _hiddenAt, acceptedDocumentRevisions: _acceptedDocumentRevisions, ...fields } = intent;
           const agentWork = req.actor.type === "agent" && (Object.keys(fields).length > 0 || reviewRequest !== undefined);
           const workspace = current.executionWorkspaceId ? await executionWorkspaceServiceDirect(policyDb).getById(current.executionWorkspaceId) : null;
           if (workspace && isClosedIsolatedExecutionWorkspace(workspace) && (comment || agentWork)) throw new IssueCommentPolicyRefusal(409, {
