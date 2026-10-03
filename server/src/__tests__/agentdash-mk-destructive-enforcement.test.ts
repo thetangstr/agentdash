@@ -50,9 +50,12 @@ describeEmbeddedPostgres("agentdash-mk destructive-action enforcement", () => {
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
   beforeAll(async () => {
+    // The helper allows 60s each for initdb and postgres start plus 120s for
+    // migrations; a 20s hook deadline could not outlive a slow phase on a
+    // loaded CI box (#984).
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-mk-destructive-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+  }, 60_000);
 
   afterEach(async () => {
     await db.delete(workflowEvents);
@@ -70,6 +73,9 @@ describeEmbeddedPostgres("agentdash-mk destructive-action enforcement", () => {
   });
 
   afterAll(async () => {
+    // Close the pool before the server stops so open sockets don't surface as
+    // CONNECTION_DESTROYED unhandled errors during cleanup.
+    await db?.$client.end({ timeout: 5 });
     await tempDb?.cleanup();
   });
 

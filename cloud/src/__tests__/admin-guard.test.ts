@@ -35,9 +35,20 @@ async function refusals() {
   return await db.select().from(operatorAudit).where(eq(operatorAudit.kind, "admin_refused")).orderBy(operatorAudit.id);
 }
 
-/** The audit write is fire-and-forget; give it a moment to land. */
-async function settle() {
-  await new Promise((r) => setTimeout(r, 150));
+/**
+ * The audit write is fire-and-forget, so a fixed delay races it on a loaded
+ * box: wait until the expected number of refusal rows has actually landed.
+ */
+async function waitForRefusals(expected: number, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const rows = await refusals();
+    if (rows.length >= expected) return rows;
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${expected} admin_refused audit rows (have ${rows.length})`);
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
 }
 
 beforeAll(async () => {
@@ -99,9 +110,10 @@ describe("X-Real-IP from the private network", () => {
   it("is refused even with an allow-listed X-Real-IP and the right bearer, and audited", async () => {
     // Supertest connects from loopback; treat loopback as "the private network" here.
     const app = createApp({ db, config: config({ CLOUD_CLIENT_IP_SOURCE: "x-real-ip", CLOUD_PRIVATE_NETWORK_CIDRS: "127.0.0.0/8,::1/128" }), log });
+    const before = (await refusals()).length;
     const res = await request(app).get("/internal/settings").set("authorization", `Bearer ${ADMIN}`).set("x-real-ip", "203.0.113.7");
     expect(res.status).toBe(403);
-    await settle();
+    await waitForRefusals(before + 1);
     const [last] = await db.select().from(operatorAudit).orderBy(desc(operatorAudit.id)).limit(1);
     expect(last).toMatchObject({ kind: "admin_refused", actor: "unauthenticated", ip: null });
     expect(last!.detail).toMatchObject({ reason: "private_network", path: "/settings", method: "GET" });
@@ -135,8 +147,7 @@ describe("brute-force limit on /internal", () => {
     expect(Number(locked.headers["retry-after"])).toBe(60);
     t += 60_000;
     expect((await request(app).get("/internal/settings").set("authorization", `Bearer ${ADMIN}`)).status).toBe(200);
-    await settle();
-    const rows = (await refusals()).slice(before);
+    const rows = (await waitForRefusals(before + 3)).slice(before);
     // Three audited refusals (the third marks the lockout); the 429 writes
     // nothing. Audit writes are asynchronous, so compare without order.
     expect(rows.map((r) => (r.detail as { reason: string }).reason).sort()).toEqual(["bad_bearer", "bad_bearer", "locked_out"]);
@@ -152,12 +163,11 @@ describe("brute-force limit on /internal", () => {
     for (let i = 0; i < 5; i++) {
       expect((await request(app).get("/internal/settings").set("authorization", `Bearer ${ADMIN}`)).status).toBe(403);
     }
-    await settle();
-    expect((await refusals()).length - before).toBe(2);
+    // The per-minute cap is 2, so no further rows can land for this window.
+    expect((await waitForRefusals(before + 2)).length - before).toBe(2);
     t += 60_000;
     expect((await request(app).get("/internal/boxes")).status).toBe(403);
-    await settle();
-    expect((await refusals()).length - before).toBe(3);
+    expect((await waitForRefusals(before + 3)).length - before).toBe(3);
   });
 });
 
