@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockUseMessages = vi.hoisted(() => vi.fn());
 
-vi.mock("../realtime/useMessages", () => ({ useMessages: mockUseMessages }));
+vi.mock("../realtime/useMessages", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../realtime/useMessages")>()),
+  useMessages: mockUseMessages,
+}));
 vi.mock("../components/MessageList", () => ({
   MessageList: ({ messages }: { messages: Array<{ id: string }> }) => (
     <div data-testid="message-list">{messages.length} messages</div>
@@ -16,8 +19,14 @@ vi.mock("../components/MessageList", () => ({
 vi.mock("../components/Composer", () => ({ Composer: () => <div data-testid="composer" /> }));
 vi.mock("../components/ChatHeader", () => ({ ChatHeader: () => <div data-testid="chat-header" /> }));
 const mockRetry = vi.hoisted(() => vi.fn());
+const mockPost = vi.hoisted(() => vi.fn());
 vi.mock("../api/conversations", () => ({
-  conversationsApi: { read: vi.fn().mockResolvedValue(undefined), post: vi.fn(), retry: mockRetry },
+  conversationsApi: { read: vi.fn().mockResolvedValue(undefined), post: mockPost, retry: mockRetry },
+}));
+const mockPublish = vi.hoisted(() => vi.fn());
+vi.mock("../realtime/conversationEventBus", () => ({
+  publishConversationMessage: mockPublish,
+  subscribeToConversationMessages: vi.fn(() => () => {}),
 }));
 
 import ChatPanel, { REPLY_PENDING_TIMEOUT_MS } from "./ChatPanel";
@@ -71,13 +80,108 @@ describe("ChatPanel empty state", () => {
   });
 
   it("hides the starter chips as soon as one is sent", async () => {
-    const { conversationsApi } = await import("../api/conversations");
-    (conversationsApi.post as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "m2" });
+    mockPost.mockResolvedValue({ id: "m2" });
     mockUseMessages.mockReturnValue([{ id: "m1", role: "agent", content: "Hi" }]);
     act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" suggestions={["Who should I hire first?"]} />));
     const chip = container.querySelector('[data-testid="chat-suggestions"] button') as HTMLButtonElement;
     act(() => chip.click());
     expect(container.querySelector('[data-testid="chat-suggestions"]')).toBeNull();
+  });
+});
+
+// AgentDash (canary, lane chat): the POST response is the persisted row — it
+// goes straight into the open chat instead of waiting for the live socket
+// (which may be down) to deliver it back.
+describe("ChatPanel sent message", () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    Element.prototype.scrollIntoView = vi.fn();
+    mockPublish.mockClear();
+    mockPost.mockReset();
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("publishes the message the POST returned as soon as it resolves", async () => {
+    const posted = {
+      id: "m9",
+      conversationId: "c1",
+      role: "user",
+      authorUserId: "person-1",
+      content: "Who should I hire first?",
+      createdAt: "2026-10-03T09:00:00Z",
+    };
+    mockPost.mockResolvedValue(posted);
+    mockUseMessages.mockReturnValue([{ id: "m1", role: "agent", content: "Hi" }]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" suggestions={["Who should I hire first?"]} />));
+    const chip = container.querySelector('[data-testid="chat-suggestions"] button') as HTMLButtonElement;
+
+    await act(async () => chip.click());
+
+    expect(mockPost).toHaveBeenCalledWith("c1", "Who should I hire first?", "co1");
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith(posted);
+  });
+
+  it("publishes nothing when the POST fails, and says so", async () => {
+    mockPost.mockRejectedValue(new Error("offline"));
+    mockUseMessages.mockReturnValue([{ id: "m1", role: "agent", content: "Hi" }]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" suggestions={["Who should I hire first?"]} />));
+    const chip = container.querySelector('[data-testid="chat-suggestions"] button') as HTMLButtonElement;
+
+    await act(async () => chip.click());
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain("was not sent");
+  });
+});
+
+// AgentDash (canary, lane chat): the chat used to open ~52px short of the
+// bottom — a smooth scroll interrupted mid-flight by the thinking block and
+// cards still laying out. The first scroll is instant instead.
+describe("ChatPanel initial scroll", () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("lands on the newest message instantly once the first page paints", () => {
+    mockUseMessages.mockReturnValue([
+      { id: "m1", role: "agent", content: "Hi" },
+      { id: "m2", role: "agent", content: "Newest" },
+    ]);
+    // jsdom reports scrollHeight 0; fake a tall scroller so the effect has
+    // something to land on.
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
+    Object.defineProperty(Element.prototype, "scrollHeight", { value: 640, configurable: true });
+    try {
+      act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" />));
+      const scroller = container.querySelector('[data-testid="chat-scroller"]') as HTMLElement;
+      // The container's own scrollTop is set (scrollIntoView on a marker
+      // stopped the pb-4 padding short of the bottom), instantly — nothing
+      // still laying out can interrupt it above the bottom.
+      expect(scroller.scrollTop).toBe(640);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollHeight", original);
+    }
   });
 });
 

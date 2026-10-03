@@ -251,6 +251,22 @@ describe.sequential("conversation routes", () => {
         expect.objectContaining({ authorIsInstanceAdmin: true }),
       );
     });
+
+    // AgentDash (review #1000): the CoS reply lands in the shared inbox every
+    // member reads, so its workspace facts are built for the least-privileged
+    // member — the sender's memberships never reach the dispatcher, or an
+    // admin's question could leak restricted projects into a shared reply.
+    it("does not pass the sender's memberships to the dispatcher", async () => {
+      const memberships = [{ companyId, membershipRole: "admin", status: "active" }];
+      const app = await createApp({ ...boardActor, source: "session", memberships });
+      await requestApp(app, (base) =>
+        request(base).post(`/api/conversations/${conversationId}/messages`).send({ body: "What is everyone working on?" }),
+      );
+      await new Promise((r) => setImmediate(r));
+      expect(mockDispatchOnMessage).toHaveBeenCalledWith(
+        expect.not.objectContaining({ authorMemberships: expect.anything() }),
+      );
+    });
   });
 
   // AgentDash (scan 3, lane G): only the requester confirms a CoS task card.

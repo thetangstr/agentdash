@@ -3,6 +3,7 @@ import type { CostByBiller, CostByProviderModel } from "@paperclipai/shared";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { QuotaBar } from "./QuotaBar";
 import { billingTypeDisplayName, formatCents, formatTokens, providerDisplayName } from "@/lib/utils";
+import { TOKENS_COUNTED_NOTE, formatCountedTokens } from "../lib/token-figures";
 
 interface BillerSpendCardProps {
   row: CostByBiller;
@@ -10,6 +11,12 @@ interface BillerSpendCardProps {
   budgetMonthlyCents: number;
   totalCompanySpendCents: number;
   providerRows: CostByProviderModel[];
+  /**
+   * Company-level "any billed amount exists" (CostSummary.pricedSpend). A
+   * priced company shows a $0 biller's 0% bar honestly; an unpriced BYOK
+   * workspace cannot claim a share of a budget it was never billed against.
+   */
+  pricedSpend: boolean;
 }
 
 export function BillerSpendCard({
@@ -18,6 +25,7 @@ export function BillerSpendCard({
   budgetMonthlyCents,
   totalCompanySpendCents,
   providerRows,
+  pricedSpend,
 }: BillerSpendCardProps) {
   const providerBreakdown = useMemo(() => {
     const map = new Map<string, { provider: string; costCents: number; inputTokens: number; outputTokens: number }>();
@@ -29,7 +37,9 @@ export function BillerSpendCard({
         outputTokens: 0,
       };
       current.costCents += entry.costCents;
-      current.inputTokens += entry.inputTokens + entry.cachedInputTokens;
+      // Display totals count input + output only (ui/src/lib/token-figures.ts);
+      // cached reads are billed at a fraction and would dwarf the figure.
+      current.inputTokens += entry.inputTokens;
       current.outputTokens += entry.outputTokens;
       map.set(entry.provider, current);
     }
@@ -37,11 +47,14 @@ export function BillerSpendCard({
   }, [providerRows]);
 
   const billingTypeBreakdown = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { costCents: number; tokens: number }>();
     for (const entry of providerRows) {
-      map.set(entry.billingType, (map.get(entry.billingType) ?? 0) + entry.costCents);
+      const current = map.get(entry.billingType) ?? { costCents: 0, tokens: 0 };
+      current.costCents += entry.costCents;
+      current.tokens += entry.inputTokens + entry.outputTokens;
+      map.set(entry.billingType, current);
     }
-    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+    return Array.from(map.entries()).sort((a, b) => b[1].costCents - a[1].costCents);
   }, [providerRows]);
 
   const providerBudgetShare =
@@ -61,10 +74,16 @@ export function BillerSpendCard({
             <CardTitle className="text-sm font-semibold">
               {providerDisplayName(row.biller)}
             </CardTitle>
-            <CardDescription className="text-xs mt-0.5">
-              <span className="font-mono">{formatTokens(row.inputTokens + row.cachedInputTokens)}</span> in
+            <CardDescription className="text-xs mt-0.5" title={TOKENS_COUNTED_NOTE}>
+              <span className="font-mono">{formatTokens(row.inputTokens)}</span> in
               {" · "}
               <span className="font-mono">{formatTokens(row.outputTokens)}</span> out
+              {row.cachedInputTokens > 0 ? (
+                <>
+                  {" · "}
+                  <span className="font-mono">{formatTokens(row.cachedInputTokens)}</span> cached reads
+                </>
+              ) : null}
               {" · "}
               {row.providerCount} provider{row.providerCount === 1 ? "" : "s"}
               {" · "}
@@ -72,13 +91,15 @@ export function BillerSpendCard({
             </CardDescription>
           </div>
           <span className="text-xl font-bold tabular-nums shrink-0">
-            {formatCents(row.costCents)}
+            {row.costCents > 0
+              ? formatCents(row.costCents)
+              : formatCountedTokens(row.inputTokens + row.outputTokens)}
           </span>
         </div>
       </CardHeader>
 
       <CardContent className="px-4 pb-4 pt-3 space-y-4">
-        {budgetMonthlyCents > 0 && (
+        {budgetMonthlyCents > 0 && (pricedSpend || row.costCents > 0) && (
           <QuotaBar
             label="Period spend"
             percentUsed={budgetPct}
@@ -93,8 +114,12 @@ export function BillerSpendCard({
           {row.subscriptionRunCount > 0
             ? `${row.subscriptionRunCount} subscription run${row.subscriptionRunCount === 1 ? "" : "s"}`
             : "0 subscription runs"}
-          {" · "}
-          {formatCents(weekSpendCents)} this week
+          {pricedSpend ? (
+            <>
+              {" · "}
+              {formatCents(weekSpendCents)} this week
+            </>
+          ) : null}
         </div>
 
         {billingTypeBreakdown.length > 0 && (
@@ -105,10 +130,12 @@ export function BillerSpendCard({
                 Billing types
               </p>
               <div className="space-y-1.5">
-                {billingTypeBreakdown.map(([billingType, costCents]) => (
+                {billingTypeBreakdown.map(([billingType, bucket]) => (
                   <div key={billingType} className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-muted-foreground">{billingTypeDisplayName(billingType as any)}</span>
-                    <span className="font-medium tabular-nums">{formatCents(costCents)}</span>
+                    <span className="font-medium tabular-nums">
+                      {bucket.costCents > 0 ? formatCents(bucket.costCents) : formatCountedTokens(bucket.tokens)}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -128,10 +155,16 @@ export function BillerSpendCard({
                   <div key={entry.provider} className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-muted-foreground">{providerDisplayName(entry.provider)}</span>
                     <div className="text-right tabular-nums">
-                      <div className="font-medium">{formatCents(entry.costCents)}</div>
-                      <div className="text-muted-foreground">
-                        {formatTokens(entry.inputTokens + entry.outputTokens)} tok
+                      <div className="font-medium">
+                        {entry.costCents > 0
+                          ? formatCents(entry.costCents)
+                          : formatCountedTokens(entry.inputTokens + entry.outputTokens)}
                       </div>
+                      {entry.costCents > 0 ? (
+                        <div className="text-muted-foreground">
+                          {formatTokens(entry.inputTokens + entry.outputTokens)} tok
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ))}

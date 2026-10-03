@@ -7061,19 +7061,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const ts = new Date().toISOString();
         if (firstOutputAt === null) firstOutputAt = new Date(ts);
 
+        outputSeq += 1;
+        const chunkSeq = outputSeq;
         let appendedBytes = 0;
         if (handle) {
           appendedBytes = await runLogStore.append(handle, {
             stream,
             chunk: sanitizedChunk,
             ts,
+            seq: chunkSeq,
           });
           persistedLogBytes += appendedBytes;
         }
-        outputSeq += 1;
         outputProgressState.pending = {
           at: new Date(ts),
-          seq: outputSeq,
+          seq: chunkSeq,
           stream,
           bytes: persistedLogBytes,
         };
@@ -7091,6 +7093,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             runId: run.id,
             agentId: run.agentId,
             ts,
+            seq: chunkSeq,
             stream,
             chunk: payloadChunk,
             truncated: payloadChunk.length !== sanitizedChunk.length,

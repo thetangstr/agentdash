@@ -237,6 +237,36 @@ export function describeToolInput(name: string, input: unknown): ToolInputDetail
   return details;
 }
 
+// AgentDash (batch 2): agent runtimes print `--- stderr ---` style section
+// markers inside a tool's output (Hermes' execute_code returns
+// `stdout\n--- stderr ---\nstderr`). The marker is not the outcome — the line
+// it introduces is — so a collapsed row showing only "-- stderr --" now folds
+// that marker away and shows the content it marked.
+const STREAM_SECTION_MARKER_ONLY = /^-{2,}\s*(?:stdout|stderr|traceback|console|output)\s*-{2,}$/i;
+const STREAM_SECTION_MARKER = /\s*-{2,}\s*(?:stdout|stderr|traceback|console|output)\s*-{2,}\s*/i;
+const DURATION_ONLY = /^\d+(?:\.\d+)?\s*(?:ms|s|min|h)\b\.?$/i;
+
+/**
+ * The line a collapsed tool row should quote: the first real line, skipping
+ * stream-section markers. A marker embedded mid-line folds to what it marked
+ * (`x -- stderr -- boom` → `boom`); when only noise followed it (a duration),
+ * the line contributes nothing.
+ */
+function outcomeLine(result: string): string | null {
+  for (const line of result.split(/\r?\n/)) {
+    const compact = compactWhitespace(line);
+    if (!compact || STREAM_SECTION_MARKER_ONLY.test(compact)) continue;
+    if (!STREAM_SECTION_MARKER.test(compact)) return compact;
+    const segments = compact
+      .split(STREAM_SECTION_MARKER)
+      .map((segment) => compactWhitespace(segment))
+      .filter((segment) => segment && !DURATION_ONLY.test(segment));
+    const cleaned = segments[segments.length - 1] ?? null;
+    if (cleaned) return cleaned;
+  }
+  return null;
+}
+
 export function summarizeToolResult(
   result: string | undefined,
   isError: boolean | undefined,
@@ -246,19 +276,17 @@ export function summarizeToolResult(
   const structured = parseStructuredToolResult(result);
   if (structured) {
     if (structured.body) {
-      return truncate(structured.body.split("\n")[0] ?? structured.body, density === "compact" ? 84 : 140);
+      const line = outcomeLine(structured.body);
+      if (line) return truncate(line, density === "compact" ? 84 : 140);
     }
     if (structured.status === "completed") return "Completed";
     if (structured.status === "failed" || structured.status === "error") {
       return structured.exitCode ? `Failed with exit code ${structured.exitCode}` : "Failed";
     }
   }
-  const lines = result
-    .split(/\r?\n/)
-    .map((line) => compactWhitespace(line))
-    .filter(Boolean);
-  const firstLine = lines[0] ?? result;
-  return truncate(firstLine, density === "compact" ? 84 : 140);
+  const line = outcomeLine(result);
+  if (line) return truncate(line, density === "compact" ? 84 : 140);
+  return isError ? "Failed" : "Done";
 }
 
 export function parseSystemActivity(text: string): TranscriptActivity | null {

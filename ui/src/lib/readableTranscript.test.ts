@@ -7,6 +7,7 @@ import {
   commandName,
   parseAgentDashApiCall,
   redactSecrets,
+  scriptEnv,
   shellWords,
   updateReadableTranscript,
   formatRunDuration,
@@ -463,7 +464,8 @@ describe("heredoc writes and JSON outputs (scan 4 lane O1)", () => {
     expect(summarizeJsonOutput('{"error":"Issue not found"}')).toBe("Error: Issue not found");
     expect(summarizeJsonOutput('{"id":"c1"}')).toBe("Response: 1 field");
     expect(summarizeJsonOutput("not json {")).toBeNull();
-    expect(summarizeJsonOutput("{broken")).toBeNull();
+    // A truncated JSON body still gets a phrase (see the multi-body tests).
+    expect(summarizeJsonOutput("{broken")).toBe("Response (JSON)");
   });
 
   it("uses the JSON phrase for the collapsed outcome, redacted", () => {
@@ -745,5 +747,148 @@ describe("incremental building", () => {
     const first = updateReadableTranscript(null, entries, true);
     const next = updateReadableTranscript(first.cache, entries, false);
     expect(next.cache.builder).not.toBe(first.cache.builder);
+  });
+});
+
+// AgentDash (batch 2, insurance-agency canary): Hermes binds the API base
+// once (`API="$PAPERCLIP_API_URL/api"`) and curls `"$API/<route>"` after
+// that — the unresolved variable read as a bare "Ran curl" row. And
+// execute_code's `--- stderr ---` section divider became the row's outcome.
+describe("script-local API variables and Hermes rows (batch 2)", () => {
+  const AUTH = '-H "Authorization: Bearer $PAPERCLIP_API_KEY"';
+
+  beforeEach(() => {
+    vi.stubGlobal("window", { location: { host: "127.0.0.1:3489", hostname: "127.0.0.1" } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves a leading $VAR in the curl URL against the script's assignments", () => {
+    const env = scriptEnv('API="$PAPERCLIP_API_URL/api"');
+    expect(parseAgentDashApiCall('curl -s "$API/issues/WHI-1"', env)).toMatchObject({
+      method: "GET",
+      route: "/api/issues/:id",
+      issueRef: "WHI-1",
+      action: "Read issue",
+    });
+    // Chained bindings: BASE=$PAPERCLIP_API_URL; API=$BASE/api.
+    const chained = scriptEnv('BASE="$PAPERCLIP_API_URL"\nAPI="$BASE/api"');
+    expect(parseAgentDashApiCall('curl -s -X PATCH "$API/issues/WHI-2"', chained)?.action)
+      .toBe("Updated issue");
+    // A literal base bound to a variable resolves the same way.
+    const literal = scriptEnv('API="http://127.0.0.1:3489/api"');
+    expect(parseAgentDashApiCall('curl -s "$API/issues/WHI-1"', literal)?.issueRef).toBe("WHI-1");
+  });
+
+  it("reads the variable-backed calls when the whole script is summarised", () => {
+    const script = [
+      'API="$PAPERCLIP_API_URL/api"',
+      `curl -s "$API/issues/WHI-1" ${AUTH}`,
+      `curl -s -X PATCH "$API/issues/WHI-1" ${AUTH} -d '{"status":"in_review"}'`,
+    ].join("\n");
+    expect(summarizeToolCall("Bash", { command: script }).label).toBe("Ran a script (2 AgentDash calls)");
+    // One bound call alone is named by its action.
+    expect(
+      summarizeToolCall("Bash", {
+        command: `API="$PAPERCLIP_API_URL/api"\ncurl -s "$API/issues/WHI-1" ${AUTH}`,
+      }).label,
+    ).toBe("Read issue WHI-1");
+  });
+
+  it("still refuses variables it cannot resolve or that do not point at an /api base", () => {
+    const env = scriptEnv('API="$PAPERCLIP_API_URL/api"');
+    expect(parseAgentDashApiCall('curl -s "$UNKNOWN/api/issues/WHI-1"', env)).toBeNull();
+    const notApi = scriptEnv('API="https://api.github.com"');
+    expect(parseAgentDashApiCall('curl -s "$API/repos/a/b"', notApi)).toBeNull();
+    // A variable bound to a foreign host is never AgentDash.
+    const other = scriptEnv('API="http://127.0.0.1:9999/api"');
+    expect(parseAgentDashApiCall('curl -s "$API/issues/WHI-1"', other)).toBeNull();
+  });
+
+  it("shows only the file name for a Hermes write_file detail path", () => {
+    const summary = summarizeToolCall("write_file", {
+      detail: "/paperclip/.hermes/profiles/agent-1/notes/onboarding.md",
+    });
+    expect(summary.label).toBe("Write onboarding.md");
+    expect(summary.label).not.toContain("/paperclip");
+    // An explicit file_path still wins over detail.
+    expect(
+      summarizeToolCall("write_file", { file_path: "docs/x.md", detail: "/paperclip/.hermes/other.md" }).label,
+    ).toBe("Write docs/x.md");
+  });
+
+  it("folds an execute_code section marker into the row's real outcome", () => {
+    const output = "\n--- stderr ---\nSyntaxWarning: \"\\W\" is an invalid escape sequence";
+    expect(summarizeToolOutcome(output, "error")).toBe('SyntaxWarning: "\\W" is an invalid escape sequence');
+    expect(summarizeToolOutcome(output, "completed")).toBe(
+      'SyntaxWarning: "\\W" is an invalid escape sequence',
+    );
+    // A marker embedded mid-line splits there too.
+    expect(summarizeToolOutcome("all good -- stderr -- DeprecationWarning: x", "completed"))
+      .toBe("DeprecationWarning: x");
+    // A marker with nothing after it has nothing to quote.
+    expect(summarizeToolOutcome("--- stderr ---", "error")).toBe("Failed");
+    expect(summarizeToolOutcome("--- stderr ---", "completed")).toBe("Done");
+  });
+
+  it("summarises each body when tool output holds several JSON values", () => {
+    expect(
+      summarizeJsonOutput(
+        '{"identifier":"WHI-1","title":"x"}{"items":[1,2,3,4]}',
+      ),
+    ).toBe("Got issue WHI-1 · Response: 4 items");
+    // NDJSON lines split the same way.
+    expect(
+      summarizeJsonOutput('{"identifier":"WHI-1"}\n{"a":1,"b":2,"c":3,"d":4}'),
+    ).toBe("Got issue WHI-1 · Response: 4 fields");
+  });
+
+  it("degrades a truncated JSON body to its issue ref or a generic label", () => {
+    expect(summarizeJsonOutput('{"identifier":"WHI-7","title":"half-wri')).toBe(
+      "Got issue WHI-7",
+    );
+    expect(summarizeJsonOutput('{"title":"half-wri')).toBe("Response (JSON)");
+    // A complete body followed by a truncated tail keeps both phrases.
+    expect(
+      summarizeJsonOutput('{"a":1,"b":2}{"identifier":"WHI-9","titl'),
+    ).toBe("Response: 2 fields · Got issue WHI-9");
+    // Non-JSON text between bodies is not JSON output at all.
+    expect(summarizeJsonOutput('{"a":1} tail')).toBeNull();
+    expect(summarizeJsonOutput("plain text")).toBeNull();
+  });
+
+  it("drops a write_file outcome that echoes the file path and a duration", () => {
+    const input = { detail: "/paperclip/.hermes/profiles/agent-1/notes/onboarding.md" };
+    expect(
+      summarizeToolOutcome(
+        "/paperclip/.hermes/profiles/agent-1/notes/onboarding.md (12ms)",
+        "completed",
+        input,
+      ),
+    ).toBe("Done");
+    // A bare echo of the call's path is the same noise without the duration.
+    expect(
+      summarizeToolOutcome(input.detail as string, "completed", input),
+    ).toBe("Done");
+    // Path plus a duration collapses even without a matching call input.
+    expect(summarizeToolOutcome("/var/state/notes.md · 0.4s", "completed")).toBe("Done");
+    // A path that is not the call's own is real output and stays visible.
+    expect(
+      summarizeToolOutcome("/etc/hostname", "completed", input),
+    ).toBe("/etc/hostname");
+    // The expanded text of a failing call keeps its verdict.
+    expect(summarizeToolOutcome(input.detail as string, "error", input)).toBe("Failed");
+    // The call's path followed by an error is a finding, not an echo.
+    expect(
+      summarizeToolOutcome(`${input.detail}: Permission denied`, "error", input),
+    ).toBe(`${input.detail}: Permission denied`);
+    expect(
+      summarizeToolOutcome(
+        "/repo/src/a.ts(3,1): error TS2307: Cannot find module",
+        "error",
+        { detail: "/repo/src/a.ts" },
+      ),
+    ).toBe("/repo/src/a.ts(3,1): error TS2307: Cannot find module");
   });
 });

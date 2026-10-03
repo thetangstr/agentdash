@@ -33,6 +33,7 @@ import { useDateRange, PRESET_KEYS, PRESET_LABELS } from "../hooks/useDateRange"
 import { queryKeys } from "../lib/queryKeys";
 import { Link } from "../lib/router";
 import { billingTypeDisplayName, cn, formatCents, formatTokens, providerDisplayName } from "../lib/utils";
+import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, countedTokens, formatCountedTokens } from "../lib/token-figures";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -49,25 +50,25 @@ function currentWeekRange(): { from: string; to: string } {
 }
 
 function ProviderTabLabel({ provider, rows }: { provider: string; rows: CostByProviderModel[] }) {
-  const totalTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.cachedInputTokens + row.outputTokens, 0);
+  const totalTokens = rows.reduce((sum, row) => sum + countedTokens(row), 0);
   const totalCost = rows.reduce((sum, row) => sum + row.costCents, 0);
   return (
     <span className="flex items-center gap-1.5">
       <span>{providerDisplayName(provider)}</span>
-      <span className="font-mono text-xs text-muted-foreground">{formatTokens(totalTokens)}</span>
-      <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span>
+      <span className="font-mono text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE}>{formatTokens(totalTokens)}</span>
+      {totalCost > 0 ? <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span> : null}
     </span>
   );
 }
 
 function BillerTabLabel({ biller, rows }: { biller: string; rows: CostByBiller[] }) {
-  const totalTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.cachedInputTokens + row.outputTokens, 0);
+  const totalTokens = rows.reduce((sum, row) => sum + countedTokens(row), 0);
   const totalCost = rows.reduce((sum, row) => sum + row.costCents, 0);
   return (
     <span className="flex items-center gap-1.5">
       <span>{providerDisplayName(biller)}</span>
-      <span className="font-mono text-xs text-muted-foreground">{formatTokens(totalTokens)}</span>
-      <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span>
+      <span className="font-mono text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE}>{formatTokens(totalTokens)}</span>
+      {totalCost > 0 ? <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span> : null}
     </span>
   );
 }
@@ -548,7 +549,7 @@ export function Costs() {
   const providerTabItems = useMemo(() => {
     const providerKeys = Array.from(byProvider.keys());
     const allTokens = providerKeys.reduce(
-      (sum, provider) => sum + (byProvider.get(provider)?.reduce((acc, row) => acc + row.inputTokens + row.cachedInputTokens + row.outputTokens, 0) ?? 0),
+      (sum, provider) => sum + (byProvider.get(provider)?.reduce((acc, row) => acc + countedTokens(row), 0) ?? 0),
       0,
     );
     const allCents = providerKeys.reduce(
@@ -564,7 +565,7 @@ export function Costs() {
             {providerKeys.length > 0 ? (
               <>
                 <span className="font-mono text-xs text-muted-foreground">{formatTokens(allTokens)}</span>
-                <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span>
+                {allCents > 0 ? <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span> : null}
               </>
             ) : null}
           </span>
@@ -580,7 +581,7 @@ export function Costs() {
   const billerTabItems = useMemo(() => {
     const billerKeys = Array.from(byBiller.keys());
     const allTokens = billerKeys.reduce(
-      (sum, biller) => sum + (byBiller.get(biller)?.reduce((acc, row) => acc + row.inputTokens + row.cachedInputTokens + row.outputTokens, 0) ?? 0),
+      (sum, biller) => sum + (byBiller.get(biller)?.reduce((acc, row) => acc + countedTokens(row), 0) ?? 0),
       0,
     );
     const allCents = billerKeys.reduce(
@@ -596,7 +597,7 @@ export function Costs() {
             {billerKeys.length > 0 ? (
               <>
                 <span className="font-mono text-xs text-muted-foreground">{formatTokens(allTokens)}</span>
-                <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span>
+                {allCents > 0 ? <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span> : null}
               </>
             ) : null}
           </span>
@@ -609,9 +610,12 @@ export function Costs() {
     ];
   }, [byBiller]);
 
+  // AgentDash (batch 2): every display token figure on this page shares the
+  // one definition (input + output, cached reads excluded) so this total can
+  // never disagree with Home, Shipped, or the run page.
   const inferenceTokenTotal =
     (spendData?.byAgent ?? []).reduce(
-      (sum, row) => sum + row.inputTokens + row.cachedInputTokens + row.outputTokens,
+      (sum, row) => sum + countedTokens(row),
       0,
     );
 
@@ -632,6 +636,12 @@ export function Costs() {
   // Absent until the server says otherwise: an unknown must never render as
   // a measured zero, including while the request is still in flight.
   const spendMeasured = spendData?.summary.measured === true;
+  // Usage was recorded but never priced (BYOK / subscription workspaces):
+  // "spend $0.00" there is technically true and substantively false — the
+  // model provider billed real money AgentDash cannot see. The honest display
+  // is the token count plus "Billed by your model provider".
+  const spendPriced = spendData?.summary.pricedSpend === true;
+  const shippedPullRequests = shippedMonth?.pullRequests ?? 0;
   const showOverviewLoading = (spendLoading || financeLoading) && customReady;
   const overviewError = spendError ?? financeError;
 
@@ -834,6 +844,7 @@ export function Costs() {
                         budgetMonthlyCents={spendData?.summary.budgetCents ?? 0}
                         totalCompanySpendCents={spendData?.summary.spendCents ?? 0}
                         providerRows={providerRows}
+                        pricedSpend={spendPriced}
                       />
                     );
                   })}
@@ -853,6 +864,7 @@ export function Costs() {
                     budgetMonthlyCents={spendData?.summary.budgetCents ?? 0}
                     totalCompanySpendCents={spendData?.summary.spendCents ?? 0}
                     providerRows={providerRows}
+                    pricedSpend={spendPriced}
                   />
                 </TabsContent>
                 );
@@ -948,28 +960,42 @@ export function Costs() {
             </div>
           ) : null}
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+          <div className={`grid grid-cols-1 gap-3 ${shippedPullRequests > 0 ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
             {/* "$0.00" and "we cannot measure this" are different claims, and only
                 one is true here: the local Hermes adapter emits no token counts, so
                 nothing downstream can compute a cost. Telling an owner they spent
                 nothing is the most damaging thing this page could say to someone
                 deciding whether to trust the product with money. `measured` asks
-                whether spend was EVER recorded, not whether this range was quiet. */}
+                whether spend was EVER recorded, not whether this range was quiet.
+
+                A third case sits between them (batch 2): usage recorded but
+                never priced, the BYOK/subscription workspace. There the tile
+                shows tokens, not dollars, and says who actually bills them. */}
             <MetricTile
               testId="inference-spend-tile"
               label="Inference spend"
-              value={spendMeasured ? formatCents(spendData?.summary.spendCents ?? 0) : "Not measured"}
+              value={
+                !spendMeasured
+                  ? "Not measured"
+                  : spendPriced
+                    ? formatCents(spendData?.summary.spendCents ?? 0)
+                    : inferenceTokenTotal > 0
+                      ? formatCountedTokens(inferenceTokenTotal)
+                      : "—"
+              }
               subtitle={
-                spendMeasured
-                  ? `${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`
-                  : "This agent runtime reports no token usage, so spend cannot be calculated"
+                !spendMeasured
+                  ? "This agent runtime reports no token usage, so spend cannot be calculated"
+                  : spendPriced
+                    ? `${formatCountedTokens(inferenceTokenTotal)} in the selected period`
+                    : BILLED_BY_PROVIDER_NOTE
               }
               icon={DollarSign}
             />
             <MetricTile
               label="Budget"
               value={activeBudgetIncidents.length > 0 ? String(activeBudgetIncidents.length) : (
-                spendMeasured && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
+                spendPriced && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
                   ? `${spendData.summary.utilizationPercent}%`
                   : "Open"
               )}
@@ -978,53 +1004,60 @@ export function Costs() {
                   ? `${budgetData?.pausedAgentCount ?? 0} agents paused · ${budgetData?.pausedProjectCount ?? 0} projects paused`
                   : spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
                     // A cap is configured and real; how much of it is gone is not
-                    // knowable without metering, and "$0.00 of $500" reads as
-                    // headroom the owner does not actually know they have.
-                    ? spendMeasured
+                    // knowable without priced usage, and "$0.00 of $500" reads
+                    // as headroom the owner does not actually know they have.
+                    ? spendPriced
                       ? `${formatCents(spendData.summary.spendCents)} of ${formatCents(spendData.summary.budgetCents)}`
-                      : `${formatCents(spendData.summary.budgetCents)} cap · usage not measured`
+                      : spendMeasured
+                        ? `${formatCents(spendData.summary.budgetCents)} cap · ${BILLED_BY_PROVIDER_NOTE.toLowerCase()}`
+                        : `${formatCents(spendData.summary.budgetCents)} cap · usage not measured`
                     : "No monthly cap configured"
               }
               icon={Coins}
             />
             {/* GH #796: the first screen answers "what did the money buy" —
                 shipped count and cost per shipped PR stand where the finance
-                tiles used to; those still exist under Advanced. */}
+                tiles used to; those still exist under Advanced.
+                Batch 2: pull-request wording only appears when PR work
+                products exist — on a workspace with none, a "0 pull requests"
+                subtitle and a "Cost per shipped PR" tile claim an engineering
+                workflow that was never there. */}
             <MetricTile
               testId="shipped-count-tile"
               label="Shipped this month"
               value={String(shippedMonth?.count ?? 0)}
-              subtitle={`${shippedMonth?.pullRequests ?? 0} pull request${(shippedMonth?.pullRequests ?? 0) === 1 ? "" : "s"} (UTC month)`}
+              subtitle={
+                shippedPullRequests > 0
+                  ? `${shippedPullRequests} pull request${shippedPullRequests === 1 ? "" : "s"} (UTC month)`
+                  : "items accepted (UTC month)"
+              }
               icon={ArrowUpRight}
             />
-            <MetricTile
-              testId="cost-per-shipped-pr-tile"
-              label="Cost per shipped PR"
-              value={
-                !shippedMonth?.usage.metered
-                  ? "Not metered yet"
-                  : shippedMonth.pullRequests > 0
-                    ? shippedMonth.usage.costCents > 0
+            {shippedPullRequests > 0 ? (
+              <MetricTile
+                testId="cost-per-shipped-pr-tile"
+                label="Cost per shipped PR"
+                value={
+                  !shippedMonth?.usage.metered
+                    ? "Not metered yet"
+                    : shippedMonth.usage.costCents > 0
                       ? formatCents(Math.round(shippedMonth.usage.costCents / shippedMonth.pullRequests))
                       // Token-only usage: cents never recorded, so "cost"
                       // would read a dishonest $0.00 — show the real signal.
-                      : `${formatTokens(Math.round(
-                          (shippedMonth.usage.inputTokens +
-                            shippedMonth.usage.cachedInputTokens +
-                            shippedMonth.usage.outputTokens) /
-                            shippedMonth.pullRequests,
-                        ))} tokens`
-                    : "No PRs yet"
-              }
-              subtitle={
-                shippedMonth?.usage.metered
-                  ? shippedMonth.usage.costCents > 0
-                    ? "Metered spend on this month's shipped issues ÷ shipped PRs"
-                    : "Metered tokens on this month's shipped issues ÷ shipped PRs"
-                  : "No metered spend on shipped issues yet"
-              }
-              icon={ReceiptText}
-            />
+                      : formatCountedTokens(Math.round(
+                          countedTokens(shippedMonth.usage) / shippedMonth.pullRequests,
+                        ))
+                  }
+                subtitle={
+                  shippedMonth?.usage.metered
+                    ? shippedMonth.usage.costCents > 0
+                      ? "Metered spend on this month's shipped issues ÷ shipped PRs"
+                      : "Tokens on this month's shipped issues ÷ shipped PRs"
+                    : "No metered spend on shipped issues yet"
+                }
+                icon={ReceiptText}
+              />
+            ) : null}
           </div>
       </div>
 
@@ -1067,24 +1100,38 @@ export function Costs() {
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">Inference ledger</CardTitle>
                     <CardDescription>
-                      Request-scoped inference spend for the selected period.
+                      {spendMeasured && !spendPriced
+                        ? `Token usage for the selected period — ${BILLED_BY_PROVIDER_NOTE.toLowerCase()}.`
+                        : "Inference usage for the selected period."}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 px-5 pb-5 pt-2">
                     <div className="flex flex-wrap items-end justify-between gap-3">
                       <div>
                         <div className="text-3xl font-semibold tabular-nums">
-                          {spendMeasured ? formatCents(spendData?.summary.spendCents ?? 0) : "Not measured"}
+                          {!spendMeasured
+                            ? "Not measured"
+                            : spendPriced
+                              ? formatCents(spendData?.summary.spendCents ?? 0)
+                              : inferenceTokenTotal > 0
+                                ? formatCountedTokens(inferenceTokenTotal)
+                                : "—"}
                         </div>
                         <div className="mt-1 text-sm text-muted-foreground">
-                          {spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
-                            ? `Budget ${formatCents(spendData.summary.budgetCents)}`
-                            : "Unlimited budget"}
+                          {spendMeasured && !spendPriced
+                            ? BILLED_BY_PROVIDER_NOTE
+                            : spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
+                              ? `Budget ${formatCents(spendData.summary.budgetCents)}`
+                              : "Unlimited budget"}
                         </div>
                       </div>
                       <div className="border border-border px-4 py-3 text-right">
                         <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">usage</div>
-                        <div className="mt-1 text-lg font-medium tabular-nums" data-testid="inference-usage-tokens">
+                        <div
+                          className="mt-1 text-lg font-medium tabular-nums"
+                          data-testid="inference-usage-tokens"
+                          title={TOKENS_COUNTED_NOTE}
+                        >
                           {spendMeasured ? formatTokens(inferenceTokenTotal) : "—"}
                         </div>
                       </div>
@@ -1095,7 +1142,7 @@ export function Costs() {
                         budget consumed" is the single most actionable false
                         claim on this page. Withhold the whole thing rather than
                         colour a bar from a number we do not have. */}
-                    {spendMeasured && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
+                    {spendPriced && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
                       <div className="space-y-2">
                         <div className="h-2 overflow-hidden bg-muted">
                           <div
@@ -1149,12 +1196,10 @@ export function Costs() {
                             ) : null}
                             {row.issueTitle ?? "Untitled issue"}
                           </Link>
-                          <span className="font-medium tabular-nums">
+                          <span className="font-medium tabular-nums" title={TOKENS_COUNTED_NOTE}>
                             {row.costCents > 0
                               ? formatCents(row.costCents)
-                              : `${formatTokens(
-                                    row.inputTokens + row.cachedInputTokens + row.outputTokens,
-                                  )} tokens`}
+                              : formatCountedTokens(countedTokens(row))}
                           </span>
                         </div>
                       ))
@@ -1195,9 +1240,12 @@ export function Costs() {
                                 {row.agentStatus === "terminated" ? <StatusBadge status="terminated" /> : null}
                               </div>
                               <div className="text-right text-sm tabular-nums">
-                                <div className="font-medium">{formatCents(row.costCents)}</div>
-                                <div className="text-xs text-muted-foreground">
-                                  in {formatTokens(row.inputTokens + row.cachedInputTokens)} · out {formatTokens(row.outputTokens)}
+                                <div className="font-medium">
+                                  {row.costCents > 0 ? formatCents(row.costCents) : formatCountedTokens(countedTokens(row))}
+                                </div>
+                                <div className="text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE}>
+                                  in {formatTokens(row.inputTokens)} · out {formatTokens(row.outputTokens)}
+                                  {row.cachedInputTokens > 0 ? ` · ${formatTokens(row.cachedInputTokens)} cached reads` : ""}
                                 </div>
                                 {(row.apiRunCount > 0 || row.subscriptionRunCount > 0) ? (
                                   <div className="text-xs text-muted-foreground">
@@ -1232,12 +1280,19 @@ export function Costs() {
                                       </div>
                                       <div className="text-right tabular-nums">
                                         <div className="font-medium">
-                                          {formatCents(modelRow.costCents)}
-                                          <span className="ml-1 font-normal text-muted-foreground">({sharePct}%)</span>
+                                          {modelRow.costCents > 0 ? formatCents(modelRow.costCents) : formatCountedTokens(countedTokens(modelRow))}
+                                          {modelRow.costCents > 0 ? (
+                                            <span className="ml-1 font-normal text-muted-foreground">({sharePct}%)</span>
+                                          ) : null}
                                         </div>
-                                        <div className="text-muted-foreground">
-                                          {formatTokens(modelRow.inputTokens + modelRow.cachedInputTokens + modelRow.outputTokens)} tok
-                                        </div>
+                                        {modelRow.costCents > 0 || modelRow.cachedInputTokens > 0 ? (
+                                          <div className="text-muted-foreground" title={TOKENS_COUNTED_NOTE}>
+                                            {[
+                                              modelRow.costCents > 0 ? `${formatTokens(countedTokens(modelRow))} tok` : null,
+                                              modelRow.cachedInputTokens > 0 ? `${formatTokens(modelRow.cachedInputTokens)} cached` : null,
+                                            ].filter(Boolean).join(" · ")}
+                                          </div>
+                                        ) : null}
                                       </div>
                                     </div>
                                   );
@@ -1267,7 +1322,9 @@ export function Costs() {
                             className="flex items-center justify-between gap-3 border border-border px-3 py-2 text-sm"
                           >
                             <span className="min-w-0 truncate max-sm:whitespace-normal max-sm:break-words">{row.projectName ?? row.projectId ?? "Unattributed"}</span>
-                            <span className="font-medium tabular-nums">{formatCents(row.costCents)}</span>
+                            <span className="font-medium tabular-nums" title={TOKENS_COUNTED_NOTE}>
+                              {row.costCents > 0 ? formatCents(row.costCents) : formatCountedTokens(countedTokens(row))}
+                            </span>
                           </div>
                         ))
                       )}

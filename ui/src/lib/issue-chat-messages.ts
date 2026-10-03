@@ -18,6 +18,8 @@ import type { IssueTimelineEvent } from "./issue-timeline-events";
 import {
   summarizeNotice,
 } from "./transcriptPresentation";
+import { visibleRunCostUsd } from "./utils";
+import type { ReadableRunUsage } from "../components/transcript/ReadableTranscript";
 
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 type JsonObject = { [key: string]: JsonValue };
@@ -45,6 +47,7 @@ export interface IssueChatLinkedRun {
   finishedAt?: Date | string | null;
   hasStoredOutput?: boolean;
   logBytes?: number | null;
+  usageJson?: Record<string, unknown> | null;
   resultJson?: Record<string, unknown> | null;
 }
 
@@ -106,6 +109,111 @@ function fingerprintThreadMessage(message: ThreadMessage) {
   return JSON.stringify(message);
 }
 
+function issueChatMessageCustom(message: ThreadMessage): Record<string, unknown> {
+  const custom = message.metadata?.custom;
+  return custom && typeof custom === "object" && !Array.isArray(custom)
+    ? custom as Record<string, unknown>
+    : {};
+}
+
+function isLiveRunThreadMessage(message: ThreadMessage) {
+  return message.role === "assistant"
+    && message.status?.type === "running"
+    && issueChatMessageCustom(message)["kind"] === "live-run";
+}
+
+export function preserveReadableStreamingRetraction(previousText: string, nextText: string) {
+  if (!previousText || !nextText) return nextText;
+
+  if (nextText.length >= previousText.length && nextText.startsWith(previousText)) {
+    return revealCompleteStreamingWords(previousText, nextText);
+  }
+
+  const overlapLength = longestSuffixPrefixOverlap(previousText, nextText);
+  if (overlapLength >= 8 && overlapLength < previousText.length) {
+    const removedPrefix = previousText.slice(0, previousText.length - overlapLength);
+    if (isQuietStreamingRemovalBoundary(removedPrefix)) {
+      return nextText;
+    }
+
+    return nextText;
+  }
+
+  if (nextText.length >= previousText.length || !previousText.startsWith(nextText)) {
+    return revealCompleteStreamingWords(previousText, nextText);
+  }
+
+  const nextLength = nextText.length;
+  if (previousText[nextLength] === "\n") return nextText;
+
+  const nextLineBreak = previousText.indexOf("\n", nextLength);
+  if (nextLineBreak === -1) return previousText;
+  return previousText.slice(0, nextLineBreak);
+}
+
+function revealCompleteStreamingWords(previousText: string, nextText: string) {
+  if (nextText.length <= previousText.length || !nextText.startsWith(previousText)) {
+    return nextText;
+  }
+
+  const addedText = nextText.slice(previousText.length);
+  if (!addedText) return nextText;
+
+  const boundaryIndex = lastReadableWordBoundary(addedText);
+  if (boundaryIndex === -1) return nextText;
+  return previousText + addedText.slice(0, boundaryIndex + 1);
+}
+
+function lastReadableWordBoundary(text: string) {
+  let index = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (/\s/.test(char) || /[.,;:!?)}\]"'`]/.test(char)) {
+      index = i;
+    }
+  }
+  return index;
+}
+
+function longestSuffixPrefixOverlap(previousText: string, nextText: string) {
+  const maxLength = Math.min(previousText.length, nextText.length);
+  for (let length = maxLength; length > 0; length -= 1) {
+    if (previousText.endsWith(nextText.slice(0, length))) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+function isQuietStreamingRemovalBoundary(removedPrefix: string) {
+  return /(?:\n\s*\n|\n|[.!?]\s+)$/.test(removedPrefix);
+}
+
+function smoothLiveRunRetractions(
+  message: ThreadMessage,
+  previousMessage: ThreadMessage | undefined,
+): ThreadMessage {
+  if (!previousMessage || !isLiveRunThreadMessage(message) || !isLiveRunThreadMessage(previousMessage)) {
+    return message;
+  }
+
+  let changed = false;
+  const content = message.content.map((part, index) => {
+    if (part.type !== "text" && part.type !== "reasoning") return part;
+
+    const previousPart = previousMessage.content[index];
+    if (previousPart?.type !== part.type) return part;
+
+    const text = preserveReadableStreamingRetraction(previousPart.text, part.text);
+    if (text === part.text) return part;
+
+    changed = true;
+    return { ...part, text };
+  });
+
+  return changed ? ({ ...message, content } as ThreadMessage) : message;
+}
+
 export function stabilizeThreadMessages(
   messages: readonly ThreadMessage[],
   previousMessages: readonly ThreadMessage[],
@@ -115,12 +223,13 @@ export function stabilizeThreadMessages(
   let sameSequence = previousMessages.length === messages.length;
 
   const stabilizedMessages = messages.map((message, index) => {
-    const fingerprint = fingerprintThreadMessage(message);
     const cached = previousById.get(message.id);
+    const displayMessage = smoothLiveRunRetractions(message, cached?.message);
+    const fingerprint = fingerprintThreadMessage(displayMessage);
     const stableMessage =
       cached && cached.fingerprint === fingerprint
         ? cached.message
-        : message;
+        : displayMessage;
     nextById.set(message.id, {
       fingerprint,
       message: stableMessage,
@@ -419,6 +528,37 @@ function createInteractionMessage(interaction: IssueThreadInteraction) {
 
 function runTimestamp(run: IssueChatLinkedRun) {
   return run.finishedAt ?? run.startedAt ?? run.createdAt;
+}
+
+function usageNumber(usage: Record<string, unknown> | null, ...keys: string[]) {
+  for (const key of keys) {
+    const value = usage?.[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+/**
+ * AgentDash (batch 2): the run record's final usage, in the shape the
+ * transcript footer reads. The chat footer used to quote the transcript's own
+ * result line — a snapshot taken before the run's last tokens were metered —
+ * so it disagreed with the run page ("1m 9s · 24.8k" vs a real 2m 29s). When
+ * the run record carries usage at all it is authoritative, for duration
+ * (started→finished) as much as for tokens and cost.
+ */
+export function linkedRunUsage(run: IssueChatLinkedRun): ReadableRunUsage | null {
+  const usage = run.usageJson ?? null;
+  if (!usage) return null;
+  const start = run.startedAt ?? run.createdAt;
+  const durationMs = run.finishedAt != null && start != null
+    ? Math.max(0, toTimestamp(run.finishedAt) - toTimestamp(start))
+    : null;
+  return {
+    inputTokens: usageNumber(usage, "inputTokens", "input_tokens"),
+    outputTokens: usageNumber(usage, "outputTokens", "output_tokens"),
+    costUsd: visibleRunCostUsd(usage, run.resultJson ?? null),
+    durationMs,
+  };
 }
 
 export interface SegmentTiming {

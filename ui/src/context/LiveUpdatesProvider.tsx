@@ -16,6 +16,7 @@ import { workforceKeys } from "../api/workforce";
 import { toCompanyRelativePath } from "../lib/company-routes";
 import { useLocation } from "../lib/router";
 import { publishConversationMessage } from "../realtime/conversationEventBus";
+import { setLiveSocketState } from "../realtime/liveSocketState";
 import type { Message } from "../api/conversations";
 
 const TOAST_COOLDOWN_WINDOW_MS = 10_000;
@@ -1029,12 +1030,14 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
       const url = `${protocol}://${window.location.host}/api/companies/${encodeURIComponent(liveCompanyId)}/events/ws`;
       const nextSocket = new WebSocket(url);
       socket = nextSocket;
+      setLiveSocketState("connecting");
 
       nextSocket.onopen = () => {
         if (closed || socket !== nextSocket) {
           closeSocketQuietly(nextSocket, "stale_connection");
           return;
         }
+        setLiveSocketState("open");
         if (reconnectAttempt > 0) {
           gateRef.current.suppressUntil = Date.now() + RECONNECT_SUPPRESS_MS;
           queryClient.invalidateQueries({ queryKey: ["serverHealth"] });
@@ -1066,6 +1069,7 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
         if (socket !== nextSocket) return;
         socket = null;
         if (closed) return;
+        setLiveSocketState("down");
         scheduleReconnect();
       };
     };
@@ -1082,6 +1086,7 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
       const activeSocket = socket;
       socket = null;
       closeSocketQuietly(activeSocket, "provider_unmount");
+      setLiveSocketState("idle");
     };
   }, [queryClient, liveCompanyId, pushToast, canConnectSocket, socketAuthKey]);
 
