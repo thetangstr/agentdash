@@ -105,10 +105,13 @@ export function AgentPlanProposal({
     setSubmitting(false);
   }
   const agents = Array.isArray(payload?.agents) ? payload.agents : [];
-  // AgentDash: the plan prose stays in the chat bubble — the card used to
-  // restate it as "rationale" and again as short-/long-term alignment, so the
-  // same plan read three times in a row. The fields still travel in the
-  // payload (they feed hiring/materialization); they just aren't re-rendered.
+  // AgentDash: the plan's rationale already reads once in the chat bubble —
+  // restating it verbatim on the card made the plan read three times in a
+  // row. The rationale still travels in the payload (it feeds hiring and
+  // materialization); it just isn't re-rendered. The alignment lines stay:
+  // they're forward-looking context the bubble doesn't carry.
+  const shortTerm = isKnownPlanValue(payload?.alignmentToShortTerm) ? payload.alignmentToShortTerm : null;
+  const longTerm = isKnownPlanValue(payload?.alignmentToLongTerm) ? payload.alignmentToLongTerm : null;
   return (
     <div
       className="agent-plan-proposal w-full min-w-0 border border-border-soft rounded-lg p-3 sm:p-6 bg-surface-raised shadow-sm"
@@ -142,6 +145,21 @@ export function AgentPlanProposal({
           );
         })}
       </div>
+
+      {(shortTerm || longTerm) && (
+        <div className="mt-4 grid grid-cols-1 gap-2 text-sm text-text-secondary break-words">
+          {shortTerm && (
+            <div>
+              <span className="font-medium text-text-primary">Short-term:</span> {shortTerm}
+            </div>
+          )}
+          {longTerm && (
+            <div>
+              <span className="font-medium text-text-primary">Long-term:</span> {longTerm}
+            </div>
+          )}
+        </div>
+      )}
 
       {!hired && (superseded || supersededHere) ? (
         <p className="mt-5 text-sm text-text-tertiary" data-testid="plan-superseded">

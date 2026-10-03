@@ -60,11 +60,11 @@ describe("AgentPlanProposal", () => {
     // Scan 3, lane G: plain language — title-cased roles, no adapter chip.
     expect(container.textContent).toContain("Engineering Lead");
     expect(container.textContent).not.toContain("claude_local");
-    // AgentDash (b2 polish): the plan prose lives in the chat bubble; the card
-    // shows the team only, so rationale/alignment are not re-rendered.
+    // AgentDash (b2 polish): the rationale repeats the chat bubble and is not
+    // re-rendered; the short/long-term alignment lines stay on the card.
     expect(container.textContent).not.toContain("Hits short-term ship goal");
-    expect(container.textContent).not.toContain("ships v2");
-    expect(container.textContent).not.toContain("lays groundwork");
+    expect(container.textContent).toContain("ships v2");
+    expect(container.textContent).toContain("lays groundwork");
 
     const buttons = container.querySelectorAll("button");
     expect(buttons.length).toBe(2);
