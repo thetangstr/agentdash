@@ -50,8 +50,9 @@ describeEmbeddedPostgres("agentdash-mk destructive-action enforcement", () => {
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
   beforeAll(async () => {
-    // The helper's own per-phase bound is 60s; a 20s hook deadline could never
-    // succeed under it on a loaded CI box (#984).
+    // The helper allows 60s each for initdb and postgres start plus 120s for
+    // migrations; a 20s hook deadline could not outlive a slow phase on a
+    // loaded CI box (#984).
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-mk-destructive-");
     db = createDb(tempDb.connectionString);
   }, 60_000);

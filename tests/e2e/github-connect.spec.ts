@@ -44,19 +44,21 @@ test("an owner connects a repo from project settings and sees it connected", asy
   // Wrong scope: named permission, nothing connected.
   await section.getByLabel("Repository").fill("https://github.com/acme/readonly");
   await section.getByLabel("Fine-grained token").fill(TOKEN);
-  await Promise.all([
+  const [readonlyCheckRes] = await Promise.all([
     connectCheck(),
     section.getByRole("button", { name: "Check and connect" }).click(),
   ]);
+  expect(readonlyCheckRes.status()).toBe(422);
   await expect(section.getByRole("alert")).toContainText("Missing permission: Contents: Read and write");
 
   // Right scope: connected.
   await section.getByLabel("Repository").fill("https://github.com/acme/app");
   await section.getByLabel("Fine-grained token").fill(TOKEN);
-  await Promise.all([
+  const [connectRes] = await Promise.all([
     connectCheck(),
     section.getByRole("button", { name: "Check and connect" }).click(),
   ]);
+  expect(connectRes.status()).toBe(201);
   await expect(section.getByTestId("github-connected")).toContainText("acme/app");
   await expect(section.getByTestId("github-connected")).toContainText("Default branch main");
 

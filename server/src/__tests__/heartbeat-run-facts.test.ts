@@ -90,8 +90,9 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
   let heartbeat!: ReturnType<typeof heartbeatService>;
 
   beforeAll(async () => {
-    // The helper's own per-phase bound is 60s; a 20s hook deadline could never
-    // succeed under it on a loaded CI box.
+    // The helper allows 60s each for initdb and postgres start plus 120s for
+    // migrations; a 20s hook deadline could not outlive a slow phase on a
+    // loaded CI box.
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-run-facts-");
     db = createDb(tempDb.connectionString);
     heartbeat = heartbeatService(db);
