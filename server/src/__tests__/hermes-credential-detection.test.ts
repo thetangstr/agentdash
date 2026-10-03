@@ -78,8 +78,21 @@ describe("hermesStatusHasConfiguredCredentials", () => {
         "  GitHub        ✓ gh_x...xxxx",
         "  Tavily        ✓ tv_x...xxxx",
         "  Firecrawl     ✓ fc_x...xxxx",
+        "  Perplexity    ✓ pplx_x...xxxx",
         "  OpenAI        ✗ (not set)",
         "  Anthropic     ✗ (not set)",
+      ],
+    });
+    expect(hermesStatusHasConfiguredCredentials(status)).toBe(false);
+  });
+
+  it("matches the row label only — a provider-looking masked key value does not count", () => {
+    // Masked values can contain provider-name substrings ("...openai42...");
+    // the credential is still a GitHub tool key.
+    const status = buildStatus({
+      apiKeys: [
+        "  GitHub        ✓ gh_openai42...xxxx",
+        "  Tavily        ✓ tv_kimi...xxxx",
       ],
     });
     expect(hermesStatusHasConfiguredCredentials(status)).toBe(false);
