@@ -17,7 +17,7 @@ import type { DispatchMeter } from "./dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-failure.js";
 // Type-only: cos-issue-action pulls in the issue and heartbeat services, which
 // this module must not load (first-run and onboarding import it).
-import type { CosIssueRequester, CosIssueRosterEntry } from "./cos-issue-action.js";
+import type { CosIssueRequester, CosIssueRosterEntry, CosTurnContext } from "./cos-issue-action.js";
 import { PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "./cos-plan-naming.js";
 
 // AgentDash (scan 3, lane G): mirrors ISSUE_PROPOSAL_CARD_KIND in cos-issue-action.ts.
@@ -134,6 +134,9 @@ interface Deps {
   // Absent: no task proposals.
   issueAction?: {
     roster(companyId: string, requester: CosIssueRequester | null | undefined, cosAgentId: string | null): Promise<CosIssueRosterEntry[]>;
+    // AgentDash (canary, lane chat): the workspace facts a reply may rely on —
+    // open issues this person may see and their task cards still waiting.
+    turnContext?(companyId: string, requester: CosIssueRequester | null | undefined): Promise<CosTurnContext>;
     proposeFromTrailer(input: {
       companyId: string;
       conversationId: string;
@@ -148,14 +151,68 @@ interface Deps {
 
 const STEADY_STATE_PROMPT = `You are the Chief of Staff in an AgentDash workspace. Be warm, concise, and specific. When a human asks about an agent's progress, answer based on the conversation history. If you don't have the data, say so plainly. No greetings, no preamble, no markdown headings. ${COS_PLAIN_LANGUAGE_GUIDANCE}`;
 
+// AgentDash (canary, lane chat): the CoS must only state what its turn
+// context shows. It once praised "the pricing summary you just approved"
+// while the card still waited, and reported an agent busy on a finished
+// issue.
+export const COS_TRUTHFULNESS_GUIDANCE = `Only state what the workspace facts above show. Approval, progress and finished work may be claimed ONLY when those facts say so; a card under "still waiting for a decision" was never approved and nothing from it has started. When the facts do not say, say plainly that you do not know — never guess.`;
+
+/**
+ * Facts come from user-authored rows — an issue title or agent name is a
+ * free-text field anyone with write access controls. Control and format
+ * characters are stripped (no injected line breaks, no bidi tricks) and each
+ * value is capped, so a crafted string cannot break out of its line in the
+ * prompt or smuggle a directive into it.
+ */
+function promptFactText(value: string, max = 120): string {
+  return value
+    .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+// The turn context rendered into the system prompt; every line is a fact the
+// reply may rely on. Nothing listed means unknown, not assumed.
+function cosTurnContextBlock(context: CosTurnContext | null | undefined): string {
+  if (!context) return "";
+  const issueLine = (issue: CosTurnContext["openIssues"][number]) => {
+    const title = `"${promptFactText(issue.title)}"`;
+    const name = issue.identifier ? `${promptFactText(issue.identifier, 32)} ${title}` : title;
+    const assignee = issue.assigneeName ? ` — assigned to ${promptFactText(issue.assigneeName, 80)}` : "";
+    return `- ${name} is ${issue.status.replace(/_/g, " ")}${assignee}`;
+  };
+  const proposalLine = (proposal: CosTurnContext["pendingProposals"][number]) =>
+    `- "${promptFactText(proposal.title)}"${proposal.assigneeName ? ` for ${promptFactText(proposal.assigneeName, 80)}` : ""} — still waiting for this person to confirm or decline it`;
+  const issues = context.openIssues.length > 0 ? context.openIssues.map(issueLine).join("\n") : "- none you can see";
+  const proposals =
+    context.pendingProposals.length > 0
+      ? context.pendingProposals.map(proposalLine).join("\n")
+      : "- none";
+  return `
+
+Workspace facts right now, for the person you are answering. Anything not listed here is unknown to you:
+Open work they can see:
+${issues}
+Task cards still waiting for their decision — none of these was approved, created or started:
+${proposals}
+
+${COS_TRUTHFULNESS_GUIDANCE}`;
+}
+
 // AgentDash (scan 3, lane G): the steady-state CoS can hand out one task per
 // reply through a fenced JSON trailer, which the server validates and turns
 // into an assigned issue (cos-issue-action.ts).
-export function steadyStatePrompt(roster: CosIssueRosterEntry[] | null, request?: string | null): string {
+export function steadyStatePrompt(
+  roster: CosIssueRosterEntry[] | null,
+  request?: string | null,
+  turnContext?: CosTurnContext | null,
+): string {
+  const contextBlock = cosTurnContextBlock(turnContext);
   if (!roster || roster.length === 0) {
-    return `${STEADY_STATE_PROMPT} You cannot hand out tasks from this chat right now because nobody on the team can take work from this person yet; if asked, say so plainly and suggest hiring someone first.`;
+    return `${STEADY_STATE_PROMPT} You cannot hand out tasks from this chat right now because nobody on the team can take work from this person yet; if asked, say so plainly and suggest hiring someone first.${contextBlock}`;
   }
-  const team = roster.map((a) => `- ${a.name} (${a.role}): ${a.id}`).join("\n");
+  const team = roster.map((a) => `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}`).join("\n");
   const requestBlock = request
     ? `
 
@@ -176,7 +233,7 @@ Only when the message you are answering clearly asks for a piece of work to be d
 {"create_issue":{"title":"Short task title","description":"What done looks like, in plain words","assigneeAgentId":"<id from the list above>"}}
 \`\`\`
 
-Rules: at most one task per reply; nothing may follow the block; pick the assignee whose role fits best and use their id exactly as listed; never invent an id. Do not suggest a task for questions, status checks, thanks, brainstorming, or when you are unsure what they want; ask one short question instead. In the visible reply, say in one neutral sentence whose list you can add it to, for example "I can add this to Ellie's list; confirm below." Never say they will start, get started or begin right away: the person chooses on the card whether the work starts now. Never show the JSON or the id in the visible reply.`;
+Rules: at most one task per reply; nothing may follow the block; pick the assignee whose role fits best and use their id exactly as listed; never invent an id. Do not suggest a task for questions, status checks, thanks, brainstorming, or when you are unsure what they want; ask one short question instead. In the visible reply, say in one neutral sentence whose list you can add it to, for example "I can add this to Ellie's list; confirm below." Never say they will start, get started or begin right away: the person chooses on the card whether the work starts now. Never show the JSON or the id in the visible reply.${contextBlock}`;
 }
 
 function goalsPrompt(state: CosStateRow): string {
@@ -547,14 +604,24 @@ export function cosReplier(deps: Deps) {
       let llmMessages = messages;
       if (steady && deps.issueAction && input.companyId) {
         let roster: CosIssueRosterEntry[] | null = null;
+        let turnContext: CosTurnContext | null = null;
         try {
           roster = await deps.issueAction.roster(input.companyId, input.requestedBy, input.cosAgentId);
         } catch (err) {
           logger.warn({ err, companyId: input.companyId }, "cos-replier: could not load the team roster");
         }
+        if (deps.issueAction.turnContext) {
+          try {
+            turnContext = await deps.issueAction.turnContext(input.companyId, input.requestedBy);
+          } catch (err) {
+            // A reply without facts is safer than no reply; the prompt then
+            // carries no claims to rely on.
+            logger.warn({ err, companyId: input.companyId }, "cos-replier: could not load the turn context");
+          }
+        }
         const trigger = input.triggerMessageId ? recent.find((m: any) => m.id === input.triggerMessageId) : null;
         const request = typeof trigger?.content === "string" ? trigger.content : null;
-        system = steadyStatePrompt(roster, request);
+        system = steadyStatePrompt(roster, request, turnContext);
         // Several people can share this chat: every earlier person-written
         // message is labelled with who wrote it, relative to the requester.
         llmMessages = labelMessageAuthors(recent, input.triggerMessageId, input.requestedBy?.userId ?? null);

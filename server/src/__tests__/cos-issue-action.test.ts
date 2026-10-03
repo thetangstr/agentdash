@@ -153,6 +153,40 @@ describe("cosIssueAction.roster", () => {
     const { deps } = makeDeps();
     await expect(cosIssueAction(deps).roster(companyId, null, cosAgentId)).resolves.toEqual([]);
   });
+
+  // AgentDash (review #1000): the roster lands in a reply every member can
+  // read, so it is the company-visible list — an agent only the sender (an
+  // owner) can see must not be named there.
+  it("names only company-visible agents when the dep provides them", async () => {
+    const { deps } = makeDeps({
+      companyVisibleAgentIds: vi.fn().mockResolvedValue(new Set([agentId])),
+    });
+    // The sender sees every agent (null), but the hidden one is omitted.
+    const roster = await cosIssueAction(deps).roster(companyId, requester(), cosAgentId);
+    expect(roster.map((a) => a.id)).toEqual([agentId]);
+  });
+});
+
+// AgentDash (canary, lane chat): the turn context is the facts a reply may
+// rely on — open issues this person may see and their own waiting task cards.
+describe("cosIssueAction.turnContext", () => {
+  it("returns the dep's facts for this person", async () => {
+    const context = {
+      openIssues: [{ identifier: "ACM-7", title: "Draft the Acme proposal", status: "in_progress", assigneeName: "Ellie" }],
+      pendingProposals: [{ title: "Price the Acme renovation", assigneeName: "Ellie" }],
+    };
+    const { deps } = makeDeps({ turnContext: vi.fn().mockResolvedValue(context) });
+    await expect(cosIssueAction(deps).turnContext(companyId, requester())).resolves.toEqual(context);
+    expect(deps.turnContext).toHaveBeenCalledWith(companyId, requester());
+  });
+
+  it("is empty without a person or without the dep, never an error", async () => {
+    const { deps } = makeDeps({ turnContext: vi.fn().mockResolvedValue({ openIssues: [{}], pendingProposals: [{}] }) });
+    await expect(cosIssueAction(deps).turnContext(companyId, null)).resolves.toEqual({ openIssues: [], pendingProposals: [] });
+    expect(deps.turnContext).not.toHaveBeenCalled();
+    const { deps: bare } = makeDeps();
+    await expect(cosIssueAction(bare).turnContext(companyId, requester())).resolves.toEqual({ openIssues: [], pendingProposals: [] });
+  });
 });
 
 describe("cosIssueAction.proposeFromTrailer", () => {

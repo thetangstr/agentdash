@@ -1070,21 +1070,48 @@ No greetings. No markdown headings outside the JSON block.`;
 
     const { plan: newPlan, body: visibleBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
 
-    // Post the visible preamble FIRST, then the new card. Mirrors the
-    // cos-replier plan-emit ordering so the timeline reads naturally.
-    await conversations.postMessage({
-      conversationId,
-      authorKind: "agent",
-      authorId: cos.id,
-      body: visibleBody,
-    });
-    const cardMsg = await conversations.postMessage({
-      conversationId,
-      authorKind: "agent",
-      authorId: cos.id,
-      body: "",
-      cardKind: "agent_plan_proposal_v1",
-      cardPayload: newPlan as unknown as Record<string, unknown>,
+    // AgentDash (canary, lane chat): the LLM call above takes seconds — long
+    // enough for the person to confirm this plan in another tab. Re-check the
+    // old card before posting under the same conversation-row lock the hire
+    // step takes (acceptOnboardingHires' SELECT … FOR UPDATE): a confirm-plan
+    // that wins the lock commits its hire receipt before this re-check runs,
+    // and no hire can slip between the check and the card post. A stale
+    // revision becomes a 409 instead of a live card offering to hire a team
+    // that already exists.
+    const cardMsg = await db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(assistantConversations)
+        .where(and(eq(assistantConversations.id, conversationId), eq(assistantConversations.companyId, companyId)))
+        .for("update");
+      if (!locked) throw notFound("Conversation not found");
+      const freshPlanRows = await tx
+        .select({ cardPayload: assistantMessages.cardPayload })
+        .from(assistantMessages)
+        .where(eq(assistantMessages.id, planMsg.id))
+        .limit(1);
+      const freshPayload = freshPlanRows[0]?.cardPayload as AgentPlanProposalV1Payload | null | undefined;
+      if (freshPayload?.confirmedAt || receiptFrom(locked.metadata, `plan:${planMsg.id}`)) {
+        throw conflict("This team is already hired. Ask your Chief of Staff for changes to the team instead.", { code: "plan_hired" });
+      }
+
+      // Post the visible preamble FIRST, then the new card. Mirrors the
+      // cos-replier plan-emit ordering so the timeline reads naturally.
+      const txConversations = conversationService(tx as unknown as Db);
+      await txConversations.postMessage({
+        conversationId,
+        authorKind: "agent",
+        authorId: cos.id,
+        body: visibleBody,
+      });
+      return txConversations.postMessage({
+        conversationId,
+        authorKind: "agent",
+        authorId: cos.id,
+        body: "",
+        cardKind: "agent_plan_proposal_v1",
+        cardPayload: newPlan as unknown as Record<string, unknown>,
+      });
     });
 
     res.json({
