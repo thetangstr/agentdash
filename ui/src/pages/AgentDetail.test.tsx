@@ -282,15 +282,15 @@ describe("RunStderrExcerpt", () => {
       <RunStderrExcerpt
         run={{
           status: "succeeded",
-          stderrExcerpt: "SyntaxWarning at /Users/kailor/.hermes/run.py",
+          stderrExcerpt: "SyntaxWarning at /Users/operator/.hermes/run.py",
         }}
       />,
     );
     const details = container!.querySelector("details");
     expect(details).not.toBeNull();
     expect(details!.textContent).toContain("Technical details");
-    expect(details!.textContent).toContain("/Users/k*****/.hermes/run.py");
-    expect(details!.textContent).not.toContain("kailor");
+    expect(details!.textContent).toContain("/Users/o*******/.hermes/run.py");
+    expect(details!.textContent).not.toContain("operator");
     expect(container!.querySelector(".text-red-700")).toBeNull();
   });
 
