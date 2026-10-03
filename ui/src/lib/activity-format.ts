@@ -1,4 +1,5 @@
 import type { Agent } from "@paperclipai/shared";
+import { HIDDEN_FEED_ACTIVITY_ACTIONS, IMPORTANT_SYSTEM_ACTIVITY_ACTIONS } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "./company-members";
 import { issueStatusLabel } from "./issue-status-label";
 
@@ -28,18 +29,15 @@ interface ActivityFormatOptions {
  * passed" filled the feed, attributed to whichever agent or person triggered
  * them (the preflight one read as the CEO's own action). They are hidden from
  * the default feeds and, when shown, are relabelled and attributed to System.
+ * The list lives in packages/shared so this and the server feed stay in step.
  */
-const SYSTEM_PLUMBING_ACTIONS = new Set([
-  "environment.lease_acquired",
-  "environment.lease_released",
-  "environment.probed",
-  "environment.probed_unsaved",
-  "agent.harness_preflight_passed",
-]);
+const SYSTEM_PLUMBING_ACTIONS = new Set<string>(HIDDEN_FEED_ACTIVITY_ACTIONS);
 
 export function isSystemPlumbingActivity(action: string): boolean {
   return SYSTEM_PLUMBING_ACTIONS.has(action);
 }
+
+export { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS };
 
 const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "environment.lease_acquired": "prepared a workspace for a run",
@@ -58,6 +56,14 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "issue.document_created": "created document for",
   "issue.document_updated": "updated document on",
   "issue.document_deleted": "deleted document from",
+  "issue.read_marked": "marked as read",
+  "issue.read_unmarked": "marked as unread",
+  "issue.inbox_archived": "archived",
+  "issue.inbox_unarchived": "unarchived",
+  "queue_state_changed": "updated the review queue on",
+  "issue.work_product_created": "added a deliverable to",
+  "issue.work_product_updated": "updated a deliverable on",
+  "issue.work_product_deleted": "removed a deliverable from",
   "issue.commented": "commented on",
   "issue.deleted": "deleted",
   "agent.created": "created",
@@ -100,6 +106,14 @@ const ISSUE_ACTIVITY_LABELS: Record<string, string> = {
   "issue.document_created": "created a document",
   "issue.document_updated": "updated a document",
   "issue.document_deleted": "deleted a document",
+  "issue.read_marked": "marked the issue as read",
+  "issue.read_unmarked": "marked the issue as unread",
+  "issue.inbox_archived": "archived the issue",
+  "issue.inbox_unarchived": "unarchived the issue",
+  "queue_state_changed": "updated the review queue",
+  "issue.work_product_created": "added a deliverable",
+  "issue.work_product_updated": "updated a deliverable",
+  "issue.work_product_deleted": "removed a deliverable",
   "issue.deleted": "deleted the issue",
   "agent.created": "created an agent",
   "agent.updated": "updated the agent",

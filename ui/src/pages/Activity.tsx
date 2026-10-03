@@ -58,8 +58,8 @@ export function Activity() {
   }, [setBreadcrumbs]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: ACTIVITY_PAGE_LIMIT }],
-    queryFn: () => activityApi.list(selectedCompanyId!, { limit: ACTIVITY_PAGE_LIMIT }),
+    queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: ACTIVITY_PAGE_LIMIT, includeSystem: showSystem }],
+    queryFn: () => activityApi.list(selectedCompanyId!, { limit: ACTIVITY_PAGE_LIMIT, includeSystem: showSystem }),
     enabled: !!selectedCompanyId,
   });
 
@@ -113,8 +113,11 @@ export function Activity() {
     return <PageSkeleton variant="list" />;
   }
 
+  // AgentDash (batch 2 review lane): plumbing actions AND rows the server
+  // stamped as system-actor (review-queue churn) are hidden until asked for —
+  // previously a System row with an unlisted action still rendered.
   const visible = data && !showSystem
-    ? data.filter((e) => !isSystemPlumbingActivity(e.action))
+    ? data.filter((e) => e.actorType !== "system" && !isSystemPlumbingActivity(e.action))
     : data;
   const hiddenSystemCount = (data?.length ?? 0) - (visible?.length ?? 0);
 

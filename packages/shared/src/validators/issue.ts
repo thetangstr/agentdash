@@ -281,7 +281,17 @@ export const updateIssueSchema = createIssueBaseSchema.omit({
  * contract (docs/api/contract.json) can name the schema the route really uses.
  * Same shape as before the move.
  */
-export const updateIssueRouteSchema = updateIssueSchema.extend({ interrupt: z.boolean().optional() });
+export const updateIssueRouteSchema = updateIssueSchema.extend({
+  interrupt: z.boolean().optional(),
+  /**
+   * AgentDash (batch 2 review lane): the document revision numbers the
+   * reviewer saw when accepting, keyed by document key. When a document-bound
+   * deliverable's latest revision is newer than what is sent, the move to
+   * done is refused with 409 — acceptance binds to the revision the person
+   * actually reviewed.
+   */
+  acceptedDocumentRevisions: z.record(z.string(), z.number().int().positive()).optional(),
+});
 
 export type UpdateIssue = z.infer<typeof updateIssueSchema>;
 export type IssueExecutionWorkspaceSettings = z.infer<typeof issueExecutionWorkspaceSettingsSchema>;

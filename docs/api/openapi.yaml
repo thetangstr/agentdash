@@ -8067,6 +8067,11 @@ components:
             - string
             - "null"
           format: date-time
+        acceptedDocumentRevisions:
+          type: object
+          additionalProperties:
+            type: integer
+            exclusiveMinimum: 0
     UpdateProjectRequest:
       type: object
       properties:

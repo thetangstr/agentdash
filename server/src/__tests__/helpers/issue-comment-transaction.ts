@@ -9,6 +9,8 @@ export function commentTransactionReads(getIssue: () => Promise<any>, getRun: (i
       let tableName: string;
       const query = {
         from(table: any) { tableName = getTableName(table); return query; },
+        innerJoin() { return query; },
+        leftJoin() { return query; },
         where() { return query; },
         for(mode: string) { if (mode !== "update" && mode !== "no key update") throw new Error("Unexpected lock mode"); return query; },
         orderBy() { return query; },
@@ -19,7 +21,18 @@ export function commentTransactionReads(getIssue: () => Promise<any>, getRun: (i
             if (tableName === "feature_flags") return resolve([]);
             if (tableName === "issue_thread_interactions") return resolve([]);
             if (tableName === "issues") return resolve([await getIssue()]);
-            if (tableName === "heartbeat_runs") { const run = await getRun((await getIssue()).executionRunId); return resolve(run ? [run] : []); }
+            // AgentDash (batch 2 review lane): these fixtures hold no work
+            // products and no issue documents — the same emptiness the write
+            // stub below already assumes.
+            if (tableName === "issue_work_products") return resolve([]);
+            if (tableName === "issue_documents" || tableName === "documents") return resolve([]);
+            if (tableName === "heartbeat_runs") {
+              const run = await getRun((await getIssue()).executionRunId);
+              // The real close-out queries only pick live runs; a finished
+              // run would not be selected for cancellation.
+              const liveStatuses = ["queued", "running", "scheduled_retry"];
+              return resolve(run && liveStatuses.includes(run.status) ? [run] : []);
+            }
             throw new Error(`Unexpected comment acceptance read: ${tableName}`);
           } catch (error) { if (reject) return reject(error); throw error; }
         },
