@@ -3,7 +3,7 @@ title: "Setup toolset"
 summary: "The install and onboarding tools: what an agent standing up a fresh instance is given."
 ---
 
-> Generated at commit `c69c37f49` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `ddebd3f5c` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
 **17 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "setup")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/journey.ts`.
@@ -47,9 +47,11 @@ Configure the model adapter your agents will run on — a required onboarding st
 
 ## `agentdash_start_interview`
 
-Bootstrap the AgentDash workspace: creates the company, the Chief of Staff agent, and the onboarding conversation, then enforces the boundary default that new agent hires require board approval. Returns {companyId, conversationId, cosAgentId, boundaries}. Follow with agentdash_interview_turn to run the intent-capture interview.
+Bootstrap the AgentDash workspace: creates the company, the Chief of Staff agent, and the onboarding conversation, then enforces the boundary default that new agent hires require board approval. Returns {companyId, conversationId, cosAgentId, boundaries}. Follow with agentdash_interview_turn to run the intent-capture interview. Pass companyId when the user belongs to more than one company — the server refuses to guess (409) and lists the candidates.
 
-No input.
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `companyId` | string \| null | no | Company to bootstrap in. Required when the user holds active memberships in more than one company; omit when they belong to exactly one or none. |
 
 ## `agentdash_interview_turn`
 
