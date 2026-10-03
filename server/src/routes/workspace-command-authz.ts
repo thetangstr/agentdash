@@ -1,6 +1,10 @@
+import path from "node:path";
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
+import { resolveHomeAwarePath } from "../home-paths.js";
+import { checkCompanyWorkspaceCwd } from "../services/workspace-cwd-confinement.js";
+import { REPO_ONLY_CWD_SENTINEL } from "../services/projects.js";
 import {
   actorMaySetHostWorkspaceCommand,
   findRestrictedHostExecutionFields,
@@ -59,7 +63,24 @@ function collectWorkspaceRuntimeCommandPaths(raw: unknown, stored: unknown, pref
 }
 
 function collectWorkspaceStrategyCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
-  return collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand"]);
+  const paths = collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand"]);
+  // AgentDash (security, GH #980): an ABSOLUTE worktreeParentDir names a host
+  // directory the server mkdirs and writes worktrees into — the same class as
+  // cwd. A relative one resolves under the workspace's own repo root, so it
+  // stays open to non-admins.
+  if (isRecord(raw)) {
+    const value = raw.worktreeParentDir;
+    const storedValue = isRecord(stored) ? stored.worktreeParentDir : undefined;
+    if (
+      typeof value === "string" &&
+      value.trim().length > 0 &&
+      (path.isAbsolute(value.trim()) || value.trim().startsWith("~")) &&
+      value !== storedValue
+    ) {
+      paths.push(prefixPath(prefix, "worktreeParentDir"));
+    }
+  }
+  return paths;
 }
 
 function collectExecutionWorkspaceConfigCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
@@ -109,6 +130,47 @@ export async function assertHostWorkspaceCommandAuthority(
 
 function sub(value: unknown, key: string): unknown {
   return isRecord(value) ? value[key] : undefined;
+}
+
+/**
+ * AgentDash (security, GH #980): a project workspace `cwd` is the host
+ * directory runs execute in — the same authority class as a host-executed
+ * command. Everyone but the instance admin (and the local_trusted board) may
+ * only choose a cwd inside this company's server-managed roots: the managed
+ * project checkout dirs, the instance workspaces of this company's agents, or
+ * a directory an executionWorkspaces row of this company registers. The check
+ * runs only when a cwd is being SET: resending the stored value — including
+ * the legacy repo paths self-hosted installs already hold — never trips it.
+ * `remote_managed` workspaces carry a remote path, not a host one, and are
+ * exempt.
+ */
+export async function assertProjectWorkspaceCwdAuthority(
+  db: Db,
+  req: Request,
+  companyId: string,
+  cwd: unknown,
+  options: { storedCwd?: unknown; sourceType?: unknown } = {},
+): Promise<void> {
+  if (options.sourceType === "remote_managed") return;
+  if (typeof cwd !== "string" || cwd.trim().length === 0) return;
+  // "/__paperclip_repo_only__" is a sentinel meaning "no cwd, use the repo
+  // clone" — it never lands on the host filesystem.
+  if (cwd.trim() === REPO_ONLY_CWD_SENTINEL) return;
+  if (
+    typeof options.storedCwd === "string" &&
+    options.storedCwd.trim().length > 0 &&
+    resolveHomeAwarePath(cwd) === resolveHomeAwarePath(options.storedCwd)
+  ) {
+    return;
+  }
+  if (actorMaySetHostWorkspaceCommand(req.actor)) return;
+  const check = await checkCompanyWorkspaceCwd(db, companyId, cwd);
+  if (!check.ok) {
+    throw forbidden(
+      `Workspace cwd refused: ${check.reason}. ` +
+        "Set a path inside the company's managed workspace roots, or ask the instance admin to set it.",
+    );
+  }
 }
 
 export function collectAgentAdapterWorkspaceCommandPaths(
