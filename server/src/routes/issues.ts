@@ -37,7 +37,7 @@ import {
   truncateAncestorsAtInvisible,
   visibleAgentIdsFor,
 } from "./visibility.js";
-import { decodeShippedCursor, sanitizeWorkProductTitle } from "../services/work-products.js";
+import { decodeShippedCursor, sanitizeWorkProductTitle, workProductDocumentKey } from "../services/work-products.js";
 import {
   addIssueCommentSchema,
   acceptIssueThreadInteractionSchema,
@@ -1551,6 +1551,8 @@ export function issueRoutes(
   // AgentDash (review #1003): once a deliverable is submitted for review, the
   // document it binds to is server-owned — otherwise an agent could drop or
   // rewrite documentKey and the revision baseline check would be skipped.
+  // Round-2 follow-up: a bound key is locked whenever it is already set too,
+  // not only from ready_for_review onward.
   const DOCUMENT_KEY_LOCKED_STATUSES = new Set(["ready_for_review", "changes_requested", "approved", "merged"]);
   function protectServerOwnedMetadata<T extends object>(
     req: Request,
@@ -1560,7 +1562,9 @@ export function issueRoutes(
   ): T {
     if (req.actor.type !== "agent" && req.actor.source !== "assistant_grant") return body;
     if (!("metadata" in body)) return body;
-    const documentKeyLocked = !!existingStatus && DOCUMENT_KEY_LOCKED_STATUSES.has(existingStatus);
+    const documentKeyLocked =
+      (!!existingStatus && DOCUMENT_KEY_LOCKED_STATUSES.has(existingStatus))
+      || (!!existingMetadata && "documentKey" in existingMetadata);
     const supplied = (body as { metadata?: unknown }).metadata;
     const incoming = supplied && typeof supplied === "object" ? { ...(supplied as Record<string, unknown>) } : null;
     for (const key of SERVER_OWNED_WORK_PRODUCT_METADATA_KEYS) delete incoming?.[key];
@@ -1965,6 +1969,30 @@ export function issueRoutes(
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
     if (refuseSelfAcceptance(req, res, req.body)) return;
+    // AgentDash (review #1003 follow-up): a fresh deliverable bound to the
+    // same documentKey as an already-reviewed one revives Accept for it with
+    // no new revision — delete-and-recreate through the row instead of the
+    // field. Refused for agents, same as the reviewed-status write.
+    if (req.actor.type === "agent" || req.actor.source === "assistant_grant") {
+      const documentKey = workProductDocumentKey((req.body as { metadata?: unknown }).metadata);
+      if (documentKey) {
+        const bound = await db
+          .select({ status: issueWorkProducts.status, metadata: issueWorkProducts.metadata })
+          .from(issueWorkProducts)
+          .where(and(
+            eq(issueWorkProducts.companyId, issue.companyId),
+            eq(issueWorkProducts.issueId, issue.id),
+            sql`${issueWorkProducts.metadata} ->> 'documentKey' = ${documentKey}`,
+          ));
+        if (bound.some((row) => workProductWasReviewed(row.status ?? undefined, row.metadata))) {
+          res.status(403).json({
+            error: "A reviewed deliverable already binds that document. Write the revised document revision, then move the issue to in_review.",
+            code: "work_product_self_acceptance",
+          });
+          return;
+        }
+      }
+    }
     const actor = getActorInfo(req);
     const product = await workProductsSvc.createForIssue(issue.id, issue.companyId, {
       ...protectServerOwnedMetadata(req, withoutLocalFileUrl(req.body), null),
@@ -2054,6 +2082,20 @@ export function issueRoutes(
       return;
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    // AgentDash (review #1003 follow-up): deleting a reviewed deliverable and
+    // recording a fresh ready_for_review one revives Accept with no new
+    // revision — the same bypass the status-write refusal closes, through the
+    // row instead of the field.
+    if (
+      (req.actor.type === "agent" || req.actor.source === "assistant_grant")
+      && workProductWasReviewed(existing.status, existing.metadata)
+    ) {
+      res.status(403).json({
+        error: "Only the server removes a reviewed deliverable: write the revised document revision, then move the issue to in_review.",
+        code: "work_product_self_acceptance",
+      });
+      return;
+    }
     const removed = await workProductsSvc.remove(id);
     if (!removed) {
       res.status(404).json({ error: "Work product not found" });
