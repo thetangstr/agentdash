@@ -70,6 +70,28 @@ describe("openaiCompatLLM", () => {
     expect(sent.messages[1]).toEqual({ role: "user", content: "Help me hire agents." });
   });
 
+  it("merges consecutive same-role messages so providers with strict alternation do not 400", async () => {
+    process.env.OPENAI_COMPAT_API_KEY = "or-test-key";
+    const fetchMock = mockFetchOnce({ choices: [{ message: { content: "ok" } }] });
+
+    await openaiCompatLLM({
+      system: "sys",
+      messages: [
+        { role: "user", content: "first" },
+        { role: "user", content: "facts" },
+        { role: "user", content: "question" },
+        { role: "assistant", content: "earlier reply" },
+      ],
+    });
+
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.messages).toEqual([
+      { role: "system", content: "sys" },
+      { role: "user", content: "first\n\nfacts\n\nquestion" },
+      { role: "assistant", content: "earlier reply" },
+    ]);
+  });
+
   it("honors OPENAI_COMPAT_MODEL and OPENAI_COMPAT_BASE_URL overrides (trailing slash trimmed)", async () => {
     process.env.OPENAI_COMPAT_API_KEY = "fw-test-key";
     process.env.OPENAI_COMPAT_MODEL = "accounts/fireworks/models/llama-v3p1-70b-instruct";

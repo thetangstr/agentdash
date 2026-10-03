@@ -65,8 +65,22 @@ export async function openaiCompatLLMDetailed(
   const model = (process.env.OPENAI_COMPAT_MODEL ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const maxTokens = Number(process.env.OPENAI_COMPAT_MAX_TOKENS) || DEFAULT_MAX_TOKENS;
 
+  // Providers enforcing strict role alternation return 400 on consecutive
+  // same-role messages — which the CoS facts message deliberately produces
+  // (it rides immediately before the latest user turn). Collapse same-role
+  // runs into a single message joined by a blank line.
+  const merged = input.messages.reduce<ChatMessage[]>((acc, message) => {
+    const last = acc[acc.length - 1];
+    if (last && last.role === message.role) {
+      last.content = `${last.content}\n\n${message.content}`;
+    } else {
+      acc.push({ ...message });
+    }
+    return acc;
+  }, []);
+
   // OpenAI chat format: the system prompt is the first message with role "system".
-  const messages = [{ role: "system", content: input.system }, ...input.messages];
+  const messages = [{ role: "system", content: input.system }, ...merged];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
