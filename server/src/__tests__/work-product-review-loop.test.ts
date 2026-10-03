@@ -792,4 +792,86 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     const [back] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, deliverable!.id));
     expect(back).toMatchObject({ status: 'ready_for_review', reviewState: 'needs_board_review' });
   });
+
+  // AgentDash (review #1003 follow-up): delete-and-recreate is the same
+  // bypass through the row instead of the field — remove the reviewed
+  // deliverable, record a fresh ready_for_review one, and Accept revives for
+  // the revision already rejected. Both halves are refused for agents.
+  it('an agent cannot delete a reviewed deliverable, while an unreviewed one still deletes', async () => {
+    const f = await fixture();
+    const sentBack = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'changes_requested', reviewState: 'changes_requested',
+      metadata: { documentKey: 'proposal', changesRequestedAt: new Date().toISOString() },
+    });
+    expect((await call('DELETE', `/work-products/${sentBack!.id}`, f.agentToken, undefined, f.run.id)).status).toBe(403);
+    const [stillThere] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, sentBack!.id));
+    expect(stillThere).toBeTruthy();
+
+    // Review metadata alone marks it reviewed too — a status-laundered row
+    // cannot be deleted either.
+    const metadataOnly = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Laundered', status: 'active',
+      metadata: { acceptance: { reason: 'issue_accepted' } },
+    });
+    expect((await call('DELETE', `/work-products/${metadataOnly!.id}`, f.agentToken, undefined, f.run.id)).status).toBe(403);
+
+    // Work that was never reviewed deletes as before — and so does reviewed
+    // work for a board user.
+    const draft = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Draft', status: 'active',
+    });
+    expect((await call('DELETE', `/work-products/${draft!.id}`, f.agentToken, undefined, f.run.id)).status).toBe(200);
+    expect((await call('DELETE', `/work-products/${sentBack!.id}`, f.boardToken)).status).toBe(200);
+  });
+
+  it('an agent cannot record a new deliverable bound to a documentKey a reviewed one already holds', async () => {
+    const f = await fixture();
+    await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'changes_requested', reviewState: 'changes_requested',
+      metadata: { documentKey: 'proposal', changesRequestedAt: new Date().toISOString() },
+    });
+    const recreate = await call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
+      type: 'document', provider: 'paperclip', title: 'Proposal again', status: 'ready_for_review',
+      metadata: { documentKey: 'proposal' },
+    }, f.run.id);
+    expect(recreate.status).toBe(403);
+    expect(await recreate.json()).toMatchObject({ code: 'work_product_self_acceptance' });
+
+    // A different documentKey — or a key only an unreviewed row holds — is fine.
+    await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Draft', status: 'active',
+      metadata: { documentKey: 'draft' },
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
+      type: 'document', provider: 'paperclip', title: 'Notes', status: 'ready_for_review',
+      metadata: { documentKey: 'notes' },
+    }, f.run.id)).status).toBe(201);
+    expect((await call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
+      type: 'document', provider: 'paperclip', title: 'Draft v2', status: 'ready_for_review',
+      metadata: { documentKey: 'draft' },
+    }, f.run.id)).status).toBe(201);
+
+    // And the board can still record anything.
+    expect((await call('POST', `/issues/${f.issue.id}/work-products`, f.boardToken, {
+      type: 'document', provider: 'paperclip', title: 'Proposal replacement', status: 'ready_for_review',
+      metadata: { documentKey: 'proposal' },
+    })).status).toBe(201);
+  });
+
+  // AgentDash (review #1003 follow-up): documentKey locks whenever it is
+  // already set — an active deliverable's binding is server-owned too, not
+  // only from ready_for_review onward.
+  it('an agent cannot rebind or drop documentKey on any deliverable that has one set', async () => {
+    const f = await fixture();
+    const active = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Working draft', status: 'active',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('PATCH', `/work-products/${active!.id}`, f.agentToken, { metadata: { documentKey: 'other' } }, f.run.id)).status).toBe(200);
+    let [row] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, active!.id));
+    expect((row!.metadata as Record<string, unknown>).documentKey).toBe('proposal');
+    expect((await call('PATCH', `/work-products/${active!.id}`, f.agentToken, { metadata: { note: 'x' } }, f.run.id)).status).toBe(200);
+    [row] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, active!.id));
+    expect(row!.metadata).toEqual({ documentKey: 'proposal', note: 'x' });
+  });
 });
