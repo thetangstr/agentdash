@@ -879,5 +879,16 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
     ).toBe("/etc/hostname");
     // The expanded text of a failing call keeps its verdict.
     expect(summarizeToolOutcome(input.detail as string, "error", input)).toBe("Failed");
+    // The call's path followed by an error is a finding, not an echo.
+    expect(
+      summarizeToolOutcome(`${input.detail}: Permission denied`, "error", input),
+    ).toBe(`${input.detail}: Permission denied`);
+    expect(
+      summarizeToolOutcome(
+        "/repo/src/a.ts(3,1): error TS2307: Cannot find module",
+        "error",
+        { detail: "/repo/src/a.ts" },
+      ),
+    ).toBe("/repo/src/a.ts(3,1): error TS2307: Cannot find module");
   });
 });

@@ -844,6 +844,7 @@ export function Costs() {
                         budgetMonthlyCents={spendData?.summary.budgetCents ?? 0}
                         totalCompanySpendCents={spendData?.summary.spendCents ?? 0}
                         providerRows={providerRows}
+                        pricedSpend={spendPriced}
                       />
                     );
                   })}
@@ -863,6 +864,7 @@ export function Costs() {
                     budgetMonthlyCents={spendData?.summary.budgetCents ?? 0}
                     totalCompanySpendCents={spendData?.summary.spendCents ?? 0}
                     providerRows={providerRows}
+                    pricedSpend={spendPriced}
                   />
                 </TabsContent>
                 );

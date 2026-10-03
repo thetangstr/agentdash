@@ -11,6 +11,12 @@ interface BillerSpendCardProps {
   budgetMonthlyCents: number;
   totalCompanySpendCents: number;
   providerRows: CostByProviderModel[];
+  /**
+   * Company-level "any billed amount exists" (CostSummary.pricedSpend). A
+   * priced company shows a $0 biller's 0% bar honestly; an unpriced BYOK
+   * workspace cannot claim a share of a budget it was never billed against.
+   */
+  pricedSpend: boolean;
 }
 
 export function BillerSpendCard({
@@ -19,6 +25,7 @@ export function BillerSpendCard({
   budgetMonthlyCents,
   totalCompanySpendCents,
   providerRows,
+  pricedSpend,
 }: BillerSpendCardProps) {
   const providerBreakdown = useMemo(() => {
     const map = new Map<string, { provider: string; costCents: number; inputTokens: number; outputTokens: number }>();
@@ -92,7 +99,7 @@ export function BillerSpendCard({
       </CardHeader>
 
       <CardContent className="px-4 pb-4 pt-3 space-y-4">
-        {budgetMonthlyCents > 0 && row.costCents > 0 && (
+        {budgetMonthlyCents > 0 && (pricedSpend || row.costCents > 0) && (
           <QuotaBar
             label="Period spend"
             percentUsed={budgetPct}
@@ -107,8 +114,12 @@ export function BillerSpendCard({
           {row.subscriptionRunCount > 0
             ? `${row.subscriptionRunCount} subscription run${row.subscriptionRunCount === 1 ? "" : "s"}`
             : "0 subscription runs"}
-          {" · "}
-          {formatCents(weekSpendCents)} this week
+          {pricedSpend ? (
+            <>
+              {" · "}
+              {formatCents(weekSpendCents)} this week
+            </>
+          ) : null}
         </div>
 
         {billingTypeBreakdown.length > 0 && (

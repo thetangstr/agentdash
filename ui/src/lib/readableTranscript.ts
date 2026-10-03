@@ -846,11 +846,15 @@ function callPathHint(input: unknown): string | null {
 
 const PATH_DURATION_RE = /^\/\S+\s+(?:\([\d.]+\s*(?:ms|s|sec|m)\)|[·—–-]\s*[\d.]+\s*(?:ms|s|sec|m)\b|in\s+[\d.]+\s*(?:ms|s|sec|m)\b)\s*$/i;
 
+// What may follow the echoed call path: nothing, or just a duration.
+// "<path>: Permission denied" is a finding, not an echo, and stays visible.
+const PATH_TRAILER_RE = /^\s*(?:\(?[\d.]+\s*(?:ms|s|sec|m)\)?|[·—–-]\s*[\d.]+\s*(?:ms|s|sec|m)\b)?\s*$/i;
+
 function isPathEchoOutcome(result: string, callInput: unknown): boolean {
   const line = result.trim();
   if (!line.startsWith("/") || line.includes("\n")) return false;
   const callPath = callPathHint(callInput);
-  if (callPath && line.startsWith(callPath)) return true;
+  if (callPath && line.startsWith(callPath) && PATH_TRAILER_RE.test(line.slice(callPath.length))) return true;
   return PATH_DURATION_RE.test(line);
 }
 
