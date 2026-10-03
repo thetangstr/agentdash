@@ -250,6 +250,39 @@ describe("run-log redaction", () => {
     );
   });
 
+  it("collects only path segments that look like tokens, not slugs or ids", () => {
+    // A credential-named URL whose last segment is a name or a numeric id
+    // must not be collected — it would shred `database-password-prod` or a
+    // Discord channel id out of every log line permanently.
+    const keys = knownKeysFromEnv({
+      SLACK_WEBHOOK_URL: "https://hooks.example.com/services/database-password-prod",
+      ORG_WEBHOOK_URL: "https://hooks.example.com/services/my-organization-name",
+      DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789012345678/extra",
+      SLUG_TOKEN_URL: "https://hooks.example.com/t/db-prod-2024-cluster",
+      // …while a mixed-case+digits segment of 10-15 chars is a real token:
+      SHORT_TOKEN_URL: "https://hooks.example.com/x/Zq8Rk2Vm7Tn4",
+      // …but 10-15 all-lowercase+digits is an id, not a token:
+      LOWER_TOKEN_URL: "https://hooks.example.com/x/abcdef123456",
+    } as unknown as NodeJS.ProcessEnv);
+    for (const url of [
+      "https://hooks.example.com/services/database-password-prod",
+      "https://hooks.example.com/services/my-organization-name",
+      "https://discord.com/api/webhooks/123456789012345678/extra",
+      "https://hooks.example.com/t/db-prod-2024-cluster",
+      "https://hooks.example.com/x/abcdef123456",
+    ]) {
+      expect(keys, url).not.toContain(url);
+      expect(redactSecrets(`echo ${url} done`, keys), url).toContain(url);
+    }
+    expect(keys).toContain("https://hooks.example.com/x/Zq8Rk2Vm7Tn4");
+    expect(keys).toContain("Zq8Rk2Vm7Tn4");
+    expect(redactSecrets("echo Zq8Rk2Vm7Tn4 done", keys)).not.toContain("Zq8Rk2Vm7Tn4");
+    // Identifier fragments stay printable.
+    for (const frag of ["database-password-prod", "my-organization-name", "123456789012345678"]) {
+      expect(redactSecrets(`echo ${frag} done`, keys), frag).toContain(frag);
+    }
+  });
+
   it("NDJSON pass redacts the chunk field and keeps lines parseable", () => {
     const line = JSON.stringify({
       ts: "2026-10-03T00:00:00Z",

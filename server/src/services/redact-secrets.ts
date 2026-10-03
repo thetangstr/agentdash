@@ -105,10 +105,23 @@ export function isCollectableSecretValue(name: string, value: string): boolean {
   );
 }
 
-// A URL path segment that is itself the credential: >=16 chars of token
-// alphabet. UUIDs are identifiers, not secrets.
+// UUIDs are identifiers, not secrets; a lowercase slug of
+// hyphen/underscore-joined words (`database-password2-prod`) is a name.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TOKENISH_SEGMENT_RE = /^[A-Za-z0-9_-]{16,}$/;
+const WORD_SLUG_RE = /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/;
+
+/**
+ * Whether a URL path segment is itself the credential rather than an
+ * identifier. >=16 chars needs letters AND digits (`Zq8Rk2Vm7Tn4Wb9Xc3Ls`)
+ * — an all-digit channel id, a UUID or a word slug is not a token. A
+ * shorter segment (10-15) counts only when it also mixes case.
+ */
+function isTokenishSegment(seg: string): boolean {
+  if (seg.length < 10 || !/^[A-Za-z0-9_-]+$/.test(seg) || UUID_RE.test(seg)) return false;
+  if (!/[A-Za-z]/.test(seg) || !/\d/.test(seg)) return false;
+  if (seg.length >= 16) return !WORD_SLUG_RE.test(seg);
+  return /[a-z]/.test(seg) && /[A-Z]/.test(seg);
+}
 
 /**
  * Whether a URL carries credential material — userinfo, a secret-named
@@ -121,9 +134,7 @@ function urlCarriesCredential(raw: string): boolean {
     const url = new URL(raw);
     if (url.username || url.password) return true;
     for (const key of url.searchParams.keys()) if (isSecretName(key)) return true;
-    return url.pathname
-      .split("/")
-      .some((seg) => TOKENISH_SEGMENT_RE.test(seg) && !UUID_RE.test(seg));
+    return url.pathname.split("/").some(isTokenishSegment);
   } catch {
     return false;
   }
@@ -140,7 +151,7 @@ function credentialPartsOfUrl(raw: string): string[] {
       if (isSecretName(key) && param.length >= 8) parts.push(param);
     }
     for (const seg of url.pathname.split("/")) {
-      if (TOKENISH_SEGMENT_RE.test(seg) && !UUID_RE.test(seg)) parts.push(seg);
+      if (isTokenishSegment(seg)) parts.push(seg);
     }
   } catch {
     // malformed — nothing to extract

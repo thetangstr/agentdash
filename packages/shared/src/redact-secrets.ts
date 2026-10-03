@@ -103,9 +103,11 @@ export function isSecretValueKey(name: string): boolean {
  * Whether an unquoted `name: value` value looks like a credential and not
  * prose. `hunter2pass99` and `f3b9…Qz9` qualify; `required`, `is`, `out` and
  * `1500` do not (letters+digits or special characters or length ≥ 16).
+ * No upper bound: a 600-char bare value after `client_secret:` is still a
+ * credential — every check below is a single linear scan.
  */
 function looksLikeCredentialValue(value: string): boolean {
-  if (value.length < 4 || value.length > 512) return false;
+  if (value.length < 4) return false;
   if (!/[A-Za-z]/.test(value)) return false;
   return /\d/.test(value) || /[_+/=\-.@~]/.test(value) || value.length >= 16;
 }
@@ -553,14 +555,17 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     if (unescaped.length < 8 && !/\d/.test(unescaped)) return;
     // Prose like `Token authentication is required` or `Key rotation` is not
     // a credential: for the word-like schemes an all-letters value only
-    // counts when it still looks token-ish (mixed case or >=20 chars).
-    if (
-      /^(?:Token|Key|Bot|Basic)$/i.test(m[1]) &&
-      /^[A-Za-z]+$/.test(unescaped) &&
-      unescaped.length < 20 &&
-      !(/[a-z]/.test(unescaped) && /[A-Z]/.test(unescaped))
-    ) {
-      return;
+    // counts when it still looks token-ish (mixed case or >=20 chars), and a
+    // single Title-case word ("Key Exchange", "Bot Framework") never does.
+    if (/^(?:Token|Key|Bot|Basic)$/i.test(m[1])) {
+      if (/^[A-Z][a-z]+$/.test(unescaped)) return;
+      if (
+        /^[A-Za-z]+$/.test(unescaped) &&
+        unescaped.length < 20 &&
+        !(/[a-z]/.test(unescaped) && /[A-Z]/.test(unescaped))
+      ) {
+        return;
+      }
     }
     push(span.start, span.end);
   });

@@ -154,6 +154,12 @@ describe("security-review bypass cases", () => {
     'token = "<your token>"',
     '{"token": "<your token>"}',
     "Key <word>",
+    // A single Title-case word after a word-like scheme is prose.
+    "Key Exchange",
+    "Bot Framework",
+    "Key Management Service",
+    "Token Ring protocols",
+    "Basic Authentication guide",
   ])("leaves ordinary text alone: %s", (sample) => {
     expect(redactSecrets(sample)).toBe(sample);
   });
@@ -162,6 +168,15 @@ describe("security-review bypass cases", () => {
     expect(redactSecrets("Token abc123XYZsecret99")).not.toContain("abc123XYZsecret99");
     expect(redactSecrets("Basic dXNlcjpwYXNzd29yZDEyMw==")).not.toContain("dXNlcjpwYXNz");
     expect(redactSecrets("Token MixedCaseTokenNoDigits")).not.toContain("MixedCaseTokenNoDigits");
+  });
+
+  it("redacts a bare credential value over 512 chars", () => {
+    // `client_secret:`/`x-api-key:` values had a 512-char ceiling — a longer
+    // blob came back unredacted.
+    const blob = "Ab3xZ9qW".repeat(75); // 600 chars, credential-shaped
+    expect(redactSecrets(`client_secret: ${blob}`)).not.toContain(blob);
+    expect(redactSecrets(`x-api-key: ${blob}`)).not.toContain(blob);
+    expect(redactSecrets(`client_secret: ${blob}`)).toContain(REDACTED);
   });
 
   it("never blanks identifier keys in values", () => {
