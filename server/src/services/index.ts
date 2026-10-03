@@ -92,6 +92,7 @@ export { cosProactive } from "./cos-proactive.js";
 export {
   onboardingOrchestrator,
   OnboardingTierCapacityExceededError,
+  AmbiguousWorkspaceBootstrapError,
 } from "./onboarding-orchestrator.js";
 export { cosInterview } from "./cos-interview.js";
 export { agentProposer } from "./agent-proposer.js";

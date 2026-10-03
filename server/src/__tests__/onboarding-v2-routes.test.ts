@@ -118,6 +118,9 @@ vi.mock("../services/index.js", () => ({
       this.action = action;
     }
   },
+  // AgentDash (GH #977): the bootstrap route maps this error to 409, so the
+  // mock must export a constructor or `instanceof` throws into a 500.
+  AmbiguousWorkspaceBootstrapError: function AmbiguousWorkspaceBootstrapError() {},
   cosInterview: () => mockInterview,
   agentProposer: () => mockProposer,
   agentCreatorFromProposal: () => mockCreator,
@@ -864,8 +867,46 @@ describe("POST /api/onboarding/confirm-plan", () => {
 });
 
 describe("POST /api/onboarding/revise-plan", () => {
+  const planPayload = {
+    rationale: "ship + seed",
+    agents: [
+      {
+        role: "engineering_lead",
+        name: "Ellie",
+        adapterType: "hermes_local",
+        responsibilities: ["own dashboard"],
+        kpis: ["ship Q3"],
+      },
+    ],
+    alignmentToShortTerm: "ships v2",
+    alignmentToLongTerm: "lays groundwork",
+  };
+  const convoRow = [{ id: "conv1", companyId: "c1", metadata: null }];
+  const planCardRow = [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }];
+  const revisedReply = [
+    "Updated based on your feedback.",
+    "```json",
+    JSON.stringify({ plan: { ...planPayload, rationale: "revised" } }),
+    "```",
+  ].join("\n");
+
+  // The queue, front to back: conversation lookup, latest plan card,
+  // pre-LLM hire receipt, locked conversation row (FOR UPDATE re-check),
+  // post-LLM card re-read.
+  // (The member-names query fails on the stub — no innerJoin — and is
+  // caught, so it never pops the queue.)
+  let dbQueue: unknown[][];
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    mockDispatchLLM.mockResolvedValue(revisedReply);
+    dbQueue = [
+      convoRow,
+      planCardRow,
+      convoRow,
+      convoRow,
+      [{ cardPayload: planPayload }],
+    ];
   });
 
   // Closes #330: route is no longer Phase-F-deferred (#210 / #231
@@ -880,6 +921,51 @@ describe("POST /api/onboarding/revise-plan", () => {
       .post("/api/onboarding/revise-plan")
       .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
     expect(res.status).toBe(404);
+  });
+
+  it("posts the revised card when the plan stayed unconfirmed through the LLM call", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, dbQueue);
+    const res = await request(app)
+      .post("/api/onboarding/revise-plan")
+      .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
+    expect(res.status).toBe(200);
+    expect(res.body.plan.rationale).toBe("revised");
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(2);
+    expect(mockConversations.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cardKind: "agent_plan_proposal_v1" }),
+    );
+  });
+
+  // AgentDash (canary, lane chat): the LLM call takes seconds — long enough
+  // for the person to confirm this plan in another tab. A stale revised card
+  // posted afterwards would offer to hire a team that already exists, so the
+  // route re-checks the card before posting and answers 409.
+  it("returns 409 when the plan was confirmed while the LLM was revising it", async () => {
+    const queue = [...dbQueue];
+    queue[4] = [{ cardPayload: { ...planPayload, confirmedAt: "2026-10-03T10:00:00Z", confirmedAgentIds: ["agent-1"] } }];
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, queue);
+    const res = await request(app)
+      .post("/api/onboarding/revise-plan")
+      .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
+    expect(res.status).toBe(409);
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when a hire receipt landed while the LLM was revising it", async () => {
+    const queue = [...dbQueue];
+    queue[3] = [
+      {
+        id: "conv1",
+        companyId: "c1",
+        metadata: { agentdashAcceptedHires: { "plan:msg1": { attemptId: "a1", agentIds: ["agent-1"] } } },
+      },
+    ];
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, queue);
+    const res = await request(app)
+      .post("/api/onboarding/revise-plan")
+      .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
+    expect(res.status).toBe(409);
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
   });
 });
 

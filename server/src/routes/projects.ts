@@ -43,6 +43,7 @@ import {
 } from "../services/workspace-runtime.js";
 import {
   assertHostWorkspaceCommandAuthority,
+  assertProjectWorkspaceCwdAuthority,
   collectProjectExecutionWorkspaceCommandPaths,
   collectProjectWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
@@ -283,6 +284,11 @@ export function projectRoutes(db: Db) {
         ...collectProjectWorkspaceCommandPaths(workspace, "workspace"),
       ],
     );
+    // AgentDash (security, GH #980): the embedded workspace's cwd is a host
+    // path runs execute in — confine it like the standalone route below.
+    await assertProjectWorkspaceCwdAuthority(db, req, companyId, workspace?.cwd, {
+      sourceType: workspace?.sourceType,
+    });
     // AgentDash (security, #735): project env reaches every run in the project.
     assertProjectEnvAllowed(req.actor, projectData.env);
     if (projectData.env !== undefined) {
@@ -455,6 +461,9 @@ export function projectRoutes(db: Db) {
       existing.companyId,
       collectProjectWorkspaceCommandPaths(req.body),
     );
+    await assertProjectWorkspaceCwdAuthority(db, req, existing.companyId, req.body.cwd, {
+      sourceType: req.body.sourceType,
+    });
     const workspace = await svc.createWorkspace(id, req.body);
     if (!workspace) {
       res.status(422).json({ error: "Invalid project workspace payload" });
@@ -500,6 +509,11 @@ export function projectRoutes(db: Db) {
         existing.companyId,
         collectProjectWorkspaceCommandPaths(req.body, "", existingWorkspace),
       );
+      await assertProjectWorkspaceCwdAuthority(db, req, existing.companyId, req.body.cwd, {
+        storedCwd: existingWorkspace?.cwd,
+        storedSourceType: existingWorkspace?.sourceType,
+        sourceType: req.body.sourceType ?? existingWorkspace?.sourceType,
+      });
       if (!existingWorkspace) {
         res.status(404).json({ error: "Project workspace not found" });
         return;
