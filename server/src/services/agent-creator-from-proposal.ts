@@ -176,6 +176,11 @@ ${userVoice || "No interview context was captured."}
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry
 // or destructive compensation; separate setup/persistence/link phases stay truthful.
 
+// AgentDash: host-execution-config (GH #980) is inherited from the canonical
+// default bundle: a project workspace's `cwd` must stay inside the company's
+// managed directories unless an instance admin sets it — same class as the
+// adapterConfig host-execution fields the bundle already describes.
+
 // AgentDash: task-recovery-permit is inherited from the canonical default
 // bundle: a persisted exhausted marker refuses every wake source, including a
 // board user's ordinary wake; only the explicit clear or one board-user-confirmed

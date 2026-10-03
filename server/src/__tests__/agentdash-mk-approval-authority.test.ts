@@ -16,6 +16,7 @@ import {
   createDb,
   heartbeatRunEvents,
   heartbeatRuns,
+  principalPermissionGrants,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -157,6 +158,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     await db.delete(approvals);
     await db.delete(agentStewardships);
     await db.delete(agents);
+    await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
     await db.delete(companies);
   });
@@ -295,6 +297,43 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     );
 
     expect(res.status).toBe(403);
+  });
+
+  it("denies emergency override to a member holding only an agents:create grant", async () => {
+    // GH #971 review: the override write used to accept `agents:create`,
+    // which every member can earn — a grant, not the admin role, stood in
+    // for administrator. The gate now applies the same role rule the
+    // override inbox read path does, so a member with the grant alone can
+    // neither see nor write overrides.
+    const { company, bystander, approval } = await seed();
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: bystander.principalId,
+      permissionKey: "agents:create",
+      grantedByUserId: "seeder",
+    });
+    const app = await createApp(db, makeBoardActor(company.id, bystander.principalId));
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/override`)
+        .send({
+          decision: "approved",
+          overrideReason: "I hold agents:create",
+          revision: 1,
+          idempotencyKey: `key-${randomUUID()}`,
+          channel: "web",
+        }),
+    );
+
+    expect(res.status).toBe(403);
+    const stored = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
   });
 
   it("binds a decision to the approval revision and fails a stale button closed", async () => {

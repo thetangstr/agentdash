@@ -1,10 +1,17 @@
+import path from "node:path";
 import type { Request } from "express";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { agents, agentStewardships, projects } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
+import { resolveHomeAwarePath } from "../home-paths.js";
+import { checkCompanyWorkspaceCwd } from "../services/workspace-cwd-confinement.js";
+import { REPO_ONLY_CWD_SENTINEL } from "../services/projects.js";
 import {
   actorMaySetHostWorkspaceCommand,
   findRestrictedHostExecutionFields,
 } from "../services/adapter-host-execution-policy.js";
+import { isProjectVisible, seesEverything } from "./visibility.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -58,8 +65,33 @@ function collectWorkspaceRuntimeCommandPaths(raw: unknown, stored: unknown, pref
   });
 }
 
+function hasDotDotPathSegment(value: string) {
+  return value.split(/[\\/]+/).includes("..");
+}
+
 function collectWorkspaceStrategyCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
-  return collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand"]);
+  const paths = collectCommandKeys(raw, stored, prefix, ["provisionCommand", "teardownCommand"]);
+  // AgentDash (security, GH #980): a worktreeParentDir names a host directory
+  // the server mkdirs and writes worktrees into — the same class as cwd. An
+  // ABSOLUTE value lands anywhere; a relative one is resolved against the
+  // repo root with plain path.resolve, so one carrying a `..` segment climbs
+  // out of the repo just the same (GH #980 review). Both are gated; a plain
+  // relative dir stays open to non-admins.
+  if (isRecord(raw)) {
+    const value = raw.worktreeParentDir;
+    const storedValue = isRecord(stored) ? stored.worktreeParentDir : undefined;
+    if (
+      typeof value === "string" &&
+      value.trim().length > 0 &&
+      (path.isAbsolute(value.trim()) ||
+        value.trim().startsWith("~") ||
+        hasDotDotPathSegment(value.trim())) &&
+      value !== storedValue
+    ) {
+      paths.push(prefixPath(prefix, "worktreeParentDir"));
+    }
+  }
+  return paths;
 }
 
 function collectExecutionWorkspaceConfigCommandPaths(raw: unknown, prefix: string, stored?: unknown): string[] {
@@ -109,6 +141,152 @@ export async function assertHostWorkspaceCommandAuthority(
 
 function sub(value: unknown, key: string): unknown {
   return isRecord(value) ? value[key] : undefined;
+}
+
+/**
+ * Is `projectId` a project of this company the actor may see? A directory
+ * under `<instance>/projects/<companyId>/<projectId>` names that project —
+ * letting an off-list member point a workspace cwd at it would leak a
+ * restricted project's checkout (GH #980 review).
+ */
+async function actorMayUseManagedProjectDir(
+  db: Db,
+  req: Request,
+  companyId: string,
+  projectId: string,
+): Promise<boolean> {
+  const project = await db
+    .select({
+      id: projects.id,
+      companyId: projects.companyId,
+      visibility: projects.visibility,
+      createdByUserId: projects.createdByUserId,
+    })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.companyId, companyId)))
+    .then((rows) => rows[0] ?? null);
+  if (!project) return false;
+  return isProjectVisible(db, req, project);
+}
+
+/**
+ * May the actor point a workspace cwd at `<instance>/workspaces/<agentId>`?
+ * The dir belongs to one agent, so "manage" — not mere visibility — is the
+ * bar: an agent manages its own dir; a human manages the agents they
+ * created, steward or answer for, and anything reporting to those (the same
+ * `answers_for` set resolveAgentVisibility builds, minus company-visibility
+ * and minus the created-by-others flat add).
+ */
+async function actorManagesAgent(
+  db: Db,
+  req: Request,
+  companyId: string,
+  agentId: string,
+): Promise<boolean> {
+  if (req.actor.type === "agent") return req.actor.agentId === agentId;
+  if (seesEverything(req, companyId)) return true;
+  const userId = req.actor.type === "board" ? req.actor.userId : null;
+  if (!userId) return false;
+  const rows = await db.execute<{ id: string }>(sql`
+    with recursive manageable as (
+      select a.id from ${agents} a
+      where a.company_id = ${companyId}
+        and (
+          a.accountable_user_id = ${userId}
+          or a.created_by_user_id = ${userId}
+          or exists (
+            select 1 from ${agentStewardships} s
+            where s.company_id = ${companyId}
+              and s.agent_id = a.id
+              and s.user_id = ${userId}
+              and s.ended_at is null
+          )
+        )
+      union
+      select a.id from ${agents} a
+        join manageable m on a.reports_to = m.id
+        where a.company_id = ${companyId}
+    )
+    select id from manageable where id = ${agentId}::uuid
+    limit 1
+  `);
+  return (rows as unknown as unknown[]).length > 0;
+}
+
+/**
+ * AgentDash (security, GH #980): a project workspace `cwd` is the host
+ * directory runs execute in — the same authority class as a host-executed
+ * command. Everyone but the instance admin (and the local_trusted board) may
+ * only choose a cwd inside this company's server-managed roots: the managed
+ * project checkout dirs (of projects the actor can see) and the instance
+ * workspaces of agents the actor manages.
+ *
+ * Grandfathering: the check only trips when the EFFECTIVE host cwd changes.
+ * Resending the stored value — including the legacy repo paths self-hosted
+ * installs hold — stays open, but ONLY while the row's `sourceType` also
+ * stays the same. Flipping a row to a host source type (`remote_managed` →
+ * `local_path`, or between host types) re-validates the cwd that will
+ * actually execute, even when cwd is absent from the body — otherwise a
+ * laundered value rides the grandfather clause in (GH #980 review).
+ *
+ * `remote_managed` rows carry a remote path, not a host one, so a non-empty
+ * NEW cwd is refused outright for non-admins: nothing local should ever
+ * execute in it, and heartbeats ignore it.
+ */
+export async function assertProjectWorkspaceCwdAuthority(
+  db: Db,
+  req: Request,
+  companyId: string,
+  cwd: unknown,
+  options: { storedCwd?: unknown; sourceType?: unknown; storedSourceType?: unknown } = {},
+): Promise<void> {
+  const sourceType = typeof options.sourceType === "string" ? options.sourceType : undefined;
+  const sourceTypeChanged =
+    sourceType !== undefined &&
+    typeof options.storedSourceType === "string" &&
+    sourceType !== options.storedSourceType;
+  // "/__paperclip_repo_only__" is a sentinel meaning "no cwd, use the repo
+  // clone" — it never lands on the host filesystem.
+  const settingCwd =
+    typeof cwd === "string" &&
+    cwd.trim().length > 0 &&
+    cwd.trim() !== REPO_ONLY_CWD_SENTINEL;
+  const cwdUnchanged =
+    settingCwd &&
+    typeof options.storedCwd === "string" &&
+    options.storedCwd.trim().length > 0 &&
+    resolveHomeAwarePath(cwd) === resolveHomeAwarePath(options.storedCwd);
+
+  if (sourceType === "remote_managed") {
+    if (settingCwd && !cwdUnchanged && !actorMaySetHostWorkspaceCommand(req.actor)) {
+      throw forbidden(
+        "A remote-managed workspace does not execute on this host, so its cwd is not a host path. " +
+          "Leave it empty, or ask the instance admin to set it.",
+      );
+    }
+    return;
+  }
+
+  // An explicit `cwd: null` clears the value, so the effective post-write cwd
+  // is null — not the stored one. Only an ABSENT cwd leaves the stored value
+  // in force, which is the case a source-type flip must re-validate.
+  const effectiveCwd = cwd !== undefined ? cwd : options.storedCwd;
+  if (!sourceTypeChanged && (!settingCwd || cwdUnchanged)) return;
+  if (typeof effectiveCwd !== "string" || effectiveCwd.trim().length === 0) return;
+  if (effectiveCwd.trim() === REPO_ONLY_CWD_SENTINEL) return;
+  if (actorMaySetHostWorkspaceCommand(req.actor)) return;
+  const check = await checkCompanyWorkspaceCwd(db, companyId, effectiveCwd, {
+    isManagedProjectDirAllowed: (projectId) =>
+      actorMayUseManagedProjectDir(db, req, companyId, projectId),
+    isAgentWorkspaceDirAllowed: (agentId) =>
+      actorManagesAgent(db, req, companyId, agentId),
+  });
+  if (!check.ok) {
+    throw forbidden(
+      `Workspace cwd refused: ${check.reason}. ` +
+        "Set a path inside the company's managed workspace roots, or ask the instance admin to set it.",
+    );
+  }
 }
 
 export function collectAgentAdapterWorkspaceCommandPaths(

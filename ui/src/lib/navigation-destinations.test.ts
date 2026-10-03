@@ -38,7 +38,7 @@ describe("navigationDestinationGroups", () => {
   it("offers the primary pages, More, Help and Settings", () => {
     const groups = navigationDestinationGroups({
       isInstanceAdmin: false,
-      canManageAgents: false,
+      isCompanyAdmin: false,
       workspacesEnabled: false,
     });
     expect(groups.map((g) => g.heading)).toEqual(["Pages", "More", "Help", "Settings"]);
@@ -67,17 +67,26 @@ describe("navigationDestinationGroups", () => {
 
   it("adds instance pages, Override and Workspaces by who the user is and what is enabled", () => {
     const all = paths(
-      navigationDestinationGroups({ isInstanceAdmin: true, canManageAgents: true, workspacesEnabled: true }),
+      navigationDestinationGroups({ isInstanceAdmin: true, isCompanyAdmin: true, workspacesEnabled: true }),
     );
     for (const href of [...INSTANCE_ADMIN_ONLY, "/inbox/override", "/workspaces"]) {
       expect(all, `expected ${href}`).toContain(href);
     }
   });
 
+  it("hides the Override destination from a member who can manage agents but is not an admin", () => {
+    // GH #971 review: the override inbox is an owner/admin view on the server,
+    // so the palette must not offer it to anyone the server would refuse.
+    const all = paths(
+      navigationDestinationGroups({ isInstanceAdmin: false, isCompanyAdmin: false, workspacesEnabled: false }),
+    );
+    expect(all).not.toContain("/inbox/override");
+  });
+
   it("labels settings items with their group so same-named pages are distinguishable", () => {
     const settings = navigationDestinationGroups({
       isInstanceAdmin: true,
-      canManageAgents: false,
+      isCompanyAdmin: false,
       workspacesEnabled: false,
     }).find((g) => g.heading === "Settings")!;
     const generals = settings.items.filter((item) => item.label === "General");

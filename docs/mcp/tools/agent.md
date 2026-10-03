@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `8a544875b` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `ddebd3f5c` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -646,9 +646,11 @@ Make a JSON request to an existing AgentDash /api endpoint for unsupported opera
 
 ## `agentdashBootstrapWorkspace`
 
-AgentDash: provision a workspace for the authenticated user — creates the company, a Chief of Staff agent, and the opening conversation. The lowest-friction way to start onboarding. Takes no input.
+AgentDash: provision a workspace for the authenticated user — creates the company, a Chief of Staff agent, and the opening conversation. The lowest-friction way to start onboarding. Pass companyId when the user belongs to more than one company — the server refuses to guess (409) and lists the candidates.
 
-No input.
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `companyId` | string \| null | no | Company to bootstrap in. Required when the user holds active memberships in more than one company; omit when they belong to exactly one or none. |
 
 ## `agentdashListCompanies`
 
@@ -746,9 +748,11 @@ Configure the model adapter your agents will run on — a required onboarding st
 
 ## `agentdash_start_interview`
 
-Bootstrap the AgentDash workspace: creates the company, the Chief of Staff agent, and the onboarding conversation, then enforces the boundary default that new agent hires require board approval. Returns {companyId, conversationId, cosAgentId, boundaries}. Follow with agentdash_interview_turn to run the intent-capture interview.
+Bootstrap the AgentDash workspace: creates the company, the Chief of Staff agent, and the onboarding conversation, then enforces the boundary default that new agent hires require board approval. Returns {companyId, conversationId, cosAgentId, boundaries}. Follow with agentdash_interview_turn to run the intent-capture interview. Pass companyId when the user belongs to more than one company — the server refuses to guess (409) and lists the candidates.
 
-No input.
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `companyId` | string \| null | no | Company to bootstrap in. Required when the user holds active memberships in more than one company; omit when they belong to exactly one or none. |
 
 ## `agentdash_interview_turn`
 

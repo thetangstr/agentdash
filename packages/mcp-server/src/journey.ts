@@ -513,14 +513,22 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       "Bootstrap the AgentDash workspace: creates the company, the Chief of Staff agent, and the "
         + "onboarding conversation, then enforces the boundary default that new agent hires require "
         + "board approval. Returns {companyId, conversationId, cosAgentId, boundaries}. Follow with "
-        + "agentdash_interview_turn to run the intent-capture interview.",
-      z.object({}),
-      async () => {
+        + "agentdash_interview_turn to run the intent-capture interview. Pass companyId when the "
+        + "user belongs to more than one company — the server refuses to guess (409) and lists the "
+        + "candidates.",
+      z.object({
+        companyId: companyIdOptional.describe(
+          "Company to bootstrap in. Required when the user holds active memberships in more than one company; omit when they belong to exactly one or none.",
+        ),
+      }),
+      async ({ companyId }) => {
         const bootstrap = await client.requestJson<{
           companyId: string;
           cosAgentId: string;
           conversationId: string;
-        }>("POST", "/onboarding/bootstrap", { body: {} });
+        }>("POST", "/onboarding/bootstrap", {
+          body: { ...(companyId ? { companyId } : {}) },
+        });
 
         // Boundary default: hires beyond the confirmed plan must be gated
         // behind human approval in the AgentDash UI.

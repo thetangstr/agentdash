@@ -24,6 +24,7 @@ import {
   inviteService,
   logActivity,
   OnboardingTierCapacityExceededError,
+  AmbiguousWorkspaceBootstrapError,
 } from "../services/index.js";
 import {
   memberOnboardingService,
@@ -480,6 +481,16 @@ export function onboardingV2Routes(db: Db) {
       }
       if (err instanceof OnboardingTierCapacityExceededError) {
         res.status(402).json(freeTierCapExceededPayload(err.action));
+        return;
+      }
+      // AgentDash (security, GH #977): no companyId + several workspaces —
+      // refuse with the candidate list instead of guessing one.
+      if (err instanceof AmbiguousWorkspaceBootstrapError) {
+        res.status(409).json({
+          code: err.code,
+          companies: err.companies,
+          message: err.message,
+        });
         return;
       }
       throw err;

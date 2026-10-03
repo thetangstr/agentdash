@@ -62,7 +62,7 @@ export function resolveDefaultAgentWorkspaceDir(agentId: string): string {
   return path.resolve(resolvePaperclipInstanceRoot(), "workspaces", trimmed);
 }
 
-function sanitizeFriendlyPathSegment(value: string | null | undefined, fallback = "_default"): string {
+export function sanitizeFriendlyPathSegment(value: string | null | undefined, fallback = "_default"): string {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) return fallback;
   const sanitized = trimmed

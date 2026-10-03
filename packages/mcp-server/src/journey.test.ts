@@ -562,6 +562,26 @@ describe("agentdash_start_interview", () => {
     });
   });
 
+  it("forwards an explicit companyId to bootstrap (multi-company 409 recovery)", async () => {
+    // GH #977: the server refuses to guess a workspace for a multi-company
+    // user — the tool must let the caller retry with the chosen company.
+    const companyId = "99999999-9999-4999-8999-999999999999";
+    const fetchMock = routeFetch([
+      [/\/onboarding\/bootstrap$/, {
+        companyId,
+        cosAgentId: AGENT_ID,
+        conversationId: CONVERSATION_ID,
+      }],
+      [new RegExp(`/companies/${companyId}$`), { id: companyId, requireBoardApprovalForNewAgents: true }],
+    ]);
+
+    await getTool("agentdash_start_interview").execute({ companyId });
+
+    const [bootstrapUrl, bootstrapInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(bootstrapUrl)).toBe("http://localhost:3100/api/onboarding/bootstrap");
+    expect(JSON.parse(String(bootstrapInit.body))).toEqual({ companyId });
+  });
+
   it("surfaces a REQUIRED manual step when the boundary PATCH fails", async () => {
     routeFetch([
       [/\/onboarding\/bootstrap$/, {

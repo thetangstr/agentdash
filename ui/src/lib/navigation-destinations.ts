@@ -37,11 +37,11 @@ export interface NavigationDestinationGroup {
 
 export function navigationDestinationGroups({
   isInstanceAdmin,
-  canManageAgents,
+  isCompanyAdmin,
   workspacesEnabled,
 }: {
   isInstanceAdmin: boolean;
-  canManageAgents: boolean;
+  isCompanyAdmin: boolean;
   workspacesEnabled: boolean;
 }): NavigationDestinationGroup[] {
   const pages: NavigationDestination[] = [
@@ -55,7 +55,10 @@ export function navigationDestinationGroups({
     { to: "/projects", label: "Projects", icon: Hexagon },
     { to: "/my-agent", label: "My agent", icon: Bot, keywords: "personal channels" },
   ];
-  if (canManageAgents) {
+  // AgentDash (security, GH #971 review): the override inbox is an
+  // owner/admin view on the server — the destination hides for everyone
+  // else, matching the gate the page itself enforces.
+  if (isInstanceAdmin || isCompanyAdmin) {
     pages.push({ to: "/inbox/override", label: "Override", icon: ShieldAlert, keywords: "override inbox" });
   }
   if (workspacesEnabled) {
