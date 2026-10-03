@@ -6,6 +6,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { redactSecrets } from "@paperclipai/shared";
+import { knownKeysFromEnv } from "../services/redact-secrets.ts";
 import {
   createRunLogStreamRedactor,
   instanceKnownSecrets,
@@ -125,6 +127,40 @@ describe("run-log redaction", () => {
     // but an echoed `postgres://user:pass@host` is still scrubbed by the
     // URL-userinfo pattern plus the extracted password literal.
     expect(keys).not.toContain("/usr/bin");
+  });
+
+  it("never collects paths, URLs, public keys or trivial DSN passwords", () => {
+    // PR #998 re-review: collecting these shreds instance paths and the word
+    // `paperclip` out of every run log — and persist-time over-redaction is
+    // permanent.
+    const keys = knownKeysFromEnv({
+      PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/Users/kailor/.paperclip/instances/default/secrets/master.key",
+      GOOGLE_APPLICATION_CREDENTIALS: "/Users/kailor/.config/gcloud/application_default_credentials.json",
+      STRIPE_PUBLISHABLE_KEY: "pk_live_abcdefghijklmnopqrstuvwx",
+      DATABASE_URL: "postgres://paperclip:paperclip@127.0.0.1:54329/paperclip",
+      BETTER_AUTH_SECRET: "abcdefghijklmnopqrstuvwxyz012345",
+      PAPERCLIP_PUBLIC_KEY_URL: "https://agentdash.example.com/.well-known/jwks.json",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(keys).toEqual(["abcdefghijklmnopqrstuvwxyz012345"]);
+
+    for (const line of [
+      "reading /Users/kailor/.paperclip/instances/default/data/run-logs/abc.ndjson",
+      "cat /Users/kailor/.config/gcloud/application_default_credentials.json",
+      "user paperclip connected to db paperclip",
+      "GET https://agentdash.example.com/.well-known/jwks.json",
+      "pk_live_abcdefghijklmnopqrstuvwx is publishable",
+    ]) {
+      expect(redactSecrets(line, keys), JSON.stringify(line)).toBe(line);
+    }
+  });
+
+  it("still collects a real DSN password and a long != username secret", () => {
+    const keys = knownKeysFromEnv({
+      DATABASE_URL: "postgres://app:dsn-pass-4444444@db.internal:5432/app",
+      SECONDARY_DSN: "mysql://root:r00t-longpassword-99@db.internal/app",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(keys).toContain("dsn-pass-4444444");
+    expect(keys).toContain("r00t-longpassword-99");
   });
 
   it("NDJSON pass redacts the chunk field and keeps lines parseable", () => {

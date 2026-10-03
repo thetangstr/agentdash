@@ -36,7 +36,7 @@ import { promisify } from "node:util";
 import { badRequest, HttpError } from "../errors.js";
 import { isSecretName } from "@paperclipai/shared";
 import { agentProfileName } from "./hermes-profile.js";
-import { redactSecrets } from "./redact-secrets.js";
+import { isCollectableSecretValue, redactSecrets } from "./redact-secrets.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -577,7 +577,9 @@ export function configuredProviderKeysSync(env: NodeJS.ProcessEnv = process.env)
       const name = line.slice(0, eq).trim();
       if (!names.has(name) && !isSecretName(name)) continue;
       const value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-      if (value.length >= 6) keys.push(value);
+      // Same guard as process env collection: a `*_FILE=` path or public key
+      // in a profile .env must not shred matching text out of every run log.
+      if (value.length >= 6 && isCollectableSecretValue(name, value)) keys.push(value);
     }
   }
   return keys;

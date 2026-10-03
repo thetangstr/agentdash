@@ -138,7 +138,7 @@ describe("redactSecrets", () => {
   });
 
   it("redacts a known secret split across innocuous variables", () => {
-    const secret = "abcdefgh12345678IJKLMNOP123456";
+    const secret = "k8fP2mX9qB4rT7zN1wJ6yV3hG5d0s";
     const first = secret.slice(0, 15);
     const second = secret.slice(15);
     const out = redactSecrets(`A=${first} B=${second}; curl -H "Auth: $A$B"`, [secret]);
@@ -153,6 +153,13 @@ describe("redactSecrets", () => {
     expect(redactSecrets("correct horse", [spaced])).toBe("correct horse");
     // A short secret is only ever matched verbatim.
     expect(redactSecrets("abc123xyz", ["abc123"])).toBe("***REDACTED***xyz");
+    // Windows cut from a sequential secret are low entropy — they collide
+    // with the alphabet inside unrelated values, so no fragment matching.
+    const sequential = "abcdefghijklmnopqrstuvwxyz012345";
+    expect(redactSecrets("pk_live_abcdefghijklmnopqrstuvwx", [sequential])).toBe(
+      "pk_live_abcdefghijklmnopqrstuvwx",
+    );
+    expect(redactSecrets(`key is ${sequential}`, [sequential])).toBe("key is ***REDACTED***");
     expect(redactSecrets("abc", ["abc123"])).toBe("abc");
   });
 });

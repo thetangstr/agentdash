@@ -314,17 +314,55 @@ function secretEncodedForms(secret: string): string[] {
 }
 
 /**
+ * True when `value` contains a run of ≥8 sequential characters (a–z, A–Z or
+ * 0–9, either direction). Such runs are low entropy — fragments cut from
+ * them (`abcdefghijklmn`) collide with ordinary identifiers and the test
+ * fixture alphabet inside values like `pk_live_abcdefghijklmnopqrstuvwx`.
+ */
+function hasSequentialRun(value: string, runLength = 8): boolean {
+  let run = 1;
+  for (let i = 1; i < value.length; i++) {
+    const prev = value.charCodeAt(i - 1);
+    const cur = value.charCodeAt(i);
+    const sameClass =
+      (prev >= 0x30 && prev <= 0x39 && cur >= 0x30 && cur <= 0x39) ||
+      (prev >= 0x41 && prev <= 0x5a && cur >= 0x41 && cur <= 0x5a) ||
+      (prev >= 0x61 && prev <= 0x7a && cur >= 0x61 && cur <= 0x7a);
+    run = sameClass && Math.abs(cur - prev) === 1 ? run + 1 : 1;
+    if (run >= runLength) return true;
+  }
+  return false;
+}
+
+/**
  * Windows of a known secret, so a key split across innocuous assignments
  * (`A=sk-proj-4f8a… B=…z9q2`) still hides each half. Only token-shaped
- * secrets get fragment matching — fragments of a spaced passphrase could be
- * ordinary words. A fragment needs 14 characters, so a 2-way split of a
- * 28+ character secret is caught on both sides.
+ * secrets get fragment matching — a fragment of a file path, URL or spaced
+ * passphrase is an ordinary word (`…/secrets/master.key`, `…/.well-known/`),
+ * and persist-time over-redaction cannot be undone. "Token-shaped" means a
+ * URL-safe run with no `/` or spaces and some entropy: a digit, mixed case,
+ * or a `_-~+=@` separator (dots alone don't count — dotted names like
+ * `packages.something.foo` are identifiers). Each 14-char window is also
+ * dropped when it is mostly a sequential run — `abcdefghijklmn` cut from an
+ * alphabet-ordered secret collides with the alphabet inside unrelated
+ * values like `pk_live_abcdefghijklmnopqrstuvwx`. A fragment needs 14
+ * characters, so a 2-way split of a 28+ character secret is caught on
+ * both sides.
  */
 function secretFragments(secret: string): string[] {
-  if (secret.length < 20 || /\s/.test(secret)) return [];
+  if (secret.length < 20 || !/^[A-Za-z0-9][A-Za-z0-9._~+=@-]*$/.test(secret)) return [];
+  if (!/\d/.test(secret) && !(/[a-z]/.test(secret) && /[A-Z]/.test(secret)) && !/[_~+=@-]/.test(secret)) {
+    return [];
+  }
   const fragments = new Set<string>();
   for (let i = 0; i + SECRET_FRAGMENT_LENGTH <= secret.length; i++) {
-    fragments.add(secret.slice(i, i + SECRET_FRAGMENT_LENGTH));
+    const fragment = secret.slice(i, i + SECRET_FRAGMENT_LENGTH);
+    // Low-entropy windows stay out too: sequential runs collide with the
+    // alphabet inside unrelated values, and near-uniform windows
+    // (`00000000000000`) collide with ordinary padding.
+    if (!hasSequentialRun(fragment) && new Set(fragment).size >= 3) {
+      fragments.add(fragment);
+    }
   }
   return [...fragments];
 }
@@ -354,11 +392,20 @@ function knownSecretsRegex(secrets: readonly string[]): RegExp | null {
 // Edit collection over the normalized text.
 // ---------------------------------------------------------------------------
 
-function eachMatch(regex: RegExp, text: string, fn: (match: RegExpExecArray) => void): void {
+/**
+ * Iterate `regex` over `text`. When `fn` returns a number the scan rewinds to
+ * that index and continues — used by NAME_VALUE_RE so a rejected `label:`
+ * prefix does not swallow a `NAME=` that starts inside its value.
+ */
+function eachMatch(regex: RegExp, text: string, fn: (match: RegExpExecArray) => void | number): void {
   regex.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
-    fn(match);
+    const rewind = fn(match);
+    if (typeof rewind === "number") {
+      regex.lastIndex = Math.max(0, Math.min(rewind, text.length));
+      continue;
+    }
     if (match[0].length === 0) regex.lastIndex++;
   }
 }
@@ -422,7 +469,14 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     const span = groupSpan(m, 4);
     if (!span) return;
     const isAssignment = sep.includes("=");
-    if (isAssignment ? !isSecretName(name) : !isSecretValueKey(name)) return;
+    if (isAssignment ? !isSecretName(name) : !isSecretValueKey(name)) {
+      // A non-secret label (`run:`, `note:`, `x:`, `stdout:`) swallows the
+      // inner name as its value — `run: TOKEN=abc` consumes `TOKEN` and the
+      // `=abc` tail is never checked. Rewind to the value start so the inner
+      // `NAME=` assignment is scanned on its own. The rescan always starts
+      // strictly after this match's start, so the loop still terminates.
+      return span.start;
+    }
     if (value === '""' || value === "''" || value === "") return;
     if (value.includes(REDACTED)) return;
     // A variable reference or command substitution is not itself a secret.

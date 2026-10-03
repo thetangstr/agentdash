@@ -66,6 +66,39 @@ export function redactSecrets(text: string, knownKeys: readonly (string | undefi
   return out;
 }
 
+// `*_FILE` / `*_PATH` / `*_DIR` / `*_URL` hold locations, not credential
+// material — `PAPERCLIP_SECRETS_MASTER_KEY_FILE` is the path TO the key, and
+// collecting the path would shred instance directories out of every log line.
+const LOCATION_NAME_TAIL_RE = /_(?:FILE|PATH|DIR|URL)$/i;
+
+// Publishable/public values are public by design — `pk_live_…`,
+// `STRIPE_PUBLISHABLE_KEY`, `*_PUBLIC_KEY_URL` must never be redacted.
+const PUBLIC_NAME_RE = /(?:^|_)(?:PUBLISHABLE|PUBLIC)(?:_|$)/i;
+
+/** A value that is a filesystem path or URL is a pointer, not the secret. */
+function looksLikeLocation(value: string): boolean {
+  return (
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ||
+    /^~?[/.]/.test(value) ||
+    /^[A-Za-z]:[\\/]/.test(value)
+  );
+}
+
+/**
+ * Whether a credential-named variable holds real secret material and is safe
+ * to collect for verbatim matching. Paths, URLs and publishable keys are
+ * excluded — collecting them shreds ordinary text out of every log line, and
+ * persist-time over-redaction cannot be undone.
+ */
+export function isCollectableSecretValue(name: string, value: string): boolean {
+  return (
+    !LOCATION_NAME_TAIL_RE.test(name) &&
+    !PUBLIC_NAME_RE.test(name) &&
+    !looksLikeLocation(value) &&
+    !/^pk_(?:live|test)_/.test(value)
+  );
+}
+
 /** Credentials this process was started with, for redacting adapter output. */
 export function knownKeysFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   const keys: string[] = [];
@@ -73,10 +106,22 @@ export function knownKeysFromEnv(env: NodeJS.ProcessEnv = process.env): string[]
     if (!value) continue;
     // `AWS_SECRET_ACCESS_KEY`, `PGPASSWORD`, `*_PRIVATE_KEY`, `*_MASTER_KEY`,
     // `*SECRET_KEY` — any credential-named variable, not just the classic four.
-    if (value.length >= 8 && (isSecretName(name) || /_?KEY$/i.test(name))) keys.push(value);
-    // DSNs carry their password inline: postgres://user:pass@host.
-    const dsn = /^[a-z][a-z0-9+.-]*:\/\/[^\s/@"']+:([^\s/"']+)@/i.exec(value);
-    if (dsn && dsn[1].length >= 6) keys.push(dsn[1]);
+    // Skipped: location-named and public-named variables, and values that are
+    // paths/URLs (`GOOGLE_APPLICATION_CREDENTIALS` points at a file).
+    if (
+      value.length >= 8 &&
+      (isSecretName(name) || /_?KEY$/i.test(name)) &&
+      isCollectableSecretValue(name, value)
+    ) {
+      keys.push(value);
+    }
+    // DSNs carry their password inline: postgres://user:pass@host. The
+    // password counts only when it looks real — the embedded default
+    // `paperclip:paperclip` (any `user == pass`, or a short password) would
+    // redact a common word out of every line, and persist-time
+    // over-redaction cannot be undone.
+    const dsn = /^[a-z][a-z0-9+.-]*:\/\/([^\s/@"']+):([^\s/"']+)@/i.exec(value);
+    if (dsn && dsn[2].length >= 12 && dsn[2] !== dsn[1]) keys.push(dsn[2]);
   }
   return keys;
 }

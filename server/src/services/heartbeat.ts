@@ -9920,8 +9920,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // a path that missed it) are still safe to serve. The content is
         // NDJSON — each line is parsed and its `chunk` redacted structurally,
         // so JSON escaping can never be corrupted; byte-range reads still see
-        // truncated first/last lines handled as plain text.
-        content: redactRunLogNdjson(result.content),
+        // truncated first/last lines handled as plain text. Files the store
+        // marks redactedAtPersist skip the pass — every byte in them already
+        // went through the redacting append in this process.
+        content: result.redactedAtPersist ? result.content : redactRunLogNdjson(result.content),
       };
     },
 

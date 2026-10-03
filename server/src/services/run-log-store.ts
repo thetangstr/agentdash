@@ -20,6 +20,14 @@ export interface RunLogReadOptions {
 export interface RunLogReadResult {
   content: string;
   nextOffset?: number;
+  /**
+   * AgentDash (GH #992): true when every byte of this file was appended
+   * through the store's redacting path in this process — readers may then
+   * skip the serve-time re-redaction pass. Files written before the
+   * redaction change (or after a restart clears the mark) report false and
+   * still get the pass.
+   */
+  redactedAtPersist?: boolean;
 }
 
 export interface RunLogFinalizeSummary {
@@ -52,6 +60,12 @@ function resolveWithin(basePath: string, relativePath: string) {
 }
 
 function createLocalFileRunLogStore(basePath: string): RunLogStore {
+  // Paths appended through the redacting append() in this process. Capped:
+  // if it ever fills, old entries are dropped and those files simply get
+  // the serve-time pass again — the mark is an optimization, not a safety
+  // boundary.
+  const redactedAtPersist = new Set<string>();
+
   async function ensureDir(relativeDir: string) {
     const dir = resolveWithin(basePath, relativeDir);
     await fs.mkdir(dir, { recursive: true });
@@ -121,6 +135,8 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       });
       const persisted = `${line}\n`;
       await fs.appendFile(absPath, persisted, "utf8");
+      if (redactedAtPersist.size > 100_000) redactedAtPersist.clear();
+      redactedAtPersist.add(absPath);
       return Buffer.byteLength(persisted, "utf8");
     },
 
@@ -147,7 +163,8 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       const absPath = resolveWithin(basePath, handle.logRef);
       const offset = opts?.offset ?? 0;
       const limitBytes = opts?.limitBytes ?? 256_000;
-      return readFileRange(absPath, offset, limitBytes);
+      const result = await readFileRange(absPath, offset, limitBytes);
+      return { ...result, redactedAtPersist: redactedAtPersist.has(absPath) };
     },
   };
 }

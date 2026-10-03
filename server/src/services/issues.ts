@@ -4215,10 +4215,15 @@ export function issueService(db: Db) {
         const currentUserRedactionOptions = {
           enabled: (generalSettings ?? await readInstanceGeneralSettings(executor)).censorUsernameInLogs,
         };
-        // AgentDash (GH #992): secrets are redacted at READ time
-        // (redactIssueComment), not baked into the stored body — an agent can
-        // legitimately quote config a reviewer would need verbatim.
+        // AgentDash (GH #992): agent-authored comments persist redacted —
+        // agent output echoes tool results that can carry credentials, and
+        // other readers (productivity review, ross requests, handoff
+        // evaluation) copy bodies elsewhere. Human comments stay raw in the
+        // row and are redacted only when served (redactIssueComment), so a
+        // verbatim config quote a reviewer needs is never destroyed.
         const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+        const persistedBody =
+          actor.agentId || actor.runId ? redactRunLogText(redactedBody) : redactedBody;
         const [comment] = await executor
           .insert(issueComments)
           .values({
@@ -4227,7 +4232,7 @@ export function issueService(db: Db) {
             authorAgentId: actor.agentId ?? null,
             authorUserId: actor.userId ?? null,
             createdByRunId: actor.runId ?? null,
-            body: redactedBody,
+            body: persistedBody,
           })
           .returning();
 

@@ -9,6 +9,7 @@ import {
   ROSS_REVIEW_FRESH_MS,
   type RossRequestReadStatus,
 } from "@paperclipai/shared";
+import { redactRunLogText } from "./run-log-redaction.js";
 
 /**
  * AgentDash (Ross launch M2): server-side reads behind the governed
@@ -44,7 +45,7 @@ export async function findRossRequestComments(
 ): Promise<RossRequestComment[]> {
   // The key is [a-z0-9-] only (validated upstream), so it carries no LIKE
   // metacharacters; the brackets are literal in LIKE.
-  return executor
+  const rows = await executor
     .select({
       id: issueComments.id,
       body: issueComments.body,
@@ -61,6 +62,9 @@ export async function findRossRequestComments(
       ),
     )
     .orderBy(asc(issueComments.createdAt), asc(issueComments.id));
+  // AgentDash (GH #992): request bodies are parsed and copied into review
+  // documents — apply the read pass before they leave the comments table.
+  return rows.map((row) => ({ ...row, body: redactRunLogText(row.body) }));
 }
 
 export function classifyRossRequestComments(

@@ -21,12 +21,15 @@ import {
   createDb,
   heartbeatRunEvents,
   heartbeatRuns,
+  issueComments,
+  issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { heartbeatService } from "../services/heartbeat.ts";
+import { issueService } from "../services/issues.ts";
 import { resetInstanceSecretsCacheForTests } from "../services/run-log-redaction.ts";
 import { runLogBasePath } from "../services/run-log-store.ts";
 
@@ -236,5 +239,32 @@ describeEmbeddedPostgres("heartbeat run-log secret redaction", () => {
     expect(servedSnapshot.sessionKey).toBe(sessionKey);
     expect(served?.error).not.toContain(CANARY);
     expect(served?.error).toContain("***REDACTED***");
+  }, 30_000);
+
+  // PR #998 re-review: comment bodies are copied into review documents by
+  // other readers. Agent-authored comments persist redacted (agents echo
+  // tool output); human comments stay raw in the row and get the read-time
+  // pass so a verbatim config quote survives.
+  it("persists agent-authored comments redacted but keeps human comments raw", async () => {
+    const { company, agentId } = await seedCompanyAndAgent("process.exit(0);");
+    const [issue] = await db
+      .insert(issues)
+      .values({ companyId: company.id, title: "Comment redaction" })
+      .returning();
+    const svc = issueService(db);
+
+    const agentComment = await svc.addComment(issue.id, `key was ${CANARY}`, { agentId });
+    const humanComment = await svc.addComment(issue.id, `key was ${CANARY}`, { userId: "user-1" });
+
+    // Served bodies are clean either way — the read pass covers stored rows.
+    expect(agentComment.body).not.toContain(CANARY);
+    expect(humanComment.body).not.toContain(CANARY);
+
+    const stored = await db.select().from(issueComments);
+    const agentRow = stored.find((comment) => comment.id === agentComment.id)!;
+    const humanRow = stored.find((comment) => comment.id === humanComment.id)!;
+    expect(agentRow.body).not.toContain(CANARY);
+    expect(agentRow.body).toContain("***REDACTED***");
+    expect(humanRow.body).toContain(CANARY);
   }, 30_000);
 });

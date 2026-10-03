@@ -80,6 +80,20 @@ const LEAKS: [string, string, string[]?][] = [
   ["header escaped quote", `curl -H "Authorization: Bearer ab\\"${SHAPELESS}" https://x.test`],
   ["bearer escaped quote", `Authorization: Bearer ab\\"${SHAPELESS}"`],
   ["token escaped quote", `api_token=ab\\"${SHAPELESS}"`],
+  // A non-secret label prefix (`run:`, `note:`, `stdout:`, `DEBUG:`) must not
+  // swallow the inner `NAME=` — re-review regression: the rejected match
+  // consumed the name as its value and the `=…` tail was never scanned.
+  ["label run token", `run: TOKEN=abc123xyz "next"`],
+  ["label run token bare", `run: TOKEN=abc123xyz`],
+  ["label run ZAI", `run: ZAI_API_KEY=${SHAPELESS}`],
+  ["label step export", `step: export ZAI_API_KEY=${SHAPELESS} && ok`],
+  ["label note api key", `note: API_KEY=${SHAPELESS}`],
+  ["label x password", `x: password=hunter2pass`],
+  ["label ERROR api_key", `ERROR: invalid api_key=${SHAPELESS}`],
+  ["label mid-line", `foo: bar ZAI_API_KEY=${SHAPELESS}`],
+  ["label stdout", `stdout: password=hunter2pass`],
+  ["label DEBUG", `DEBUG: token=abc123xyz tail`],
+  ["label equals sep", `x = password=hunter2pass`],
 ];
 
 const PROBE_FRAGMENTS = [
@@ -119,6 +133,10 @@ describe("security-review bypass cases", () => {
     "see packages.something.abcdefgh.ijklmnop",
     "file my-component.stories-config.typescript",
     "token: 1500 tokens used",
+    "run: TOKEN",
+    "stdout: hello world",
+    "note: this is a log line",
+    "grep 'TOKEN=' src",
     "the secret: is out",
     "password: required",
     'console.log("\\u0041BC")',
