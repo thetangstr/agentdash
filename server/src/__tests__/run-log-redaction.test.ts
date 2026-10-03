@@ -215,6 +215,39 @@ describe("run-log redaction", () => {
     ]) {
       expect(redactSecrets(`echo ${bare} done`, keys), bare).not.toContain(collected);
     }
+    // The credential fragment on its own is collected too — a bare
+    // `echo <token>` would not match the whole URL.
+    expect(redactSecrets("echo Zq8Rk2Vm7Tn4Wb9Xc3Ls done", keys)).not.toContain("Zq8Rk2Vm7Tn4Wb9Xc3Ls");
+  });
+
+  it("does not collect secret-named URLs that carry no credential material", () => {
+    // `OAUTH_TOKEN_URL` is the token ENDPOINT, not the token — collecting it
+    // would shred a public URL out of every log line.
+    const keys = knownKeysFromEnv({
+      OAUTH_TOKEN_URL: "https://oauth2.googleapis.com/token",
+      KEY_VAULT_URL: "https://myvault.vault.azure.net/",
+      ISSUE_API_URL: "https://api.example.com/issues/550e8400-e29b-41d4-a716-446655440000",
+      // …but one carrying real credential material still collects:
+      HOOK_TOKEN_URL: "https://hooks.example.com/t/Zq8Rk2Vm7Tn4Wb9Xc3LsAbc",
+      CALLBACK_TOKEN_URL: "https://cb.example.com/h?token=Zq8Rk2Vm7Tn4Wb9Xc3Ls",
+      API_SECRET_URL: "https://user:Zq8Rk2Vm7Tn4Wb9Xc3Ls@dsn.example.com/1",
+    } as unknown as NodeJS.ProcessEnv);
+    for (const url of [
+      "https://oauth2.googleapis.com/token",
+      "https://myvault.vault.azure.net/",
+      "https://api.example.com/issues/550e8400-e29b-41d4-a716-446655440000",
+    ]) {
+      expect(keys, url).not.toContain(url);
+      expect(redactSecrets(`echo ${url} done`, keys), url).toContain(url);
+    }
+    expect(keys).toContain("https://hooks.example.com/t/Zq8Rk2Vm7Tn4Wb9Xc3LsAbc");
+    expect(keys).toContain("https://cb.example.com/h?token=Zq8Rk2Vm7Tn4Wb9Xc3Ls");
+    expect(keys).toContain("https://user:Zq8Rk2Vm7Tn4Wb9Xc3Ls@dsn.example.com/1");
+    // The identifier-looking UUID path segment is never collected.
+    expect(keys).not.toContain("550e8400-e29b-41d4-a716-446655440000");
+    expect(redactSecrets("id 550e8400-e29b-41d4-a716-446655440000", keys)).toContain(
+      "550e8400-e29b-41d4-a716-446655440000",
+    );
   });
 
   it("NDJSON pass redacts the chunk field and keeps lines parseable", () => {

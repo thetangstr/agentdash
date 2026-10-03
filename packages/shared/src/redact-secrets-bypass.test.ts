@@ -143,8 +143,25 @@ describe("security-review bypass cases", () => {
     "ssh://git@github.com/o/r",
     "https://user@host",
     "uuid 123e4567-e89b-12d3-a456-426614174000",
+    // Word-like auth schemes in prose are not credentials — an all-letters
+    // "token" needs a digit, a symbol, mixed case or >=20 chars.
+    "Token authentication is required",
+    "Token rotation happens hourly",
+    "Key management is important",
+    "Basic hygiene first",
+    "set key=value",
+    "token=<your token>",
+    'token = "<your token>"',
+    '{"token": "<your token>"}',
+    "Key <word>",
   ])("leaves ordinary text alone: %s", (sample) => {
     expect(redactSecrets(sample)).toBe(sample);
+  });
+
+  it("still redacts real scheme-shaped tokens next to the prose guards", () => {
+    expect(redactSecrets("Token abc123XYZsecret99")).not.toContain("abc123XYZsecret99");
+    expect(redactSecrets("Basic dXNlcjpwYXNzd29yZDEyMw==")).not.toContain("dXNlcjpwYXNz");
+    expect(redactSecrets("Token MixedCaseTokenNoDigits")).not.toContain("MixedCaseTokenNoDigits");
   });
 
   it("never blanks identifier keys in values", () => {

@@ -231,6 +231,46 @@ describeEmbeddedPostgres("conversationService", () => {
     const latest = await service.latestByRole(conversation.id, "agent");
     expect(latest?.content).not.toContain(canary);
   });
+
+  it("redacts an agent cardPayload at insert and on serve, keeps a human one raw", async () => {
+    // GH #992: the proposal card's description is model output too — it can
+    // echo a credential, and cos-issue-action copies it into the issue.
+    const canary = "provk-card-canary-9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a";
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const conversation = await service.create({ companyId, userId: TEST_USER_ID });
+    const agentMsg = await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "agent",
+      authorId: "cos-1",
+      body: "proposal",
+      cardKind: "issue_proposal_v1",
+      cardPayload: { title: "Task", description: `uses api_key=${canary}`, status: "pending" },
+    });
+    await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "user",
+      authorId: TEST_USER_ID,
+      body: "proposal",
+      cardKind: "note_v1",
+      cardPayload: { description: `uses api_key=${canary}` },
+    });
+
+    const stored = await db
+      .select({ role: assistantMessages.role, cardPayload: assistantMessages.cardPayload })
+      .from(assistantMessages)
+      .orderBy(assistantMessages.createdAt);
+    const agentRow = stored.find((row) => row.role === "agent");
+    const userRow = stored.find((row) => row.role === "user");
+    expect(JSON.stringify(agentRow?.cardPayload)).not.toContain(canary);
+    expect(JSON.stringify(agentRow?.cardPayload)).toContain('"status":"pending"');
+    expect(JSON.stringify(userRow?.cardPayload)).toContain(canary);
+
+    // The returned message and every served page emit a clean payload.
+    expect(JSON.stringify(agentMsg.cardPayload)).not.toContain(canary);
+    const page = await service.paginate(conversation.id, { limit: 10 });
+    for (const message of page) expect(JSON.stringify(message.cardPayload)).not.toContain(canary);
+  });
 });
 
 // WS event emission tests — these use a stub DB so they run without embedded postgres.

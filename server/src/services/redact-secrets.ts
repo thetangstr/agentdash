@@ -105,6 +105,49 @@ export function isCollectableSecretValue(name: string, value: string): boolean {
   );
 }
 
+// A URL path segment that is itself the credential: >=16 chars of token
+// alphabet. UUIDs are identifiers, not secrets.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TOKENISH_SEGMENT_RE = /^[A-Za-z0-9_-]{16,}$/;
+
+/**
+ * Whether a URL carries credential material — userinfo, a secret-named
+ * query parameter (`?token=…`), or a token-like path segment (webhook
+ * URLs). `https://oauth2.googleapis.com/token` and bare vault hosts do not
+ * qualify: they are endpoints, not credentials.
+ */
+function urlCarriesCredential(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    if (url.username || url.password) return true;
+    for (const key of url.searchParams.keys()) if (isSecretName(key)) return true;
+    return url.pathname
+      .split("/")
+      .some((seg) => TOKENISH_SEGMENT_RE.test(seg) && !UUID_RE.test(seg));
+  } catch {
+    return false;
+  }
+}
+
+/** The credential fragments inside a credential-carrying URL. */
+function credentialPartsOfUrl(raw: string): string[] {
+  const parts: string[] = [];
+  try {
+    const url = new URL(raw);
+    if (url.username && url.username.length >= 8) parts.push(decodeURIComponent(url.username));
+    if (url.password && url.password.length >= 8) parts.push(decodeURIComponent(url.password));
+    for (const [key, param] of url.searchParams) {
+      if (isSecretName(key) && param.length >= 8) parts.push(param);
+    }
+    for (const seg of url.pathname.split("/")) {
+      if (TOKENISH_SEGMENT_RE.test(seg) && !UUID_RE.test(seg)) parts.push(seg);
+    }
+  } catch {
+    // malformed — nothing to extract
+  }
+  return parts;
+}
+
 /** Credentials this process was started with, for redacting adapter output. */
 export function knownKeysFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   const keys: string[] = [];
@@ -118,17 +161,22 @@ export function knownKeysFromEnv(env: NodeJS.ProcessEnv = process.env): string[]
     ) {
       keys.push(value);
     }
-    // A URL is normally a location, not a secret — but a secret- or
-    // webhook-named URL carries its credential in the path
-    // (`hooks.slack.com/services/T…/B…/<token>`, `*_TOKEN_URL`). Collect the
-    // whole URL verbatim; public-named ones stay excluded.
+    // A URL is normally a location, not a secret — even a secret-named one
+    // (`OAUTH_TOKEN_URL=https://oauth2.googleapis.com/token` is the token
+    // ENDPOINT, not the token). Collect it verbatim only when it carries
+    // credential material: userinfo, a secret-named query parameter, or a
+    // token-like path segment (`hooks.slack.com/services/T…/B…/<token>`).
     if (
       value.length >= 8 &&
       /^[a-z][a-z0-9+.-]*:\/\//i.test(value) &&
       !PUBLIC_NAME_RE.test(name) &&
-      (credentialNamed || /WEBHOOK/i.test(name))
+      (credentialNamed || /WEBHOOK/i.test(name)) &&
+      urlCarriesCredential(value)
     ) {
       keys.push(value);
+      // The credential fragment on its own is also a known secret — a bare
+      // `echo <token>` would not match the whole URL.
+      for (const part of credentialPartsOfUrl(value)) keys.push(part);
     }
     // DSNs carry their credential inline: postgres://user:pass@host, or a
     // bare userinfo credential like a Sentry DSN key (https://<key>@host).

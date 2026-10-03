@@ -6,17 +6,22 @@ import {
   assistantMessages,
 } from "@paperclipai/db";
 import { emitMessageCreated, emitMessageRead } from "../realtime/conversation-events.js";
-import { redactRunLogText } from "./run-log-redaction.js";
+import { redactRunLogText, redactRunLogValue } from "./run-log-redaction.js";
 
 export function conversationService(db: Db) {
   // AgentDash (GH #992): agent-authored messages are model output and can
   // echo credentials, so they persist redacted (postMessage). The serve pass
   // also covers human-authored content and rows written before the persist
   // pass shipped — applied everywhere a message row leaves this service.
-  function redactMessage<T extends { content?: string | null }>(message: T): T {
-    return typeof message.content === "string" && message.content.length > 0
-      ? { ...message, content: redactRunLogText(message.content) }
-      : message;
+  function redactMessage<T extends { content?: string | null; cardPayload?: unknown }>(message: T): T {
+    const out = { ...message };
+    if (typeof out.content === "string" && out.content.length > 0) {
+      out.content = redactRunLogText(out.content);
+    }
+    if (out.cardPayload != null) {
+      out.cardPayload = redactRunLogValue(out.cardPayload);
+    }
+    return out;
   }
 
   return {
@@ -176,7 +181,10 @@ export function conversationService(db: Db) {
           // AgentDash (GH #992): agent-authored text persists redacted.
           content: input.authorKind === "agent" ? redactRunLogText(input.body) : input.body,
           cardKind: input.cardKind ?? null,
-          cardPayload: input.cardPayload ?? null,
+          cardPayload:
+            input.authorKind === "agent" && input.cardPayload != null
+              ? (redactRunLogValue(input.cardPayload) as Record<string, unknown>)
+              : (input.cardPayload ?? null),
         })
         .returning();
       const row = rows[0]!;

@@ -277,6 +277,47 @@ describe("createSecretStreamRedactor", () => {
     expect(out.length).toBeGreaterThan(0);
     expect(stream.push("tail\n")).toContain("tail");
   });
+
+  it("keeps holding the tail at the hard cap so a straddling secret survives", () => {
+    // The cap emits `len - keepTail`, not the whole buffer — a secret right
+    // at that boundary stays in the held tail and is redacted on flush.
+    const secret = "hunter2pass";
+    const stream = createSecretStreamRedactor([]);
+    const out = stream.push("a".repeat(1024 * 1024) + `API_KEY=${secret}`);
+    expect(out).not.toContain(secret);
+    const flushed = stream.flush();
+    expect(out + flushed).not.toContain(secret);
+    expect(out + flushed).toContain("***REDACTED***");
+  });
+
+  it("holds a label with its value across the overflow boundary", () => {
+    // The delimiter cut lands between the label and a straddling value
+    // (`Authorization: Bearer |KEY`). Emitting the label alone leaves the
+    // value patternless — it must be held with its label.
+    const secret = "hunter2pass";
+    const total = 64 * 1024 + 100;
+    const emitEnd = total - 1024;
+    const labels: Array<[string, string]> = [
+      ["Authorization: Bearer ", ""],
+      ['API_KEY="', '"'],
+      ['{"password": "', '"}'],
+      ["client_secret: ", ""],
+      ["--token ", ""],
+    ];
+    for (const [label, close] of labels) {
+      for (let off = 1; off <= 12; off++) {
+        const stream = createSecretStreamRedactor([]);
+        const pos = emitEnd - off - label.length;
+        // `x ` filler: delimiters everywhere, so the back-off lands mid-pad
+        // rather than collapsing to a hold-all. Exactly `pos` chars ending
+        // on a space so the secret starts `off` chars before emitEnd.
+        const pad = "x ".repeat(Math.ceil(pos / 2)).slice(0, pos - 1) + " ";
+        const line = pad + label + secret + close + " " + "y".repeat(2048);
+        const out = stream.push(line) + stream.push("z\n") + stream.flush();
+        expect(out, `${JSON.stringify(label)} offset -${off}`).not.toContain(secret);
+      }
+    }
+  });
 });
 
 describe("containsSecrets", () => {

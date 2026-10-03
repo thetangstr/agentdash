@@ -481,6 +481,8 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     if (value.includes(REDACTED)) return;
     // A variable reference or command substitution is not itself a secret.
     if (/^["']?\$/.test(value)) return;
+    // Doc placeholders: `key=value`, `token=<your token>` — not credentials.
+    if (/^["']?</.test(value) || /^["']?value["']?$/i.test(value)) return;
     if (!scheme && !isAssignment && !/^["']/.test(value) && !looksLikeCredentialValue(value)) return;
     const quote = /^["']/.test(value) ? value[0] : "";
     push(span.start, span.end, quote ? `${quote}${REDACTED}${quote}` : REDACTED);
@@ -513,7 +515,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
 
   eachMatch(CLI_SECRET_OPTION_RE, text, (m) => {
     const span = groupSpan(m, 3);
-    if (span && m[3] !== REDACTED) push(span.start, span.end);
+    if (span && m[3] !== REDACTED && !/^</.test(m[3])) push(span.start, span.end);
   });
 
   // Quoted JSON / Python-dict keys.
@@ -527,6 +529,8 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     if (value.includes(REDACTED)) return;
     const quote = /^["']/.test(value) ? value[0] : "";
     if (!quote && !looksLikeCredentialValue(value)) return;
+    // `{"token": "<your token>"}` is a doc placeholder, not a credential.
+    if (quote && /^</.test(value.slice(1))) return;
     push(valueSpan.start, valueSpan.end, quote ? `${quote}${REDACTED}${quote}` : REDACTED);
   });
   eachMatch(ESCAPED_JSON_KV_RE, text, (m) => {
@@ -547,6 +551,17 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     const unescaped = value.replace(/\\(.)/g, "$1");
     if (!/^[A-Za-z0-9._~+/=-]{6,}$/.test(unescaped)) return;
     if (unescaped.length < 8 && !/\d/.test(unescaped)) return;
+    // Prose like `Token authentication is required` or `Key rotation` is not
+    // a credential: for the word-like schemes an all-letters value only
+    // counts when it still looks token-ish (mixed case or >=20 chars).
+    if (
+      /^(?:Token|Key|Bot|Basic)$/i.test(m[1]) &&
+      /^[A-Za-z]+$/.test(unescaped) &&
+      unescaped.length < 20 &&
+      !(/[a-z]/.test(unescaped) && /[A-Z]/.test(unescaped))
+    ) {
+      return;
+    }
     push(span.start, span.end);
   });
 
@@ -683,6 +698,19 @@ function lastDelimiterBefore(text: string, end: number): number {
   return -1;
 }
 
+// How far back from the delimiter cut a label may sit. Delimiter-free
+// regions (`"…"`, long tokens) separate `API_KEY="` from the cut, so the
+// hold window must reach past the label, not just the value.
+const LABEL_CONTEXT = 512;
+
+// An "open label" at the end of emitted text: `Bearer `, `API_KEY=`,
+// `API_KEY="`, `{"password": "`, `client_secret: `, `--token `, `-u `.
+// Emitting the label alone and holding its value leaves the value
+// patternless — it would leak on the next emit. Plain trailing words are
+// not labels, so prose ending in ` word ` is unaffected.
+const OPEN_LABEL_TAIL_RE =
+  /(?:\b(?:Bearer|Basic|Token|Bot|Key|Digest|ApiKey|Negotiate|AWS4-HMAC-SHA256)|[A-Za-z_][A-Za-z0-9_.-]*[ \t]*[:=]|--[A-Za-z][A-Za-z0-9_-]*|-[a-zA-Z]|"[^"\n]{1,80}"[ \t]*:|'[^'\n]{1,80}'[ \t]*:)[ \t]*["']?$/;
+
 export function createSecretStreamRedactor(
   knownSecrets?: KnownSecrets,
   maxHold = STREAM_MAX_HOLD,
@@ -740,19 +768,42 @@ export function createSecretStreamRedactor(
         }
       } else if (text.length > maxHold) {
         // Never cut at a fixed position: a key starting a few chars before the
-        // cut would be persisted in two halves. Emit only up to the last
-        // delimiter before the tail window so a token straddling it is held
-        // whole. `=` is deliberately not a delimiter — `NAME=value` must be
-        // held as one piece. With no delimiter at all the buffer keeps
-        // growing until STREAM_HARD_CAP, where the whole buffer is emitted
-        // (redacted) to bound memory.
+        // cut would be persisted in two halves. Emit only up to a delimiter
+        // before the tail window so a token straddling it is held whole, and
+        // keep the label that makes the held value recognizable — `Bearer `
+        // or `password="` emitted alone leaves the value patternless, and it
+        // leaks on the next emit. `=` is deliberately not a delimiter —
+        // `NAME=value` must be held as one piece. With no delimiter at all
+        // the buffer keeps growing until STREAM_HARD_CAP, where all but the
+        // tail window is emitted (redacted) to bound memory.
         const emitEnd = text.length - keepTail;
-        const cut = lastDelimiterBefore(text, emitEnd);
+        let cut = lastDelimiterBefore(text, emitEnd);
+        if (cut >= 0) {
+          // Hold label context too: the delimiter just before a straddling
+          // value separates it from its label.
+          cut = lastDelimiterBefore(text, cut - LABEL_CONTEXT);
+          // If the new emit point still lands right after a label
+          // (`... Bearer `, `... password="`), hold the label as well.
+          for (let guard = 8; cut >= 0 && guard > 0; guard--) {
+            const tail = OPEN_LABEL_TAIL_RE.exec(text.slice(0, cut + 1));
+            if (!tail || tail[0].length === 0) break;
+            const next = lastDelimiterBefore(text, cut + 1 - tail[0].length);
+            if (next < 0) {
+              cut = -1;
+              break;
+            }
+            cut = next;
+          }
+        }
         if (cut >= 0) {
           out += text.slice(0, cut + 1);
           held = text.slice(cut + 1);
         } else if (text.length > STREAM_HARD_CAP) {
-          out += text;
+          // Delimiter-free even at the cap: emit up to the tail window and
+          // keep holding the tail so a straddling secret stays together.
+          const capEnd = text.length - keepTail;
+          out += text.slice(0, capEnd);
+          held = text.slice(capEnd);
         } else {
           held = text;
         }
