@@ -53,14 +53,6 @@ export function BreadcrumbBar() {
     );
   }
 
-  if (breadcrumbs.length === 0) {
-    return (
-      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end">
-        {globalToolbarSlots}
-      </div>
-    );
-  }
-
   const menuButton = isMobile && (
     <Button
       variant="ghost"
@@ -72,6 +64,23 @@ export function BreadcrumbBar() {
       <Menu className="h-5 w-5" />
     </Button>
   );
+
+  if (breadcrumbs.length === 0) {
+    // AgentDash: a page that registers no breadcrumb (Billing, Workforce)
+    // still gets the sidebar menu and the workspace name on phones —
+    // otherwise the top bar is empty and the nav is unreachable.
+    return (
+      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end">
+        {menuButton}
+        {isMobile && selectedCompany ? (
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <h1 className="text-sm font-semibold uppercase tracking-wider truncate">{selectedCompany.name}</h1>
+          </div>
+        ) : null}
+        {globalToolbarSlots}
+      </div>
+    );
+  }
 
   // Single breadcrumb = page title (uppercase)
   if (breadcrumbs.length === 1) {

@@ -105,18 +105,16 @@ export function AgentPlanProposal({
     setSubmitting(false);
   }
   const agents = Array.isArray(payload?.agents) ? payload.agents : [];
-  const shortTerm = isKnownPlanValue(payload?.alignmentToShortTerm) ? payload.alignmentToShortTerm : null;
-  const longTerm = isKnownPlanValue(payload?.alignmentToLongTerm) ? payload.alignmentToLongTerm : null;
+  // AgentDash: the plan prose stays in the chat bubble — the card used to
+  // restate it as "rationale" and again as short-/long-term alignment, so the
+  // same plan read three times in a row. The fields still travel in the
+  // payload (they feed hiring/materialization); they just aren't re-rendered.
   return (
     <div
       className="agent-plan-proposal w-full min-w-0 border border-border-soft rounded-lg p-3 sm:p-6 bg-surface-raised shadow-sm"
       data-testid="plan-proposal"
     >
-      {isKnownPlanValue(payload?.rationale) && (
-        <div className="text-sm sm:text-base text-text-primary break-words">{payload.rationale}</div>
-      )}
-
-      <div className="mt-3 sm:mt-4 flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {agents.map((agent, i) => {
           const role = planAgentTitle(agent);
           const kpis = (Array.isArray(agent.kpis) ? agent.kpis : []).filter(isKnownPlanValue);
@@ -144,21 +142,6 @@ export function AgentPlanProposal({
           );
         })}
       </div>
-
-      {(shortTerm || longTerm) && (
-        <div className="mt-4 grid grid-cols-1 gap-2 text-sm text-text-secondary break-words">
-          {shortTerm && (
-            <div>
-              <span className="font-medium text-text-primary">Short-term:</span> {shortTerm}
-            </div>
-          )}
-          {longTerm && (
-            <div>
-              <span className="font-medium text-text-primary">Long-term:</span> {longTerm}
-            </div>
-          )}
-        </div>
-      )}
 
       {!hired && (superseded || supersededHere) ? (
         <p className="mt-5 text-sm text-text-tertiary" data-testid="plan-superseded">

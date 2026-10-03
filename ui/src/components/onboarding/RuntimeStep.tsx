@@ -159,7 +159,7 @@ export function RuntimeStep({ companyId, onContinue }: RuntimeStepProps) {
               className="rounded-lg border p-4 text-sm"
               data-testid={`first-run-runtime-${runtime.adapterType}`}
             >
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="font-medium">
                     {runtime.label}

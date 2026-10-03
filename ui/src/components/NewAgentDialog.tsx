@@ -27,6 +27,7 @@ import { listUIAdapters } from "../adapters";
 import { isVisualAdapterChoice } from "../adapters/metadata";
 import { getAdapterDisplay } from "../adapters/adapter-display-registry";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
+import { useBoardOrgAccess } from "../hooks/useBoardSessionReady";
 
 /**
  * Adapter types that are suitable for agent creation (excludes internal
@@ -77,10 +78,15 @@ export function NewAgentDialog() {
   const hostedHirePath = health?.hostedBox === true;
   const hirePathPending = health === undefined && !healthFailed;
 
-  // Fetch registered adapters from server (syncs disabled store + provides data)
+  // Fetch registered adapters from server (syncs disabled store + provides data).
+  // AgentDash (b2 polish): this dialog mounts under Layout on /company-create
+  // too, where a fresh sign-up has a session but no membership — the server
+  // answers 403 until then, so wait for org access first.
+  const orgAccess = useBoardOrgAccess();
   const { data: serverAdapters } = useQuery({
     queryKey: queryKeys.adapters.all,
     queryFn: () => adaptersApi.list(),
+    enabled: orgAccess,
     staleTime: 5 * 60 * 1000,
   });
 

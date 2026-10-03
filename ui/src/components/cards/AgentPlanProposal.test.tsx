@@ -96,8 +96,9 @@ describe("AgentPlanProposal", () => {
     expect(text).not.toContain("hermes_local");
     expect(text).not.toContain("Unknown");
     expect(text).not.toContain("Outcome measurements");
+    // AgentDash (b2 polish): alignment prose stays in the chat bubble, not the card.
     expect(text).not.toContain("Short-term:");
-    expect(text).toContain("Long-term: Builds a repeatable sales motion");
+    expect(text).not.toContain("Long-term:");
     expect(text).toContain("Targets: Proposals sent within 48 hours");
   });
 

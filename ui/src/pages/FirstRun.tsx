@@ -39,14 +39,12 @@ const STEP_LABELS: Array<{ step: Exclude<FirstRunStep, "done">; label: string }>
 
 function StepIndicator({
   current,
-  showModel,
   modelLabel,
 }: {
   current: FirstRunStep;
-  showModel: boolean;
   modelLabel?: string;
 }) {
-  const steps = STEP_LABELS.filter((entry) => showModel || entry.step !== "model").map((entry) =>
+  const steps = STEP_LABELS.map((entry) =>
     entry.step === "model" && modelLabel ? { ...entry, label: modelLabel } : entry,
   );
   const currentIndex = steps.findIndex((entry) => entry.step === current);
@@ -217,10 +215,13 @@ export function FirstRunPage() {
 
   return (
     <div className="min-h-screen bg-surface-page" data-testid="first-run">
+      {/* AgentDash: the assistant step exists on every install — self-hosted
+          picks a runtime instead of a model key. Listing it always keeps the
+          numbering stable, so revisiting /setup resumes at "2. Code
+          (optional)" instead of a renumbered step 1. */}
       <StepIndicator
         current={showRuntime ? "model" : status.nextStep}
-        showModel={status.model.required || showRuntime}
-        modelLabel={showRuntime ? "Your AI assistant" : undefined}
+        modelLabel={status.model.required ? undefined : "Your AI assistant"}
       />
       {optionalStep ? (
         // px-6 matches the step bodies, so the notice keeps a gutter on a phone.

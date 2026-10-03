@@ -420,9 +420,17 @@ export function IssueProperties({
     }
     return value;
   };
+  // AgentDash: with no configured reviewers the issue owner is the de-facto
+  // reviewer — "Reviewers: None" while they hold the Accept/Request-changes
+  // bar read as a bug.
+  const implicitReviewerLabel = issue.status === "in_review"
+    ? userLabel(issue.createdByUserId)
+    : null;
   const reviewerTrigger = reviewerValues.length > 0
     ? <span className="text-sm break-words min-w-0">{reviewerValues.map((value) => executionParticipantLabel(value)).join(", ")}</span>
-    : <span className="text-sm text-muted-foreground">None</span>;
+    : implicitReviewerLabel
+      ? <span className="text-sm break-words min-w-0">{implicitReviewerLabel}</span>
+      : <span className="text-sm text-muted-foreground">None</span>;
   const approverTrigger = approverValues.length > 0
     ? <span className="text-sm break-words min-w-0">{approverValues.map((value) => executionParticipantLabel(value)).join(", ")}</span>
     : <span className="text-sm text-muted-foreground">None</span>;

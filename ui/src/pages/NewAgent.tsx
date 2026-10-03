@@ -427,7 +427,7 @@ export function NewAgent() {
                         checked={checked}
                         onCheckedChange={(next) => toggleSkill(skill.key, next === true)}
                       />
-                      <label htmlFor={inputId} className="grid gap-1 leading-none">
+                      <label htmlFor={inputId} className="grid gap-1 leading-none max-sm:min-h-11 max-sm:content-center">
                         <span className="text-sm font-medium">{skill.name}</span>
                         <span className="text-xs text-muted-foreground">
                           {skill.description ?? skill.key}

@@ -4,6 +4,8 @@ import { useLocation, useNavigate } from "@/lib/router";
 import { billingApi, type BillingStatus } from "../api/billing";
 import { fetchFreshBillingStatus, isRateLimited, useBillingStatus } from "../hooks/useBillingStatus";
 import { useToastActions } from "../context/ToastContext";
+import { useCompany } from "../context/CompanyContext";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { planLabel, seatsPhrase } from "../lib/billing-copy";
 import { UpgradeCheckoutButton } from "../components/UpgradeCheckoutButton";
 
@@ -21,6 +23,14 @@ export default function BillingPage({ companyId }: { companyId: string }) {
   const navigate = useNavigate();
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
+  const { selectedCompany } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([
+      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
+      { label: "Billing" },
+    ]);
+  }, [setBreadcrumbs, selectedCompany?.name]);
   // AgentDash (scan 3 lane L): the shared billing-status query, the same
   // cache entry the trial banner reads.
   const statusQuery = useBillingStatus(companyId);

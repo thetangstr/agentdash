@@ -94,14 +94,19 @@ export function DefinitionOfDoneEditor({
         )}
         {draft.criteria.map((c, idx) => (
           <div key={c.id} className="flex items-center gap-2">
-            <Checkbox
-              checked={c.done}
-              onCheckedChange={(checked) => {
-                const next = [...draft.criteria];
-                next[idx] = { ...c, done: checked === true };
-                update({ ...draft, criteria: next });
-              }}
-            />
+            {/* AgentDash: the label gives the checkbox a name and a phone-sized
+                hit area (44px) without stretching the box itself. */}
+            <label className="flex items-center max-sm:min-h-11 max-sm:min-w-11 max-sm:justify-center">
+              <Checkbox
+                aria-label={c.text.trim() || `Criterion ${idx + 1}`}
+                checked={c.done}
+                onCheckedChange={(checked) => {
+                  const next = [...draft.criteria];
+                  next[idx] = { ...c, done: checked === true };
+                  update({ ...draft, criteria: next });
+                }}
+              />
+            </label>
             <Input
               value={c.text}
               onChange={(e) => {

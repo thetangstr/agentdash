@@ -32,7 +32,7 @@ export function InstanceChangelog() {
                   </h2>
                   <ul className="space-y-1 text-sm text-foreground">
                     {section.items.slice(0, MAX_ITEMS_PER_SECTION).map((item) => (
-                      <li key={item} className="leading-6">
+                      <li key={item} className="leading-6 [overflow-wrap:anywhere]">
                         {item}
                       </li>
                     ))}
