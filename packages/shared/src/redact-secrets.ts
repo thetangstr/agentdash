@@ -197,39 +197,51 @@ const AUTH_SCHEMES = "(?:Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4
 // to end-of-input from every `-----BEGIN` position (quadratic on adversarial
 // logs that repeat the marker).
 const PEM_BLOCK_RE =
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:(?!-----BEGIN)[\s\S])*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gd;
+  /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY-----(?:(?!-----BEGIN)[\s\S]){0,262144}?-----END [A-Z0-9 ]{0,64}PRIVATE KEY-----/gd;
 
 // `NAME=value` (env assignment, query parameter, `api_key = "…"`) and
 // `NAME: value` (YAML, headers) with an optional auth scheme between
 // separator and value. A bare value may contain `\X` escape pairs mid-token
 // (`Bearer ab\"key"` in a transcript) but never ends on one: the lookahead
 // keeps a trailing `\"` (a JSON string boundary) out of the match.
+// The name is bounded ({0,128}) and guarded by `(?<![\w.-])` — a dot/identifier
+// run like `a.a.a.…` used to re-attempt a match at every char mid-run, each
+// scanning the rest of the input (quadratic; ~190s at 256KB on the stream
+// path). All quantifiers carry explicit upper bounds for the same reason.
 const NAME_VALUE_RE = new RegExp(
-  `(?<![\\w-])([A-Za-z_][A-Za-z0-9_.-]*)([ \\t]*[:=][ \\t]*)(?:(${AUTH_SCHEMES})[ \\t]+)?(?![\\/]{2})("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|(?:[^\\s"'\\\\,;=\`&|()?]+|\\\\.(?=[^\\s"'\\\\,;=\`&|()?}\\]]))+)`,
+  `(?<![\\w.-])([A-Za-z_][A-Za-z0-9_.-]{0,128})([ \\t]*[:=][ \\t]*)(?:(${AUTH_SCHEMES})[ \\t]+)?(?![\\/]{2})("(?:\\\\.|[^"\\\\]){0,2048}"|'(?:\\\\.|[^'\\\\]){0,2048}'|(?:[^\\s"'\\\\,;=\`&|()?]+|\\\\.(?=[^\\s"'\\\\,;=\`&|()?}\\]])){1,2048})`,
   "gid",
 );
+// Sticky mirror of the NAME_VALUE value alternation — anchored via lastIndex
+// so the `=`-tail redaction can check "what follows the `=`" without copying
+// the rest of the input into a slice.
+const INNER_VALUE_STICKY_RE =
+  /(?:"(?:\\.|[^"\\]){0,2048}"|'(?:\\.|[^'\\]){0,2048}'|(?:[^\s"'\\,;=`&|()?]+|\\.(?=[^\s"'\\,;=`&|()?}\]])){1,2048})/y;
 
 // Cookie headers: everything to the end of the quoted value / line.
-const COOKIE_HEADER_RE = /(\b(?:set-)?cookie[ \t]*:[ \t]*)((?:\\.|[^\n\\])+)/gid;
+const COOKIE_HEADER_RE = /(\b(?:set-)?cookie[ \t]*:[ \t]*)((?:\\.|[^\n\\]){1,8192})/gid;
 
 // `scheme://user:pass@host`. The password run is greedy so `p@ssw0rd!` and
-// `ab/cdEFGH12` inside userinfo are fully consumed before the last `@`.
-const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"']+):([^\s"']+)@/gid;
+// `ab/cdEFGH12` inside userinfo are fully consumed before the last `@`. The
+// scheme and both userinfo parts are bounded, and the lookbehind blocks
+// mid-run starts (`https://a:bhttps://a:b…`), so a `scheme://` repeat is a
+// constant-cost scan, not a retry-to-end per position.
+const URL_USERINFO_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)([^\s/@:"']{1,256}):([^\s"']{1,1024})@/gid;
 // `scheme://TOKEN@host` — credential as the whole userinfo, no `user:` prefix.
-const URL_BARE_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"'\\]{4,})@/gid;
+const URL_BARE_USERINFO_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)([^\s/@:"'\\]{4,256})@/gid;
 
 // curl `-u user:pass`, `-uuser:pass`, `--user user:pass`, `--user=user:pass`.
-const CURL_USER_RE = /(\s--user(?:[ \t]+|=)|\s-u(?:[ \t]+|=|(?=[^\s=-])))(["']?)([^\s"':=]+):([^\s"']*)\2/gd;
+const CURL_USER_RE = /(\s--user(?:[ \t]+|=)|\s-u(?:[ \t]+|=|(?=[^\s=-])))(["']?)([^\s"':=]{1,128}):([^\s"']{0,1024})\2/gd;
 // curl `-b "name=value"` / `--cookie` (a cookie file path has no `=` and is kept).
-const CURL_COOKIE_RE = /(\s(?:-b|--cookie)(?:[ \t]+|=))(["']?)([^\s"']*=[^\s"']*)\2/gd;
+const CURL_COOKIE_RE = /(\s(?:-b|--cookie)(?:[ \t]+|=))(["']?)([^\s"']{1,256}=[^\s"']{0,2048})\2/gd;
 
 // mysql / mariadb `-p<password>` (no space). Only on those commands: elsewhere `-p8080` is a port.
-const MYSQL_LINE_RE = /\b(?:mysql\w*|mariadb\w*)\b[^\n]*/gd;
-const MYSQL_PASSWORD_RE = /([ \t]-p)(?![ \t])([^\s"']+)/gd;
+const MYSQL_LINE_RE = /\b(?:mysql\w*|mariadb\w*)\b[^\n]{0,8192}/gd;
+const MYSQL_PASSWORD_RE = /([ \t]-p)(?![ \t])([^\s"']{1,256})/gd;
 
 // `--password x`, `--token=x`, `--api-key x`, `--client-secret=x`.
 const CLI_SECRET_OPTION_RE =
-  /((?:^|\s)--?(?:api[-_]?key|(?:access[-_]?|auth[-_]?|refresh[-_]?)?token|password|passwd|secret|client[-_]?secret|private[-_]?key|credentials?|passphrase|pgpassword)(?:[ \t]+|=))(["']?)(?!-)([^\s"']+)\2/gimd;
+  /((?:^|\s)--?(?:api[-_]?key|(?:access[-_]?|auth[-_]?|refresh[-_]?)?token|password|passwd|secret|client[-_]?secret|private[-_]?key|credentials?|passphrase|pgpassword)(?:[ \t]+|=))(["']?)(?!-)([^\s"']{1,1024})\2/gimd;
 
 // JSON / Python-dict keys: `{"api_key": "…"}`, `{'x-api-key': '…'}`. Any quoted
 // key name is checked against isSecretValueKey, so `x-api-key`, `PRIVATE-TOKEN`,
@@ -239,42 +251,45 @@ const CLI_SECRET_OPTION_RE =
 // end-of-input from every quote on an unterminated run (`API_KEY="` + `\"`×N),
 // which is quadratic and blocks the event loop on a single hostile comment.
 const JSON_KV_RE =
-  /("(?:\\.|[^"\\]){1,256}?")([ \t]*:[ \t]*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]{[]+)|('(?:\\.|[^'\\]){1,256}?')([ \t]*:[ \t]*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")/gd;
+  /("(?:\\.|[^"\\]){1,256}?")([ \t]*:[ \t]*)("(?:\\.|[^"\\]){0,2048}"|'(?:\\.|[^'\\]){0,2048}'|[^\s,}\]{[]{1,2048})|('(?:\\.|[^'\\]){1,256}?')([ \t]*:[ \t]*)('(?:\\.|[^'\\]){0,2048}'|"(?:\\.|[^"\\]){0,2048}")/gd;
 // The `\"key\":\"value\"` form inside a JSON string.
 const ESCAPED_JSON_KV_RE =
-  /(\\")((?:\\.|[^"\\]){1,256}?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\])*)\\"/gd;
+  /(\\")((?:\\.|[^"\\]){1,256}?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\]){0,2048})\\"/gd;
 
 // `Bearer <token>` anywhere (JSON bodies, headers embedded in strings). The
 // token may contain `\X` escape pairs mid-value (`ab\"key"`) but never ends
 // on one, so a `\"` closing a JSON string stays outside the span.
-const AUTH_SCHEME_VALUE_RE = /\b(Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)([ \t]+)((?:[^\s"'`,;\]\\]+|\\.(?=[^\s"'`,;\]\\}\[{]))+)/gd;
+const AUTH_SCHEME_VALUE_RE = /\b(Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)([ \t]+)((?:[^\s"'`,;\]\\]+|\\.(?=[^\s"'`,;\]\\}\[{])){1,1024})/gd;
 
 // An AWS secret access key is an unmarked 40-char blob — only redactable when
 // an AKIA access key id sits within ~300 chars on the same line(s).
 const AWS_SECRET_AFTER_ID_RE = /(\bAKIA[0-9A-Z]{16}[^\n]{0,300}?)(?<![A-Za-z0-9/+=])([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])/gd;
 const AWS_SECRET_BEFORE_ID_RE = /(?<![A-Za-z0-9/+=])([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])(?=[^\n]{0,300}?\bAKIA[0-9A-Z]{16})/gd;
 
-// Well-known key shapes.
+// Well-known key shapes. `(?<![\w-])` (not `\b`) starts each pattern so a
+// repeated prefix — `sk-sk-sk-…`, `eyJ-eyJ-…` — can only start at the run
+// boundary, never mid-run where a `\b` would still match after `-`.
+// Trailing `{N,M}` bounds keep every scan constant-cost.
 const KEY_SHAPES: RegExp[] = [
   // Stripe secret / restricted keys and webhook signing secrets.
-  /\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}/gd,
-  /\bwhsec_[A-Za-z0-9]{10,}/gd,
-  /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}/gd,
-  /\bgh[pousr]_[A-Za-z0-9_]{20,}/gd,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/gd,
+  /(?<![\w-])[rs]k_(?:live|test)_[A-Za-z0-9]{10,128}/gd,
+  /(?<![\w-])whsec_[A-Za-z0-9]{10,128}/gd,
+  /(?<![\w-])sk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,256}/gd,
+  /(?<![\w-])gh[pousr]_[A-Za-z0-9_]{20,128}/gd,
+  /(?<![\w-])github_pat_[A-Za-z0-9_]{20,128}/gd,
   // GitLab personal access tokens.
-  /\bglpat-[A-Za-z0-9_-]{10,}/gd,
+  /(?<![\w-])glpat-[A-Za-z0-9_-]{10,128}/gd,
   // xAI keys (xai-…).
-  /\bxai-[A-Za-z0-9_-]{10,}/gd,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/gd,
+  /(?<![\w-])xai-[A-Za-z0-9_-]{10,128}/gd,
+  /(?<![\w-])xox[abprs]-[A-Za-z0-9-]{10,256}/gd,
   /\bAKIA[0-9A-Z]{16}\b/gd,
   // Paperclip agent API keys (`pcp_…`), board keys (`pcp_board_…`) and CLI auth
   // tokens (`pcp_cli_auth_…`) share the prefix, so this covers all three.
-  /\bpcp_[A-Za-z0-9_-]{8,}/gd,
-  /\bAIza[0-9A-Za-z_-]{30,}/gd,
+  /(?<![\w-])pcp_[A-Za-z0-9_-]{8,128}/gd,
+  /(?<![\w-])AIza[0-9A-Za-z_-]{30,128}/gd,
   // JWTs always begin `eyJ` (base64 of `{"`). Requiring it keeps dotted
   // identifiers like `packages.something.abcdefgh` untouched.
-  /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{4,})?\b/gd,
+  /(?<![\w-])eyJ[A-Za-z0-9_-]{4,512}\.[A-Za-z0-9_-]{8,2048}\.[A-Za-z0-9_-]{8,2048}(?:\.[A-Za-z0-9_-]{4,512})?(?![\w-])/gd,
 ];
 
 // ---------------------------------------------------------------------------
@@ -429,11 +444,21 @@ function groupSpan(match: RegExpExecArray, group: number): { start: number; end:
 function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   const edits: Edit[] = [];
   const claimed: Array<[number, number]> = [];
+  // Rightmost byte any claim reaches. A push starting at or past it cannot
+  // overlap anything, so the overwhelmingly common case — many small,
+  // left-to-right claims — stays O(1) per push. Only a push landing inside
+  // already-claimed territory pays the scan, and it exits on the first hit.
+  // (Scanning `claimed` unconditionally was O(E^2): `mysql -pa`×N produces
+  // ~270K pushes at 1MB, ~5s and superlinear.)
+  let frontier = 0;
   const push = (start: number, end: number, replacement = REDACTED): void => {
     if (end <= start) return;
-    for (const [s, e] of claimed) {
-      if (start < e && end > s) return;
+    if (start < frontier) {
+      for (const [s, e] of claimed) {
+        if (start < e && end > s) return;
+      }
     }
+    if (end > frontier) frontier = end;
     claimed.push([start, end]);
     edits.push({ start, end, replacement });
   };
@@ -481,15 +506,47 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     if (isAssignment ? !isSecretName(name) : !isSecretValueKey(name)) {
       // A non-secret label (`run:`, `note:`, `x:`, `stdout:`) can swallow an
       // inner `NAME=` as its value — `run: TOKEN=abc` consumes `TOKEN` and the
-      // `=abc` tail is never checked. Rewind only when the value ends right
-      // before `=`, and jump to the last identifier in the value (not the
-      // value start). Rewinding unconditionally rescans the value tail once
-      // per rejected label — quadratic on `a:a:a:…` — and rewinding to the
-      // value start can re-match the same label-value pair and loop.
+      // `=abc` tail is never checked.
+      if (/^["']/.test(value)) {
+        // Quoted value: the assignment is inside the quotes
+        // (`note: "API_KEY=…"`). Rewind to just inside the quote — bounded by
+        // the closing quote, so it stays linear.
+        return span.start + 1;
+      }
       if (text[span.end] === "=") {
+        // The value ends right before `=`: `run: TOKEN=…`, `step: 1.TOKEN=…`.
+        // Walk back over identifier chars, then forward to the first
+        // name-start char, and redact the `=`-value directly — a rescan
+        // cannot be trusted to re-match here because the `(?<![\w.-])` start
+        // guard deliberately blocks `TOKEN` inside `1.TOKEN`.
         let start = span.end;
         while (start > span.start && /[A-Za-z0-9_.-]/.test(text[start - 1])) start--;
-        if (start < span.end && /[A-Za-z_]/.test(text[start])) return start;
+        while (start < span.end && !/[A-Za-z_]/.test(text[start])) start++;
+        if (start === span.end) return;
+        const tailName = text.slice(start, span.end);
+        if (!isSecretName(tailName)) return start;
+        // Sticky-anchored match at the char after `=` — no O(N) tail slice
+        // per rewind.
+        INNER_VALUE_STICKY_RE.lastIndex = span.end + 1;
+        const inner = INNER_VALUE_STICKY_RE.exec(text);
+        if (!inner) return start;
+        const innerValue = inner[0];
+        if (
+          !innerValue ||
+          innerValue.includes(REDACTED) ||
+          /^["']?\$/.test(innerValue) ||
+          /^["']?</.test(innerValue) ||
+          /^["']?value["']?$/i.test(innerValue)
+        ) {
+          return;
+        }
+        const innerQuote = /^["']/.test(innerValue) ? innerValue[0] : "";
+        push(
+          span.end + 1,
+          span.end + 1 + innerValue.length,
+          innerQuote ? `${innerQuote}${REDACTED}${innerQuote}` : REDACTED,
+        );
+        return;
       }
       return;
     }
@@ -626,12 +683,19 @@ export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string
       end: normalized.end[edit.end - 1],
       replacement: edit.replacement,
     }))
-    .sort((a, b) => b.start - a.start);
-  let out = text;
+    .sort((a, b) => a.start - b.start);
+  // Build the output in one pass: splicing into `out` per edit is O(N) each
+  // — quadratic on inputs that produce many edits (`mysql -pa`×N yields
+  // ~270K at 1MB, ~5s before this).
+  const parts: string[] = [];
+  let cursor = 0;
   for (const edit of original) {
-    out = out.slice(0, edit.start) + edit.replacement + out.slice(edit.end);
+    if (edit.start < cursor) continue;
+    parts.push(text.slice(cursor, edit.start), edit.replacement);
+    cursor = edit.end;
   }
-  return out;
+  parts.push(text.slice(cursor));
+  return parts.join("");
 }
 
 /** True when `redactSecrets` would hide something in `text`. */
@@ -728,7 +792,7 @@ const LABEL_CONTEXT = 512;
 // patternless — it would leak on the next emit. Plain trailing words are
 // not labels, so prose ending in ` word ` is unaffected.
 const OPEN_LABEL_TAIL_RE =
-  /(?:\b(?:Bearer|Basic|Token|Bot|Key|Digest|ApiKey|Negotiate|AWS4-HMAC-SHA256)|[A-Za-z_][A-Za-z0-9_.-]*[ \t]*[:=]|--[A-Za-z][A-Za-z0-9_-]*|-[a-zA-Z]|"[^"\n]{1,80}"[ \t]*:|'[^'\n]{1,80}'[ \t]*:)[ \t]*["']?$/;
+  /(?:\b(?:Bearer|Basic|Token|Bot|Key|Digest|ApiKey|Negotiate|AWS4-HMAC-SHA256)|[A-Za-z_][A-Za-z0-9_.-]{0,128}[ \t]*[:=]|--[A-Za-z][A-Za-z0-9_-]{0,63}|-[a-zA-Z]|"[^"\n]{1,80}"[ \t]*:|'[^'\n]{1,80}'[ \t]*:)[ \t]*["']?$/;
 
 export function createSecretStreamRedactor(
   knownSecrets?: KnownSecrets,
@@ -804,7 +868,11 @@ export function createSecretStreamRedactor(
           // If the new emit point still lands right after a label
           // (`... Bearer `, `... password="`), hold the label as well.
           for (let guard = 8; cut >= 0 && guard > 0; guard--) {
-            const tail = OPEN_LABEL_TAIL_RE.exec(text.slice(0, cut + 1));
+            // Only the last 512 chars — a label never reaches further back,
+            // and scanning the whole prefix here is O(buffer) per emit.
+            const tail = OPEN_LABEL_TAIL_RE.exec(
+              text.slice(Math.max(0, cut + 1 - LABEL_CONTEXT), cut + 1),
+            );
             if (!tail || tail[0].length === 0) break;
             const next = lastDelimiterBefore(text, cut + 1 - tail[0].length);
             if (next < 0) {

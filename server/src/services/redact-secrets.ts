@@ -12,21 +12,23 @@
 // logs — long-hex would shred git SHAs in transcripts.
 import { redactSecrets as redactSharedSecrets, isSecretName, REDACTED } from "@paperclipai/shared";
 
-const MASKED_KEY_RE = /[A-Za-z0-9_-]*[*•]{3,}[A-Za-z0-9_-]*/g;
+// Anchored on the asterisks with bounded flanks — unbounded `[A-Za-z0-9_-]*`
+// on both sides re-attempts a scan at every char of an `a`-or-`*` run.
+const MASKED_KEY_RE = /[A-Za-z0-9_-]{0,64}[*•]{3,}[A-Za-z0-9_-]{0,64}/g;
 
 const FIELD_NAME_SECRET =
-  /(["']?(?:api[_-]?key|apikey|x-api-key|token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^"'\s,}]+/gi;
+  /(["']?(?:api[_-]?key|apikey|x-api-key|token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^"'\s,}]{1,1024}/gi;
 
-const BASIC_SCHEME_RE = /(\bBasic\s+)[A-Za-z0-9._~+/=-]{8,}/g;
+const BASIC_SCHEME_RE = /(\bBasic\s+)[A-Za-z0-9._~+/=-]{8,1024}/g;
 
 const EXTRA_PATTERNS: RegExp[] = [
   // Z.AI style "<id>.<secret>" keys.
-  /\b[A-Za-z0-9]{24,}\.[A-Za-z0-9]{8,}/g,
+  /\b[A-Za-z0-9]{24,256}\.[A-Za-z0-9]{8,256}/g,
   // Long hex strings (tokens, digests).
-  /(?<![\w-])[a-f0-9]{32,}\b/gi,
+  /(?<![\w-])[a-f0-9]{32,4096}\b/gi,
   // Long base64-ish tokens. Paths and profile names are not matched: they
   // contain "_", "-" or "." every few characters, which breaks the run.
-  /(?<![\w-])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=])/g,
+  /(?<![\w-])[A-Za-z0-9+/]{32,4096}={0,2}(?![A-Za-z0-9+/=])/g,
 ];
 
 // A masked key echoed by a provider, e.g. "sk-proj-****abcd" or "****abcd".
@@ -159,7 +161,11 @@ function credentialPartsOfUrl(raw: string, looseLastSegment = false): string[] {
     if (url.username && url.username.length >= 8) parts.push(decodeURIComponent(url.username));
     if (url.password && url.password.length >= 8) parts.push(decodeURIComponent(url.password));
     for (const [key, param] of url.searchParams) {
-      if (isSecretName(key) && param.length >= 8) parts.push(param);
+      // `sig`/`signature` are not secret names generally, but on a webhook
+      // URL they carry the shared-secret signature — collect them so a bare
+      // echo of the value is caught too.
+      const credentialParam = isSecretName(key) || (looseLastSegment && /^(?:sig|signature)$/i.test(key));
+      if (credentialParam && param.length >= 8) parts.push(param);
     }
     const segments = url.pathname.split("/");
     for (let i = 0; i < segments.length; i++) {

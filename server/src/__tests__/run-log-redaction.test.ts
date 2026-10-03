@@ -290,6 +290,21 @@ describe("run-log redaction", () => {
     }
   });
 
+  it("collects a webhook URL's sig= query value as a fragment", () => {
+    // `sig` is not a secret name generally, but on a webhook URL it carries
+    // the shared-secret signature — a bare `echo <sig>` must still redact.
+    const sig = "sigvalue9a8b7c6d5e";
+    const keys = knownKeysFromEnv({
+      HOOK_WEBHOOK_URL: `https://hooks.example.com/t/abc?sig=${sig}`,
+      NONHOOK_URL_TOKEN: `https://example.com/t/abc?sig=${sig}`,
+    } as unknown as NodeJS.ProcessEnv);
+    expect(keys).toContain(sig);
+    expect(redactSecrets(`echo ${sig} done`, keys)).not.toContain(sig);
+    // Under a non-webhook name `sig=` alone is not credential material — the
+    // URL itself stays uncollected.
+    expect(keys).not.toContain(`https://example.com/t/abc?sig=${sig}`);
+  });
+
   it("collects a webhook URL's slug-shaped or digit-mixing last segment", () => {
     // Webhook tokens sit in the last path segment and are often slug-shaped
     // or case-mixed without digits — >=16 chars with mixed case OR a digit.

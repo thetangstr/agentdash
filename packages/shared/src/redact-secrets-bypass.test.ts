@@ -94,6 +94,15 @@ const LEAKS: [string, string, string[]?][] = [
   ["label stdout", `stdout: password=hunter2pass`],
   ["label DEBUG", `DEBUG: token=abc123xyz tail`],
   ["label equals sep", `x = password=hunter2pass`],
+  // Re-review round 2: a quoted or digit-prefixed value swallowed the inner
+  // `NAME=` and was never rescanned — the rewind now lands inside the quote,
+  // and the `=` case redacts the inner value directly.
+  ["label quoted dq", `note: "API_KEY=hunter2pass"`],
+  ["label quoted sq", `note: 'API_KEY=hunter2pass'`],
+  ["label quoted password", `msg: "password=hunter2pass"`],
+  ["label quoted run", `run: "TOKEN=hunter2pass"`],
+  ["label quoted export", `echo: "export API_KEY=hunter2pass"`],
+  ["label digit-prefixed name", `step: 1.TOKEN=hunter2pass`],
 ];
 
 const PROBE_FRAGMENTS = [
