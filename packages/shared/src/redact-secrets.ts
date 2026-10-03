@@ -103,9 +103,11 @@ export function isSecretValueKey(name: string): boolean {
  * Whether an unquoted `name: value` value looks like a credential and not
  * prose. `hunter2pass99` and `f3b9…Qz9` qualify; `required`, `is`, `out` and
  * `1500` do not (letters+digits or special characters or length ≥ 16).
+ * No upper bound: a 600-char bare value after `client_secret:` is still a
+ * credential — every check below is a single linear scan.
  */
 function looksLikeCredentialValue(value: string): boolean {
-  if (value.length < 4 || value.length > 512) return false;
+  if (value.length < 4) return false;
   if (!/[A-Za-z]/.test(value)) return false;
   return /\d/.test(value) || /[_+/=\-.@~]/.test(value) || value.length >= 16;
 }
@@ -195,32 +197,49 @@ interface Edit {
 const AUTH_SCHEMES = "(?:Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)";
 
 // `-----BEGIN … PRIVATE KEY----- … -----END …-----` (single and multi-line).
+// The tempered body `(?:(?!-----BEGIN)[\s\S])*?` cannot cross another BEGIN
+// marker, so an unterminated marker fails at the next one instead of scanning
+// to end-of-input from every `-----BEGIN` position (quadratic on adversarial
+// logs that repeat the marker).
 const PEM_BLOCK_RE =
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gd;
+  /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY-----(?:(?!-----BEGIN)[\s\S]){0,262144}?-----END [A-Z0-9 ]{0,64}PRIVATE KEY-----/gd;
 
 // `NAME=value` (env assignment, query parameter, `api_key = "…"`) and
 // `NAME: value` (YAML, headers) with an optional auth scheme between
-// separator and value. A bare value may contain `\X` escape pairs mid-token
-// (`Bearer ab\"key"` in a transcript) but never ends on one: the lookahead
-// keeps a trailing `\"` (a JSON string boundary) out of the match.
+// separator and value. A bare value is a single flat character class — `\`
+// is included, so a `\"` escape pair mid-token truncates the match at the
+// quote; the callback extends through it when a token char follows and
+// trims a trailing `\` run at a boundary. A quoted value either closes
+// inside 2048 chars or hits the cap exactly — a lone unclosed quote stays
+// prose (`grep 'TOKEN=' src`); at the cap the callback extends the redaction
+// forward to the real closer, so >2048-char values are hidden whole.
+// The name is bounded ({0,128}) and guarded by `(?<![\w.-])` — a dot/identifier
+// run like `a.a.a.…` used to re-attempt a match at every char mid-run.
 const NAME_VALUE_RE = new RegExp(
-  `(?<![\\w-])([A-Za-z_][A-Za-z0-9_.-]*)([ \\t]*[:=][ \\t]*)(?:(${AUTH_SCHEMES})[ \\t]+)?(?![\\/]{2})("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|(?:[^\\s"'\\\\,;=\`&|()?]+|\\\\.(?=[^\\s"'\\\\,;=\`&|()?}\\]]))+)`,
+  `(?<![\\w.-])([A-Za-z_][A-Za-z0-9_.-]{0,128})([ \\t]*[:=][ \\t]*)(?:(${AUTH_SCHEMES})[ \\t]+)?(?![\\/]{2})("(?:\\\\.|[^"\\\\]){0,2048}"|"(?:\\\\.|[^"\\\\]){2048}|'(?:\\\\.|[^'\\\\]){0,2048}'|'(?:\\\\.|[^'\\\\]){2048}|[^\\s"',;=\`&|()?]+)`,
   "gid",
 );
+// Sticky mirror of the NAME_VALUE value alternation — anchored via lastIndex
+// so the `=`-tail redaction can check "what follows the `=`" without copying
+// the rest of the input into a slice.
+const INNER_VALUE_STICKY_RE =
+  /(?:"(?:\\.|[^"\\]){0,2048}"|"(?:\\.|[^"\\]){2048}|'(?:\\.|[^'\\]){0,2048}'|'(?:\\.|[^'\\]){2048}|[^\s"',;=`&|()?]+)/y;
 
 // Cookie headers: everything to the end of the quoted value / line.
-const COOKIE_HEADER_RE = /(\b(?:set-)?cookie[ \t]*:[ \t]*)((?:\\.|[^\n\\])+)/gid;
+const COOKIE_HEADER_RE = /(\b(?:set-)?cookie[ \t]*:[ \t]*)([^\n]+)/gid;
 
-// `scheme://user:pass@host`. The password run is greedy so `p@ssw0rd!` and
-// `ab/cdEFGH12` inside userinfo are fully consumed before the last `@`.
-const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"']+):([^\s"']+)@/gid;
-// `scheme://TOKEN@host` — credential as the whole userinfo, no `user:` prefix.
-const URL_BARE_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@:"'\\]{4,})@/gid;
+// `scheme://userinfo@host`. Only the `scheme://` prefix is a regex match —
+// the userinfo region is scanned in JS (see the callback below) because an
+// `@`-terminated pattern can never match across a scan-piece edge and a
+// bounded-minimum or alternation tail builds a regex backtrack frame per
+// char, overflowing on multi-megabyte runs. The lookbehind blocks mid-run
+// starts (`https://a:bhttps://a:b…`). Case-insensitive: `HTTPS://` counts.
+const URL_SCHEME_RE = /(?<![\w+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)/gid;
 
 // curl `-u user:pass`, `-uuser:pass`, `--user user:pass`, `--user=user:pass`.
 const CURL_USER_RE = /(\s--user(?:[ \t]+|=)|\s-u(?:[ \t]+|=|(?=[^\s=-])))(["']?)([^\s"':=]+):([^\s"']*)\2/gd;
 // curl `-b "name=value"` / `--cookie` (a cookie file path has no `=` and is kept).
-const CURL_COOKIE_RE = /(\s(?:-b|--cookie)(?:[ \t]+|=))(["']?)([^\s"']*=[^\s"']*)\2/gd;
+const CURL_COOKIE_RE = /(\s(?:-b|--cookie)(?:[ \t]+|=))(["']?)([^\s"']+=[^\s"']*)\2/gd;
 
 // mysql / mariadb `-p<password>` (no space). Only on those commands: elsewhere `-p8080` is a port.
 const MYSQL_LINE_RE = /\b(?:mysql\w*|mariadb\w*)\b[^\n]*/gd;
@@ -234,44 +253,72 @@ const CLI_SECRET_OPTION_RE =
 // key name is checked against isSecretValueKey, so `x-api-key`, `PRIVATE-TOKEN`,
 // `ZAI_API_KEY`, `session_token` and `secretAccessKey` are all covered while
 // `{"key": "…"}` and `{"taskKey": "…"}` are left alone.
+// Keys are bounded to 128 chars — an unbounded lazy key retries to
+// end-of-input from every quote on an unterminated run (`API_KEY="` + `\"`×N),
+// which is quadratic and blocks the event loop on a single hostile comment.
+// 128 keeps the per-position retry cost small on adversarial input while
+// covering any real credential field name.
 const JSON_KV_RE =
-  /("(?:\\.|[^"\\])+?")([ \t]*:[ \t]*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}\]{[]+)|('(?:\\.|[^'\\])+?')([ \t]*:[ \t]*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")/gd;
-// The `\"key\":\"value\"` form inside a JSON string.
+  /("(?:\\.|[^"\\]){1,128}?")([ \t]*:[ \t]*)("(?:\\.|[^"\\]){0,2048}"|"(?:\\.|[^"\\]){2048}|'(?:\\.|[^'\\]){0,2048}'|'(?:\\.|[^'\\]){2048}|[^\s,}\]{[]+)|('(?:\\.|[^'\\]){1,128}?')([ \t]*:[ \t]*)('(?:\\.|[^'\\]){0,2048}'|'(?:\\.|[^'\\]){2048}|"(?:\\.|[^"\\]){0,2048}"|"(?:\\.|[^"\\]){2048})/gd;
+// The `\"key\":\"value\"` form inside a JSON string. Two value alternatives:
+// group 4 is content of a value that closes inside the cap; group 5 is
+// exactly 2048 chars — a value past the cap, whose real `\"` closer the
+// callback scans for and extends the redaction over.
+// The value content units, in order: `\\\\\\\\` (4 backslashes = an escaped
+// literal backslash), `\\\\\\"` (3 backslashes + quote = a quote inside the
+// value — `JSON.stringify` of a `"` produces exactly that), `\\\\[^"\\]`
+// (2 backslashes + other), `\\[^"\\]` (1 backslash + other), `[^"\\]`
+// (plain char). Only a single-backslash `\"` can close the value — a `"`
+// preceded by a `\` run ≡1 (mod 4) — matching closeEscapedJson.
 const ESCAPED_JSON_KV_RE =
-  /(\\")((?:\\.|[^"\\])+?)\\"([ \t]*:[ \t]*)\\"((?:\\.|[^"\\])*)\\"/gd;
+  /(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\\\\\\|\\\\\\"|\\\\[^"\\]|\\[^"\\]|[^"\\]){0,2048})\\"|(\\")((?:\\.|[^"\\]){1,128}?)\\"([ \t]*:[ \t]*)\\"((?:\\\\\\\\|\\\\\\"|\\\\[^"\\]|\\[^"\\]|[^"\\]){2048})/gd;
 
-// `Bearer <token>` anywhere (JSON bodies, headers embedded in strings). The
-// token may contain `\X` escape pairs mid-value (`ab\"key"`) but never ends
-// on one, so a `\"` closing a JSON string stays outside the span.
-const AUTH_SCHEME_VALUE_RE = /\b(Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)([ \t]+)((?:[^\s"'`,;\]\\]+|\\.(?=[^\s"'`,;\]\\}\[{]))+)/gd;
+// `Bearer <token>` anywhere (JSON bodies, headers embedded in strings).
+// The value is a single flat character class — `\` is allowed mid-token
+// (`ab\"key"` in a transcript) and a trailing run of `\` is trimmed in the
+// callback, so a `\"` closing a JSON string stays outside the span. The
+// flat class replaces the old `(?:X+|\\.){1,N}` alternation, which pushed a
+// regex backtrack frame per character and overflowed the stack on
+// multi-megabyte tokens.
+const AUTH_SCHEME_VALUE_RE = /\b(Bearer|Basic|Token|Digest|Bot|ApiKey|Key|Negotiate|AWS4-HMAC-SHA256)([ \t]+)([^\s"'`,;\]]+)/gd;
 
 // An AWS secret access key is an unmarked 40-char blob — only redactable when
 // an AKIA access key id sits within ~300 chars on the same line(s).
 const AWS_SECRET_AFTER_ID_RE = /(\bAKIA[0-9A-Z]{16}[^\n]{0,300}?)(?<![A-Za-z0-9/+=])([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])/gd;
 const AWS_SECRET_BEFORE_ID_RE = /(?<![A-Za-z0-9/+=])([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])(?=[^\n]{0,300}?\bAKIA[0-9A-Z]{16})/gd;
 
-// Well-known key shapes.
+// Well-known key shapes. `(?<![\w-])` (not `\b`) starts each pattern so a
+// repeated prefix — `sk-sk-sk-…`, `eyJ-eyJ-…` — can only start at the run
+// boundary, never mid-run where a `\b` would still match after `-`. The tail
+// classes are unbounded: the lookbehind plus flat character classes keep the
+// scan linear, and upper bounds would leak long keys. Every tail is written
+// `X{min-1}X+`, never `X{min,}` — a bounded-minimum quantifier pushes a
+// regex backtrack frame per character in V8 and overflows the call stack on
+// multi-megabyte tokens; a fixed prefix plus a flat `+` does not.
 const KEY_SHAPES: RegExp[] = [
   // Stripe secret / restricted keys and webhook signing secrets.
-  /\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}/gd,
-  /\bwhsec_[A-Za-z0-9]{10,}/gd,
-  /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}/gd,
-  /\bgh[pousr]_[A-Za-z0-9_]{20,}/gd,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/gd,
+  /(?<![\w-])[rs]k_(?:live|test)_[A-Za-z0-9]{9}[A-Za-z0-9]+/gd,
+  /(?<![\w-])whsec_[A-Za-z0-9]{9}[A-Za-z0-9]+/gd,
+  /(?<![\w-])sk-(?:ant-|proj-)?[A-Za-z0-9_-]{11}[A-Za-z0-9_-]+/gd,
+  /(?<![\w-])gh[pousr]_[A-Za-z0-9_]{19}[A-Za-z0-9_]+/gd,
+  /(?<![\w-])github_pat_[A-Za-z0-9_]{19}[A-Za-z0-9_]+/gd,
   // GitLab personal access tokens.
-  /\bglpat-[A-Za-z0-9_-]{10,}/gd,
+  /(?<![\w-])glpat-[A-Za-z0-9_-]{9}[A-Za-z0-9_-]+/gd,
   // xAI keys (xai-…).
-  /\bxai-[A-Za-z0-9_-]{10,}/gd,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/gd,
+  /(?<![\w-])xai-[A-Za-z0-9_-]{9}[A-Za-z0-9_-]+/gd,
+  /(?<![\w-])xox[abprs]-[A-Za-z0-9-]{9}[A-Za-z0-9-]+/gd,
   /\bAKIA[0-9A-Z]{16}\b/gd,
   // Paperclip agent API keys (`pcp_…`), board keys (`pcp_board_…`) and CLI auth
   // tokens (`pcp_cli_auth_…`) share the prefix, so this covers all three.
-  /\bpcp_[A-Za-z0-9_-]{8,}/gd,
-  /\bAIza[0-9A-Za-z_-]{30,}/gd,
-  // JWTs always begin `eyJ` (base64 of `{"`). Requiring it keeps dotted
-  // identifiers like `packages.something.abcdefgh` untouched.
-  /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{4,})?\b/gd,
+  /(?<![\w-])pcp_[A-Za-z0-9_-]{7}[A-Za-z0-9_-]+/gd,
+  /(?<![\w-])AIza[0-9A-Za-z_-]{29}[0-9A-Za-z_-]+/gd,
 ];
+// JWTs always begin `eyJ` (base64 of `{"`). The match is a single flat class
+// over the whole dotted run — the `.`-separated segment structure is checked
+// in the callback, so a multi-megabyte token never builds a regex backtrack
+// chain (a `X\.Y\.Z` pattern gives the run back one char at a time on
+// failure, and can never match across scan pieces anyway).
+const JWT_RUN_RE = /(?<![\w-])eyJ[A-Za-z0-9_.-]{19}[A-Za-z0-9_.-]+/gd;
 
 // ---------------------------------------------------------------------------
 // Known-secret forms: verbatim, common encodings, split-safe fragments and the
@@ -422,20 +469,143 @@ function groupSpan(match: RegExpExecArray, group: number): { start: number; end:
   return { start: indices[0], end: indices[1] };
 }
 
+// Past ~1MB the matcher runs on 1MB pieces with a 4KB tail carried into the
+// next piece (like the stream redactor's keepTail). A regex match can then
+// never span more than one piece — a multi-megabyte token used to recurse the
+// regex engine past the call-stack limit — while the carry keeps a label or
+// open value crossing the boundary matchable. A push whose span ends exactly
+// at the piece edge is a truncated match: `push` extends it forward through
+// `cont` (the pattern's value class), so the token is still redacted whole.
+// Each piece also starts a few chars before its offset: a `(?<!…)` or `\b`
+// at position 0 otherwise sees no left neighbor, and a token cut at the
+// boundary could produce a false start (`a|sk-…`) or a missed one.
+const SCAN_PIECE = 1024 * 1024;
+const SCAN_OVERLAP = 4 * 1024;
+const SCAN_LEFT = 64;
+
+// Sticky single-char continuation classes — one per unbounded value shape.
+const CONT_NAME_VALUE = /[^\s"',;=`&|()?]/y;
+const CONT_AUTH_VALUE = /[^\s"'`,;\]]/y;
+const CONT_JSON_BARE = /[^\s,}\]{[]/y;
+const CONT_LINE = /[^\n]/y;
+const CONT_TOKEN = /[^\s"']/y;
+const CONT_KEY_SHAPE = /[A-Za-z0-9_.-]/y;
+// Chars allowed after a mid-token `\"` escape pair — the strict lookahead
+// classes the escape-pair alternatives used to carry. `{`, `[`, `}` and `]`
+// are delimiters here (a `\"` before `}`/`]` is a JSON boundary, not token
+// material) even though the main value classes allow them.
+const PAIR_NEXT_NAME_VALUE = /[^\s"',;=`&|()?\\}\]]/y;
+const PAIR_NEXT_AUTH = /[^\s"'`,;\]\\}\[{]/y;
+
+/** Extend a piece-truncated match forward in `text` while `cont` matches. */
+function extendRight(text: string, from: number, cont: RegExp): number {
+  let i = from;
+  while (i < text.length) {
+    cont.lastIndex = i;
+    if (!cont.test(text)) break;
+    i = cont.lastIndex;
+  }
+  return i;
+}
+
+/**
+ * Final end of a bare token/class match. The value classes include `\` but
+ * exclude `"`, so a `\"` escape pair truncates the match at the quote — when
+ * a token char follows the pair it is still the same value (`ab\"f3b9` in a
+ * transcript). Also extend through a piece boundary while the class holds.
+ * The caller trims a trailing `\` run so a boundary `\"` stays outside.
+ */
+function bareValueEnd(text: string, end: number, limit: number, cont: RegExp, pairNext: RegExp): number {
+  for (;;) {
+    if (text[end - 1] === "\\" && text[end] === '"' && end + 1 < text.length) {
+      pairNext.lastIndex = end + 1;
+      if (pairNext.test(text)) {
+        end = extendRight(text, end + 1, cont);
+        continue;
+      }
+    }
+    if (end === limit && end < text.length) {
+      const next = extendRight(text, end, cont);
+      if (next === end) return end;
+      end = next;
+      continue;
+    }
+    return end;
+  }
+}
+
+/**
+ * Position just past the unescaped `q` that closes the quoted value starting
+ * before `from`, or at EOL/end when no closer exists. Called when a quoted
+ * value hit the {0,2048} pattern cap (or a piece edge) without its quote.
+ */
+function closeQuoted(text: string, from: number, q: string): number {
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (c === q) return i + 1;
+    if (c === "\n") return i;
+  }
+  return text.length;
+}
+
+/**
+ * Position of the `\` starting the `\"` that closes an escaped-JSON string
+ * value, or end of input. In doubly-escaped JSON a `"` closes the value only
+ * when the `\` run before it has length ≡1 (mod 4): `\\\"` (≡3 mod 4) is an
+ * escaped quote inside the value and `\\\\` (even) is a literal backslash —
+ * a literal `\` at end-of-value makes the closer's run 5, 9, … Returning the
+ * closer's start keeps the `\"` itself outside the redacted span.
+ */
+function closeEscapedJson(text: string, from: number): number {
+  for (let i = from; i < text.length; i++) {
+    if (text[i] !== '"') continue;
+    let backslashes = 0;
+    for (let j = i - 1; j >= 0 && text[j] === "\\"; j--) backslashes++;
+    if (backslashes % 4 === 1) return i - 1;
+  }
+  return text.length;
+}
+
 function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   const edits: Edit[] = [];
-  const claimed: Array<[number, number]> = [];
-  const push = (start: number, end: number, replacement = REDACTED): void => {
+  // Per-byte claim mask. Marking and checking are both O(span), never
+  // O(prior edits) — a linear `claimed` scan is quadratic on `-b a=`×N and
+  // AWS-blob×N above the 1MB bound (11–14s and ~85s at 8MB before this
+  // mask).
+  const claimed = new Uint8Array(text.length);
+  // End of the piece currently being scanned — a push ending exactly there is
+  // a window-truncated match, extended through `cont` on the full text.
+  let pieceEnd = text.length;
+  const push = (start: number, end: number, replacement = REDACTED, cont?: RegExp): void => {
+    if (cont && end === pieceEnd && end < text.length) end = extendRight(text, end, cont);
     if (end <= start) return;
-    for (const [s, e] of claimed) {
-      if (start < e && end > s) return;
+    // A push fully inside earlier claims adds nothing; a PARTIALLY claimed
+    // push fills each unclaimed sub-span instead of dropping — a short
+    // match claimed first must not suppress a longer match's tail
+    // (`PASSWORD=Pa55;word&<known>`: `Pa55` claimed by NAME_VALUE would
+    // otherwise drop the known literal and leak `;word&<known>`).
+    let i = start;
+    while (i < end) {
+      while (i < end && claimed[i]) i++;
+      let j = i;
+      while (j < end && !claimed[j]) j++;
+      if (j <= i) return;
+      claimed.fill(1, i, j);
+      // Only a clean whole-span push keeps a custom replacement (e.g. the
+      // PEM markers); split fills use the plain marker.
+      edits.push({ start: i, end: j, replacement: i === start && j === end ? replacement : REDACTED });
+      i = j;
     }
-    claimed.push([start, end]);
-    edits.push({ start, end, replacement });
   };
 
   // PEM private-key blocks first — they claim the largest spans and keep the
-  // BEGIN/END markers so the log still reads as a key.
+  // BEGIN/END markers so the log still reads as a key. Runs once on the full
+  // text: it is the only multi-line pattern and a windowed scan could split
+  // the body.
   eachMatch(PEM_BLOCK_RE, text, (m) => {
     const block = m[0];
     const firstNl = block.indexOf("\n");
@@ -447,133 +617,14 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     push(m.index, m.index + block.length, replacement);
   });
 
-  // An unmarked 40-char AWS secret only counts next to its AKIA id.
-  eachMatch(AWS_SECRET_AFTER_ID_RE, text, (m) => {
-    const span = groupSpan(m, 2);
-    if (span) push(span.start, span.end);
-  });
-  eachMatch(AWS_SECRET_BEFORE_ID_RE, text, (m) => {
-    const span = groupSpan(m, 1);
-    if (span) push(span.start, span.end);
-  });
-
-  eachMatch(COOKIE_HEADER_RE, text, (m) => {
-    const span = groupSpan(m, 2);
-    if (span && !m[2].includes(REDACTED)) push(span.start, span.end);
-  });
-
-  // `NAME=value` and `NAME: value`. `=` uses the broad matcher (env
-  // assignments are intentional); `:` uses the strict matcher and requires a
-  // credential-looking bare value so prose (`password: required`,
-  // `token: 1500 tokens used`) and identifier fields survive.
-  eachMatch(NAME_VALUE_RE, text, (m) => {
-    const name = m[1];
-    const sep = m[2];
-    const scheme = m[3];
-    const value = m[4];
-    const span = groupSpan(m, 4);
-    if (!span) return;
-    const isAssignment = sep.includes("=");
-    if (isAssignment ? !isSecretName(name) : !isSecretValueKey(name)) {
-      // A non-secret label (`run:`, `note:`, `x:`, `stdout:`) swallows the
-      // inner name as its value — `run: TOKEN=abc` consumes `TOKEN` and the
-      // `=abc` tail is never checked. Rewind to the value start so the inner
-      // `NAME=` assignment is scanned on its own. The rescan always starts
-      // strictly after this match's start, so the loop still terminates.
-      return span.start;
-    }
-    if (value === '""' || value === "''" || value === "") return;
-    if (value.includes(REDACTED)) return;
-    // A variable reference or command substitution is not itself a secret.
-    if (/^["']?\$/.test(value)) return;
-    // Doc placeholders: `key=value`, `token=<your token>` — not credentials.
-    if (/^["']?</.test(value) || /^["']?value["']?$/i.test(value)) return;
-    if (!scheme && !isAssignment && !/^["']/.test(value) && !looksLikeCredentialValue(value)) return;
-    const quote = /^["']/.test(value) ? value[0] : "";
-    push(span.start, span.end, quote ? `${quote}${REDACTED}${quote}` : REDACTED);
-  });
-
-  eachMatch(URL_USERINFO_RE, text, (m) => {
-    const span = groupSpan(m, 3);
-    if (span && !m[3].includes(REDACTED)) push(span.start, span.end);
-  });
-  eachMatch(URL_BARE_USERINFO_RE, text, (m) => {
-    const span = groupSpan(m, 2);
-    if (span && looksLikeCredential(m[2])) push(span.start, span.end);
-  });
-
-  eachMatch(CURL_USER_RE, text, (m) => {
-    const span = groupSpan(m, 4);
-    if (span && m[4] && !m[4].includes(REDACTED)) push(span.start, span.end);
-  });
-  eachMatch(CURL_COOKIE_RE, text, (m) => {
-    const span = groupSpan(m, 3);
-    if (span && !m[3].includes(REDACTED)) push(span.start, span.end);
-  });
-
-  eachMatch(MYSQL_LINE_RE, text, (m) => {
-    eachMatch(MYSQL_PASSWORD_RE, m[0], (inner) => {
-      const span = groupSpan(inner, 2);
-      if (span && inner[2] !== REDACTED) push(m.index + span.start, m.index + span.end);
-    });
-  });
-
-  eachMatch(CLI_SECRET_OPTION_RE, text, (m) => {
-    const span = groupSpan(m, 3);
-    if (span && m[3] !== REDACTED && !/^</.test(m[3])) push(span.start, span.end);
-  });
-
-  // Quoted JSON / Python-dict keys.
-  eachMatch(JSON_KV_RE, text, (m) => {
-    const key = m[1] ?? m[4];
-    const value = m[3] ?? m[6];
-    const valueSpan = groupSpan(m, 3) ?? groupSpan(m, 6);
-    if (!key || !value || !valueSpan) return;
-    const name = key.slice(1, -1);
-    if (!isSecretValueKey(name)) return;
-    if (value.includes(REDACTED)) return;
-    const quote = /^["']/.test(value) ? value[0] : "";
-    if (!quote && !looksLikeCredentialValue(value)) return;
-    // `{"token": "<your token>"}` is a doc placeholder, not a credential.
-    if (quote && /^</.test(value.slice(1))) return;
-    push(valueSpan.start, valueSpan.end, quote ? `${quote}${REDACTED}${quote}` : REDACTED);
-  });
-  eachMatch(ESCAPED_JSON_KV_RE, text, (m) => {
-    const name = m[2];
-    const span = groupSpan(m, 4);
-    if (!span || !isSecretValueKey(name)) return;
-    if (m[4].includes(REDACTED)) return;
-    push(span.start, span.end);
-  });
-
-  // `Bearer x` / `Basic x` anywhere.
-  eachMatch(AUTH_SCHEME_VALUE_RE, text, (m) => {
-    const span = groupSpan(m, 3);
-    const value = m[3];
-    if (!span || value.includes(REDACTED)) return;
-    // `\X` escape pairs inside a token are part of it; strip before the shape
-    // check so `ab\"key` is judged on `abkey`.
-    const unescaped = value.replace(/\\(.)/g, "$1");
-    if (!/^[A-Za-z0-9._~+/=-]{6,}$/.test(unescaped)) return;
-    if (unescaped.length < 8 && !/\d/.test(unescaped)) return;
-    // Prose like `Token authentication is required` or `Key rotation` is not
-    // a credential: for the word-like schemes an all-letters value only
-    // counts when it still looks token-ish (mixed case or >=20 chars).
-    if (
-      /^(?:Token|Key|Bot|Basic)$/i.test(m[1]) &&
-      /^[A-Za-z]+$/.test(unescaped) &&
-      unescaped.length < 20 &&
-      !(/[a-z]/.test(unescaped) && /[A-Z]/.test(unescaped))
-    ) {
-      return;
-    }
-    push(span.start, span.end);
-  });
-
-  for (const shape of KEY_SHAPES) {
-    eachMatch(shape, text, (m) => push(m.index, m.index + m[0].length));
-  }
-
+  // Configured (known) secrets next — once over the whole text and BEFORE
+  // every pattern pass. A shorter pattern match claimed first would make the
+  // literal's push land as a partial overlap: even with sub-span fill the
+  // literal then redacts as two fragments and a custom shape in between can
+  // still break it apart. Claimed first, the literal is a single span and
+  // overlapping pattern pushes fill around it harmlessly. Running inside the
+  // windows is also unsafe: a fragment claim in an earlier window can
+  // suppress the full match in the next one and leak the tail.
   const known = knownSecretsRegex(secrets);
   if (known) {
     eachMatch(known, text, (m) => {
@@ -582,6 +633,343 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     });
   }
 
+  // Scan the piece [base, limit). Match spans are piece-relative; callbacks
+  // translate to full-text offsets with `base` — context reads go to `text`
+  // so a lookbehind/lookahead at the piece edge still sees real neighbours.
+  const collect = (base: number, limit: number): void => {
+    pieceEnd = limit;
+    const slice = text.slice(base, limit);
+
+    // An unmarked 40-char AWS secret only counts next to its AKIA id.
+    eachMatch(AWS_SECRET_AFTER_ID_RE, slice, (m) => {
+      const span = groupSpan(m, 2);
+      if (span) push(base + span.start, base + span.end);
+    });
+    eachMatch(AWS_SECRET_BEFORE_ID_RE, slice, (m) => {
+      const span = groupSpan(m, 1);
+      if (span) push(base + span.start, base + span.end);
+    });
+
+    eachMatch(COOKIE_HEADER_RE, slice, (m) => {
+      const span = groupSpan(m, 2);
+      if (span && !m[2].includes(REDACTED)) push(base + span.start, base + span.end, REDACTED, CONT_LINE);
+    });
+
+    // `scheme://userinfo@host`. Only the `scheme://` prefix is a regex match —
+    // the userinfo region is scanned in JS (see the callback below) because an
+    // `@`-terminated pattern can never match across a scan-piece edge and a
+    // bounded-minimum or alternation tail builds a regex backtrack frame per
+    // char, overflowing on multi-megabyte runs. This runs BEFORE NAME_VALUE so
+    // a secret name inside the URL (`x-access-token:`) cannot claim
+    // `<token>@host/path` as its bare value and eat the host.
+    eachMatch(URL_SCHEME_RE, slice, (m) => {
+      const start = base + m.index + m[0].length;
+      // `[` opens an IP literal (`http://[::1]:8080/…`) — never userinfo.
+      if (text.charCodeAt(start) === 0x5b) return;
+      let end = start;
+      let at = -1;
+      let atBeforeSlash = -1;
+      let firstAt = -1;
+      let colon = -1;
+      let slash = -1;
+      let backslash = -1;
+      for (; end < text.length; end++) {
+        const c = text.charCodeAt(end);
+        if (c <= 0x20 || c === 0x22 || c === 0x27) break;
+        if (c === 0x2f) {
+          // Only a `://` (the next URL's scheme) ends the userinfo region —
+          // `//` inside the password is content (`Zq8R//k2Vm…==` base64).
+          if (text.charCodeAt(end + 1) === 0x2f && text.charCodeAt(end - 1) === 0x3a) break;
+          if (slash === -1) slash = end;
+        } else if (c === 0x40) {
+          if (firstAt === -1) firstAt = end;
+          if (slash === -1) atBeforeSlash = end;
+          at = end;
+        } else if (c === 0x3a && colon === -1) {
+          colon = end;
+        } else if (c === 0x5c && backslash === -1) {
+          backslash = end;
+        }
+      }
+      // The userinfo delimiter is the last `@` inside the authority — before
+      // the host/path slash — when the text between that `@` and the `/`
+      // reads as a host: an `[A-Za-z0-9-]+` label, or anything carrying `.`,
+      // `:port`, `[`, or the name `localhost`. The exception: when a later
+      // `@` in the region itself precedes a `/`, the slash-separated text is
+      // password material, not a host — `u:p@ss/<key>@host/x` must redact
+      // through `@host`, not stop at `p@` and leak `ss/<key>`. When every
+      // `@` sits past a `/`, the slashes are password material and the last
+      // `@` delimits.
+      let delim = at;
+      if (atBeforeSlash !== -1 && atBeforeSlash !== at) {
+        const hostCandidate = text.slice(atBeforeSlash + 1, slash);
+        const hostLike =
+          /^[A-Za-z0-9-]+$/.test(hostCandidate) ||
+          hostCandidate === "localhost" ||
+          /[.:\[]/.test(hostCandidate);
+        const rest = text.slice(slash, end);
+        const laterAt = rest.indexOf("@");
+        const moreBeforeSlash = laterAt !== -1 && rest.indexOf("/", laterAt + 1) !== -1;
+        if (hostLike && !moreBeforeSlash) delim = atBeforeSlash;
+      }
+      if (delim < start) return;
+      // `user:pass@` — the user has no `/`, `:` or `@`, and the pass keeps
+      // `p@ssw0rd!`, `ab/cdEFGH12` and `//` pairs.
+      if (colon > start && colon < delim && (slash === -1 || slash > colon) && firstAt > colon) {
+        push(colon + 1, delim);
+        return;
+      }
+      // `TOKEN@` bare userinfo — the token carries no `/`, `:` or `@`.
+      if (
+        (colon === -1 || colon > delim) &&
+        (slash === -1 || slash > delim) &&
+        (backslash === -1 || backslash > delim) &&
+        delim - start >= 4
+      ) {
+        const candidate = text.slice(start, delim);
+        if (looksLikeCredential(candidate)) push(start, delim);
+      }
+    });
+
+    // `NAME=value` and `NAME: value`. `=` uses the broad matcher (env
+    // assignments are intentional); `:` uses the strict matcher and requires
+    // a credential-looking bare value so prose (`password: required`,
+    // `token: 1500 tokens used`) and identifier fields survive.
+    eachMatch(NAME_VALUE_RE, slice, (m) => {
+      const name = m[1];
+      const sep = m[2];
+      const scheme = m[3];
+      const value = m[4];
+      const span = groupSpan(m, 4);
+      if (!span) return;
+      const isAssignment = sep.includes("=");
+      if (isAssignment ? !isSecretName(name) : !isSecretValueKey(name)) {
+        // A non-secret label (`run:`, `note:`, `x:`, `stdout:`) can swallow
+        // an inner `NAME=` as its value — `run: TOKEN=abc` consumes `TOKEN`
+        // and the `=abc` tail is never checked.
+        if (/^["']/.test(value)) {
+          // Quoted value: the assignment is inside the quotes
+          // (`note: "API_KEY=…"`). Rewind to just inside the quote — bounded
+          // by the closing quote, so it stays linear.
+          return span.start + 1;
+        }
+        if (text[base + span.end] === "=") {
+          // The value ends right before `=`: `run: TOKEN=…`, `step:
+          // 1.TOKEN=…`. Walk back over identifier chars, then forward to the
+          // first name-start char, and redact the `=`-value directly — a
+          // rescan cannot be trusted to re-match here because the
+          // `(?<![\w.-])` start guard deliberately blocks `TOKEN` inside
+          // `1.TOKEN`.
+          let start = span.end;
+          while (start > span.start && /[A-Za-z0-9_.-]/.test(text[base + start - 1])) start--;
+          while (start < span.end && !/[A-Za-z_]/.test(text[base + start])) start++;
+          if (start === span.end) return;
+          const tailName = text.slice(base + start, base + span.end);
+          if (!isSecretName(tailName)) return start;
+          // Sticky-anchored match at the char after `=` — no O(N) tail slice
+          // per rewind. Runs on the full text, so the inner value is not
+          // truncated at the piece edge.
+          INNER_VALUE_STICKY_RE.lastIndex = base + span.end + 1;
+          const inner = INNER_VALUE_STICKY_RE.exec(text);
+          if (!inner) return start;
+          let innerValue = inner[0];
+          let innerEnd = inner.index + innerValue.length;
+          const innerQuote = /^["']/.test(innerValue) ? innerValue[0] : "";
+          if (innerQuote) {
+            if (!innerValue.endsWith(innerQuote)) innerEnd = closeQuoted(text, innerEnd, innerQuote);
+          } else {
+            innerEnd = bareValueEnd(text, innerEnd, text.length, CONT_NAME_VALUE, PAIR_NEXT_NAME_VALUE);
+            while (innerEnd > inner.index && text[innerEnd - 1] === "\\") innerEnd--;
+            innerValue = text.slice(inner.index, innerEnd);
+          }
+          if (
+            !innerValue ||
+            innerValue.includes(REDACTED) ||
+            /^["']?\$/.test(innerValue) ||
+            /^["']?</.test(innerValue) ||
+            /^["']?value["']?$/i.test(innerValue)
+          ) {
+            return;
+          }
+          push(inner.index, innerEnd, innerQuote ? `${innerQuote}${REDACTED}${innerQuote}` : REDACTED);
+          return;
+        }
+        return;
+      }
+      const quote = /^["']/.test(value) ? value[0] : "";
+      if (value === '""' || value === "''" || value === "") return;
+      if (value.includes(REDACTED)) return;
+      if (quote) {
+        // A variable reference or doc placeholder is not a secret.
+        if (/^["']?\$/.test(value) || /^["']?</.test(value) || /^["']?value["']?$/i.test(value)) {
+          return;
+        }
+        if (!value.endsWith(quote)) {
+          // The quoted value hit the {0,2048} pattern cap — extend the
+          // redaction to the real closer (or EOL) so a >2048-char value is
+          // hidden whole, then resume scanning after it.
+          const close = closeQuoted(text, base + span.end, quote);
+          push(base + span.start, close, `${quote}${REDACTED}${quote}`);
+          return close - base;
+        }
+        push(base + span.start, base + span.end, `${quote}${REDACTED}${quote}`);
+        return;
+      }
+      // Bare value: extend through mid-token `\"` escape pairs and the piece
+      // edge, then drop trailing `\`s from the final end — a boundary `\`
+      // is not token material.
+      let valueEnd = bareValueEnd(text, base + span.end, limit, CONT_NAME_VALUE, PAIR_NEXT_NAME_VALUE);
+      while (valueEnd > base + span.start && text[valueEnd - 1] === "\\") valueEnd--;
+      const bare = text.slice(base + span.start, valueEnd);
+      // A variable reference or command substitution is not itself a secret.
+      if (/^["']?\$/.test(bare)) return;
+      // Doc placeholders: `key=value`, `token=<your token>` — not credentials.
+      if (/^["']?</.test(bare) || /^["']?value["']?$/i.test(bare)) return;
+      if (!scheme && !isAssignment && !looksLikeCredentialValue(bare)) return;
+      push(base + span.start, valueEnd);
+    });
+
+    eachMatch(CURL_USER_RE, slice, (m) => {
+      const span = groupSpan(m, 4);
+      if (span && m[4] && !m[4].includes(REDACTED)) {
+        push(base + span.start, base + span.end, REDACTED, CONT_TOKEN);
+      }
+    });
+    eachMatch(CURL_COOKIE_RE, slice, (m) => {
+      const span = groupSpan(m, 3);
+      if (span && !m[3].includes(REDACTED)) push(base + span.start, base + span.end, REDACTED, CONT_TOKEN);
+    });
+
+    eachMatch(MYSQL_LINE_RE, slice, (m) => {
+      eachMatch(MYSQL_PASSWORD_RE, m[0], (inner) => {
+        const span = groupSpan(inner, 2);
+        if (span && inner[2] !== REDACTED) {
+          push(base + m.index + span.start, base + m.index + span.end, REDACTED, CONT_TOKEN);
+        }
+      });
+    });
+
+    eachMatch(CLI_SECRET_OPTION_RE, slice, (m) => {
+      const span = groupSpan(m, 3);
+      if (span && m[3] !== REDACTED && !/^</.test(m[3])) {
+        push(base + span.start, base + span.end, REDACTED, CONT_TOKEN);
+      }
+    });
+
+    // Quoted JSON / Python-dict keys.
+    eachMatch(JSON_KV_RE, slice, (m) => {
+      const key = m[1] ?? m[4];
+      const value = m[3] ?? m[6];
+      const valueSpan = groupSpan(m, 3) ?? groupSpan(m, 6);
+      if (!key || !value || !valueSpan) return;
+      const name = key.slice(1, -1);
+      if (!isSecretValueKey(name)) return;
+      if (value.includes(REDACTED)) return;
+      const quote = /^["']/.test(value) ? value[0] : "";
+      if (!quote && !looksLikeCredentialValue(value)) return;
+      // `{"token": "<your token>"}` is a doc placeholder, not a credential.
+      if (quote && /^</.test(value.slice(1))) return;
+      if (value === '"' || value === "'") return;
+      if (quote && !value.endsWith(quote)) {
+        // Value past the {0,2048} cap or the piece edge — extend to the
+        // real closing quote (or end of object/input).
+        const close = closeQuoted(text, base + valueSpan.end, quote);
+        push(base + valueSpan.start, close, `${quote}${REDACTED}${quote}`);
+        return close - base;
+      }
+      push(
+        base + valueSpan.start,
+        base + valueSpan.end,
+        quote ? `${quote}${REDACTED}${quote}` : REDACTED,
+        quote ? undefined : CONT_JSON_BARE,
+      );
+    });
+    eachMatch(ESCAPED_JSON_KV_RE, slice, (m) => {
+      const name = m[2] ?? m[6];
+      const span = groupSpan(m, 4) ?? groupSpan(m, 8);
+      const value = m[4] ?? m[8];
+      if (!span || !name || !isSecretValueKey(name)) return;
+      if (value.includes(REDACTED)) return;
+      if (m[4] !== undefined) {
+        push(base + span.start, base + span.end);
+        return;
+      }
+      // Group 8: value at the {0,2048} cap with no `\"` closer — extend to
+      // the real closer (kept outside the span) and resume after it.
+      const close = closeEscapedJson(text, base + span.end);
+      push(base + span.start, close);
+      return Math.min(close + 2, text.length) - base;
+    });
+
+    // `Bearer x` / `Basic x` anywhere.
+    eachMatch(AUTH_SCHEME_VALUE_RE, slice, (m) => {
+      const span = groupSpan(m, 3);
+      if (!span) return;
+      // Extend through mid-token `\"` escape pairs and the piece edge, then
+      // drop trailing `\`s from the final end — a boundary `\"` stays out.
+      let valueEnd = bareValueEnd(text, base + span.end, limit, CONT_AUTH_VALUE, PAIR_NEXT_AUTH);
+      while (valueEnd > base + span.start && text[valueEnd - 1] === "\\") valueEnd--;
+      const bare = text.slice(base + span.start, valueEnd);
+      if (bare === "" || bare.includes(REDACTED)) return;
+      // `\X` escape pairs inside a token are part of it; strip before the
+      // shape check so `ab\"key` is judged on `abkey`.
+      const unescaped = bare.replace(/\\(.)/g, "$1");
+      // Negated-class searches, not anchored `^X+$` tests — an anchored
+      // full-match builds a regex backtrack frame per char and overflows the
+      // stack on a multi-megabyte token.
+      if (unescaped.length < 6 || /[^A-Za-z0-9._~+/=-]/.test(unescaped)) return;
+      if (unescaped.length < 8 && !/\d/.test(unescaped)) return;
+      // Prose like `Token authentication is required` or `Key rotation` is
+      // not a credential: for the word-like schemes an all-letters value
+      // only counts when it still looks token-ish (mixed case or >=20
+      // chars), and a single Title-case word ("Key Exchange", "Bot
+      // Framework") never does.
+      if (/^(?:Token|Key|Bot|Basic)$/i.test(m[1])) {
+        if (
+          unescaped.length > 1 &&
+          unescaped[0] >= "A" &&
+          unescaped[0] <= "Z" &&
+          !/[^a-z]/.test(unescaped.slice(1))
+        ) {
+          return;
+        }
+        if (
+          !/[^A-Za-z]/.test(unescaped) &&
+          unescaped.length < 20 &&
+          !(/[a-z]/.test(unescaped) && /[A-Z]/.test(unescaped))
+        ) {
+          return;
+        }
+      }
+      push(base + span.start, valueEnd);
+    });
+
+    for (const shape of KEY_SHAPES) {
+      eachMatch(shape, slice, (m) => push(base + m.index, base + m.index + m[0].length, REDACTED, CONT_KEY_SHAPE));
+    }
+
+    // JWTs: the flat run match is extended to its real end first, then the
+    // `header.payload.signature` segment structure is checked in JS — a
+    // `X.Y.Z` regex can neither span pieces nor survive a multi-MB segment.
+    eachMatch(JWT_RUN_RE, slice, (m) => {
+      let end = base + m.index + m[0].length;
+      if (end === limit && end < text.length) end = extendRight(text, end, CONT_KEY_SHAPE);
+      const parts = text.slice(base + m.index, end).split(".");
+      // `eyJ` + {4,} then two {8,} segments — the minimum real JWT shape.
+      if (parts.length < 3 || parts[0].length < 7 || parts[1].length < 8 || parts[2].length < 8) return;
+      push(base + m.index, end);
+    });
+
+  };
+
+  // 1MB windows, each re-scanning the previous window's last 4KB so a
+  // label/value crossing the boundary is matched whole (duplicate pushes
+  // are dropped by the claim mask), and carrying 64 chars of left context
+  // so lookbehind/`\b` at the window edge see real text. Small inputs take
+  // the same path through a single window.
+  for (let pos = 0; pos < text.length; pos += SCAN_PIECE) {
+    collect(Math.max(0, pos - SCAN_LEFT), Math.min(pos + SCAN_PIECE + SCAN_OVERLAP, text.length));
+  }
   return edits;
 }
 
@@ -612,12 +1000,22 @@ export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string
       end: normalized.end[edit.end - 1],
       replacement: edit.replacement,
     }))
-    .sort((a, b) => b.start - a.start);
-  let out = text;
+    .sort((a, b) => a.start - b.start);
+  // Build the output in one pass: splicing into `out` per edit is O(N) each
+  // — quadratic on inputs that produce many edits (`mysql -pa`×N yields
+  // ~270K at 1MB, ~5s before this). Contiguous same-marker edits coalesce
+  // (sub-span fills around an earlier claim read as one redaction).
+  const parts: string[] = [];
+  let cursor = 0;
   for (const edit of original) {
-    out = out.slice(0, edit.start) + edit.replacement + out.slice(edit.end);
+    if (edit.start < cursor) continue;
+    const gap = text.slice(cursor, edit.start);
+    if (gap) parts.push(gap);
+    if (parts[parts.length - 1] !== edit.replacement) parts.push(edit.replacement);
+    cursor = edit.end;
   }
-  return out;
+  parts.push(text.slice(cursor));
+  return parts.join("");
 }
 
 /** True when `redactSecrets` would hide something in `text`. */
@@ -714,7 +1112,7 @@ const LABEL_CONTEXT = 512;
 // patternless — it would leak on the next emit. Plain trailing words are
 // not labels, so prose ending in ` word ` is unaffected.
 const OPEN_LABEL_TAIL_RE =
-  /(?:\b(?:Bearer|Basic|Token|Bot|Key|Digest|ApiKey|Negotiate|AWS4-HMAC-SHA256)|[A-Za-z_][A-Za-z0-9_.-]*[ \t]*[:=]|--[A-Za-z][A-Za-z0-9_-]*|-[a-zA-Z]|"[^"\n]{1,80}"[ \t]*:|'[^'\n]{1,80}'[ \t]*:)[ \t]*["']?$/;
+  /(?:\b(?:Bearer|Basic|Token|Bot|Key|Digest|ApiKey|Negotiate|AWS4-HMAC-SHA256)|[A-Za-z_][A-Za-z0-9_.-]{0,128}[ \t]*[:=]|--[A-Za-z][A-Za-z0-9_-]{0,63}|-[a-zA-Z]|"[^"\n]{1,80}"[ \t]*:|'[^'\n]{1,80}'[ \t]*:)[ \t]*["']?$/;
 
 export function createSecretStreamRedactor(
   knownSecrets?: KnownSecrets,
@@ -790,7 +1188,11 @@ export function createSecretStreamRedactor(
           // If the new emit point still lands right after a label
           // (`... Bearer `, `... password="`), hold the label as well.
           for (let guard = 8; cut >= 0 && guard > 0; guard--) {
-            const tail = OPEN_LABEL_TAIL_RE.exec(text.slice(0, cut + 1));
+            // Only the last 512 chars — a label never reaches further back,
+            // and scanning the whole prefix here is O(buffer) per emit.
+            const tail = OPEN_LABEL_TAIL_RE.exec(
+              text.slice(Math.max(0, cut + 1 - LABEL_CONTEXT), cut + 1),
+            );
             if (!tail || tail[0].length === 0) break;
             const next = lastDelimiterBefore(text, cut + 1 - tail[0].length);
             if (next < 0) {

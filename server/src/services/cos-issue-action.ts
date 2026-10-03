@@ -334,7 +334,9 @@ async function listTurnContextProposals(
     .limit(COS_PROPOSAL_CONTEXT_LIMIT);
   const proposals: CosTurnContextProposal[] = [];
   for (const row of rows) {
-    const proposal = readProposal(row.cardPayload);
+    // AgentDash (GH #992): the title is quoted into an LLM prompt, so the
+    // payload must be credential-clean even for pre-redaction rows.
+    const proposal = readProposal(redactRunLogValue(row.cardPayload));
     if (!proposal) continue;
     const assigneeVisible = companyVisible === null || companyVisible.has(proposal.assigneeAgentId);
     proposals.push({ title: proposal.title, assigneeName: assigneeVisible ? proposal.assigneeName : null });

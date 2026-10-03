@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agents,
+  assistantConversations,
+  assistantMessages,
   companies,
   companyMemberships,
   createDb,
@@ -148,5 +150,39 @@ describeEmbeddedPostgres("cos turn context visibility (shared inbox)", () => {
     expect(prompt).not.toContain("Secret acquisition plan");
     expect(prompt).not.toContain("Task for the hidden agent");
     expect(prompt).not.toContain("Ghost");
+  });
+
+  it("serves pending proposal titles credential-clean to the LLM context", async () => {
+    // GH #992: a proposal card's title is model output quoted into the CoS
+    // prompt. Rows written before persist-time redaction must not reach the
+    // LLM raw.
+    const canary = "provk-proposal-canary-4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a";
+    const conversationId = randomUUID();
+    await db.insert(assistantConversations).values({
+      id: conversationId,
+      companyId: COMPANY,
+      userId: "admin-user",
+    });
+    await db.insert(assistantMessages).values({
+      conversationId,
+      role: "agent",
+      content: "",
+      cardKind: "issue_proposal_v1",
+      cardPayload: {
+        status: "pending",
+        title: `rotate api_key=${canary} next week`,
+        description: null,
+        assigneeAgentId: VISIBLE_AGENT,
+        assigneeName: "Ellie",
+        requesterUserId: "admin-user",
+        triggerMessageId: randomUUID(),
+        cosAgentId: randomUUID(),
+      },
+    });
+    const context = await cosIssueActionForDb(db).turnContext(COMPANY, adminRequester);
+    const titles = context.pendingProposals.map((proposal) => proposal.title);
+    expect(titles).toHaveLength(1);
+    expect(titles[0]).not.toContain(canary);
+    expect(titles[0]).toContain("***REDACTED***");
   });
 });

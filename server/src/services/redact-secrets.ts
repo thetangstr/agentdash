@@ -12,21 +12,26 @@
 // logs — long-hex would shred git SHAs in transcripts.
 import { redactSecrets as redactSharedSecrets, isSecretName, REDACTED } from "@paperclipai/shared";
 
-const MASKED_KEY_RE = /[A-Za-z0-9_-]*[*•]{3,}[A-Za-z0-9_-]*/g;
+// Anchored on the asterisks with bounded flanks — unbounded `[A-Za-z0-9_-]*`
+// on both sides re-attempts a scan at every char of an `a`-or-`*` run.
+const MASKED_KEY_RE = /[A-Za-z0-9_-]{0,64}[*•]{3,}[A-Za-z0-9_-]{0,64}/g;
 
 const FIELD_NAME_SECRET =
-  /(["']?(?:api[_-]?key|apikey|x-api-key|token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^"'\s,}]+/gi;
+  /(["']?(?:api[_-]?key|apikey|x-api-key|token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^"'\s,}]{1,1024}/gi;
 
-const BASIC_SCHEME_RE = /(\bBasic\s+)[A-Za-z0-9._~+/=-]{8,}/g;
+const BASIC_SCHEME_RE = /(\bBasic\s+)[A-Za-z0-9._~+/=-]{8,1024}/g;
 
 const EXTRA_PATTERNS: RegExp[] = [
   // Z.AI style "<id>.<secret>" keys.
-  /\b[A-Za-z0-9]{24,}\.[A-Za-z0-9]{8,}/g,
+  /\b[A-Za-z0-9]{24,256}\.[A-Za-z0-9]{8,256}/g,
   // Long hex strings (tokens, digests).
-  /(?<![\w-])[a-f0-9]{32,}\b/gi,
+  /(?<![\w-])[a-f0-9]{32,4096}\b/gi,
   // Long base64-ish tokens. Paths and profile names are not matched: they
-  // contain "_", "-" or "." every few characters, which breaks the run.
-  /(?<![\w-])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=])/g,
+  // contain "_", "-" or "." every few characters, which breaks the run. The
+  // lookbehind blocks mid-run restarts (`a+a+a+…` would otherwise pay a
+  // ~1024-deep backtrack per position) but leaves `/` out so a path-embedded
+  // token (`https://host/<token>`) still matches.
+  /(?<![\w+-])[A-Za-z0-9+/]{32,1024}={0,2}(?![A-Za-z0-9+/=])/g,
 ];
 
 // A masked key echoed by a provider, e.g. "sk-proj-****abcd" or "****abcd".
@@ -105,10 +110,32 @@ export function isCollectableSecretValue(name: string, value: string): boolean {
   );
 }
 
-// A URL path segment that is itself the credential: >=16 chars of token
-// alphabet. UUIDs are identifiers, not secrets.
+// UUIDs are identifiers, not secrets; a lowercase slug of
+// hyphen/underscore-joined words (`database-password2-prod`) is a name.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TOKENISH_SEGMENT_RE = /^[A-Za-z0-9_-]{16,}$/;
+const WORD_SLUG_RE = /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/;
+
+/**
+ * Whether a URL path segment is itself the credential rather than an
+ * identifier. >=16 chars needs letters AND digits (`Zq8Rk2Vm7Tn4Wb9Xc3Ls`)
+ * — an all-digit channel id, a UUID or a word slug is not a token. A
+ * shorter segment (10-15) counts only when it also mixes case.
+ *
+ * `looseSlug` applies only to the LAST segment of a webhook URL, where the
+ * token lives and slug shapes are legitimate (`ab12-cd34-ef56-gh78-ij90`,
+ * `ZqRkVmTnWbXcLsQxZpLm`): >=16 chars with mixed case OR a digit is enough.
+ * A lowercase word slug with no digits (`database-password-prod`) still
+ * fails — the loosening does not resurrect that over-redaction.
+ */
+function isTokenishSegment(seg: string, looseSlug = false): boolean {
+  if (seg.length < 10 || !/^[A-Za-z0-9_-]+$/.test(seg) || UUID_RE.test(seg)) return false;
+  if (looseSlug && seg.length >= 16) {
+    return /\d/.test(seg) || (/[a-z]/.test(seg) && /[A-Z]/.test(seg));
+  }
+  if (!/[A-Za-z]/.test(seg) || !/\d/.test(seg)) return false;
+  if (seg.length >= 16) return !WORD_SLUG_RE.test(seg);
+  return /[a-z]/.test(seg) && /[A-Z]/.test(seg);
+}
 
 /**
  * Whether a URL carries credential material — userinfo, a secret-named
@@ -121,26 +148,33 @@ function urlCarriesCredential(raw: string): boolean {
     const url = new URL(raw);
     if (url.username || url.password) return true;
     for (const key of url.searchParams.keys()) if (isSecretName(key)) return true;
-    return url.pathname
-      .split("/")
-      .some((seg) => TOKENISH_SEGMENT_RE.test(seg) && !UUID_RE.test(seg));
+    // `seg` wrapper is load-bearing: `.some(isTokenishSegment)` would pass the
+    // segment's index as `looseSlug`, loosening every segment past index 0.
+    return url.pathname.split("/").some((seg) => isTokenishSegment(seg));
   } catch {
     return false;
   }
 }
 
 /** The credential fragments inside a credential-carrying URL. */
-function credentialPartsOfUrl(raw: string): string[] {
+function credentialPartsOfUrl(raw: string, looseLastSegment = false): string[] {
   const parts: string[] = [];
   try {
     const url = new URL(raw);
     if (url.username && url.username.length >= 8) parts.push(decodeURIComponent(url.username));
     if (url.password && url.password.length >= 8) parts.push(decodeURIComponent(url.password));
     for (const [key, param] of url.searchParams) {
-      if (isSecretName(key) && param.length >= 8) parts.push(param);
+      // `sig`/`signature` are not secret names generally, but on a webhook
+      // URL they carry the shared-secret signature — collect them so a bare
+      // echo of the value is caught too.
+      const credentialParam = isSecretName(key) || (looseLastSegment && /^(?:sig|signature)$/i.test(key));
+      if (credentialParam && param.length >= 8) parts.push(param);
     }
-    for (const seg of url.pathname.split("/")) {
-      if (TOKENISH_SEGMENT_RE.test(seg) && !UUID_RE.test(seg)) parts.push(seg);
+    const segments = url.pathname.split("/");
+    for (let i = 0; i < segments.length; i++) {
+      if (isTokenishSegment(segments[i], looseLastSegment && i === segments.length - 1)) {
+        parts.push(segments[i]);
+      }
     }
   } catch {
     // malformed — nothing to extract
@@ -163,20 +197,24 @@ export function knownKeysFromEnv(env: NodeJS.ProcessEnv = process.env): string[]
     }
     // A URL is normally a location, not a secret — even a secret-named one
     // (`OAUTH_TOKEN_URL=https://oauth2.googleapis.com/token` is the token
-    // ENDPOINT, not the token). Collect it verbatim only when it carries
-    // credential material: userinfo, a secret-named query parameter, or a
-    // token-like path segment (`hooks.slack.com/services/T…/B…/<token>`).
+    // ENDPOINT, not the token). A WEBHOOK-named URL is always collected
+    // verbatim: possessing the URL is the credential. Other secret-named
+    // URLs collect only when they carry credential material: userinfo, a
+    // secret-named query parameter, or a token-like path segment
+    // (`hooks.slack.com/services/T…/B…/<token>`).
+    const isWebhookNamed = /WEBHOOK/i.test(name);
     if (
       value.length >= 8 &&
       /^[a-z][a-z0-9+.-]*:\/\//i.test(value) &&
       !PUBLIC_NAME_RE.test(name) &&
-      (credentialNamed || /WEBHOOK/i.test(name)) &&
-      urlCarriesCredential(value)
+      (isWebhookNamed || (credentialNamed && urlCarriesCredential(value)))
     ) {
       keys.push(value);
       // The credential fragment on its own is also a known secret — a bare
-      // `echo <token>` would not match the whole URL.
-      for (const part of credentialPartsOfUrl(value)) keys.push(part);
+      // `echo <token>` would not match the whole URL. A webhook URL's last
+      // segment is the token even when slug-shaped, so it gets the looser
+      // mixed-case-or-digit rule.
+      for (const part of credentialPartsOfUrl(value, isWebhookNamed)) keys.push(part);
     }
     // DSNs carry their credential inline: postgres://user:pass@host, or a
     // bare userinfo credential like a Sentry DSN key (https://<key>@host).

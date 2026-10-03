@@ -280,10 +280,13 @@ describe("createSecretStreamRedactor", () => {
 
   it("keeps holding the tail at the hard cap so a straddling secret survives", () => {
     // The cap emits `len - keepTail`, not the whole buffer — a secret right
-    // at that boundary stays in the held tail and is redacted on flush.
+    // at that boundary stays in the held tail and is redacted on flush. The
+    // `API_KEY=` needs a real word boundary before it: inside an unbroken
+    // >128-char identifier run it is not a label (the name match is
+    // deliberately bounded).
     const secret = "hunter2pass";
     const stream = createSecretStreamRedactor([]);
-    const out = stream.push("a".repeat(1024 * 1024) + `API_KEY=${secret}`);
+    const out = stream.push("a".repeat(1024 * 1024) + ` API_KEY=${secret}`);
     expect(out).not.toContain(secret);
     const flushed = stream.flush();
     expect(out + flushed).not.toContain(secret);
