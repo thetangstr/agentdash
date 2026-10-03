@@ -229,11 +229,27 @@ import type { ActivityAcceptance } from '../services/activity-log.js';
  * otherwise a direct PATCH would bring Accept back for a revision the
  * reviewer never saw.
  */
+// AgentDash (review #1003, round 2): a deliverable that has been through
+// review — sent back (changes_requested), accepted (approved/merged), or
+// carrying the server's review stamps — may not have its status or
+// reviewState touched by an agent at all. Otherwise a two-step PATCH
+// (changes_requested → active → ready_for_review) walks around the
+// back-to-review refusal and revives Accept without a new revision.
+const REVIEWED_WORK_PRODUCT_STATUSES = new Set(["changes_requested", "approved", "merged"]);
+const REVIEWED_METADATA_KEYS = ["changesRequestedAt", "acceptance"] as const;
+
+function workProductWasReviewed(existingStatus?: string, existingMetadata?: unknown): boolean {
+  if (existingStatus !== undefined && REVIEWED_WORK_PRODUCT_STATUSES.has(existingStatus)) return true;
+  if (!existingMetadata || typeof existingMetadata !== "object" || Array.isArray(existingMetadata)) return false;
+  return REVIEWED_METADATA_KEYS.some((key) => key in (existingMetadata as Record<string, unknown>));
+}
+
 export function workProductSelfAcceptanceRefusal(
   actor: { type?: string | null; source?: string | null },
   body: { status?: unknown; reviewState?: unknown; type?: unknown },
   existingType?: string,
   existingStatus?: string,
+  existingMetadata?: unknown,
 ): string | null {
   const notAPerson = actor.type === "agent" || actor.source === "assistant_grant";
   if (!notAPerson) return null;
@@ -244,12 +260,11 @@ export function workProductSelfAcceptanceRefusal(
   if (status === "approved" || status === "merged" || body.reviewState === "approved") {
     return "Only a person can accept work. A board user accepts it from the issue.";
   }
-  const backToReview = status === "ready_for_review" || body.reviewState === "needs_board_review";
-  // "Back to review" means the deliverable already went through review — a
-  // sent-back or accepted one. A fresh or still-active product is only being
-  // submitted, which the create/submit paths legitimately do.
-  if (backToReview && (existingStatus === "changes_requested" || existingStatus === "approved" || existingStatus === "merged")) {
-    return "Only the server sends a deliverable back to review: write the revised document revision, then move the issue to in_review.";
+  if (
+    (body.status !== undefined || body.reviewState !== undefined)
+    && workProductWasReviewed(existingStatus, existingMetadata)
+  ) {
+    return "Only the server changes a reviewed deliverable's status: write the revised document revision, then move the issue to in_review.";
   }
   return null;
 }
@@ -1505,13 +1520,14 @@ export function issueRoutes(
     req: Request,
     res: Response,
     body: { status?: unknown; reviewState?: unknown; type?: unknown },
-    existing?: { type: string; status: string },
+    existing?: { type: string; status: string; metadata?: unknown },
   ): boolean {
     const error = workProductSelfAcceptanceRefusal(
       { type: req.actor.type, source: req.actor.source },
       body,
       existing?.type,
       existing?.status,
+      existing?.metadata,
     );
     if (!error) return false;
     res.status(403).json({ error, code: "work_product_self_acceptance" });
@@ -1532,10 +1548,10 @@ export function issueRoutes(
     "reviewReopenedAt",
     "reviewReopenReason",
   ] as const;
-  // AgentDash (review #1003): once a deliverable is sent back or accepted, the
-  // document it binds to is server-owned too — otherwise an agent could drop
-  // or rewrite documentKey and the revision baseline check would be skipped.
-  const DOCUMENT_KEY_LOCKED_STATUSES = new Set(["changes_requested", "approved", "merged"]);
+  // AgentDash (review #1003): once a deliverable is submitted for review, the
+  // document it binds to is server-owned — otherwise an agent could drop or
+  // rewrite documentKey and the revision baseline check would be skipped.
+  const DOCUMENT_KEY_LOCKED_STATUSES = new Set(["ready_for_review", "changes_requested", "approved", "merged"]);
   function protectServerOwnedMetadata<T extends object>(
     req: Request,
     body: T,

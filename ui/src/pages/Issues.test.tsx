@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Issue } from "@paperclipai/shared";
-import { buildIssuesSearchUrl, getNextIssuesPageOffset, mergeIssuePagesStable } from "./Issues";
+import { ApiError } from "../api/client";
+import { buildIssuesSearchUrl, getNextIssuesPageOffset, issueUpdateErrorToast, mergeIssuePagesStable } from "./Issues";
 
 function createIssue(id: string, title: string): Issue {
   return { id, title } as Issue;
@@ -43,5 +44,42 @@ describe("issues page pagination helpers", () => {
       second,
       third,
     ]);
+  });
+});
+
+// AgentDash (review #1003, round 2): a failed issue update on the list/board
+// must surface the server's message — and a document_revision_required refusal
+// links to the issue page, where the documents can be read before accepting.
+describe("issueUpdateErrorToast", () => {
+  it("links a document_revision_required refusal to the issue detail page", () => {
+    const err = new ApiError(
+      "The document changed after the revision you saw — open the issue to review the latest.",
+      409,
+      { error: "conflict", details: { code: "document_revision_required" } },
+    );
+    expect(issueUpdateErrorToast(err, "issue-uuid-1")).toEqual({
+      title: "Issue update failed",
+      body: "The document changed after the revision you saw — open the issue to review the latest.",
+      tone: "error",
+      action: { label: "Open the issue", href: "/issues/issue-uuid-1" },
+    });
+  });
+
+  it("shows the server message with no link for other conflicts", () => {
+    const err = new ApiError("Issue is checked out by another run", 409, {
+      error: "conflict",
+      details: { code: "document_revision_stale" },
+    });
+    expect(issueUpdateErrorToast(err, "issue-uuid-1")).toEqual({
+      title: "Issue update failed",
+      body: "Issue is checked out by another run",
+      tone: "error",
+    });
+  });
+
+  it("falls back for non-API errors", () => {
+    expect(issueUpdateErrorToast(new Error("network down"), "issue-uuid-1").body).toBe("network down");
+    expect(issueUpdateErrorToast("nope", "issue-uuid-1").body).toBe("Unable to save issue changes");
+    expect(issueUpdateErrorToast("nope", "issue-uuid-1")).not.toHaveProperty("action");
   });
 });

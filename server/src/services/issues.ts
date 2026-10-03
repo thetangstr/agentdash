@@ -45,7 +45,7 @@ import type {
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
 } from "@paperclipai/shared";
-import { clampIssueRequestDepth, extractAgentMentionIds, extractProjectMentionIds, isUuidLike } from "@paperclipai/shared";
+import { clampIssueRequestDepth, extractAgentMentionIds, extractProjectMentionIds, isUuidLike, ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS } from "@paperclipai/shared";
 import { HttpError, conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
@@ -645,14 +645,10 @@ function issueLastActivityAtExpr(companyId: string, userId: string) {
   `;
 }
 
-// AgentDash (batch 2 review lane): exported so the activity feed can hide the
-// same bookkeeping actions the "latest activity" computation already ignores.
-export const ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS = [
-  "issue.read_marked",
-  "issue.read_unmarked",
-  "issue.inbox_archived",
-  "issue.inbox_unarchived",
-] as const;
+// AgentDash (batch 2 review lane, review #1003): the list moved to
+// packages/shared so the server feed and the UI cannot drift apart; re-exported
+// here for existing importers.
+export { ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS };
 
 function issueLatestCommentAtExpr(companyId: string) {
   return sql<Date | null>`

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  activityLog,
   agents,
   agentRuntimeState,
   agentWakeupRequests,
@@ -11,6 +12,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
+  issueWorkProducts,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -44,6 +46,8 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
   afterEach(async () => {
     await db.delete(heartbeatRunEvents);
     await db.delete(environmentLeases);
+    await db.delete(issueWorkProducts);
+    await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
@@ -586,6 +590,106 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
       .where(eq(issues.id, issueId))
       .then((rows) => rows[0] ?? null);
     expect(issue?.executionRunId).toBeNull();
+  });
+
+  // AgentDash (review #1003, round 2): the stale-retry cancellation is a
+  // terminal write that bypasses setRunStatus — it must still fire the
+  // run-finish re-check so a sent-back deliverable deferred on that run
+  // returns to review once it is gone.
+  it("re-runs the sent-back deliverable re-check when a stale scheduled retry is cancelled", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const otherAgentId = randomUUID();
+    const issueId = randomUUID();
+    const sourceRunId = randomUUID();
+    const now = new Date("2026-04-20T15:00:00.000Z");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    for (const [id, name] of [[agentId, "CodexCoder"], [otherAgentId, "ClaudeCoder"]] as const) {
+      await db.insert(agents).values({
+        id,
+        companyId,
+        name,
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: { heartbeat: { wakeOnDemand: true, maxConcurrentRuns: 1 } },
+        permissions: {},
+      });
+    }
+
+    await db.insert(heartbeatRuns).values({
+      id: sourceRunId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      status: "failed",
+      error: "upstream overload",
+      errorCode: "adapter_failed",
+      finishedAt: now,
+      contextSnapshot: { issueId, wakeReason: "issue_assigned" },
+      updatedAt: now,
+      createdAt: now,
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Deferred resubmission on stale retry cancel",
+      status: "in_review",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      issueNumber: 1,
+      identifier: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}-3`,
+    });
+
+    // The deliverable sent back and deferred on the assignee's live run.
+    await db.insert(issueWorkProducts).values({
+      companyId,
+      issueId,
+      type: "document",
+      provider: "paperclip",
+      title: "Proposal",
+      status: "changes_requested",
+      reviewState: "changes_requested",
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(sourceRunId, {
+      now,
+      random: () => 0.5,
+    });
+    expect(scheduled.outcome).toBe("scheduled");
+    if (scheduled.outcome !== "scheduled") return;
+
+    // The retry goes stale because the issue moved to a different assignee.
+    await db.update(issues).set({ assigneeAgentId: otherAgentId, updatedAt: now }).where(eq(issues.id, issueId));
+
+    const promotion = await heartbeat.promoteDueScheduledRetries(scheduled.dueAt);
+    expect(promotion).toEqual({ promoted: 0, runIds: [] });
+
+    const [staleRun] = await db
+      .select({ status: heartbeatRuns.status, errorCode: heartbeatRuns.errorCode })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, scheduled.run.id));
+    expect(staleRun).toEqual({ status: "cancelled", errorCode: "issue_reassigned" });
+
+    // The fire-and-forget re-check lands after the cancellation commits: the
+    // sent-back deliverable flips to review with no live assignee run left.
+    await vi.waitFor(async () => {
+      const [product] = await db
+        .select({ status: issueWorkProducts.status })
+        .from(issueWorkProducts)
+        .where(eq(issueWorkProducts.issueId, issueId));
+      expect(product?.status).toBe("ready_for_review");
+    });
   });
 
   it("exhausts bounded retries after the hard cap", async () => {

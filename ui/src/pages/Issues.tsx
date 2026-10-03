@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import { useLocation, useSearchParams } from "@/lib/router";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ApiError } from "../api/client";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
@@ -9,7 +10,8 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
 import { queryKeys } from "../lib/queryKeys";
-import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
+import { useToastActions } from "../context/ToastContext";
+import { createIssueDetailLocationState, createIssueDetailPath } from "../lib/issueDetailBreadcrumb";
 import { EmptyState } from "../components/EmptyState";
 import { IssuesList } from "../components/IssuesList";
 import {
@@ -61,12 +63,31 @@ export function buildIssuesSearchUrl(currentHref: string, search: string): strin
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
+/** AgentDash (review #1003, round 2): the toast a failed issue update shows
+ * on the list/board. A document_revision_required refusal links to the issue
+ * page, where the documents can actually be read before accepting. */
+export function issueUpdateErrorToast(err: unknown, issueId: string) {
+  const code =
+    err instanceof ApiError
+      ? (err.body as { details?: { code?: unknown } } | null | undefined)?.details?.code
+      : undefined;
+  return {
+    title: "Issue update failed",
+    body: err instanceof Error ? err.message : "Unable to save issue changes",
+    tone: "error" as const,
+    ...(code === "document_revision_required"
+      ? { action: { label: "Open the issue", href: createIssueDetailPath(issueId) } }
+      : {}),
+  };
+}
+
 export function Issues() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const { pushToast } = useToastActions();
   const fetchNextPageInFlightRef = useRef(false);
 
   const urlSearch = searchParams.get("q") ?? "";
@@ -184,6 +205,9 @@ export function Issues() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId!) });
     },
+    onError: (err, variables) => {
+      pushToast(issueUpdateErrorToast(err, variables.id));
+    },
   });
 
   if (!selectedCompanyId) {
@@ -216,9 +240,9 @@ export function Issues() {
           // deliverables — the server needs the document revisions the person
           // saw as the baseline. The list/board shows no documents, so only a
           // cached set (rendered on the issue page earlier) counts; with none,
-          // send no baseline and let the server refuse with
-          // document_revision_required, which sends the reviewer to the issue
-          // page to actually read the document.
+          // no baseline is sent and the server refuses with
+          // document_revision_required — the error toast then links to the
+          // issue page, where the documents can be read before accepting.
           const documents = data.status === "done"
             ? queryClient.getQueryData<Awaited<ReturnType<typeof issuesApi.listDocuments>>>(queryKeys.issues.documents(id))
             : undefined;

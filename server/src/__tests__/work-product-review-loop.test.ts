@@ -200,6 +200,21 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { reviewState: 'needs_board_review' }, undefined, 'approved')).not.toBeNull();
     expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'assistant_grant' }, { status: 'ready_for_review' }, undefined, 'changes_requested')).not.toBeNull();
     expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'session' }, { status: 'ready_for_review' }, undefined, 'changes_requested')).toBeNull();
+    // Review #1003 round 2: once a product was reviewed — a reviewed status,
+    // or changesRequestedAt / acceptance in metadata — EVERY agent status
+    // write is refused, so the two-step changes_requested → active →
+    // ready_for_review cannot walk around the back-to-review refusal.
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'active' }, undefined, 'changes_requested')).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'draft' }, undefined, 'approved')).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'assistant_grant' }, { status: 'active' }, undefined, 'merged')).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'active' }, undefined, 'active', { changesRequestedAt: '2026-10-03T00:00:00Z' })).not.toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'ready_for_review' }, undefined, 'active', { acceptance: { status: 'accepted' } })).not.toBeNull();
+    // Unreviewed work still moves freely, and a reviewed product may still be
+    // edited — just not re-staged by the agent.
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'active' }, undefined, 'active')).toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { status: 'ready_for_review' }, undefined, 'active', { note: 'unrelated' })).toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'agent' }, { summary: 'x' }, undefined, 'changes_requested')).toBeNull();
+    expect(workProductSelfAcceptanceRefusal({ type: 'board', source: 'session' }, { status: 'active' }, undefined, 'changes_requested')).toBeNull();
   });
 
   it('request changes: one server action posts the note, sends the issue back, marks waiting work, wakes the assignee', async () => {
@@ -353,13 +368,15 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     const [kept] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
     expect(kept!.metadata).toEqual({ changesRequestedAt: stamps.changesRequestedAt, resubmittedAt: stamps.resubmittedAt });
 
-    // Client values for those keys are dropped; its own keys are kept.
+    // Client values for those keys are dropped; its own keys are kept. The
+    // resubmitted product is ready_for_review, so documentKey is locked too —
+    // the forged binding never lands (review #1003, round 2).
     const forged = { previousReviewState: 'approved', previousStatus: 'ready_for_review', reason: 'issue_accepted' };
     expect((await call('PATCH', `/work-products/${product!.id}`, f.agentToken, {
       metadata: { acceptance: forged, changesRequestedAt: null, documentKey: 'proposal' },
     }, f.run.id)).status).toBe(200);
     const [afterForge] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
-    expect(afterForge!.metadata).toEqual({ documentKey: 'proposal', changesRequestedAt: stamps.changesRequestedAt, resubmittedAt: stamps.resubmittedAt });
+    expect(afterForge!.metadata).toEqual({ changesRequestedAt: stamps.changesRequestedAt, resubmittedAt: stamps.resubmittedAt });
 
     // Nor on create.
     const created = await call('POST', `/issues/${f.issue.id}/work-products`, f.agentToken, {
@@ -639,6 +656,60 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
       documentKey: 'proposal', changesRequestedAtRevision: 1, changesRequestedAt: expect.any(String),
     }));
     expect((row!.metadata as Record<string, unknown>).reviewReopenReason).toBeUndefined();
+  });
+
+  // AgentDash (review #1003, round 2 finding 1): the exact bypass the second
+  // review caught — a back-to-review-only refusal is walked around in two
+  // steps (changes_requested → active → ready_for_review), then a
+  // documentKey rewrite unbinds the deliverable and Accept revives for the
+  // revision already rejected. Every step must now fail.
+  it('the two-step self-resubmit bypass is refused at every step', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'in_review', checkoutRunId: null, executionRunId: null }).where(eq(issues.id, f.issue.id));
+    expect((await writeDocumentRevision(f, '# rev 1')).status).toBe(201);
+    const product = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'ready_for_review', reviewState: 'needs_board_review',
+      metadata: { documentKey: 'proposal' },
+    });
+    expect((await call('POST', `/issues/${f.issue.id}/request-changes`, f.boardToken, { note: 'Add Kyoto.' })).status).toBe(200);
+    const [sentBack] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(sentBack).toMatchObject({ status: 'changes_requested', reviewState: 'changes_requested' });
+
+    // Step 1: escape the reviewed status.
+    const step1 = await call('PATCH', `/work-products/${product!.id}`, f.agentToken, { status: 'active' }, f.run.id);
+    expect(step1.status).toBe(403);
+    // Step 2: (would-be) resubmit. Refused outright — the status never left
+    // changes_requested — and it stays refused even from the same status.
+    const step2 = await call('PATCH', `/work-products/${product!.id}`, f.agentToken, { status: 'ready_for_review' }, f.run.id);
+    expect(step2.status).toBe(403);
+    // Step 3: rebind the deliverable to a different document. The write goes
+    // through but the locked key is carried over unchanged.
+    const step3 = await call('PATCH', `/work-products/${product!.id}`, f.agentToken, { metadata: { documentKey: 'nope' } }, f.run.id);
+    expect(step3.status).toBe(200);
+
+    const [after] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(after).toMatchObject({ status: 'changes_requested', reviewState: 'changes_requested' });
+    expect((after!.metadata as Record<string, unknown>).documentKey).toBe('proposal');
+
+    // Nothing was revived: closing the issue must not accept the still
+    // sent-back deliverable behind anyone's back.
+    await call('PATCH', `/issues/${f.issue.id}`, f.boardToken, { status: 'done' });
+    const [final] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, product!.id));
+    expect(final).toMatchObject({ status: 'changes_requested', reviewState: 'changes_requested' });
+    expect((final!.metadata as Record<string, unknown>).acceptance).toBeUndefined();
+  });
+
+  // AgentDash (review #1003, round 2): review metadata marks a product as
+  // reviewed even when its status does not — a status write is refused on it
+  // too, so history cannot be laundered through a non-reviewed-looking row.
+  it('a product carrying review metadata counts as reviewed even in an unreviewed status', async () => {
+    const f = await fixture();
+    const product = await workProductService(db).createForIssue(f.issue.id, f.company.id, {
+      type: 'document', provider: 'paperclip', title: 'Proposal', status: 'active', reviewState: 'none',
+      metadata: { documentKey: 'proposal', changesRequestedAt: new Date().toISOString(), changesRequestedAtRevision: 1 },
+    });
+    const res = await call('PATCH', `/work-products/${product!.id}`, f.agentToken, { status: 'ready_for_review' }, f.run.id);
+    expect(res.status).toBe(403);
   });
 
   // AgentDash (review #1003, finding 3): a missing baseline is not a stale

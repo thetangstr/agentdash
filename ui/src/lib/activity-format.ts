@@ -1,4 +1,5 @@
 import type { Agent } from "@paperclipai/shared";
+import { HIDDEN_FEED_ACTIVITY_ACTIONS, IMPORTANT_SYSTEM_ACTIVITY_ACTIONS } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "./company-members";
 import { issueStatusLabel } from "./issue-status-label";
 
@@ -28,45 +29,15 @@ interface ActivityFormatOptions {
  * passed" filled the feed, attributed to whichever agent or person triggered
  * them (the preflight one read as the CEO's own action). They are hidden from
  * the default feeds and, when shown, are relabelled and attributed to System.
+ * The list lives in packages/shared so this and the server feed stay in step.
  */
-const SYSTEM_PLUMBING_ACTIONS = new Set([
-  "environment.lease_acquired",
-  "environment.lease_released",
-  "environment.probed",
-  "environment.probed_unsaved",
-  "agent.harness_preflight_passed",
-  // AgentDash (batch 2 review lane): read markers and review-queue churn are
-  // bookkeeping, not work a person needs to read about — hidden until "Show
-  // system events" is on.
-  "issue.read_marked",
-  "issue.read_unmarked",
-  "issue.inbox_archived",
-  "issue.inbox_unarchived",
-  "queue_state_changed",
-]);
+const SYSTEM_PLUMBING_ACTIONS = new Set<string>(HIDDEN_FEED_ACTIVITY_ACTIONS);
 
 export function isSystemPlumbingActivity(action: string): boolean {
   return SYSTEM_PLUMBING_ACTIONS.has(action);
 }
 
-/**
- * AgentDash (review #1003): system-actor events an owner DOES need to see —
- * budget hard-stops, ceiling pauses, failed recovery, escalations and failed
- * hire hooks. Home hides system-actor plumbing but whitelists these.
- */
-export const IMPORTANT_SYSTEM_ACTIVITY_ACTIONS = new Set([
-  "budget.hard_threshold_crossed",
-  "agent.token_ceiling_paused",
-  "agent.paused",
-  "issue.recovery_budget_exhausted",
-  "heartbeat.recovery_budget_refusal",
-  "issue.task_recovery_permit_denied",
-  "heartbeat.output_stale_escalated",
-  "issue.harness_liveness_escalation_created",
-  "agent_fact.escalated",
-  "hire_hook.failed",
-  "hire_hook.error",
-]);
+export { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS };
 
 const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "environment.lease_acquired": "prepared a workspace for a run",

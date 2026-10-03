@@ -3344,13 +3344,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // deliverable deferred at resubmission because this run was still live
       // re-evaluates once it goes terminal. Post-commit by construction:
       // deferred publishes run this after the caller's commit lands.
-      if (isHeartbeatRunTerminalStatus(updated.status)) {
-        const context = (updated.contextSnapshot ?? null) as Record<string, unknown> | null;
-        if (typeof context?.issueId === "string" || typeof context?.taskId === "string") {
-          void resubmitSentBackDeliverablesAfterRunFinished(db, updated)
-            .catch((err) => logger.warn({ err, runId: updated.id }, "post-run resubmission re-check failed"));
-        }
-      }
+      recheckIssueReviewAfterRunFinished(updated);
+    }
+  }
+
+  // AgentDash (review #1003, round 2): the run-finish re-check, shared by
+  // publishRunStatusChange and the terminal writes that legitimately bypass it
+  // (stale scheduled-retry and workspace-recovery cancellations). Callers
+  // running inside a transaction must invoke it only after their commit lands.
+  function recheckIssueReviewAfterRunFinished(run: typeof heartbeatRuns.$inferSelect) {
+    if (!isHeartbeatRunTerminalStatus(run.status)) return;
+    const context = (run.contextSnapshot ?? null) as Record<string, unknown> | null;
+    if (typeof context?.issueId === "string" || typeof context?.taskId === "string") {
+      void resubmitSentBackDeliverablesAfterRunFinished(db, run)
+        .catch((err) => logger.warn({ err, runId: run.id }, "post-run resubmission re-check failed"));
     }
   }
 
@@ -4682,6 +4689,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
           if (!cancelled) continue;
 
+          // AgentDash (review #1003, round 2): this terminal write bypasses
+          // setRunStatus, so run the run-finish resubmission re-check directly.
+          recheckIssueReviewAfterRunFinished(cancelled);
+
           if (cancelled.wakeupRequestId) {
             await db
               .update(agentWakeupRequests)
@@ -4986,14 +4997,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   async function cancelQueuedRunForWorkspaceRecovery(run: typeof heartbeatRuns.$inferSelect) {
+    // AgentDash (review #1003, round 2): the run-finish re-check must fire only
+    // after this transaction commits, so the cancelled row is captured and the
+    // re-check runs once db.transaction resolves.
+    let cancelledRun: typeof heartbeatRuns.$inferSelect | null = null;
     await db.transaction(async tx => {
       await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, run.companyId)).for("no key update");
       await tx.update(issues).set({ executionRunId: null, executionAgentNameKey: null, executionLockedAt: null })
         .where(and(eq(issues.companyId, run.companyId), eq(issues.executionRunId, run.id)));
-      await tx.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date(), error: "Workspace recovery required", errorCode: WORKSPACE_PERSISTENCE_RECOVERY_CODE })
-        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")));
+      cancelledRun = await tx.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date(), error: "Workspace recovery required", errorCode: WORKSPACE_PERSISTENCE_RECOVERY_CODE })
+        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
+        .returning()
+        .then((rows) => rows[0] ?? null);
       if (run.wakeupRequestId) await tx.update(agentWakeupRequests).set({ status: "skipped", finishedAt: new Date(), error: "Workspace recovery required" }).where(eq(agentWakeupRequests.id, run.wakeupRequestId));
     });
+    if (cancelledRun) recheckIssueReviewAfterRunFinished(cancelledRun);
   }
 
   // AgentDash (GH #891): a permit-bound run that an earlier start check
@@ -8695,6 +8713,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // same issue workspace while the assignee already has a live run.
       const agentNameKey = normalizeAgentNameKey(agent.name);
 
+      // AgentDash (review #1003, round 2): stale scheduled-retry cancellations
+      // inside this transaction bypass setRunStatus; the run-finish
+      // resubmission re-check runs for each after the commit lands.
+      const staleRetryCancellations: Array<typeof heartbeatRuns.$inferSelect> = [];
+
       const outcome = await db.transaction(async (tx) => {
         await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, agent.companyId)).for("no key update");
         if (await workspacePersistenceHold(tx, agent.companyId, agentId, issueId)) return { kind: "skipped" as const };
@@ -8833,6 +8856,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             },
           });
 
+          staleRetryCancellations.push(cancelled);
           return true;
         };
 
@@ -9123,6 +9147,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
         return { kind: "queued" as const, run: newRun };
       });
+
+      for (const staleCancelled of staleRetryCancellations) {
+        recheckIssueReviewAfterRunFinished(staleCancelled);
+      }
 
       if (outcome.kind === "tree_hold") {
         await writeSkippedRequest("issue_tree_hold_active");

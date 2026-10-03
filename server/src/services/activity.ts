@@ -15,7 +15,7 @@ import {
   workspaceOperations,
 } from "@paperclipai/db";
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
-import { ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS } from "./issues.js";
+import { ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS, HIDDEN_FEED_ACTIVITY_ACTIONS } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { classifyRunLiveness } from "./run-liveness.js";
 import { redactRunLogValue } from "./run-log-redaction.js";
@@ -53,7 +53,8 @@ const DEFAULT_ISSUE_RUNS_LIMIT = 100;
 const MAX_ISSUE_RUNS_LIMIT = 500;
 
 // AgentDash (batch 2 review lane): bookkeeping actions hidden from issue
-// feeds by default — local inbox/read markers plus review-queue churn.
+// feeds by default — local inbox/read markers plus review-queue churn. The
+// lists live in packages/shared so the feed and the UI cannot drift apart.
 const ISSUE_FEED_HIDDEN_ACTIONS = [
   ...ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
   "queue_state_changed",
@@ -62,14 +63,7 @@ const ISSUE_FEED_HIDDEN_ACTIONS = [
 // AgentDash (review #1003): the company feed's "Show system events" off state
 // hides the same bookkeeping plus workspace/env machinery, and every
 // system-actor row, filtered in SQL so the limit applies to visible rows.
-const COMPANY_FEED_HIDDEN_ACTIONS = [
-  ...ISSUE_FEED_HIDDEN_ACTIONS,
-  "environment.lease_acquired",
-  "environment.lease_released",
-  "environment.probed",
-  "environment.probed_unsaved",
-  "agent.harness_preflight_passed",
-];
+const COMPANY_FEED_HIDDEN_ACTIONS = [...HIDDEN_FEED_ACTIVITY_ACTIONS];
 
 export function normalizeActivityLimit(limit: number | undefined) {
   if (!Number.isFinite(limit)) return DEFAULT_ACTIVITY_LIMIT;
