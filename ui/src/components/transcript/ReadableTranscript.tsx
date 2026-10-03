@@ -179,7 +179,7 @@ export function ReadableToolRow({
     else setLocalOpen(next);
   };
   const compact = density === "compact";
-  const outcome = summarizeToolOutcome(item.result, item.status);
+  const outcome = summarizeToolOutcome(item.result, item.status, item.input);
 
   return (
     <div data-readable-tool={item.status} className="min-w-0">

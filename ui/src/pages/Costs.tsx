@@ -56,7 +56,7 @@ function ProviderTabLabel({ provider, rows }: { provider: string; rows: CostByPr
     <span className="flex items-center gap-1.5">
       <span>{providerDisplayName(provider)}</span>
       <span className="font-mono text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE}>{formatTokens(totalTokens)}</span>
-      <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span>
+      {totalCost > 0 ? <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span> : null}
     </span>
   );
 }
@@ -68,7 +68,7 @@ function BillerTabLabel({ biller, rows }: { biller: string; rows: CostByBiller[]
     <span className="flex items-center gap-1.5">
       <span>{providerDisplayName(biller)}</span>
       <span className="font-mono text-xs text-muted-foreground" title={TOKENS_COUNTED_NOTE}>{formatTokens(totalTokens)}</span>
-      <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span>
+      {totalCost > 0 ? <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span> : null}
     </span>
   );
 }
@@ -565,7 +565,7 @@ export function Costs() {
             {providerKeys.length > 0 ? (
               <>
                 <span className="font-mono text-xs text-muted-foreground">{formatTokens(allTokens)}</span>
-                <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span>
+                {allCents > 0 ? <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span> : null}
               </>
             ) : null}
           </span>
@@ -597,7 +597,7 @@ export function Costs() {
             {billerKeys.length > 0 ? (
               <>
                 <span className="font-mono text-xs text-muted-foreground">{formatTokens(allTokens)}</span>
-                <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span>
+                {allCents > 0 ? <span className="text-xs text-muted-foreground">{formatCents(allCents)}</span> : null}
               </>
             ) : null}
           </span>
@@ -1278,13 +1278,19 @@ export function Costs() {
                                       </div>
                                       <div className="text-right tabular-nums">
                                         <div className="font-medium">
-                                          {formatCents(modelRow.costCents)}
-                                          <span className="ml-1 font-normal text-muted-foreground">({sharePct}%)</span>
+                                          {modelRow.costCents > 0 ? formatCents(modelRow.costCents) : formatCountedTokens(countedTokens(modelRow))}
+                                          {modelRow.costCents > 0 ? (
+                                            <span className="ml-1 font-normal text-muted-foreground">({sharePct}%)</span>
+                                          ) : null}
                                         </div>
-                                        <div className="text-muted-foreground" title={TOKENS_COUNTED_NOTE}>
-                                          {formatTokens(countedTokens(modelRow))} tok
-                                          {modelRow.cachedInputTokens > 0 ? ` · ${formatTokens(modelRow.cachedInputTokens)} cached` : ""}
-                                        </div>
+                                        {modelRow.costCents > 0 || modelRow.cachedInputTokens > 0 ? (
+                                          <div className="text-muted-foreground" title={TOKENS_COUNTED_NOTE}>
+                                            {[
+                                              modelRow.costCents > 0 ? `${formatTokens(countedTokens(modelRow))} tok` : null,
+                                              modelRow.cachedInputTokens > 0 ? `${formatTokens(modelRow.cachedInputTokens)} cached` : null,
+                                            ].filter(Boolean).join(" · ")}
+                                          </div>
+                                        ) : null}
                                       </div>
                                     </div>
                                   );

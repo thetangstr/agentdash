@@ -3,7 +3,7 @@ import type { CostByBiller, CostByProviderModel } from "@paperclipai/shared";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { QuotaBar } from "./QuotaBar";
 import { billingTypeDisplayName, formatCents, formatTokens, providerDisplayName } from "@/lib/utils";
-import { TOKENS_COUNTED_NOTE } from "../lib/token-figures";
+import { TOKENS_COUNTED_NOTE, formatCountedTokens } from "../lib/token-figures";
 
 interface BillerSpendCardProps {
   row: CostByBiller;
@@ -40,11 +40,14 @@ export function BillerSpendCard({
   }, [providerRows]);
 
   const billingTypeBreakdown = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { costCents: number; tokens: number }>();
     for (const entry of providerRows) {
-      map.set(entry.billingType, (map.get(entry.billingType) ?? 0) + entry.costCents);
+      const current = map.get(entry.billingType) ?? { costCents: 0, tokens: 0 };
+      current.costCents += entry.costCents;
+      current.tokens += entry.inputTokens + entry.outputTokens;
+      map.set(entry.billingType, current);
     }
-    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+    return Array.from(map.entries()).sort((a, b) => b[1].costCents - a[1].costCents);
   }, [providerRows]);
 
   const providerBudgetShare =
@@ -81,13 +84,15 @@ export function BillerSpendCard({
             </CardDescription>
           </div>
           <span className="text-xl font-bold tabular-nums shrink-0">
-            {formatCents(row.costCents)}
+            {row.costCents > 0
+              ? formatCents(row.costCents)
+              : formatCountedTokens(row.inputTokens + row.outputTokens)}
           </span>
         </div>
       </CardHeader>
 
       <CardContent className="px-4 pb-4 pt-3 space-y-4">
-        {budgetMonthlyCents > 0 && (
+        {budgetMonthlyCents > 0 && row.costCents > 0 && (
           <QuotaBar
             label="Period spend"
             percentUsed={budgetPct}
@@ -114,10 +119,12 @@ export function BillerSpendCard({
                 Billing types
               </p>
               <div className="space-y-1.5">
-                {billingTypeBreakdown.map(([billingType, costCents]) => (
+                {billingTypeBreakdown.map(([billingType, bucket]) => (
                   <div key={billingType} className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-muted-foreground">{billingTypeDisplayName(billingType as any)}</span>
-                    <span className="font-medium tabular-nums">{formatCents(costCents)}</span>
+                    <span className="font-medium tabular-nums">
+                      {bucket.costCents > 0 ? formatCents(bucket.costCents) : formatCountedTokens(bucket.tokens)}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -137,10 +144,16 @@ export function BillerSpendCard({
                   <div key={entry.provider} className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-muted-foreground">{providerDisplayName(entry.provider)}</span>
                     <div className="text-right tabular-nums">
-                      <div className="font-medium">{formatCents(entry.costCents)}</div>
-                      <div className="text-muted-foreground">
-                        {formatTokens(entry.inputTokens + entry.outputTokens)} tok
+                      <div className="font-medium">
+                        {entry.costCents > 0
+                          ? formatCents(entry.costCents)
+                          : formatCountedTokens(entry.inputTokens + entry.outputTokens)}
                       </div>
+                      {entry.costCents > 0 ? (
+                        <div className="text-muted-foreground">
+                          {formatTokens(entry.inputTokens + entry.outputTokens)} tok
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ))}

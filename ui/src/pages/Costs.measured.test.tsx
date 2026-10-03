@@ -82,7 +82,7 @@ function setup(measured: boolean, budgetCents: number, pricedSpend = measured) {
   });
   mockCostsApi.byAgent.mockResolvedValue(
     measured
-      ? [{ agentId: "a1", agentName: "CoS", costCents: pricedSpend ? 12_345 : 0, inputTokens: 900, cachedInputTokens: 0, outputTokens: 100 }]
+      ? [{ agentId: "a1", agentName: "CoS", costCents: pricedSpend ? 12_345 : 0, inputTokens: 900, cachedInputTokens: 50_000, outputTokens: 100 }]
       : [],
   );
   mockCostsApi.byProject.mockResolvedValue([]);
@@ -264,8 +264,11 @@ describe("Costs on a BYOK workspace (usage recorded, never priced)", () => {
     const region = inferenceRegion();
     expect(region).not.toMatch(/\$0\.00/);
     expect(region).toContain("Billed by your model provider");
-    // 900 in + 100 out — cached reads never inflate the display figure.
+    // 900 in + 100 out — the fixture's 50k cached reads stay out of every
+    // display total and appear only under their own label.
     expect(region).toContain("1.0k");
+    expect(region).not.toContain("50.0k");
+    expect(container.textContent).toContain("50.0k cached reads");
   });
 
   it("does not report budget consumption it cannot price", async () => {

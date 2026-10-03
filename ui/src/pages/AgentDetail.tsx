@@ -2077,7 +2077,8 @@ export function TokenCeilingStatusLine({
 
 /* ---- Costs Section (inline) ---- */
 
-function CostsSection({
+// Exported for focused render tests (ui/src/pages/AgentDetail.test.tsx).
+export function CostsSection({
   runtimeState,
   runs,
 }: {

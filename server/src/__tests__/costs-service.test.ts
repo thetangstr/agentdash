@@ -746,6 +746,108 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     });
   });
 
+  it("reports measured-but-unpriced when cost events carry tokens but no billed cents", async () => {
+    // AgentDash (batch 2): BYOK/subscription workspaces record usage that is
+    // never priced here. `measured` without `pricedSpend` is what lets the UI
+    // show tokens + "Billed by your model provider" instead of $0.00.
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "BYOK Co",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Cost Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(costEvents).values({
+      companyId,
+      agentId,
+      provider: "anthropic",
+      biller: "user_provided_key",
+      billingType: "user_provided_key",
+      model: "claude-opus-4-7",
+      inputTokens: 36_100,
+      cachedInputTokens: 50_000,
+      outputTokens: 1_200,
+      costCents: 0,
+      occurredAt: new Date("2026-04-10T00:00:00.000Z"),
+    });
+
+    const summary = await costs.summary(companyId);
+
+    expect(summary.measured).toBe(true);
+    expect(summary.pricedSpend).toBe(false);
+    expect(summary.spendCents).toBe(0);
+  });
+
+  it("reports pricedSpend once any event has a billed amount", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Mixed Co",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Cost Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(costEvents).values([
+      {
+        companyId,
+        agentId,
+        provider: "anthropic",
+        biller: "user_provided_key",
+        billingType: "user_provided_key",
+        model: "claude-opus-4-7",
+        inputTokens: 36_100,
+        cachedInputTokens: 0,
+        outputTokens: 1_200,
+        costCents: 0,
+        occurredAt: new Date("2026-04-10T00:00:00.000Z"),
+      },
+      {
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 50,
+        costCents: 42,
+        occurredAt: new Date("2026-04-10T00:01:00.000Z"),
+      },
+    ]);
+
+    const summary = await costs.summary(companyId);
+
+    expect(summary.measured).toBe(true);
+    expect(summary.pricedSpend).toBe(true);
+    expect(summary.spendCents).toBe(42);
+  });
+
   it("byIssue attributes cost events to their recorded issue_id — aligned with Shipped usage", async () => {
     const companyId = randomUUID();
     const otherCompanyId = randomUUID();

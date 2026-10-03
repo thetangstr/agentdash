@@ -142,6 +142,23 @@ describe("AgentDash-MK prompt surface synchronization", () => {
     }
   });
 
+  // AgentDash (batch 2): the reviewer mandate is a specialist surface, so it
+  // sits outside renderedPromptSurfaces — but its plain-language block carries
+  // the same rules, phrased for justifications.
+  it("carries the strengthened plain-language rules in the reviewer mandate", () => {
+    const reviewer = readFileSync(
+      path.join(serverSrc, "onboarding-assets/reviewer/AGENTS.md"),
+      "utf8",
+    );
+    expect(reviewer).toContain("<!-- AgentDash: plain-language-summaries");
+    expect(reviewer).toContain("<!-- /AgentDash: plain-language-summaries -->");
+    expect(reviewer).toContain('Say "ready for review"');
+    expect(reviewer).toContain('Never "the board user"');
+    expect(reviewer).toContain('never "complete" or "finished"');
+    expect(reviewer).toContain('"work product record"');
+    expect(reviewer).toContain('"what was asked for"');
+  });
+
   it("includes the AgentDash-MK workforce block in every prompt surface", () => {
     for (const surface of renderedPromptSurfaces) {
       expect(surface.content, `${surface.name} is missing the named block`).toContain(

@@ -815,18 +815,43 @@ export function summarizeToolCall(name: string, rawInput: unknown): ToolCallSumm
 export type ReadableToolStatus = "running" | "completed" | "error" | "no_result";
 
 /** Status-line text for a tool result: first meaningful line or a short summary. */
-export function summarizeToolOutcome(rawResult: string | undefined, status: ReadableToolStatus): string {
+export function summarizeToolOutcome(
+  rawResult: string | undefined,
+  status: ReadableToolStatus,
+  callInput?: unknown,
+): string {
   // AgentDash (scan 4 lane O1): the collapsed row shows this line, so it is
   // redacted (`cat .env` must not print OPENAI_API_KEY=sk-… on the row).
   const result = rawResult ? redactSecrets(rawResult) : rawResult;
   if (status === "running") return result ? summarizeToolResult(result, false, "compact") : "Running…";
   if (status === "no_result") return "No result";
   if (!result || !result.trim()) return status === "error" ? "Failed" : "Done";
+  // AgentDash (batch 2): a write_file outcome echoes the file's absolute path
+  // plus a duration ("/paperclip/.hermes/…/onboarding.md (12ms)"); the row's
+  // label already names the file, so the echo drops to a plain verdict.
+  if (isPathEchoOutcome(result, callInput)) return status === "error" ? "Failed" : "Done";
   // JSON.parse decodes \u escapes the redaction above could not see, so the
   // phrase is redacted again.
   const json = summarizeJsonOutput(result);
   if (json) return quietCredentialError(redactSecrets(json), status);
   return quietCredentialError(summarizeToolResult(result, status === "error", "compact"), status);
+}
+
+/** The absolute path a call says it writes to (Hermes keeps it under `detail`). */
+function callPathHint(input: unknown): string | null {
+  const record = asRecord(unwrapInput(input));
+  const hint = firstString(record, ["file_path", "filePath", "path", "detail", "filename", "target_file", "notebook_path"]);
+  return hint && hint.startsWith("/") ? hint : null;
+}
+
+const PATH_DURATION_RE = /^\/\S+\s+(?:\([\d.]+\s*(?:ms|s|sec|m)\)|[·—–-]\s*[\d.]+\s*(?:ms|s|sec|m)\b|in\s+[\d.]+\s*(?:ms|s|sec|m)\b)\s*$/i;
+
+function isPathEchoOutcome(result: string, callInput: unknown): boolean {
+  const line = result.trim();
+  if (!line.startsWith("/") || line.includes("\n")) return false;
+  const callPath = callPathHint(callInput);
+  if (callPath && line.startsWith(callPath)) return true;
+  return PATH_DURATION_RE.test(line);
 }
 
 /**
@@ -850,18 +875,76 @@ function plural(count: number, noun: string): string {
 /**
  * AgentDash (scan 4 lane O1): a JSON tool output (an API response) as a short
  * phrase instead of its first raw line: "Got issue WHI-1", "Response: 12
- * fields", "Response: 3 items", "Error: Issue not found". Null when the
- * output is not one JSON value. The full output stays in the expanded view.
+ * fields", "Response: 3 items", "Error: Issue not found". Concatenated or
+ * NDJSON bodies each get a phrase ("Got issue WHI-1 · Response: 4 fields"),
+ * and a truncated body degrades to its issue ref or "Response (JSON)". Null
+ * when the output is not JSON. The full output stays in the expanded view.
  */
 export function summarizeJsonOutput(text: string): string | null {
   const trimmed = text.trim();
-  if (!/^[[{]/.test(trimmed) || !/[\]}]$/.test(trimmed)) return null;
-  let value: unknown;
+  if (!/^[[{]/.test(trimmed)) return null;
   try {
-    value = JSON.parse(trimmed);
+    return summarizeJsonValue(JSON.parse(trimmed));
   } catch {
-    return null;
+    // Several bodies back to back, or a truncated one: fall through.
   }
+  const bodies = splitJsonBodies(trimmed);
+  if (!bodies || bodies.length === 0) return null;
+  const phrases: string[] = [];
+  for (const body of bodies) {
+    try {
+      const phrase = summarizeJsonValue(JSON.parse(body));
+      if (!phrase) return null;
+      phrases.push(phrase);
+    } catch {
+      // A truncated body keeps enough of its head to recognise an issue ref.
+      const identifier = /"identifier"\s*:\s*"([^"]+)"/.exec(body)?.[1];
+      phrases.push(identifier && ISSUE_REF_RE.test(identifier) ? `Got issue ${identifier}` : "Response (JSON)");
+    }
+  }
+  return phrases.join(" · ");
+}
+
+/**
+ * Splits concatenated JSON values (`{"a":1}{"b":2}` or NDJSON lines) into
+ * their raw bodies; a truncated tail is kept as its own body so the caller
+ * can summarise it loosely. Null when non-JSON text sits between bodies.
+ */
+function splitJsonBodies(text: string): string[] | null {
+  const bodies: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    while (i < text.length && /\s/.test(text[i]!)) i += 1;
+    if (i >= text.length) break;
+    if (text[i] !== "{" && text[i] !== "[") return null;
+    const start = i;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (; i < text.length; i += 1) {
+      const ch = text[i]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{" || ch === "[") depth += 1;
+      else if (ch === "}" || ch === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          i += 1;
+          break;
+        }
+      }
+    }
+    bodies.push(text.slice(start, i));
+  }
+  return bodies;
+}
+
+function summarizeJsonValue(value: unknown): string | null {
   if (Array.isArray(value)) return value.length === 0 ? "Response: no items" : `Response: ${plural(value.length, "item")}`;
   const record = asRecord(value);
   if (!record) return null;

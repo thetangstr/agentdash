@@ -464,7 +464,8 @@ describe("heredoc writes and JSON outputs (scan 4 lane O1)", () => {
     expect(summarizeJsonOutput('{"error":"Issue not found"}')).toBe("Error: Issue not found");
     expect(summarizeJsonOutput('{"id":"c1"}')).toBe("Response: 1 field");
     expect(summarizeJsonOutput("not json {")).toBeNull();
-    expect(summarizeJsonOutput("{broken")).toBeNull();
+    // A truncated JSON body still gets a phrase (see the multi-body tests).
+    expect(summarizeJsonOutput("{broken")).toBe("Response (JSON)");
   });
 
   it("uses the JSON phrase for the collapsed outcome, redacted", () => {
@@ -829,5 +830,54 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
     // A marker with nothing after it has nothing to quote.
     expect(summarizeToolOutcome("--- stderr ---", "error")).toBe("Failed");
     expect(summarizeToolOutcome("--- stderr ---", "completed")).toBe("Done");
+  });
+
+  it("summarises each body when tool output holds several JSON values", () => {
+    expect(
+      summarizeJsonOutput(
+        '{"identifier":"WHI-1","title":"x"}{"items":[1,2,3,4]}',
+      ),
+    ).toBe("Got issue WHI-1 · Response: 4 items");
+    // NDJSON lines split the same way.
+    expect(
+      summarizeJsonOutput('{"identifier":"WHI-1"}\n{"a":1,"b":2,"c":3,"d":4}'),
+    ).toBe("Got issue WHI-1 · Response: 4 fields");
+  });
+
+  it("degrades a truncated JSON body to its issue ref or a generic label", () => {
+    expect(summarizeJsonOutput('{"identifier":"WHI-7","title":"half-wri')).toBe(
+      "Got issue WHI-7",
+    );
+    expect(summarizeJsonOutput('{"title":"half-wri')).toBe("Response (JSON)");
+    // A complete body followed by a truncated tail keeps both phrases.
+    expect(
+      summarizeJsonOutput('{"a":1,"b":2}{"identifier":"WHI-9","titl'),
+    ).toBe("Response: 2 fields · Got issue WHI-9");
+    // Non-JSON text between bodies is not JSON output at all.
+    expect(summarizeJsonOutput('{"a":1} tail')).toBeNull();
+    expect(summarizeJsonOutput("plain text")).toBeNull();
+  });
+
+  it("drops a write_file outcome that echoes the file path and a duration", () => {
+    const input = { detail: "/paperclip/.hermes/profiles/agent-1/notes/onboarding.md" };
+    expect(
+      summarizeToolOutcome(
+        "/paperclip/.hermes/profiles/agent-1/notes/onboarding.md (12ms)",
+        "completed",
+        input,
+      ),
+    ).toBe("Done");
+    // A bare echo of the call's path is the same noise without the duration.
+    expect(
+      summarizeToolOutcome(input.detail as string, "completed", input),
+    ).toBe("Done");
+    // Path plus a duration collapses even without a matching call input.
+    expect(summarizeToolOutcome("/var/state/notes.md · 0.4s", "completed")).toBe("Done");
+    // A path that is not the call's own is real output and stays visible.
+    expect(
+      summarizeToolOutcome("/etc/hostname", "completed", input),
+    ).toBe("/etc/hostname");
+    // The expanded text of a failing call keeps its verdict.
+    expect(summarizeToolOutcome(input.detail as string, "error", input)).toBe("Failed");
   });
 });
