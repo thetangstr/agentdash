@@ -19,6 +19,7 @@ import {
   preserveIssueRecoveryBudget,
   readIssueRecoveryBudget,
   isEnvironmentDriverSupportedForAdapter,
+  isSecretName,
   type BillingType,
   type EnvironmentLeaseStatus,
   type ExecutionWorkspace,
@@ -51,6 +52,11 @@ import { conflict, HttpError, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, runLogBasePath, type RunLogHandle } from "./run-log-store.js";
+import {
+  createRunLogStreamRedactor,
+  redactRunLogText,
+  redactRunLogValue,
+} from "./run-log-redaction.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import type {
   AdapterExecutionResult,
@@ -2526,7 +2532,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       )
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
-      .then((rows) => rows[0] ?? null);
+      // AgentDash (GH #992): the default read is served to API callers; rows
+      // written before persist-time redaction get the serve-time pass here.
+      // Internal callers that genuinely need the raw row opt into
+      // `unsafeFullResultJson` (the name already warns it is unsafe).
+      .then((rows) => {
+        const row = rows[0] ?? null;
+        if (!row || opts?.unsafeFullResultJson) return row;
+        return redactRunLogValue(row);
+      });
   }
 
   async function getRunLogAccess(runId: string) {
@@ -3933,13 +3947,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   ) {
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
     // AgentDash (GH #782): GitHub tokens are scrubbed by shape from events too.
+    // AgentDash (GH #992): the full secret pattern set plus this instance's
+    // known keys run on top, so a provider key or run token echoed into an
+    // event never reaches the table or the live bus.
     const sanitizedMessage = event.message
-      ? redactGitHubTokens(redactCurrentUserText(event.message, currentUserRedactionOptions))
+      ? redactRunLogText(redactGitHubTokens(redactCurrentUserText(event.message, currentUserRedactionOptions)))
       : event.message;
     const boundedPayload = event.payload
       ? redactGitHubTokensInValue(boundHeartbeatRunEventPayloadForStorage(event.payload))
       : event.payload;
-    const secretSanitizedPayload = boundedPayload ? redactEventPayload(boundedPayload) : boundedPayload;
+    const secretSanitizedPayload = boundedPayload ? redactRunLogValue(redactEventPayload(boundedPayload)) : boundedPayload;
     const sanitizedPayload = secretSanitizedPayload
       ? redactCurrentUserValue(secretSanitizedPayload, currentUserRedactionOptions)
       : secretSanitizedPayload;
@@ -6943,6 +6960,28 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     let persistedLogBytes = Number(run.logBytes ?? 0);
     // OBS-1: time to first output byte feeds runFacts.firstOutputMs.
     let firstOutputAt: Date | null = null;
+    const adapter = getServerAdapter(agent.adapterType);
+    const authToken = adapter.supportsLocalAgentJwt
+      ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
+      : null;
+    // AgentDash (GH #992): verbatim secrets this run knows — the injected
+    // PAPERCLIP_API_KEY and every secret-named or secret-ref value the
+    // resolved adapter env hands the agent — on top of the instance keys
+    // the run-log redactor always applies (configured provider key,
+    // credential-valued process env).
+    const runKnownSecrets = Object.entries(parseObject(resolvedConfig.env))
+      .filter(
+        ([key, value]) =>
+          typeof value === "string" &&
+          value.length >= 8 &&
+          (secretKeys.has(key) || isSecretName(key)),
+      )
+      .map(([, value]) => value as string);
+    if (authToken) runKnownSecrets.push(authToken);
+    const secretLogRedactors = {
+      stdout: createRunLogStreamRedactor(runKnownSecrets),
+      stderr: createRunLogStreamRedactor(runKnownSecrets),
+    };
     const flushOutputProgress = async (opts?: { force?: boolean }) => {
       const pendingOutputProgress = outputProgressState.pending;
       if (!pendingOutputProgress) return;
@@ -7022,6 +7061,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .where(eq(heartbeatRuns.id, runId));
 
       const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
+      if (adapter.supportsLocalAgentJwt && !authToken) {
+        logger.warn(
+          {
+            companyId: agent.companyId,
+            agentId: agent.id,
+            runId: run.id,
+            adapterType: agent.adapterType,
+          },
+          "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
+        );
+      }
       // AgentDash (GH #782): an agent can print a GitHub token from its shell;
       // scrub anything token-shaped before it is stored or streamed. Stateful
       // per stream, so a token split across two chunks is still caught.
@@ -7033,13 +7083,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const githubSafeChunk = githubTokenRedactors[stream].push(
           redactCurrentUserText(chunk, currentUserRedactionOptions),
         );
-        if (githubSafeChunk.length === 0 && chunk.length > 0) return;
-        await appendRunLogChunk(stream, githubSafeChunk);
+        const safeChunk = secretLogRedactors[stream].push(githubSafeChunk);
+        if (safeChunk.length === 0 && chunk.length > 0) return;
+        await appendRunLogChunk(stream, safeChunk);
       };
-      const flushGitHubTokenRedactors = async () => {
+      const flushLogRedactors = async () => {
         for (const stream of ["stdout", "stderr"] as const) {
           const rest = githubTokenRedactors[stream].flush();
-          if (rest) await appendRunLogChunk(stream, rest);
+          const pending =
+            secretLogRedactors[stream].push(rest) + secretLogRedactors[stream].flush();
+          if (pending) await appendRunLogChunk(stream, pending);
         }
       };
       const appendRunLogChunk = async (stream: "stdout" | "stderr", redactedChunk: string) => {
@@ -7163,21 +7216,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         });
       };
 
-      const adapter = getServerAdapter(agent.adapterType);
-      const authToken = adapter.supportsLocalAgentJwt
-        ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
-        : null;
-      if (adapter.supportsLocalAgentJwt && !authToken) {
-        logger.warn(
-          {
-            companyId: agent.companyId,
-            agentId: agent.id,
-            runId: run.id,
-            adapterType: agent.adapterType,
-          },
-          "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
-        );
-      }
       // AgentDash (GH #782): result text is persisted and shown; no GitHub token in it.
       let rawAdapterResult: Awaited<ReturnType<typeof adapter.execute>>;
       try {
@@ -7206,9 +7244,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         authToken: authToken ?? undefined,
       });
       } finally {
-        await flushGitHubTokenRedactors();
+        await flushLogRedactors();
       }
-      const adapterResult = redactGitHubTokensInValue(rawAdapterResult);
+      const adapterResult = redactRunLogValue(redactGitHubTokensInValue(rawAdapterResult), runKnownSecrets);
       adapterResult.resultJson = withoutWorkspaceResultFields(adapterResult.resultJson ?? null);
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
@@ -7568,9 +7606,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       await finalizeAgentStatus(agent.id, outcome);
     } catch (err) {
-      const message = redactCurrentUserText(
-        err instanceof Error ? err.message : "Unknown adapter failure",
-        await getCurrentUserRedactionOptions(),
+      const message = redactRunLogText(
+        redactCurrentUserText(
+          err instanceof Error ? err.message : "Unknown adapter failure",
+          await getCurrentUserRedactionOptions(),
+        ),
+        runKnownSecrets,
       );
       logger.error({ err, runId }, "heartbeat execution failed");
 
@@ -9694,7 +9735,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           resultCostUsdCamel?: string | null;
         };
 
-        return {
+        // AgentDash (GH #992): `error` and the projected resultJson text
+        // fields can carry a credential a provider echoed back; rows written
+        // before persist-time redaction get the serve-time pass here.
+        return redactRunLogValue({
           ...rest,
           contextSnapshot: summarizeHeartbeatRunContextSnapshot({
             issueId: contextIssueId,
@@ -9717,7 +9761,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 costUsd: resultCostUsd,
                 costUsdCamel: resultCostUsdCamel,
               }),
-        };
+        });
       });
     },
 
@@ -9790,13 +9834,22 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
     },
 
+    // AgentDash (GH #992): event rows are redacted at insert, and again here
+    // so rows written before that pass shipped cannot leak a stored key.
     listEvents: (runId: string, afterSeq = 0, limit = 200) =>
       db
         .select()
         .from(heartbeatRunEvents)
         .where(and(eq(heartbeatRunEvents.runId, runId), gt(heartbeatRunEvents.seq, afterSeq)))
         .orderBy(asc(heartbeatRunEvents.seq))
-        .limit(Math.max(1, Math.min(limit, 1000))),
+        .limit(Math.max(1, Math.min(limit, 1000)))
+        .then((rows) =>
+          rows.map((row) => ({
+            ...row,
+            message: row.message ? redactRunLogText(row.message) : row.message,
+            payload: row.payload ? redactRunLogValue(row.payload) : row.payload,
+          })),
+        ),
 
     getRetryExhaustedReason: async (runId: string) => {
       const row = await db
@@ -9849,9 +9902,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         store: run.logStore,
         logRef: run.logRef,
         ...result,
-        // Run-log chunks are already redacted before they are appended to the store.
-        // Rewriting the full chunk again on every poll creates avoidable string copies.
-        content: result.content,
+        // AgentDash (GH #992): chunks are redacted at append time, but the
+        // read pass runs again so log files written before this change (or by
+        // a path that missed it) are still safe to serve. The content is
+        // NDJSON — each line's `chunk` string is escaped, which the pattern
+        // set handles (escaped JSON keys included); verbatim known keys are
+        // replaced wherever they appear.
+        content: redactRunLogText(result.content),
       };
     },
 

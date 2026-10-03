@@ -5,19 +5,22 @@ import type { WorkspaceOperation, WorkspaceOperationPhase, WorkspaceOperationSta
 import { asc, desc, eq, inArray, isNull, or, and } from "drizzle-orm";
 import { notFound } from "../errors.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
+import { redactRunLogText, redactRunLogValue } from "./run-log-redaction.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { getWorkspaceOperationLogStore } from "./workspace-operation-log-store.js";
 
 type WorkspaceOperationRow = typeof workspaceOperations.$inferSelect;
 
 function toWorkspaceOperation(row: WorkspaceOperationRow): WorkspaceOperation {
+  // AgentDash (GH #992): serve-time pass on command/excerpts/metadata so rows
+  // written before persist-time redaction shipped cannot leak a stored key.
   return {
     id: row.id,
     companyId: row.companyId,
     executionWorkspaceId: row.executionWorkspaceId ?? null,
     heartbeatRunId: row.heartbeatRunId ?? null,
     phase: row.phase as WorkspaceOperationPhase,
-    command: row.command ?? null,
+    command: row.command ? redactRunLogText(row.command) : null,
     cwd: row.cwd ?? null,
     status: row.status as WorkspaceOperationStatus,
     exitCode: row.exitCode ?? null,
@@ -26,9 +29,9 @@ function toWorkspaceOperation(row: WorkspaceOperationRow): WorkspaceOperation {
     logBytes: row.logBytes ?? null,
     logSha256: row.logSha256 ?? null,
     logCompressed: row.logCompressed,
-    stdoutExcerpt: row.stdoutExcerpt ?? null,
-    stderrExcerpt: row.stderrExcerpt ?? null,
-    metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    stdoutExcerpt: row.stdoutExcerpt ? redactRunLogText(row.stdoutExcerpt) : null,
+    stderrExcerpt: row.stderrExcerpt ? redactRunLogText(row.stderrExcerpt) : null,
+    metadata: (redactRunLogValue(row.metadata) as Record<string, unknown> | null) ?? null,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt ?? null,
     createdAt: row.createdAt,
@@ -121,7 +124,11 @@ export function workspaceOperationService(db: Db) {
           let stderrExcerpt = "";
           const append = async (stream: "stdout" | "stderr" | "system", chunk: string | null | undefined) => {
             if (!chunk) return;
-            const sanitizedChunk = redactCurrentUserText(chunk, currentUserRedactionOptions);
+            // AgentDash (GH #992): operation logs get the same secret pass as
+            // run logs — commands clone repos and run credentialled CLIs.
+            const sanitizedChunk = redactRunLogText(
+              redactCurrentUserText(chunk, currentUserRedactionOptions),
+            );
             if (stream === "stdout") stdoutExcerpt = appendExcerpt(stdoutExcerpt, sanitizedChunk);
             if (stream === "stderr") stderrExcerpt = appendExcerpt(stderrExcerpt, sanitizedChunk);
             await logStore.append(handle, {
@@ -137,15 +144,15 @@ export function workspaceOperationService(db: Db) {
             executionWorkspaceId,
             heartbeatRunId: input.heartbeatRunId ?? null,
             phase: recordInput.phase,
-            command: recordInput.command ?? null,
+            command: recordInput.command ? redactRunLogText(recordInput.command) : null,
             cwd: recordInput.cwd ?? null,
             status: "running",
             logStore: handle.store,
             logRef: handle.logRef,
-            metadata: redactCurrentUserValue(
+            metadata: redactRunLogValue(redactCurrentUserValue(
               recordInput.metadata ?? null,
               currentUserRedactionOptions,
-            ) as Record<string, unknown> | null,
+            )) as Record<string, unknown> | null,
             startedAt,
           });
           createdIds.push(id);
@@ -168,10 +175,10 @@ export function workspaceOperationService(db: Db) {
                 logBytes: finalized.bytes,
                 logSha256: finalized.sha256,
                 logCompressed: finalized.compressed,
-                metadata: redactCurrentUserValue(
+                metadata: redactRunLogValue(redactCurrentUserValue(
                   combineMetadata(recordInput.metadata, result.metadata),
                   currentUserRedactionOptions,
-                ) as Record<string, unknown> | null,
+                )) as Record<string, unknown> | null,
                 finishedAt,
                 updatedAt: finishedAt,
               })
@@ -250,9 +257,9 @@ export function workspaceOperationService(db: Db) {
         store: operation.logStore,
         logRef: operation.logRef,
         ...result,
-        // Workspace-operation log chunks are sanitized before append-time storage.
-        // Returning the stored chunk avoids another whole-string rewrite per poll.
-        content: result.content,
+        // AgentDash (GH #992): same serve-time pass as run logs — files
+        // written before redaction shipped stay safe to return.
+        content: redactRunLogText(result.content),
       };
     },
   };

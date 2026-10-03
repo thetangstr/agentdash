@@ -130,6 +130,7 @@ import {
 } from "../adapters/index.js";
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
+import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { resolveMaxDailyTokens, tokenCeilingService } from "../services/token-ceiling.js";
@@ -4611,11 +4612,13 @@ export function agentRoutes(
     }
     assertCompanyAccess(req, run.companyId);
     const retryExhaustedReason = await heartbeat.getRetryExhaustedReason(runId);
+    // AgentDash (GH #992): the run row carries `error`, `resultJson` and the
+    // excerpts — provider 401s can echo credentials into all of them.
     res.json(
-      redactCurrentUserValue(
+      redactRunLogValue(redactCurrentUserValue(
         { ...run, retryExhaustedReason, outputSilence: await heartbeat.buildRunOutputSilence(run) },
         await getCurrentUserRedactionOptions(),
-      ),
+      )),
     );
   });
 

@@ -62,6 +62,7 @@ import {
 } from "./issue-recovery-budget.js";
 import { instanceSettingsService, readInstanceExperimentalSettings, readInstanceGeneralSettings } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
+import { redactRunLogText } from "./run-log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
 import {
@@ -1997,7 +1998,9 @@ export function issueService(db: Db) {
   function redactIssueComment<T extends { body: string }>(comment: T, censorUsernameInLogs: boolean): T {
     return {
       ...comment,
-      body: redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs }),
+      // AgentDash (GH #992): comments carry run output into the issue chat;
+      // the secret pass keeps stored comments written before it shipped safe.
+      body: redactRunLogText(redactCurrentUserText(comment.body, { enabled: censorUsernameInLogs })),
     };
   }
 
@@ -4212,7 +4215,7 @@ export function issueService(db: Db) {
         const currentUserRedactionOptions = {
           enabled: (generalSettings ?? await readInstanceGeneralSettings(executor)).censorUsernameInLogs,
         };
-        const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
+        const redactedBody = redactRunLogText(redactCurrentUserText(body, currentUserRedactionOptions));
         const [comment] = await executor
           .insert(issueComments)
           .values({
