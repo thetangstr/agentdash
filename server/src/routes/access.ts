@@ -3695,6 +3695,11 @@ export function accessRoutes(
               membershipRole,
               "active",
             );
+            // AgentDash (security, GH #978): the grants originate with the
+            // person who issued the invite, not the joiner redeeming it —
+            // grantedByUserId must record invite.invitedByUserId. Falls back
+            // to the accepting actor only when the invite names no inviter
+            // (legacy rows, synthetic local_trusted invites).
             await txAccess.setPrincipalGrants(
               companyId,
               "user",
@@ -3703,7 +3708,7 @@ export function accessRoutes(
                 invite.defaultsPayload as Record<string, unknown> | null,
                 membershipRole,
               ),
-              req.actor.userId ?? null,
+              invite.invitedByUserId ?? req.actor.userId ?? null,
             );
             await memberOnboardingService(dbOrTx).startOrResume(
               companyId,
@@ -4639,7 +4644,7 @@ export function accessRoutes(
       if (!memberToUpdate) throw notFound("Member not found");
       await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
 
-      const updated = await db.transaction(async (tx) => {
+      const { updated, grantsResetToRole } = await db.transaction(async (tx) => {
         await tx.execute(sql`
           select ${companyMemberships.id}
           from ${companyMemberships}
@@ -4660,7 +4665,7 @@ export function accessRoutes(
             ),
           )
           .then((rows) => rows[0] ?? null);
-        if (!existing) return null;
+        if (!existing) return { updated: null, grantsResetToRole: null };
 
         const nextMembershipRole =
           req.body.membershipRole !== undefined
@@ -4691,7 +4696,7 @@ export function accessRoutes(
           }
         }
 
-        return tx
+        const row = await tx
           .update(companyMemberships)
           .set({
             membershipRole: nextMembershipRole,
@@ -4701,6 +4706,48 @@ export function accessRoutes(
           .where(eq(companyMemberships.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? existing);
+
+        // AgentDash (security, GH #978): a role-only PATCH used to leave
+        // explicit permission grants untouched, so an admin demoted to member
+        // kept admin powers (users:manage_permissions, agents:create) through
+        // hasPermission's grant fallback. When the normalized role changes,
+        // grants are rewritten to the new role's defaults in the same
+        // transaction — anything beyond defaults must be re-granted through
+        // /role-and-grants, which is the deliberate-grant surface.
+        let resetRole: string | null = null;
+        if (
+          existing.principalType === "user" &&
+          normalizeHumanRole(nextMembershipRole) !== normalizeHumanRole(existing.membershipRole)
+        ) {
+          const now = new Date();
+          await tx
+            .delete(principalPermissionGrants)
+            .where(
+              and(
+                eq(principalPermissionGrants.companyId, companyId),
+                eq(principalPermissionGrants.principalType, existing.principalType),
+                eq(principalPermissionGrants.principalId, existing.principalId),
+              ),
+            );
+          const defaultGrants = grantsForHumanRole(normalizeHumanRole(nextMembershipRole));
+          if (defaultGrants.length > 0) {
+            await tx.insert(principalPermissionGrants).values(
+              defaultGrants.map((grant) => ({
+                companyId,
+                principalType: existing.principalType,
+                principalId: existing.principalId,
+                permissionKey: grant.permissionKey,
+                scope: grant.scope ?? null,
+                grantedByUserId: req.actor.userId ?? null,
+                createdAt: now,
+                updatedAt: now,
+              })),
+            );
+          }
+          resetRole = normalizeHumanRole(nextMembershipRole);
+        }
+
+        return { updated: row, grantsResetToRole: resetRole };
       });
       if (!updated) throw notFound("Member not found");
       publishMembershipAccessChange(updated, "membership updated"); // AgentDash (GH #708): after commit
@@ -4715,6 +4762,17 @@ export function accessRoutes(
         details: {
           membershipRole: updated.membershipRole,
           status: updated.status,
+          // AgentDash (security, GH #978): the grant reset is part of the
+          // audit record — a demotion is also a revocation.
+          ...(grantsResetToRole
+            ? {
+                grantsReset: {
+                  fromRole: normalizeHumanRole(memberToUpdate.membershipRole),
+                  toRole: grantsResetToRole,
+                  grantedByUserId: req.actor.userId ?? null,
+                },
+              }
+            : {}),
         },
       });
 

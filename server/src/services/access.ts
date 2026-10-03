@@ -943,7 +943,7 @@ export function accessService(db: Db) {
         }
       }
 
-      return tx
+      const updated = await tx
         .update(companyMemberships)
         .set({
           membershipRole: nextMembershipRole,
@@ -953,6 +953,44 @@ export function accessService(db: Db) {
         .where(eq(companyMemberships.id, existing.id))
         .returning()
         .then((rows) => rows[0] ?? existing);
+
+      // AgentDash (security, GH #978): a role change without a grant reset
+      // leaves the OLD role's explicit grants live — a demoted admin kept
+      // users:manage_permissions through the grant fallback. Role-only
+      // updates rewrite grants to the new role's defaults in this
+      // transaction; deliberate extras go through updateMemberPermissions.
+      if (
+        existing.principalType === "user" &&
+        normalizeHumanRole(nextMembershipRole) !== normalizeHumanRole(existing.membershipRole)
+      ) {
+        const now = new Date();
+        await tx
+          .delete(principalPermissionGrants)
+          .where(
+            and(
+              eq(principalPermissionGrants.companyId, companyId),
+              eq(principalPermissionGrants.principalType, existing.principalType),
+              eq(principalPermissionGrants.principalId, existing.principalId),
+            ),
+          );
+        const defaultGrants = grantsForHumanRole(normalizeHumanRole(nextMembershipRole));
+        if (defaultGrants.length > 0) {
+          await tx.insert(principalPermissionGrants).values(
+            defaultGrants.map((grant) => ({
+              companyId,
+              principalType: existing.principalType,
+              principalId: existing.principalId,
+              permissionKey: grant.permissionKey,
+              scope: grant.scope ?? null,
+              grantedByUserId: null,
+              createdAt: now,
+              updatedAt: now,
+            })),
+          );
+        }
+      }
+
+      return updated;
     });
     publishMembershipAccessChange(result, "membership updated");
     return result;

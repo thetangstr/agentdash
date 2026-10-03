@@ -197,6 +197,23 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
       .then((rows) => rows[0] ?? null);
     expect(consumed?.acceptedAt).not.toBeNull();
 
+    // GH #978: the grants the acceptance wrote name the INVITER as grantor —
+    // not the joiner, who did not grant themselves anything.
+    const grants = await db
+      .select()
+      .from(principalPermissionGrants)
+      .where(
+        and(
+          eq(principalPermissionGrants.companyId, companyId),
+          eq(principalPermissionGrants.principalType, "user"),
+          eq(principalPermissionGrants.principalId, userId),
+        ),
+      );
+    expect(grants.length).toBeGreaterThan(0);
+    for (const grant of grants) {
+      expect(grant.grantedByUserId).toBe("inviter-1");
+    }
+
     const onboarding = await db
       .select()
       .from(onboardingSessions)
