@@ -186,8 +186,8 @@ test.describe("mobile lists at 390×844", () => {
     }
 
     await page.getByRole("button", { name: "More org chart actions" }).click();
-    await expect(page.getByRole("menuitem", { name: "Import company" })).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: "Export company" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Import workspace" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Export workspace" })).toBeVisible();
     await page.keyboard.press("Escape");
 
     await expectNoHorizontalOverflow(page, "Org chart");

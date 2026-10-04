@@ -197,6 +197,20 @@ describe("CoSConversation", () => {
     });
     await act(async () => {});
     expect(container.querySelector('[data-testid="cos-review-team-link"]')?.textContent).toContain("Review your team");
+    // c3-a11y: the phone header link's accessible name matches its visible
+    // text and says where it goes. ChatPanel is mocked, so the action element
+    // arrives through its headerProps rather than the DOM.
+    const props = mockChatPanelProps.mock.calls.at(-1)?.[0] as {
+      headerProps?: { action?: { props: { "aria-label"?: string; to?: string; children?: unknown } } };
+    };
+    const action = props.headerProps?.action;
+    expect(action?.props["aria-label"]).toBe("Review workforce");
+    expect(action?.props.to).toBe("/workforce");
+    const actionText = (Array.isArray(action?.props.children) ? action.props.children : [action?.props.children])
+      .filter((child): child is string => typeof child === "string")
+      .join(" ")
+      .trim();
+    expect(actionText).toBe("Review workforce");
     list.mockReturnValue([]);
   });
 

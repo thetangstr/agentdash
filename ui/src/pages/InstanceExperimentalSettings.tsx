@@ -7,6 +7,8 @@ import type {
 } from "@paperclipai/shared";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useCompany } from "../context/CompanyContext";
+import { useCapabilities } from "../hooks/useCapability";
 import { queryKeys } from "../lib/queryKeys";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { Button } from "@/components/ui/button";
@@ -120,6 +122,10 @@ function RecoveryPreviewDialog({
 
 export function InstanceExperimentalSettings() {
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { selectedCompanyId } = useCompany();
+  // AgentDash (c3-a11y review): the dev-server section names a real local
+  // command — it only makes sense to the person who runs the instance.
+  const isInstanceAdmin = useCapabilities(selectedCompanyId).data?.isInstanceAdmin === true;
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
   const [lookbackHoursDraft, setLookbackHoursDraft] = useState("24");
@@ -298,23 +304,25 @@ export function InstanceExperimentalSettings() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-border bg-card p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1.5">
-            <h2 className="text-sm font-semibold">Auto-Restart Dev Server When Idle</h2>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              In `pnpm dev:once`, wait for all queued and running local agent runs to finish, then restart the server
-              automatically when backend changes or migrations make the current boot stale.
-            </p>
+      {isInstanceAdmin && (
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1.5">
+              <h2 className="text-sm font-semibold">Auto-Restart Dev Server When Idle</h2>
+              <p className="max-w-2xl text-sm text-muted-foreground">
+                In `pnpm dev:once`, wait for all queued and running local agent runs to finish, then restart the
+                server automatically when backend changes or migrations make the current boot stale.
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={autoRestartDevServerWhenIdle}
+              onCheckedChange={() => toggleMutation.mutate({ autoRestartDevServerWhenIdle: !autoRestartDevServerWhenIdle })}
+              disabled={toggleMutation.isPending}
+              aria-label="Toggle guarded dev-server auto-restart"
+            />
           </div>
-          <ToggleSwitch
-            checked={autoRestartDevServerWhenIdle}
-            onCheckedChange={() => toggleMutation.mutate({ autoRestartDevServerWhenIdle: !autoRestartDevServerWhenIdle })}
-            disabled={toggleMutation.isPending}
-            aria-label="Toggle guarded dev-server auto-restart"
-          />
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="rounded-xl border border-border bg-card p-5">
         <div className="flex flex-col gap-5">

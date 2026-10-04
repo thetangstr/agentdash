@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, useEffect } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BreadcrumbProvider } from "../context/BreadcrumbContext";
+import { BreadcrumbProvider, useBreadcrumbs, type Breadcrumb } from "../context/BreadcrumbContext";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 
 const mockState = vi.hoisted(() => ({
@@ -45,6 +45,12 @@ vi.mock("@/plugins/launchers", () => ({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+function SetCrumbs({ crumbs }: { crumbs: Breadcrumb[] }) {
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => setBreadcrumbs(crumbs), [crumbs, setBreadcrumbs]);
+  return null;
+}
+
 describe("BreadcrumbBar", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
@@ -62,10 +68,11 @@ describe("BreadcrumbBar", () => {
     container.remove();
   });
 
-  function renderBar() {
+  function renderBar(crumbs: Breadcrumb[] = []) {
     act(() => {
       root.render(
         <BreadcrumbProvider>
+          <SetCrumbs crumbs={crumbs} />
           <BreadcrumbBar />
         </BreadcrumbProvider>,
       );
@@ -91,5 +98,71 @@ describe("BreadcrumbBar", () => {
 
     expect(container.querySelector('button[aria-label="Open sidebar"]')).toBeNull();
     expect(container.textContent).not.toContain("Acme Travel");
+  });
+
+  it("replaces the parent crumb with a labelled back chevron on phones and keeps the page name in full", () => {
+    renderBar([
+      { label: "Workforce Management Console", href: "/workforce" },
+      { label: "Agent Settings" },
+    ]);
+
+    const back = container.querySelector('a[aria-label="Up to Workforce Management Console"]');
+    expect(back).not.toBeNull();
+    expect(back!.getAttribute("href")).toBe("/workforce");
+
+    // Phone-only (sm:hidden removes it from the desktop accessibility tree),
+    // icon-only, and at the 44px tap floor — no "W"/"Worl" fragment can render.
+    expect(back!.classList.contains("sm:hidden")).toBe(true);
+    expect(back!.textContent?.trim()).toBe("");
+    expect(back!.querySelector("svg")).not.toBeNull();
+
+    // The current page name renders complete, not a fragment.
+    expect(container.textContent).toContain("Agent Settings");
+  });
+
+  it("shows only the closest linked parent as a chevron on phones — earlier crumbs and separators hide", () => {
+    renderBar([
+      { label: "Team", href: "/agents" },
+      { label: "Maya", href: "/agents/maya/dashboard" },
+      { label: "Runs", href: "/agents/maya/runs" },
+      { label: "Run c04a79" },
+    ]);
+
+    // One chevron, named for the closest parent — never "Back to …", which
+    // pages already use for their own back links (connect-assistant e2e).
+    const ups = container.querySelectorAll('a[aria-label^="Up to "]');
+    expect(ups).toHaveLength(1);
+    expect(ups[0]!.getAttribute("aria-label")).toBe("Up to Runs");
+    expect(ups[0]!.getAttribute("href")).toBe("/agents/maya/runs");
+    expect(container.querySelector('a[aria-label^="Back to "]')).toBeNull();
+
+    // Earlier crumbs' items and every separator are desktop-only.
+    const items = Array.from(container.querySelectorAll("li[data-slot='breadcrumb-item'], nav li"));
+    const hiddenItems = items.filter((li) => li.classList.contains("max-sm:hidden"));
+    const teamItem = items.find((li) => li.textContent === "Team");
+    expect(teamItem!.classList.contains("max-sm:hidden")).toBe(true);
+    const mayaItem = items.find((li) => li.textContent === "Maya");
+    expect(mayaItem!.classList.contains("max-sm:hidden")).toBe(true);
+    const separators = Array.from(container.querySelectorAll("li[role='presentation']"));
+    expect(separators.length).toBe(3);
+    expect(separators.every((li) => li.classList.contains("max-sm:hidden"))).toBe(true);
+    expect(hiddenItems.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("keeps the parent crumb's text label for desktop widths", () => {
+    renderBar([
+      { label: "Workforce", href: "/workforce" },
+      { label: "Agents" },
+    ]);
+
+    // Desktop keeps a text crumb literally named "Workforce": the chevron's
+    // "Back to Workforce" name must not leak onto it (a shared aria-label
+    // collided with pages' own "Back to …" links — first-run e2e).
+    const textCrumb = Array.from(container.querySelectorAll('a[href="/workforce"]'))
+      .find((a) => a.textContent === "Workforce");
+    expect(textCrumb).not.toBeUndefined();
+    expect(textCrumb!.getAttribute("aria-label")).toBeNull();
+    expect(textCrumb!.classList.contains("max-sm:hidden")).toBe(true);
+    expect(textCrumb!.classList.contains("truncate")).toBe(true);
   });
 });

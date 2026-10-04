@@ -33,6 +33,9 @@ export const COS_EMPTY_STATE_TITLE = "Your Chief of Staff is ready.";
 // AgentDash: the workforce review link (a bar on desktop, a header link on
 // phones). Scan 3, lane G: shown only once someone besides the CoS is hired.
 export const COS_WORKFORCE_LINK_LABEL = "Review your team, company knowledge and first jobs";
+// AgentDash (c3-a11y): the phone header link's visible text IS its accessible
+// name — both say where it goes.
+export const COS_WORKFORCE_LINK_TEXT = "Review workforce";
 // AgentDash: shown instead of a conversation that belongs to another company.
 export const COS_WRONG_COMPANY_MESSAGE =
   "This company has no Chief of Staff conversation yet. Switch to a company that has one, or ask an owner or admin to open Ask here first.";
@@ -428,13 +431,13 @@ function CoSConversationView({
             action: hasHiredTeam ? (
               <Link
                 to="/workforce"
-                aria-label={COS_WORKFORCE_LINK_LABEL}
+                aria-label={COS_WORKFORCE_LINK_TEXT}
                 title={COS_WORKFORCE_LINK_LABEL}
                 data-testid="cos-workforce-header-link"
                 className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-text-secondary hover:bg-surface-sunken hover:text-text-primary sm:hidden"
               >
                 <ClipboardList className="h-4 w-4" aria-hidden="true" />
-                Review
+                {COS_WORKFORCE_LINK_TEXT}
               </Link>
             ) : undefined,
           }}

@@ -141,6 +141,7 @@ export interface IssueDocumentsSectionHandle {
 export function IssueDocumentsSection({
   issue,
   canDeleteDocuments,
+  awaitingReview = false,
   feedbackVotes = [],
   feedbackDataSharingPreference = "prompt",
   feedbackTermsUrl = null,
@@ -153,6 +154,13 @@ export function IssueDocumentsSection({
 }: {
   issue: Issue;
   canDeleteDocuments: boolean;
+  /**
+   * AgentDash (c3-a11y review): true only when the Result block's Accept /
+   * Request changes actions actually render for the viewer (board access, the
+   * issue neither done/cancelled nor live, and a deliverable waits). Only then
+   * are the thumbs on the bound document a competing review vocabulary.
+   */
+  awaitingReview?: boolean;
   feedbackVotes?: FeedbackVote[];
   feedbackDataSharingPreference?: FeedbackDataSharingPreference;
   feedbackTermsUrl?: string | null;
@@ -196,6 +204,21 @@ export function IssueDocumentsSection({
     queryKey: queryKeys.issues.documents(issue.id),
     queryFn: () => issuesApi.listDocuments(issue.id),
   });
+
+  // AgentDash (c3-a11y review): the thumbs hide only on the document a
+  // ready_for_review document deliverable binds to (metadata.documentKey) —
+  // not on every document of the issue. Same query the Result block runs, so
+  // this adds no request.
+  const { data: shipped } = useQuery({
+    queryKey: queryKeys.shipped(issue.companyId, { issueId: issue.id }),
+    queryFn: () => issuesApi.listShipped(issue.companyId, { issueId: issue.id }),
+  });
+  const documentKeysAwaitingReview = new Set(
+    (shipped?.items ?? [])
+      .filter((product) => product.status === "ready_for_review" && product.type === "document")
+      .map((product) => product.metadata?.documentKey)
+      .filter((key): key is string => typeof key === "string" && key.length > 0),
+  );
 
   // `isFetching` alone cannot gate the empty state: it goes false the moment
   // the request fails while `data` stays undefined, so the menu fell through to
@@ -844,7 +867,13 @@ export function IssueDocumentsSection({
             displayedBody.split("\n").find((line) => line.trim().length > 0)?.trimStart() ?? "",
           );
           const showTitle = !isPlanKey(doc.key) && !!displayedTitle.trim() && !titlesMatchKey(displayedTitle, doc.key) && (isFolded || !bodyLeadsWithHeading);
-          const canVoteOnDocument = Boolean(doc.latestRevisionId && doc.updatedByAgentId && !doc.updatedByUserId && onVote);
+          const canVoteOnDocument = Boolean(
+            doc.latestRevisionId
+            && doc.updatedByAgentId
+            && !doc.updatedByUserId
+            && onVote
+            && !(awaitingReview && documentKeysAwaitingReview.has(doc.key)),
+          );
 
           return (
             <div

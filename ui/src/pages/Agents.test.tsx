@@ -58,7 +58,7 @@ vi.mock("../api/heartbeats", () => ({
 
 vi.mock("../adapters/adapter-display-registry", () => ({
   getAdapterLabel: (type: string) => type,
-  plainRuntimeLabel: (type: string) => (type.endsWith("_local") ? "Runs on your workspace server" : type),
+  plainRuntimeLabel: (type: string) => (type.endsWith("_local") ? "Runs on your server" : type),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -192,8 +192,26 @@ describe("Agents", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("Runs on your workspace server");
+    expect(container.textContent).toContain("Runs on your server");
     expect(container.textContent).toContain("gpt-5.4");
+  });
+
+  it("names the list/org view toggle (c3-a11y)", async () => {
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <Agents />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const group = container.querySelector('[role="group"][aria-label="Agents view"]');
+    expect(group).not.toBeNull();
+    expect(group!.querySelector('button[aria-label="List view"][aria-pressed]')).not.toBeNull();
+    expect(group!.querySelector('button[aria-label="Org chart view"][aria-pressed]')).not.toBeNull();
   });
 
   it("points an empty Team page at Ask for a hire for every company (UX-11)", async () => {

@@ -195,6 +195,17 @@ describe("CompanySettings Advanced section", () => {
     });
     act(() => root.unmount());
   });
+
+  it("names the description, logo and brand-color inputs (c3-a11y)", async () => {
+    const { root } = render(container);
+    await waitForAssertion(() => {
+      expect(container.querySelector('input[aria-label="Workspace name"]')).not.toBeNull();
+    });
+    for (const name of ["Description", "Logo", "Brand color", "Brand color value"]) {
+      expect(container.querySelector(`[aria-label="${name}"]`), name).not.toBeNull();
+    }
+    act(() => root.unmount());
+  });
 });
 
 // Review of #991: reconciliation stays under the collapsed Advanced section

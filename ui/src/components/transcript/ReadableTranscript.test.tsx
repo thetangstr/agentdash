@@ -98,12 +98,12 @@ describe("ReadableToolGroup redaction", () => {
     act(() => root.render(<ReadableToolGroup items={[item("a", "Bash", { command }, "completed", output)]} />));
     // Collapsed: label and the first output line.
     expect(container.querySelector("[data-readable-tool] [role=button]")?.getAttribute("title")).toBe("Ran curl");
-    expect(container.textContent).toContain("OPENAI_API_KEY=***REDACTED***");
+    expect(container.textContent).toContain("OPENAI_API_KEY=•••• hidden");
     expect(container.innerHTML).not.toContain(SECRET);
 
     act(() => container.querySelector<HTMLElement>("[data-readable-tool] [role=button]")!.click());
-    expect(container.textContent).toContain("Authorization: Bearer ***REDACTED***");
-    expect(container.textContent).toContain('"apiKey":"***REDACTED***"');
+    expect(container.textContent).toContain("Authorization: Bearer •••• hidden");
+    expect(container.textContent).toContain('"apiKey":"•••• hidden"');
     expect(container.innerHTML).not.toContain(SECRET);
   });
 
