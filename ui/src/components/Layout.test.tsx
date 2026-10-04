@@ -346,6 +346,15 @@ describe("Layout", () => {
     await act(async () => root.unmount());
   });
 
+  // AgentDash (c4 trust): the floating cluster sits above the scroll area —
+  // the last feed row used to hide underneath it on desktop.
+  it("reserves clearance under the floating status cluster on desktop", async () => {
+    const root = await renderLayout();
+    const main = container.querySelector("#main-content");
+    expect(main?.className).toContain("pb-20");
+    await act(async () => root.unmount());
+  });
+
   it("publishes --mobile-bottom-nav-offset: nav height while shown, 0px when hidden on scroll", async () => {
     sidebarState.isMobile = true;
     const html = document.documentElement;

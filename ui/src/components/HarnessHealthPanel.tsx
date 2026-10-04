@@ -2,8 +2,29 @@ import type { DashboardHarnessAdapterHealth, DashboardHarnessHealth, DashboardHa
 import { AlertTriangle, ShieldCheck } from "lucide-react";
 import { cn } from "../lib/utils";
 
+/**
+ * AgentDash (c4 trust): adapter keys are internal identifiers — "hermes
+ * local" in the hosted feed meant nothing to an owner. Name the harness the
+ * person actually picked at hire time.
+ */
+const ADAPTER_TYPE_LABELS: Record<string, string> = {
+  process: "Local process",
+  http: "HTTP",
+  acpx_local: "ACPX (local)",
+  claude_api: "Claude API",
+  claude_local: "Claude Code (local)",
+  codex_local: "Codex (local)",
+  gemini_local: "Gemini (local)",
+  hermes_local: "Hermes (local)",
+  opencode_local: "OpenCode (local)",
+  pi_local: "Pi (local)",
+  cursor: "Cursor",
+  openclaw_gateway: "OpenClaw",
+};
+
 function formatAdapterType(value: string) {
-  return value.replace(/[_-]+/g, " ");
+  return ADAPTER_TYPE_LABELS[value]
+    ?? value.replace(/[_-]+/g, " ").replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
 }
 
 function formatCategory(value: string | null) {
@@ -36,8 +57,10 @@ function HarnessAdapterRow({ adapter }: { adapter: DashboardHarnessAdapterHealth
             {statusLabel(adapter.status)}
           </span>
         </div>
+        {/* AgentDash (c4 trust): "Top category: quota_limit" read as internal
+            jargon to a non-technical owner. */}
         <p className="mt-1 min-w-0 break-words text-[11px]">
-          Top category: <span className="font-mono">{formatCategory(adapter.topFailureCategory)}</span>
+          Most common failure: <span>{formatCategory(adapter.topFailureCategory)}</span>
           {adapter.latestFailureAt ? ` · Latest failure ${new Date(adapter.latestFailureAt).toLocaleString()}` : ""}
         </p>
       </div>
@@ -48,8 +71,8 @@ function HarnessAdapterRow({ adapter }: { adapter: DashboardHarnessAdapterHealth
         <span className="font-medium text-foreground">{adapter.failedRuns}</span>/{adapter.totalRuns} runs
       </div>
       <div className="tabular-nums">
-        <span className="font-medium text-foreground">{adapter.affectedAgents}</span>{" "}
-        {adapter.affectedAgents === 1 ? "agent" : "agents"}
+        <span className="font-medium text-foreground">{adapter.agents}</span>{" "}
+        {adapter.agents === 1 ? "agent" : "agents"}
       </div>
     </div>
   );
@@ -63,10 +86,10 @@ export function HarnessHealthPanel({ health }: { health: DashboardHarnessHealth 
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Icon className="h-4 w-4 shrink-0" />
-            <h3 className="text-sm font-medium">Harness health</h3>
+            <h3 className="text-sm font-medium">Run reliability</h3>
           </div>
           <p className="mt-1 text-xs opacity-80">
-            Last {health.windowHours}h agent-run failure rate by adapter.
+            How often agent runs failed in the last {health.windowHours} hours, by agent type.
           </p>
         </div>
         <div className="text-right tabular-nums">
@@ -79,7 +102,7 @@ export function HarnessHealthPanel({ health }: { health: DashboardHarnessHealth 
 
       {health.adapters.length === 0 ? (
         <p className="mt-3 rounded-md border border-current/15 bg-background/50 px-2 py-2 text-xs">
-          No completed harness runs in the last {health.windowHours}h.
+          No agent runs finished in the last {health.windowHours} hours.
         </p>
       ) : (
         <div className="mt-3">

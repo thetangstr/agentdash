@@ -74,4 +74,75 @@ describe("ActivityRow", () => {
     expect(container.textContent).not.toContain("AgentDash");
     expect(container.textContent).toContain("stopped Scout's run");
   });
+
+  function rowEvent(action: string, details: Record<string, unknown>): ActivityEvent {
+    return {
+      id: "event-1",
+      companyId: "company-1",
+      actorType: "user",
+      actorId: "user-1",
+      action,
+      entityType: "issue",
+      entityId: "issue-1",
+      agentId: null,
+      runId: null,
+      details,
+      createdAt: new Date(),
+    } as unknown as ActivityEvent;
+  }
+
+  // AgentDash (c4 trust): a comment that reopens a closed issue is the
+  // product's doing, and an approval the system opened must not read as the
+  // person asking.
+  it("credits an automatic reopen to AgentDash", () => {
+    const event = rowEvent("issue.updated", {
+      status: "todo",
+      reopened: true,
+      reopenedFrom: "done",
+      source: "comment",
+    });
+    act(() =>
+      root.render(<ActivityRow event={event} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).toContain("AgentDash");
+    expect(container.textContent).toContain("reopened");
+    expect(container.textContent).not.toContain("Board");
+  });
+
+  it("credits a system-opened approval to AgentDash", () => {
+    const event = rowEvent("approval.created", { type: "hire_agent", source: "cos_plan" });
+    act(() =>
+      root.render(<ActivityRow event={event} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).toContain("AgentDash");
+    expect(container.textContent).toContain("requested approval for an agent hire");
+    expect(container.textContent).not.toContain("Board");
+  });
+
+  it("still names the person on an approval they opened themselves", () => {
+    const event = rowEvent("approval.created", { type: "hire_agent" });
+    act(() =>
+      root.render(<ActivityRow event={event} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).toContain("Board");
+    expect(container.textContent).not.toContain("AgentDash");
+  });
+
+  it("renders reference chips only on issue.updated rows", () => {
+    const details = {
+      removedReferencedIssues: [{ id: "i2", identifier: "ACM-2", title: "Other" }],
+    };
+    const updated = rowEvent("issue.updated", details);
+    act(() =>
+      root.render(<ActivityRow event={updated} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).toContain("Removed references");
+    expect(container.textContent).toContain("updated references");
+
+    const other = rowEvent("issue.comment_added", details);
+    act(() =>
+      root.render(<ActivityRow event={other} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).not.toContain("Removed references");
+  });
 });

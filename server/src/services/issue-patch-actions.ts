@@ -695,6 +695,10 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             ...(commentBody ? { source: "comment" } : {}),
             ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
+            // AgentDash (c4 trust): the request-changes route reaches this
+            // same audit with a status move, and the feed showed the bare
+            // "updated ACM-6" — nothing said changes were asked for.
+            ...(context.requestChanges === true ? { requestedChanges: true } : {}),
             ...(plan.interruptRun ? { requestedInterruptRunId: plan.interruptRun.id } : {}),
             ...(plan.runsToCancelForClosedStatus.length > 0
               ? { requestedStatusCancelRunIds: plan.runsToCancelForClosedStatus.map((run) => run.id) }

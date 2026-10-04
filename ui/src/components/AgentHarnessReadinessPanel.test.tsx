@@ -238,4 +238,55 @@ describe("stale evidence the client cannot detect alone", () => {
     });
     expect(status.state).toBe("pass");
   });
+
+  /**
+   * AgentDash (c4 trust): every agent in the MK workspace had a verdict of
+   * `not_passed` — a CURRENT check that failed — which the panel mapped to
+   * "stale". Stale is hidden and re-checked in the background, so the failure
+   * was invisible while the page hammered the preflight endpoint (and logged
+   * an activity row) on every visit.
+   */
+  it("reports a not-passed verdict as the failure it is, with the check's message", () => {
+    const status = readAgentHarnessPreflightStatus(
+      evidence({
+        status: "fail",
+        checks: [
+          {
+            code: "missing_token",
+            level: "error",
+            message: "Missing API key",
+            hint: "Add the provider key.",
+          },
+        ],
+      }),
+      {
+        ready: false,
+        reason: "not_passed",
+        message: "Resolve the saved harness preflight checks before starting this agent.",
+        testedAt: "2026-05-29T12:00:00.000Z",
+      },
+    );
+    expect(status.state).toBe("fail");
+    expect(status.message).toBe(
+      "Resolve the saved harness preflight checks before starting this agent.",
+    );
+    expect(status.checks[0]?.message).toBe("Missing API key");
+    // A failure is a current answer, not stale evidence — no re-check.
+    expect(needsBackgroundPreflight(status.state)).toBe(false);
+  });
+
+  it("renders a not-passed verdict as the softened re-check note for an agent that has run", () => {
+    const status = readAgentHarnessPreflightStatus(evidence({ status: "fail" }), {
+      ready: false,
+      reason: "not_passed",
+      message: "Resolve the saved harness preflight checks before starting this agent.",
+      testedAt: "2026-05-29T12:00:00.000Z",
+    });
+    const html = renderToStaticMarkup(
+      <AgentHarnessReadinessPanel status={status} onRunPreflight={() => undefined} hasSuccessfulRuns />,
+    );
+    expect(html).toContain("Re-check setup");
+    expect(html).toContain("has run before");
+    expect(html).not.toContain("out of date");
+  });
 });

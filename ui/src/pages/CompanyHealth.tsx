@@ -39,7 +39,7 @@ export function CompanyHealth() {
           <h1 className="text-lg font-semibold">Health</h1>
         </div>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Operational health for this company's agents — harness run reliability and task outcome quality.
+          How reliably this company's agents are running, and how often their work is accepted.
         </p>
       </div>
 

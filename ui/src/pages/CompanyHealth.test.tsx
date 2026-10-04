@@ -44,6 +44,7 @@ const harness: DashboardHarnessHealth = {
       totalRuns: 4,
       failedRuns: 3,
       failureRatePercent: 75,
+      agents: 2,
       affectedAgents: 2,
       latestFailureAt: "2026-05-29T16:00:00.000Z",
       topFailureCategory: "rate_limited",
@@ -107,7 +108,7 @@ describe("CompanyHealth", () => {
     await flushReact();
 
     expect(summaryMock).toHaveBeenCalledWith("company-1");
-    expect(container.textContent).toContain("Harness health");
-    expect(container.textContent).toContain("Task outcome quality");
+    expect(container.textContent).toContain("Run reliability");
+    expect(container.textContent).toContain("Accepted work");
   });
 });

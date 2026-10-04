@@ -65,7 +65,23 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
     event.action === "heartbeat.cancelled" &&
     typeof (event.details as Record<string, unknown> | null)?.source === "string" &&
     ((event.details as Record<string, unknown> | null)?.source as string).startsWith("issue_status_");
-  const systemEvent = event.actorType === "system" || isSystemPlumbingActivity(event.action) || statusDrivenCancel;
+  const details = event.details as Record<string, unknown> | null;
+  // AgentDash (c4 trust): a comment that reopens a closed issue is the
+  // product reacting to the comment — the person didn't "reopen" anything.
+  const autoReopen = event.action === "issue.updated" && details?.reopened === true;
+  // AgentDash (c4 trust): approvals the system opens on the person's behalf
+  // (the onboarding plan's hire requests, assistant-granted actions) must not
+  // read as the person asking. `via` marks an assistant-grant write; `source`
+  // marks a server-originated approval such as "cos_plan".
+  const systemApproval =
+    (event.action === "approval.created" || event.action === "approval.resubmitted") &&
+    (typeof details?.source === "string" || typeof details?.via === "string" || details?.auto === true);
+  const systemEvent =
+    event.actorType === "system" ||
+    isSystemPlumbingActivity(event.action) ||
+    statusDrivenCancel ||
+    autoReopen ||
+    systemApproval;
   // AgentDash (c3 copy): actions the system takes are the product's own doing —
   // "System" read like a person, so it is named "AgentDash" instead.
   const actorName = systemEvent ? "AgentDash" : actor?.name ?? ( userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));
@@ -90,7 +106,10 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
         </span>
         <span className="shrink-0 text-muted-foreground">{timeAgo(event.createdAt)}</span>
       </div>
-      <IssueReferenceActivitySummary event={event} />
+      {/* AgentDash (c4 trust): the added/removed chips belong to issue.updated
+          only — rendered unconditionally they surfaced as a stray
+          "Removed references" line under unrelated rows. */}
+      {event.action === "issue.updated" && <IssueReferenceActivitySummary event={event} />}
     </div>
   ) : (
     <div className="space-y-2">
@@ -108,7 +127,7 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
         </p>
         <span className="text-xs text-muted-foreground shrink-0 pt-0.5">{timeAgo(event.createdAt)}</span>
       </div>
-      <IssueReferenceActivitySummary event={event} />
+      {event.action === "issue.updated" && <IssueReferenceActivitySummary event={event} />}
     </div>
   );
 

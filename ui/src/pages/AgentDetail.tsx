@@ -895,9 +895,9 @@ export function AgentDetail() {
   });
 
   const harnessPreflight = useMutation({
-    mutationFn: () => {
+    mutationFn: (opts?: { background?: boolean }) => {
       if (!agentLookupRef) throw new Error("No agent reference");
-      return agentsApi.runHarnessPreflight(agentLookupRef, resolvedCompanyId ?? undefined);
+      return agentsApi.runHarnessPreflight(agentLookupRef, resolvedCompanyId ?? undefined, opts);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(routeAgentRef) });
@@ -927,7 +927,10 @@ export function AgentDetail() {
     if (!needsBackgroundPreflight(harnessPreflightStatus.state)) return;
     if (backgroundPreflightRef.current === agentId) return;
     backgroundPreflightRef.current = agentId;
-    harnessPreflight.mutate();
+    // AgentDash (c4 trust): mark it as a background check — the server skips
+    // the activity row, so merely opening this page no longer logs
+    // "agent harness preflight failed" under the viewer's name.
+    harnessPreflight.mutate({ background: true });
   }, [agent?.id, harnessPreflightStatus.state, harnessPreflight]);
 
   const budgetMutation = useMutation({
@@ -1219,7 +1222,7 @@ export function AgentDetail() {
       {!urlRunId && (
         <AgentHarnessReadinessPanel
           status={harnessPreflightStatus}
-          onRunPreflight={() => harnessPreflight.mutate()}
+          onRunPreflight={() => harnessPreflight.mutate({})}
           pending={harnessPreflight.isPending}
           hasSuccessfulRuns={(agent.runHealth?.succeeded ?? 0) > 0}
           error={

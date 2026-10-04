@@ -8,6 +8,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
+  issueWorkProducts,
   verdicts,
 } from "@paperclipai/db";
 import { notFound } from "../errors.js";
@@ -342,6 +343,7 @@ export function dashboardService(db: Db) {
         {
           totalRuns: number;
           failedRuns: number;
+          agentIds: Set<string>;
           affectedAgents: Set<string>;
           latestFailureAt: Date | null;
           categories: Map<string, number>;
@@ -355,11 +357,13 @@ export function dashboardService(db: Db) {
         const adapter = harnessByAdapter.get(row.adapterType) ?? {
           totalRuns: 0,
           failedRuns: 0,
+          agentIds: new Set<string>(),
           affectedAgents: new Set<string>(),
           latestFailureAt: null,
           categories: new Map<string, number>(),
         };
         adapter.totalRuns += 1;
+        adapter.agentIds.add(row.agentId);
         const failed = row.status === "failed" || row.status === "timed_out";
         if (failed) {
           harnessFailedRuns += 1;
@@ -385,6 +389,10 @@ export function dashboardService(db: Db) {
             totalRuns: adapter.totalRuns,
             failedRuns: adapter.failedRuns,
             failureRatePercent,
+            // AgentDash (c4 trust): the hosted panel read "0 agents" beside a
+            // non-zero run count because only failing agents were counted.
+            // `agents` is every agent that ran in the window.
+            agents: adapter.agentIds.size,
             affectedAgents: adapter.affectedAgents.size,
             latestFailureAt: adapter.latestFailureAt?.toISOString() ?? null,
             topFailureCategory: topCategory(adapter.categories),
@@ -455,11 +463,62 @@ export function dashboardService(db: Db) {
         }
       }
 
+      // AgentDash (c4 trust): the verdicts table only records REVIEWER
+      // verdicts. When the owner accepts a deliverable or sends it back, that
+      // decision lands on issue_work_products.status (approved/merged vs
+      // changes_requested) — so Health showed "0/0 accepted", "successful runs
+      // pending review", and "done tasks without verdicts" for work the owner
+      // already signed off. Fold the current owner decision per issue into
+      // the same map: a deliverable still sent back counts as a revision;
+      // otherwise any accepted deliverable counts as a pass. A live reviewer
+      // verdict stays authoritative when no owner decision exists.
+      const OWNER_PRODUCT_OUTCOME: Record<string, "passed" | "revision_requested"> = {
+        approved: "passed",
+        merged: "passed",
+        changes_requested: "revision_requested",
+      };
+      const taskQualityIssueIdList = Array.from(taskQualityIssueIds);
+      const taskQualityProductRows = taskQualityIssueIdList.length > 0
+        ? await db
+            .select({
+              issueId: issueWorkProducts.issueId,
+              status: issueWorkProducts.status,
+              updatedAt: issueWorkProducts.updatedAt,
+            })
+            .from(issueWorkProducts)
+            .where(
+              and(
+                eq(issueWorkProducts.companyId, companyId),
+                inArray(issueWorkProducts.issueId, taskQualityIssueIdList),
+              ),
+            )
+        : [];
+
+      const ownerProductStatusesByIssueId = new Map<string, { statuses: Set<string>; latestAt: Date }>();
+      for (const row of taskQualityProductRows) {
+        const entry = ownerProductStatusesByIssueId.get(row.issueId) ?? {
+          statuses: new Set<string>(),
+          latestAt: row.updatedAt,
+        };
+        entry.statuses.add(row.status);
+        if (row.updatedAt > entry.latestAt) entry.latestAt = row.updatedAt;
+        ownerProductStatusesByIssueId.set(row.issueId, entry);
+      }
+
+      const latestDecisionByIssueId = new Map(latestVerdictByIssueId);
+      for (const [issueId, { statuses, latestAt }] of ownerProductStatusesByIssueId) {
+        if (statuses.has("changes_requested")) {
+          latestDecisionByIssueId.set(issueId, { outcome: "revision_requested", createdAt: latestAt });
+        } else if ([...statuses].some((status) => OWNER_PRODUCT_OUTCOME[status] === "passed")) {
+          latestDecisionByIssueId.set(issueId, { outcome: "passed", createdAt: latestAt });
+        }
+      }
+
       let passedIssues = 0;
       let failedIssues = 0;
       let revisionRequestedIssues = 0;
       let escalatedIssues = 0;
-      for (const verdict of latestVerdictByIssueId.values()) {
+      for (const verdict of latestDecisionByIssueId.values()) {
         if (verdict.outcome === "passed") passedIssues += 1;
         else if (verdict.outcome === "failed") failedIssues += 1;
         else if (verdict.outcome === "revision_requested") revisionRequestedIssues += 1;
@@ -470,7 +529,7 @@ export function dashboardService(db: Db) {
         definitionOfDoneSchema.safeParse(row.definitionOfDone).success
       ).length;
       const unreviewedDoneIssues = taskQualityIssueRows.filter(
-        (row) => row.status === "done" && !latestVerdictByIssueId.has(row.id),
+        (row) => row.status === "done" && !latestDecisionByIssueId.has(row.id),
       ).length;
 
       const taskQualityCostRows = await db
@@ -515,7 +574,7 @@ export function dashboardService(db: Db) {
         );
       const greenRunsPendingReview = taskQualityRunRows.filter((row) => {
         const issueId = readIssueIdFromRunContext(row.contextSnapshot);
-        return Boolean(issueId && taskQualityIssueIds.has(issueId) && !latestVerdictByIssueId.has(issueId));
+        return Boolean(issueId && taskQualityIssueIds.has(issueId) && !latestDecisionByIssueId.has(issueId));
       }).length;
       const greenRunsWithOpenTasks = taskQualityRunRows.filter((row) => {
         const issueId = readIssueIdFromRunContext(row.contextSnapshot);

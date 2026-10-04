@@ -440,7 +440,10 @@ export function Layout() {
               tabIndex={-1}
               className={cn(
                 "flex-1 p-4 outline-none md:p-6",
-                isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto",
+                // AgentDash (c4 trust): the floating Connected/Report cluster
+                // sits at bottom-4 over the scroll area and covered the last
+                // row of long feeds — reserve clearance beneath it on desktop.
+                isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto pb-20",
               )}
             >
               {hasUnknownCompanyPrefix ? (
