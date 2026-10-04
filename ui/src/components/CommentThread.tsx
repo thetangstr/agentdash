@@ -197,7 +197,7 @@ function formatTimelineActorName(
     return agentMap?.get(actorId)?.name ?? actorId.slice(0, 8);
   }
   if (actorType === "system") {
-    return "System";
+    return "AgentDash";
   }
   return formatAssigneeUserLabel(actorId, currentUserId) ?? "Board";
 }

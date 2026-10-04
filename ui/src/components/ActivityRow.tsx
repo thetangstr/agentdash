@@ -58,7 +58,14 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
 
   const actor = event.actorType === "agent" ? agentMap.get(event.actorId) : null;
   const userProfile = event.actorType === "user" ? userProfileMap?.get(event.actorId) : null;
-  const systemEvent = event.actorType === "system" || isSystemPlumbingActivity(event.action);
+  // AgentDash (review-1015): a run stopped because the issue closed is the
+  // product's doing — the person only marked the issue done — so AgentDash
+  // owns the row, not them.
+  const statusDrivenCancel =
+    event.action === "heartbeat.cancelled" &&
+    typeof (event.details as Record<string, unknown> | null)?.source === "string" &&
+    ((event.details as Record<string, unknown> | null)?.source as string).startsWith("issue_status_");
+  const systemEvent = event.actorType === "system" || isSystemPlumbingActivity(event.action) || statusDrivenCancel;
   // AgentDash (c3 copy): actions the system takes are the product's own doing —
   // "System" read like a person, so it is named "AgentDash" instead.
   const actorName = systemEvent ? "AgentDash" : actor?.name ?? ( userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));

@@ -34,6 +34,22 @@ export const NO_AGENTS_TEXT = "No agents yet.";
 export const BYOK_SPEND_NOTE = BILLED_BY_PROVIDER_NOTE;
 
 /**
+ * AgentDash (review-1015): the line under an agent's name must never restate
+ * the name. agentIdentityLineUnderName suppresses its own duplicates, but the
+ * role fallback re-printed "Chief of Staff" under "Chief of Staff" — so the
+ * CoS names itself "Your Chief of Staff" and any other restating role drops
+ * the line entirely. Same rule on phone and desktop (one row renders both).
+ */
+export function fleetRowSubtitle(agent: { name?: string | null; role?: string | null; title?: string | null }): string {
+  const line = agentIdentityLineUnderName(agent);
+  if (line) return line;
+  if ((agent.role ?? "").trim() === "chief_of_staff") return "Your Chief of Staff";
+  const roleLabel = isGenericAgentRole(agent.role) ? "" : humanizeAgentRole(agent.role);
+  if (roleLabel && roleLabel.toLowerCase() === (agent.name ?? "").trim().toLowerCase()) return "";
+  return roleLabel || "Agent";
+}
+
+/**
  * AgentDash: what the month-spend tile shows. A BYOK box meters tokens but not
  * dollars (the customer's model provider bills them), so "$0.00" next to real
  * usage would be wrong. Dollars whenever any were metered; tokens when the
@@ -306,13 +322,7 @@ function FleetPanel({ agents, isLoading, error }: { agents: Agent[] | undefined;
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{agent.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {/* AgentDash (c3 copy): when the name suppresses the
-                          identity line ("Chief of Staff" named Chief of Staff)
-                          still name the role — "Agent" read as a different
-                          hire than the CoS the desktop row described. */}
-                      {agentIdentityLineUnderName(agent)
-                        || (isGenericAgentRole(agent.role) ? "" : humanizeAgentRole(agent.role))
-                        || "Agent"}
+                      {fleetRowSubtitle(agent)}
                     </span>
                   </span>
                   <span className="shrink-0 text-right text-xs text-muted-foreground">

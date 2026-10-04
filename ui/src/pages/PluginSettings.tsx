@@ -58,7 +58,7 @@ import {
  * @see doc/plugins/PLUGIN_SPEC.md §19.8 — Plugin Settings UI.
  */
 export function PluginSettings() {
-  const { selectedCompany, selectedCompanyId } = useCompany();
+  const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { companyPrefix, pluginId } = useParams<{ companyPrefix?: string; pluginId: string }>();
   const [activeTab, setActiveTab] = useState<"configuration" | "status">("configuration");
@@ -113,13 +113,14 @@ export function PluginSettings() {
   const hasCustomSettingsPage = pluginSlots.length > 0;
 
   useEffect(() => {
+    // AgentDash (review-1015): this page lives under Instance Settings — same
+    // trail as About/Changelog/Adapters, not Company → Settings.
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
-      { label: "Settings", href: "/instance/settings/heartbeats" },
+      { label: "Instance Settings", href: "/instance/settings/general" },
       { label: "Plugins", href: "/instance/settings/plugins" },
       { label: plugin?.manifestJson?.displayName ?? plugin?.packageName ?? "Plugin Details" },
     ]);
-  }, [selectedCompany?.name, setBreadcrumbs, companyPrefix, plugin]);
+  }, [setBreadcrumbs, companyPrefix, plugin]);
 
   useEffect(() => {
     setActiveTab("configuration");

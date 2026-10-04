@@ -126,6 +126,19 @@ describe("heartbeat cancellations", () => {
     );
     expect(formatActivityVerb("heartbeat.cancelled", {})).toBe("stopped the agent's run");
   });
+
+  // AgentDash (review-1015): the audit carries the identifier — "ACM-3 was
+  // marked done", not "the issue was marked done".
+  it("names the issue the close came from", () => {
+    const details = { agentId: "agent-scout", source: "issue_status_done", identifier: "ACM-3" };
+    const agents = new Map<string, Agent>([["agent-scout", { id: "agent-scout", name: "Scout" } as Agent]]);
+    expect(formatActivityVerb("heartbeat.cancelled", details, { agentMap: agents })).toBe(
+      "stopped Scout's run — ACM-3 was marked done",
+    );
+    expect(formatIssueActivityAction("heartbeat.cancelled", details, { agentMap: agents })).toBe(
+      "stopped Scout's run — ACM-3 was marked done",
+    );
+  });
 });
 
 // AgentDash (c3 copy): closing an issue accepts its deliverable — say so.
@@ -139,6 +152,37 @@ describe("deliverable acceptance", () => {
   it("names the document when it is not the generic deliverable", () => {
     expect(formatIssueActivityAction("issue.work_product_updated", { reason: "issue_accepted", documentKey: "report" })).toBe(
       "accepted the report",
+    );
+  });
+});
+
+// AgentDash (review-1015): the other reasons the server logs on
+// issue.work_product_updated must not fall back to "updated a deliverable".
+describe("deliverable review reasons", () => {
+  it("reads requested changes, not updated", () => {
+    const details = { reason: "changes_requested" };
+    expect(formatActivityVerb("issue.work_product_updated", details)).toBe("requested changes on the deliverable on");
+    expect(formatIssueActivityAction("issue.work_product_updated", details)).toBe("requested changes on the deliverable");
+  });
+
+  it("reads resubmitted for review", () => {
+    const details = { reason: "resubmitted_for_review" };
+    expect(formatActivityVerb("issue.work_product_updated", details)).toBe("resubmitted the deliverable for review on");
+    expect(formatIssueActivityAction("issue.work_product_updated", details)).toBe("resubmitted the deliverable for review");
+  });
+
+  it("reads reopened", () => {
+    const details = { reason: "issue_reopened" };
+    expect(formatActivityVerb("issue.work_product_updated", details)).toBe("reopened the deliverable on");
+    expect(formatIssueActivityAction("issue.work_product_updated", details)).toBe("reopened the deliverable");
+  });
+
+  it("humanises slugged document keys for every reason", () => {
+    expect(formatIssueActivityAction("issue.work_product_updated", { reason: "issue_accepted", documentKey: "product-description" })).toBe(
+      "accepted the product description",
+    );
+    expect(formatIssueActivityAction("issue.work_product_updated", { reason: "changes_requested", documentKey: "launch-plan" })).toBe(
+      "requested changes on the launch plan",
     );
   });
 });

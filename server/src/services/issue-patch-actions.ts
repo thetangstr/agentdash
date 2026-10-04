@@ -1145,7 +1145,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           const publication = await insertActivity(db, {
             companyId: issue.companyId, ...actor,
             action: "heartbeat.cancelled", entityType: "heartbeat_run", entityId: runId,
-            details: { agentId: run.agentId, source, issueId: id, mutationId: accepted.mutationId }
+            // AgentDash (review-1015): identifier lets the activity row name
+            // the issue — "ACM-3 was marked done", not "the issue was …".
+            details: { agentId: run.agentId, source, issueId: id, identifier: issue.identifier, mutationId: accepted.mutationId }
           });
           publishActivity(publication);
         });

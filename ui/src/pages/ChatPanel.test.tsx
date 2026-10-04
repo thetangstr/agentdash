@@ -274,3 +274,73 @@ describe("ChatPanel reply state", () => {
     expect(q("cos-reply-stalled")).toBeNull();
   });
 });
+
+// AgentDash (review-1015): a desktop→phone resize reflows the scroller —
+// scrollHeight and clientHeight change, so a chat pinned to the bottom
+// jumped to mid-thread. The pin is restored on resize only while the
+// reader is still at the bottom; a person reading history is left alone.
+describe("ChatPanel resize pin", () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  let resizeCallbacks: Array<() => void>;
+
+  class FakeResizeObserver {
+    constructor(callback: () => void) {
+      resizeCallbacks.push(callback);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+
+  function renderAndMeasure() {
+    mockUseMessages.mockReturnValue([{ id: "m1", role: "agent", content: "Hi" }]);
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" />));
+    const scroller = container.querySelector('[data-testid="chat-scroller"]') as HTMLElement;
+    Object.defineProperty(scroller, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 400, configurable: true });
+    return scroller;
+  }
+
+  const scrollTo = (el: HTMLElement, top: number) => {
+    act(() => {
+      el.scrollTop = top;
+      el.dispatchEvent(new Event("scroll"));
+    });
+  };
+
+  const resize = () => {
+    act(() => resizeCallbacks.forEach((cb) => cb()));
+  };
+
+  beforeEach(() => {
+    resizeCallbacks = [];
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("re-pins to the bottom on resize while the reader is at the bottom", () => {
+    const scroller = renderAndMeasure();
+    scrollTo(scroller, 600); // 1000 - 600 - 400 = 0 < 8 → at bottom
+    scroller.scrollTop = 500; // a resize reflow nudged the pin off the bottom
+    resize();
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it("does not re-pin on resize after the reader scrolled up", () => {
+    const scroller = renderAndMeasure();
+    scrollTo(scroller, 100); // 1000 - 100 - 400 = 500 ≥ 8 → scrolled up
+    scroller.scrollTop = 120;
+    resize();
+    expect(scroller.scrollTop).toBe(120);
+  });
+});

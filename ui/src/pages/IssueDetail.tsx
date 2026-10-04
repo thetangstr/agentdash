@@ -351,7 +351,7 @@ function ActorIdentity({ evt, agentMap, userProfileMap }: { evt: ActivityEvent; 
     const agent = agentMap.get(id);
     return <Identity name={agent?.name ?? id.slice(0, 8)} size="sm" />;
   }
-  if (evt.actorType === "system") return <Identity name="System" size="sm" />;
+  if (evt.actorType === "system") return <Identity name="AgentDash" size="sm" />;
   if (evt.actorType === "user") {
     const profile = userProfileMap?.get(id);
     return <Identity name={profile?.label ?? "Board"} avatarUrl={profile?.image} size="sm" />;

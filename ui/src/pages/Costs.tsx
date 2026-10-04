@@ -924,7 +924,7 @@ export function Costs() {
             <div>
                 <h1 className="text-3xl font-semibold tracking-tight">Costs</h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                  Model usage, platform fees, credits, and live quota windows.
+                  Model usage, platform fees, credits, and quota remaining.
                 </p>
             </div>
 

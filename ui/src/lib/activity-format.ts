@@ -265,34 +265,50 @@ function formatIssueUpdatedAction(details: ActivityDetails, options: ActivityFor
  * stopped it; the reason is why ("the issue was marked done"), so a stop that
  * happened as a side effect no longer reads as the person ending the run.
  */
-const HEARTBEAT_CANCEL_REASONS: Record<string, string> = {
-  issue_status_done: "the issue was marked done",
-  issue_status_cancelled: "the issue was cancelled",
-  issue_comment_interrupt: "a new comment interrupted it",
+const HEARTBEAT_CANCEL_REASONS: Record<string, (issue: string) => string> = {
+  issue_status_done: (issue) => `${issue} was marked done`,
+  issue_status_cancelled: (issue) => `${issue} was cancelled`,
+  issue_comment_interrupt: () => "a new comment interrupted it",
 };
 
 function formatHeartbeatCancelledPhrase(details: ActivityDetails, options: ActivityFormatOptions): string {
   const agentId = typeof details?.agentId === "string" ? details.agentId : null;
   const agentName = (agentId ? options.agentMap?.get(agentId)?.name : null) ?? "the agent";
   const source = typeof details?.source === "string" ? details.source : null;
-  const reason = source ? (HEARTBEAT_CANCEL_REASONS[source] ?? humanizeValue(source)) : null;
+  // AgentDash (review-1015): name the issue when the audit carries its
+  // identifier — "ACM-3 was marked done" beats "the issue was marked done".
+  const issue = typeof details?.identifier === "string" && details.identifier ? details.identifier : "the issue";
+  const reason = source ? (HEARTBEAT_CANCEL_REASONS[source]?.(issue) ?? humanizeValue(source)) : null;
   return `stopped ${agentName === "the agent" ? "the agent's" : `${agentName}'s`} run${reason ? ` — ${reason}` : ""}`;
 }
 
+/** "product-description" -> "product description": document keys are slugs, not words. */
+function humanizeDocumentKey(key: string): string {
+  return key.replace(/[-_]+/g, " ");
+}
+
 /**
- * AgentDash (c3 copy): closing an issue accepts its deliverable — the audit
- * row used to read "updated a deliverable", which hid what actually happened.
- * The document key names the deliverable when it is not the generic one.
+ * AgentDash (c3 copy): every deliverable transition the server logs as a
+ * work_product_updated reason reads as what happened — "updated a
+ * deliverable" hid accepts, change requests, resubmissions, and reopens.
+ * The humanised document key names the deliverable when it is not the
+ * generic one.
  */
-function formatWorkProductAcceptedPhrase(details: ActivityDetails): string {
+const WORK_PRODUCT_UPDATE_PHRASES: Record<string, (target: string) => string> = {
+  issue_accepted: (target) => `accepted ${target}`,
+  changes_requested: (target) => `requested changes on ${target}`,
+  resubmitted_for_review: (target) => `resubmitted ${target} for review`,
+  issue_reopened: (target) => `reopened ${target}`,
+};
+
+function formatWorkProductUpdatePhrase(details: ActivityDetails): string | null {
+  const reason = typeof details?.reason === "string" ? details.reason : null;
+  const phrase = reason ? WORK_PRODUCT_UPDATE_PHRASES[reason] : undefined;
+  if (!phrase) return null;
   const key = typeof details?.documentKey === "string" && details.documentKey && details.documentKey !== "deliverable"
     ? details.documentKey
     : null;
-  return key ? `accepted the ${key}` : "accepted the deliverable";
-}
-
-function isWorkProductAcceptance(action: string, details: ActivityDetails): boolean {
-  return action === "issue.work_product_updated" && details?.reason === "issue_accepted";
+  return phrase(key ? `the ${humanizeDocumentKey(key)}` : "the deliverable");
 }
 
 function formatStructuredIssueChange(input: {
@@ -351,8 +367,9 @@ export function formatActivityVerb(
     return formatHeartbeatCancelledPhrase(details, options);
   }
 
-  if (isWorkProductAcceptance(action, details)) {
-    return `${formatWorkProductAcceptedPhrase(details)} on`;
+  if (action === "issue.work_product_updated") {
+    const phrase = formatWorkProductUpdatePhrase(details);
+    if (phrase) return `${phrase} on`;
   }
 
   const structuredChange = formatStructuredIssueChange({
@@ -380,8 +397,9 @@ export function formatIssueActivityAction(
     return formatHeartbeatCancelledPhrase(details, options);
   }
 
-  if (isWorkProductAcceptance(action, details)) {
-    return formatWorkProductAcceptedPhrase(details);
+  if (action === "issue.work_product_updated") {
+    const phrase = formatWorkProductUpdatePhrase(details);
+    if (phrase) return phrase;
   }
 
   const structuredChange = formatStructuredIssueChange({

@@ -86,7 +86,7 @@ function resolveActorLabel(
   if (actorType === "agent" && actorId) {
     return resolveAgentName(queryClient, companyId, actorId) ?? `Agent ${shortId(actorId)}`;
   }
-  if (actorType === "system") return "System";
+  if (actorType === "system") return "AgentDash";
   if (actorType === "user" && actorId) {
     return resolveUserName(queryClient, companyId, actorId) ?? "Board";
   }

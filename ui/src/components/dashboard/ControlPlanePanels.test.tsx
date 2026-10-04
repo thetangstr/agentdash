@@ -26,7 +26,7 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-const { ControlPlanePanels, fleetSize, monthSpendTile, BYOK_SPEND_NOTE, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT } = await import(
+const { ControlPlanePanels, fleetSize, fleetRowSubtitle, monthSpendTile, BYOK_SPEND_NOTE, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT } = await import(
   "./ControlPlanePanels"
 );
 
@@ -250,5 +250,26 @@ describe("fleetSize", () => {
     expect(fleetSize(summary as any, [])).toBe(4);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(fleetSize(undefined, [makeAgent(1), makeAgent(2, "terminated")] as any)).toBe(1);
+  });
+});
+
+// AgentDash (review-1015): the fleet row's subtitle must never restate the
+// name — "Chief of Staff / Chief of Staff" read as a bug.
+describe("fleetRowSubtitle", () => {
+  it("names the hire's CoS instead of repeating the name", () => {
+    expect(fleetRowSubtitle({ name: "Chief of Staff", role: "chief_of_staff", title: null })).toBe("Your Chief of Staff");
+  });
+
+  it("drops the line rather than restating a role-named hire", () => {
+    expect(fleetRowSubtitle({ name: "Engineer", role: "engineer", title: null })).toBe("");
+  });
+
+  it("still names the role under a real name", () => {
+    expect(fleetRowSubtitle({ name: "Maya", role: "chief_of_staff", title: null })).toBe("Chief of Staff");
+    expect(fleetRowSubtitle({ name: "Scout", role: "engineer", title: null })).toBe("Engineer");
+  });
+
+  it("keeps the Agent fallback when the agent has neither title nor role", () => {
+    expect(fleetRowSubtitle({ name: "Scout", role: null, title: null })).toBe("Agent");
   });
 });
